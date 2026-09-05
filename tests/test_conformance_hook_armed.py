@@ -31,7 +31,7 @@ from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_result
 from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
 from tests.conftest import (
     NO_CONTRACT_DELEGATES,
-    make_sim_job,
+    make_experiment_job,
     stage_recorded_fixture,
 )
 
@@ -41,25 +41,14 @@ async def test_hook_rejects_a_schema_violating_emission(
 ):
     """A registered handler emitting structuredContent that contradicts its
     output_schema is caught at emission time, not silently passed through."""
-    # jobs' status branch relays a legacy job's ``error`` verbatim as a
-    # failure ``message`` the schema types as a string; seeding a non-string
+    # jobs' status branch relays a job's recorded failures verbatim, and the
+    # schema types each failure's ``message`` as a string. Seeding a non-string
     # makes the real handler emit a genuinely non-conforming payload from real
     # registry state through the (patched) format_response. The cast injects
     # the bad value deliberately — the point is that it is NOT a valid str.
-    # (The record-derived failure list must stay empty so the relay branch
-    # runs: a completed run with a raw file produces no record failures.)
-    netlist = work_dir / "specimen.cir"
-    netlist.write_text("* specimen\n.end\n")
-    raw = work_dir / "specimen.raw"
-    raw.write_bytes(b"Title: mock")
-    job = make_sim_job(
-        "hook_specimen",
-        status="completed",
-        netlist=netlist,
-        raw_file=raw,
-        error=cast("str", [123]),
-    )
-    state_no_sim.all_jobs[job.job_id] = job
+    job = make_experiment_job(state_no_sim, job_id="hook_specimen", status="completed")
+    job.failures = [{"case_id": "case-0000", "code": "run_failed", "message": cast("str", [123])}]
+
     with pytest.raises(AssertionError, match="output_schema"):
         await handle_jobs(
             JobsInput.model_validate({"action": "status", "job_id": job.job_id}),
@@ -167,7 +156,6 @@ def _delegate_targets() -> dict[str, Any]:
         importlib.import_module(name)
         for name in (
             "ltspice_mcp.tools.analysis",
-            "ltspice_mcp.tools.simulation",
             "ltspice_mcp.lib.schematic_ops",
         )
     ]

@@ -16,38 +16,28 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, NoReturn, TypeVar
+from typing import Any, TypeVar
 
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
+from ltspice_mcp.errors import JobNotFoundError, ResultError
 from ltspice_mcp.lib import experiment_store, job_store, recent
-from ltspice_mcp.lib.batch_results import (
-    compute_batch_stats,
-    filter_runs_by_params,
-    get_progress_snapshot,
-)
 from ltspice_mcp.lib.experiment_types import ExperimentJob
-from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.log_parser import (
     LogDiagnostics,
     extract_missing_refs,
     missing_refs_from_text,
-    parse_measurements,
-    read_log_text,
 )
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.state import (
-    TERMINAL_STATUSES,
-    BatchJob,
-    RunRef,
+    LegacyJobRecord,
     SessionState,
-    SimulationJob,
+    legacy_record_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,65 +130,7 @@ def attach_suggestions_to_failure(
     return f"{error_msg}{block}"
 
 
-def _deck_has_sectioned_lib(netlist: Path) -> bool:
-    """True when the deck has a ``.lib <file> <section>`` directive (2+ args).
-
-    The section-selecting form of ``.lib`` — the standard PDK corner idiom — as
-    opposed to LTspice's section-less ``.lib <file>``. Lexes so an inline comment
-    or a quoted path containing spaces doesn't inflate the token count into a
-    spurious "section" (``card.body`` is comment-stripped; ``tokenize_body`` keeps
-    a quoted path as one token).
-    """
-    try:
-        from ltspice_mcp.lib.spice_lex import cards_from_path, iter_by_kind, tokenize_body
-
-        cards = cards_from_path(netlist).cards
-    except (OSError, ValueError):
-        return False
-    for card in iter_by_kind(cards, "directive"):
-        tokens = tokenize_body(card.body)
-        if len(tokens) >= 3 and tokens[0].text.lower() == ".lib":
-            return True
-    return False
-
-
-def ngbehavior_lib_hint(
-    netlist: Path,
-    log_text: str,
-    *,
-    is_ngspice: bool,
-    current_mode: str | None,
-) -> str | None:
-    """Actionable hint when ngspice's compat mode broke a sectioned ``.lib``.
-
-    Fires only when ALL of: the run used ngspice, the active ``ngbehavior`` still
-    contains ``lt`` or ``ps`` (a mode with neither parses the section fine), the
-    log reports a missing include, and the deck actually uses a sectioned ``.lib``.
-    See the ``ngbehavior`` config field for the mechanism. The deck read is last,
-    so the three cheap string checks gate it.
-    """
-    if not is_ngspice:
-        return None
-    # Both the LTspice (lt) and PSPICE (ps) compat tokens split a sectioned .lib;
-    # a mode with neither (e.g. hsa, kia) parses it correctly, so don't fire there.
-    mode = (current_mode or "").lower()
-    if "lt" not in mode and "ps" not in mode:
-        return None
-    if "could not find include file" not in log_text.lower():
-        return None
-    if not _deck_has_sectioned_lib(netlist):
-        return None
-    return (
-        "This looks like a sectioned '.lib <file> <section>' that ngspice split into "
-        "two plain includes: ngspice is running in an LTspice/PSPICE-compatibility mode "
-        f"(ngbehavior='{current_mode}'), so the corner section was read as a missing "
-        'include file. Set [simulator] ngbehavior = "hsa" in ltspice-mcp.toml (or '
-        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add 'set ngbehavior=hsa' "
-        "to a .spiceinit in the run directory."
-    )
-
-
-Job = SimulationJob | BatchJob | ExperimentJob
+Job = LegacyJobRecord | ExperimentJob
 
 
 def _experiment_was_reconciled(job: ExperimentJob) -> bool:
@@ -266,156 +198,6 @@ async def resolve_job_async(job_id: str, state: SessionState) -> Job:
         if _experiment_was_reconciled(job):
             state.persist_job(job)
     return await state.job_registry.refresh_foreign_job_async(job)
-
-
-async def resolve_batch_job_async(job_id: str, state: SessionState) -> BatchJob:
-    """Loop-safe ``resolve_batch_job`` (offloaded foreign refresh)."""
-    try:
-        job = await resolve_job_async(job_id, state)
-    except JobNotFoundError:
-        # Re-raise as JobNotFoundError (not BatchJobError): the dispatch
-        # layer's recovery hint (list jobs via check_job; the id may be
-        # stale/evicted) is keyed on the exception type, and a stale batch id
-        # is exactly the case that needs it.
-        raise JobNotFoundError(f"Batch job not found: {job_id}") from None
-    if isinstance(job, SimulationJob):
-        raise BatchJobError(
-            f"Job '{job_id}' is a single simulation job — read its results with "
-            "check_job (status + completion summary) or query_value (job_id + "
-            "run_index) for a signal value."
-        )
-    if isinstance(job, ExperimentJob):
-        raise BatchJobError(
-            f"Job '{job_id}' is an experiment job (status={job.status!r}); "
-            "legacy batch_results accepts only sweep and Monte Carlo jobs."
-        )
-    return job
-
-
-def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
-    """Look up a single-simulation job by id.
-
-    An unknown id propagates ``JobNotFoundError`` from ``resolve_job``. A
-    batch (sweep/MC) id gets an honest redirect instead of "not found" —
-    the job exists, it just isn't readable through the single-sim surface.
-    """
-    job = resolve_job(job_id, state)
-    if isinstance(job, BatchJob):
-        raise SimulationError(
-            f"Job '{job_id}' is a {job.job_type} batch job — "
-            "use batch_results for its per-run results."
-        )
-    if isinstance(job, ExperimentJob):
-        raise SimulationError(
-            f"Job '{job_id}' is an experiment job (status={job.status!r}); "
-            "legacy single-simulation result readers do not accept experiment jobs."
-        )
-    return job
-
-
-def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
-    """Look up a batch (sweep/MC) job by id.
-
-    A single-simulation id gets an honest redirect instead of "not found" —
-    the job exists, it just has no per-run batch surface.
-    """
-    try:
-        job = resolve_job(job_id, state)
-    except JobNotFoundError:
-        # Keep the historical "Batch job not found" surface text but keep the
-        # TYPE JobNotFoundError: the dispatch layer's list-known-jobs recovery
-        # hint is keyed on the exception type, and BatchJobError has no hint —
-        # the translation used to dead-end the most common batch failure mode
-        # (an id from a previous session) while the single-sim path recovered.
-        raise JobNotFoundError(f"Batch job not found: {job_id}") from None
-    if isinstance(job, SimulationJob):
-        # Point only at tools that accept a job id: check_job (status +
-        # completion results) and query_value (job_id + run_index for a
-        # signal). simulation_summary takes a raw_file, not a job id, so it
-        # is reached only after check_job hands back that path.
-        raise BatchJobError(
-            f"Job '{job_id}' is a single simulation job — read its results with "
-            "check_job (status + completion summary) or query_value (job_id + "
-            "run_index) for a signal value."
-        )
-    if isinstance(job, ExperimentJob):
-        raise BatchJobError(
-            f"Job '{job_id}' is an experiment job (status={job.status!r}); "
-            "legacy batch_results accepts only sweep and Monte Carlo jobs."
-        )
-    return job
-
-
-def _as_path(p: object) -> Path | None:
-    """Coerce a stored raw/log path to a real Path, treating ""/"." as absent.
-
-    An empty Path coerces to "." which would silently point at the current
-    directory, so those sentinels become None.
-    """
-    if p is None or str(p) in ("", "."):
-        return None
-    return p if isinstance(p, Path) else Path(str(p))
-
-
-def runs_of(job: Job) -> list[RunRef]:
-    """Project any job into a uniform list of result runs (the read-model seam).
-
-    A single-run job is the degenerate batch-of-one: one ``RunRef`` at index 0.
-    A batch job yields one ``RunRef`` per ``run_results`` entry, ordered by run
-    index. This is the ONLY place that knows the two physical result layouts;
-    extraction routines consume ``RunRef`` and stay job-agnostic.
-    """
-    if isinstance(job, SimulationJob):
-        return [RunRef(0, _as_path(job.raw_file), _as_path(job.log_file), {})]
-    if isinstance(job, ExperimentJob):
-        raise ResultError(
-            f"Experiment job {job.job_id!r} uses case-addressed results; "
-            "legacy RunRef resolution is not available."
-        )
-    return [
-        RunRef(
-            index=idx,
-            raw_file=_as_path(run.get("raw_file")),
-            log_file=_as_path(run.get("log_file")),
-            params=dict(run.get("params") or {}),
-        )
-        for idx, run in sorted(job.run_results.items())
-    ]
-
-
-#: Where a caller holding a run_experiments job id is read by case.
-_EXPERIMENT_RUNS_BY_CASE = (
-    "analyze_results, plot_waveform, and Api.load_raw read its runs by job_id "
-    "with run_index or case_id."
-)
-
-
-def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
-    """Resolve one run of a COMPLETED job by id + run index (default 0).
-
-    Gates on completion so every job_id-addressed read (resolve_raw_file,
-    query_value/bode_metrics via the read-model) behaves identically — you can't
-    read partial data from a running/failed job through one path while a sibling
-    tool rejects it. A single-run job has exactly one run (index 0). Raises
-    ``ResultError`` for an out-of-range index, listing the indices actually
-    present (batch run indices can be non-contiguous after a mid-batch failure).
-    """
-    job = resolve_job(job_id, state)
-    if isinstance(job, ExperimentJob):
-        raise ResultError(
-            f"Job {job_id!r} is a run_experiments job (status={job.status!r}), which "
-            f"this path does not read; {_EXPERIMENT_RUNS_BY_CASE}"
-        )
-    if job.status != "completed":
-        raise ResultError(f"Job {job_id!r} is not completed (status={job.status!r})")
-    runs = {r.index: r for r in runs_of(job)}
-    if not runs:
-        raise ResultError(f"Job {job_id!r} has no run results")
-    if run_index not in runs:
-        raise ResultError(
-            f"Run index {run_index} out of range for job {job_id!r}; valid indices: {sorted(runs)}"
-        )
-    return runs[run_index]
 
 
 # TERMINAL SPICE solve-failure phrases. When the log carries one, the solve
@@ -638,7 +420,6 @@ def resolve_analysis_source(
     raw_file = getattr(args, "raw_file", None)
     log_file = getattr(args, "log_file", None)
     job_id = getattr(args, "job_id", None)
-    run_index = int(getattr(args, "run_index", 0))
     if hasattr(args, "raw_file") and bool(raw_file) == bool(job_id):
         raise ResultError(
             "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
@@ -647,28 +428,17 @@ def resolve_analysis_source(
             show_hint=False,
         )
     if job_id:
-        run = resolve_run(job_id, state, run_index)
-        if run.raw_file is None:
-            raise ResultError(f"Job {job_id!r} run {run_index} has no raw file")
+        # Every job this version creates is an experiment, and an experiment's
+        # runs are case-addressed — the consolidated callers inject a resolved
+        # source above rather than arriving here. Anything that reaches this
+        # point is a record an earlier release wrote.
         job = resolve_job(job_id, state)
-        state.raw_dialect_hints[run.raw_file] = dialect_for_job(job, state)
-        legacy_netlist = legacy_job_netlist(job, operation="Analysis")
-        return AnalysisSource(
-            raw=run.raw_file,
-            log=run.log_file,
-            netlist=legacy_netlist,
-            dialect=dialect_for_job(job, state),
-            identity={
-                "case_id": None,
-                "run_index": run.index,
-                "assignments": dict(run.params),
-                "circuit": legacy_netlist.stem,
-                "deck_sha256": None,
-                "step_index": None,
-                "step_values": {},
-            },
-            trusted_job_artifact=True,
-        )
+        if isinstance(job, ExperimentJob):
+            raise ResultError(
+                f"Job {job_id!r} is an experiment; its runs are case-addressed. "
+                "Read them with analyze_results (job_id plus run_index or case_id)."
+            )
+        raise ResultError(legacy_record_message(job_id))
     if raw_file:
         raw = resolve_safe_path(str(raw_file), state.config.allowed_paths)
         sibling = raw.with_suffix(".log")
@@ -693,140 +463,6 @@ def resolve_analysis_source(
     raise ResultError("Provide one analysis source: raw_file, log_file, or job_id")
 
 
-def legacy_job_netlist(job: Job, *, operation: str) -> Path:
-    """Return a legacy job's netlist or reject experiments explicitly."""
-    if isinstance(job, ExperimentJob):
-        raise ResultError(
-            f"{operation} does not accept run_experiments job {job.job_id!r} "
-            f"(status={job.status!r}); {_EXPERIMENT_RUNS_BY_CASE}"
-        )
-    return job.netlist
-
-
-def reject_experiment_job(
-    job: ExperimentJob,
-    tool_name: Literal["check_job", "cancel_job"],
-    state: SessionState,
-) -> NoReturn:
-    """Raise a profile-aware legacy-tool redirect for an experiment job."""
-    redirect = ""
-    if "jobs" in state.tool_dispatch:
-        if tool_name == "check_job":
-            redirect = (
-                f" Use jobs(action='status', job_id='{job.job_id}') for its experiment receipt."
-            )
-        else:
-            redirect = (
-                f" Use jobs(action='cancel', job_id='{job.job_id}', control_token=...) instead."
-            )
-    raise SimulationError(
-        f"Job {job.job_id} is an experiment job (status: {job.status}); "
-        f"{tool_name} only accepts legacy simulation and batch jobs.{redirect}",
-        show_hint=False,
-    )
-
-
-def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> list[str]:
-    """Pre-flight check for ngspice-incompatible directives in a base netlist.
-
-    Returns warnings to surface in the response; raises ``SimulationError`` for
-    the hard ``.step`` blocker. No-op for non-ngspice simulators. Shared by the
-    single-run path (run_simulation) and the batch paths (configure_sweep /
-    configure_montecarlo) so all three surface the same ".meas skipped in batch
-    mode" warning instead of silently dropping measurements.
-    """
-    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
-
-    if not issubclass(simulator_class, NGspiceSimulator):
-        return []
-    from ltspice_mcp.lib.spice_lex import MEAS_ANALYSIS_TOKENS
-
-    try:
-        content = netlist_path.read_text(errors="replace")
-    except OSError:
-        return []
-    warnings: list[str] = []
-    meas_names: list[str] = []
-    for line in content.splitlines():
-        stripped = line.strip().lower()
-        if stripped.startswith(".step"):
-            raise SimulationError(
-                "ngspice batch mode does not support .step directives. "
-                "Declare the parameter as a run_experiments variation instead, "
-                "or remove the .step line and set it to a fixed value."
-            )
-        if stripped.startswith(".meas"):
-            # .meas[ure] [analysis-type] <name> <FIND|PARAM|TRIG|WHEN|...> ...
-            # The analysis-type token is OPTIONAL; when it is omitted the name is
-            # parts[1], not parts[2] (e.g. ".meas vfoo FIND V(a)" — parts[2] would
-            # wrongly grab "find"). ``stripped`` is already lowercased. Mirrors
-            # MeasCard.from_card's optional-token skip.
-            parts = stripped.split()
-            idx = 1
-            if len(parts) > idx and parts[idx] in MEAS_ANALYSIS_TOKENS:
-                idx += 1
-            if len(parts) > idx:
-                meas_names.append(parts[idx])
-    if meas_names:
-        names = ", ".join(meas_names)
-        warnings.append(
-            "ngspice does not evaluate .meas in batch mode when a rawfile is set "
-            "(-b -r, this server's invocation). "
-            f"The following measurements will be skipped: {names}. "
-            "Compute them from the raw with signal_stats / query_value, or move the "
-            "measurement into a '.control ... run ... .endc' block written as the "
-            "dot-less 'meas' command (a dotted '.meas' inside .control is not valid "
-            "ngspice and computes nothing)."
-        )
-    return warnings
-
-
-def _resolve_result_file(
-    job_id: str, state: SessionState, field: str, label: str, *, run_index: int = 0
-) -> Path:
-    """Resolve a result file (raw or log) from a completed job's run.
-
-    ``run_index`` selects which run (default 0 — the only run for single-run
-    jobs, the first run for a batch). Shares ``resolve_run``'s completion + bounds
-    gate so single and batch jobs behave identically.
-    """
-    run = resolve_run(job_id, state, run_index)
-    file_path = run.raw_file if field == "raw_file" else run.log_file
-    if file_path is None:
-        raise ResultError(f"Job {job_id!r} run {run_index} has no {label} file")
-    if field == "raw_file":
-        # Record which simulator produced this raw (resolution always precedes
-        # the load) so load_raw parses it with the job's dialect — a per-run
-        # simulator override can differ from the session default.
-        state.raw_dialect_hints[file_path] = dialect_for_job(resolve_job(job_id, state), state)
-    return file_path
-
-
-def resolve_raw_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
-    """Get the raw result file for a completed simulation or batch job run."""
-    return _resolve_result_file(job_id, state, "raw_file", "raw", run_index=run_index)
-
-
-def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
-    """Get the log file for a completed simulation or batch job run."""
-    return _resolve_result_file(job_id, state, "log_file", "log", run_index=run_index)
-
-
-def simulator_class_for_job(job: Job, state: SessionState) -> type | None:
-    """The configured simulator class matching ``job.simulator``, or None.
-
-    Jobs record the class ``__name__`` (e.g. ``"LTspiceWSL"``); with per-run
-    simulator selection this may differ from the session default. A recovered
-    job may name a simulator that is no longer configured — callers fall back
-    to their own default then.
-    """
-    if job.simulator:
-        for cls in state.available_simulators.values():
-            if cls.__name__ == job.simulator:
-                return cls
-    return None
-
-
 def dialect_for_job(job: Job, state: SessionState) -> str | None:
     """Raw dialect for the simulator ``job`` actually ran on.
 
@@ -836,10 +472,12 @@ def dialect_for_job(job: Job, state: SessionState) -> str | None:
     persisted ngspice job read back with only LTspice installed still parses
     with the ngspice dialect — the producing simulator need not remain
     configured. Falls back to the session default only when the job records no
-    simulator at all.
+    simulator at all — which is every legacy record, none of which is readable
+    here anyway.
     """
-    if job.simulator:
-        return dialect_for_simulator_name(job.simulator)
+    simulator = getattr(job, "simulator", None)
+    if simulator:
+        return dialect_for_simulator_name(simulator)
     return state.raw_dialect
 
 
@@ -1101,32 +739,6 @@ def validate_step(raw: RawRead, step: int) -> None:
         raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
-def load_signal_names(job_id: str, state: SessionState) -> list[str]:
-    """Load signal names from a completed job.
-
-    Stays synchronous (via ``load_raw_sync``) because its only caller is the
-    synchronous MCP resource router.
-    """
-    raw_path = resolve_raw_file(job_id, state)
-    raw = load_raw_sync(raw_path, state)
-    return raw.get_trace_names()
-
-
-def load_measurements(
-    job_id: str, state: SessionState, *, include_log_text: bool = False
-) -> dict[str, Any]:
-    """Load measurements from a completed job.
-
-    Return type is ``dict[str, Any]`` (not ``MeasurementsOutput``) because
-    this helper may add a ``log_text`` field beyond the parser's shape.
-    """
-    log_path = resolve_log_file(job_id, state)
-    data: dict[str, Any] = dict(parse_measurements(log_path))
-    if include_log_text and log_path.exists():
-        data["log_text"] = log_path.read_text(encoding="utf-8", errors="replace")
-    return data
-
-
 def collect_recent_circuits() -> list[dict[str, Any]]:
     """List recently-touched circuits with their persisted-job summaries.
 
@@ -1146,53 +758,6 @@ def collect_recent_circuits() -> list[dict[str, Any]]:
         summary["last_touched"] = entry.get("last_touched")
         circuits.append(summary)
     return circuits
-
-
-async def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
-    """Build structured status/progress data for a batch job.
-
-    Owns its offload: the convergence scan walks every per-run log once
-    the job is terminal, so it runs via ``asyncio.to_thread``; the status
-    fields themselves are assembled inline.
-    """
-    base = {
-        "job_id": batch_job.job_id,
-        "job_type": batch_job.job_type,
-        "status": batch_job.status,
-        "netlist": batch_job.netlist.name,
-        "total_runs": batch_job.total_runs,
-        "completed_runs": batch_job.completed_runs,
-        "failed_runs": batch_job.failed_runs,
-    }
-
-    if batch_job.status == "running":
-        snap = get_progress_snapshot(batch_job, batch_job.started_at.timestamp())
-        return {
-            **base,
-            "completed": snap["completed"],
-            "total": snap["total"],
-            "failed": snap["failed"],
-            "elapsed_s": snap["elapsed_s"],
-            "eta_s": snap["eta_s"],
-        }
-
-    duration = job_duration_seconds(
-        batch_job.started_at, batch_job.completed_at, label=f"batch job {batch_job.job_id}"
-    )
-
-    out: dict[str, Any] = {
-        **base,
-        "duration": duration,
-        "successful": batch_job.completed_runs - batch_job.failed_runs,
-    }
-    # Omit-when-empty: "error": null breaks clients that validate against
-    # an output schema typing error as string (same class as check_job's
-    # batch branch).
-    if batch_job.error is not None:
-        out["error"] = batch_job.error
-    convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
-    attach_convergence(out, convergence)
-    return out
 
 
 # Substrings that indicate the per-run OP convergence didn't take the
@@ -1215,193 +780,6 @@ _CONVERGENCE_FLAG_SUBSTRINGS: tuple[str, ...] = (
 # — a 400-run Monte Carlo where most runs trip a gmin/source-stepping marker
 # would re-ship ~400 near-identical objects per poll.
 _CONVERGENCE_STRUCTURED_CAP = 25
-
-
-def attach_convergence(out: dict[str, Any], convergence: list[dict[str, Any]]) -> None:
-    """Attach convergence warnings to a structured payload, bounded.
-
-    Thin domain wrapper over ``cap_list`` (the one truncation convention):
-    an empty scan attaches nothing — absence of the key IS the all-clear.
-    """
-    if convergence:
-        cap_list(out, "convergence_warnings", convergence, _CONVERGENCE_STRUCTURED_CAP)
-
-
-def scan_batch_convergence(batch_job: BatchJob) -> list[dict[str, Any]]:
-    """Walk every per-run log and surface convergence-fallback markers.
-
-    Returns an empty list while the job is still running — the per-run
-    logs are still being written and re-reading every poll loop is a
-    waste. Once the job is terminal the result is cached on the
-    ``BatchJob`` so the (status, signal-data) round-trip a typical poll
-    issues doesn't pay for two full walks.
-    """
-    # Scan once the job is terminal (incl. ``interrupted`` — its completed
-    # sub-runs are real results worth surfacing). A hardcoded tuple here used to
-    # omit ``interrupted``, silently skipping the convergence scan for recovered
-    # batches; use the canonical terminal set so the class can't recur.
-    if batch_job.status not in TERMINAL_STATUSES:
-        return []
-    cached = batch_job.convergence_warnings
-    if cached is not None:
-        return cached
-    flagged: list[dict[str, Any]] = []
-    for run_index in sorted(batch_job.run_results.keys()):
-        log_str = batch_job.run_results[run_index].get("log_file")
-        if not log_str:
-            continue
-        text = read_log_text(Path(log_str)).lower()
-        if not text:
-            continue
-        markers = [s for s in _CONVERGENCE_FLAG_SUBSTRINGS if s in text]
-        if markers:
-            flagged.append({"run_index": run_index, "markers": markers})
-    batch_job.convergence_warnings = flagged
-    return flagged
-
-
-def job_duration_seconds(
-    started_at: Any | None,
-    completed_at: Any | None,
-    *,
-    label: str = "job",
-) -> float | None:
-    """Compute ``completed_at - started_at`` in seconds, clamped at 0.
-
-    Guard: clock skew, persistence round-trips, or out-of-order
-    timestamps occasionally produce negative durations. Clamping with a
-    warning surfaces the anomaly without leaking garbage to clients.
-    """
-    if not started_at or not completed_at:
-        return None
-    delta = (completed_at - started_at).total_seconds()
-    if delta < 0:
-        logger.warning(
-            "%s reports negative duration (%.3fs); started_at=%s completed_at=%s — clamping to 0.",
-            label,
-            delta,
-            started_at.isoformat(),
-            completed_at.isoformat(),
-        )
-        return 0.0
-    return delta
-
-
-def _copy_present(out: dict, src: dict, *keys: str) -> None:
-    """Copy each key from src to out when it holds a truthy value (skip empty)."""
-    for k in keys:
-        if src.get(k):
-            out[k] = src[k]
-
-
-async def get_batch_signal_data(
-    batch_job: BatchJob,
-    signal: str,
-    *,
-    filters: dict[str, str] | None = None,
-    raw: bool = False,
-    offset: int = 0,
-    limit: int = 50,
-    at: float | None = None,
-    dialect: str | None = None,
-) -> dict[str, Any]:
-    """Extract structured batch signal data for aggregated or raw mode.
-
-    The ``run_results`` snapshot is taken on the event loop before the
-    first await (a batch runner may still be appending runs); the per-run
-    ``RawRead`` loop — one header+trace parse per matching run — and the
-    per-run log walk behind the convergence scan are offloaded to worker
-    threads, since each can take seconds for a large Monte Carlo batch.
-    """
-    if batch_job.completed_runs == 0:
-        raise BatchJobError(f"No completed runs yet for job {batch_job.job_id}")
-
-    if raw and (offset < 0 or limit < 1):
-        raise BatchJobError(
-            f"Invalid pagination for job {batch_job.job_id}: "
-            f"offset must be >= 0 and limit must be >= 1 (got offset={offset}, limit={limit})"
-        )
-
-    if filters:
-        matching_indices = filter_runs_by_params(batch_job.run_results, filters)
-    else:
-        matching_indices = sorted(batch_job.run_results.keys())
-
-    total_matching = len(matching_indices)
-    if total_matching == 0:
-        raise BatchJobError(
-            f"No runs match the specified filters for job {batch_job.job_id}: {filters}"
-        )
-
-    # Single pre-await snapshot — both modes draw their rows from it below.
-    # Re-reading batch_job.run_results after an await could see rows a
-    # still-appending batch runner added meanwhile, breaking the contract above.
-    matching_run_results = {idx: batch_job.run_results[idx] for idx in matching_indices}
-    total_available = len(batch_job.run_results)
-
-    convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
-
-    if raw:
-        paginated_indices = matching_indices[offset : offset + limit]
-        if not paginated_indices:
-            raise BatchJobError(
-                f"No runs in requested page range for job {batch_job.job_id}: "
-                f"offset={offset}, limit={limit}"
-            )
-        paginated_run_results = {idx: matching_run_results[idx] for idx in paginated_indices}
-        page_stats = await asyncio.to_thread(
-            compute_batch_stats, paginated_run_results, signal, at=at, dialect=dialect
-        )
-        # Mirror the aggregate path's guard: if the signal could not be read
-        # from ANY run in the page, raise instead of silently returning
-        # runs:[] (which reads as "no data produced"). A typo, a .MEAS name,
-        # or a derived expression all land here.
-        if page_stats["run_count"] == 0 and paginated_indices:
-            raise ResultError(
-                f"Signal '{signal}' could not be read from any run of job "
-                f"{batch_job.job_id}. If it is a .MEAS name use measurement_stats; "
-                f"otherwise check the trace name against a run's raw signals.",
-                show_hint=False,
-            )
-        out_raw: dict[str, Any] = {
-            "mode": "raw",
-            "job_id": batch_job.job_id,
-            "job_type": batch_job.job_type,
-            "signal": signal,
-            "runs": page_stats["runs"],
-            "filtered": filters is not None,
-            "total_matching": total_matching,
-            "total_available": total_available,
-            "offset": offset,
-            "limit": limit,
-        }
-        _copy_present(out_raw, page_stats, "step_collapsed_runs", "step_unknown_runs")
-        attach_convergence(out_raw, convergence)
-        return out_raw
-
-    batch_stats = await asyncio.to_thread(
-        compute_batch_stats, matching_run_results, signal, at=at, dialect=dialect
-    )
-    if batch_stats["run_count"] == 0:
-        raise ResultError(f"Signal '{signal}' not found in any completed run")
-
-    out: dict[str, Any] = {
-        "mode": "aggregate",
-        "job_id": batch_job.job_id,
-        "job_type": batch_job.job_type,
-        "signal": signal,
-        "at": at,
-        "run_count": batch_stats["run_count"],
-        "filtered": filters is not None,
-        "total_matching": total_matching,
-        "total_available": total_available,
-        "stats": batch_stats["stats"],
-        "max_case_run": batch_stats["max_case_run"],
-        "min_case_run": batch_stats["min_case_run"],
-    }
-    _copy_present(out, batch_stats, "step_collapsed_runs", "step_unknown_runs")
-    attach_convergence(out, convergence)
-    return out
 
 
 def asc_component_value(editor: AscEditor, ref: str) -> str:

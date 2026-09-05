@@ -560,10 +560,10 @@ def test_runner_cache_survives_repeated_bridge_calls(
     )
     _patch_stub_bootstrap(monkeypatch, cast(Any, state))
     original_import = importlib.import_module
-    runner_module = SimpleNamespace(SimulationRunner=_StubRunner)
+    runner_module = SimpleNamespace(ExperimentRunner=_StubRunner)
 
     def import_module(name: str, package: str | None = None) -> Any:
-        if name == "ltspice_mcp.lib.sim_runner":
+        if name == "ltspice_mcp.lib.experiment_runner":
             return runner_module
         return original_import(name, package)
 
@@ -572,7 +572,7 @@ def test_runner_cache_survives_repeated_bridge_calls(
     api = Api()
 
     async def get_runner() -> object:
-        return state.runners.get_sim_runner(
+        return state.runners.get_experiment_runner(
             asyncio.get_running_loop(),
             simulator_class,
             tmp_path,

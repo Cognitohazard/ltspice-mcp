@@ -25,21 +25,19 @@ from typing import Any, TypeVar
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
-from ltspice_mcp.lib.job_lifecycle import recover, transition
+from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
-    BatchJob,
-    SimulationJob,
+    LegacyJobRecord,
 )
 from ltspice_mcp.lib.observability import emit_job_event
-from ltspice_mcp.lib.raw_parser import has_valid_raw_header
 
 logger = logging.getLogger(__name__)
 
 # Bound to the union job type so the typed views and per-type eviction stay
 # scoped to one job class at a time.
-Job = SimulationJob | BatchJob | ExperimentJob
+Job = LegacyJobRecord | ExperimentJob
 J = TypeVar("J", bound=Job)
 
 # Maximum finished jobs to retain per job type (single-sim, batch, experiment).
@@ -92,7 +90,7 @@ async def _issue_cancels(cancels: list[Awaitable[Any]]) -> None:
         task.cancel()
 
 
-def _cancel_tasks(jobs: list[BatchJob] | list[ExperimentJob]) -> list[Awaitable[Any]]:
+def _cancel_tasks(jobs: list[ExperimentJob]) -> list[Awaitable[Any]]:
     """Cancel each job's still-live task; return the awaits for the bound above.
 
     Requesting cancellation is not the same as being stopped: a task that
@@ -199,14 +197,9 @@ class JobRegistry:
     # ------------------------------------------------------------------
 
     @property
-    def sim_jobs(self) -> _TypedJobView[SimulationJob]:
-        """Writable view of the single-simulation jobs in the union store."""
-        return _TypedJobView(self.jobs, SimulationJob)
-
-    @property
-    def batch_jobs(self) -> _TypedJobView[BatchJob]:
-        """Writable view of the batch (sweep/MC) jobs in the union store."""
-        return _TypedJobView(self.jobs, BatchJob)
+    def legacy_records(self) -> _TypedJobView[LegacyJobRecord]:
+        """Writable view of the pre-0.6 records loaded from disk."""
+        return _TypedJobView(self.jobs, LegacyJobRecord)
 
     @property
     def experiment_jobs(self) -> _TypedJobView[ExperimentJob]:
@@ -216,20 +209,6 @@ class JobRegistry:
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
-
-    def add_sim_job(self, job: SimulationJob) -> None:
-        """Register a simulation job; evict old finished jobs if needed."""
-        self.jobs[job.job_id] = job
-        self._evict_from(self.sim_jobs)
-        self.persist_job(job)
-        emit_job_event("submitted", job, simulator=job.simulator)
-
-    def add_batch_job(self, job: BatchJob) -> None:
-        """Register a batch job; evict old finished batch jobs if needed."""
-        self.jobs[job.job_id] = job
-        self._evict_from(self.batch_jobs)
-        self.persist_job(job)
-        emit_job_event("submitted", job, total_runs=job.total_runs)
 
     def add_experiment_job(
         self,
@@ -257,7 +236,7 @@ class JobRegistry:
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
-        finished.sort(key=lambda pair: pair[1].started_at)
+        finished.sort(key=lambda pair: getattr(pair[1], "started_at", None) or 0)
         for jid, j in finished[:overflow]:
             del jobs_view[jid]
             self._delete_persisted(j)
@@ -286,7 +265,7 @@ class JobRegistry:
         """
         if (
             not self.persist_enabled
-            or job.owner_pid in (0, os.getpid())
+            or getattr(job, "owner_pid", 0) in (0, os.getpid())
             or job.status not in NON_TERMINAL_LIVE_STATUSES
         ):
             return job
@@ -324,7 +303,7 @@ class JobRegistry:
         """
         if (
             not self.persist_enabled
-            or job.owner_pid in (0, os.getpid())
+            or getattr(job, "owner_pid", 0) in (0, os.getpid())
             or job.status not in NON_TERMINAL_LIVE_STATUSES
         ):
             return job
@@ -404,35 +383,18 @@ class JobRegistry:
             fn(job)
 
     def _persist_sync(self, job: Job) -> None:
+        # A legacy record is read-only: this version never wrote it and has
+        # nothing new to say about it, so persisting one would only risk
+        # rewriting an earlier release's file in a shape it cannot read.
+        if not isinstance(job, ExperimentJob):
+            return
         try:
-            if isinstance(job, ExperimentJob):
-                from ltspice_mcp.lib import experiment_store
+            from ltspice_mcp.lib import experiment_store
 
-                experiment_store.save_job(job)
-            else:
-                from ltspice_mcp.lib import job_store
-
-                job_store.save_job(job)
+            experiment_store.save_job(job)
         except Exception as e:
             # Persistence failures must never break simulation flow.
             logger.warning("Failed to persist job %s: %s", job.job_id, e)
-
-    def persist_batch_progress(self, batch_job: BatchJob) -> None:
-        """Persist a batch job's in-progress state, throttled by run count.
-
-        Per-run callbacks for sweeps and Monte Carlo can fire thousands of
-        times per job; serialising the full ``run_results`` dict on each
-        call is O(N²). Write only on a sparse schedule so crash-recovery
-        sees near-current state without paying the quadratic IO cost.
-        """
-        if not self.persist_enabled:
-            return
-        total = batch_job.total_runs
-        done = batch_job.completed_runs
-        # Checkpoint ~20 times per batch plus always on the final run.
-        step = max(1, total // 20) if total else 1
-        if done == total or done % step == 0:
-            self.persist_job(batch_job)
 
     def _delete_persisted(self, job: Job) -> None:
         """Remove a job's on-disk record (used on eviction)."""
@@ -460,15 +422,10 @@ class JobRegistry:
     def _delete_persisted_sync(self, job: Job) -> None:
         """Blocking deletion half, including dependent immutable result sets."""
         try:
-            if self.persist_enabled:
-                if isinstance(job, ExperimentJob):
-                    from ltspice_mcp.lib import experiment_store
+            if self.persist_enabled and isinstance(job, ExperimentJob):
+                from ltspice_mcp.lib import experiment_store
 
-                    experiment_store.delete_job(job, self.working_dir)
-                else:
-                    from ltspice_mcp.lib import job_store
-
-                    job_store.delete_job(job)
+                experiment_store.delete_job(job, self.working_dir)
             from ltspice_mcp.lib import result_store
 
             result_store.invalidate_for_job(self.working_dir, job.job_id)
@@ -500,17 +457,17 @@ class JobRegistry:
     def _read_persisted_jobs(
         self,
         resolved: Path,
-    ) -> tuple[list, list, list, list] | None:
+    ) -> tuple[list, list, list] | None:
         """File-read half of the load — offloadable (touches no registry state)."""
         try:
             from ltspice_mcp.lib import experiment_store, job_store
 
-            sim_jobs, batch_jobs = job_store.load_jobs_for_circuit(resolved)
+            legacy_records = job_store.load_jobs_for_circuit(resolved)
             experiment_jobs, observations = experiment_store.load_pointer_jobs(
                 resolved,
                 self.working_dir,
             )
-            return sim_jobs, batch_jobs, experiment_jobs, observations
+            return legacy_records, experiment_jobs, observations
         except Exception as e:
             logger.warning("Failed to load persisted jobs for %s: %s", resolved, e)
             return None
@@ -561,33 +518,19 @@ class JobRegistry:
 
     def _apply_loaded_jobs(
         self,
-        sim_jobs: list[SimulationJob],
-        batch_jobs: list[BatchJob],
+        legacy_records: list[LegacyJobRecord],
         experiment_jobs: list[ExperimentJob],
         observations: list[dict],
     ) -> None:
-        """Registry-mutation half of the load — loop-only (mutates ``self.jobs``)."""
-        for sj in sim_jobs:
-            if sj.job_id in self.jobs:
-                continue
-            self.jobs[sj.job_id] = sj
-            # If the sim outputs exist on disk, the job may have finished
-            # just before the crash — promote interrupted → completed via
-            # the recovery path so the emitted event is
-            # 'interrupted_recovered', not 'completed'.
-            if sj.status == "interrupted" and has_valid_raw_header(sj.raw_file):
-                sj.error = None
-                # No state arg — the registry owns persistence below.
-                recover(sj, "completed")
-                self.persist_job(sj)
-            elif sj.status == "interrupted":
-                emit_job_event("interrupted_recovered", sj, recovered_as="interrupted")
-        for bj in batch_jobs:
-            if bj.job_id in self.jobs:
-                continue
-            self.jobs[bj.job_id] = bj
-            if bj.status == "interrupted":
-                emit_job_event("interrupted_recovered", bj, recovered_as="interrupted")
+        """Registry-mutation half of the load — loop-only (mutates ``self.jobs``).
+
+        A legacy record is registered so a caller asking about it is told what
+        it is; there is no recovery to attempt, because this version has no
+        runner that could resume or re-read it.
+        """
+        for record in legacy_records:
+            if record.job_id not in self.jobs:
+                self.jobs[record.job_id] = record
         for experiment in experiment_jobs:
             if experiment.job_id in self.jobs:
                 continue
@@ -658,45 +601,16 @@ class JobRegistry:
         for a circular reference.
         """
         own_pid = os.getpid()
-        # Snapshot both views before iterating: the typed views iterate the
-        # live union dict lazily, and the awaits below suspend this coroutine
-        # — a concurrent job registration during a cancel would otherwise
-        # raise "dictionary changed size during iteration".
+        # Snapshot the view before iterating: the typed view iterates the live
+        # union dict lazily, and the awaits below suspend this coroutine — a
+        # concurrent job registration during a cancel would otherwise raise
+        # "dictionary changed size during iteration".
         #
         # Only THIS process's jobs are cancelled: a parallel server session's
         # live job also sits in the registry as running (loaded from its
         # sidecar with the owner still alive) and must not be killed or
-        # relabeled by our shutdown.
-        sim_cancels: list[Awaitable[Any]] = []
-        for job in list(self.sim_jobs.values()):
-            if job.status in NON_TERMINAL_LIVE_STATUSES and job.owner_pid == own_pid:
-                # Match the runner to the job's own simulator: runners are
-                # cached per simulator class, and the kill scopes by that
-                # class's executable names.
-                sim_runner = runners.get_existing_sim_runner(job.simulator)
-                if sim_runner is not None:
-                    sim_cancels.append(sim_runner.cancel(job, session_state))
-                else:
-                    transition(job, "cancelled")
-                    self.persist_job(job)
-        await _issue_cancels(sim_cancels)
-
-        batch_cancels: list[Awaitable[Any]] = []
-        for batch_job in list(self.batch_jobs.values()):
-            if batch_job.status == "running" and batch_job.owner_pid == own_pid:
-                # Route to the runner instance that launched the batch — with
-                # several runners of one kind cached, most-recent isn't
-                # necessarily the owner of this job's cancel event.
-                batch_runner = runners.get_batch_runner_for(batch_job)
-                if batch_runner is not None:
-                    batch_cancels.append(batch_runner.cancel(batch_job, session_state))
-                else:
-                    transition(batch_job, "cancelled")
-                    self.persist_job(batch_job)
-        await _issue_cancels(batch_cancels)
-
-        await _issue_cancels(_cancel_tasks(list(self.batch_jobs.values())))
-
+        # relabeled by our shutdown. A legacy record is never running under
+        # this version — nothing here could have launched one.
         experiments = list(self.experiment_jobs.values())
         await _issue_cancels(
             [

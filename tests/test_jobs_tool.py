@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import jsonschema
 import pytest
 
-from ltspice_mcp.lib import experiment_store, now, recent
+from ltspice_mcp.lib import analysis_snapshot, experiment_store, now, recent
 from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest
 from ltspice_mcp.lib.experiment_types import (
     AnalysisStage,
@@ -37,7 +37,7 @@ from ltspice_mcp.tools.experiments import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import fake_simulator, make_batch_job, make_sim_job
+from tests.conftest import fake_simulator, write_legacy_sidecar
 
 
 class MockSimulator:
@@ -426,12 +426,21 @@ class TestReceiptSnapshotCoherence:
         job.analysis = AnalysisStage(
             status="completed",
             request={"recipes": []},
-            result={
-                "rows": [
-                    {"case_id": produced.case_id, "status": produced.status},
-                    {"case_id": failed.case_id, "status": failed.status},
-                ]
-            },
+            result=analysis_snapshot.envelope(
+                {
+                    "top": {
+                        "rows": [
+                            {"case_id": produced.case_id, "status": produced.status},
+                            {"case_id": failed.case_id, "status": failed.status},
+                        ],
+                        "next": None,
+                    },
+                    "results": {},
+                    "natural_cursor_base": None,
+                    "natural_has_next": False,
+                    "natural_deferred": False,
+                }
+            ),
             observations=[
                 {
                     "code": "analysis_finished",
@@ -669,90 +678,6 @@ class TestDurableProgress:
         assert data["progress"]["terminal"] == 1
         assert data["progress"]["remaining"] == 2
         assert all(isinstance(value, int) for value in data["progress"].values())
-
-    @pytest.mark.parametrize(
-        ("status", "expected_failed", "expected_cancelled"),
-        [
-            ("failed", 3, 0),
-            ("cancelled", 1, 2),
-            ("interrupted", 3, 0),
-        ],
-    )
-    async def test_terminal_batch_remainder_reconciles_through_the_shared_projection(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        status: str,
-        expected_failed: int,
-        expected_cancelled: int,
-    ):
-        circuit = _circuit(work_dir)
-        raw = work_dir / f"{status}.raw"
-        log = work_dir / f"{status}.log"
-        raw.write_bytes(b"Title: mock")
-        log.write_text("ok")
-        job = make_batch_job(
-            f"legacy_batch_{status}",
-            status=status,
-            netlist=circuit,
-            total_runs=4,
-            completed_runs=2,
-            failed_runs=1,
-            run_results={
-                0: {"raw_file": str(raw), "log_file": str(log), "params": {}},
-                1: {"raw_file": "", "log_file": str(log), "params": {}},
-            },
-        )
-        state_no_sim.all_jobs[job.job_id] = job
-
-        data = _assert_jobs_schema(
-            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
-        )
-
-        assert data["completeness"]["submitted"] == 2
-        assert data["completeness"]["produced"] == 1
-        assert data["completeness"]["failed"] == expected_failed
-        assert data["completeness"]["cancelled"] == expected_cancelled
-        assert data["progress"] == progress_from_completeness(Completeness(**data["completeness"]))
-        assert data["progress"]["terminal"] == 4
-        assert data["progress"]["remaining"] == 0
-
-    @pytest.mark.parametrize(
-        ("status", "raw_name", "terminal", "remaining"),
-        [
-            ("queued", None, 0, 1),
-            ("completed", "single.raw", 1, 0),
-        ],
-    )
-    async def test_single_run_progress_uses_the_same_helper_queued_through_terminal(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        status: str,
-        raw_name: str | None,
-        terminal: int,
-        remaining: int,
-    ):
-        circuit = _circuit(work_dir)
-        raw = work_dir / raw_name if raw_name is not None else None
-        if raw is not None:
-            raw.write_bytes(b"Title: mock")
-        job = make_sim_job(
-            f"legacy_single_{status}",
-            status=status,
-            netlist=circuit,
-            raw_file=raw,
-        )
-        state_no_sim.all_jobs[job.job_id] = job
-
-        data = _assert_jobs_schema(
-            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
-        )
-
-        assert data["progress"] == progress_from_completeness(Completeness(**data["completeness"]))
-        assert data["progress"]["expanded"] == 1
-        assert data["progress"]["terminal"] == terminal
-        assert data["progress"]["remaining"] == remaining
 
 
 @pytest.mark.asyncio
@@ -995,26 +920,6 @@ class TestCancellationAuthority:
         assert data["error"]["code"] == "cancel_not_authorized"
         assert job.status == "running"
 
-    async def test_foreign_legacy_cancel_has_honest_authority_error(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-    ):
-        job = make_sim_job(
-            "legacy_foreign",
-            status="running",
-            netlist=_circuit(work_dir),
-            owner_pid=-1,
-        )
-        state_no_sim.all_jobs[job.job_id] = job
-
-        result = await handle_jobs(_args("cancel", job_id=job.job_id), state_no_sim)
-        data = _assert_jobs_schema(result)
-
-        assert result.isError
-        assert data["error"]["code"] == "cancel_not_authorized"
-        assert "no transferable control token" in data["error"]["message"]
-
 
 @pytest.mark.asyncio
 class TestListAndRunsPagination:
@@ -1173,107 +1078,43 @@ class TestListAndRunsPagination:
 
 
 @pytest.mark.asyncio
-class TestLegacyPassthrough:
-    async def test_owned_legacy_cancel_delegates_to_legacy_handler(
+class TestLegacyRecordCancel:
+    """A record an earlier release wrote has nothing to cancel: this version
+    has no runner that could have launched it, so ``jobs(cancel)`` says what it
+    is rather than reporting a cancellation that never happened."""
+
+    async def test_a_running_record_loads_terminal_so_cancel_is_a_no_op(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ):
-        import ltspice_mcp.tools.simulation as simulation_tools
+        # The sidecar still says "running" — the release that wrote it died
+        # mid-run. Nothing here can be executing it, so it loads interrupted
+        # and cancel reports that rather than acknowledging a kill that never
+        # happened.
+        circuit = _circuit(work_dir)
+        write_legacy_sidecar(circuit, "legacy_owned", status="running")
+        state_no_sim.job_registry.persist_enabled = True
+        state_no_sim.ensure_jobs_loaded_for(circuit)
 
-        job = make_sim_job(
-            "legacy_owned",
-            status="running",
-            netlist=_circuit(work_dir),
-        )
-        state_no_sim.all_jobs[job.job_id] = job
+        result = await handle_jobs(_args("cancel", job_id="legacy_owned"), state_no_sim)
+        data = _assert_jobs_schema(result)
 
-        async def cancel(args, _state):
-            assert args.job_id == job.job_id
-            job.status = "cancelled"
-            job.done_event.set()
-            return SimpleNamespace()
+        assert not result.isError
+        assert data["status"] == "interrupted"
+        assert "already terminal" in data["hint"]
 
-        legacy_cancel = AsyncMock(side_effect=cancel)
-        monkeypatch.setattr(simulation_tools, "handle_cancel_job", legacy_cancel)
-
-        data = _assert_jobs_schema(
-            await handle_jobs(_args("cancel", job_id=job.job_id), state_no_sim)
-        )
-
-        legacy_cancel.assert_awaited_once()
-        assert data["status"] == "cancelled"
-
-    async def test_single_and_batch_status_wait_runs_follow_job_dialect(
+    async def test_status_carries_the_records_own_observation(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
     ):
         circuit = _circuit(work_dir)
-        raw = work_dir / "legacy.raw"
-        log = work_dir / "legacy.log"
-        raw.write_bytes(b"Title: mock")
-        log.write_text("ok")
-        sim = make_sim_job(
-            "legacy_sim",
-            netlist=circuit,
-            simulator="NGspiceSimulator",
-            raw_file=raw,
-            log_file=log,
-        )
-        sim.done_event.set()
-        batch = make_batch_job(
-            "legacy_batch",
-            netlist=circuit,
-            simulator="NGspiceSimulator",
-            total_runs=1,
-            completed_runs=1,
-            run_results={
-                0: {
-                    "raw_file": str(raw),
-                    "log_file": str(log),
-                    "params": {"R1": "1k"},
-                }
-            },
-        )
-        batch.done_event.set()
-        state_no_sim.all_jobs[sim.job_id] = sim
-        state_no_sim.all_jobs[batch.job_id] = batch
-
-        responses = [
-            await handle_jobs(_args("status", job_id=sim.job_id), state_no_sim),
-            await handle_jobs(
-                _args("wait", job_id=batch.job_id, timeout_s=0),
-                state_no_sim,
-            ),
-            await handle_jobs(_args("runs", job_id=sim.job_id), state_no_sim),
-            await handle_jobs(_args("runs", job_id=batch.job_id), state_no_sim),
-        ]
-        payloads = [_assert_jobs_schema(result) for result in responses]
-
-        assert all(data["dialect"] == "ngspice" for data in payloads)
-        assert payloads[1]["timed_out"] is False
-        assert payloads[2]["items"][0]["raw"] == str(raw)
-        assert payloads[3]["items"][0]["assignments"] == {"R1": "1k"}
-
-    async def test_existing_legacy_job_never_reports_job_not_found(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-    ):
-        job = make_sim_job(
-            "legacy_failed",
-            status="failed",
-            netlist=_circuit(work_dir),
-            error="simulator failed",
-        )
-        state_no_sim.all_jobs[job.job_id] = job
+        write_legacy_sidecar(circuit, "legacy_done", status="completed")
+        state_no_sim.job_registry.persist_enabled = True
+        state_no_sim.ensure_jobs_loaded_for(circuit)
 
         data = _assert_jobs_schema(
-            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+            await handle_jobs(_args("status", job_id="legacy_done"), state_no_sim)
         )
-
-        assert data["job_id"] == job.job_id
-        assert data["status"] == "failed"
-        assert data.get("error", {}).get("code") != "job_not_found"
+        assert [item["code"] for item in data["observations"]] == ["legacy_job_record"]

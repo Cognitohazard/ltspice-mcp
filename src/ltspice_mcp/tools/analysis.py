@@ -119,7 +119,7 @@ from ltspice_mcp.lib.signal_analysis import (
     downsample_minmax,
     window_and_clean,
 )
-from ltspice_mcp.state import BatchJob, ExperimentJob, SessionState
+from ltspice_mcp.state import ExperimentJob, SessionState, legacy_record_message
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     MEAS_ERRORS_SCHEMA,
@@ -459,15 +459,13 @@ async def _experiment_case(
 def _run_meta(job_id: str | None, run_index: int, state: SessionState) -> dict | None:
     """Identify which job run an analysis addressed: ``{run_index, params}``.
 
-    ``None`` for a direct ``raw_file`` (there's no run to name). Cheap: a sweep /
-    MC run's swept-parameter values are already on the ``RunRef`` resolved during
-    path lookup, so echoing them tells the caller which point of the sweep this
-    result is — no extra ``batch_results`` round-trip to map run_index → params.
+    ``None`` for a direct ``raw_file`` — there is no run to name. A consolidated
+    caller resolves the run itself and injects the source, so the assignments
+    travel on the injected identity rather than being looked up again here.
     """
     if not job_id:
         return None
-    run = services.resolve_run(job_id, state, run_index)
-    return {"run_index": run.index, "params": dict(run.params)}
+    return {"run_index": run_index, "params": {}}
 
 
 async def _resolve_artifact_dest(
@@ -500,11 +498,13 @@ async def _resolve_artifact_dest(
         if circuit_dir is not None:
             dest_anchor = circuit_dir
         elif job_id:
-            job = await services.resolve_job_async(job_id, state)
-            dest_anchor = services.legacy_job_netlist(
-                job,
-                operation="Legacy artifact export",
-            ).parent
+            # Only a caller that resolved the run itself can name a circuit
+            # directory (``circuit_dir`` above); a bare job_id cannot, because
+            # an experiment spans several decks.
+            raise ResultError(
+                "Pass out_dir, or resolve the run first — a job id alone does not "
+                "name one circuit directory to write beside."
+            )
         else:
             dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
         # Sidecar next to the anchor — but if the anchor is already inside a
@@ -2786,11 +2786,7 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
             resolved_job = None
             with contextlib.suppress(Exception):
                 resolved_job = await services.resolve_job_async(args.job_id, state)
-            if resolved_job is not None:
-                netlist = services.legacy_job_netlist(
-                    resolved_job,
-                    operation="noise_integral",
-                )
+            del resolved_job  # an experiment spans decks; no single .NOISE line
         resolved = _noise_input_source_unit(netlist)
         if resolved is not None:
             unit = resolved
@@ -2930,102 +2926,6 @@ def _apply_when_axis_swap(
     return axis_map
 
 
-def _aggregate_job_measurements(
-    batch_job: BatchJob,
-) -> tuple[
-    dict[str, list[float | None]],
-    int,
-    dict[str, AggregatedField],
-    list[str],
-    list[dict],
-    dict[str, list[float | None]],
-]:
-    """Walk every completed run's .log and concatenate ``.MEAS`` results.
-
-    The MC engine emits one log per run; this reconciles by collecting
-    per-run scalar values keyed by .MEAS name. The caller has already
-    resolved ``batch_job`` from the job store.
-
-    For ``WHEN``-style .MEAS, the per-run scalar in ``values`` is the
-    trigger level (constant across runs by definition) — the interesting
-    per-run axis lives in the folded ``at`` field. When that pattern is
-    detected (constant ``values``, varying ``at``) the aggregator swaps to
-    the ``at`` axis automatically.
-
-    Returns ``(flat_values, run_count, axis_map, diagnostics, per_run, at_map)``
-    where ``axis_map[name]`` is ``"value"`` or ``"at"`` describing which field
-    was aggregated, ``diagnostics`` carries deduplicated per-run log
-    errors/warnings explaining missing measurements (e.g. ngspice's
-    batch-mode .meas skip) so an empty aggregate can relay the cause, and
-    ``at_map`` is the unswapped per-run crossing list per name.
-    """
-    if not batch_job.run_results:
-        raise ResultError(
-            f"Batch job {batch_job.job_id!r} has no completed runs yet — wait for it "
-            "to finish (use jobs(action='status') to monitor)."
-        )
-
-    samples: dict[str, _MeasSamples] = {}
-    diagnostics: list[str] = []
-    seen_diagnostics: set[str] = set()
-    runs_processed = 0
-    # Per-run corner map, in the SAME order as every value list below — so a
-    # min_step_index/max_step_index dereferences straight to the run's params.
-    per_run: list[dict] = []
-    for run_index in sorted(batch_job.run_results.keys()):
-        run = batch_job.run_results[run_index]
-        log_path_str = run.get("log_file")
-        if not log_path_str:
-            continue
-        try:
-            data = parse_measurements(Path(log_path_str))
-        except Exception:
-            # Missing/unreadable per-run log — skip silently. Aggregation
-            # over partial runs is the documented behaviour.
-            continue
-        runs_processed += 1
-        per_run.append({"run_index": run_index, "params": dict(run.get("params") or {})})
-        # parse_measurements only populates errors/warnings on its
-        # no-measurements branch, so this collects exactly the lines that
-        # explain an absence. Deduplicated: every run of a batch typically
-        # repeats the same simulator diagnostic verbatim.
-        for diag in list(data.get("errors") or []) + list(data.get("warnings") or []):
-            if diag not in seen_diagnostics:
-                seen_diagnostics.add(diag)
-                diagnostics.append(diag)
-        for name, entry in data.get("measurements", {}).items():
-            row = entry.get("values", [])
-            scalar = row[0] if row else None
-            at_raw = entry.get("at")
-            # Per-step lists collapse to the first scalar: batch runs
-            # usually have step_count=1 so this is a no-op, but guard anyway.
-            if isinstance(at_raw, list):
-                at_raw = next((v for v in at_raw if v is not None), None)
-            at_val = float(at_raw) if isinstance(at_raw, int | float) else None
-            bucket = samples.get(name)
-            if bucket is None:
-                bucket = _MeasSamples(
-                    values=[None] * (runs_processed - 1),
-                    ats=[None] * (runs_processed - 1),
-                )
-                samples[name] = bucket
-            bucket["values"].append(scalar)
-            bucket["ats"].append(at_val)
-        # Backfill any names that didn't appear in this run.
-        for bucket in samples.values():
-            if len(bucket["values"]) < runs_processed:
-                bucket["values"].append(None)
-                bucket["ats"].append(None)
-
-    flat_values: dict[str, list[float | None]] = {n: b["values"] for n, b in samples.items()}
-    at_map: dict[str, list[float | None]] = {n: b["ats"] for n, b in samples.items()}
-    axis_map = _apply_when_axis_swap(
-        flat_values, at_map, _meas_kinds_from_netlist(batch_job.netlist)
-    )
-
-    return flat_values, runs_processed, axis_map, diagnostics, per_run, at_map
-
-
 def _aggregate_log_measurements(
     log_path: Path,
     netlist: Path | None = None,
@@ -3106,70 +3006,17 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             lambda: _aggregate_log_measurements(log_path, injected.netlist),
         )
     elif args.job_id is not None:
+        # Both shapes this branch served — a batch's per-run log walk and a
+        # single simulation's one log — belonged to job types earlier releases
+        # wrote. An experiment's .MEAS results are read per case through
+        # analyze_results, which injects the resolved source above.
         job = await services.resolve_job_async(args.job_id, state)
-        job_netlist = services.legacy_job_netlist(job, operation="measurement_stats")
-        if isinstance(job, BatchJob):
-            # Offloaded: the walk parses one .log per run through spicelib —
-            # hundreds of unbounded parses on a large Monte Carlo batch, which
-            # must not stall the event loop. Off-loop reads of the job are safe
-            # here: the walk snapshots run_results keys up front and per-run
-            # entries are write-once at run completion; a run landing mid-walk
-            # is at worst omitted, which the partial-aggregate caveat below
-            # already surfaces.
-            (
-                flat_values,
-                run_count,
-                axis_map,
-                run_diags,
-                per_run,
-                at_map,
-            ) = await services.bounded_parse(
-                job_netlist,
-                lambda: _aggregate_job_measurements(job),
+        if isinstance(job, ExperimentJob):
+            raise ResultError(
+                f"Job {args.job_id!r} is an experiment; its .MEAS results are read per "
+                "case. Use analyze_results with the measurements recipe."
             )
-            # A partial aggregate is a measurement assumption the caller must
-            # see: a still-running batch silently reading as final stats was a
-            # recurring field trap.
-            if run_count < job.total_runs:
-                state_word = "still running" if job.status in ("queued", "running") else job.status
-                caveats.append(
-                    f"Stats aggregate {run_count} of {job.total_runs} runs "
-                    f"(batch {state_word}) — partial, not final."
-                )
-            if not flat_values:
-                if run_count == 0:
-                    raise ResultError(
-                        f"No .MEAS results found across the runs of job {args.job_id!r} "
-                        "— none of the per-run log files could be read."
-                    )
-                # Relay WHY from the per-run logs, in the same indented format
-                # as the single-log branch — the cause is often stated there
-                # verbatim (e.g. ngspice's batch-mode .meas skip). Capped:
-                # run-unique lines (timestamps, values) survive deduplication,
-                # which would otherwise grow the message one line per run on
-                # a large Monte Carlo batch.
-                shown = run_diags[:_MAX_RELAYED_RUN_DIAGNOSTICS]
-                hidden = len(run_diags) - len(shown)
-                if hidden:
-                    shown.append(f"... and {hidden} more distinct diagnostic lines")
-                err_block = _diagnostics_block(
-                    shown, "(run logs contained no .MEAS results and no diagnostics)"
-                )
-                raise ResultError(
-                    f"No .MEAS results found across the runs of job {args.job_id!r}:\n{err_block}"
-                )
-            steps_label = f"{run_count} run(s)"
-        else:
-            # Single-simulation job: aggregate its one log, which is the same
-            # physical shape as the ``log_file`` input (a .step run carries one
-            # value per step; a plain run collapses to n=1 stats).
-            # ``resolve_log_file`` gates on completed status like every other
-            # job-id-addressed read; the path is a trusted server artifact.
-            log_path = services.resolve_log_file(args.job_id, state)
-            flat_values, axis_map, steps_label, at_map = await services.bounded_parse(
-                log_path,
-                lambda: _aggregate_log_measurements(log_path, job_netlist),
-            )
+        raise ResultError(legacy_record_message(args.job_id))
     elif args.log_file is not None:
         log_path = services.resolve_analysis_source(args, state).log
         assert log_path is not None

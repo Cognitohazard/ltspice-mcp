@@ -1,51 +1,36 @@
-"""Per-circuit JSON persistence for simulation and batch jobs.
+"""Per-circuit JSON persistence for job records.
 
 Jobs are stored in ``{circuit_parent}/.ltspice-mcp/jobs/{job_id}.json`` so they
-travel with the circuit they belong to. Writes are atomic (tempfile + rename).
-Loads are lazy — the server only reads a circuit's sidecar directory the first
-time a tool touches that circuit in a session.
+travel with the circuit they belong to. Loads are lazy — the server only reads a
+circuit's sidecar directory the first time a tool touches that circuit.
 
-Jobs whose server process died while they were running come back as
-``interrupted``; a record whose owning process is still alive — a parallel
-server session's live job — keeps its status as written (see
-``_finalize_loaded_status``).
+This version writes experiment records only (through ``experiment_store``); the
+simulation and batch records earlier releases wrote are read, never written.
+They come back as :class:`LegacyJobRecord`: recognised, listed, and inert. A
+directory full of them must not break the registry or the startup preload, and a
+caller that asks about one must be told why it has no results rather than left
+waiting on a job nothing will ever finish.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import parse_iso_datetime
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
-    TERMINAL_STATUSES,
-    BatchJob,
-    MonteCarloConfig,
-    SimulationJob,
-    SweepConfig,
-    SweepDimension,
+    LegacyJobRecord,
 )
-from ltspice_mcp.lib.store_common import (
-    JOB_SCHEMA,
-    accept_schema,
-    atomic_write_json,
-    owner_alive,
-    pid_of,
-)
+from ltspice_mcp.lib.store_common import JOB_SCHEMA, accept_schema
 
 logger = logging.getLogger(__name__)
 
 SIDECAR_DIRNAME = ".ltspice-mcp"
 JOBS_SUBDIR = "jobs"
 SCHEMA = JOB_SCHEMA
-# The experiment coordinator writes its own records into this same directory,
-# so every scan here meets them. Declared a sibling: skipped without a warning,
-# because their presence is the layout working as designed.
 # v2 (2026-05-30): SweepDimension gained an optional ``values`` list and nullable
 # ``start``/``stop`` for explicit discrete-value sweeps. The shape change is why
 # the version bumped — so a v1-only reader rejects v2 records via _accept_schema
@@ -61,14 +46,12 @@ INTERRUPTED_STATUS = "interrupted"
 def _migrate_v1_to_v2(data: dict) -> dict:
     """v1 -> v2: ``SweepDimension`` gained an optional ``values`` list and nullable
     ``start``/``stop`` (explicit discrete-value sweeps). No data transform is
-    needed — the v2 reader treats a missing ``values`` as ``None`` and reads v1's
-    always-present ``start``/``stop`` unchanged — so this only re-stamps the
+    needed — those fields are no longer read at all — so this only re-stamps the
     version (done by ``_migrate``). Idempotent-safe: returns ``data`` unchanged."""
     return data
 
 
 # Registered migration functions. Key N transforms v(N) into v(N+1).
-# Keep each function focused and reversible where possible.
 _MIGRATIONS: dict[int, Any] = {1: _migrate_v1_to_v2}
 
 
@@ -81,108 +64,15 @@ def _job_file(job_id: str, dir_: Path) -> Path:
     return dir_ / f"{job_id}.json"
 
 
-def _serialize_sim_job(job: SimulationJob) -> dict:
-    return {
-        "schema": SCHEMA,
-        "schema_version": SCHEMA_VERSION,
-        "job_id": job.job_id,
-        "kind": "simulation",
-        # Additive within schema v2: older records lack it; readers treat a
-        # missing pid as a dead owner (the pre-pid behavior).
-        "pid": job.owner_pid,
-        "netlist": str(job.netlist),
-        "simulator": job.simulator,
-        "status": job.status,
-        "started_at": job.started_at.isoformat(),
-        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-        "raw_file": str(job.raw_file) if job.raw_file else None,
-        "log_file": str(job.log_file) if job.log_file else None,
-        "error": job.error,
-        # Additive within schema v2: older records lack these; readers treat
-        # a missing key as "no alias requested" (the pre-alias behavior).
-        "output_basename": job.output_basename,
-        "output_alias_raw": str(job.output_alias_raw) if job.output_alias_raw else None,
-        "output_alias_log": str(job.output_alias_log) if job.output_alias_log else None,
-        "output_alias_note": job.output_alias_note,
-    }
+def _effective_status(raw_status: str) -> str:
+    """The status a pre-0.6 record reports here.
 
-
-def _serialize_batch_job(job: BatchJob) -> dict:
-    # dataclasses.asdict handles nested SweepDimension / MonteCarloConfig cleanly.
-    sweep_cfg = asdict(job.sweep_config) if job.sweep_config else None
-    mc_cfg = asdict(job.mc_config) if job.mc_config else None
-    # run_results may contain Path objects inside values — coerce to str.
-    run_results_clean: dict[str, dict[str, Any]] = {}
-    for idx, res in job.run_results.items():
-        run_results_clean[str(idx)] = {
-            "raw_file": str(res["raw_file"]) if res.get("raw_file") else None,
-            "log_file": str(res["log_file"]) if res.get("log_file") else None,
-            "params": dict(res.get("params") or {}),
-        }
-
-    return {
-        "schema": SCHEMA,
-        "schema_version": SCHEMA_VERSION,
-        "job_id": job.job_id,
-        "kind": "batch",
-        "pid": job.owner_pid,
-        "job_type": job.job_type,
-        "netlist": str(job.netlist),
-        "simulator": job.simulator,
-        "total_runs": job.total_runs,
-        "completed_runs": job.completed_runs,
-        "failed_runs": job.failed_runs,
-        "status": job.status,
-        "started_at": job.started_at.isoformat(),
-        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-        "error": job.error,
-        "run_results": run_results_clean,
-        "sweep_config": sweep_cfg,
-        "mc_config": mc_cfg,
-    }
-
-
-def serialize_job(job: SimulationJob | BatchJob) -> dict:
-    """Return a JSON-ready dict for either job flavour."""
-    if isinstance(job, SimulationJob):
-        return _serialize_sim_job(job)
-    return _serialize_batch_job(job)
-
-
-def save_job(job: SimulationJob | BatchJob) -> Path:
-    """Persist a job to its circuit's sidecar directory. Returns the file path."""
-    target_dir = sidecar_dir(job.netlist)
-    path = _job_file(job.job_id, target_dir)
-    atomic_write_json(path, serialize_job(job))
-    logger.debug("Persisted job %s to %s", job.job_id, path)
-    return path
-
-
-def delete_job(job: SimulationJob | BatchJob) -> None:
-    """Delete a job's persisted JSON file, if present."""
-    path = _job_file(job.job_id, sidecar_dir(job.netlist))
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-
-
-def _finalize_loaded_status(
-    raw_status: str, owner_pid: int | None = None, *, own_is_alive: bool = False
-) -> tuple[str, bool]:
-    """Translate a loaded status.
-
-    Returns (effective_status, was_interrupted). Running/queued jobs whose
-    owning process is gone come back as ``interrupted``; if the owner is
-    still alive (a parallel server session's live job), the status stands
-    as written. ``own_is_alive`` is forwarded to ``owner_alive`` — see its
-    docstring for which callers pass True.
+    Any live-looking status becomes ``interrupted``, whatever pid the file
+    names: that pid belonged to a process running a release this one has no
+    runner for, so nothing here can still be executing the job. Reporting it as
+    running would leave a caller waiting on a job that will never report.
     """
-    if raw_status in NON_TERMINAL_LIVE_STATUSES and not owner_alive(
-        owner_pid, own_is_alive=own_is_alive
-    ):
-        return INTERRUPTED_STATUS, True
-    return raw_status, False
+    return INTERRUPTED_STATUS if raw_status in NON_TERMINAL_LIVE_STATUSES else raw_status
 
 
 def _accept_schema(data: dict, source: Path) -> bool:
@@ -203,126 +93,25 @@ def _accept_schema(data: dict, source: Path) -> bool:
     )
 
 
-def _deserialize_sim_job(data: dict) -> SimulationJob:
-    pid = pid_of(data)
-    status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)), pid)
-    started = parse_iso_datetime(data.get("started_at"))
-    if started is None:
-        from ltspice_mcp.lib import now as _now
+def _read_legacy_record(data: dict) -> LegacyJobRecord:
+    """Build the inert record a pre-0.6 sidecar becomes.
 
-        started = _now()
-    raw_file = Path(data["raw_file"]) if data.get("raw_file") else None
-    log_file = Path(data["log_file"]) if data.get("log_file") else None
-    alias_raw = Path(data["output_alias_raw"]) if data.get("output_alias_raw") else None
-    alias_log = Path(data["output_alias_log"]) if data.get("output_alias_log") else None
-    job = SimulationJob(
-        job_id=str(data["job_id"]),
-        netlist=Path(str(data["netlist"])),
-        simulator=str(data.get("simulator", "unknown")),
-        status=status,  # type: ignore[arg-type]
-        started_at=started,
-        completed_at=parse_iso_datetime(data.get("completed_at")),
-        raw_file=raw_file,
-        log_file=log_file,
-        error=("Server restarted while job was running" if interrupted else data.get("error")),
-        # The record's pid, NOT ours: a loaded job belongs to whichever
-        # process persisted it (0 when the record predates the pid field).
-        owner_pid=pid or 0,
-        output_basename=data.get("output_basename"),
-        output_alias_raw=alias_raw,
-        output_alias_log=alias_log,
-        output_alias_note=data.get("output_alias_note"),
-    )
-    # A loaded terminal job's work is over — pre-trigger the done event so
-    # callers that await it don't block forever. (A parallel session's live
-    # job stays unset; its completion is signalled only in the owner.)
-    if job.status in TERMINAL_STATUSES:
-        job.done_event.set()
-    return job
-
-
-def _deserialize_sweep_config(data: dict | None) -> SweepConfig | None:
-    if not data:
-        return None
-    dims = [
-        SweepDimension(
-            type=d.get("type", "component"),
-            name=str(d.get("name", "")),
-            start=None if d.get("start") is None else float(d["start"]),
-            stop=None if d.get("stop") is None else float(d["stop"]),
-            step=d.get("step"),
-            points=d.get("points"),
-            scale=str(d.get("scale", "linear")),
-            values=([float(v) for v in d["values"]] if d.get("values") is not None else None),
-        )
-        for d in data.get("dimensions", [])
-    ]
-    return SweepConfig(netlist=Path(str(data.get("netlist", ""))), dimensions=dims)
-
-
-def _deserialize_mc_config(data: dict | None) -> MonteCarloConfig | None:
-    if not data:
-        return None
-
-    def _coerce_tol_map(raw: dict | None) -> dict[str, tuple[float, str]]:
-        out: dict[str, tuple[float, str]] = {}
-        for k, v in (raw or {}).items():
-            if isinstance(v, (list, tuple)) and len(v) == 2:
-                out[str(k)] = (float(v[0]), str(v[1]))
-        return out
-
-    return MonteCarloConfig(
+    Only the four fields a caller can still be told about survive: which job
+    it was, which circuit it belonged to, what shape it claimed, and the
+    status the earlier release last wrote. Everything the old readers needed
+    (per-run results, sweep and Monte Carlo configs, artifact paths) is
+    deliberately dropped — this version cannot act on any of it.
+    """
+    status = _effective_status(str(data.get("status", INTERRUPTED_STATUS)))
+    return LegacyJobRecord(
+        job_id=str(data.get("job_id", "")),
         netlist=Path(str(data.get("netlist", ""))),
-        type_tolerances=_coerce_tol_map(data.get("type_tolerances")),
-        component_overrides=_coerce_tol_map(data.get("component_overrides")),
-        num_runs=int(data.get("num_runs", 100)),
+        kind="batch" if data.get("kind") == "batch" else "sim",
+        status=status,
     )
 
 
-def _deserialize_batch_job(data: dict) -> BatchJob:
-    pid = pid_of(data)
-    status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)), pid)
-    started = parse_iso_datetime(data.get("started_at"))
-    if started is None:
-        from ltspice_mcp.lib import now as _now
-
-        started = _now()
-
-    run_results: dict[int, dict] = {}
-    for key, res in (data.get("run_results") or {}).items():
-        try:
-            idx = int(key)
-        except (TypeError, ValueError):
-            continue
-        run_results[idx] = {
-            "raw_file": res.get("raw_file"),
-            "log_file": res.get("log_file"),
-            "params": dict(res.get("params") or {}),
-        }
-
-    bj = BatchJob(
-        job_id=str(data["job_id"]),
-        job_type=str(data.get("job_type", "sweep")),  # type: ignore[arg-type]
-        netlist=Path(str(data["netlist"])),
-        simulator=str(data.get("simulator", "")),
-        total_runs=int(data.get("total_runs", 0)),
-        completed_runs=int(data.get("completed_runs", 0)),
-        failed_runs=int(data.get("failed_runs", 0)),
-        status=status,  # type: ignore[arg-type]
-        started_at=started,
-        completed_at=parse_iso_datetime(data.get("completed_at")),
-        error=("Server restarted while job was running" if interrupted else data.get("error")),
-        run_results=run_results,
-        sweep_config=_deserialize_sweep_config(data.get("sweep_config")),
-        mc_config=_deserialize_mc_config(data.get("mc_config")),
-        owner_pid=pid or 0,
-    )
-    if bj.status in TERMINAL_STATUSES:
-        bj.done_event.set()
-    return bj
-
-
-def _load_job_file(path: Path) -> SimulationJob | BatchJob | ExperimentJob | None:
+def _load_job_file(path: Path) -> LegacyJobRecord | ExperimentJob | None:
     """Read + schema-check + deserialize one sidecar record, or None.
 
     Unreadable, unsupported-schema, and malformed files log a warning and
@@ -350,38 +139,31 @@ def _load_job_file(path: Path) -> SimulationJob | BatchJob | ExperimentJob | Non
     if not _accept_schema(data, path):
         return None
     try:
-        if data.get("kind") == "batch":
-            return _deserialize_batch_job(data)
-        return _deserialize_sim_job(data)
+        return _read_legacy_record(data)
     except Exception as e:
         logger.warning("Skipping malformed job file %s: %s", path, e)
         return None
 
 
-def load_jobs_for_circuit(
-    circuit_path: Path,
-) -> tuple[list[SimulationJob], list[BatchJob]]:
-    """Scan a circuit's sidecar directory and return parsed jobs.
+def load_jobs_for_circuit(circuit_path: Path) -> list[LegacyJobRecord]:
+    """Every pre-0.6 record in a circuit's sidecar directory.
 
     Unparseable files are skipped with a warning rather than aborting the load.
+    Experiment records are this session's own and are loaded by the experiment
+    store, not here.
     """
     target = sidecar_dir(circuit_path)
-    sim_jobs: list[SimulationJob] = []
-    batch_jobs: list[BatchJob] = []
     if not target.is_dir():
-        return sim_jobs, batch_jobs
-
+        return []
+    records: list[LegacyJobRecord] = []
     for file_path in sorted(target.glob("*.json")):
         job = _load_job_file(file_path)
-        if isinstance(job, BatchJob):
-            batch_jobs.append(job)
-        elif isinstance(job, SimulationJob):
-            sim_jobs.append(job)
-
-    return sim_jobs, batch_jobs
+        if isinstance(job, LegacyJobRecord):
+            records.append(job)
+    return records
 
 
-def load_job(job_id: str, netlist: Path) -> SimulationJob | BatchJob | ExperimentJob | None:
+def load_job(job_id: str, netlist: Path) -> LegacyJobRecord | ExperimentJob | None:
     """Load one job record by id from its circuit's sidecar, or None.
 
     Used to refresh this session's view of a job owned by a parallel server
@@ -396,17 +178,17 @@ def load_job(job_id: str, netlist: Path) -> SimulationJob | BatchJob | Experimen
 
 
 def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
-    """Return a lightweight summary of one circuit's persisted jobs.
+    """Return a lightweight summary of one circuit's persisted job records.
 
     The sidecar dir is per-directory, so a single ``.ltspice-mcp/jobs/``
     folder holds records for every circuit in that directory. Filter to
     just the rows whose persisted ``netlist`` field matches ``circuit_path``
     — otherwise every circuit in the dir reports the directory's totals.
 
-    A batch job (``kind="batch"``) shows up as ONE entry under ``total_jobs``
+    A batch record (``kind="batch"``) shows up as ONE entry under ``total_jobs``
     but has ``total_runs`` underlying simulation iterations. Both numbers
-    are surfaced separately so a 100-run MC isn't mistaken for "circuit
-    ran once".
+    are surfaced separately so a 100-run Monte Carlo isn't mistaken for
+    "circuit ran once".
     """
     target = sidecar_dir(circuit_path)
     counts: dict[str, int] = {}
@@ -429,22 +211,12 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
             record_netlist = str(data.get("netlist", ""))
             if record_netlist != match_path:
                 continue
-            # Running/queued with a dead owner means that server died —
-            # summarize as interrupted; with a live owner the status stands.
-            # own_is_alive: our own pid on a running record here is almost
-            # always THIS server's live job (not a recycled pid), so the
-            # summary reports it as running.
-            status, _ = _finalize_loaded_status(
-                str(data.get("status", "unknown")), pid_of(data), own_is_alive=True
-            )
+            status = _effective_status(str(data.get("status", "unknown")))
             counts[status] = counts.get(status, 0) + 1
             total += 1
             if data.get("kind") == "batch":
                 runs = data.get("total_runs")
-                if isinstance(runs, int) and runs > 0:
-                    total_runs += runs
-                else:
-                    total_runs += 1
+                total_runs += runs if isinstance(runs, int) and runs > 0 else 1
             else:
                 total_runs += 1
             if status == INTERRUPTED_STATUS:

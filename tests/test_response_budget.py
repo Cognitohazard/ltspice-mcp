@@ -35,7 +35,7 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import SyncApi, make_batch_job, stage_recorded_fixture
+from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
 # Every rung-0 allowlist the three budget-aware tools declare, paired with the
 # schema node whose keys it names. Listed rather than derived: the coverage test
@@ -648,20 +648,10 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
 # ---------------------------------------------------------------------------
 
 
-def _batch_with_runs(work_dir: Path, count: int):
-    return make_batch_job(
-        "b_budget",
-        total_runs=count,
-        completed_runs=count,
-        run_results={
-            index: {
-                "raw_file": str(work_dir / f"run_{index:04d}.raw"),
-                "log_file": str(work_dir / f"run_{index:04d}.log"),
-                "params": {"R1": f"{index + 1}k", "C1": f"{index + 1}n"},
-            }
-            for index in range(count)
-        },
-    )
+def _batch_with_runs(state, count: int):
+    """A completed experiment with ``count`` produced cases — the runs page
+    the jobs budget has to shrink."""
+    return make_experiment_job(state, job_id="b_budget", count=count, status="completed")
 
 
 async def _jobs(state: SessionState, **values: Any) -> dict[str, Any]:
@@ -777,8 +767,7 @@ class TestJobsBudget:
         assert data["analysis"]["view"] == "answer"
 
     async def test_a_met_budget_changes_nothing(self, state_no_sim: SessionState, work_dir: Path):
-        job = _batch_with_runs(work_dir, 60)
-        state_no_sim.all_jobs[job.job_id] = job
+        job = _batch_with_runs(state_no_sim, 60)
         # As above: 'no budget' has to mean no budget for this comparison.
         state_no_sim.config.default_budget = 0
         plain = await _jobs(state_no_sim, action="runs", job_id=job.job_id)
@@ -788,11 +777,10 @@ class TestJobsBudget:
     async def test_shrunk_run_pages_reach_every_record(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        job = _batch_with_runs(work_dir, 60)
-        state_no_sim.all_jobs[job.job_id] = job
+        job = _batch_with_runs(state_no_sim, 60)
         plain = await _jobs(state_no_sim, action="runs", job_id=job.job_id)
         assert plain["total"] == 60
-        expected = [f"{job.job_id}-case-{index:04d}" for index in range(60)]
+        expected = [f"case-{index:04d}" for index in range(60)]
 
         seen: list[str] = []
         cursor: str | None = None
@@ -820,9 +808,10 @@ class TestJobsBudget:
         """A produced run's paths are provenance the analysis tools resolve by
         id; a run that did not produce keeps them, because its log IS the
         diagnostic and failures entries carry only a code and a message."""
-        job = _batch_with_runs(work_dir, 60)
-        job.run_results[7] = {"raw_file": None, "log_file": None, "params": {}}
-        state_no_sim.all_jobs[job.job_id] = job
+        job = _batch_with_runs(state_no_sim, 60)
+        job.cases[7].status = "failed"
+        job.cases[7].raw_file = None
+        job.cases[7].log_file = None
         plain = await _jobs(state_no_sim, action="runs", job_id=job.job_id)
         assert "raw" in plain["items"][0]
 
@@ -837,8 +826,7 @@ class TestJobsBudget:
         assert all("raw" in row for row in rows if row["status"] != "produced")
 
     async def test_facts_and_handles_survive(self, state_no_sim: SessionState, work_dir: Path):
-        job = _batch_with_runs(work_dir, 60)
-        state_no_sim.all_jobs[job.job_id] = job
+        job = _batch_with_runs(state_no_sim, 60)
         data = await _jobs(
             state_no_sim,
             action="runs",
@@ -908,7 +896,7 @@ def test_the_api_automatic_door_carries_no_budget_route(
     door refuses. Checked on jobs(list), the collected surface that keeps the
     observations its pages carried."""
     for index in range(6):
-        job = _batch_with_runs(work_dir, 20)
+        job = _batch_with_runs(state_no_sim, 20)
         job.job_id = f"b_budget_{index}"
         state_no_sim.all_jobs[job.job_id] = job
     state_no_sim.config.default_budget = 100

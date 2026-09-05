@@ -16,9 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib import job_store, now, recent
+from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.state import SimulationJob
 
 # ---------------------------------------------------------------------------
 # Cross-process: recent.json
@@ -72,76 +71,6 @@ class TestRecentConcurrentProcesses:
 # ---------------------------------------------------------------------------
 # Cross-thread: job_store atomic writes
 # ---------------------------------------------------------------------------
-
-
-class TestJobStoreConcurrentThreads:
-    def test_many_threads_saving_different_jobs(self, tmp_path: Path) -> None:
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-
-        def save(job_id: str) -> None:
-            job = SimulationJob(
-                job_id=job_id,
-                netlist=circuit,
-                simulator="LTspice",
-                status="completed",
-                started_at=now(),
-                completed_at=now(),
-            )
-            job_store.save_job(job)
-
-        threads = [threading.Thread(target=save, args=(f"sim_thread_{i}",)) for i in range(32)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-            assert not t.is_alive()
-
-        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
-        assert {j.job_id for j in sim_jobs} == {f"sim_thread_{i}" for i in range(32)}
-
-    def test_same_job_rewritten_from_many_threads_stays_valid(self, tmp_path: Path) -> None:
-        """Concurrent writes to the same file must never leave a torn JSON."""
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job_id = "sim_same"
-        # Initial save so the file exists.
-        base = SimulationJob(
-            job_id=job_id,
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-        )
-        job_store.save_job(base)
-        path = job_store.sidecar_dir(circuit) / f"{job_id}.json"
-
-        def rewrite(status: str) -> None:
-            job = SimulationJob(
-                job_id=job_id,
-                netlist=circuit,
-                simulator="LTspice",
-                status=status,  # type: ignore[arg-type]
-                started_at=now(),
-                completed_at=now() if status != "running" else None,
-            )
-            for _ in range(10):
-                job_store.save_job(job)
-
-        threads = [
-            threading.Thread(target=rewrite, args=(s,))
-            for s in ("running", "completed", "failed", "cancelled")
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        # File must always be parseable; last-writer-wins semantics mean the
-        # exact status is non-deterministic but the file never corrupts.
-        data = json.loads(path.read_text())
-        assert data["job_id"] == job_id
-        assert data["status"] in {"running", "completed", "failed", "cancelled"}
 
 
 # ---------------------------------------------------------------------------
