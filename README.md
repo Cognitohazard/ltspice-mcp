@@ -343,6 +343,10 @@ Release with `scripts/release.sh 0.5.1`. The script updates the plugin manifests
 
 More: [docs/DESIGN.md](docs/DESIGN.md) (scope, architecture, non-goals) and [docs/spice_lex.md](docs/spice_lex.md) (SPICE parser internals).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test gate, and how to add a tool or report a spicelib bug; the tool-surface and Python API contracts are in [docs/design/](docs/design/). The project follows the [Contributor Covenant](CODE_OF_CONDUCT.md); vendored components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## License
 
 GPL-3.0-or-later

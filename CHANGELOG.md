@@ -212,6 +212,14 @@ every sample to a file and returns its path.
 
 ### Changed
 
+- The `mcp` dependency no longer pulls the `cli` extra: six packages fewer
+  (typer, rich, markdown-it-py, mdurl, shellingham, annotated-doc) for a
+  server that never imported them.
+- Contributor documents: `CONTRIBUTING.md`, a code of conduct, issue
+  templates, `THIRD_PARTY_NOTICES.md`, and the tool-surface and Python API
+  contracts under `docs/design/`; the spicelib bug ledger is published as
+  `docs/spicelib_bugs.md`.
+
 - The advertised tool definitions are shorter. A sentence of schema or tool
   description is kept in the tool listing only if it states a unit, a
   convention, a sign or an inversion, a context cost, or where fuller
