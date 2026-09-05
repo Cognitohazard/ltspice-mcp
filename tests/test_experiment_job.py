@@ -47,9 +47,7 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.simulation import (
     CancelJobInput,
-    CheckJobInput,
     handle_cancel_job,
-    handle_check_job,
 )
 from tests.conftest import make_batch_job
 
@@ -1127,7 +1125,7 @@ class TestLegacyCompatibility:
         with pytest.raises(BatchJobError, match="experiment job"):
             await services.resolve_batch_job_async(job.job_id, state_no_sim)
 
-    async def test_check_and_cancel_job_reject_experiment_without_netlist_deref(
+    async def test_cancel_job_rejects_experiment_without_netlist_deref(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
@@ -1137,8 +1135,6 @@ class TestLegacyCompatibility:
         job = _job(work_dir, circuit, status="completed")
         experiment_store.save_job(job)
 
-        with pytest.raises(SimulationError, match=r"experiment job.*completed"):
-            await handle_check_job(CheckJobInput(job_id=job.job_id), state_no_sim)
         with pytest.raises(SimulationError, match=r"experiment job.*completed"):
             await handle_cancel_job(CancelJobInput(job_id=job.job_id), state_no_sim)
 

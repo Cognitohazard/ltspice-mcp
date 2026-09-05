@@ -4,7 +4,8 @@ Independent MCP server processes can share one working directory. Three
 mechanisms keep them out of each other's way:
 
 - the cross-process circuit-file lock — concurrent edits of the same file
-  serialize (edit-on-latest) instead of last-writer-wins;
+  serialize, and the revision check runs inside the lock so a peer's committed
+  write is seen instead of silently overwritten;
 - owner-pid liveness in job sidecars — a live sibling's running job isn't
   mislabeled ``interrupted``, shutdown only cancels this process's own jobs,
   and a foreign job's status refreshes from disk at resolution time;
@@ -16,6 +17,7 @@ separate fd — flock/msvcrt contention is per open file description, so this
 exercises the exact cross-process semantics without spawning a process.
 """
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -36,13 +38,12 @@ from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executa
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import circuit_lock_target
-from ltspice_mcp.tools.circuit import (
-    ListComponentsInput,
-    SetComponentValueInput,
-    handle_list_components,
-    handle_set_component_value,
-)
+from ltspice_mcp.tools.circuit import _get_asc_editor, _resolve_pin
+from tests._asc_ops import apply_ops, sha_of
 from tests.conftest import make_batch_job, make_sim_job
+
+#: The line a peer session appends while holding the lock.
+_PEER_MARKER = b"TEXT -48 320 Left 2 ;external marker\n"
 
 
 def _hold_lock_then_write(target: Path, content: bytes, hold_s: float) -> threading.Thread:
@@ -83,102 +84,93 @@ def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading
 
 @pytest.mark.asyncio
 class TestCircuitFileLock:
-    async def test_cir_edit_waits_for_peer_and_keeps_both_edits(
-        self, state_no_sim: SessionState, work_dir: Path
+    async def test_asc_edit_sees_a_peer_write_instead_of_overwriting_it(
+        self, asc_state: SessionState, asc_file: Path
     ):
-        # Without the cross-process lock this is last-writer-wins: our edit
-        # reads the pre-peer bytes immediately and the peer's later write
-        # erases it. With the lock, our edit blocks until the peer releases,
-        # re-reads, and lands on top of the peer's version.
-        cir = work_dir / "shared.cir"
-        cir.write_text("* shared\nR1 in 0 1k\n.END\n")
-        peer_version = b"* shared\nR1 in 0 1k\nC1 out 0 1n\n.END\n"
-        t = _hold_lock_then_write(cir, peer_version, hold_s=0.4)
-
-        await handle_set_component_value(
-            SetComponentValueInput.model_validate(
-                {"path": cir.name, "reference": "R1", "value": "2k"}
-            ),
-            state_no_sim,
-        )
-        t.join(5)
-        text = cir.read_text()
-        assert "2k" in text, "our edit must survive"
-        assert "C1 out 0 1n" in text, "the peer session's edit must survive too"
-
-    async def test_asc_edit_waits_for_peer_and_keeps_both_edits(
-        self, asc_state: SessionState, asc_file: Path, work_dir: Path
-    ):
-        # Same scenario through the cached-AscEditor path: the editor fetch
-        # stats the file INSIDE the guard, so the peer's completed write
-        # forces a reload instead of saving a stale in-memory editor.
-
-        await handle_list_components(
-            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
-        )  # warm the cache
-        peer_version = asc_file.read_bytes() + b"TEXT -48 320 Left 2 ;external marker\n"  # noqa: ASYNC240
+        # The editor fetch and the revision check both run INSIDE the guard, so
+        # a peer's completed write is seen. Without that ordering our edit would
+        # read the pre-peer bytes, pass its own stale sha, and erase the peer's
+        # work; with it, the stale revision is refused and nothing is written.
+        sha_before = sha_of(asc_file)
+        peer_version = asc_file.read_bytes() + _PEER_MARKER  # noqa: ASYNC240
         t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
 
-        await handle_set_component_value(
-            SetComponentValueInput.model_validate(
-                {"path": asc_file.name, "reference": "R1", "value": "2k2"}
-            ),
+        data = await apply_ops(
             asc_state,
+            asc_file.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k2"}],
+            expected_sha256=sha_before,
         )
         t.join(5)
-        data = asc_file.read_bytes()  # noqa: ASYNC240
-        assert b"2k2" in data, "our edit must survive"
-        assert b"external marker" in data, "the peer session's edit must survive too"
+        assert data["outcome"] == "failed"
+        assert data["error"]["code"] == "revision_conflict"
+        assert data["commit_state"] == "not_committed"
+        payload = asc_file.read_bytes()  # noqa: ASYNC240
+        assert _PEER_MARKER in payload, "the peer session's edit must survive"
+        assert b"2k2" not in payload, "a refused edit must write nothing"
+
+    async def test_asc_edit_on_the_peers_revision_keeps_both_edits(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # Same race, but the caller submits the peer's revision: our edit blocks
+        # on the lock, re-reads inside it, and lands on top of the peer's bytes.
+        peer_version = asc_file.read_bytes() + _PEER_MARKER  # noqa: ASYNC240
+        peer_sha = hashlib.sha256(peer_version).hexdigest()
+        t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
+
+        data = await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k2"}],
+            expected_sha256=peer_sha,
+        )
+        t.join(5)
+        assert data["outcome"] == "complete"
+        payload = asc_file.read_bytes()  # noqa: ASYNC240
+        assert b"2k2" in payload, "our edit must survive"
+        assert _PEER_MARKER in payload, "the peer session's edit must survive too"
 
     async def test_contended_lock_times_out_with_clear_error(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+        self, asc_state: SessionState, asc_file: Path, monkeypatch
     ):
         import ltspice_mcp.tools._base as base_mod
 
-        cir = work_dir / "busy.cir"
-        cir.write_text("* busy\nR1 in 0 1k\n.END\n")
         # Shrink the acquisition window so the test doesn't sit out the
         # full default timeout.
         monkeypatch.setattr(base_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
-        t, release = _hold_lock_until_released(cir)
+        t, release = _hold_lock_until_released(asc_file)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
-                await handle_set_component_value(
-                    SetComponentValueInput.model_validate(
-                        {"path": cir.name, "reference": "R1", "value": "2k"}
-                    ),
-                    state_no_sim,
+                await apply_ops(
+                    asc_state,
+                    asc_file.name,
+                    [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
                 )
         finally:
             release.set()
             t.join(5)
 
     async def test_pin_geometry_resolved_under_the_lock(
-        self, asc_state: SessionState, asc_file: Path, work_dir: Path
+        self, asc_state: SessionState, asc_file: Path
     ):
-        # A peer session moves R1 while holding the lock. Our add_net_label
-        # by pin reference must resolve R1's position AFTER acquiring the
-        # lock (post-move), not from the editor cached before it — otherwise
-        # the label lands at the old, now-empty coordinate.
-        from ltspice_mcp.tools.circuit import (
-            NetLabelInput,
-            _get_asc_editor,
-            _resolve_pin,
-            handle_add_net_label,
-        )
-
-        await handle_list_components(
-            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
-        )  # warm the cache
+        # A peer session moves R1 while holding the lock. Our add_net_label by
+        # pin reference must resolve R1's position AFTER acquiring the lock
+        # (post-move), not from the editor cached before it — otherwise the
+        # label lands at the old, now-empty coordinate.
         original = asc_file.read_bytes()  # noqa: ASYNC240
         moved = original.replace(b"SYMBOL res 128 112 R90", b"SYMBOL res 128 240 R90")
         assert moved != original, "fixture layout changed — update the SYMBOL line above"
+        moved_sha = hashlib.sha256(moved).hexdigest()
         t = _hold_lock_then_write(asc_file, moved, hold_s=0.4)
 
-        await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="probe", pin="R1.1"), asc_state
+        data = await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "add_net_label", "net": "probe", "pin": "R1.1"}],
+            expected_sha256=moved_sha,
         )
         t.join(5)
+        assert data["outcome"] == "complete"
         x, y = _resolve_pin("R1.1", _get_asc_editor(asc_file, asc_state))
         text = asc_file.read_text(errors="replace")  # noqa: ASYNC240
         assert f"FLAG {x} {y} probe" in text, "label must sit at R1's post-move pin position"
@@ -203,18 +195,15 @@ class TestCircuitFileLock:
             t.join(5)
 
     async def test_lock_file_lives_in_sidecar_dir_not_next_to_circuit(
-        self, state_no_sim: SessionState, work_dir: Path
+        self, asc_state: SessionState, asc_file: Path, work_dir: Path
     ):
-        cir = work_dir / "tidy.cir"
-        cir.write_text("* tidy\nR1 in 0 1k\n.END\n")
-        await handle_set_component_value(
-            SetComponentValueInput.model_validate(
-                {"path": cir.name, "reference": "R1", "value": "2k"}
-            ),
-            state_no_sim,
+        await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
         )
-        assert (work_dir / ".ltspice-mcp" / "locks" / "tidy.cir.lock").exists()
-        assert not (work_dir / "tidy.cir.lock").exists()
+        assert (work_dir / ".ltspice-mcp" / "locks" / f"{asc_file.name}.lock").exists()
+        assert not (work_dir / f"{asc_file.name}.lock").exists()
 
 
 def _make_running_job(work_dir: Path, job_id: str, pid: int) -> SimulationJob:

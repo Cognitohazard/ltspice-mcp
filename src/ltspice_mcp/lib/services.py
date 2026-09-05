@@ -642,7 +642,7 @@ def resolve_analysis_source(
     if hasattr(args, "raw_file") and bool(raw_file) == bool(job_id):
         raise ResultError(
             "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
-            "an existing result — if you only have a netlist, run_simulation "
+            "an existing result — if you only have a netlist, run_experiments "
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
@@ -752,8 +752,8 @@ def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> lis
         if stripped.startswith(".step"):
             raise SimulationError(
                 "ngspice batch mode does not support .step directives. "
-                "Use configure_sweep + run_sweep for parametric sweeps, "
-                "or remove the .step line and set the parameter to a fixed value."
+                "Declare the parameter as a run_experiments variation instead, "
+                "or remove the .step line and set it to a fixed value."
             )
         if stripped.startswith(".meas"):
             # .meas[ure] [analysis-type] <name> <FIND|PARAM|TRIG|WHEN|...> ...

@@ -23,10 +23,6 @@ from ltspice_mcp.resources import (
 )
 from ltspice_mcp.server import CONSOLIDATED_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.circuit import (
-    CreateSchematicInput,
-    handle_create_schematic,
-)
 
 _GUIDE_ASSET = files("ltspice_mcp") / "assets" / "spice_guide.md"
 
@@ -47,22 +43,6 @@ class TestServerInstructionsFloor:
         ):
             assert tool in CONSOLIDATED_INSTRUCTIONS
         assert "completed is not correct" in CONSOLIDATED_INSTRUCTIONS
-
-
-class TestCreateSchematicChecklist:
-    async def test_result_includes_layout_checklist(self, state_no_sim: SessionState):
-        result = await handle_create_schematic(
-            CreateSchematicInput(name="checklist_probe"), state_no_sim
-        )
-        text = result.content[0].text  # type: ignore[union-attr]
-        assert "Layout checklist" in text
-        assert "spice://guide" in text
-        # Structured-aware clients show only structuredContent, so the same
-        # checklist must ride in the data channel too.
-        data = result.structuredContent
-        assert data is not None
-        assert "Layout checklist" in data["hint"]
-        assert "spice://guide" in data["hint"]
 
 
 class TestGuideIsEngineGeneral:

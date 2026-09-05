@@ -15,18 +15,13 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib import raster
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
-from ltspice_mcp.tools.circuit import (
-    ApplySchematicOpsInput,
-    CreateSchematicInput,
-    handle_apply_schematic_ops,
-    handle_create_schematic,
-)
+from ltspice_mcp.tools.circuit import _get_asc_editor, _run_op_batch
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import (
     EditSchematicInput,
@@ -34,6 +29,10 @@ from ltspice_mcp.tools.schematic_edit import (
     evaluate_edit_schematic,
     handle_edit_schematic,
 )
+
+# Validates a raw op dict into the tool's own op union, so the control path
+# below builds exactly the op objects the tool would have built.
+_OPS_ADAPTER = TypeAdapter(list[se.ConsolidatedOp])
 
 
 def _assert_schema(result) -> dict:
@@ -87,21 +86,26 @@ async def _build_blank(state: SessionState, name: str, ops: list[dict], **kw) ->
 # ---------------------------------------------------------------------------
 
 
-async def test_blank_build_parity_with_create_plus_apply(asc_state, work_dir):
-    """base:"blank" produces the same .asc as create_schematic + apply_schematic_ops."""
+async def test_blank_build_parity_with_the_shared_op_runner(asc_state, work_dir):
+    """base:"blank" writes the same .asc the shared op runner produces directly.
+
+    The tool wraps the runner in a revision guard, a staged write and a view
+    pass; none of that may alter the geometry the ops describe. Driving the
+    runner against the same blank template is the control.
+    """
     data = await _build_blank(asc_state, "parity_edit", _DIVIDER_OPS)
     assert data["outcome"] == "complete"
     assert data["commit_state"] == "committed"
 
-    await handle_create_schematic(CreateSchematicInput(name="parity_apply"), asc_state)
-    await handle_apply_schematic_ops(
-        ApplySchematicOpsInput.model_validate({"path": "parity_apply.asc", "ops": _DIVIDER_OPS}),
-        asc_state,
-    )
+    control = work_dir / "parity_runner.asc"
+    control.write_text(se._BLANK_TEMPLATE)
+    editor = _get_asc_editor(control, asc_state)
+    ops = _OPS_ADAPTER.validate_python(_DIVIDER_OPS)
+    _, abort = _run_op_batch(editor, ops, control, stop_on_error=True)
+    assert abort is None
+    editor.save_netlist(control)
 
-    edit_text = (work_dir / "parity_edit.asc").read_text()
-    apply_text = (work_dir / "parity_apply.asc").read_text()
-    assert edit_text == apply_text
+    assert (work_dir / "parity_edit.asc").read_text() == control.read_text()
 
 
 async def test_committed_sha_matches_file(asc_state, work_dir):
@@ -433,7 +437,6 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
     sha0 = first["sha256"]
 
     before = _fingerprint(work_dir)
-    snaps_before = dict(asc_state.asc_snapshots)
 
     data = _assert_schema(
         await handle_edit_schematic(
@@ -460,10 +463,9 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
     # Every op validated, geometry computed, nothing written.
     assert data["wiring"]["pins_total"] == 6  # R1, R2, R3
     assert data["views"]["render"]["status"] == "dry_run"
-    # Directory fingerprint, target sha, and snapshots all unchanged.
+    # Directory fingerprint and target sha both unchanged.
     assert _fingerprint(work_dir) == before
     assert _sha(work_dir / "dry.asc") == sha0
-    assert dict(asc_state.asc_snapshots) == snaps_before
     assert not (work_dir / ".ltspice-mcp" / "renders").exists()
 
 
