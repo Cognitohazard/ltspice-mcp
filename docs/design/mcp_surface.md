@@ -164,6 +164,20 @@ the wire is the one those two channels also serve.
 descriptions must equal the source ones, and each tool's serialized definition
 has an upper size bound.
 
+**Two listing modes.** `[tools] listing` (or `LTSPICE_MCP_TOOL_LISTING`)
+chooses how much of each definition goes on the wire. `full`, the default, is
+the paragraph above. `compact` publishes the same seven tools and the same
+schemas with every per-argument description removed — structure, enums,
+defaults, `required` and `$defs` are untouched, so a client can still build a
+valid call, and the models are not filtered, so the server accepts exactly what
+it did. It is an explicit transform (`strip_argument_descriptions` in
+`tools/_schema.py`, applied in `get_tools()`), never a wording rule, and on the
+current surface it takes roughly 40% off what a session loads. Both modes are
+*static* listings: the same for every connection and unchanged by anything
+called on one, which is what the 2026-07-28 specification requires of
+`tools/list` and what lets a client cache it. Nothing keys on the mode below
+the listing — dispatch, validation and every response are identical either way.
+
 ---
 
 ## 3. Tool contracts

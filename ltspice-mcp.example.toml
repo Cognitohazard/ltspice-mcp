@@ -59,11 +59,10 @@ result_set_ttl_hours = 24.0
 # The key itself is removed in 0.7.0; new configs need no [tools] section.
 profile = "consolidated"
 
-# How the tool list is served (experimental). "full" (the default)
-# advertises the seven tools as registered; "compact" advertises the
-# same seven with the per-argument descriptions removed; "discover"
-# advertises find_tools/invoke_tool and reveals a tool once find_tools
-# has returned it. No tool gains or loses a capability.
+# How much of each tool definition the tool list carries. "full"
+# (the default) advertises the seven tools as registered; "compact"
+# advertises the same seven with the per-argument descriptions
+# removed. No tool gains or loses a capability either way.
 listing = "full"
 
 [schematic]
