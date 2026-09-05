@@ -50,6 +50,18 @@ CSV waveform export is the `waveform` recipe with `format: "csv"`, which writes
 every sample to a file and returns its path.
 
 
+### Removed
+
+- The MCP logging capability. The 2026-07-28 revision deprecates it whole
+  (SEP-2577): the `logging` server capability, the server-to-client
+  `notifications/message` delivery and the per-request log-level opt-in that
+  replaced `logging/setLevel`, with no replacement offered, and
+  `logging/setLevel` is absent from that revision's schema. The server no
+  longer advertises the capability, answers `logging/setLevel` with
+  method-not-found, and sends no log notifications. Job lifecycle events and
+  diagnostics go to the process's stderr logger, which `[logging] level`
+  still controls.
+
 ### Removed — the columns form of budget-limited rows
 
 A response cap (`budget`) used to re-render row surfaces once it got tight
@@ -89,6 +101,12 @@ Error codes that only those handlers emitted are gone with them:
 `max_pk_pk_bucket`, and `export_written`.
 
 ### Changed
+
+- Calling a tool name the server does not have now answers a JSON-RPC
+  invalid-params error (-32602) naming the unknown tool and listing the seven
+  that exist, instead of an error-flagged tool result. A lookup failure has no
+  tool to attribute a result to, and this matches how an unknown resource URI
+  is already answered.
 
 - Moved to the MCP Python SDK 2, which serves protocol revision 2026-07-28
   alongside the older initialize handshake. Clients on either revision are
