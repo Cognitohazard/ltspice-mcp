@@ -811,7 +811,10 @@ async def test_reference_without_a_query_returns_the_table_of_contents(
         "edit_schematic",
         "verify_circuit",
         "jobs",
+        # Every tool's own arguments are listed too, plot_waveform included.
+        "plot_waveform",
     }
+    assert {group["family"] for group in data["contents"]} >= {"argument"}
     listed = sum(len(group["branches"]) for group in data["contents"])
     assert listed == data["total_branches"]
     for group in data["contents"]:

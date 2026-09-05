@@ -90,16 +90,39 @@ class TestIndexCompleteness:
         assert declared, "the checks argument no longer declares its literals"
         assert declared <= _names("verify_circuit")
 
+    def test_every_tool_indexes_its_own_arguments(self):
+        """A tool's own arguments are vocabulary too.
+
+        The branch families describe what goes *inside* a discriminated item,
+        which left 'all_steps', 'budget' and 'expected_sha256' described
+        nowhere a compact session can reach: the listing strips their prose and
+        no branch carries them.
+        """
+        from ltspice_mcp.tools import get_tools
+
+        _, dispatch = get_tools()
+        expected = {name for name, tool in dispatch.items() if tool.input_model is not None}
+        assert expected, "no registered tool declares an input model"
+        indexed = {entry.name for entry in _entries() if entry.family == "argument" and entry.tool}
+        assert indexed == expected
+        for entry in _entries():
+            if entry.family == "argument":
+                assert entry.tool == entry.name, "an argument table is named for its tool"
+                assert entry.fields, f"{entry.name} indexed no arguments"
+
     def test_the_index_has_no_branch_the_models_do_not_declare(self):
         """The reverse direction: nothing is indexed that cannot be called."""
         from ltspice_mcp.lib.schematic_ops import SchematicOp
         from ltspice_mcp.lib.variations import RandomRule, Variation
+        from ltspice_mcp.tools import get_tools
         from ltspice_mcp.tools.inspect_tools import SUPPORTED_KINDS
         from ltspice_mcp.tools.jobs import JOBS_ACTIONS
         from ltspice_mcp.tools.verify import CHECK_ORDER
 
+        _, dispatch = get_tools()
         declared = (
-            {("analyze_results", metric) for metric in DISCRIMINANTS}
+            {(name, name) for name, tool in dispatch.items() if tool.input_model is not None}
+            | {("analyze_results", metric) for metric in DISCRIMINANTS}
             | {("inspect", kind) for kind in SUPPORTED_KINDS}
             | {("jobs", action) for action in JOBS_ACTIONS}
             | {("verify_circuit", check) for check in CHECK_ORDER}
@@ -255,6 +278,28 @@ class TestSearch:
     def test_a_query_that_matches_nothing_returns_nothing(self):
         hits, total = search_branches("xyzzy quuxbar", limit=5)
         assert hits == [] and total == 0
+
+    def test_a_tool_level_argument_is_reachable_by_its_own_name(self):
+        """The branch families cover what goes inside a discriminated item.
+
+        A tool's own arguments sat on neither channel a compact session has:
+        the listing strips their prose, and no branch declares them. Searching
+        for one now lands on its tool's argument table.
+        """
+        for argument, tool in (
+            ("all_steps", "analyze_results"),
+            ("expected_sha256", "edit_schematic"),
+            ("allow_live_includes", "run_experiments"),
+            ("export_to", "verify_circuit"),
+        ):
+            hits, _ = search_branches(argument, limit=5)
+            found = next(
+                (hit for hit in hits if hit.tool == tool and hit.family == "argument"), None
+            )
+            assert found is not None, f"{argument!r} returned " + ", ".join(
+                f"{hit.tool}.{hit.name}" for hit in hits
+            )
+            assert argument in {field.name for field in found.fields}
 
     def test_other_tools_are_reachable_too(self):
         for phrase, expected in (
