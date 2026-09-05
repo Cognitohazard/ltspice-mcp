@@ -823,3 +823,16 @@ class TestLoadCoversEveryKey:
         monkeypatch.setenv("LTSPICE_MCP_MAX_PARALLEL", "9")
         config = ServerConfig.load(toml_path, overrides={"max_parallel_sims": 3})
         assert config.max_parallel_sims == 3
+
+
+def test_checked_in_example_matches_the_generator(tmp_path: Path) -> None:
+    """ltspice-mcp.example.toml is the generator's output plus a two-line
+    header; it once drifted to a removed profile for a whole release cycle."""
+    from ltspice_mcp.config import generate_default_config
+
+    generated = tmp_path / "generated.toml"
+    generate_default_config(generated)
+    example = (Path(__file__).resolve().parent.parent / "ltspice-mcp.example.toml").read_text()
+    body = "\n".join(example.splitlines()[2:]) + "\n"
+    expected = "\n".join(generated.read_text().splitlines()[1:]) + "\n"
+    assert body == expected
