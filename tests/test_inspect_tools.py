@@ -139,6 +139,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     for key in ("executable", "install_kind", "ephemeral", "package_location"):
         assert key in python_facts, f"missing python fact {key!r}"
     assert isinstance(python_facts["ephemeral"], bool)
+    assert data["diagnostics"] == []
     for lim in (
         "max_experiment_cases",
         "analysis_budget_s",
@@ -148,6 +149,24 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):
+    """A server that started degraded — a configured simulator path that does
+    not exist, a requested engine that fell back to another — says so only in
+    its own stderr log, which no client reads. The capabilities query is where
+    a client can see it, so the notes have to ride there."""
+    state = SessionState.create(
+        config,
+        available={"ltspice": FakeLT},
+        diagnostics=["Configured simulator path does not exist: /nope/LTspice.exe"],
+    )
+
+    (res,) = await _run(state, [{"kind": "capabilities"}])
+
+    assert res["data"]["diagnostics"] == [
+        "Configured simulator path does not exist: /nope/LTspice.exe"
+    ]
 
 
 async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: SessionState):
