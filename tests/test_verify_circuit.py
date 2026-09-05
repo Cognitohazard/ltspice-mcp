@@ -34,12 +34,17 @@ from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
+from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from ltspice_mcp.tools.verify import (
     STRUCTURAL_DELTA_PROPS,
     VerifyCircuitInput,
     evaluate_verify_circuit,
     handle_verify_circuit,
 )
+
+# The same reader the render/compare spelling tests use: the model class behind
+# an ``X | None`` field annotation.
+from tests.test_render_compare_spellings import _model_of
 
 
 class FakeSim:
@@ -774,6 +779,49 @@ def test_render_boolean_is_advertised_in_the_json_schema():
 def test_api_types_exports_the_models_errors_name():
     from ltspice_mcp.api import types as api_types
 
-    assert api_types.RenderPolicy is vc.RenderPolicy
+    # Asserted against the classes the two tools' own fields validate against;
+    # an identity check against the module the export came from would hold no
+    # matter which class had been re-exported there.
+    assert api_types.VerifyRenderPolicy is _model_of(VerifyCircuitInput, "render")
+    assert api_types.VerifyCompareSpec is _model_of(VerifyCircuitInput, "compare")
+    assert api_types.RenderPolicy is _model_of(EditSchematicInput, "render")
+    assert api_types.CompareSpec is _model_of(EditSchematicInput, "compare")
     for name in api_types.__all__:
         assert getattr(api_types, name, None) is not None, name
+
+
+@pytest.mark.parametrize(
+    ("tool", "render_model", "compare_model", "extra"),
+    [
+        ("VerifyCircuitInput", "VerifyRenderPolicy", "VerifyCompareSpec", {"path": "divider.asc"}),
+        (
+            "EditSchematicInput",
+            "RenderPolicy",
+            "CompareSpec",
+            {
+                "target": "divider.asc",
+                "ops": [{"op": "add_net_label", "net": "vout", "pin": "R1.2"}],
+            },
+        ),
+    ],
+)
+def test_the_exported_policy_models_are_accepted_by_their_tool(
+    tool: str, render_model: str, compare_model: str, extra: dict[str, Any]
+):
+    """An exported argument model must validate on the field it is exported for.
+
+    verify_circuit takes VerifyRenderPolicy, a SUBCLASS of the shared
+    RenderPolicy, and a parent instance is not a child instance — so passing a
+    base RenderPolicy is rejected by pydantic. Exporting only the base under
+    the verify_circuit heading pointed callers at the one type that tool
+    cannot take, and never exported the one it can.
+    """
+    from ltspice_mcp.api import types as api_types
+
+    args = getattr(api_types, tool)(
+        **extra,
+        render=getattr(api_types, render_model)(format="svg"),
+        compare=getattr(api_types, compare_model)(reference="ref.cir"),
+    )
+    assert args.render is not None and args.render.format == "svg"
+    assert args.compare is not None and args.compare.reference == "ref.cir"

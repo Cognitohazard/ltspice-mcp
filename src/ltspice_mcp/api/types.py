@@ -105,7 +105,13 @@ from ltspice_mcp.tools.schematic_edit import (
     EditViewCursors,
     OpWirePinsStrict,
 )
-from ltspice_mcp.tools.verify import RenderPolicy, VerifyCircuitInput
+from ltspice_mcp.tools.verify import (
+    CompareSpec,
+    RenderPolicy,
+    VerifyCircuitInput,
+    VerifyCompareSpec,
+    VerifyRenderPolicy,
+)
 
 # The schematic op models are the ones lib/schematic_ops.py defines and the
 # applier dispatches on. Aliased rather than re-declared: one class per op, so
@@ -131,8 +137,15 @@ __all__ = [  # noqa: RUF022 - grouped by the operation that takes them
     "JobsInput",
     "RunExperimentsInput",
     "VerifyCircuitInput",
-    # verify_circuit
+    # The render and compare policies. verify_circuit takes SUBCLASSES of the
+    # shared pair (it has checks to skip and an image channel to deliver into,
+    # and two comparison modes); edit_schematic takes the shared pair itself. A
+    # parent instance is not a child instance, so both spellings are exported —
+    # passing the wrong one is a validation error, not a widening.
     "RenderPolicy",
+    "CompareSpec",
+    "VerifyRenderPolicy",
+    "VerifyCompareSpec",
     # analyze_results
     "AnalyzeInclude",
     "AnalyzeSourceInput",
