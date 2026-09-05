@@ -129,11 +129,11 @@ class SessionState:
     def _surface(
         self,
     ) -> "tuple[list[types.Tool], dict[str, RegisteredTool], dict[str, tuple[str, ...]]]":
-        from ltspice_mcp.tools import get_tools_for_profile
+        from ltspice_mcp.tools import get_tools
         from ltspice_mcp.tools._base import registry as tool_registry
 
-        defs, dispatch = get_tools_for_profile(self.config.tool_profile)
-        owners = tool_registry.field_owners_for_profile(self.config.tool_profile)
+        defs, dispatch = get_tools()
+        owners = tool_registry.field_owners()
         return (defs, dispatch, owners)
 
     @property

@@ -3802,7 +3802,6 @@ async def capture_attached_analysis(
         idempotentHint=True,
         openWorldHint=False,
     ),
-    profiles=("consolidated",),
     output_schema=OUTPUT_SCHEMA,
 )
 async def handle_analyze_results(

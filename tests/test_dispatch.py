@@ -7,45 +7,35 @@ import pytest
 from mcp import types
 from pydantic import ValidationError
 
-from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.lib.schematic_ops import SchematicOp
-from ltspice_mcp.tools import _base, get_tools_for_profile
+from ltspice_mcp.tools import _base, get_tools
 from tests.conftest import resolve_local_ref
 
 
 def _all_profile_defs() -> list[types.Tool]:
-    """Union of tool definitions across every valid profile, deduped by name.
+    """Every advertised tool definition.
 
-    The reversal/reversibility guards must see every registered tool, whichever
-    profile exposes it, so a one-way mutating tool can't ship without a reviewed
-    _TOOL_REVERSAL entry (R1-F19)."""
-    seen: dict[str, types.Tool] = {}
-    for profile in VALID_PROFILES:
-        defs, _ = get_tools_for_profile(profile)
-        for tool_def in defs:
-            seen[tool_def.name] = tool_def
-    return list(seen.values())
+    The reversal/reversibility guards must see every registered tool, so a
+    one-way mutating tool can't ship without a reviewed _TOOL_REVERSAL entry."""
+    defs, _ = get_tools()
+    return list(defs)
 
 
 def _all_profile_declared_defs() -> list[types.Tool]:
-    """Union of DISPATCH-side definitions across every profile, deduped.
+    """Every DISPATCH-side definition.
 
-    The wire tool list drops outputSchema (followups item 30); the declared
-    output contract lives on the dispatch definitions, which is what the
-    conformance hook validates emissions against. Contract pins on output
-    shapes must read this side, not the advertised list."""
-    seen: dict[str, types.Tool] = {}
-    for profile in VALID_PROFILES:
-        _, dispatch = get_tools_for_profile(profile)
-        for registered in dispatch.values():
-            seen[registered.definition.name] = registered.definition
-    return list(seen.values())
+    The wire tool list drops outputSchema; the declared output contract lives
+    on the dispatch definitions, which is what the conformance hook validates
+    emissions against. Contract pins on output shapes must read this side, not
+    the advertised list."""
+    _, dispatch = get_tools()
+    return [registered.definition for registered in dispatch.values()]
 
 
 class TestDispatchTable:
     def test_all_tools_wired(self):
         """Every registered tool definition should have a matching dispatch entry."""
-        defs, handlers = get_tools_for_profile("consolidated")
+        defs, handlers = get_tools()
         expected = {tool_def.name for tool_def in defs}
         dispatched = set(handlers.keys())
         missing = expected - dispatched
@@ -54,18 +44,18 @@ class TestDispatchTable:
     def test_no_extra_handlers(self):
         """Every dispatch entry matches a tool definition — a stray handler
         with no advertised definition would be callable but undiscoverable."""
-        defs, handlers = get_tools_for_profile("consolidated")
+        defs, handlers = get_tools()
         defined = {tool_def.name for tool_def in defs}
         assert set(handlers.keys()) == defined
 
     def test_all_handlers_callable(self):
-        _, handlers = get_tools_for_profile("consolidated")
+        _, handlers = get_tools()
         for name, registered in handlers.items():
             assert callable(registered.handler), f"{name} handler is not callable"
 
     def test_required_inputs_reject_empty_args(self):
         """Tools with required fields should reject an empty argument object."""
-        _, handlers = get_tools_for_profile("consolidated")
+        _, handlers = get_tools()
         for name, registered in handlers.items():
             if registered.input_model is None:
                 continue
@@ -81,7 +71,7 @@ class TestDispatchTable:
 
 class TestToolSchemas:
     def test_all_schemas_valid(self):
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         for tool_def in defs:
             schema = tool_def.inputSchema
             assert schema, f"{tool_def.name}: no inputSchema"
@@ -89,7 +79,7 @@ class TestToolSchemas:
             assert "properties" in schema, f"{tool_def.name}: no properties"
 
     def test_required_fields_in_properties(self):
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         for tool_def in defs:
             schema = tool_def.inputSchema
             required = schema.get("required", [])
@@ -107,7 +97,7 @@ class TestConsolidatedInputDocumentation:
     documentation obligation moved to the depth channels, not away."""
 
     def test_every_consolidated_top_level_field_is_documented(self):
-        _, dispatch = get_tools_for_profile("consolidated")
+        _, dispatch = get_tools()
         registered = [rt.definition for rt in dispatch.values()]
         assert registered, "no tools registered"
         undocumented: list[str] = []
@@ -122,28 +112,19 @@ class TestConsolidatedInputDocumentation:
         )
 
 
-class TestToolProfiles:
+class TestRegisteredSurface:
     def test_profile_returns_all_dispatch_entries(self):
         """Every tool definition has a dispatch entry, and vice versa."""
-        defs, handlers = get_tools_for_profile("consolidated")
+        defs, handlers = get_tools()
         assert {tool_def.name for tool_def in defs} == set(handlers.keys())
 
-    def test_unknown_profile_falls_back_to_consolidated(self):
-        """'consolidated' is the only surface since 0.6.0, and an unrecognized
-        profile name (a stale config naming 'full'/'agentic', a typo) must land
-        on it rather than resolving to nothing — the fallback is what keeps an
-        outdated config connected to a working server."""
-        expected = {tool_def.name for tool_def in get_tools_for_profile("consolidated")[0]}
-        for unknown in ("full", "agentic", "nonexistent"):
-            assert {tool_def.name for tool_def in get_tools_for_profile(unknown)[0]} == expected
-
-    def test_a_profile_resolving_to_zero_tools_is_a_hard_error(self):
+    def test_an_empty_registry_is_a_hard_error(self):
         """An empty surface still completes the MCP handshake, so a client reads
         it as 'this server has no capabilities' rather than 'misconfigured'.
         Registration breakage must fail loudly instead of serving nothing."""
         empty = _base.ToolRegistry()
         with pytest.raises(RuntimeError, match="zero tools"):
-            empty.get_for_profile("consolidated")
+            empty.get_tools()
 
 
 class TestDestructiveAnnotations:
@@ -152,7 +133,7 @@ class TestDestructiveAnnotations:
     non-destructive."""
 
     def test_the_schematic_writer_is_destructive(self):
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         by_name = {d.name: d for d in defs}
         tool = by_name["edit_schematic"]
         assert tool.annotations is not None
@@ -162,7 +143,7 @@ class TestDestructiveAnnotations:
         # tied so the hint can't silently rot if that op is ever dropped. The
         # tie lives on the SOURCE definition — the advertised wire serves
         # semantics-only prose and may drop this sentence.
-        _, dispatch = get_tools_for_profile("consolidated")
+        _, dispatch = get_tools()
         ops_field = dispatch["edit_schematic"].definition.inputSchema["properties"]["ops"]
         assert "remove_component" in (ops_field.get("description") or "")
 
@@ -554,7 +535,7 @@ class TestSchemaPostProcessing:
         """Nested submodels are $refs into the schema's own $defs (followups
         item 30) — the composition contract is that they resolve to full
         object schemas a local-ref-following client can read."""
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         experiment_tools = [d for d in defs if d.name == "run_experiments"]
         assert experiment_tools, "run_experiments not found"
         schema = experiment_tools[0].inputSchema
@@ -572,7 +553,7 @@ class TestAdvertisedOrderIsStable:
         tools/__init__; this pin turns an accidental reorder (a set, a dict
         rebuild, an import shuffle) into a failure instead of a silent
         cache-buster for every connected client."""
-        names = [t.name for t in get_tools_for_profile("consolidated")[0]]
+        names = [t.name for t in get_tools()[0]]
         assert names == [
             "plot_waveform",
             "analyze_results",

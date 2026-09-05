@@ -4673,7 +4673,6 @@ class PlotWaveformInput(ToolInput):
         idempotentHint=False,
         openWorldHint=True,
     ),
-    profiles=("consolidated",),
     # MCP Apps (SEP-1865): declare the in-chat renderer so an apps-capable host
     # fetches it via resources/read and pipes the chart spec into it.
     meta={"ui": {"resourceUri": WIDGET_RESOURCE_URI}},

@@ -7,7 +7,7 @@ from mcp import types
 
 from ltspice_mcp import prompts
 from ltspice_mcp.config import VALID_PROFILES
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import get_tools
 from tests.test_consolidated_profile import TOOLS_REMOVED_IN_0_6
 
 _STARTERS = {"characterize_filter", "run_and_plot", "step_response"}
@@ -119,7 +119,7 @@ class TestPromptsRespectProfiles:
 
     @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
     def test_no_prompt_names_a_removed_tool(self, profile: str):
-        visible = {t.name for t in get_tools_for_profile(profile)[0]}
+        visible = {t.name for t in get_tools()[0]}
         uncallable = TOOLS_REMOVED_IN_0_6 - visible
         assert uncallable, "the removed-tool list no longer names anything uncallable"
 
@@ -137,7 +137,7 @@ class TestPromptsRespectProfiles:
     def test_every_prompt_still_names_a_callable_tool(self, profile: str):
         """Guards the check above from passing vacuously: stripping the quoted
         spans must not strip the prompt's actual instructions with them."""
-        visible = {t.name for t in get_tools_for_profile(profile)[0]}
+        visible = {t.name for t in get_tools()[0]}
         for p in prompts.list_prompts(profile):
             text = re.sub(r'"[^"]*"', "", _text(prompts.get_prompt(p.name, _SAMPLE, profile)))
             named = {tool for tool in visible if re.search(rf"\b{re.escape(tool)}\b", text)}

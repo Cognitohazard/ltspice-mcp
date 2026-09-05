@@ -727,6 +727,6 @@ class TestWidgetTemplateAndResource:
         from ltspice_mcp.lib.plot_html import WIDGET_RESOURCE_URI
         from ltspice_mcp.tools._base import registry
 
-        defs, _ = registry.get_for_profile("full")
+        defs, _ = registry.get_tools()
         plot = next(d for d in defs if d.name == "plot_waveform")
         assert plot.meta == {"ui": {"resourceUri": WIDGET_RESOURCE_URI}}

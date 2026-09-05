@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ltspice_mcp.config import VALID_PROFILES, ServerConfig
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import configure_asc_editor
 from ltspice_mcp.errors import (
     LibraryError,
@@ -101,65 +101,41 @@ class TestBuildInstructions:
         assert "Active simulators: LTspice (default), ngspice." in text
         assert "LTspice not detected" not in text
 
-    def test_every_instruction_edition_fits_client_budget(self):
+    def test_the_instructions_fit_the_client_budget(self):
         """Claude Code truncates server instructions at 2048 chars; the tail
-        (the result-trust guidance) must survive under every prefix shape,
-        for EVERY profile edition — an edition left out of this loop ships
-        silently truncated."""
-        from ltspice_mcp.server import _INSTRUCTIONS_BUDGET, _PROFILE_GUIDANCE
+        (the result-trust guidance) must survive under every prefix shape — a
+        prefix left out of this list ships silently truncated."""
+        from ltspice_mcp.server import _INSTRUCTIONS_BUDGET
 
-        for profile in _PROFILE_GUIDANCE:
-            worst_cases = [
-                build_instructions({}, None, profile=profile),
-                build_instructions({"ngspice": _NG}, _NG, profile=profile),
-                build_instructions(
-                    {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG},
-                    _LT,
-                    profile=profile,
-                ),
-                # Multiple simulators WITHOUT LTspice: the longest active-line
-                # list PLUS the LTspice-not-detected note stack on the same
-                # edition — the one combination the three cases above never
-                # form, and the branch that shipped truncated in v0.5.0.
-                build_instructions(
-                    {"ngspice": _NG, "qspice": _LT, "xyce": _NG},
-                    _NG,
-                    profile=profile,
-                ),
-            ]
-            for text in worst_cases:
-                assert len(text) <= _INSTRUCTIONS_BUDGET, (
-                    f"{profile} instructions {len(text)} chars > "
-                    f"{_INSTRUCTIONS_BUDGET} client truncation budget"
-                )
-                # The Python-door discovery pointer must ride EVERY edition:
-                # the instructions are the one surface an agent sees without
-                # asking, and an agent that never learns the API exists can
-                # never choose it (the in-process door has no other billboard
-                # at handshake time).
-                assert "from ltspice_mcp.api import Api" in text, (
-                    f"{profile}: an instruction edition lost the Python API discovery line"
-                )
+        worst_cases = [
+            build_instructions({}, None),
+            build_instructions({"ngspice": _NG}, _NG),
+            build_instructions({"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG}, _LT),
+            # Multiple simulators WITHOUT LTspice: the longest active-line list
+            # PLUS the LTspice-not-detected note stack on the same edition — the
+            # one combination the three cases above never form, and the branch
+            # that shipped truncated in v0.5.0.
+            build_instructions({"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG),
+        ]
+        for text in worst_cases:
+            assert len(text) <= _INSTRUCTIONS_BUDGET, (
+                f"instructions {len(text)} chars > {_INSTRUCTIONS_BUDGET} client truncation budget"
+            )
+            # The Python-door discovery pointer must ride every shape: the
+            # instructions are the one surface an agent sees without asking,
+            # and an agent that never learns the API exists can never choose it
+            # (the in-process door has no other billboard at handshake time).
+            assert "from ltspice_mcp.api import Api" in text, (
+                "an instruction shape lost the Python API discovery line"
+            )
 
 
-class TestProfileGuidanceIsTotal:
-    """Every profile-keyed choice covers every valid profile.
-
-    A profile added to the config and forgotten here would otherwise inherit
-    whichever branch the code falls through to — instructions or an error hint
-    naming tools it does not expose, with nothing failing to say so.
-    """
-
-    def test_instruction_editions_cover_every_profile(self):
-        from ltspice_mcp.server import _PROFILE_GUIDANCE
-
-        assert set(_PROFILE_GUIDANCE) == VALID_PROFILES
-
+class TestInstructionHints:
     def test_every_hint_names_only_exposed_tools(self):
         from ltspice_mcp.server import _ERROR_HINTS
-        from ltspice_mcp.tools import get_tools_for_profile
+        from ltspice_mcp.tools import get_tools
 
-        exposed = {t.name for t in get_tools_for_profile("consolidated")[0]}
+        exposed = {t.name for t in get_tools()[0]}
         # Hints may reference an exposed tool by name; they must never
         # reference a removed one (the shape of the stale-hint bug).
         removed = {
@@ -466,7 +442,7 @@ class TestToolAnnotationHonesty:
         # request_id-keyed and read-only tools ARE idempotent and say so.
         from ltspice_mcp.tools._base import registry
 
-        dispatch = registry.get_for_profile("consolidated")[1]
+        dispatch = registry.get_tools()[1]
         expected = {
             "edit_schematic": False,
             "plot_waveform": False,
