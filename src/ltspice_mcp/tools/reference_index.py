@@ -641,7 +641,8 @@ def _summary_for(tool: str, name: str, model: type[BaseModel] | None, fallback: 
 
 @functools.cache
 def build_index() -> tuple[BranchEntry, ...]:
-    """Every branch of every tool, in advertised order."""
+    """Every branch of every tool, plus each tool's own arguments, in
+    advertised order."""
     entries: list[BranchEntry] = []
     for source in _sources():
         derived = dict(source.summaries)
@@ -803,7 +804,7 @@ def search_branches(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
 
 
 def table_of_contents() -> list[dict[str, Any]]:
-    """Every branch name and its one line, grouped by tool and family."""
+    """Every entry name and its one line, grouped by tool and family."""
     groups: list[dict[str, Any]] = []
     for source in _sources():
         branches = [
