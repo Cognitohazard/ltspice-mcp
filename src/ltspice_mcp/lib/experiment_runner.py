@@ -36,6 +36,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
+from ltspice_mcp.lib.store import Store, run_dir_in, run_filename_in, validate_job_id
 from ltspice_mcp.lib.sweep_utils import generate_id
 
 if TYPE_CHECKING:
@@ -275,9 +276,9 @@ class ExperimentRunner(RunnerBase):
         if capacity < 1:
             raise SimulationError("max_parallel must be at least 1")
         job_id = request.job_id or generate_id("exp")
-        experiment_store.validate_job_id(job_id)
+        validate_job_id(job_id)
         control_token = secrets.token_urlsafe(32)
-        store_path = experiment_store.record_path(job_id, request.state.working_dir)
+        store_path = Store(request.state.working_dir).job_record(job_id)
         case_ids = [case.case_id for case in request.cases]
         run_indices = [case.run_index for case in request.cases]
         if any(not case_id for case_id in case_ids) or len(set(case_ids)) != len(case_ids):
@@ -317,7 +318,11 @@ class ExperimentRunner(RunnerBase):
             sources=request.sources,
             simulator=request.simulator,
             completeness=completeness,
-            output_folder=self.output_folder,
+            # The job's own directory inside the runner's stable output folder,
+            # not the folder itself: everything this job wrote is under it, and
+            # the reconciliation that re-finds a case's artifacts after a crash
+            # reconstructs them from here.
+            output_folder=run_dir_in(self.output_folder, job_id),
             failures=failures,
             analysis=analysis,
         )
@@ -387,7 +392,7 @@ class ExperimentRunner(RunnerBase):
     ) -> _BarrierResult:
         """One blocking lock/lookup/write critical section for submission."""
         working_dir = request.state.working_dir
-        with file_lock(experiment_store.request_lock_target(request.request_id, working_dir)):
+        with file_lock(Store(working_dir).request_lock(request.request_id)):
             index = experiment_store.load_request_index(request.request_id, working_dir)
             dangling = False
             if index is not None:
@@ -459,15 +464,15 @@ class ExperimentRunner(RunnerBase):
             experiment_store.save_job(candidate)
 
         try:
-            experiment_store.save_pointers(candidate)
+            experiment_store.register_circuits(candidate, working_dir)
         except OSError as exc:
             candidate.observations.append(
                 {
-                    "code": "experiment_pointer_write_failed",
+                    "code": "experiment_index_write_failed",
                     "kind": "persistence",
                     "detail": (
                         "The coordinator is durable, but one or more circuit "
-                        f"pointers could not be written: {exc}"
+                        f"index entries could not be written: {exc}"
                     ),
                 }
             )
@@ -649,10 +654,9 @@ class ExperimentRunner(RunnerBase):
         the launch so the loop never waits on a simulator.
         """
         working_dir = execution.request.state.working_dir
-        with file_lock(
-            experiment_store.cancellation_lock_target(execution.job.job_id, working_dir)
-        ):
-            if experiment_store.cancellation_requested(execution.job.job_id, working_dir):
+        job_id = execution.job.job_id
+        with file_lock(Store(working_dir).cancellation_lock(job_id)):
+            if experiment_store.cancellation_requested(job_id, working_dir):
                 return False
         with execution.launch_lock:
             if execution.cancel_event.is_set():
@@ -676,8 +680,10 @@ class ExperimentRunner(RunnerBase):
         # chaining on run_deck is safe. The injection is a fact about the run,
         # not about the deck the record pins: the staged deck and its digest
         # stay byte-identical either way.
+        run_dir = run_dir_in(self.output_folder, job_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
         scripted_deck = inject_ngspice_control_write(
-            run_deck, self.simulator_class, case.run_token, self.output_folder
+            run_deck, self.simulator_class, case.run_token, run_dir
         )
         if scripted_deck != run_deck:
             run_deck = scripted_deck
@@ -697,7 +703,11 @@ class ExperimentRunner(RunnerBase):
         try:
             self.submit_netlist(
                 run_deck,
-                f"{case.run_token}{suffix}",
+                # A sub-path, not a bare name: the simulator layer joins it onto
+                # the runner's output folder, so this is what lands the run's
+                # deck copy, raw and log in the job's own directory without the
+                # runner (and its shared concurrency semaphore) ever moving.
+                run_filename_in(job_id, f"{case.run_token}{suffix}"),
                 lambda outcome: self._handle_case_completion(
                     execution.job.job_id,
                     case.case_id,
@@ -862,7 +872,7 @@ class ExperimentRunner(RunnerBase):
             code=reason,
             error=f"Case stopped because {reason.replace('_', ' ')} elapsed",
         )
-        await asyncio.to_thread(self._remove_case_artifacts, case)
+        await asyncio.to_thread(self._remove_case_artifacts, execution.job, case)
         self._release_slot(execution, case.case_id)
 
     def _handle_case_completion(
@@ -901,7 +911,7 @@ class ExperimentRunner(RunnerBase):
             }
         )
         execution.request.state.persist_job(execution.job)
-        self.loop.run_in_executor(None, self._remove_case_artifacts, case)
+        self.loop.run_in_executor(None, self._remove_case_artifacts, execution.job, case)
         self._release_slot(execution, case_id)
         if execution.job.done_event.is_set() and not execution.retained_slots:
             self._executions.pop(job_id, None)
@@ -1177,11 +1187,14 @@ class ExperimentRunner(RunnerBase):
     async def _kill_case(self, token: str) -> None:
         await asyncio.to_thread(self._kill_by_token, token, "experiment case")
 
-    def _remove_case_artifacts(self, case: ExperimentCase) -> None:
+    def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
         """Best-effort removal of a killed case's exact heavy-artifact paths."""
         raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
         run_suffix = case.staged_deck.suffix or ".net"
-        run_netlist = self.output_folder / f"{case.run_token}{run_suffix}"
+        # The job's own run directory, which is also what the record persists —
+        # the same reconstruction the crash reconciliation uses to FIND these.
+        run_dir = job.output_folder or run_dir_in(self.output_folder, job.job_id)
+        run_netlist = run_dir / f"{case.run_token}{run_suffix}"
         paths = {
             run_netlist,
             run_netlist.with_suffix(raw_extension),

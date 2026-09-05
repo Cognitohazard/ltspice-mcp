@@ -13,7 +13,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.lib import analysis_snapshot, experiment_store, now, recent, store_common
+from ltspice_mcp.lib import analysis_snapshot, experiment_store, now, recent, store
 from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest
 from ltspice_mcp.lib.experiment_types import (
     AnalysisStage,
@@ -24,6 +24,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.runner_base import RunOutcome
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import _build_input_schema
 from ltspice_mcp.tools.experiments import (
@@ -113,7 +114,7 @@ def _experiment(
         fingerprint="f" * 64,
         canonicalizer_version=experiment_store.CANONICALIZER_VERSION,
         control_token="control-secret",
-        store_path=experiment_store.record_path(job_id, work_dir),
+        store_path=Store(work_dir).job_record(job_id),
         cases=cases,
         sources=[source],
         simulator="MockSimulator",
@@ -130,7 +131,7 @@ def _experiment(
 
 def _persist_experiment(job: ExperimentJob, work_dir: Path) -> None:
     experiment_store.save_job(job)
-    experiment_store.save_pointers(job)
+    experiment_store.register_circuits(job, work_dir)
     experiment_store.save_request_index(
         request_id=job.request_id,
         fingerprint=job.fingerprint,
@@ -912,7 +913,7 @@ class TestDurableProgress:
         monkeypatch.setattr(
             experiment_store,
             "owner_liveness",
-            lambda *_args, **_kwargs: store_common.OwnerLiveness.ALIVE,
+            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
         )
 
         data = _assert_jobs_schema(
@@ -988,7 +989,7 @@ class TestWait:
         monkeypatch.setattr(
             experiment_store,
             "owner_liveness",
-            lambda *_args, **_kwargs: store_common.OwnerLiveness.ALIVE,
+            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
         )
         stale = experiment_store.load_job(owner_job.job_id, work_dir, own_is_alive=True)
         assert stale is not None
@@ -1133,7 +1134,7 @@ class TestCancellationAuthority:
         monkeypatch.setattr(
             experiment_store,
             "owner_liveness",
-            lambda *_args, **_kwargs: store_common.OwnerLiveness.ALIVE,
+            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
         )
 
         data = _assert_jobs_schema(
@@ -1177,7 +1178,7 @@ class TestCancellationAuthority:
 
 @pytest.mark.asyncio
 class TestListAndRunsPagination:
-    async def test_list_pages_recent_groups_and_surfaces_malformed_pointer(
+    async def test_list_pages_recent_groups_and_surfaces_malformed_index_entry(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
@@ -1188,10 +1189,10 @@ class TestListAndRunsPagination:
         second = _circuit(work_dir, "second.cir")
         await asyncio.to_thread(recent.touch, first)
         await asyncio.to_thread(recent.touch, second)
-        pointer_dir = experiment_store.pointer_dir(first)
-        await asyncio.to_thread(pointer_dir.mkdir, parents=True, exist_ok=True)
+        index_dir = Store(work_dir).circuit_index_dir(first)
+        await asyncio.to_thread(index_dir.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(
-            (pointer_dir / "broken.json").write_text,
+            (index_dir / "broken.json").write_text,
             "{not-json",
         )
 
@@ -1206,7 +1207,7 @@ class TestListAndRunsPagination:
         assert page_one["total"] == 2
         assert page_one["returned"] == page_two["returned"] == 1
         observations = [*page_one["observations"], *page_two["observations"]]
-        assert any(item["code"] == "experiment_pointer_invalid" for item in observations)
+        assert any(item["code"] == "experiment_index_invalid" for item in observations)
 
     async def test_submission_appears_in_unfiltered_recent_view(
         self,
