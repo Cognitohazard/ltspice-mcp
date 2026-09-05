@@ -30,7 +30,7 @@ from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools import receipts as receipts_mod
 from ltspice_mcp.tools._schema import build_input_schema
-from ltspice_mcp.tools.analyze import AnalyzeResultsInput
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import (
     AnalysisPerRun,
     RunExperimentsInput,
@@ -1785,6 +1785,100 @@ class TestAttachedAnalysis:
         assert entry["per_run"]["returned"] == 2
         assert {row["run_index"] for row in entry["per_run"]["items"]} == {0, 1}
         assert result["signals_available"]
+
+    async def test_all_steps_reaches_the_attached_analysis(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The point of the hoist is that attached and standalone read the same
+        steps, so the attached half has to honour 'all_steps' on its own.
+
+        Dropped, every attached analysis quietly falls back to the first step
+        while the standalone tool keeps reading every one.
+        """
+        recorded_fixture_simulator(monkeypatch, "ltspice_step_tran")
+        deck = _deck(work_dir / "attached-steps.cir")
+        recipes = [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
+
+        every = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-all-steps",
+                    analyze={
+                        "recipes": recipes,
+                        "all_steps": True,
+                        "include": {"per_run": {"limit": 20}},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        rows = every["analysis"]["result"]["results"]["v"]["per_run"]["items"]
+        assert [row["step_index"] for row in rows] == [0, 1, 2]
+
+        # Absent, the same job reads the first step only — which is what makes
+        # the row list above evidence the argument was forwarded.
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-first-step",
+                    analyze={"recipes": recipes, "include": {"per_run": {"limit": 20}}},
+                ),
+                state_with_sim,
+            )
+        )
+        first_rows = first["analysis"]["result"]["results"]["v"]["per_run"]["items"]
+        assert [row["step_index"] for row in first_rows] == [0]
+
+    async def test_attached_step_selection_matches_the_standalone_tool(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Same job, same selection, same numbers — whichever door asked."""
+        recorded_fixture_simulator(monkeypatch, "ltspice_step_tran")
+        deck = _deck(work_dir / "attached-one-step.cir")
+        recipes = [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
+        selection = {"axis": "r", "value": 22}
+
+        attached = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-step-parity",
+                    analyze={
+                        "recipes": recipes,
+                        "step": selection,
+                        "include": {"per_run": {"limit": 20}},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": attached["job_id"], "runs": "all", "label": "dut"}],
+                    "recipes": recipes,
+                    "step": selection,
+                    "include": {"per_run": {"limit": 20}},
+                }
+            ),
+            state_with_sim,
+        )
+        assert standalone.structured_content is not None
+
+        def _rows(result: dict[str, Any]) -> list[tuple[Any, Any]]:
+            items = result["results"]["v"]["per_run"]["items"]
+            return [(row["step_index"], row["value"]) for row in items]
+
+        assert _rows(attached["analysis"]["result"]) == _rows(standalone.structured_content)
+        assert [index for index, _ in _rows(attached["analysis"]["result"])] == [1]
 
     async def test_replay_projects_nested_content_from_the_neutral_snapshot(
         self,
