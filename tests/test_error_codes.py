@@ -11,11 +11,24 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    NetlistError,
+    NoAxisError,
+    ResultError,
+    SymbolResolutionError,
+    raise_site_code,
+)
 from ltspice_mcp.lib import result_store, services
+from ltspice_mcp.lib.deck_staging import DeckStagingError
+from ltspice_mcp.lib.experiment_runner import CancelNotAuthorized, ExperimentCancellationError
+from ltspice_mcp.lib.netlist_graph import PortArityMismatch, flatten_graph, parse_netlist_graph
+from ltspice_mcp.lib.raw_parser import query_point_value
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools.circuit import _make_editor
+from ltspice_mcp.tools.experiments import _jobs_error_details
 from tests.conftest import FIXTURES_DIR
 
 
@@ -157,3 +170,88 @@ class TestAnalysisDeadlineIsTyped:
             ],
         )
         assert _failure_codes(data) == {"artifact_publish_failed"}
+
+
+class TestCancellationCodeIsTyped:
+    """A refusal to cancel is told by its type, not by the words it used."""
+
+    def test_wording_alone_does_not_make_it_an_authorization_failure(self):
+        # A coordinator that is gone is a different failure from a caller who
+        # holds no authority, however the sentence is phrased.
+        exc = ExperimentCancellationError(
+            "Experiment job j1 is not owned by a live coordinator in this "
+            "process, so it is not authorized to stop its cases"
+        )
+        assert _jobs_error_details(exc)[0] == "cancel_failed"
+
+    def test_authorization_refusal_keeps_its_code_when_reworded(self):
+        exc = CancelNotAuthorized("cancellation refused: the control token does not match")
+        assert _jobs_error_details(exc) == ("cancel_not_authorized", "cancellation", False)
+
+
+class TestStageOutranksTheClassDefault:
+    """A class code is the default; the stage that failed may still name it."""
+
+    def test_class_default_is_not_a_raise_site_code(self):
+        # ResultError.code exists, but nothing chose it for this failure, so
+        # a handler reporting its own stage keeps that name (a result read
+        # that fails while staging a deck is a submission failure).
+        assert ResultError.code == "result_unreadable"
+        assert raise_site_code(ResultError("unreadable")) is None
+
+    def test_a_code_named_at_the_raise_site_wins(self):
+        assert raise_site_code(DeckStagingError("include_missing", "no such include")) == (
+            "include_missing"
+        )
+
+
+class TestSchematicDependencyIsTyped:
+    """A missing schematic and a missing dependency are told apart structurally."""
+
+    def test_missing_schematic_whose_name_mentions_asy_is_file_not_found(
+        self, work_dir: Path, asc_symbols: Path
+    ):
+        missing = work_dir / "opamp.asy.asc"
+        with pytest.raises(NetlistError) as exc:
+            _make_editor(missing)
+        assert not isinstance(exc.value, SymbolResolutionError)
+        assert "File not found" in str(exc.value)
+
+    def test_missing_sub_sheet_is_a_dependency_failure(self, work_dir: Path, asc_symbols: Path):
+        # A hierarchical block whose sheet is gone: the editor names the
+        # missing .asc, so a ".asy" match blamed the schematic that opened fine.
+        (work_dir / "myblock.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
+            encoding="utf-8",
+        )
+        sheet = work_dir / "top.asc"
+        sheet.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL myblock 0 0 R0\nSYMATTR InstName X1\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(SymbolResolutionError) as exc:
+            _make_editor(sheet)
+        assert "myblock.asc" in str(exc.value)
+
+
+class TestNoAxisIsTyped:
+    """An operating-point raw has no axis; that is a type, not a sentence."""
+
+    def test_query_at_a_point_on_an_op_raw_raises_no_axis(self):
+        from spicelib.raw.raw_read import RawRead
+
+        raw = RawRead(str(FIXTURES_DIR / "op_extreme_node.raw"))
+        with pytest.raises(NoAxisError):
+            query_point_value(raw, raw.get_trace_names()[0], 0.0)
+
+
+class TestPortArityIsTyped:
+    """Recovering from an arity mismatch keys on the type, not the message."""
+
+    def test_flatten_raises_the_arity_type(self):
+        graph = parse_netlist_graph(
+            "Vin in 0 5\nXU1 in out THREEPORT\n.subckt THREEPORT a b c\n"
+            "R1 a b 1k\n.ends THREEPORT\n.end\n"
+        )
+        with pytest.raises(PortArityMismatch):
+            flatten_graph(graph)

@@ -21,7 +21,7 @@ from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_classes import SpiceReadException
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
@@ -466,7 +466,15 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     Raises:
         ValueError: If the trace contains no data points.
     """
-    axis = real_axis(np.asarray(raw.get_axis(step=step)))
+    try:
+        raw_axis = raw.get_axis(step=step)
+    except (RuntimeError, TypeError) as exc:
+        # Two spellings of the same fact: spicelib raises RuntimeError ("This
+        # RAW file does not have an axis.") for an operating-point raw, and
+        # returns an unsized empty array for a file that held no plots at all,
+        # so len() inside it raises TypeError.
+        raise NoAxisError(f"Result has no sweep axis to query at step {step}.") from exc
+    axis = real_axis(np.asarray(raw_axis))
     wave = raw.get_wave(trace_name, step=step)
 
     if axis.size == 0 or len(wave) == 0:
