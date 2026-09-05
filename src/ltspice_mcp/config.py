@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 ToolProfile = Literal["consolidated"]
 VALID_PROFILES: frozenset[str] = frozenset({"consolidated"})
 
+ToolListing = Literal["full", "compact", "discover"]
+VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact", "discover"})
+
 # Profiles removed in 0.6.0. The [tools] profile key stays RECOGNIZED for one
 # release so the removal is loud through auto-updating install channels (PyPI,
 # uvx, plugin, MCPB): a config naming a removed profile gets a warning with the
@@ -103,6 +106,19 @@ def _validated_profile(value: str, source: str) -> str | None:
     return None
 
 
+def _validated_listing(value: object, source: str) -> str | None:
+    """Return value if it names a tool-listing mode, else warn and return None."""
+    if isinstance(value, str) and value in VALID_TOOL_LISTINGS:
+        return value
+    logger.warning(
+        "Unknown tool listing %r in %s, using 'full'; valid values are %s",
+        value,
+        source,
+        ", ".join(sorted(VALID_TOOL_LISTINGS)),
+    )
+    return None
+
+
 def _validated_string_list(
     value: object, field_name: str, source: str = "config"
 ) -> list[str] | None:
@@ -185,6 +201,10 @@ def _toml_tool_profile(value: Any) -> Any:
     return _validated_profile(value, "config") or _SKIP
 
 
+def _toml_tool_listing(value: Any) -> Any:
+    return _validated_listing(value, "config") or _SKIP
+
+
 def _toml_persist_jobs(value: Any) -> Any:
     if isinstance(value, bool):
         return value
@@ -233,6 +253,10 @@ def _env_log_level(value: str) -> Any:
 
 def _env_tool_profile(value: str) -> Any:
     return _validated_profile(value, "LTSPICE_MCP_TOOL_PROFILE") or _SKIP
+
+
+def _env_tool_listing(value: str) -> Any:
+    return _validated_listing(value.strip(), "LTSPICE_MCP_TOOL_LISTING") or _SKIP
 
 
 def _env_persist_jobs(value: str) -> Any:
@@ -423,6 +447,14 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_tool_profile,
     ),
     _Setting(
+        field="tool_listing",
+        section="tools",
+        key="listing",
+        from_toml=_toml_tool_listing,
+        env="LTSPICE_MCP_TOOL_LISTING",
+        from_env=_env_tool_listing,
+    ),
+    _Setting(
         field="persist_jobs",
         section="state",
         key="persist_jobs",
@@ -552,6 +584,19 @@ class ServerConfig:
     the six-tool surface plus the plot widget. The former "full" and
     "agentic" profiles were removed; their names are still recognized in
     config so the removal warns instead of silently changing the surface."""
+
+    tool_listing: ToolListing = "full"
+    """How the tool list is served to the client (experimental).
+
+    ``"full"`` (the default) advertises the seven tools exactly as they are
+    registered. ``"compact"`` advertises the same seven with every per-argument
+    description removed from the published schema; structure, enums, defaults
+    and ``$defs`` are untouched, and the tools accept exactly what they did.
+    ``"discover"`` advertises two meta-tools instead — ``find_tools`` searches a
+    catalogue and returns matching tools with their full input schema inline,
+    and ``invoke_tool`` calls any catalogue tool by name — so a session loads
+    tool definitions only for the work it actually does. Only the shape of the
+    advertised list changes; no tool gains or loses a capability."""
 
     persist_jobs: bool = True
     """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
@@ -742,6 +787,13 @@ def generate_default_config(path: Path) -> None:
         comment("The key itself is removed in 0.7.0; new configs need no [tools] section.")
     )
     tools_tbl.add("profile", "consolidated")
+    tools_tbl.add(nl())
+    tools_tbl.add(comment('How the tool list is served (experimental). "full" (the default)'))
+    tools_tbl.add(comment('advertises the seven tools as registered; "compact" advertises the'))
+    tools_tbl.add(comment('same seven with the per-argument descriptions removed; "discover"'))
+    tools_tbl.add(comment("advertises find_tools/invoke_tool and reveals a tool once find_tools"))
+    tools_tbl.add(comment("has returned it. No tool gains or loses a capability."))
+    tools_tbl.add("listing", "full")
     doc.add("tools", tools_tbl)
     doc.add(nl())
 

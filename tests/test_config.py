@@ -244,6 +244,58 @@ class TestToolProfile:
         assert "profile" in content
 
 
+class TestToolListing:
+    """[tools] listing selects how the tool list is served."""
+
+    def test_default_listing_is_full(self):
+        assert ServerConfig().tool_listing == "full"
+
+    @pytest.mark.parametrize("mode", ["full", "compact", "discover"])
+    def test_listing_from_toml(self, work_dir: Path, mode: str):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(f'[tools]\nlisting = "{mode}"\n')
+        assert ServerConfig.load(toml_path).tool_listing == mode
+
+    @pytest.mark.parametrize("mode", ["full", "compact", "discover"])
+    def test_listing_from_env(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: str):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", mode)
+        assert ServerConfig.load(work_dir / "nonexistent.toml").tool_listing == mode
+
+    def test_env_overrides_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nlisting = "compact"\n')
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "discover")
+        assert ServerConfig.load(toml_path).tool_listing == "discover"
+
+    def test_unknown_value_in_toml_falls_back_to_full(
+        self, work_dir: Path, caplog: pytest.LogCaptureFixture
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nlisting = "sparse"\n')
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(toml_path)
+        assert config.tool_listing == "full"
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert "sparse" in message
+        assert "discover" in message, "the warning must enumerate the valid values"
+
+    def test_unknown_env_value_does_not_clobber_a_valid_toml_listing(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nlisting = "discover"\n')
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "sparse")
+        assert ServerConfig.load(toml_path).tool_listing == "discover"
+
+    def test_generated_config_documents_the_listing_key(self, work_dir: Path):
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+        assert 'listing = "full"' in content
+        for mode in ("compact", "discover"):
+            assert mode in content
+
+
 class TestSimulatorExeConfig:
     """Tests for the simulator_exe config field being wired to detection."""
 
@@ -560,6 +612,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_LOG_LEVEL": "error",
     "LTSPICE_MCP_SYMBOL_PATHS": f"/tmp/env-sym-a{os.pathsep}/tmp/env-sym-b",
     "LTSPICE_MCP_TOOL_PROFILE": "consolidated",
+    "LTSPICE_MCP_TOOL_LISTING": "discover",
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "7",
 }
@@ -598,6 +651,7 @@ symbol_paths = ["/tmp/sym-a", "/tmp/sym-b"]
 
 [tools]
 profile = "consolidated"
+listing = "compact"
 
 [state]
 persist_jobs = false
@@ -648,6 +702,7 @@ class TestLoadCoversEveryKey:
             "log_level": "DEBUG",
             "symbol_paths": [Path("/tmp/sym-a"), Path("/tmp/sym-b")],
             "tool_profile": "consolidated",
+            "tool_listing": "compact",
             "persist_jobs": False,
             "preload_recent_count": 3,
             "config_path": toml_path,
@@ -679,6 +734,7 @@ class TestLoadCoversEveryKey:
             "log_level": "ERROR",
             "symbol_paths": [Path("/tmp/env-sym-a"), Path("/tmp/env-sym-b")],
             "tool_profile": "consolidated",
+            "tool_listing": "discover",
             "persist_jobs": True,
             "preload_recent_count": 7,
             "config_path": toml_path,
@@ -723,6 +779,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_RAW_MB": "0",
             "LTSPICE_MCP_LOG_LEVEL": "LOUD",
             "LTSPICE_MCP_TOOL_PROFILE": "bogus",
+            "LTSPICE_MCP_TOOL_LISTING": "sparse",
             "LTSPICE_MCP_PERSIST_JOBS": "maybe",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "-2",
         }
@@ -743,6 +800,7 @@ class TestLoadCoversEveryKey:
         assert snapshot["max_raw_mb"] == 512
         assert snapshot["log_level"] == "DEBUG"
         assert snapshot["tool_profile"] == "consolidated"
+        assert snapshot["tool_listing"] == "compact"
         assert snapshot["persist_jobs"] is False
         assert snapshot["preload_recent_count"] == 3
         message = "\n".join(record.getMessage() for record in caplog.records)
