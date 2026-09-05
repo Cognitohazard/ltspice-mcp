@@ -1,4 +1,8 @@
-"""Working-directory persistence for multi-circuit experiment jobs."""
+"""Reading and writing the experiment job record.
+
+The record's shape lives here; where it lives on disk is ``lib/store.py``, and
+every path below comes from a :class:`~ltspice_mcp.lib.store.Store`.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -27,57 +30,35 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
-from ltspice_mcp.lib.store_common import (
-    EXPERIMENT_JOB_SCHEMA,
+from ltspice_mcp.lib.store import (
+    KIND_CANCELLATION,
+    KIND_CIRCUIT_INDEX,
+    KIND_EXPERIMENT,
+    KIND_REQUEST_INDEX,
     OwnerLiveness,
-    accept_schema,
+    Store,
+    accept,
     atomic_write_json,
+    envelope,
     owner_liveness,
     owner_unknown_observation,
     pid_of,
-    schema_envelope,
+    validate_job_id,
 )
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = EXPERIMENT_JOB_SCHEMA
-SCHEMA_VERSION = 2
-SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
-# The legacy job store writes into this same directory; its records are the
-# expected other half of the layout, not a corrupted file.
-
-
-def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
-    """Admit v1 records; their untagged analysis result remains legacy public data."""
-    return data
-
-
-_MIGRATIONS: dict[int, Any] = {1: _migrate_v1_to_v2}
-
-POINTER_SCHEMA = "ltspice-mcp/experiment-pointer"
-POINTER_SCHEMA_VERSION = 1
-# Version 2: execution.wait_s left the canonical fingerprint (the dwell bounds
-# only the response, so a different dwell is the same experiment). A reused
-# request_id whose record was hashed under an older version raises the loud
-# idempotency conflict instead of silently mis-comparing fingerprints.
-# Version 3: the measurements recipe gained histogram_bins. It participates
-# (asking for bins computes something new, like include.outliers does), so a
-# request carrying that recipe now hashes different bytes than it did before
-# the field existed — which is exactly the condition a version bump exists to
-# report accurately instead of as "your arguments differ".
 CANONICALIZER_VERSION = 3
+# How a request's identity was computed — NOT a storage schema version. It says
+# which fields the canonical fingerprint covers, so a reused ``request_id``
+# whose record was hashed under an older definition raises the loud idempotency
+# conflict instead of silently mis-comparing fingerprints.
+#   2: execution.wait_s left the fingerprint (the dwell bounds only the
+#      response, so a different dwell is the same experiment).
+#   3: the measurements recipe gained histogram_bins, which participates
+#      (asking for bins computes something new), so a request carrying that
+#      recipe hashes different bytes than it did before the field existed.
 
-SIDECAR_DIRNAME = ".ltspice-mcp"
-JOBS_SUBDIR = "jobs"
-EXPERIMENT_POINTERS_SUBDIR = "experiments"
-REQUESTS_SUBDIR = "requests"
-LOCKS_SUBDIR = "locks"
-CANCELLATIONS_SUBDIR = "cancellations"
-
-CANCELLATION_SCHEMA = "ltspice-mcp/experiment-cancellation"
-CANCELLATION_SCHEMA_VERSION = 1
-
-JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
 _TERMINAL_STATUSES = frozenset(
     {
@@ -90,63 +71,9 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
-def validate_job_id(job_id: str) -> str:
-    """Validate a server-generated job id before it reaches path construction."""
-    if not isinstance(job_id, str) or JOB_ID_RE.fullmatch(job_id) is None:
-        raise ValueError(
-            "Invalid job id: expected 1-64 letters, digits, underscores, or hyphens, "
-            "starting with a letter or digit"
-        )
-    return job_id
-
-
-def working_store_root(working_dir: Path) -> Path:
-    """Resolved working-directory home for coordinator records."""
-    return (working_dir / SIDECAR_DIRNAME / JOBS_SUBDIR).resolve()
-
-
-def record_path(job_id: str, working_dir: Path) -> Path:
-    """Contained coordinator-record path for ``job_id``."""
-    validate_job_id(job_id)
-    root = working_store_root(working_dir)
-    candidate = (root / f"{job_id}.json").resolve()
-    if candidate.parent != root:
-        raise ValueError(f"Experiment job path escapes the working store: {job_id!r}")
-    return candidate
-
-
-def request_digest(request_id: str) -> str:
-    """Filesystem-safe digest used for request indexes and their locks."""
-    import hashlib
-
-    return hashlib.sha256(request_id.encode("utf-8")).hexdigest()
-
-
-def request_index_path(request_id: str, working_dir: Path) -> Path:
-    """Request-id index path; the raw request id never becomes a path segment."""
-    return working_store_root(working_dir) / REQUESTS_SUBDIR / f"{request_digest(request_id)}.json"
-
-
-def request_lock_target(request_id: str, working_dir: Path) -> Path:
-    """Target whose ``file_lock`` sidecar is ``request-{digest}.lock``."""
-    return working_store_root(working_dir) / LOCKS_SUBDIR / f"request-{request_digest(request_id)}"
-
-
-def cancellation_path(job_id: str, working_dir: Path) -> Path:
-    """Contained durable cancellation marker for one experiment."""
-    validate_job_id(job_id)
-    return working_store_root(working_dir) / CANCELLATIONS_SUBDIR / f"{job_id}.json"
-
-
-def cancellation_lock_target(job_id: str, working_dir: Path) -> Path:
-    """Cross-process gate shared by cancellation and case submission."""
-    validate_job_id(job_id)
-    return working_store_root(working_dir) / LOCKS_SUBDIR / f"cancel-{job_id}"
-
-
 def cancellation_requested(job_id: str, working_dir: Path) -> bool:
     """Whether an authorized durable cancellation marker exists."""
-    return cancellation_path(job_id, working_dir).is_file()
+    return Store(working_dir).cancellation(job_id).is_file()
 
 
 def cancel_authorized(job: ExperimentJob, control_token: str | None) -> bool:
@@ -169,33 +96,23 @@ def request_cancellation(
     record is re-read while the cross-process gate is held so a stale in-memory
     view cannot authorize cancellation.
     """
-    with file_lock(cancellation_lock_target(job_id, working_dir)):
+    store = Store(working_dir)
+    with file_lock(store.cancellation_lock(job_id)):
         job = load_job(job_id, working_dir, own_is_alive=True)
         if job is None:
             return None
         if not cancel_authorized(job, control_token):
             raise PermissionError(f"Cancellation is not authorized for experiment job {job_id}")
+        store.ensure_root()
         atomic_write_json(
-            cancellation_path(job_id, working_dir),
-            schema_envelope(
-                CANCELLATION_SCHEMA,
-                CANCELLATION_SCHEMA_VERSION,
-                kind="experiment_cancellation",
+            store.cancellation(job_id),
+            envelope(
+                KIND_CANCELLATION,
                 job_id=job_id,
                 requested_at=now().isoformat(),
             ),
         )
         return job
-
-
-def pointer_dir(circuit_path: Path) -> Path:
-    """Per-circuit directory holding experiment pointer records."""
-    return circuit_path.parent / SIDECAR_DIRNAME / JOBS_SUBDIR / EXPERIMENT_POINTERS_SUBDIR
-
-
-def pointer_path(circuit_path: Path, job_id: str) -> Path:
-    validate_job_id(job_id)
-    return pointer_dir(circuit_path) / f"{job_id}.json"
 
 
 def _path_or_none(value: Any) -> Path | None:
@@ -259,10 +176,8 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         ),
         "observations": job.analysis.observations,
     }
-    return schema_envelope(
-        SCHEMA,
-        SCHEMA_VERSION,
-        kind="experiment",
+    return envelope(
+        KIND_EXPERIMENT,
         job_id=job.job_id,
         request_id=job.request_id,
         fingerprint=job.fingerprint,
@@ -308,23 +223,26 @@ def save_request_index(
 ) -> Path:
     """Write the durable request-id mapping."""
     validate_job_id(job_id)
-    path = request_index_path(request_id, working_dir)
+    store = Store(working_dir)
+    store.ensure_root()
+    path = store.request_index(request_id)
     atomic_write_json(
         path,
-        {
-            "request_id": request_id,
-            "fingerprint": fingerprint,
-            "canonicalizer_version": canonicalizer_version,
-            "job_id": job_id,
-            "created_at": now().isoformat(),
-        },
+        envelope(
+            KIND_REQUEST_INDEX,
+            request_id=request_id,
+            fingerprint=fingerprint,
+            canonicalizer_version=canonicalizer_version,
+            job_id=job_id,
+            created_at=now().isoformat(),
+        ),
     )
     return path
 
 
 def load_request_index(request_id: str, working_dir: Path) -> dict[str, Any] | None:
     """Load the exact request-id index entry, rejecting hash collisions."""
-    path = request_index_path(request_id, working_dir)
+    path = Store(working_dir).request_index(request_id)
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -333,17 +251,30 @@ def load_request_index(request_id: str, working_dir: Path) -> dict[str, Any] | N
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Ignoring unreadable experiment request index %s: %s", path, exc)
         return None
-    if not isinstance(data, dict) or data.get("request_id") != request_id:
+    if not accept(data, path, kind=KIND_REQUEST_INDEX, log=logger):
+        return None
+    if data.get("request_id") != request_id:
         logger.warning("Ignoring mismatched experiment request index %s", path)
         return None
     return data
 
 
-def save_pointers(job: ExperimentJob) -> list[Path]:
-    """Write one lightweight pointer beside every distinct source circuit."""
+def register_circuits(job: ExperimentJob, working_dir: Path) -> list[Path]:
+    """Index this job under every distinct circuit it ran, in the working store.
+
+    This replaces the pointer file that used to be written next to each source
+    circuit and named an absolute path back into the store. That path had to be
+    re-validated on every read (a tampered one could name a record outside the
+    store), and it could only ever resolve for the session whose working
+    directory it happened to name — so a pointer beside a circuit was already
+    unusable from anywhere else. An index inside the store carries a job id and
+    nothing else: there is no path to validate, and discovery is scoped to the
+    store that owns the records, which is where it always actually was.
+    """
+    store = Store(working_dir)
+    store.ensure_root()
     saved: list[Path] = []
     seen: set[Path] = set()
-    target = job.store_path.resolve()
     for source in job.sources:
         try:
             circuit = source.path.resolve()
@@ -352,15 +283,12 @@ def save_pointers(job: ExperimentJob) -> list[Path]:
         if circuit in seen:
             continue
         seen.add(circuit)
-        path = pointer_path(circuit, job.job_id)
+        path = store.circuit_index(circuit, job.job_id)
         atomic_write_json(
             path,
-            schema_envelope(
-                POINTER_SCHEMA,
-                POINTER_SCHEMA_VERSION,
-                kind="experiment_pointer",
+            envelope(
+                KIND_CIRCUIT_INDEX,
                 job_id=job.job_id,
-                target=str(target),
                 circuit=str(circuit),
                 created_at=now().isoformat(),
             ),
@@ -619,9 +547,9 @@ def load_job_from_path(
     own_is_alive: bool = False,
 ) -> ExperimentJob | None:
     """Load one coordinator record after validating store-root containment."""
-    root = working_store_root(working_dir)
+    store = Store(working_dir)
     resolved = path.resolve()
-    if resolved.parent != root:
+    if resolved.parent != store.experiments_dir:
         raise ValueError(f"Experiment record is outside the working store: {path}")
     validate_job_id(resolved.stem)
     try:
@@ -632,18 +560,7 @@ def load_job_from_path(
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Skipping unreadable experiment job %s: %s", resolved, exc)
         return None
-    if not isinstance(data, dict) or not accept_schema(
-        data,
-        resolved,
-        schema=SCHEMA,
-        current_version=SCHEMA_VERSION,
-        supported_versions=SUPPORTED_VERSIONS,
-        migrations=_MIGRATIONS,
-        logger=logger,
-    ):
-        return None
-    if data.get("kind") != "experiment":
-        logger.warning("Skipping experiment record %s: wrong kind %r", resolved, data.get("kind"))
+    if not accept(data, resolved, kind=KIND_EXPERIMENT, log=logger):
         return None
     if data.get("job_id") != resolved.stem:
         logger.warning("Skipping experiment record %s: job id does not match filename", resolved)
@@ -663,91 +580,86 @@ def load_job(
 ) -> ExperimentJob | None:
     """Load a coordinator directly by validated job id."""
     return load_job_from_path(
-        record_path(job_id, working_dir),
+        Store(working_dir).job_record(job_id),
         working_dir,
         own_is_alive=own_is_alive,
     )
 
 
-def load_pointer_jobs(
+def load_jobs_for_circuit(
     circuit_path: Path,
     working_dir: Path,
     prefer: Mapping[str, ExperimentJob] | None = None,
 ) -> tuple[list[ExperimentJob], list[dict[str, Any]]]:
-    """Resolve a circuit's pointers to validated working-store records.
+    """Every experiment in this store that ran ``circuit_path``.
 
     ``prefer`` maps job ids to live registry instances (snapshotted on the
     event loop by the caller): a job this process owns is returned from
     there instead of disk, because its most recent transitions may still be
     in a pending fire-and-forget persist.
+
+    An index entry whose record has gone (evicted, or deleted by hand) is not
+    an anomaly and is skipped in silence; only an entry this build cannot read
+    at all becomes an observation.
     """
+    store = Store(working_dir)
     jobs: list[ExperimentJob] = []
     observations: list[dict[str, Any]] = []
-    target_dir = pointer_dir(circuit_path)
-    if not target_dir.is_dir():
+    index_dir = store.circuit_index_dir(circuit_path)
+    if not index_dir.is_dir():
         return jobs, observations
-    root = working_store_root(working_dir)
-    for path in sorted(target_dir.glob("*.json")):
+    for path in sorted(index_dir.glob("*.json")):
         try:
             with path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            if (
-                data.get("schema") != POINTER_SCHEMA
-                or data.get("schema_version") != POINTER_SCHEMA_VERSION
-                or data.get("kind") != "experiment_pointer"
-            ):
-                raise ValueError("unsupported experiment pointer schema")
+            if not accept(data, path, kind=KIND_CIRCUIT_INDEX, log=logger):
+                raise ValueError("unsupported experiment index record")
             job_id = validate_job_id(str(data.get("job_id", "")))
             live = prefer.get(job_id) if prefer else None
             if live is not None:
                 jobs.append(live)
                 continue
-            target_raw = data.get("target")
-            if not isinstance(target_raw, str):
-                raise TypeError("pointer target is missing")
-            target = Path(target_raw).resolve()
-            if target.parent != root or target.name != f"{job_id}.json":
-                raise ValueError("pointer target is outside the configured working store")
-            job = load_job_from_path(target, working_dir, own_is_alive=True)
+            job = load_job_from_path(
+                store.job_record(job_id),
+                working_dir,
+                own_is_alive=True,
+            )
             if job is not None:
                 jobs.append(job)
         except Exception as exc:
             observation = {
-                "code": "experiment_pointer_invalid",
+                "code": "experiment_index_invalid",
                 "kind": "discovery",
-                "detail": f"Skipped experiment pointer {path}: {exc}",
-                "evidence": {"pointer": str(path)},
+                "detail": f"Skipped experiment index entry {path}: {exc}",
+                "evidence": {"entry": str(path)},
             }
             observations.append(observation)
-            # Debug, not warning: the pointer index is global, so a fresh
-            # working directory reaches other projects' stale records and
-            # narrates a dozen of them before the caller has done anything.
-            # The fact still reaches whoever asked — the registry accumulates
-            # these and the jobs listing returns them — so nothing is lost by
-            # keeping them out of a library's boot output.
+            # Debug, not warning: the fact still reaches whoever asked — the
+            # registry accumulates these and the jobs listing returns them —
+            # so nothing is lost by keeping it out of a library's boot output.
             logger.debug(observation["detail"])
     return jobs, observations
 
 
 def delete_job(job: ExperimentJob, working_dir: Path) -> None:
-    """Delete a coordinator, its pointers, and its still-current request index."""
+    """Delete a coordinator, its circuit index entries, and its request index."""
+    store = Store(working_dir)
     for source in job.sources:
         try:
-            pointer_path(source.path, job.job_id).unlink()
+            store.circuit_index(source.path, job.job_id).unlink()
         except FileNotFoundError:
             pass
         except OSError as exc:
-            logger.debug("Could not remove experiment pointer for %s: %s", job.job_id, exc)
+            logger.debug("Could not remove experiment index entry for %s: %s", job.job_id, exc)
 
-    lock_target = request_lock_target(job.request_id, working_dir)
-    with file_lock(lock_target):
-        index_path = request_index_path(job.request_id, working_dir)
+    with file_lock(store.request_lock(job.request_id)):
+        index_path = store.request_index(job.request_id)
         index = load_request_index(job.request_id, working_dir)
         if index is not None and index.get("job_id") == job.job_id:
             with contextlib.suppress(FileNotFoundError):
                 index_path.unlink()
-        with file_lock(cancellation_lock_target(job.job_id, working_dir)):
+        with file_lock(store.cancellation_lock(job.job_id)):
             with contextlib.suppress(FileNotFoundError):
                 job.store_path.unlink()
             with contextlib.suppress(FileNotFoundError):
-                cancellation_path(job.job_id, working_dir).unlink()
+                store.cancellation(job.job_id).unlink()
