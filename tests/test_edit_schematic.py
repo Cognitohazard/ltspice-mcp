@@ -735,6 +735,31 @@ async def test_cross_view_cursor_rejected(asc_state):
         )
 
 
+async def test_malformed_touched_cursor_is_rejected_before_the_sheet_is_written(asc_state):
+    """A bad views.touched cursor must be caught with the other arguments.
+
+    The touched view is paged after the commit, so a cursor only checked there
+    rejects the call with the sheet already rewritten — the exact failure the
+    up-front check exists to prevent.
+    """
+    await _build_blank(asc_state, "touchedcursor", _DIVIDER_OPS)
+    sheet = Path(asc_state.working_dir) / "touchedcursor.asc"
+    before = sheet.read_bytes()
+
+    with pytest.raises(NetlistError, match="touched"):
+        await handle_edit_schematic(
+            _edit_input(
+                target="touchedcursor.asc",
+                expected_sha256=_sha(sheet),
+                return_views=["touched"],
+                view_cursors={"touched": "tampered"},
+                ops=[{"op": "add_net_label", "net": "spare", "pin": "R2.2"}],
+            ),
+            asc_state,
+        )
+    assert sheet.read_bytes() == before
+
+
 # ---------------------------------------------------------------------------
 # Views this tool does not have
 # ---------------------------------------------------------------------------
