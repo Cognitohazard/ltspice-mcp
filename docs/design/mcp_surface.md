@@ -91,7 +91,7 @@ From the error hierarchy:
 | `internal_error` | an unclassified server failure |
 
 Named by the stage instead, where the stage is the more useful fact:
-`submission_failed`, `receipt_failed`, `revision_conflict`,
+`submission_failed`, `submission_committed`, `receipt_failed`, `revision_conflict`,
 `asc_export_unavailable`, `unsupported_variant` (with the supported list),
 `ambiguous_target`, `parse_deadline`, `lint_blocked`.
 
