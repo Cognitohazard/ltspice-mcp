@@ -517,14 +517,34 @@ async def test_simultaneous_analyses_of_one_job_agree_and_parse_once(
 async def test_simultaneous_cancels_of_one_job_report_one_outcome(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Both cancels answer through the envelope; the job cancels exactly once."""
+    """Both cancels answer through the envelope; the job cancels exactly once.
+
+    The case is parked where it waits for a launch permit, so it is provably
+    still queued when the cancels arrive instead of however far the coordinator
+    got before they did. That is what makes the receipts below decidable: with a
+    queued case, the call that gets there first stops it and reports that
+    transition, and the second finds nothing non-terminal left. Left to the
+    scheduler the case may already be running, and then both calls see work to
+    stop and both claim the same transition.
+    """
     callbacks: dict[str, Any] = {}
+    waiting_for_a_permit = asyncio.Event()
+    # Never set. The case leaves this wait by being cancelled, which is the
+    # state under test: a case stopped while queued never reaches a simulator.
+    permit_granted = asyncio.Event()
 
     def submit(self, _netlist: Path, run_filename: str, callback):
         callbacks[run_filename] = callback
         return object()
 
+    async def park_at_the_launch_permit(self) -> None:
+        # A case takes this permit before it stamps itself submitted, so a case
+        # parked here is exactly a queued one.
+        waiting_for_a_permit.set()
+        await permit_granted.wait()
+
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+    monkeypatch.setattr(ExperimentRunner, "acquire_launch_slot", park_at_the_launch_permit)
     deck = _deck(work_dir / "cancel-twice.cir")
     receipt = await _call(
         state_with_sim,
@@ -534,6 +554,7 @@ async def test_simultaneous_cancels_of_one_job_report_one_outcome(
     assert receipt["outcome"] == "in_progress", receipt
     job_id = receipt["job_id"]
     token = receipt["control_token"]
+    await asyncio.wait_for(waiting_for_a_permit.wait(), 30)
 
     cancel = {"action": "cancel", "job_id": job_id, "control_token": token}
     first, second = await asyncio.gather(
@@ -556,6 +577,7 @@ async def test_simultaneous_cancels_of_one_job_report_one_outcome(
     assert [row["prior_status"] for row in reporting[0]["items"]] == ["queued"]
     quiet = next(data for data in (first, second) if not data["items"])
     assert "no cancellation was needed" in quiet["hint"]
+    assert not callbacks, f"a case stopped while queued still reached the simulator: {callbacks}"
 
 
 # ---------------------------------------------------------------------------
