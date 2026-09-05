@@ -667,36 +667,40 @@ class TestQueryValueRejectsNaNInf:
 
 
 # ---------------------------------------------------------------------------
-# paginate() must floor limit — limit=0 produced a never-advancing next_offset
+# page() must floor limit — limit=0 produced a never-advancing next_cursor
 # ---------------------------------------------------------------------------
 
 
-class TestPaginateLimitFloor:
-    class _Args:
-        def __init__(self, offset=0, limit=50):
-            self.offset = offset
-            self.limit = limit
-
+class TestPageLimitFloor:
     def test_limit_zero_is_floored_and_advances(self):
-        from ltspice_mcp.tools._base import paginate, pagination_metadata
+        from ltspice_mcp.tools._page import page
 
-        page, total, offset, limit = paginate(list(range(10)), self._Args(limit=0))
-        assert limit == 1 and page == [0]
-        meta = pagination_metadata(total, offset, limit)
-        assert meta["has_more"] is True
-        assert meta["next_offset"] == 1  # advances — no livelock
+        first = page(list(range(10)), limit=0)
+        assert first["items"] == [0]
+        assert first["truncated"] is True
+        assert first["next_cursor"] == "o:1"  # advances — no livelock
 
     def test_negative_limit_is_floored(self):
-        from ltspice_mcp.tools._base import paginate
+        from ltspice_mcp.tools._page import page
 
-        page, _, _, limit = paginate(list(range(10)), self._Args(offset=2, limit=-5))
-        assert limit == 1 and page == [2]
+        assert page(list(range(10)), offset=2, limit=-5)["items"] == [2]
 
-    def test_cap_still_applies(self):
-        from ltspice_mcp.tools._base import paginate
+    def test_an_offset_past_the_end_yields_an_empty_last_page(self):
+        from ltspice_mcp.tools._page import page
 
-        _, _, _, limit = paginate(list(range(100)), self._Args(limit=999))
-        assert limit == 50
+        last = page(list(range(3)), offset=99, limit=10)
+        assert last["items"] == [] and last["truncated"] is False
+        assert last["total"] == 3 and last["next_cursor"] is None
+
+    def test_the_page_cap_is_the_input_model_s_bound(self):
+        # The cap moved from the paginator to the field that takes the number:
+        # a limit out of range is refused at validation, not clamped after it.
+        from pydantic import ValidationError
+
+        from ltspice_mcp.tools.jobs import JobsInput
+
+        with pytest.raises(ValidationError):
+            JobsInput.model_validate({"action": "list", "limit": 999})
 
 
 # ---------------------------------------------------------------------------

@@ -292,17 +292,6 @@ SUGGESTIONS_SCHEMA: dict[str, Any] = {
     },
 }
 
-PAGINATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "total": {"type": "integer"},
-        "offset": {"type": "integer"},
-        "limit": {"type": "integer"},
-        "has_more": {"type": "boolean"},
-        "next_offset": {"type": ["integer", "null"]},
-    },
-}
-
 PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -998,46 +987,6 @@ def declare_output_schema(
 
 
 registry = ToolRegistry()
-
-
-# ---------------------------------------------------------------------------
-# Pagination helper
-# ---------------------------------------------------------------------------
-
-
-DEFAULT_PAGE_CAP = 50
-"""Server-side ceiling on list-endpoint page size — the "caps at 50" the
-``limit`` field descriptions document."""
-
-
-def paginate(
-    items: list, arguments: Any, cap: int = DEFAULT_PAGE_CAP
-) -> tuple[list, int, int, int]:
-    """Slice a list according to offset/limit from tool arguments.
-
-    Returns:
-        (page, total, offset, limit) tuple
-    """
-    total = len(items)
-    offset = max(0, min(int(getattr(arguments, "offset", 0)), total))
-    # Floor as well as cap: limit=0 would otherwise report has_more=true with
-    # next_offset == offset — a pagination loop that never advances — and a
-    # negative limit would mis-slice. Server-side clamping (not rejection) is
-    # the documented contract for out-of-range limits.
-    limit = max(1, min(int(getattr(arguments, "limit", cap)), cap))
-    return items[offset : offset + limit], total, offset, limit
-
-
-def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
-    """Build structured pagination metadata for JSON responses."""
-    has_more = offset + limit < total
-    return {
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": offset + limit if has_more else None,
-    }
 
 
 class ResponseBudget(NamedTuple):
