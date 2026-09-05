@@ -428,12 +428,9 @@ def make_experiment_job(
 
 
 class _FakeSession:
-    """Stub MCP session — log/progress calls are no-ops."""
+    """Stub MCP session — progress calls are no-ops."""
 
     client_capabilities = None
-
-    async def send_log_message(self, **kwargs):
-        pass
 
     async def send_progress_notification(self, **kwargs):
         pass

@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import sys
-import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -14,7 +13,7 @@ from mcp import types
 from mcp.server.caching import CacheHint
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
-from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
+from mcp.shared.exceptions import MCPError
 from pydantic import ValidationError
 
 from ltspice_mcp import __version__, prompts
@@ -24,7 +23,6 @@ from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
-from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.resources import (
@@ -38,19 +36,6 @@ from ltspice_mcp.state import SessionState
 _CIRCUIT_PATH_KEYS: tuple[str, ...] = ("path", "netlist")
 
 logger = logging.getLogger(__name__)
-
-# The 2026-07-28 revision deprecates the logging capability, so the SDK warns
-# both when a `logging/setLevel` handler is registered and on every log
-# notification sent. We keep serving it: clients that negotiate an earlier
-# revision still ask for it, and it is the only channel a tool has for progress
-# text. The SDK drops a notification the peer never opted into either way, so
-# the warning has nothing left to tell us — silence it once, by its message,
-# rather than at every call site.
-warnings.filterwarnings(
-    "ignore",
-    message="The logging capability is deprecated",
-    category=MCPDeprecationWarning,
-)
 
 
 def _get_state(ctx: ServerRequestContext) -> SessionState:
@@ -408,19 +393,9 @@ async def call_tool(
             f"Unknown tool: {name}. Available tools: {available}.",
         )
 
-    # Set up MCP protocol logging for this request.
-    # Handlers and services call mcp_log() which reads this ContextVar —
-    # no server/session reference needed downstream. Messages below the
-    # client's requested minimum level (logging/setLevel) are not sent.
-    session = ctx.session
-    _client_capabilities.set(session.client_capabilities)
-
-    async def _log(level: str, msg: str) -> None:
-        if _below_client_log_level(level, state.client_log_level):
-            return
-        await session.send_log_message(level=level, data=msg, logger="ltspice-mcp")  # type: ignore[arg-type]
-
-    set_log_fn(_log)
+    # Bind the caller's capabilities for the life of this request, so a
+    # handler can pick its delivery channel (widget vs local open).
+    _client_capabilities.set(ctx.session.client_capabilities)
 
     # Lazy-load persisted jobs for the circuit this tool is operating on,
     # and bump it in the recent-circuits index. Best-effort; errors swallowed;
@@ -441,7 +416,9 @@ async def call_tool(
         )
         return _tool_error(f"Invalid arguments for {name}: {detail}")
     except PathSecurityError as e:
-        await mcp_log("warning", f"Path security violation in {name}: {e}")
+        # The caller reads the refusal in the result; the operator reads it on
+        # the server's stderr, which is the only channel left for it.
+        logger.warning("Path security violation in %s: %s", name, e)
         return _tool_error(f"{e}\n\n{_path_reject_guidance(state)}")
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
@@ -472,45 +449,6 @@ async def call_tool(
         # an unexpected failure diagnosable. Full traceback still goes to logs.
         logger.exception(f"Unexpected error in tool {name}")
         return _tool_error(f"Internal error in {name}: {type(e).__name__}: {e}")
-
-
-# MCP log severities, ascending RFC-5424 rank (the protocol's LoggingLevel).
-_LOG_SEVERITY = {
-    "debug": 0,
-    "info": 1,
-    "notice": 2,
-    "warning": 3,
-    "error": 4,
-    "critical": 5,
-    "alert": 6,
-    "emergency": 7,
-}
-
-
-def _below_client_log_level(level: str, client_min: str | None) -> bool:
-    """True when ``level`` is below the client's requested minimum.
-
-    No minimum set (client never called logging/setLevel) or an unknown level
-    string sends the message — filtering is an opt-in narrowing, never a
-    silent drop of something we can't rank.
-    """
-    if client_min is None:
-        return False
-    rank = _LOG_SEVERITY.get(level)
-    floor = _LOG_SEVERITY.get(client_min)
-    if rank is None or floor is None:
-        return False
-    return rank < floor
-
-
-async def set_logging_level(
-    ctx: ServerRequestContext, params: types.SetLevelRequestParams
-) -> types.EmptyResult:
-    """Store the client's minimum log level; also declares the logging
-    capability (the SDK only advertises it when this handler exists, and
-    without it spec-conforming clients drop our notifications/message)."""
-    _get_state(ctx).client_log_level = params.level
-    return types.EmptyResult()
 
 
 async def list_resources(
@@ -618,5 +556,4 @@ server: Server[dict] = Server(
     on_read_resource=read_resource,
     on_list_prompts=list_prompts,
     on_get_prompt=get_prompt,
-    on_set_logging_level=set_logging_level,
 )

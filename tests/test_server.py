@@ -383,35 +383,29 @@ class TestServerDispatch:
         assert "2N2222" in str(item["data"])
 
 
-class TestClientLogLevelFilter:
-    def test_no_level_set_sends_everything(self):
-        from ltspice_mcp.server import _below_client_log_level
+class TestLoggingCapabilityDropped:
+    """The 2026-07-28 revision deprecates the whole logging capability — the
+    `logging/setLevel` request, the `logging` capability, and the
+    server-to-client `notifications/message` delivery — with no replacement.
+    The server serves none of it, so nothing is advertised and nothing is
+    sent."""
 
-        assert _below_client_log_level("debug", None) is False
-        assert _below_client_log_level("emergency", None) is False
-
-    def test_below_floor_filtered_at_and_above_sent(self):
-        from ltspice_mcp.server import _below_client_log_level
-
-        assert _below_client_log_level("debug", "warning") is True
-        assert _below_client_log_level("info", "warning") is True
-        assert _below_client_log_level("warning", "warning") is False
-        assert _below_client_log_level("error", "warning") is False
-
-    def test_unknown_levels_never_filtered(self):
-        from ltspice_mcp.server import _below_client_log_level
-
-        assert _below_client_log_level("verbose", "warning") is False
-        assert _below_client_log_level("info", "chatty") is False
-
-    def test_set_level_handler_registered_declares_capability(self):
-        # Registering the logging/setLevel handler is what makes the SDK
-        # declare the logging capability in the initialize result — without
-        # it, spec-conforming clients drop notifications/message entirely.
+    def test_no_set_level_handler_and_no_capability(self):
         from ltspice_mcp.server import server
 
-        assert server.get_request_handler("logging/setLevel") is not None
-        assert server.get_capabilities().logging is not None
+        assert server.get_request_handler("logging/setLevel") is None
+        assert server.get_capabilities().logging is None
+
+    def test_no_protocol_log_delivery_module(self):
+        # The delivery itself is gone, not just its advertisement: no module
+        # for it, and no import of one left behind.
+        import importlib
+
+        import ltspice_mcp.server as server_module
+
+        assert not hasattr(server_module, "mcp_log")
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("ltspice_mcp.lib.mcp_logging")
 
 
 class TestStderrIsQuietByDefault:
