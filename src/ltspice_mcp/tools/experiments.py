@@ -9,14 +9,17 @@ import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
 
 from mcp import types
 from pydantic import (
     BeforeValidator,
     Field,
+    SkipValidation,
+    TypeAdapter,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -64,7 +67,7 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
-from ltspice_mcp.lib.recipes import validate_recipe
+from ltspice_mcp.lib.recipes import DISCRIMINANTS, Recipe, validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
@@ -92,6 +95,7 @@ from ltspice_mcp.tools._base import (
     keep_plan,
     paginate,
     project_row,
+    prune_unreferenced_defs,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -265,7 +269,14 @@ coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
 class AttachedAnalysis(StrictModel):
-    recipes: list[dict[str, Any]] = Field(
+    # The same typed union analyze_results advertises, not a free-form object:
+    # this block IS an analyze_results request, and a schema that said
+    # "any object" left a caller to discover the recipe grammar by having a
+    # whole simulation run and then fail at the analysis stage. SkipValidation
+    # keeps the strict union in the published schema while leaving the items as
+    # the caller sent them, which is what _validate_attached_analysis then
+    # checks recipe by recipe, before anything is staged.
+    recipes: list[SkipValidation[Recipe]] = Field(
         description=(
             "analyze_results recipes, in that tool's exact shape, run over this "
             "job's own runs once they finish. Saves a round trip when the "
@@ -292,6 +303,49 @@ class AttachedAnalysis(StrictModel):
             "a bare list of flag names switches them on."
         ),
     )
+
+    @field_serializer("recipes")
+    def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
+        """Serialize each recipe exactly as it arrived.
+
+        Skipped validation leaves a wire recipe as the dict the caller sent,
+        while the annotation promises a model. Without this the default
+        serializer warns on every dump — including the one that computes the
+        durable fingerprint, which must keep hashing the caller's own bytes.
+        """
+        return [
+            recipe if isinstance(recipe, dict) else recipe.model_dump(mode="json")
+            for recipe in recipes
+        ]
+
+
+#: What the wire says one attached recipe is: the metric names, the key every
+#: recipe carries, and where the per-metric field trees live.
+#:
+#: The grammar is ``analyze_results``', and that tool publishes all twenty-odd
+#: branches in full on the same wire. A second copy here measured 13 KB, paid
+#: by every client in every session whether or not it ever attaches an
+#: analysis, to say something already said one tool away. What a caller cannot
+#: derive is which metrics exist, so that is what the stub keeps — the same
+#: bargain the dormant recipe branches strike, including their two-channel
+#: pointer and their deliberate permissiveness: no ``additionalProperties``,
+#: so a client pre-validating a full recipe against this shape still sends it.
+#: The model behind it is the real union, and every attached recipe is
+#: validated at submission, before a deck is staged.
+_ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "One analyze_results recipe. This block mirrors analyze_results.recipes "
+        "exactly — same grammar, same metrics, validated the same way at "
+        "submission. Fields per metric: api.reference('analyze_results') or "
+        "spice://guide."
+    ),
+    "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "metric": {"type": "string", "enum": list(DISCRIMINANTS)},
+    },
+    "required": ["key", "metric"],
+}
 
 
 class RunExperimentsInput(ToolInput):
@@ -347,6 +401,20 @@ class RunExperimentsInput(ToolInput):
     def canonical_fingerprint_payload(self) -> dict[str, Any]:
         """Exclude receipt fields without changing old include=None bytes."""
         return self.strip_presentation()
+
+    @classmethod
+    def wire_input_schema(cls) -> dict[str, Any]:
+        """Advertise an attached recipe as its stub, not a second recipe union.
+
+        The stub replaces the union only in what is published; the model still
+        validates against the union, so this changes nothing a call is allowed
+        to send. Definitions the union kept alive are then unreachable, and an
+        unreferenced definition is weight no client can use.
+        """
+        schema = copy.deepcopy(super().wire_input_schema())
+        recipes = schema["$defs"][AttachedAnalysis.__name__]["properties"]["recipes"]
+        recipes["items"] = copy.deepcopy(_ATTACHED_RECIPE_WIRE_STUB)
+        return prune_unreferenced_defs(schema)
 
     request_id: str = Field(
         default_factory=lambda: generate_id("req"),
@@ -2130,30 +2198,76 @@ def _empty_payload(request_id: str) -> dict[str, Any]:
 
 _JOBS_PAGE_LIMIT = 50
 _FOREIGN_WAIT_POLL_S = 2.0
-_ADDRESSED_JOB_ACTIONS = frozenset({"status", "wait", "cancel", "runs"})
 
 Job = SimulationJob | BatchJob | ExperimentJob
 
 
 class JobsInput(ToolInput):
-    """Action-specific inputs for the consolidated jobs control plane."""
+    """The shared half of every jobs call, and the door the five actions enter by.
 
-    action: Literal["status", "wait", "cancel", "list", "runs"] = Field(
+    ``JobsInput.model_validate({"action": ...})`` routes on ``action`` and
+    returns that action's own model, so a caller may keep addressing this one
+    name while each action validates against exactly its own fields. Construct
+    an action model directly when the action is known statically.
+    """
+
+    action: str = Field(
         description=(
             "'status' snapshots a job now; 'wait' blocks until it finishes or "
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent circuits and "
             "their job counts; 'runs' pages one job's per-run records. Each action "
-            "accepts only its own fields and rejects the rest, so send exactly what "
-            "the action takes."
+            "takes only its own fields, listed under that action below."
         ),
     )
+    budget: int | None = Field(
+        default=None,
+        ge=response_budget.BUDGET_MIN_TOKENS,
+        description=response_budget.BUDGET_DESCRIPTION,
+    )
+
+    #: The five action models, in advertised order. Set below, once they exist.
+    VARIANTS: ClassVar[tuple[type[JobsInput], ...]] = ()
+
+    def __init__(self, /, **data: Any) -> None:
+        # Validation routes through the union; construction cannot, because a
+        # model validator that returned another action's model from __init__
+        # would hand back a silently empty instance. Naming the actions here
+        # is the difference between a clear error and that empty object.
+        if type(self) is JobsInput:
+            raise TypeError(
+                "JobsInput is the union of the five jobs actions; validate with "
+                "JobsInput.model_validate({'action': ...}) or construct the action "
+                "model itself"
+            )
+        super().__init__(**data)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _route_on_action(
+        cls,
+        data: Any,
+        handler: ValidatorFunctionWrapHandler,
+    ) -> Any:
+        """Validate the base name as whichever action the payload names."""
+        if cls is JobsInput and isinstance(data, dict):
+            return _JOBS_ADAPTER.validate_python(data)
+        return handler(data)
+
+    @classmethod
+    def wire_input_schema(cls) -> dict[str, Any]:
+        """Advertise the five actions as one discriminated union."""
+        if cls is not JobsInput:
+            return super().wire_input_schema()
+        return jobs_input_schema()
+
+
+class _AddressedJobsInput(JobsInput):
+    """The actions that name one job: exactly one of job_id or request_id."""
+
     job_id: str | None = Field(
         default=None,
         min_length=1,
-        description=(
-            "Address the job directly. Required by status/wait/cancel/runs unless "
-            "request_id is given instead; never both, and never with 'list'."
-        ),
+        description="Address the job directly. Give this or request_id, never both.",
     )
     request_id: str | None = Field(
         default=None,
@@ -2163,38 +2277,70 @@ class JobsInput(ToolInput):
             "way back to a job whose id was lost. Alternative to job_id."
         ),
     )
+
+    @model_validator(mode="after")
+    def _one_selector(self) -> Self:
+        if int(self.job_id is not None) + int(self.request_id is not None) != 1:
+            raise ValueError(
+                f"jobs action {self.action!r} requires exactly one of job_id or request_id"
+            )
+        return self
+
+
+class JobsStatusInput(_AddressedJobsInput):
+    """Snapshot one job's receipt as it stands now, without blocking."""
+
+    action: Literal["status"]  # pyright: ignore[reportIncompatibleVariableOverride]
+
+
+class JobsWaitInput(_AddressedJobsInput):
+    """Block server-side until one job finishes, then return its receipt."""
+
+    action: Literal["wait"]  # pyright: ignore[reportIncompatibleVariableOverride]
     timeout_s: float = Field(
         default=60.0,
         ge=0.0,
         le=JOBS_WAIT_CAP_S,
         description=(
-            "'wait' only: how long to block, 0-300s. Timing out is not a failure — "
-            "the response comes back with timed_out set and the job keeps running, "
-            "so wait again. Polling with 'status' in a loop costs calls this avoids."
+            "How long to block, 0-300s. Timing out is not a failure — the response "
+            "comes back with timed_out set and the job keeps running, so wait again. "
+            "Polling with 'status' in a loop costs calls this avoids."
         ),
     )
     wait_for: Literal["all", "runs"] = Field(
         default="all",
         description=(
-            "'wait' only: 'all' waits for the runs AND any attached analysis stage; "
-            "'runs' returns as soon as the last run is terminal, before the "
-            "analysis it would then have to wait for separately."
+            "'all' waits for the runs AND any attached analysis stage; 'runs' "
+            "returns as soon as the last run is terminal, before the analysis it "
+            "would then have to wait for separately."
         ),
     )
+
+
+class JobsCancelInput(_AddressedJobsInput):
+    """Stop one job: no further case enters submission."""
+
+    action: Literal["cancel"]  # pyright: ignore[reportIncompatibleVariableOverride]
     control_token: str | None = Field(
         default=None,
         min_length=1,
         description=(
-            "'cancel' only: the token from the original run_experiments receipt. "
-            "Needed only when this process did not submit the job — the owning "
-            "process may always cancel its own. Status and list never disclose it."
+            "The token from the original run_experiments receipt. Needed only when "
+            "this process did not submit the job — the owning process may always "
+            "cancel its own. Status and list never disclose it."
         ),
     )
+
+
+class JobsListInput(JobsInput):
+    """Page the recently-touched circuits and the jobs recorded against them."""
+
+    action: Literal["list"]  # pyright: ignore[reportIncompatibleVariableOverride]
     circuit: str | None = Field(
         default=None,
         description=(
-            "'list' only: restrict to jobs of this circuit file. Omitted, 'list' is "
-            "the recently-touched-circuits view — the way to find work from an "
+            "Restrict to jobs of this circuit file. Omitted, 'list' is the "
+            "recently-touched-circuits view — the way to find work from an "
             "earlier session."
         ),
     )
@@ -2202,57 +2348,85 @@ class JobsInput(ToolInput):
         default=_JOBS_PAGE_LIMIT,
         ge=1,
         le=_JOBS_PAGE_LIMIT,
-        description="'list' only: circuit groups per page.",
+        description="Circuit groups per page.",
     )
     cursor: str | None = Field(
         default=None,
-        description=(
-            "'list'/'runs': next_cursor from the previous page. Absent means the first page."
-        ),
+        description="next_cursor from the previous page. Absent means the first page.",
     )
-    budget: int | None = Field(
+
+
+class JobsRunsInput(_AddressedJobsInput):
+    """Page one job's per-run records, artifact paths included."""
+
+    action: Literal["runs"]  # pyright: ignore[reportIncompatibleVariableOverride]
+    cursor: str | None = Field(
         default=None,
-        ge=response_budget.BUDGET_MIN_TOKENS,
-        description=response_budget.BUDGET_DESCRIPTION,
+        description="next_cursor from the previous page. Absent means the first page.",
     )
 
-    @model_validator(mode="after")
-    def validate_action_fields(self) -> Self:
-        """Require one selector and reject fields that do not belong to an action."""
-        selected = int(self.job_id is not None) + int(self.request_id is not None)
-        if self.action in _ADDRESSED_JOB_ACTIONS and selected != 1:
-            raise ValueError(
-                f"jobs action {self.action!r} requires exactly one of job_id or request_id"
-            )
-        if self.action == "list" and selected:
-            raise ValueError("jobs action 'list' does not accept job_id or request_id")
 
-        # 'budget' caps any action's response, so it is allowed everywhere
-        # rather than repeated in five sets that could drift apart.
-        allowed_fields = {"budget"} | {
-            "status": {"action", "job_id", "request_id"},
-            "wait": {
-                "action",
-                "job_id",
-                "request_id",
-                "timeout_s",
-                "wait_for",
+#: One jobs call: the action models, told apart by ``action``. Discriminated
+#: rather than a plain union so an unknown action is one error naming the five
+#: legal ones, and a known action with a bad field reports against that action
+#: alone instead of five sets of complaints.
+JobsAction: TypeAlias = Annotated[
+    JobsStatusInput | JobsWaitInput | JobsCancelInput | JobsListInput | JobsRunsInput,
+    Field(discriminator="action"),
+]
+
+_JOBS_ADAPTER: TypeAdapter[JobsAction] = TypeAdapter(JobsAction)
+JobsInput.VARIANTS = get_args(get_args(JobsAction)[0])
+JOBS_ACTIONS: tuple[str, ...] = tuple(
+    get_args(model.model_fields["action"].annotation)[0] for model in JobsInput.VARIANTS
+)
+
+
+def jobs_input_schema() -> dict[str, Any]:
+    """The five actions as one object schema, each action's shape its own branch.
+
+    Three requirements shape this, and only one spelling meets all three.
+
+    MCP requires an object schema at the top level — a bare ``oneOf`` makes a
+    strict client reject the whole tool list — and a client that reads
+    ``properties`` and stops there must still see what every action shares, so
+    the two shared arguments are hoisted beside the branches exactly as
+    ``JOBS_OUTPUT_SCHEMA`` hoists the shared response keys. Every branch
+    declares them itself, so hoisting constrains nothing new.
+
+    The branches are then applied through ``if``/``then`` on the discriminant
+    rather than pydantic's ``oneOf``, because the server SDK validates
+    arguments against this schema before the tool is dispatched and reports the
+    single best error. Under ``oneOf`` that error is always the root
+    "is not valid under any of the given schemas", which names neither the
+    legal actions nor the offending field; under ``if``/``then`` only the
+    matching action's constraints fail, so the caller is told that 'frobnicate'
+    is not one of the five, or exactly which field this action does not take.
+    The ``discriminator`` mapping is kept beside them: it is what says the
+    branches are alternatives chosen by ``action``, and it is the reference a
+    reader (or an OpenAPI-shaped client) follows into ``$defs``.
+    """
+    union = _JOBS_ADAPTER.json_schema(ref_template="#/$defs/{model}")
+    shared = JobsInput.model_json_schema()["properties"]
+    mapping: dict[str, str] = union["discriminator"]["mapping"]
+    return {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(JOBS_ACTIONS),
+                "description": shared["action"]["description"],
             },
-            "cancel": {
-                "action",
-                "job_id",
-                "request_id",
-                "control_token",
-            },
-            "list": {"action", "circuit", "limit", "cursor"},
-            "runs": {"action", "job_id", "request_id", "cursor"},
-        }[self.action]
-        unexpected = self.model_fields_set - allowed_fields
-        if unexpected:
-            raise ValueError(
-                f"jobs action {self.action!r} does not accept: {', '.join(sorted(unexpected))}"
-            )
-        return self
+            "budget": shared["budget"],
+        },
+        "required": ["action"],
+        "discriminator": union["discriminator"],
+        "allOf": [
+            {"if": {"properties": {"action": {"const": action}}}, "then": {"$ref": ref}}
+            for action, ref in mapping.items()
+        ],
+        "$defs": union["$defs"],
+    }
 
 
 _JOBS_ERROR_SCHEMA: dict[str, Any] = {
@@ -2588,7 +2762,7 @@ def _without_control_tokens(value: Any) -> Any:
     return value
 
 
-async def _resolve_jobs_target(args: JobsInput, state: SessionState) -> Job:
+async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -> Job:
     job_id = args.job_id
     if job_id is None:
         assert args.request_id is not None
@@ -3170,7 +3344,7 @@ async def _await_foreign_experiment_cancellation(
 
 async def _cancel_jobs_target(
     job: Job,
-    args: JobsInput,
+    args: JobsCancelInput,
     state: SessionState,
 ) -> list[dict[str, Any]]:
     if job.status in TERMINAL_STATUSES:
@@ -3260,31 +3434,28 @@ async def _cancel_jobs_target(
     return _cancel_receipts_for_legacy(job, prior_status, prior_run_indices)
 
 
-def _jobs_error_payload(
-    args: JobsInput,
-    *,
-    code: str,
-    message: str,
-    stage: str,
-    retryable: bool,
-) -> dict[str, Any]:
+def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
+    """The failed-call envelope for whichever action was asked for."""
+    error = evaluation.error
+    assert error is not None
+    args = evaluation.args
+    addressed = args if isinstance(args, _AddressedJobsInput) else None
     common: dict[str, Any] = {
         "action": args.action,
         "outcome": "failed",
         "observations": [],
         "warnings": [],
         "failures": [],
-        "hint": message,
+        "hint": error.message,
         "error": {
-            "code": code,
-            "message": message,
-            "stage": stage,
-            "retryable": retryable,
+            "code": error.code,
+            "message": error.message,
+            "stage": error.stage,
+            "retryable": error.retryable,
             "commit_state": "not_started",
         },
     }
-    if args.action in {"status", "wait"}:
-        completeness = Completeness()
+    if isinstance(args, (JobsStatusInput, JobsWaitInput)):
         common.update(
             {
                 "job_id": args.job_id,
@@ -3294,25 +3465,25 @@ def _jobs_error_payload(
                 "analysis_status": "not_requested",
                 "dialect": None,
                 "source": [],
-                "completeness": completeness,
+                "completeness": Completeness(),
                 "lint": [],
                 "runs": _jobs_page([], cursor=None, limit=_JOBS_PAGE_LIMIT),
                 "artifacts": [],
             }
         )
-        if args.action == "wait":
+        if isinstance(args, JobsWaitInput):
             common["timed_out"] = False
         return finalize_receipt(common)
     common.update(unpaged_jobs_items([]))
-    if args.action in {"cancel", "runs"}:
+    if addressed is not None:
         common.update(
             {
-                "job_id": args.job_id,
-                "request_id": args.request_id,
+                "job_id": addressed.job_id,
+                "request_id": addressed.request_id,
                 "status": "unknown",
             }
         )
-    if args.action == "runs":
+    if isinstance(args, JobsRunsInput):
         common["dialect"] = None
     return common
 
@@ -3333,6 +3504,225 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
     if isinstance(exc, (OSError, ValueError)):
         return "jobs_failed", "execution", True
     return "jobs_failed", "execution", False
+
+
+@dataclass(frozen=True)
+class _JobsError:
+    """A jobs action that did not complete, as the envelope will report it."""
+
+    code: str
+    message: str
+    stage: str
+    retryable: bool
+
+
+@dataclass(frozen=True)
+class JobsEvaluation:
+    """One jobs action, executed and detached from the registry.
+
+    Every jobs response is rendered from one of these and nothing else. The MCP
+    page and the Python API's complete dict are two presentations of the SAME
+    read, which is what keeps the two doors from disagreeing: reading the job
+    again to render a second time would let a transition land between the reads
+    and report two different jobs in one answer.
+    """
+
+    args: JobsInput
+    snapshot: ReceiptSnapshot | None = None
+    timed_out: bool | None = None
+    kill_receipts: tuple[dict[str, Any], ...] = ()
+    job_id: str | None = None
+    request_id: str | None = None
+    status: str | None = None
+    groups: tuple[dict[str, Any], ...] = ()
+    observations: tuple[dict[str, Any], ...] = ()
+    circuit: Path | None = None
+    error: _JobsError | None = None
+
+    @property
+    def is_error(self) -> bool:
+        return self.error is not None
+
+
+async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
+    """Execute one jobs action, reading the job exactly once.
+
+    Returns facts only: no page, no hint, no budget. A failure is returned as
+    an evaluation carrying its error rather than raised, so both doors report
+    it through the same envelope.
+    """
+    try:
+        if isinstance(args, JobsListInput):
+            circuit = (
+                await asyncio.to_thread(safe_path, args.circuit, state)
+                if args.circuit is not None
+                else None
+            )
+            own_experiments = {
+                job_id: job
+                for job_id, job in state.all_jobs.items()
+                if isinstance(job, ExperimentJob)
+            }
+            loaded = await asyncio.to_thread(
+                _collect_circuit_groups, state, circuit, own_experiments
+            )
+            return JobsEvaluation(
+                args=args,
+                groups=tuple(loaded.groups),
+                observations=tuple(_merge_registry_observations(state, loaded.observations)),
+                circuit=circuit,
+            )
+
+        # Every action but 'list' addresses one job, so the union has no other
+        # member left here.
+        assert isinstance(args, _AddressedJobsInput)
+        job = await _resolve_jobs_target(args, state)
+        request_id = job.request_id if isinstance(job, ExperimentJob) else None
+
+        if isinstance(args, JobsCancelInput):
+            receipts = await _cancel_jobs_target(job, args, state)
+            # Re-read after the cancel: the registry entry is what carries the
+            # status the receipt reports.
+            cancelled = state.all_jobs.get(job.job_id, job)
+            return JobsEvaluation(
+                args=args,
+                kill_receipts=tuple(receipts),
+                job_id=cancelled.job_id,
+                request_id=request_id,
+                status=cancelled.status,
+            )
+
+        timed_out: bool | None = None
+        if isinstance(args, JobsWaitInput):
+            job, timed_out = await _wait_for_jobs_target(
+                job,
+                state,
+                timeout_s=args.timeout_s,
+                wait_for=args.wait_for,
+            )
+        snapshot = snapshot_receipt(job, state)
+        return JobsEvaluation(
+            args=args,
+            snapshot=snapshot,
+            timed_out=timed_out,
+            job_id=snapshot.job_id,
+            request_id=snapshot.request_id,
+            status=snapshot.status,
+        )
+    except Exception as exc:
+        return _failed_jobs_evaluation(args, exc)
+
+
+def _failed_jobs_evaluation(args: JobsInput, exc: Exception) -> JobsEvaluation:
+    """Carry one failure as an evaluation, classified for the error envelope."""
+    code, stage, retryable = _jobs_error_details(exc)
+    return JobsEvaluation(
+        args=args,
+        error=_JobsError(code=code, message=str(exc), stage=stage, retryable=retryable),
+    )
+
+
+def render_jobs_data(
+    evaluation: JobsEvaluation,
+    *,
+    limit: int | None = None,
+    rung: response_budget.Rung | None = None,
+) -> _JobsBuilt:
+    """Present one evaluation as a response payload and its text line.
+
+    ``limit`` is the presentation argument the two doors differ by: an integer
+    is one MCP page of that size (the budget ladder re-renders at smaller ones),
+    and ``None`` is the complete result the in-process door returns. Cancel
+    receipts are never paged either way — they are the acknowledgement itself,
+    not a page over a larger set.
+    """
+    args = evaluation.args
+    if evaluation.error is not None:
+        return _without_control_tokens(_jobs_error_payload(evaluation)), evaluation.error.message
+
+    if isinstance(args, JobsListInput):
+        groups = list(evaluation.groups)
+        page = (
+            unpaged_jobs_items(groups)
+            if limit is None
+            else _jobs_page(groups, cursor=args.cursor, limit=limit)
+        )
+        data = {
+            "action": "list",
+            "outcome": "complete",
+            **page,
+            "observations": list(evaluation.observations),
+            "warnings": [],
+            "failures": [],
+            "hint": (
+                (
+                    "Recent circuit groups are ordered by the recent-circuits index."
+                    if evaluation.circuit is None
+                    else f"Persisted job summary for {evaluation.circuit}."
+                )
+                + " Each group's recent_jobs names the job_ids to address with "
+                "jobs(status) or analyze_results; recent_jobs_total says how "
+                "many were left out."
+            ),
+        }
+        text = f"Listed {data['returned']} of {data['total']} circuit group(s)"
+        return _without_control_tokens(data), text
+
+    if isinstance(args, JobsCancelInput):
+        receipts = list(evaluation.kill_receipts)
+        data = {
+            "action": "cancel",
+            "outcome": "complete",
+            "job_id": evaluation.job_id,
+            "request_id": evaluation.request_id,
+            "status": evaluation.status,
+            **unpaged_jobs_items(receipts),
+            "observations": [],
+            "warnings": [],
+            "failures": [],
+            "hint": (
+                f"Job {evaluation.job_id} was already terminal; no cancellation was needed."
+                if not receipts
+                else (
+                    f"Cancellation of job {evaluation.job_id} is acknowledged; no "
+                    "further case can enter submission."
+                )
+            ),
+        }
+        return _without_control_tokens(data), (
+            f"Cancellation acknowledged for job {evaluation.job_id}"
+        )
+
+    snapshot = evaluation.snapshot
+    assert snapshot is not None  # every remaining action snapshots its job
+
+    if isinstance(args, JobsRunsInput):
+        data = render_runs_envelope(snapshot, cursor=args.cursor, limit=limit)
+        text = f"Returned {data['returned']} of {data['total']} run record(s)"
+        return _without_control_tokens(data), text
+
+    action: Literal["status", "wait"] = "wait" if isinstance(args, JobsWaitInput) else "status"
+    data = render_jobs_receipt_snapshot(
+        action,
+        snapshot,
+        timed_out=evaluation.timed_out,
+        runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
+        analysis_answer_channel=rung is not None and rung.answer_channel,
+        analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+    )
+    if action == "status":
+        text = f"Job {snapshot.job_id}: {snapshot.status}"
+    elif evaluation.timed_out:
+        text = f"Wait for job {snapshot.job_id} timed out at status {snapshot.status}"
+    else:
+        assert isinstance(args, JobsWaitInput)
+        text = f"Job {snapshot.job_id} reached {args.wait_for} terminality"
+    return _without_control_tokens(data), text
+
+
+def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
+    """The whole result of one evaluation: every run, group and receipt."""
+    return render_jobs_data(evaluation)[0]
 
 
 @registry.tool(
@@ -3358,149 +3748,35 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
 )
 async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:
     """Execute one jobs control-plane action with an action-discriminated response."""
-    is_error = False
-    build: _JobsBuild
-    try:
-        # The control-plane work runs once; each branch's ``build`` is the
-        # presentation over it, re-runnable at a smaller page so the budget
-        # ladder's shrink rung mints its cursor against what it returns. Each
-        # closes over the job as it finally stands — nothing rebinds ``job``
-        # after a branch defines its builder, so no branch needs a second name
-        # for it.
-        if args.action == "list":
-            circuit = (
-                await asyncio.to_thread(safe_path, args.circuit, state)
-                if args.circuit is not None
-                else None
-            )
-            own_experiments = {
-                job_id: job
-                for job_id, job in state.all_jobs.items()
-                if isinstance(job, ExperimentJob)
-            }
-            loaded = await asyncio.to_thread(
-                _collect_circuit_groups, state, circuit, own_experiments
-            )
-            observations = _merge_registry_observations(state, loaded.observations)
-
-            def build_list(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
-                data = {
-                    "action": "list",
-                    "outcome": "complete",
-                    **_jobs_page(loaded.groups, cursor=args.cursor, limit=limit),
-                    "observations": list(observations),
-                    "warnings": [],
-                    "failures": [],
-                    "hint": (
-                        (
-                            "Recent circuit groups are ordered by the recent-circuits index."
-                            if circuit is None
-                            else f"Persisted job summary for {circuit}."
-                        )
-                        + " Each group's recent_jobs names the job_ids to address with "
-                        "jobs(status) or analyze_results; recent_jobs_total says how "
-                        "many were left out."
-                    ),
-                }
-                return data, f"Listed {data['returned']} of {data['total']} circuit group(s)"
-
-            build = build_list
-            page_limit = args.limit
-        else:
-            job = await _resolve_jobs_target(args, state)
-            request_id = job.request_id if isinstance(job, ExperimentJob) else None
-            page_limit = _JOBS_PAGE_LIMIT
-            if args.action == "status" or args.action == "wait":
-                waited = args.action
-                timed_out: bool | None = None
-                if waited == "wait":
-                    job, timed_out = await _wait_for_jobs_target(
-                        job,
-                        state,
-                        timeout_s=args.timeout_s,
-                        wait_for=args.wait_for,
-                    )
-                snapshot = snapshot_receipt(job, state)
-
-                def build_receipt(limit: int, rung: response_budget.Rung | None) -> _JobsBuilt:
-                    data = render_jobs_receipt_snapshot(
-                        waited,
-                        snapshot,
-                        timed_out=timed_out,
-                        runs_cap=limit,
-                        analysis_answer_channel=rung is not None and rung.answer_channel,
-                        analysis_rows_cap=limit if rung is not None and rung.shrink else None,
-                    )
-                    if waited == "status":
-                        return data, f"Job {snapshot.job_id}: {snapshot.status}"
-                    return data, (
-                        f"Wait for job {snapshot.job_id} timed out at status {snapshot.status}"
-                        if timed_out
-                        else f"Job {snapshot.job_id} reached {args.wait_for} terminality"
-                    )
-
-                build = build_receipt
-
-            elif args.action == "runs":
-                snapshot = snapshot_receipt(job, state)
-
-                def build_runs(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
-                    data = render_runs_envelope(snapshot, cursor=args.cursor, limit=limit)
-                    return data, f"Returned {data['returned']} of {data['total']} run record(s)"
-
-                build = build_runs
-
+    evaluation = await evaluate_jobs(args, state)
+    built: _JobsBuilt | None = None
+    if evaluation.error is None:
+        page_limit = args.limit if isinstance(args, JobsListInput) else _JOBS_PAGE_LIMIT
+        try:
+            budget = resolve_response_budget(args.budget, state)
+            if budget.tokens is None:
+                built = render_jobs_data(evaluation, limit=page_limit)
             else:
-                receipts = await _cancel_jobs_target(job, args, state)
-                # Re-read after the cancel: the registry entry is what carries
-                # the status the receipt reports.
-                cancelled = state.all_jobs.get(job.job_id, job)
+                # The presentation re-runs at a smaller page for each rung the
+                # ladder tries; the control-plane work above ran once.
+                built = await _negotiate_jobs(
+                    budget,
+                    lambda limit, rung: render_jobs_data(evaluation, limit=limit, rung=rung),
+                    page_limit,
+                )
+        except Exception as exc:
+            # Presentation failed over an action that already happened — a
+            # cancel among them. Report it through this tool's own envelope
+            # rather than letting it out as a protocol error carrying no
+            # structuredContent at all.
+            evaluation = _failed_jobs_evaluation(args, exc)
+    if built is None:
+        # A failed call renders once, off the budget ladder: its envelope is
+        # already the irreducible floor, and the ladder's trim rung would take
+        # the empty fact channels the output schema requires.
+        built = render_jobs_data(evaluation)
 
-                def build_cancel(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
-                    data = {
-                        "action": "cancel",
-                        "outcome": "complete",
-                        "job_id": cancelled.job_id,
-                        "request_id": request_id,
-                        "status": cancelled.status,
-                        # Kill receipts are the acknowledgement itself, not a
-                        # page over a larger set: never shrunk.
-                        **unpaged_jobs_items(receipts),
-                        "observations": [],
-                        "warnings": [],
-                        "failures": [],
-                        "hint": (
-                            f"Job {cancelled.job_id} was already terminal; no cancellation "
-                            "was needed."
-                            if not receipts
-                            else (
-                                f"Cancellation of job {cancelled.job_id} is acknowledged; no "
-                                "further case can enter submission."
-                            )
-                        ),
-                    }
-                    return data, f"Cancellation acknowledged for job {cancelled.job_id}"
-
-                build = build_cancel
-
-        budget = resolve_response_budget(args.budget, state)
-        if budget.tokens is None:
-            data, text = build(page_limit, None)
-        else:
-            data, text = await _negotiate_jobs(budget, build, page_limit)
-    except Exception as exc:
-        code, stage, retryable = _jobs_error_details(exc)
-        data = _jobs_error_payload(
-            args,
-            code=code,
-            message=str(exc),
-            stage=stage,
-            retryable=retryable,
-        )
-        text = str(exc)
-        is_error = True
-
-    data = _without_control_tokens(data)
+    data, text = built
     result = format_response(text, data)
-    result.isError = is_error
+    result.isError = evaluation.is_error
     return result
