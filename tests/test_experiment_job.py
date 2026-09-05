@@ -19,7 +19,6 @@ from ltspice_mcp.lib import (
     analysis_snapshot,
     experiment_store,
     job_registry,
-    job_store,
     now,
     recent,
     services,
@@ -154,7 +153,7 @@ class FingerprintInput(BaseModel):
 
 
 class TestExperimentTypesAndStore:
-    def test_experiment_has_no_legacy_netlist_attribute(self, work_dir: Path):
+    def test_an_experiment_addresses_its_deck_per_case(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
@@ -286,37 +285,23 @@ class TestExperimentTypesAndStore:
     async def test_pre_stem_job_id_still_loads_and_resolves(
         self, work_dir: Path, state_no_sim: SessionState
     ):
-        # Ids gained a deck-name segment; the records already on disk kept the
-        # old prefix_timestamp_random form. Nothing on the read path parses an
-        # id, so such a record must still load and address exactly as before.
+        # Ids gained a deck-name segment; records written before that kept the
+        # prefix_timestamp_random form. Nothing on the read path parses an id,
+        # so such a record must still load and address exactly as before.
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
-        legacy_id = "exp_1707916800_a3f7b2c4"
-        job = _job(work_dir, circuit, job_id=legacy_id, status="completed")
+        stemless_id = "exp_1707916800_a3f7b2c4"
+        job = _job(work_dir, circuit, job_id=stemless_id, status="completed")
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(legacy_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(stemless_id, work_dir, own_is_alive=True)
         assert loaded is not None
-        assert loaded.job_id == legacy_id
+        assert loaded.job_id == stemless_id
         assert loaded.cases[0].assignments == {"R1": "1k"}
 
-        resolved = await services.resolve_job_async(legacy_id, state_no_sim)
+        resolved = await services.resolve_job_async(stemless_id, state_no_sim)
         assert isinstance(resolved, ExperimentJob)
-        assert resolved.job_id == legacy_id
-
-    def test_this_records_never_land_in_the_pre_0_6_sidecar_directory(self, work_dir: Path):
-        # The two formats used to share a directory name under different roots,
-        # which is why each reader had to know about the other's schema. They
-        # do not overlap any more, even when the circuit sits in the working
-        # directory: the legacy reader finds nothing to skip.
-        circuit = work_dir / "deck.cir"
-        circuit.write_text(".op\n.end\n")
-        job = _job(work_dir, circuit)
-        experiment_store.save_job(job)
-
-        assert job.store_path.is_relative_to(store.Store(work_dir).experiments_dir)
-        assert not job.store_path.is_relative_to(job_store.sidecar_dir(circuit))
-        assert job_store.load_jobs_for_circuit(circuit) == []
+        assert resolved.job_id == stemless_id
 
     def test_a_circuit_index_entry_finds_the_job_that_ran_it(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
@@ -1053,7 +1038,7 @@ class TestRequestBarrier:
 
 
 @pytest.mark.asyncio
-class TestLegacyCompatibility:
+class TestCancelledExperimentReads:
     async def test_cancelled_experiment_produced_case_remains_analyzable(
         self,
         state_no_sim: SessionState,
@@ -1140,97 +1125,6 @@ def test_persist_jobs_false_submission_fails_clearly(
             await asyncio.shield(runner.submit(request))
 
     asyncio.run(exercise())
-
-
-@pytest.mark.asyncio
-class TestLegacyJobRecords:
-    """A job sidecar an earlier release wrote is recognised, not run.
-
-    The three things it must do: load without breaking the registry, report on
-    ``jobs`` with the one fact this version can offer, and be refused plainly by
-    ``analyze_results`` instead of returning an empty result that reads like a
-    circuit with nothing in it.
-    """
-
-    @staticmethod
-    def _write_sidecar(circuit: Path, job_id: str = "sim_legacy_1") -> None:
-        from tests.conftest import write_legacy_sidecar
-
-        write_legacy_sidecar(circuit, job_id)
-
-    async def test_status_reports_the_record_and_its_one_observation(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        from ltspice_mcp.tools.jobs import (
-            JobsInput,
-            handle_jobs,
-        )
-
-        circuit = work_dir / "old.cir"
-        circuit.write_text(".op\n.end\n")
-        self._write_sidecar(circuit)
-        state_no_sim.job_registry.persist_enabled = True
-        state_no_sim.ensure_jobs_loaded_for(circuit)
-
-        result = await handle_jobs(
-            JobsInput.model_validate({"action": "status", "job_id": "sim_legacy_1"}),
-            state_no_sim,
-        )
-        data = result.structured_content
-        assert data is not None
-        assert data["job_id"] == "sim_legacy_1"
-        assert data["job_type"] == "legacy"
-        codes = [item["code"] for item in data["observations"]]
-        assert codes == ["legacy_job_record"]
-        detail = data["observations"][0]["detail"]
-        assert "earlier release" in detail
-        assert "run_experiments" in detail
-        # It claims no results: an empty run list reported as a completed job
-        # is exactly the silent skip the observation exists to prevent.
-        assert data["runs"]["items"] == []
-        assert data["completeness"]["produced"] == 0
-
-    async def test_analyze_results_refuses_it_plainly(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
-
-        circuit = work_dir / "old.cir"
-        circuit.write_text(".op\n.end\n")
-        self._write_sidecar(circuit, "sim_legacy_2")
-        state_no_sim.job_registry.persist_enabled = True
-        state_no_sim.ensure_jobs_loaded_for(circuit)
-
-        result = await handle_analyze_results(
-            AnalyzeResultsInput.model_validate(
-                {
-                    "sources": [{"job_id": "sim_legacy_2", "label": "old"}],
-                    "recipes": [{"key": "sum", "metric": "summary"}],
-                }
-            ),
-            state_no_sim,
-        )
-        data = result.structured_content
-        assert data is not None
-        assert data["coverage"]["runs_analyzed"] == 0
-        details = [
-            str(item.get("detail", "")) for item in data["coverage"]["missing_cases"]["items"]
-        ]
-        assert any("earlier release" in detail for detail in details), details
-
-    async def test_a_directory_of_them_preloads_without_raising(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        circuit = work_dir / "old.cir"
-        circuit.write_text(".op\n.end\n")
-        for index in range(4):
-            self._write_sidecar(circuit, f"sim_legacy_bulk_{index}")
-        state_no_sim.job_registry.persist_enabled = True
-
-        state_no_sim.ensure_jobs_loaded_for(circuit)
-
-        loaded = {job_id for job_id in state_no_sim.all_jobs if job_id.startswith("sim_legacy")}
-        assert loaded == {f"sim_legacy_bulk_{i}" for i in range(4)}
 
 
 class TestOwnerLivenessUnknownOnLoad:

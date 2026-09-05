@@ -17,7 +17,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import now, recent, result_store
 from ltspice_mcp.server import server, server_lifespan
 from ltspice_mcp.state import SessionState
-from tests.conftest import write_legacy_sidecar
+from tests.conftest import persist_experiment_record
 
 
 def _detect_without_simulators(config: ServerConfig, diagnostics: list[str]) -> dict[str, type]:
@@ -51,7 +51,7 @@ async def _stage_persisted_job(working_dir: Path, circuit: Path) -> None:
         ),
         available={},
     )
-    write_legacy_sidecar(circuit, "sim_bootstrap_preload")
+    persist_experiment_record(working_dir, circuit, "exp_bootstrap_preload")
     await seed.job_registry.drain_pending()
     await seed.shutdown()
 
@@ -117,7 +117,7 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
             "symbol_paths": [str(symbol_dir)],
             "allowed_paths": [working_dir],
             "expired_result_removed": True,
-            "jobs": ["sim_bootstrap_preload"],
+            "jobs": ["exp_bootstrap_preload"],
             "diagnostics": ["detector diagnostic"],
         }
     )

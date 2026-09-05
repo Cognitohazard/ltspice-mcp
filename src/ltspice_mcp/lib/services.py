@@ -22,7 +22,7 @@ from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
-from ltspice_mcp.lib import job_store, recent
+from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.library_manager import LibraryManager
@@ -34,11 +34,7 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
-from ltspice_mcp.state import (
-    LegacyJobRecord,
-    SessionState,
-    legacy_record_message,
-)
+from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -132,11 +128,11 @@ def attach_suggestions_to_failure(
     return f"{error_msg}{block}"
 
 
-Job = LegacyJobRecord | ExperimentJob
+Job = ExperimentJob
 
 
 def resolve_job(job_id: str, state: SessionState) -> Job:
-    """Look up any job by id.
+    """Look up a job by id.
 
     Discovery belongs to the registry, which asks the store when it does not
     already hold the job; this function only turns the two ways of not having
@@ -323,8 +319,6 @@ def resolve_experiment_run(
 ) -> RunContext:
     """Resolve a produced case from any experiment job whose runs are terminal."""
     job = resolve_job(job_id, state)
-    if not isinstance(job, ExperimentJob):
-        raise ResultError(f"Job {job_id!r} is not an experiment job")
     return experiment_run_context(job, state, run_index=run_index, case_id=case_id)
 
 
@@ -337,7 +331,7 @@ def experiment_run_context(
 ) -> RunContext:
     """``resolve_experiment_run`` for a caller already holding the job.
 
-    Records the case raw's dialect hint here, as the legacy resolvers do for
+    Records the case raw's dialect hint here, as the path-addressed resolvers do for
     their runs: resolution always precedes the load, so every reader parses a
     per-run simulator override with the right dialect without remembering to.
     """
@@ -401,17 +395,15 @@ def resolve_analysis_source(
     one's: a read that offers only a log has no such pair to refuse.
     """
     if job_id:
-        # Every job this version creates is an experiment, and an experiment's
-        # runs are case-addressed — the consolidated callers inject a resolved
-        # source above rather than arriving here. Anything that reaches this
-        # point is a record an earlier release wrote.
-        job = resolve_job(job_id, state)
-        if isinstance(job, ExperimentJob):
-            raise ResultError(
-                f"Job {job_id!r} is an experiment; its runs are case-addressed. "
-                "Read them with analyze_results (job_id plus run_index or case_id)."
-            )
-        raise ResultError(legacy_record_message(job_id))
+        # Every job is an experiment, and an experiment's runs are
+        # case-addressed — the callers inject a resolved source above rather
+        # than arriving here. Reaching this point means a job id was offered
+        # where a single run was expected, so say which read takes it.
+        resolve_job(job_id, state)
+        raise ResultError(
+            f"Job {job_id!r} is an experiment; its runs are case-addressed. "
+            "Read them with analyze_results (job_id plus run_index or case_id)."
+        )
     if raw_file:
         return source_for_raw_path(
             resolve_safe_path(str(raw_file), state.config.allowed_paths), state
@@ -438,8 +430,7 @@ def dialect_for_job(job: Job, state: SessionState) -> str | None:
     persisted ngspice job read back with only LTspice installed still parses
     with the ngspice dialect — the producing simulator need not remain
     configured. Falls back to the session default only when the job records no
-    simulator at all — which is every legacy record, none of which is readable
-    here anyway.
+    simulator at all.
     """
     simulator = getattr(job, "simulator", None)
     if simulator:
@@ -705,24 +696,43 @@ def validate_step(raw: RawRead, step: int) -> None:
         raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
-def collect_recent_circuits() -> list[dict[str, Any]]:
+def collect_recent_circuits(working_dir: Path) -> list[dict[str, Any]]:
     """List recently-touched circuits with their persisted-job summaries.
 
+    A circuit's jobs come from this working directory's store, through the
+    same per-circuit index ``jobs(list)`` reads, so a circuit last run by
+    another session in the same directory still reports its jobs here.
+
     Blocking — ``recent.load`` polls a cross-process file lock (up to 10 s)
-    and each summary reads a circuit's job-sidecar JSON files; all reads
-    (the prune rewrite is atomic), so safe under cancellation. Coroutine
-    callers must run this via ``asyncio.to_thread``; the synchronous MCP
-    resource router calls it directly (already off the loop).
+    and each summary reads the store's JSON records; all reads (the prune
+    rewrite is atomic), so safe under cancellation. Coroutine callers must
+    run this via ``asyncio.to_thread``; the synchronous MCP resource router
+    calls it directly (already off the loop).
     """
+    from ltspice_mcp.lib import experiment_store
+
     entries = recent.load(prune_missing=True)
     circuits: list[dict[str, Any]] = []
     for entry in entries:
         raw_path = entry.get("path")
         if not isinstance(raw_path, str):
             continue
-        summary = job_store.summarize_circuit(Path(raw_path))
-        summary["last_touched"] = entry.get("last_touched")
-        circuits.append(summary)
+        circuit_path = Path(raw_path)
+        jobs, _ = experiment_store.load_jobs_for_circuit(circuit_path, working_dir)
+        counts: dict[str, int] = {}
+        for job in jobs:
+            counts[job.status] = counts.get(job.status, 0) + 1
+        circuits.append(
+            {
+                "path": raw_path,
+                "exists": circuit_path.exists(),
+                "total_jobs": len(jobs),
+                "total_runs": sum(job.completeness.expanded for job in jobs),
+                "status_counts": counts,
+                "interrupted_job_ids": [job.job_id for job in jobs if job.status == "interrupted"],
+                "last_touched": entry.get("last_touched"),
+            }
+        )
     return circuits
 
 
@@ -760,7 +770,7 @@ def asc_component_value(editor: AscEditor, ref: str) -> str:
     comp = editor.components.get(ref)
     if comp is None:
         # Fall back to spicelib's lookup so the "component not found"
-        # error path is identical to the legacy code.
+        # error path is spicelib's own.
         return editor.get_component_value(ref)
     val = (comp.attributes or {}).get("Value", "")
     return str(val) if val is not None else ""

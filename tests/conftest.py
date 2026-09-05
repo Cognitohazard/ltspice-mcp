@@ -1,7 +1,6 @@
 """Shared fixtures and helpers for ltspice-mcp tests."""
 
 import asyncio
-import json
 import os
 import shutil
 import subprocess
@@ -26,7 +25,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.runner_base import RunOutcome
-from ltspice_mcp.state import LegacyJobRecord, SessionState
+from ltspice_mcp.state import SessionState
 
 _T = typing.TypeVar("_T")
 
@@ -272,49 +271,49 @@ def resolve_local_ref(schema: dict, node: dict) -> dict:
             return node
 
 
-def write_legacy_sidecar(
+def persist_experiment_record(
+    working_dir: Path,
     circuit: Path,
-    job_id: str = "j1",
+    job_id: str = "exp_1",
     *,
-    kind: str = "simulation",
     status: str = "completed",
-    **extra,
+    owner_pid: int = 0,
 ) -> Path:
-    """Write a job sidecar in the shape a pre-0.6 release wrote.
+    """Write one experiment record for *circuit* into *working_dir*'s store.
 
-    The records this build meets in the wild were written by a version whose
-    job types it no longer has, so a test about loading one has to write the
-    old shape by hand rather than serialize a live object.
+    The record and the per-circuit index entry are what a later session finds,
+    so a test about loading persisted work writes them the way the coordinator
+    does rather than reaching into the registry.
     """
-    from ltspice_mcp.lib import job_store
+    from ltspice_mcp.lib import experiment_store
+    from ltspice_mcp.lib.store import Store
 
-    record: dict = {
-        "schema": job_store.SCHEMA,
-        "schema_version": max(job_store.SUPPORTED_VERSIONS),
-        "job_id": job_id,
-        "kind": kind,
-        "netlist": str(circuit.resolve()),
-        "simulator": "ltspice",
-        "status": status,
-        "started_at": now().isoformat(),
-        "completed_at": now().isoformat() if status == "completed" else None,
-        "raw_file": str(circuit.with_suffix(".raw")),
-        "log_file": str(circuit.with_suffix(".log")),
-        "pid": 0,
-    }
-    record.update(extra)
-    target = job_store.sidecar_dir(circuit)
-    target.mkdir(parents=True, exist_ok=True)
-    path = target / f"{job_id}.json"
-    path.write_text(json.dumps(record), encoding="utf-8")
+    job = ExperimentJob(
+        job_id=job_id,
+        request_id=f"request-{job_id}",
+        fingerprint="fingerprint",
+        canonicalizer_version=1,
+        control_token="control-token",
+        store_path=Store(working_dir).job_record(job_id),
+        cases=[],
+        sources=[
+            SourceRecord(
+                circuit=circuit.stem,
+                path=circuit.resolve(),
+                sha256="a" * 64,
+                staged_deck=circuit,
+                simulator="ltspice",
+            )
+        ],
+        simulator="ltspice",
+        completeness=Completeness(),
+        status=typing.cast(typing.Any, status),
+        owner_pid=owner_pid,
+        completed_at=now() if status == "completed" else None,
+    )
+    path = experiment_store.save_job(job)
+    experiment_store.register_circuits(job, working_dir)
     return path
-
-
-def make_legacy_record(job_id: str = "j1", *, status: str = "completed", **overrides):
-    """The inert record a pre-0.6 sidecar loads as."""
-    fields: dict = {"netlist": Path("/tmp/test.cir"), "kind": "sim"}
-    fields.update(overrides)
-    return LegacyJobRecord(job_id=job_id, status=status, **fields)
 
 
 class SyncApi(ApiMethodsMixin):

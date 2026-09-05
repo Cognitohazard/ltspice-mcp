@@ -20,14 +20,13 @@ from mcp import types
 from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.plot_html import (
     WIDGET_MIME_TYPE,
     WIDGET_RESOURCE_URI,
     build_widget_html,
 )
-from ltspice_mcp.state import SessionState, legacy_record_message
+from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -429,40 +428,25 @@ def _read_results_list(
     # run on a worker thread, where the refresh returns fresh views without
     # touching the loop-owned registry.)
     for job in state.job_registry.refreshed_jobs():
-        if isinstance(job, ExperimentJob):
-            items.append(
-                {
-                    "job_id": job.job_id,
-                    "type": "experiment",
-                    "sources": [str(source.path) for source in job.sources],
-                    "status": job.status,
-                    "completeness": {
-                        "declared": job.completeness.declared,
-                        "expanded": job.completeness.expanded,
-                        "submitted": job.completeness.submitted,
-                        "produced": job.completeness.produced,
-                        "failed": job.completeness.failed,
-                        "cancelled": job.completeness.cancelled,
-                        "skipped": job.completeness.skipped,
-                    },
-                    "started_at": job.started_at.isoformat(),
-                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
-                }
-            )
-        else:
-            # A record an earlier release wrote. It is listed so it is not
-            # simply missing, with the one fact this version can offer.
-            items.append(
-                {
-                    "job_id": job.job_id,
-                    "type": "legacy",
-                    "netlist": job.netlist.name,
-                    "status": job.status,
-                    "started_at": None,
-                    "completed_at": None,
-                    "note": legacy_record_message(job.job_id),
-                }
-            )
+        items.append(
+            {
+                "job_id": job.job_id,
+                "type": "experiment",
+                "sources": [str(source.path) for source in job.sources],
+                "status": job.status,
+                "completeness": {
+                    "declared": job.completeness.declared,
+                    "expanded": job.completeness.expanded,
+                    "submitted": job.completeness.submitted,
+                    "produced": job.completeness.produced,
+                    "failed": job.completeness.failed,
+                    "cancelled": job.completeness.cancelled,
+                    "skipped": job.completeness.skipped,
+                },
+                "started_at": job.started_at.isoformat(),
+                "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
+            }
+        )
 
     items.sort(key=lambda x: x.get("started_at") or "", reverse=True)
     data = {"jobs": items, "count": len(items)}
@@ -472,17 +456,15 @@ def _read_results_list(
 def _per_run_read_pointer(job_id: str, state: SessionState) -> str:
     """Why a per-job read has to go somewhere else, for this job.
 
-    Both per-job result routes addressed a single run by job id — the shape
-    only the pre-0.6 job types had. An experiment's runs are case-addressed,
-    and a legacy record has no readable results at all.
+    Both per-job result routes addressed a single run by job id. Every job is
+    an experiment, and an experiment's runs are case-addressed, so the read
+    goes to the tool that takes a case.
     """
-    job = services.resolve_job(job_id, state)
-    if isinstance(job, ExperimentJob):
-        return (
-            f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
-            "with analyze_results (job_id plus run_index or case_id)."
-        )
-    return legacy_record_message(job_id)
+    services.resolve_job(job_id, state)
+    return (
+        f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
+        "with analyze_results (job_id plus run_index or case_id)."
+    )
 
 
 @_router.route("spice://results/{job_id}/signals")
@@ -514,8 +496,8 @@ def _read_recent(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Summary of recently-touched circuits + persisted job counts per circuit."""
-    del params, state  # state is unused; recent.json is user-global
-    circuits = services.collect_recent_circuits()
+    del params  # recent.json is user-global; the job counts are this store's
+    circuits = services.collect_recent_circuits(state.working_dir)
     data = {
         "circuits": circuits,
         "count": len(circuits),

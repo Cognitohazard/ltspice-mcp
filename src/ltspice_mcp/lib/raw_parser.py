@@ -69,11 +69,10 @@ _RAW_HEADER_UTF16 = b"\xff\xfeT\x00i\x00t\x00l\x00e\x00:\x00"
 def has_valid_raw_header(path: Path | None) -> bool:
     """True if ``path`` looks like a real ``.raw`` file, by header magic.
 
-    The one answer to "did this run actually write results?" for the two restart
-    paths that promote an interrupted job from the filesystem — the legacy job
-    registry and the experiment store. A truncated or unrelated file at the
-    expected path must not be mistaken for a result, and two copies of that
-    check are how one of them comes to accept what the other rejects.
+    The one answer to "did this run actually write results?" wherever a restart
+    promotes an interrupted job from the filesystem. A truncated or unrelated
+    file at the expected path must not be mistaken for a result, and two copies
+    of that check are how one of them comes to accept what the other rejects.
     """
     if path is None:
         return False

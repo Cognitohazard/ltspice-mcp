@@ -32,7 +32,7 @@ from ltspice_mcp.errors import (
     LTSpiceMCPError,
     PathSecurityError,
 )
-from ltspice_mcp.lib import experiment_store, job_store, recent, response_budget, services
+from ltspice_mcp.lib import experiment_store, recent, response_budget, services
 from ltspice_mcp.lib.experiment_runner import ExperimentCancellationError
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
@@ -40,10 +40,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.job_types import (
-    TERMINAL_STATUSES,
-    legacy_record_message,
-)
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.state import SessionState
@@ -410,8 +407,7 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
             "description": (
                 "The circuit's experiment jobs, newest activity first, capped at "
                 f"{_RECENT_JOBS_CAP}. These job_ids are what jobs(status)/"
-                "analyze_results address. Legacy .cir simulation runs are counted "
-                "in status_counts but carry no id here."
+                "analyze_results address."
             ),
             "items": {
                 "type": "object",
@@ -618,10 +614,6 @@ async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -
 
 
 def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
-    if not isinstance(job, ExperimentJob):
-        # A record an earlier release wrote is finished by definition: nothing
-        # in this version could still be running it.
-        return True
     if wait_for == "runs":
         # Three ways to know, in cost order: the event this session set, the
         # status the lifecycle guarantees it for, then the cases themselves —
@@ -644,7 +636,7 @@ async def _wait_for_jobs_target(
     if _runs_finished(job, wait_for):
         return job, False
 
-    if isinstance(job, ExperimentJob) and job.owner_pid == os.getpid():
+    if job.owner_pid == os.getpid():
         runner = state.runners.get_experiment_runner_for(job)
         if runner is None:
             return job, True
@@ -675,7 +667,7 @@ def _collect_circuit_groups(
     circuit: Path | None,
     own_experiments: dict[str, ExperimentJob],
 ) -> _CircuitGroupsRead:
-    """Blocking recent-index, legacy-summary, and experiment-pointer join.
+    """Blocking join of the recent index with this store's experiment records.
 
     ``own_experiments`` is a registry snapshot taken on the event loop —
     this process's live jobs are counted from it, not from possibly-lagging
@@ -717,7 +709,6 @@ def _collect_circuit_groups(
     groups: list[dict[str, Any]] = []
     observations: list[dict[str, Any]] = []
     for circuit_path, last_touched in candidates:
-        legacy = job_store.summarize_circuit(circuit_path)
         experiment_jobs, pointer_observations = experiment_store.load_jobs_for_circuit(
             circuit_path,
             state.working_dir,
@@ -737,8 +728,8 @@ def _collect_circuit_groups(
             )
         ]
         observations.extend(pointer_observations)
-        counts = dict(legacy.get("status_counts") or {})
-        interrupted = list(legacy.get("interrupted_job_ids") or [])
+        counts: dict[str, int] = {}
+        interrupted: list[str] = []
         activities = [last_touched] if last_touched is not None else []
         for experiment in experiment_jobs:
             counts[experiment.status] = counts.get(experiment.status, 0) + 1
@@ -749,7 +740,7 @@ def _collect_circuit_groups(
         groups.append(
             {
                 "path": str(circuit_path),
-                "exists": bool(legacy.get("exists")),
+                "exists": circuit_path.exists(),
                 "last_activity": max(activities) if activities else None,
                 "status_counts": counts,
                 "interrupted_job_ids": sorted(set(interrupted)),
@@ -828,79 +819,68 @@ async def _cancel_jobs_target(
     if job.status in TERMINAL_STATUSES:
         return []
 
-    if isinstance(job, ExperimentJob):
-        if not experiment_store.cancel_authorized(job, args.control_token):
+    if not experiment_store.cancel_authorized(job, args.control_token):
+        raise _JobsActionError(
+            "cancel_not_authorized",
+            (
+                f"Cancellation is not authorized for experiment job {job.job_id}; "
+                "use the control token returned by its original submission or replay"
+            ),
+            stage="authorization",
+        )
+    runner = state.runners.get_experiment_runner_for(job)
+    if runner is None:
+        if job.owner_pid == os.getpid():
+            raise _JobsActionError(
+                "cancel_unavailable",
+                (
+                    f"Experiment job {job.job_id} belongs to this process, but its "
+                    "coordinator is no longer live; cancellation was not acknowledged"
+                ),
+                stage="cancellation",
+                retryable=True,
+            )
+        prior = {
+            case.case_id: (case.run_index, case.status)
+            for case in job.cases
+            if case.status not in TERMINAL_CASE_STATUSES
+        }
+        token = args.control_token
+        if token is None:
             raise _JobsActionError(
                 "cancel_not_authorized",
-                (
-                    f"Cancellation is not authorized for experiment job {job.job_id}; "
-                    "use the control token returned by its original submission or replay"
-                ),
-                stage="authorization",
+                f"Job {job.job_id} is owned by another live process; cancelling it "
+                "requires the control_token from its submission receipt",
+                stage="cancellation",
             )
-        runner = state.runners.get_experiment_runner_for(job)
-        if runner is None:
-            if job.owner_pid == os.getpid():
-                raise _JobsActionError(
-                    "cancel_unavailable",
-                    (
-                        f"Experiment job {job.job_id} belongs to this process, but its "
-                        "coordinator is no longer live; cancellation was not acknowledged"
-                    ),
-                    stage="cancellation",
-                    retryable=True,
-                )
-            prior = {
-                case.case_id: (case.run_index, case.status)
-                for case in job.cases
-                if case.status not in TERMINAL_CASE_STATUSES
-            }
-            token = args.control_token
-            if token is None:
-                raise _JobsActionError(
-                    "cancel_not_authorized",
-                    f"Job {job.job_id} is owned by another live process; cancelling it "
-                    "requires the control_token from its submission receipt",
-                    stage="cancellation",
-                )
-            persisted = await asyncio.to_thread(
-                experiment_store.request_cancellation,
-                job.job_id,
-                state.working_dir,
-                token,
-            )
-            if persisted is None:
-                raise JobNotFoundError(f"Job not found: {job.job_id}")
-            finished = await _await_foreign_experiment_cancellation(job, state)
-            final_by_case = {case.case_id: case.status for case in finished.cases}
-            return [
-                {
-                    "case_id": case_id,
-                    "run_index": run_index,
-                    "prior_status": prior_status,
-                    "status": final_by_case.get(case_id, "cancelled"),
-                }
-                for case_id, (run_index, prior_status) in prior.items()
-            ]
-        receipts = await runner.cancel(job, control_token=args.control_token)
-        run_indices = {case.case_id: case.run_index for case in job.cases}
+        persisted = await asyncio.to_thread(
+            experiment_store.request_cancellation,
+            job.job_id,
+            state.working_dir,
+            token,
+        )
+        if persisted is None:
+            raise JobNotFoundError(f"Job not found: {job.job_id}")
+        finished = await _await_foreign_experiment_cancellation(job, state)
+        final_by_case = {case.case_id: case.status for case in finished.cases}
         return [
             {
-                **receipt,
-                "run_index": run_indices[receipt["case_id"]],
+                "case_id": case_id,
+                "run_index": run_index,
+                "prior_status": prior_status,
+                "status": final_by_case.get(case_id, "cancelled"),
             }
-            for receipt in receipts
+            for case_id, (run_index, prior_status) in prior.items()
         ]
-
-    # Unreachable in practice: a record an earlier release wrote always loads
-    # terminal (job_store._effective_status), so the already-terminal branch
-    # above answers it. Kept as a loud failure rather than a silent success in
-    # case a future record shape reaches here still claiming to be live.
-    raise _JobsActionError(
-        "legacy_job_record",
-        legacy_record_message(job.job_id),
-        stage="cancellation",
-    )
+    receipts = await runner.cancel(job, control_token=args.control_token)
+    run_indices = {case.case_id: case.run_index for case in job.cases}
+    return [
+        {
+            **receipt,
+            "run_index": run_indices[receipt["case_id"]],
+        }
+        for receipt in receipts
+    ]
 
 
 def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
@@ -1028,11 +1008,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 if args.circuit is not None
                 else None
             )
-            own_experiments = {
-                job_id: job
-                for job_id, job in state.all_jobs.items()
-                if isinstance(job, ExperimentJob)
-            }
+            own_experiments = dict(state.all_jobs)
             loaded = await asyncio.to_thread(
                 _collect_circuit_groups, state, circuit, own_experiments
             )
@@ -1047,7 +1023,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
         # member left here.
         assert isinstance(args, _AddressedJobsInput)
         job = await _resolve_jobs_target(args, state)
-        request_id = job.request_id if isinstance(job, ExperimentJob) else None
+        request_id = job.request_id
 
         if isinstance(args, JobsCancelInput):
             receipts = await _cancel_jobs_target(job, args, state)

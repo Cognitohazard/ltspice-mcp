@@ -403,7 +403,6 @@ FROZEN_ERROR_CODES = (
     "job_not_found",
     "job_not_terminal",
     "jobs_failed",
-    "legacy_job_record",
     "library_error",
     "lint_blocked",
     "log_unread",

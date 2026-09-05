@@ -103,8 +103,8 @@ class InvalidTransitionError(ValueError):
 def _transitions_for(job: ExperimentJob) -> dict[str, frozenset[str]]:
     """Pick the transition table for a job's class.
 
-    Only experiments transition: a legacy record is inert, so nothing can move
-    one, and a caller that tries is a bug rather than an unmapped status.
+    Only experiments transition, so anything else reaching here is a bug rather
+    than an unmapped status.
     """
     if isinstance(job, ExperimentJob):
         return VALID_EXPERIMENT_TRANSITIONS

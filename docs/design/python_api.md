@@ -288,9 +288,9 @@ api.measurements(job_id=..., run_index=0, case_id=None)
 - **Arrays are detached copies.** The parsed object is shared with the handler
   cache, which assumes immutability; caller mutation must not fork later results
   between the two interfaces.
-- Experiment cases resolve through `resolve_experiment_run` and legacy jobs
-  through `resolve_raw_file`. `load_raw` routes on job type and never feeds an
-  experiment job to the legacy resolver.
+- A job id resolves through `resolve_experiment_run`, which addresses one
+  case; a caller-supplied path resolves through `resolve_raw_file`. `load_raw`
+  routes on which of the two it was given.
 - All parsing goes through the bounded-parse wrapper, and `measurements`
   performs a bounded log parse — the synchronous inline loader is not called.
 
