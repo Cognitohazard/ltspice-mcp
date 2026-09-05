@@ -472,6 +472,11 @@ def _resource_error(message: str) -> MCPError:
     error. The 2026-07-28 revision dropped the separate resource-not-found code
     that earlier revisions used, so a URI that names nothing this server serves
     is an invalid parameter like any other.
+
+    For failures the caller can act on only: an unknown URI, a denied path, a
+    resource that refused the request. A server-side fault gets the
+    internal-error code instead, so a client is not told to retry with
+    different arguments when nothing it sends would help.
     """
     return MCPError(types.INVALID_PARAMS, message)
 
@@ -485,7 +490,9 @@ async def read_resource(
 
     Raises:
         MCPError: With the invalid-params code when the URI names no resource
-            this server serves, or the resource cannot be read.
+            this server serves, or the resource cannot be read; with the
+            internal-error code when the read raised something unexpected,
+            which is a fault in this server rather than in the request.
     """
     state = _get_state(ctx)
     uri = params.uri
@@ -504,8 +511,13 @@ async def read_resource(
     except (LTSpiceMCPError, ValueError) as e:
         raise _resource_error(str(e)) from None
     except Exception as e:
+        # Nothing above classified this, so it is a fault in the server, not in
+        # the request. Saying invalid-params here tells a client to try other
+        # arguments for a failure no argument can avoid.
         logger.exception(f"Unexpected error reading resource {uri}")
-        raise _resource_error(f"Internal error reading resource: {type(e).__name__}: {e}") from e
+        raise MCPError(
+            types.INTERNAL_ERROR, f"Internal error reading resource: {type(e).__name__}: {e}"
+        ) from e
 
 
 async def list_prompts(
