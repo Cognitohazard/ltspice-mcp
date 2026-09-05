@@ -182,7 +182,7 @@ class EditSchematicInput(ToolInput):
     expected_sha256: str | None = Field(
         default=None,
         description=(
-            "REQUIRED whenever the target already exists (either base). The SHA-256 "
+            "Required whenever the target already exists (either base). The SHA-256 "
             "of the file you edited against, reported as 'sha256' by an inspect "
             "components/net query on the sheet and by every edit that commits; a "
             "mismatch means a peer committed first and the call returns "
@@ -204,8 +204,9 @@ class EditSchematicInput(ToolInput):
         description=(
             "Verify the committed sheet against a reference netlist (.cir/.net): the "
             "sheet is exported on a copy and compared for connectivity equivalence. "
-            "Runs AFTER commit — a mismatch is reported but does not un-commit. The "
-            "reference path itself is checked up front, so one outside the allowed "
+            "It runs after the commit, so a mismatch is reported but does not undo "
+            "it. The reference path itself is checked up front, so one outside the "
+            "allowed "
             "roots is refused before the sheet is written, not after."
         ),
     )
@@ -334,7 +335,7 @@ _PAGE_SCHEMA: dict[str, Any] = page_schema(
     primary_truncated={
         "type": "boolean",
         "description": (
-            "Whether THIS collection has more rows. Equal to 'truncated' here; the "
+            "Whether this collection has more rows. Equal to 'truncated' here; the "
             "two differ only on a page that carries a second collection."
         ),
     },
@@ -381,8 +382,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "verification": {
             "type": "object",
             "description": (
-                "Reference-compare result: equivalent is the single-glance verdict; "
-                "the difference lists explain a false. Present only when a reference "
+                "Reference-compare result: equivalent is the overall verdict, and "
+                "the difference lists explain a false one. Present only when a reference "
                 "was supplied. 'export_error' means the sheet could not be exported."
             ),
             "properties": {

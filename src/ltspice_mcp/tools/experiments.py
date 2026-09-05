@@ -237,7 +237,7 @@ class AnalysisInclude(StrictModel):
         default=False,
         description=(
             "List the trace names each run's .raw carries. Costs one raw load per "
-            "run — a discovery aid, not something to leave on."
+            "run; use it to find signal names, then turn it off."
         ),
     )
     fields: list[str] | None = Field(
@@ -408,7 +408,7 @@ class RunExperimentsInput(ToolInput):
         description=(
             "Idempotency key, optional. Omit it for a one-off run — a fresh id is "
             "generated and echoed on the receipt. Pass your own to make submission "
-            "durable: the same id with the same arguments AND unchanged source "
+            "durable: the same id with the same arguments and unchanged source "
             "decks replays the existing receipt instead of running anything again; "
             "the same id after either changed is a conflict, not a replay."
         ),
@@ -426,10 +426,10 @@ class RunExperimentsInput(ToolInput):
         description=(
             "The sweep. 'assign' entries build the case grid (cartesian across "
             "entries, or lock-step within one entry via combine:'zip'); at most one "
-            "'random' entry adds Monte Carlo runs. Cases run in PARALLEL up to the "
-            "concurrency cap, so a whole grid costs little more wall-clock than a "
-            "single case — express the sweep here rather than as repeated one-case "
-            "calls. Empty runs each circuit once as authored."
+            "'random' entry adds Monte Carlo runs. Cases run in parallel up to the "
+            "concurrency cap, so a whole grid takes little more wall-clock time "
+            "than a single case; express the sweep here rather than as repeated "
+            "one-case calls. Empty runs each circuit once as authored."
         ),
     )
     execution: ExperimentExecution = Field(
@@ -455,8 +455,8 @@ class RunExperimentsInput(ToolInput):
             "What to do with SPICE lint findings on the staged deck. 'block' refuses "
             "to submit a circuit with a blocking finding (its cases are reported "
             "'skipped'); 'warn' runs anyway and reports them; 'off' skips linting. "
-            "Prefer 'suppress' over lowering this — the rules catch decks that "
-            "simulate to silently wrong answers."
+            "Prefer 'suppress' over lowering this: the rules catch decks that run "
+            "without an error and return wrong answers."
         ),
     )
     suppress: list[str] = Field(

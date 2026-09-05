@@ -66,7 +66,7 @@ Distribution: TypeAlias = Literal["normal", "gaussian", "uniform"]
 Scale: TypeAlias = Literal["relative", "absolute"]
 
 _APPLIES_TO_DESCRIPTION = (
-    "Circuit ids this variation expands over (default: every circuit). NOT a "
+    "Circuit ids this variation expands over (default: every circuit). Not a "
     "device filter — devices are selected by each rule's own targeting."
 )
 
@@ -105,7 +105,7 @@ class AssignVariation(VariationModel):
         default=None,
         description=(
             "Label for this entry in error messages only. Unlike a random "
-            "variation's id it does NOT reach case assignments (several assign "
+            "variation's id it does not reach case assignments (several assign "
             "entries can combine into one case, so there is no single id to "
             "record); group cases by the assigned target names instead."
         ),
@@ -184,14 +184,13 @@ class ModelRule(RandomRuleBase):
 class MismatchRule(VariationModel):
     """Pelgrom mismatch rule.
 
-    σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L), sampled INDEPENDENTLY per
+    σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L), sampled independently per
     instance per run.
 
     The field descriptions carry the two facts a caller cannot recover from a
-    result — the coefficients' UNITS and the inversion from a target sigma — and
-    nothing else. Prefix conventions and BSIM parameter names live in
-    ``spice://guide``: this schema is on the wire in every session, and prose
-    that only restates a field's own name is rent with no reader.
+    result: the coefficients' units, and the inversion from a target sigma.
+    Prefix conventions and BSIM parameter names are in ``spice://guide``, which
+    a caller reads once, rather than on the wire in every session.
     """
 
     rule: Literal["mismatch"]

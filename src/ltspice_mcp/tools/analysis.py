@@ -774,7 +774,7 @@ def _compute_widget_spec_json(
 class PlotWaveformInput(ToolInput):
     raw_file: str | None = Field(
         default=None,
-        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+        description="Path to .raw result file. Pass this or ``job_id`` (a job run), not both.",
     )
     job_id: str | None = Field(
         default=None,
@@ -802,7 +802,7 @@ class PlotWaveformInput(ToolInput):
     step: int | None = Field(
         default=None,
         description=(
-            "For a .step run: omit to overlay ALL steps as separate traces, or give "
+            "For a .step run: omit to overlay all steps as separate traces, or give "
             "a 0-based step index to plot just that one."
         ),
     )
@@ -856,24 +856,24 @@ class PlotWaveformInput(ToolInput):
 @registry.tool(
     name="plot_waveform",
     description=(
-        "Render an INTERACTIVE chart of one or more signals FOR A HUMAN to look at "
-        "(zoom/pan/hover) — the co-design complement to the numeric tools. It returns "
-        "NO data values to the model; it produces a picture.\n\n"
+        "Render an interactive chart of one or more signals for a person to look at "
+        "(zoom/pan/hover). It returns no data values to the model; it produces a "
+        "picture.\n\n"
         "Picks the chart from the run type: transient (V/I vs time), DC sweep, AC "
         "Bode (stacked magnitude-dB + phase-deg vs log frequency), noise (vs log "
         "frequency); a .step / Monte-Carlo run overlays every step as a labelled "
         "trace (or pass ``step`` for one). Full fidelity by default, with a "
-        "min/max-preserving downsample above ``max_points`` (spikes survive; "
-        "surfaced as a fact). Writes a self-contained HTML file and returns its path "
+        "min/max-preserving downsample above ``max_points`` that keeps spikes and "
+        "reports that it downsampled. Writes a self-contained HTML file and returns "
+        "its path "
         "— into ``out_dir`` if given, else a '.ltspice-mcp/plots/' sidecar next to "
         "the circuit (for a job_id) or next to the raw (for a raw_file); on a host "
         "that supports MCP Apps the chart is "
         "also embedded as an interactive in-chat widget, otherwise it opens in your "
         "local browser.\n\n"
-        "Sibling egress, don't confuse: for numbers use analyze_results — the "
-        "waveform recipe for a decimated table in context (or every sample as CSV "
-        "on disk), signal_stats / the bode_* recipes for scalars. This tool is for "
-        "looking, not measuring."
+        "For numbers use analyze_results instead: the waveform recipe returns a "
+        "decimated table in context (or every sample as CSV on disk), and "
+        "signal_stats and the bode_* recipes return scalars."
     ),
     input_model=PlotWaveformInput,
     annotations=types.ToolAnnotations(
