@@ -273,7 +273,7 @@ def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     later status read reports a cancellation nobody asked for. The contract
     states the rule; this is the same rule at the point of use.
     """
-    if receipt.get("status") in experiments._TERMINAL_EXPERIMENT_STATUSES:
+    if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
         return receipt
     observations = receipt.setdefault("observations", [])
     if isinstance(observations, list):

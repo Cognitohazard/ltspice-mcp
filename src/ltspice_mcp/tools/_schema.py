@@ -3,11 +3,11 @@
 Three jobs, all of them about the JSON Schema a tool publishes rather than
 about what a tool *does*:
 
-* ``ToolInput`` and ``_build_input_schema`` — turn a Pydantic input model into
+* ``ToolInput`` and ``build_input_schema`` — turn a Pydantic input model into
   the ``inputSchema`` the registry advertises, through the shrinking passes
   (title strip, type-keyword compaction, shared-fragment ``$defs`` hoist).
-* ``_strip_wire_prose`` — the advertised copy of a schema, carrying only the
-  load-bearing field prose (see ``_WIRE_PROSE_KEEP``).
+* ``strip_wire_prose`` — the advertised copy of a schema, carrying only the
+  load-bearing field prose (see ``WIRE_PROSE_KEEP``).
 * ``schema_from_typeddict`` — the output-schema generator, so a tool's
   ``structuredContent`` contract is derived from the TypedDict the lib already
   returns instead of being hand-written twice.
@@ -37,7 +37,7 @@ class ToolInput(StrictModel):
         The model's own schema, except for a tool whose arguments are a
         top-level union: pydantic emits a bare ``oneOf`` for one of those, and
         MCP requires an object schema at the top level. Such a model overrides
-        this to wrap its branches; ``_build_input_schema`` calls it either way.
+        this to wrap its branches; ``build_input_schema`` calls it either way.
         """
         return cls.model_json_schema()
 
@@ -325,7 +325,7 @@ def prune_unreferenced_defs(schema: dict[str, Any]) -> dict[str, Any]:
     return {**body, "$defs": kept} if kept else body
 
 
-def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
+def build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     """Generate a cleaned MCP-ready JSON schema from a Pydantic model.
 
     ``$defs`` are kept as Pydantic emits them, not inlined: a shared submodel
@@ -362,7 +362,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
 # definition and the models, so api.reference() and spice://guide carry the
 # depth. The benchmark harness's schema-prune tooling mirrors this pattern —
 # keep them in step if either changes.
-_WIRE_PROSE_KEEP = re.compile(
+WIRE_PROSE_KEEP = re.compile(
     r"(dB|degrees?|unwrapp?ed|percent|fraction|volts?|seconds?|hertz|Hz|µm|"
     r"V·µm|mV|sigma|√|sqrt|·|0 disables|echo it back|verbatim|clockwise|"
     # A pointer to the depth channels is protocol-contract prose: dropping it
@@ -380,12 +380,12 @@ _WIRE_PROSE_KEEP = re.compile(
 
 def _keep_wire_prose(description: str | None) -> str | None:
     """The advertised copy of one description: itself, or nothing."""
-    if description is not None and _WIRE_PROSE_KEEP.search(description):
+    if description is not None and WIRE_PROSE_KEEP.search(description):
         return description
     return None
 
 
-def _strip_wire_prose(node: Any) -> Any:
+def strip_wire_prose(node: Any) -> Any:
     """Advertised-schema copy with every non-load-bearing description dropped.
 
     Unlike ``_strip_titles`` this walker needs no name-map awareness: it only
@@ -400,10 +400,10 @@ def _strip_wire_prose(node: Any) -> Any:
                 if kept is not None:
                     out[key] = kept
                 continue
-            out[key] = _strip_wire_prose(value)
+            out[key] = strip_wire_prose(value)
         return out
     if isinstance(node, list):
-        return [_strip_wire_prose(value) for value in node]
+        return [strip_wire_prose(value) for value in node]
     return node
 
 
@@ -434,7 +434,7 @@ def _jsontype_from_union(args: tuple[Any, ...]) -> dict[str, Any]:
     non_none = [a for a in args if a is not type(None)]
     has_none = len(non_none) != len(args)
     if len(non_none) == 1:
-        inner = _schema_for_type(non_none[0])
+        inner = schema_for_type(non_none[0])
         if has_none and "type" in inner and isinstance(inner["type"], str):
             type_val = inner["type"]
             return {**inner, "type": [type_val, "null"]}
@@ -442,7 +442,7 @@ def _jsontype_from_union(args: tuple[Any, ...]) -> dict[str, Any]:
             # Complex inner (nested object/array) — use anyOf with null.
             return {"anyOf": [inner, {"type": "null"}]}
         return inner
-    variants = [_schema_for_type(a) for a in non_none]
+    variants = [schema_for_type(a) for a in non_none]
     if has_none:
         variants.append({"type": "null"})
     return {"anyOf": variants}
@@ -456,7 +456,7 @@ def _is_union(tp: Any) -> bool:
     return get_origin(tp) is _stdlib_types.UnionType
 
 
-def _schema_for_type(tp: Any) -> dict[str, Any]:
+def schema_for_type(tp: Any) -> dict[str, Any]:
     """Return a JSON Schema fragment for a type annotation."""
     if tp is Any:
         return {}
@@ -485,20 +485,20 @@ def _schema_for_type(tp: Any) -> dict[str, Any]:
             raise TypeError(
                 f"Fixed heterogeneous tuple {tp!r} has no faithful single-`items` "
                 "JSON Schema. Use a TypedDict (named fields) or list[...] for the "
-                "output model, or add prefixItems support to _schema_for_type."
+                "output model, or add prefixItems support to schema_for_type."
             )
         item_type = args[0] if args else Any
-        return {"type": "array", "items": _schema_for_type(item_type)}
+        return {"type": "array", "items": schema_for_type(item_type)}
     if origin is dict:
         value_type = args[1] if len(args) == 2 else Any
         return {
             "type": "object",
-            "additionalProperties": _schema_for_type(value_type),
+            "additionalProperties": schema_for_type(value_type),
         }
 
     raise TypeError(
         f"Unsupported type annotation for schema generation: {tp!r}. "
-        "Extend _schema_for_type in tools/_schema.py if this construct is "
+        "Extend schema_for_type in tools/_schema.py if this construct is "
         "now used in the repo."
     )
 
@@ -532,7 +532,7 @@ def schema_from_typeddict(td: type) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     required: list[str] = []
     for field_name, field_type in hints.items():
-        properties[field_name] = _schema_for_type(field_type)
+        properties[field_name] = schema_for_type(field_type)
         # A field is required unless the key may be absent entirely
         # (NotRequired / total=False) or its type admits None.
         admits_none = _is_union(field_type) and type(None) in get_args(field_type)

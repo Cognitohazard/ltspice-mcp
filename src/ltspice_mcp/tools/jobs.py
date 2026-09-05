@@ -62,19 +62,19 @@ from ltspice_mcp.tools._base import (
 )
 from ltspice_mcp.tools.experiments import JOBS_WAIT_CAP_S
 from ltspice_mcp.tools.receipts import (
-    _CASE_FAILURE_SCHEMA,
-    _JOBS_PAGE_LIMIT,
-    _OBSERVATION_SCHEMA,
-    _RUN_RECORD_SCHEMA,
-    _RUNS_PAGE_SCHEMA,
+    CASE_FAILURE_SCHEMA,
+    JOBS_PAGE_LIMIT,
+    OBSERVATION_SCHEMA,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
+    RUN_RECORD_SCHEMA,
+    RUNS_PAGE_SCHEMA,
     Job,
+    ReceiptBuild,
+    ReceiptBuilt,
     ReceiptSnapshot,
-    _jobs_rows,
-    _negotiate_receipt,
-    _ReceiptBuild,
-    _ReceiptBuilt,
     finalize_receipt,
+    jobs_rows,
+    negotiate_receipt,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
     snapshot_receipt,
@@ -226,9 +226,9 @@ class JobsListInput(JobsInput):
         ),
     )
     limit: int = Field(
-        default=_JOBS_PAGE_LIMIT,
+        default=JOBS_PAGE_LIMIT,
         ge=1,
-        le=_JOBS_PAGE_LIMIT,
+        le=JOBS_PAGE_LIMIT,
         description="Circuit groups per page.",
     )
     cursor: str | None = Field(
@@ -328,9 +328,9 @@ _JOBS_ERROR_SCHEMA: dict[str, Any] = {
 
 _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
     "outcome": OUTCOME_SCHEMA,
-    "observations": {"type": "array", "items": _OBSERVATION_SCHEMA},
+    "observations": {"type": "array", "items": OBSERVATION_SCHEMA},
     "warnings": {"type": "array", "items": {"type": "string"}},
-    "failures": failures_schema(_CASE_FAILURE_SCHEMA),
+    "failures": failures_schema(CASE_FAILURE_SCHEMA),
     "hint": HINT_SCHEMA,
     "error": _JOBS_ERROR_SCHEMA,
 }
@@ -361,7 +361,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
     "progress": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["progress"],
     "lint": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lint"],
-    "runs": _RUNS_PAGE_SCHEMA,
+    "runs": RUNS_PAGE_SCHEMA,
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
     "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
 }
@@ -518,7 +518,7 @@ JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
         _jobs_receipt_schema("wait"),
         _jobs_page_schema("cancel", _KILL_RECEIPT_SCHEMA, addressed=True),
         _jobs_page_schema("list", _CIRCUIT_GROUP_SCHEMA, addressed=False),
-        _jobs_page_schema("runs", _RUN_RECORD_SCHEMA, addressed=True),
+        _jobs_page_schema("runs", RUN_RECORD_SCHEMA, addressed=True),
     ],
 }
 
@@ -558,8 +558,8 @@ def _decode_jobs_cursor(cursor: str | None) -> int:
 
 
 # One jobs response, rendered at some page limit: the payload and its text line.
-_JobsBuilt = _ReceiptBuilt
-_JobsBuild = _ReceiptBuild
+_JobsBuilt = ReceiptBuilt
+_JobsBuild = ReceiptBuild
 
 
 #: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
@@ -579,11 +579,11 @@ async def _negotiate_jobs(
     page_limit: int,
 ) -> _JobsBuilt:
     """Render this jobs response at the mildest ladder rung that fits ``budget``."""
-    return await _negotiate_receipt(
+    return await negotiate_receipt(
         budget,
         build,
         page_limit,
-        rows=_jobs_rows,
+        rows=jobs_rows,
         notes=_BUDGET_NOTES,
     )
 
@@ -943,7 +943,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
                 "source": [],
                 "completeness": Completeness(),
                 "lint": [],
-                "runs": _page([], limit=_JOBS_PAGE_LIMIT),
+                "runs": _page([], limit=JOBS_PAGE_LIMIT),
                 "artifacts": [],
             }
         )
@@ -1232,7 +1232,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
     evaluation = await evaluate_jobs(args, state)
     built: _JobsBuilt | None = None
     if evaluation.error is None:
-        page_limit = args.limit if isinstance(args, JobsListInput) else _JOBS_PAGE_LIMIT
+        page_limit = args.limit if isinstance(args, JobsListInput) else JOBS_PAGE_LIMIT
         try:
             budget = resolve_response_budget(args.budget, state)
             if budget.tokens is None:
