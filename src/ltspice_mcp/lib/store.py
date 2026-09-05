@@ -457,23 +457,28 @@ class Store:
 
         A ``run_experiments(detach=True)`` call writes its request here, the
         owner it spawns writes the receipt back here, and the owner's stdout
-        and stderr are appended to a log here. All three are named from the
-        ``request_id``, so a replay of the same request reuses the same files
-        instead of leaving a new set behind.
+        and stderr go to a log here. All three carry the ``request_id``'s
+        digest so a person can find one call's files, and a per-call ``nonce``
+        so two callers detaching the same id — the advertised idempotent
+        replay — never read each other's report or share a log.
         """
         return self.root / "detached"
 
-    def detached_request(self, request_id: str) -> Path:
+    def detached_request(self, request_id: str, nonce: str) -> Path:
         """The request a detached owner is spawned to run. Deleted once read."""
-        return self.detached_dir / f"{path_digest(request_id)}.request.json"
+        return self.detached_dir / f"{self._handoff_stem(request_id, nonce)}.request.json"
 
-    def detached_receipt(self, request_id: str) -> Path:
+    def detached_receipt(self, request_id: str, nonce: str) -> Path:
         """Where a detached owner reports its durable receipt, or its failure."""
-        return self.detached_dir / f"{path_digest(request_id)}.receipt.json"
+        return self.detached_dir / f"{self._handoff_stem(request_id, nonce)}.receipt.json"
 
-    def detached_log(self, request_id: str) -> Path:
-        """A detached owner's console output, appended across replays."""
-        return self.detached_dir / f"{path_digest(request_id)}.log"
+    def detached_log(self, request_id: str, nonce: str) -> Path:
+        """One detached owner's console output."""
+        return self.detached_dir / f"{self._handoff_stem(request_id, nonce)}.log"
+
+    @staticmethod
+    def _handoff_stem(request_id: str, nonce: str) -> str:
+        return f"{path_digest(request_id)}.{_validate_name(nonce, 'handoff nonce')}"
 
     # -- locks --------------------------------------------------------------
 

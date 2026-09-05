@@ -13,8 +13,11 @@ which the record names a process that is not its owner.
 This is a program, not library mode: it configures logging on its own root and
 writes to the stdout and stderr the parent redirected into a log file.
 
-The hand-off is two files under ``.ltspice-mcp/detached/``, both named from the
-``request_id`` and both owned by :class:`~ltspice_mcp.lib.store.Store`:
+The hand-off is two files under ``.ltspice-mcp/detached/``, both named by the
+spawning call and both owned by :class:`~ltspice_mcp.lib.store.Store`. This
+process is told where they are — the request file as its one argument, the
+receipt file inside it — and never derives either name, so two callers
+detaching the same ``request_id`` cannot be handed each other's files:
 
 * the **request file** this process is given as its one argument. It carries
   the ``Api`` constructor arguments to reproduce and the ``run_experiments``
