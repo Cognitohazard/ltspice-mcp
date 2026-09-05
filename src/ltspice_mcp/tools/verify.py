@@ -1215,6 +1215,24 @@ def _file_digest(path: Path, length: int | None = None) -> str | None:
     return digest[:length] if length is not None else digest
 
 
+def _measure_netlist(net_path: Path) -> tuple[int | None, int | None, str | None] | None:
+    """Component count, net count and digest of a just-exported netlist.
+
+    Returns ``None`` when the exporter wrote no file at all.
+
+    Call this while the export lock that produced ``net_path`` is still held.
+    ``create_netlist`` writes a shared ``<stem>.net``, so the moment the lock is
+    released a second export of the same schematic reopens that path in write
+    mode and truncates it. Counts and a digest read after that describe a
+    netlist no export ever produced — and they would be reported as a success,
+    with the SHA-256 of an empty file standing in as this export's provenance.
+    """
+    if not net_path.exists():
+        return None
+    components, nets = _netlist_counts(net_path)
+    return components, nets, _file_digest(net_path)
+
+
 async def _run_export(
     asc_path: Path, state: SessionState, export_to: str, simulator_cls: Any
 ) -> tuple[dict[str, Any], dict[str, Any] | None, list[str], list[str]]:
@@ -1224,6 +1242,11 @@ async def _run_export(
     ``sidecar`` mode runs under the export lock (it overwrites ``<name>.net``) and
     records a structural ``diff_vs_prior``; ``managed`` stages the schematic with its
     project-local assets and exports there, touching none of the caller's files.
+
+    Both modes measure the netlist they just wrote *inside* their own export
+    lock (see ``_measure_netlist``): the file is a shared path a peer export
+    reopens for writing, so a digest taken after the lock is released can
+    describe the peer's truncation instead of this export's output.
     """
     observations: list[str] = []
     warnings: list[str] = []
@@ -1238,6 +1261,7 @@ async def _run_export(
         "diff_vs_prior": None,
     }
 
+    measured: tuple[int | None, int | None, str | None] | None = None
     try:
         if export_to == "sidecar":
             net_path = asc_path.with_suffix(".net")
@@ -1252,6 +1276,7 @@ async def _run_export(
                     )
                     warnings.extend(diff_warnings)
                 net_path = new_path
+                measured = await asyncio.to_thread(_measure_netlist, net_path)
         else:
             scratch = (
                 _scratch_dir(state, "export") / f"{asc_path.stem}.{_file_digest(asc_path, 8)}"
@@ -1269,6 +1294,7 @@ async def _run_export(
                 net_path = await asyncio.to_thread(
                     _create_netlist, simulator_cls, staged_asc, timeout
                 )
+                measured = await asyncio.to_thread(_measure_netlist, net_path)
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         return (
             payload,
@@ -1282,7 +1308,7 @@ async def _run_export(
             warnings,
         )
 
-    if not net_path.exists():
+    if measured is None:
         return (
             payload,
             _failure(
@@ -1294,12 +1320,12 @@ async def _run_export(
             warnings,
         )
 
-    components, nets = await asyncio.to_thread(_netlist_counts, net_path)
+    components, nets, digest = measured
     payload.update(
         {
             "ok": True,
             "netlist": str(net_path),
-            "sha256": _file_digest(net_path),
+            "sha256": digest,
             "components": components,
             "nets": nets,
         }
