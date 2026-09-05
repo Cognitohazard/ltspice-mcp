@@ -11,7 +11,9 @@ tool *does*:
   ``structuredContent`` contract is derived from the TypedDict the lib already
   returns instead of being hand-written twice.
 * ``strip_argument_descriptions`` — the one deliberate prose filter, applied
-  only when the ``compact`` tool listing is configured.
+  only when the ``compact`` tool listing is configured. Its single exemption
+  is declared in the schema, by the ``KEEP_DESCRIPTION`` marker a
+  discriminant-only branch carries.
 
 Every other pass here is structural: it changes how a schema is spelled, never
 what it says. On the default listing the prose is not filtered — every
@@ -33,7 +35,7 @@ import typing
 from functools import cache
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from ltspice_mcp.lib.models import StrictModel
+from ltspice_mcp.lib.models import KEEP_DESCRIPTION, StrictModel
 
 
 class ToolInput(StrictModel):
@@ -90,6 +92,14 @@ def strip_argument_descriptions(node: Any, *, in_name_map: bool = False) -> Any:
     argument means. It is a filter over the published copy only; the Pydantic
     models keep their descriptions and accept exactly what they did.
 
+    One exemption, and it is declared by the schema rather than recognized from
+    its wording: a node carrying ``KEEP_DESCRIPTION`` keeps its description.
+    That marks a branch advertised as its discriminant and nothing else, where
+    the description is the whole of what the branch says — the produced fields
+    and where to read the arguments — so stripping it would leave a client a
+    name with no meaning and no structure to fall back on. The marker itself is
+    consumed here and never reaches a compact listing.
+
     Descends structurally for the same reason ``_strip_titles`` does: inside a
     ``properties`` or ``$defs`` map the keys are argument names, so an argument
     that happens to be called ``description`` is a real, accepted field and
@@ -98,10 +108,13 @@ def strip_argument_descriptions(node: Any, *, in_name_map: bool = False) -> Any:
     if isinstance(node, dict):
         if in_name_map:
             return {key: strip_argument_descriptions(value) for key, value in node.items()}
+        dropped = (
+            {KEEP_DESCRIPTION} if node.get(KEEP_DESCRIPTION) else {KEEP_DESCRIPTION, "description"}
+        )
         return {
             key: strip_argument_descriptions(value, in_name_map=key in _SCHEMA_NAME_MAPS)
             for key, value in node.items()
-            if key != "description"
+            if key not in dropped
         }
     if isinstance(node, list):
         return [strip_argument_descriptions(item) for item in node]

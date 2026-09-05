@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.models import KEEP_DESCRIPTION
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools._base import registry
@@ -32,6 +33,43 @@ def _descriptions(node: Any, path: str = "") -> dict[str, str]:
     elif isinstance(node, list):
         for index, item in enumerate(node):
             found |= _descriptions(item, f"{path}[{index}]")
+    return found
+
+
+def _without_prose(node: Any, in_name_map: bool = False) -> Any:
+    """A schema with every description and keep-marker removed.
+
+    Written here rather than reused from the server so a comparison of the two
+    listings has an oracle of its own.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            return {key: _without_prose(value) for key, value in node.items()}
+        return {
+            key: _without_prose(value, key in {"properties", "$defs"})
+            for key, value in node.items()
+            if key not in {"description", KEEP_DESCRIPTION}
+        }
+    if isinstance(node, list):
+        return [_without_prose(item) for item in node]
+    return node
+
+
+def _exempt_descriptions(node: Any, path: str = "") -> dict[str, str]:
+    """The descriptions the compact listing must keep, keyed the same way.
+
+    A node marked with ``KEEP_DESCRIPTION`` is a branch published as its
+    discriminant alone, so its description is everything the branch says.
+    """
+    found: dict[str, str] = {}
+    if isinstance(node, dict):
+        if node.get(KEEP_DESCRIPTION) and isinstance(node.get("description"), str):
+            found[path or "<root>"] = node["description"]
+        for key, value in node.items():
+            found |= _exempt_descriptions(value, f"{path}.{key}" if path else key)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            found |= _exempt_descriptions(item, f"{path}[{index}]")
     return found
 
 
@@ -83,26 +121,33 @@ class TestEveryToolCarriesADisplayTitle:
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_every_argument_description_is_gone(self, name: str):
+        """Except the marked ones — see TestDormantBranchesKeepTheirDescription."""
         full = {d.name: d for d in get_tools("full")[0]}[name]
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
         assert _descriptions(full.input_schema), f"{name} advertises no descriptions to strip"
-        assert _descriptions(compact.input_schema) == {}
+        assert _descriptions(compact.input_schema) == _exempt_descriptions(full.input_schema)
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_nothing_but_the_descriptions_changes(self, name: str):
-        """Schema equality with the descriptions removed: structure, enums,
-        defaults, required and $defs must all survive."""
+        """Schema equality with the prose removed: structure, enums, defaults,
+        required and $defs must all survive.
+
+        Both sides go through this module's own stripper rather than the
+        server's, so the comparison holds even if ``get_tools`` stops calling
+        the transform it is supposed to.
+        """
         full = {d.name: d for d in get_tools("full")[0]}[name]
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
-        assert compact.input_schema == strip_argument_descriptions(full.input_schema)
+        assert _without_prose(compact.input_schema) == _without_prose(full.input_schema)
         assert set(compact.input_schema.get("$defs", {})) == set(
             full.input_schema.get("$defs", {})
         )
 
     def test_compact_is_materially_smaller_than_full(self):
-        """What the mode is for. docs/design/mcp_surface.md claims roughly 40%
-        off; a change that left the two listings the same size would mean the
-        transform stopped being applied."""
+        """What the mode is for. docs/design/mcp_surface.md claims roughly 45%
+        off, and the measured ratio is about 0.55; the bound sits just above it
+        so that losing a large part of the saving fails here rather than
+        quietly halving what the mode is worth."""
 
         def total(listing: str) -> int:
             return sum(
@@ -111,7 +156,7 @@ class TestEveryToolCarriesADisplayTitle:
             )
 
         full, compact = total("full"), total("compact")
-        assert compact < full * 0.75, (
+        assert compact < full * 0.60, (
             f"compact listing is {compact} chars against full's {full} — the "
             "argument-description strip is no longer paying for itself"
         )
@@ -149,6 +194,60 @@ class TestEveryToolCarriesADisplayTitle:
         assert stripped["$defs"]["description"] == {"type": "string"}
 
 
+class TestDormantBranchesKeepTheirDescription:
+    """The one exemption from the strip, and why it has to exist.
+
+    A dormant recipe branch is advertised as its discriminant and nothing
+    else, so its description carries the whole branch: what it produces and
+    where to read the arguments. Compact strips prose on the bet that the
+    published structure still lets a client build a valid call; on these three
+    there is no structure to fall back on, so a stripped branch would be a
+    metric name a client could send and the server would then reject.
+    """
+
+    @staticmethod
+    def _analyze(listing: str) -> dict[str, Any]:
+        return {d.name: d for d in get_tools(listing)[0]}["analyze_results"].input_schema
+
+    def _marked(self, listing: str) -> dict[str, Any]:
+        marked = {
+            name: body
+            for name, body in self._analyze(listing)["$defs"].items()
+            if body.get(KEEP_DESCRIPTION)
+        }
+        assert marked, "no branch declares the keep-description marker"
+        return marked
+
+    def test_the_marked_branches_are_the_discriminant_only_ones(self):
+        for name, body in self._marked("full").items():
+            assert set(body["properties"]) == {"metric"}, (
+                f"{name} publishes arguments, so its description is not its whole content"
+            )
+            assert body["description"]
+
+    def test_each_marked_description_survives_compaction_verbatim(self):
+        full = self._analyze("full")["$defs"]
+        compact = self._analyze("compact")["$defs"]
+        marked = self._marked("full")
+        for name in marked:
+            assert compact[name]["description"] == full[name]["description"]
+
+    def test_the_description_names_the_mcp_lookup_first(self):
+        """The route a client on this listing can actually take: the other two
+        pointers are a Python import and a resource read."""
+        for name, body in self._marked("full").items():
+            metric = body["properties"]["metric"]["const"]
+            pointer = f"inspect(kind='reference', query='{metric}')"
+            assert pointer in body["description"], name
+            assert body["description"].index(pointer) < body["description"].index("api.reference(")
+            assert "spice://guide" in body["description"]
+
+    def test_the_marker_itself_stays_off_the_compact_listing(self):
+        """It is a note to the schema publisher, not something a client reads."""
+        for name, body in self._analyze("compact")["$defs"].items():
+            assert KEEP_DESCRIPTION not in body, name
+
+
 def _state(work_dir, listing: str) -> SessionState:
     return SessionState.create(
         ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], tool_listing=listing),  # type: ignore[arg-type]
@@ -165,5 +264,8 @@ class TestSessionStateHonoursTheListing:
 
     def test_compact_state_serves_no_argument_prose(self, work_dir):
         state = _state(work_dir, "compact")
+        full = {d.name: d for d in get_tools("full")[0]}
         for definition in state.tool_defs:
-            assert _descriptions(definition.input_schema) == {}
+            assert _descriptions(definition.input_schema) == _exempt_descriptions(
+                full[definition.name].input_schema
+            )

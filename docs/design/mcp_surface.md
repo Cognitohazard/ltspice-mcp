@@ -181,7 +181,15 @@ defaults, `required` and `$defs` are untouched, so a client can still build a
 valid call, and the models are not filtered, so the server accepts exactly what
 it did. It is an explicit transform (`strip_argument_descriptions` in
 `tools/_schema.py`, applied in `get_tools()`), never a wording rule, and on the
-current surface it takes roughly 45% off what a session loads. Both modes are
+current surface it takes roughly 45% off what a session loads.
+
+The transform has one exemption, and the schema declares it rather than the
+filter recognizing it: a branch that carries the `KEEP_DESCRIPTION` marker
+keeps its description. That marker sits on the dormant recipe branches, which
+are advertised as their discriminant and nothing else — the rule above holds
+because a stripped branch still has structure to build a call from, and these
+have none, so the description is the whole branch. Stripping it would publish
+a metric name a client could send and the server would then reject. Both modes are
 *static* listings: the same for every connection and unchanged by anything
 called on one, which is what the 2026-07-28 specification requires of
 `tools/list`. Nothing keys on the mode below the listing — dispatch,
