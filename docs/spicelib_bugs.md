@@ -1133,3 +1133,60 @@ Pinned so the tolerance is deliberate rather than accidental:
 feeds the exact exported signature (both the `X§` reference and the `;§pnba`
 comment, with device parameters) through `parse_netlist_graph` and asserts the
 reference, node count, model and parameters.
+
+
+## Bug 11 — `RawRead.get_axis()` returns an unsized 0-d array for a file with no plots, so `len()` raises `TypeError`
+
+### Summary
+
+For a `.raw` file that parsed but holds no plot data, `RawRead.get_axis()`
+(and by the same route `get_time_axis()` / `get_wave()`) returns
+`numpy.array([])` built as a 0-dimensional array rather than an empty
+1-d array. `len(axis)` then raises `TypeError: len() of unsized object`
+instead of answering `0`, and any caller that sizes the axis before
+reading it has to special-case a Python exception that says nothing about
+the file.
+
+### Affected code
+
+spicelib 1.5.1, `spicelib/raw/raw_read.py`, the empty-data branch of
+`get_axis()` / `get_trace()`.
+
+### Reproduction
+
+```python
+from spicelib import RawRead
+raw = RawRead("empty_plot.raw")      # a header-only raw, e.g. a run that wrote no points
+axis = raw.get_axis()
+print(axis.ndim)                      # 0
+len(axis)                             # TypeError: len() of unsized object
+```
+
+### Impact
+
+A summary or metric that sizes the axis (`len(axis)`, `axis.shape[0]`) fails
+with a `TypeError` that reads like a bug in the caller. Our summary builder
+used to catch `Exception` around it, which hid the file's real condition;
+narrowing the catch exposed this.
+
+### Proposed fix
+
+Return `numpy.empty(0)` (a 1-d array of length 0) from every empty-data
+branch, so `len()` is `0` and `.shape == (0,)`.
+
+### Suggested upstream test
+
+```python
+def test_empty_axis_is_one_dimensional(tmp_path):
+    raw = RawRead(write_header_only_raw(tmp_path / "empty.raw"))
+    axis = raw.get_axis()
+    assert axis.ndim == 1 and len(axis) == 0
+```
+
+### Cross-reference
+
+Workaround: `src/ltspice_mcp/lib/raw_parser.py` catches `TypeError`
+alongside `RuntimeError` at the axis read in `build_simulation_summary`
+(the comment there names this bug). Pinned by
+`tests/test_log_parser.py::test_missing_log_with_invalid_raw`. Delete the
+`TypeError` arm once upstream returns a 1-d empty array.
