@@ -20,6 +20,7 @@ undeclared keys past both the suite and the session-wide conformance hook.
 
 from __future__ import annotations
 
+import hashlib
 import typing
 from pathlib import Path
 from typing import Any
@@ -693,6 +694,31 @@ async def test_render_svg(state_no_sim, work_dir, asc_symbols, monkeypatch):
     # mode="only" skips every check.
     assert data["checks_run"] == []
     assert calls["n"] == 0, "render.mode='only' must not run the layout_issues scan"
+
+
+async def test_render_reports_the_digest_of_the_sheet_it_drew(state_no_sim, work_dir, asc_symbols):
+    """Rendering reads the file on disk, and a peer may commit between an edit
+    returning and this call running.
+
+    Without the sheet's own digest beside the image, a picture of a revision
+    the caller never wrote is indistinguishable from a picture of theirs: the
+    render block's 'sha256' is the image's, and the export block's is the
+    netlist's. 'source_sha256' is the one a caller compares with the sha256
+    edit_schematic handed back.
+    """
+    asc = _write(work_dir, "digest.asc", _RES_ASC)
+    on_disk = hashlib.sha256(asc.read_bytes()).hexdigest()
+
+    data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
+    render = data["render"]
+    assert render["source_sha256"] == on_disk
+    # Not the image's digest, and not the exported netlist's.
+    assert render["source_sha256"] != render["sha256"]
+
+    # A peer's commit changes it, which is the whole point.
+    asc.write_text(_RES_ASC.replace("1k", "2k"), encoding="utf-8")
+    again = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
+    assert again["render"]["source_sha256"] != on_disk
 
 
 @pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
