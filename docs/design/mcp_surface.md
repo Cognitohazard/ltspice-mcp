@@ -268,11 +268,16 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
                                         [] = one plain run per circuit
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"}
-analyze              {recipes: list[Recipe], group_by?, include?}
+analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
+                      include?}
                                         attached analysis stage; `recipes` is
                                         the Appendix A.2 union `analyze_results`
-                                        takes. Every recipe is validated at
-                                        SUBMISSION, before a deck is staged.
+                                        takes, and `step`/`all_steps` are that
+                                        tool's own two, so an attached
+                                        measurement and a standalone one read
+                                        the same `.step` iterations. Every
+                                        recipe is validated at SUBMISSION,
+                                        before a deck is staged.
                                         The schema here advertises the metric
                                         names and points at `analyze_results`,
                                         which documents the fields per metric —
