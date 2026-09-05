@@ -117,8 +117,8 @@ class TestAttachSuggestionsToFailure:
         log = tmp_path / "err.log"
         log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
         msg = services.attach_suggestions_to_failure("failed", {}, log, state_no_sim.libraries)
-        assert "find_model" in msg
-        assert "include_builtin=true" in msg
+        assert 'inspect(kind="model"' in msg
+        assert 'mode="search"' in msg
         assert "sw" in msg
 
     def test_no_hint_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):

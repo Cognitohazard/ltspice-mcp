@@ -178,12 +178,20 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
         return await coroutine
 
 
-def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult) -> str:
+def _payload_message(payload: Mapping[str, Any]) -> str | None:
+    """The message an error envelope carries, if it carries one."""
     error = payload.get("error")
     if isinstance(error, Mapping):
         message = error.get("message")
         if isinstance(message, str):
             return message
+    return None
+
+
+def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult) -> str:
+    carried = _payload_message(payload)
+    if carried is not None:
+        return carried
     from mcp import types as mcp_types  # already loaded: a result exists to unwrap
 
     for content in result.content:
@@ -452,68 +460,22 @@ async def _collect_inspect(
     return inspect_tools.inspect_envelope(results)
 
 
-async def _collect_jobs_list(
-    request: experiments.JobsInput,
-    state: SessionState,
-) -> dict[str, Any]:
-    page = await _handler_page(experiments.handle_jobs, request, state)
-    rows = list(page.get("items", []))
-    observations = list(page.get("observations", []))
-    warnings = list(page.get("warnings", []))
-    failures = list(page.get("failures", []))
-    cursor = page.get("next_cursor")
-    final = page
-    while isinstance(cursor, str):
-        continued = request.model_copy(update={"cursor": cursor})
-        final = await _handler_page(experiments.handle_jobs, continued, state)
-        rows.extend(final.get("items", []))
-        observations.extend(final.get("observations", []))
-        warnings.extend(final.get("warnings", []))
-        failures.extend(final.get("failures", []))
-        cursor = final.get("next_cursor")
-    data = dict(final)
-    data.update(experiments.unpaged_jobs_items(rows))
-    data["observations"] = _dedupe(observations)
-    data["warnings"] = _dedupe(warnings)
-    data["failures"] = _dedupe(failures)
-    return data
-
-
-async def _collect_jobs_snapshot(
-    request: experiments.JobsInput,
-    state: SessionState,
-) -> dict[str, Any]:
-    invoked = await _handler_page(experiments.handle_jobs, request, state)
-    if request.action == "cancel":
-        return invoked
-    if request.action == "list":
-        raise ApiInternalError("jobs(list) was routed to the receipt collector")
-
-    job_id = invoked.get("job_id")
-    if not isinstance(job_id, str):
-        raise ApiInternalError("A successful jobs response did not identify its job")
-    job = await services.resolve_job_async(job_id, state)
-    snapshot = experiments.snapshot_receipt(job, state)
-    if request.action == "runs":
-        return experiments.render_runs_envelope(snapshot)
-
-    timed_out = invoked.get("timed_out") if request.action == "wait" else None
-    return experiments.render_jobs_receipt_snapshot(
-        request.action,
-        snapshot,
-        timed_out=timed_out if isinstance(timed_out, bool) else None,
-        runs_cap=max(1, len(snapshot.runs_by_key)),
-    )
-
-
 async def _collect_jobs(
     request: experiments.JobsInput,
     state: SessionState,
 ) -> dict[str, Any]:
-    """Collect one jobs action: the whole circuit list, or a complete receipt."""
-    if request.action == "list":
-        return await _collect_jobs_list(request, state)
-    return await _collect_jobs_snapshot(request, state)
+    """Collect one jobs action: the whole circuit list, or a complete receipt.
+
+    One evaluation, rendered complete. The wire door renders the same
+    evaluation as a page — the doors differ by that presentation argument and
+    by nothing else, so neither can report a job the other did not read.
+    """
+    evaluation = await experiments.evaluate_jobs(request, state)
+    data = experiments.complete_jobs_data(evaluation)
+    if evaluation.is_error:
+        message = _payload_message(data) or "The engine returned a call-level error"
+        raise ApiCallError(message, payload=data)
+    return data
 
 
 async def _collect_edit_schematic(

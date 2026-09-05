@@ -7,6 +7,7 @@ the BINNED model spelling, which is what a real PDK ships.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -469,20 +470,24 @@ class TestPatchedDeckStillValidates:
         assert emit(lex(patched).cards) == patched
 
 
-PDK_ROOT = Path("~/.volare/sky130A")
+# Point LTSPICE_MCP_TEST_PDK_ROOT at an installed sky130A PDK root (the
+# directory holding ``libs.ref`` and ``libs.tech``) to run the tests below.
+# Unset, the path cannot exist and they skip.
+PDK_ROOT = Path(os.environ.get("LTSPICE_MCP_TEST_PDK_ROOT") or "/nonexistent/sky130A")
 PDK_SPICE = PDK_ROOT / "libs.ref/sky130_fd_pr/spice"
 
 
 @pytest.mark.skipif(
     not (PDK_SPICE / "sky130_fd_pr__nfet_01v8__tt.pm3.spice").exists(),
-    reason="open-PDK model decks (sky130A) are not installed",
+    reason="set LTSPICE_MCP_TEST_PDK_ROOT to an installed sky130A PDK root to run these",
 )
 class TestOpenPdkDevice:
     """The engine against a real foundry device deck, end to end.
 
-    Local-only: CI has no PDK. This is the measurement the whole mechanism
-    rests on — two instances of one cell taking different exact threshold
-    shifts — reproduced through the engine rather than a hand-patched file.
+    Needs a locally installed PDK, so CI skips it. This is the measurement the
+    whole mechanism rests on — two instances of one cell taking different exact
+    threshold shifts — reproduced through the engine rather than a hand-patched
+    file.
     """
 
     DECK = f"""\

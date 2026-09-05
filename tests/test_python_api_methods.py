@@ -26,6 +26,7 @@ from ltspice_mcp.api import _methods as methods_module
 from ltspice_mcp.api._methods import _unwrap
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
+from ltspice_mcp.lib import recent, services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
@@ -165,42 +166,75 @@ def test_call_error_keeps_payload_handles_and_missing_structured_is_internal() -
         _unwrap(missing)
 
 
-def test_jobs_list_collects_every_flat_page(
+def test_jobs_list_returns_every_circuit_group_the_wire_would_page(
     state_no_sim: SessionState,
+    work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Through the real control plane, with more circuits than one wire page."""
+    monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
     api = SyncApi(state_no_sim)
-    rows = [{"path": f"circuit-{index}.cir"} for index in range(113)]
-    calls: list[str | None] = []
+    expected = []
+    for index in range(7):
+        circuit = work_dir / f"circuit-{index}.cir"
+        circuit.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+        recent.touch(circuit)
+        expected.append(str(circuit))
 
-    async def handler(args: experiments.JobsInput, _state: SessionState):
-        calls.append(args.cursor)
-        offset = int(args.cursor.split(":", 1)[1]) if args.cursor else 0
-        shown = rows[offset : offset + args.limit]
-        next_offset = offset + len(shown)
-        payload = {
-            "action": "list",
-            "outcome": "complete",
-            "items": shown,
-            "total": len(rows),
-            "returned": len(shown),
-            "truncated": next_offset < len(rows),
-            "next_cursor": f"o:{next_offset}" if next_offset < len(rows) else None,
-            "observations": [{"code": "inventory", "detail": "stable"}],
-            "warnings": [],
-            "failures": [],
-            "hint": "page",
-        }
-        return _result(payload)
+    paged = api.jobs(raw_page=True, action="list", limit=2)
+    collected = api.jobs(action="list", limit=2)
 
-    monkeypatch.setattr(experiments, "handle_jobs", handler)
-    collected = api.jobs(action="list", limit=17)
-    assert collected["items"] == rows
-    assert collected["returned"] == collected["total"] == 113
+    # The wire pages at the limit it was given; the in-process door renders the
+    # same evaluation complete.
+    assert paged["returned"] == 2
+    assert paged["truncated"] is True
+    assert sorted(str(group["path"]) for group in collected["items"]) == sorted(expected)
+    assert collected["returned"] == collected["total"] == 7
     assert collected["truncated"] is False
     assert collected["next_cursor"] is None
-    assert len(calls) == 7
-    assert collected["observations"] == [{"code": "inventory", "detail": "stable"}]
+
+
+@pytest.mark.parametrize("action", ["status", "wait", "runs"])
+def test_jobs_receipt_is_rendered_from_a_single_read_of_the_job(
+    state_no_sim: SessionState,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    """Both doors render one evaluation, so a receipt describes one read.
+
+    The in-process door used to invoke the wire handler and then resolve and
+    snapshot the job a second time to render the complete result, keeping
+    `timed_out` from the first read and the receipt from the second — two reads
+    reported as one answer, with a window in between for the job to move.
+    """
+    job = make_experiment_job(state_no_sim, job_id="exp-one-read", count=2)
+    api = SyncApi(state_no_sim)
+    reads: list[str] = []
+    resolve = services.resolve_job_async
+
+    async def counting_resolve(job_id: str, state: SessionState):
+        reads.append(job_id)
+        return await resolve(job_id, state)
+
+    monkeypatch.setattr(services, "resolve_job_async", counting_resolve)
+    arguments: dict[str, Any] = {"action": action, "job_id": job.job_id}
+    if action == "wait":
+        arguments["timeout_s"] = 0
+    data = api.jobs(**arguments)
+
+    assert reads == [job.job_id]
+    assert data["action"] == action
+
+
+def test_jobs_error_from_the_in_process_door_carries_the_wire_envelope(
+    state_no_sim: SessionState,
+) -> None:
+    api = SyncApi(state_no_sim)
+    with pytest.raises(ApiCallError) as raised:
+        api.jobs(action="status", job_id="exp-does-not-exist")
+    assert raised.value.code == "job_not_found"
+    assert raised.value.payload["action"] == "status"
+    assert raised.value.payload["outcome"] == "failed"
 
 
 def test_run_receipt_assembles_more_than_fifty_runs_with_original_projection(
@@ -776,7 +810,7 @@ class TestAutoDoorRefusalsAreActionable:
     """The refusal a caller who followed the skill actually hits.
 
     ``budget`` is taught as a first-class knob on four tools and advertised in
-    the MCP schema; this door rejects it. That is the ruled contract — but the
+    the MCP schema; this door rejects it. That is the intended contract — but the
     refusal has to name the fix for the field it refused, and be catchable by
     the exception the API's own documentation tells callers to catch.
     """

@@ -25,7 +25,9 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.0,<5.0",
-    "mcp[cli]>=1.27.0,<2.0",
+    # No [cli] extra: nothing here imports typer or rich, and that extra pulls
+    # both into every install for the `mcp` command-line tool we never invoke.
+    "mcp>=1.27.0,<2.0",
     "numpy>=1.26,<3.0",
     # Direct use (scoped simulator kill, job owner-pid liveness); also a
     # spicelib transitive, so this adds no new install weight.
@@ -61,7 +63,6 @@ Issues = "https://github.com/cognitohazard/ltspice-mcp/issues"
 
 [project.scripts]
 ltspice-mcp = "ltspice_mcp.main:main"
-spice-mcp = "ltspice_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -71,7 +72,29 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
+# Everything under the package directory ships, including the runtime data in
+# src/ltspice_mcp/assets/ (the packaged SPICE guide and the bundled widget
+# assets) — the server reads those at run time, so they are not optional.
 packages = ["src/ltspice_mcp"]
+
+# An explicit list, because the default sdist ships everything git tracks: the
+# repo's development surface (CI workflows, the maintainer's notes, test
+# fixtures, packaging scratch) is not something a source install needs.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src",
+    "tests",
+    "docs",
+    "skills",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE",
+    "SECURITY.md",
+    "pyproject.toml",
+]
 
 [dependency-groups]
 dev = [
@@ -110,7 +133,7 @@ select = [
 ]
 ignore = [
     "E501",    # line length (handled by formatter)
-    "TRY003",  # long exception messages are fine for a CLI tool
+    "TRY003",  # a long exception message is the caller-facing text here
     "TRY300",  # return-in-try is fine when the logic reads better inline
     "TRY301",  # raise-within-try is used intentionally for re-raising with context
     "TRY400",  # logger.error in except is acceptable

@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -34,21 +35,70 @@ def pid_of(data: Mapping[str, Any]) -> int | None:
     return pid if isinstance(pid, int) and pid > 0 else None
 
 
-def owner_alive(pid: int | None, *, own_is_alive: bool = False) -> bool:
+class OwnerLiveness(Enum):
+    """What the liveness probe learned about a record's owning server process.
+
+    Three answers, not two. Sessions share a working directory and read each
+    other's job records, and the answer "the owner is gone" is what licenses a
+    reader to rewrite a peer's running job as interrupted. A probe that could
+    not reach an answer must therefore say so instead of reporting the process
+    dead: it is the reading that takes a live run away from the session that
+    owns it, and a transient probe error is not evidence of anything.
+    """
+
+    ALIVE = "alive"
+    DEAD = "dead"
+    UNKNOWN = "unknown"
+
+    @property
+    def is_dead(self) -> bool:
+        """True only for a positive "the owner is gone" answer.
+
+        Read the probe through this rather than negating ALIVE — ``not alive``
+        folds UNKNOWN into dead, which is the whole defect.
+        """
+        return self is OwnerLiveness.DEAD
+
+
+def owner_liveness(pid: int | None, *, own_is_alive: bool = False) -> OwnerLiveness:
     """Whether the record's owning server process is still running.
 
     ``own_is_alive`` decides how a record carrying this process's pid reads:
     registry loading treats it as a recycled pid, while disk-level summaries
     treat the common own-pid case as a genuinely running job.
+
+    A record with no usable pid answers DEAD, not UNKNOWN: that is a record
+    written before pids were stored, and the recovery of those interrupted
+    jobs is the behaviour that predates this probe.
     """
     if not pid:
-        return False
+        return OwnerLiveness.DEAD
     if pid == os.getpid():
-        return own_is_alive
+        return OwnerLiveness.ALIVE if own_is_alive else OwnerLiveness.DEAD
     try:
-        return psutil.pid_exists(pid)
+        return OwnerLiveness.ALIVE if psutil.pid_exists(pid) else OwnerLiveness.DEAD
     except Exception:
-        return False
+        # Deliberately broad, and deliberately NOT an answer: whatever went
+        # wrong reaching the process table, the one thing this call must never
+        # do is report a peer's live job dead because the probe itself failed.
+        return OwnerLiveness.UNKNOWN
+
+
+def owner_unknown_observation(pid: int | None) -> dict[str, str]:
+    """The fact to surface when the liveness probe could not reach an answer.
+
+    Built here so both stores report the unreachable-probe case in the same
+    words, and so the callers' side of it stays one line.
+    """
+    return {
+        "code": "owner_liveness_unknown",
+        "kind": "lifecycle",
+        "detail": (
+            "Could not determine whether the owning server process "
+            f"(pid {pid if pid else 'unrecorded'}) is still running; the status "
+            "recorded by that server is kept as written."
+        ),
+    }
 
 
 def json_default(obj: Any) -> Any:

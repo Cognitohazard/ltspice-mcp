@@ -21,7 +21,11 @@ correct wheels for the host instead.
   cannot ship either (LTspice is a licensed app; ngspice is a native binary).
 - **Network access on first run**, so `uv` can download the package.
 
-Circuit editing works with no simulator; running simulations needs one.
+Netlist editing (`.cir`/`.net`) works with no simulator at all. Editing an
+`.asc` schematic needs LTspice's `.asy` symbol libraries on disk — the
+geometry comes from those symbol files, so an install of LTspice is what
+supplies them (auto-detected on Windows and macOS). Running simulations
+needs a simulator.
 
 ## Build
 

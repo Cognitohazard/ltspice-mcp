@@ -251,7 +251,7 @@ class TestElementArity:
         assert issues == []
 
     def test_e_source_value_keyed_form_passes(self):
-        # Codex H2: E1 out 0 VALUE={V(in)*2} is a legal LTspice keyed
+        # E1 out 0 VALUE={V(in)*2} is a legal LTspice keyed
         # behavioral form. ``InstanceLine`` parses it as params_only with
         # 2 positional nodes — the validator must NOT require 4.
         issues = self._arity("E1 out 0 VALUE={V(in)*2}\n.end")

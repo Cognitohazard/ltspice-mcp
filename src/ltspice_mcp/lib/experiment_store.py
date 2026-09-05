@@ -29,9 +29,11 @@ from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_ter
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
 from ltspice_mcp.lib.store_common import (
     EXPERIMENT_JOB_SCHEMA,
+    OwnerLiveness,
     accept_schema,
     atomic_write_json,
-    owner_alive,
+    owner_liveness,
+    owner_unknown_observation,
     pid_of,
     schema_envelope,
 )
@@ -464,8 +466,15 @@ def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path,
     return raw, log
 
 
-def _reconcile_restart(job: ExperimentJob, *, owner_alive: bool) -> None:
-    if owner_alive or job.status not in _LIVE_STATUSES:
+def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
+    if job.status not in _LIVE_STATUSES:
+        return
+    if liveness is OwnerLiveness.UNKNOWN:
+        # Not an answer, so not grounds to take a peer's live experiment away
+        # from it. Keep the recorded status and say why it was not checked.
+        job.observations.append(owner_unknown_observation(job.owner_pid))
+        return
+    if not liveness.is_dead:
         return
     observation = {
         "code": "server_restarted",
@@ -594,7 +603,7 @@ def _deserialize_job(
     )
     _reconcile_restart(
         job,
-        owner_alive=owner_alive(pid_of(data), own_is_alive=own_is_alive),
+        liveness=owner_liveness(pid_of(data), own_is_alive=own_is_alive),
     )
     if all(case.status in TERMINAL_CASE_STATUSES for case in job.cases):
         job.runs_done_event.set()

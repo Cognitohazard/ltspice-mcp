@@ -1,33 +1,24 @@
 # LTSpice MCP Server Configuration
 # Copy to ltspice-mcp.toml and edit for your environment.
-# All settings have sensible defaults and can be overridden with
-# LTSPICE_MCP_* environment variables.
+# All settings have sensible defaults and can be overridden with environment variables
 
 [simulator]
-# Preferred (default) simulator: ltspice, ngspice, qspice, xyce
-# Leave empty for auto-detection (prefers LTSpice if available)
+# Preferred simulator: ltspice, ngspice, qspice, xyce
+# Leave empty or set to null for auto-detection (prefers LTSpice if available)
 default = "ltspice"
 
-# Allowlist of simulators to expose. Empty = auto-detect every supported one.
-# When set, only the listed simulators are probed/exposed.
-# Example: enabled = ["ltspice", "ngspice"]
+# Allowlist of simulators to expose, e.g. ["ltspice", "ngspice"].
+# Empty = auto-detect every supported simulator.
 enabled = []
 
-# Explicit path to simulator executable (overrides auto-detection).
-# A valid path here suppresses auto-detection for that simulator.
-# Leave empty for auto-detection. On WSL the standard Windows install
-# locations are auto-detected, so a path is no longer strictly required.
-# Examples:
-#   WSL:     "/mnt/c/Users/<you>/AppData/Local/Programs/ADI/LTspice/LTspice.exe"
-#   Windows: "C:\\Program Files\\ADI\\LTspice\\LTspice.exe"
-#   Linux:   "" (auto-detect via Wine or PATH)
+# Explicit path to simulator executable (overrides auto-detection)
+# Leave empty for auto-detection
 path = ""
 
-# ngspice compatibility mode passed as `-D ngbehavior=<mode>`.
-# Leave unset to keep spicelib's default ("kiltpsa"). That default's `lt`/`ps`
-# tokens make ngspice read a sectioned `.lib <file> <section>` (the PDK corner
-# idiom) as two plain includes and drop the section — set a mode with neither
-# token (e.g. "hsa") if a sectioned .lib must parse. Only affects ngspice.
+# ngspice compatibility mode (ngbehavior). Unset = spicelib's default
+# 'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned
+# '.lib <file> <section>' PDK corner selection. Set a mode with neither,
+# "hsa" or "kia", for standard-SPICE / PDK decks.
 # ngbehavior = "hsa"
 
 [security]
@@ -40,30 +31,49 @@ allowed_paths = ["."]
 # Default: number of CPU cores, capped at 8. Uncomment to override.
 # max_parallel = 4
 
+# Maximum cases after run_experiments variation expansion.
+max_experiment_cases = 1024
+
 # Default simulation timeout in seconds
 timeout = 300.0
+
+# Preflight size guard, estimated from .tran/.ac/.dc directives.
+# Warn when the estimated point count exceeds this:
+max_estimated_points = 20000000
+# Refuse a run whose estimated raw (MB, single-trace) exceeds this:
+max_raw_mb = 4096
 
 [analysis]
 # Maximum waveform data points to return per trace
 max_points = 10000
-
-[logging]
-# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-level = "INFO"
-
-[schematic]
-# Additional paths to .asy symbol files (auto-detected on Windows/WSL)
-symbol_paths = []
+# Whole-call work budget for analyze_results, in seconds
+analysis_budget_s = 60.0
+# Default response budget in tokens for consolidated calls (0 disables)
+default_budget = 4000
+# Retention for raw-path-only analysis result sets, in hours
+result_set_ttl_hours = 24.0
 
 [tools]
-# Tool profile: "full" (all tools) or "agentic" (reduced set for capable LLM agents)
-profile = "full"
+# Tool profile: "consolidated" is the only profile since 0.6.0.
+# The former "full"/"agentic" profiles need a ltspice-mcp==0.5.* pin.
+# The key itself is removed in 0.7.0; new configs need no [tools] section.
+profile = "consolidated"
+
+[schematic]
+# Custom paths to LTspice symbol (.asy) files for .asc schematic support
+# On Windows and WSL these are auto-detected from the LTspice installation
+# Set this to override auto-detection or for non-standard installs
+# Example: symbol_paths = ["/path/to/LTspice/lib/sym"]
+symbol_paths = []
+
+[logging]
+# Stderr logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+# Set "INFO" for the startup banner and per-run detail.
+level = "WARNING"
 
 [state]
-# Persist simulation/batch job metadata to .ltspice-mcp/jobs/ next to each
-# circuit, so a restarted server can surface prior runs.
+# Persist simulation/batch job metadata to .ltspice-mcp/jobs/ next to each circuit.
+# Lets a restarted server surface prior runs and recent circuits; set to false to disable.
 persist_jobs = true
-
-# At startup, eagerly load persisted jobs for this many recently-touched
-# circuits. 0 disables preload (lazy loading on first tool call).
+# preload_recent_count: at startup, eagerly load persisted jobs for this many recently-touched circuits. 0 disables preload (lazy-only).
 preload_recent_count = 10

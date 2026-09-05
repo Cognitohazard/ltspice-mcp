@@ -83,9 +83,9 @@ _RULES: tuple[_Rule, ...] = (
             "supports mag(), re(), im(), ph()."
         ),
         suggestion=(
-            "Use mag(V(node)) and convert to dB downstream, or rely on "
-            "bode_metrics(mode='filter') for −3 dB cutoffs and "
-            "bode_metrics(mode='point') for point queries."
+            "Use mag(V(node)) and convert to dB downstream, or rely on the "
+            "analyze_results 'bode_filter' recipe for −3 dB cutoffs and "
+            "'bode_point' for a gain/phase reading at one frequency."
         ),
     ),
     _Rule(
@@ -107,9 +107,9 @@ _RULES: tuple[_Rule, ...] = (
             "waveform-viewer-only function in LTspice."
         ),
         suggestion=(
-            "Compute group delay via bode_metrics(mode='point') with "
-            "include_unwrapped_phase=True, then numerically differentiate "
-            "the unwrapped phase."
+            "Read phase with the analyze_results 'bode_point' recipe at two "
+            "closely spaced frequencies and differentiate numerically; "
+            "phase comes back wrapped, so undo a ±360° step between samples."
         ),
     ),
 )

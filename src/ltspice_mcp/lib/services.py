@@ -21,7 +21,7 @@ from typing import Any, TypeVar
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import JobNotFoundError, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
 from ltspice_mcp.lib import experiment_store, job_store, recent
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -104,9 +104,9 @@ def attach_suggestions_to_failure(
 
     Two complementary layers, both keyed off the unresolved model/subcircuit
     refs in the log: fuzzy matches against loaded user libraries (when any),
-    and a library-independent recovery hint pointing at find_model's built-in
-    search — which fires even with no library loaded, the common case stock
-    parts fail in. Returns the (possibly-unchanged) error message. Called on
+    and a recovery hint pointing at ``inspect``'s model search — which fires
+    even with no library loaded, the common case stock parts fail in.
+    Returns the (possibly-unchanged) error message. Called on
     simulation failure paths where the log already has the error context
     inline, so callers don't re-implement read-log / extract / format / attach.
     """
@@ -124,8 +124,10 @@ def attach_suggestions_to_failure(
     block += (
         f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
         "auto-included in the run. For each, call "
-        'find_model(name="<ref>", include_builtin=true), add the returned '
-        ".include directive to the netlist, and rerun."
+        'inspect(kind="model", mode="search", query="<ref>") to locate its '
+        'definition in the loaded libraries — or mode="enumerate" with "libs" '
+        "to read a specific stock library file — then add the returned .include "
+        "directive to the netlist and rerun."
     )
     return f"{error_msg}{block}"
 
@@ -531,11 +533,11 @@ async def bounded_parse(
     if call_deadline is not None:
         timeout_s = min(timeout_s, max(0.0, call_deadline - now_mono))
     if timeout_s <= 0:
-        raise ResultError(f"Parsing {path.name} exceeded the analysis item deadline")
+        raise AnalysisDeadlineExceeded(f"Parsing {path.name} exceeded the analysis item deadline")
     wedged_until = _wedged_raw_paths.get(path)
     if wedged_until is not None:
         if now_mono < wedged_until:
-            raise ResultError(
+            raise AnalysisDeadlineExceeded(
                 f"Parsing {path.name} recently exceeded its deadline and "
                 "its worker is still abandoned; retries are paused for "
                 f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
@@ -555,7 +557,7 @@ async def bounded_parse(
             raise
     except TimeoutError:
         _wedged_raw_paths[path] = loop.time() + cooldown_s
-        raise ResultError(
+        raise AnalysisDeadlineExceeded(
             f"Parsing {path.name} exceeded {timeout_s:.3g}s and was "
             "abandoned — the file may be corrupt in a way that wedges the parser, "
             "or on a stalled mount. The file was not modified; retries are "

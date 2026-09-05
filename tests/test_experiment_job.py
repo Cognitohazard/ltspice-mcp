@@ -1242,3 +1242,51 @@ class TestLegacyJobRecords:
 
         loaded = {job_id for job_id in state_no_sim.all_jobs if job_id.startswith("sim_legacy")}
         assert loaded == {f"sim_legacy_bulk_{i}" for i in range(4)}
+
+
+class TestOwnerLivenessUnknownOnLoad:
+    """An unreachable liveness probe must not reconcile a peer's experiment.
+
+    Rewriting a running experiment as interrupted takes the run away from the
+    session that owns it. That needs a positive "the owner is gone"; a psutil
+    call that raised is not one, and the record says so instead.
+    """
+
+    # Positive so the record round-trips it, and not this process, so the
+    # probe actually runs instead of short-circuiting on own pid.
+    _FOREIGN_PID = 999_999_999
+
+    def _persisted(self, work_dir: Path) -> ExperimentJob:
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="running")
+        job.owner_pid = self._FOREIGN_PID
+        experiment_store.save_job(job)
+        return job
+
+    def test_status_stands_and_the_gap_is_named(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        job = self._persisted(work_dir)
+
+        def boom(pid: int) -> bool:
+            raise OSError("process table unavailable")
+
+        monkeypatch.setattr(store_common.psutil, "pid_exists", boom)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+        assert loaded is not None
+        assert loaded.status == "running"
+        codes = {item.get("code") for item in loaded.observations}
+        assert "owner_liveness_unknown" in codes
+        # It must NOT claim the peer's server restarted — that is the reading
+        # the failed probe cannot support.
+        assert "server_restarted" not in codes
+
+    def test_a_dead_owner_still_reconciles(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        job = self._persisted(work_dir)
+        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: False)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+        assert loaded is not None
+        codes = {item.get("code") for item in loaded.observations}
+        assert "server_restarted" in codes
+        assert "owner_liveness_unknown" not in codes

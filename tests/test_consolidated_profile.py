@@ -44,7 +44,7 @@ CONSOLIDATED_TOOLS = frozenset(
 # mcp_v1_design.md section 3 — the normative annotations table.
 # (readOnlyHint, destructiveHint, idempotentHint, openWorldHint)
 ANNOTATIONS_TABLE: dict[str, tuple[bool, bool, bool, bool]] = {
-    "run_experiments": (False, False, True, True),
+    "run_experiments": (False, False, False, True),
     "jobs": (False, True, True, False),
     "analyze_results": (False, False, True, False),
     "edit_schematic": (False, True, False, False),

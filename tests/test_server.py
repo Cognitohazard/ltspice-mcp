@@ -446,7 +446,8 @@ class TestToolAnnotationHonesty:
         expected = {
             "edit_schematic": False,
             "plot_waveform": False,
-            "run_experiments": True,
+            # Without a caller request_id the same arguments start new work.
+            "run_experiments": False,
             "jobs": True,
             "analyze_results": True,
             "verify_circuit": True,

@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import experiment_store, job_store, now
+from ltspice_mcp.lib import experiment_store, job_store, now, store_common
 from ltspice_mcp.state import LegacyJobRecord
 
 
@@ -275,3 +275,86 @@ class TestSiblingSchemasAreSilent:
 
         assert loaded is None
         assert caplog.records == []
+
+
+class TestForgedMigrationChain:
+    def test_migration_chain_applies(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """Forge a hypothetical v0 record + migration and verify it upgrades."""
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        sidecar = job_store.sidecar_dir(circuit)
+        sidecar.mkdir(parents=True)
+
+        # Pretend current schema is v2, v0 and v1 are readable.
+        monkeypatch.setattr(job_store, "SCHEMA_VERSION", 2)
+        monkeypatch.setattr(job_store, "SUPPORTED_VERSIONS", frozenset({0, 1, 2}))
+
+        def v0_to_v1(data: dict) -> dict:
+            # Fake migration: rename old_name -> netlist
+            if "old_name" in data:
+                data["netlist"] = data.pop("old_name")
+            return data
+
+        def v1_to_v2(data: dict) -> dict:
+            # Fake migration: add a missing field with a default
+            data.setdefault("error", None)
+            return data
+
+        monkeypatch.setitem(job_store._MIGRATIONS, 0, v0_to_v1)
+        monkeypatch.setitem(job_store._MIGRATIONS, 1, v1_to_v2)
+
+        (sidecar / "sim_legacy.json").write_text(
+            json.dumps(
+                {
+                    "schema": job_store.SCHEMA,
+                    "schema_version": 0,
+                    "job_id": "sim_legacy",
+                    "kind": "simulation",
+                    "status": "completed",
+                    "old_name": str(circuit),
+                    "simulator": "LTspice",
+                    "started_at": now().isoformat(),
+                }
+            )
+        )
+        records = job_store.load_jobs_for_circuit(circuit)
+        assert [record.job_id for record in records] == ["sim_legacy"]
+        assert str(records[0].netlist) == str(circuit)
+
+
+_FOREIGN_PID = 999_999_999
+
+
+class TestOwnerLivenessUnknown:
+    """A probe that could not reach an answer must not read as "owner dead".
+
+    Sessions share a working directory, and "the owner is gone" is exactly the
+    reading that licenses one session to rewrite another's running job as
+    interrupted. A psutil call that raises is not evidence of anything, so the
+    record stands as the owning server wrote it. The experiment records this
+    probe now guards are exercised in tests/test_experiment_job.py; what is
+    pinned here is the probe's own three answers.
+    """
+
+    @staticmethod
+    def _break_the_probe(monkeypatch: Any) -> None:
+        def boom(pid: int) -> bool:
+            raise OSError("process table unavailable")
+
+        monkeypatch.setattr(store_common.psutil, "pid_exists", boom)
+
+    def test_probe_reports_unknown_rather_than_dead(self, monkeypatch: Any) -> None:
+        self._break_the_probe(monkeypatch)
+        liveness = store_common.owner_liveness(_FOREIGN_PID)
+        assert liveness is store_common.OwnerLiveness.UNKNOWN
+        assert liveness.is_dead is False
+
+    def test_probe_still_answers_dead_and_alive(self, monkeypatch: Any) -> None:
+        """The two real answers must survive the third one being added."""
+        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: False)
+        assert store_common.owner_liveness(_FOREIGN_PID) is store_common.OwnerLiveness.DEAD
+        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: True)
+        assert store_common.owner_liveness(_FOREIGN_PID) is store_common.OwnerLiveness.ALIVE
+        # A record with no pid predates pid tracking; recovering those jobs is
+        # the behaviour this probe was added to, not something it takes away.
+        assert store_common.owner_liveness(None) is store_common.OwnerLiveness.DEAD

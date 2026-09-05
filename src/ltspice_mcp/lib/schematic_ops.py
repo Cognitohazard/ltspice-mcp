@@ -26,7 +26,7 @@ import asyncio
 import importlib
 import itertools
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -60,7 +60,7 @@ try:
 except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned range)
     _SchematicComponentClass = SchematicComponent
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
@@ -937,14 +937,19 @@ def make_editor(path: Path) -> Editor:
             return AscEditor(str(path))
         return SpiceEditor(str(path))
     except FileNotFoundError as e:
-        if ".asy" in str(e):
-            raise NetlistError(
-                f"Cannot open .asc schematic: {e}\n\n"
-                "LTspice symbol libraries (.asy files) are required. "
-                "Set [schematic] symbol_paths in ltspice-mcp.toml or "
-                "LTSPICE_MCP_SYMBOL_PATHS environment variable."
-            ) from e
-        raise NetlistError(f"File not found: {path}") from e
+        if not path.is_file():
+            raise NetlistError(f"File not found: {path}") from e
+        # The schematic itself opened, so what is missing is something it
+        # refers to: a symbol, a hierarchical sub-sheet, or a model library.
+        # Which one it is comes from the file that is there, not from whether
+        # the editor's message happened to spell ".asy".
+        raise SymbolResolutionError(
+            f"Cannot open .asc schematic: {e}\n\n"
+            "A file the schematic refers to was not found; for a symbol, "
+            "LTspice symbol libraries (.asy files) are required. "
+            "Set [schematic] symbol_paths in ltspice-mcp.toml or "
+            "LTSPICE_MCP_SYMBOL_PATHS environment variable."
+        ) from e
 
 
 def _get_editor(path: Path, state: SessionState) -> Editor:
@@ -2233,6 +2238,41 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
         return {"op": "remove_directive", "instruction": op.instruction, "removed": removed}
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
+
+
+def collapse_result_warnings(results: list[dict[str, object]]) -> None:
+    """Collapse identical per-op warnings across one ops batch, in place.
+
+    The documented per-pin-label style repeats the same duplicate-label
+    advisory on every add_net_label op of that net — hundreds of identical
+    lines per converter-scale batch. Keep the first occurrence (annotated
+    with the repeat count) and drop the copies.
+    """
+    counts: Counter[str] = Counter()
+    for entry in results:
+        warnings = entry.get("warnings")
+        if isinstance(warnings, list):
+            counts.update(warnings)
+    if not counts or max(counts.values()) < 2:
+        return
+    emitted: set[str] = set()
+    for entry in results:
+        warnings = entry.get("warnings")
+        if not isinstance(warnings, list):
+            continue
+        kept: list[str] = []
+        for w in warnings:
+            if w in emitted:
+                continue
+            emitted.add(w)
+            n = counts[w]
+            kept.append(
+                w if n == 1 else f"{w} (identical warning on {n} ops in this batch; collapsed)"
+            )
+        if kept:
+            entry["warnings"] = kept
+        else:
+            del entry["warnings"]
 
 
 def run_op_batch(

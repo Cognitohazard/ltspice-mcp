@@ -137,7 +137,7 @@ class TestSemanticGoldens:
 
 
 class TestFlagRendering:
-    """Verified against an LTspice screenshot of benchmarks/render_gate/flag_probe.asc."""
+    """Verified against an LTspice screenshot of the reference flag schematic."""
 
     @pytest.mark.parametrize(
         ("wire", "flag_xy", "points"),
@@ -220,7 +220,7 @@ class TestFlagRendering:
         assert [r for r in _elements(svg, "rect") if r.get("class") == "unconnected"] == []
 
     def test_corner_junction_label_is_horizontal_above(self, tmp_path: Path) -> None:
-        # Documented fallback, from the probe's single corner sample.
+        # Documented fallback, from the reference schematic's single corner sample.
         asc = _write(
             tmp_path / "s.asc",
             "Version 4\nSHEET 1 880 680\n"

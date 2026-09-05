@@ -203,15 +203,15 @@ class TestAcStructureTool:
         assert "Out-of-phase zero / delay" in result.content[0].text
 
 
-# ---- B2. OBSERVATION SHAPE: doctrine fields declared + relayed ------------
+# ---- B2. OBSERVATION SHAPE: canonical fields declared + relayed -----------
 
 
 class TestAcStructureObservationShape:
     """The observations list mixes the reader's own facts (code/detail) with
     facts relayed from the simulator (code/kind/detail/severity/evidence). The
-    declared schema must document that full doctrine shape."""
+    declared schema must document that full Observation shape."""
 
-    def test_schema_declares_doctrine_observation_fields(self):
+    def test_schema_declares_full_observation_fields(self):
         schema = schema_from_typeddict(AcStructureResponse)
         item = schema["properties"]["observations"]["items"]
         assert {"code", "kind", "detail", "severity", "evidence"} <= set(item["properties"])

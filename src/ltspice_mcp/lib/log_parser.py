@@ -773,7 +773,10 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 
         # ngspice-specific diagnostics
         if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
-            warnings.append(stripped + " Use signal_stats or query_value for post-processing.")
+            warnings.append(
+                stripped + " Use the analyze_results 'signal_stats' or 'value' "
+                "recipes for post-processing."
+            )
             i += 1
             continue
         if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
@@ -1097,7 +1100,8 @@ def parse_success_summary(
         # needs the axis to populate ``range`` and ``point_count``; it
         # does NOT need V(*)/I(*) trace data. Loading "*" would
         # materialise every signal on every completion — fine for a
-        # short .op, unbounded for a long .tran (Codex M3).
+        # short .op, but a long .tran has no upper bound on how much that
+        # would read, so the success path must never load "*" blindly.
         header = OffsetAwareRawRead(str(raw_file), traces_to_read=None, dialect=dialect)
         trace_names = header.get_trace_names()
         # Decide value-scan coverage by the ESTIMATED total sample count (axis

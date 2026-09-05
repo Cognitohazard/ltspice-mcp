@@ -42,7 +42,7 @@ from mcp import types
 from pydantic import Field
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import NetlistError, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, NetlistError, NoAxisError, ResultError
 from ltspice_mcp.lib import atomic_write, desktop, services
 from ltspice_mcp.lib.ac_analysis import (
     CrossingWithQuantity,
@@ -196,8 +196,8 @@ def _reject_non_transient(raw) -> None:
         # generic verify-with-check_job hint would misdirect (errors.py contract).
         raise ResultError(
             f"This tool requires transient analysis (.tran) data; got {sim_type!r}. "
-            "For a .DC sweep use query_value or signal_stats; for frequency-domain "
-            "(.AC / .noise) use bode_metrics or signal_stats.",
+            "For a .DC sweep use the value or signal_stats recipe; for frequency-domain "
+            "(.AC / .noise) use the bode_* or signal_stats recipes.",
             show_hint=False,
         )
 
@@ -734,7 +734,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         if args.t_start is not None or args.t_end is not None:
             raise ResultError(
                 "t_start/t_end windowing is not supported for AC analysis. "
-                "Use query_value to look up a specific frequency.",
+                "Use the bode_point recipe to look up a specific frequency.",
                 show_hint=False,
             )
         magnitude_db = safe_magnitude_db(wave)
@@ -782,7 +782,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     if is_noise and (args.t_start is not None or args.t_end is not None):
         raise ResultError(
             "t_start/t_end windowing is not supported for Noise analysis (axis is "
-            "frequency, not time). Use query_value to look up a specific "
+            "frequency, not time). Use the value recipe to look up a specific "
             "frequency.",
             show_hint=False,
         )
@@ -1084,7 +1084,7 @@ def _build_and_write(
                 chunk.append(row)
                 if len(chunk) >= 4096:
                     if should_abort is not None and should_abort():
-                        raise ResultError(
+                        raise AnalysisDeadlineExceeded(
                             "CSV artifact exceeded its analysis item deadline; "
                             "narrow the window or export fewer signals."
                         )
@@ -1092,7 +1092,7 @@ def _build_and_write(
                     chunk.clear()
             if chunk:
                 if should_abort is not None and should_abort():
-                    raise ResultError(
+                    raise AnalysisDeadlineExceeded(
                         "CSV artifact exceeded its analysis item deadline; "
                         "narrow the window or export fewer signals."
                     )
@@ -1168,16 +1168,16 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     if args.step_axis is not None:
         if args.job_id is not None:
             raise ResultError(
-                "query_value: 'step_axis' selects a step of a .step raw and can't be "
+                "value recipe: 'step_axis' selects a step of a .step raw and can't be "
                 "combined with 'job_id' (the run is already selected — pass 'at').",
                 show_hint=False,
             )
         step_raw = args.raw_file
         if step_raw is None:
-            raise ResultError("query_value: 'step_axis' requires 'raw_file'.", show_hint=False)
+            raise ResultError("value recipe: 'step_axis' requires 'raw_file'.", show_hint=False)
         if args.step_value is None:
             raise ResultError(
-                "query_value: 'step_value' is required when 'step_axis' is given.",
+                "value recipe: 'step_value' is required when 'step_axis' is given.",
                 show_hint=False,
             )
         result = await handle_step_get(
@@ -1203,7 +1203,7 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     signal = args.signal
     if args.at is None:
         raise ResultError(
-            "query_value: 'at' is required (or use step_axis + step_value). "
+            "value recipe: 'at' is required (or use step_axis + step_value). "
             "If this is a .op (operating point) result, it has no time/frequency "
             "axis — use operating_point instead.",
             show_hint=False,
@@ -1230,17 +1230,17 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
 
     try:
         result_data = query_point_value(raw, signal, target_x, step)
+    except NoAxisError as e:
+        # Operating-point raws have no time/frequency axis. Give a precise,
+        # actionable message instead of the generic failure + misleading
+        # check_job hint.
+        raise ResultError(
+            "This is an Operating Point result (no time/frequency axis to "
+            "query). Use operating_point to read node voltages and branch "
+            "currents.",
+            show_hint=False,
+        ) from e
     except Exception as e:
-        # Operating-point raws have no time/frequency axis; spicelib raises
-        # "This RAW file does not have an axis." Give a precise, actionable
-        # message instead of the generic failure + misleading check_job hint.
-        if "does not have an axis" in str(e).lower():
-            raise ResultError(
-                "This is an Operating Point result (no time/frequency axis to "
-                "query). Use operating_point to read node voltages and branch "
-                "currents.",
-                show_hint=False,
-            ) from e
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
@@ -1362,8 +1362,8 @@ def _format_measurements(
 # same dead end by either route must be given the same way out.
 NO_DEVICE_OP_POINTS_NOTE = (
     "No small-signal device params (gm/gds/vth/vdsat) in this run. "
-    "On LTspice add '.options logopinfo' to the deck (run_experiments adds "
-    "it automatically for .op runs); on "
+    "On LTspice add '.options logopinfo' to the deck (run_experiments adds it "
+    "automatically for .op runs); on "
     "ngspice .save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
 )
 
@@ -2267,7 +2267,7 @@ class MeasurementStatsInput(ToolInput):
     job_id: str | None = Field(
         default=None,
         description=(
-            "Job ID. For a batch job (``run_montecarlo`` / ``run_sweep``) the "
+            "Job ID. For a sweep or Monte Carlo batch job the "
             "tool loads each completed run's log, concatenates the .MEAS "
             "results (one row per run), and aggregates. For a completed "
             "single-simulation job it aggregates that run's log (per-step "
@@ -3681,7 +3681,7 @@ class BodeMetricsInput(ToolInput):
             "of a raw_file path; pair with ``run_index``. The analyzed run's swept "
             "parameter values are echoed back under ``params`` (with ``run_index``), "
             "so you can tell which sweep point this is without a separate "
-            "batch_results call. Combine with ``all_steps`` to sweep the .step axis "
+            "lookup. Combine with ``all_steps`` to sweep the .step axis "
             "WITHIN that run (a value-list/param sweep stores each run as its own "
             "raw — address those by run_index, not all_steps)."
         ),
@@ -3858,7 +3858,7 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
         data["warnings"] = warnings
 
     header = [
-        f"bode_metrics(mode={args.mode!r}, all_steps) — {args.signal}",
+        f"bode {args.mode} (all_steps) — {args.signal}",
         f"Steps: {step_count}",
         *(f"⚠ {w}" for w in warnings),
         "",
@@ -3871,11 +3871,11 @@ def _validate_bode_mode_args(args: BodeMetricsInput) -> None:
     caller mistake surfaces immediately instead of being swallowed per-step in
     ``all_steps`` mode."""
     if args.mode == "crossing" and (args.quantity is None or args.level is None):
-        raise ResultError("bode_metrics mode='crossing' requires 'quantity' and 'level'.")
+        raise ResultError("bode_crossing requires 'quantity' and 'level'.")
     if args.mode == "point" and not args.frequencies:
-        raise ResultError("bode_metrics mode='point' requires 'frequencies'.")
+        raise ResultError("bode_point requires 'frequencies'.")
     if args.mode == "slope" and (args.f_low is None or args.f_high is None):
-        raise ResultError("bode_metrics mode='slope' requires 'f_low' and 'f_high'.")
+        raise ResultError("bode_slope requires 'f_low' and 'f_high'.")
 
 
 async def _bode_dispatch(
@@ -3946,7 +3946,7 @@ async def _bode_dispatch(
             ),
             state,
         )
-    raise ResultError(f"Unknown bode_metrics mode {args.mode!r}")
+    raise ResultError(f"Unknown bode mode {args.mode!r}")
 
 
 def _structured(result: types.CallToolResult) -> dict:
@@ -4848,7 +4848,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "kind": "value",
                 "detail": (
                     "Bode phase is UNWRAPPED for a readable continuous curve — this differs "
-                    "from the CSV export recipe, which keeps the wrapped np.angle as its lossless "
+                    "from the waveform recipe's CSV, which keeps the wrapped np.angle as its lossless "
                     "primitive."
                 ),
             }
@@ -5047,8 +5047,8 @@ def _step_get_native_axis(
         axis_vals = real_axis(np.asarray(raw.get_axis(step=0))).tolist()
     except Exception as e:
         raise NetlistError(
-            f"Cannot read axis values: {e}. Use query_value if "
-            "the raw doesn't have an explicit axis."
+            f"Cannot read axis values: {e}. Use the analyze_results value "
+            "recipe if the raw doesn't have an explicit axis."
         ) from e
     if not axis_vals:
         raise NetlistError(f"Axis {args.axis!r} has no samples in this raw file.")
@@ -5159,7 +5159,8 @@ def _step_get_param_lookup(
         raise NetlistError(
             f"This raw file has no .step parameters, so {args.axis!r} is not a step "
             f"axis. If {args.axis!r} is the primary sweep variable of a bare .dc/.ac "
-            f"sweep, query it directly: query_value(at='{args.value}')."
+            f"sweep, query it directly with the analyze_results value recipe "
+            f"at={args.value!r}."
         )
 
     assert best_actual is not None  # set in lockstep with best_idx above

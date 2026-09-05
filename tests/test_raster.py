@@ -153,8 +153,8 @@ def test_png_size_tolerates_a_non_png() -> None:
 
 
 def test_default_scale_is_the_measured_one() -> None:
-    # 1.5 is the lowest scale the blinded-rater gate has scored, and recall did
-    # not degrade there. Pinned because the legibility floor is unlocated and
+    # 1.5 is the lowest scale that has been checked for legibility, and
+    # detection did not degrade there. Pinned because that floor is unlocated and
     # lies somewhere at or below this: going lower is not a tuning change, it
     # steps off measured ground, and an under-scaled render fails silently.
     assert DEFAULT_SCALE == 1.5

@@ -24,13 +24,20 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 
-from ltspice_mcp.errors import NetlistError, ResultError
+from ltspice_mcp.errors import NetlistError, ResultError, SimulationError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools.experiments import _decode_jobs_cursor
+from ltspice_mcp.tools.experiments import (
+    AttachedAnalysis,
+    RunExperimentsInput,
+    _decode_jobs_cursor,
+    _validate_attached_analysis,
+)
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
@@ -74,6 +81,99 @@ def _output_schemas() -> dict[str, dict[str, Any]]:
 
 def _input_schemas() -> dict[str, dict[str, Any]]:
     return {name: tool_def.inputSchema for name, tool_def in _registered().items()}
+
+
+class TestAttachedRecipeGrammar:
+    """``run_experiments.analyze.recipes`` IS an ``analyze_results`` request.
+
+    Advertised as a bare object, the grammar was discoverable only from the
+    other tool, and a typo in it surfaced at the analysis stage — after the
+    whole simulation had run. Advertised as a second copy of the recipe union,
+    it cost 13 KB on every session to restate what that tool already publishes
+    on the same wire. What ships is what a caller cannot derive: the metric
+    names, the key every recipe carries, and a pointer to the field trees. The
+    model behind it is the union either way.
+    """
+
+    @staticmethod
+    def _attached_recipe_items(schema: dict[str, Any]) -> dict[str, Any]:
+        """The advertised shape of one attached recipe."""
+        # 'analyze' is optional, so the block sits in a nullable branch.
+        ref = next(
+            item["$ref"] for item in schema["properties"]["analyze"]["anyOf"] if "$ref" in item
+        )
+        attached = schema["$defs"][ref.split("/")[-1]]
+        return attached["properties"]["recipes"]["items"]
+
+    def test_the_advertised_metrics_are_exactly_the_recipe_union(self):
+        """Derived from the union on both sides, so a new recipe metric that
+        never reaches this enum fails here instead of being unmentionable in
+        an attached block."""
+        items = self._attached_recipe_items(_registered()["run_experiments"].inputSchema)
+        assert set(items["properties"]["metric"]["enum"]) == set(DISCRIMINANTS)
+
+        analyze = _registered()["analyze_results"].inputSchema
+        standalone = analyze["properties"]["recipes"]["items"]
+        assert set(standalone["discriminator"]["mapping"]) == set(DISCRIMINANTS)
+
+    def test_the_stub_points_at_the_channels_that_carry_the_fields(self):
+        items = self._attached_recipe_items(_registered()["run_experiments"].inputSchema)
+        description = items.get("description") or ""
+        assert "analyze_results.recipes" in description
+        assert "api.reference('analyze_results')" in description
+        assert "spice://guide" in description
+        # Permissive on purpose, like the dormant recipe stubs: a client
+        # pre-validating a full recipe against this shape must still send it.
+        assert "additionalProperties" not in items
+        assert set(items["required"]) == {"key", "metric"}
+
+    def test_a_full_recipe_is_still_what_the_tool_takes(self):
+        """The stub narrows the advertisement, never the accepted call.
+
+        All three gates a full recipe passes through: the published schema
+        (which the server SDK checks before dispatch), the input model, and the
+        submission gate.
+        """
+        payload = {
+            "request_id": "attached-full-recipe",
+            "circuits": [{"path": "dut.cir"}],
+            "analyze": {
+                "recipes": [
+                    {
+                        "key": "pm",
+                        "metric": "stability",
+                        "signal": "V(out)",
+                        "reduce": ["min"],
+                        "reduce_field": "phase_margin_deg",
+                        "spec": {"field": "phase_margin_deg", "min": 45.0},
+                    }
+                ]
+            },
+        }
+        jsonschema.validate(
+            instance=payload,
+            schema=_registered()["run_experiments"].inputSchema,
+        )
+        args = RunExperimentsInput.model_validate(payload)
+        assert args.analyze is not None
+        _validate_attached_analysis(args.analyze)
+
+    @pytest.mark.parametrize(
+        "recipe",
+        [
+            {"key": "x", "metric": "no_such_metric"},
+            {"key": "x", "metric": "stability", "signal": "V(out)", "not_a_field": 1},
+            {"metric": "summary"},
+        ],
+        ids=["unknown-metric", "unknown-field", "no-key"],
+    )
+    def test_a_malformed_recipe_is_refused_before_anything_is_staged(self, recipe: dict):
+        """The submission gate, which runs before a deck is staged or a case
+        submitted (the no-simulation half is pinned in test_run_experiments.py).
+        """
+        block = AttachedAnalysis.model_validate({"recipes": [recipe]})
+        with pytest.raises(SimulationError, match="attached analyze block"):
+            _validate_attached_analysis(block)
 
 
 def _schema_variants(schema: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -277,108 +377,39 @@ class TestOutputSchemaCoverage:
 
 # Serialized size, in characters, of each tool's advertised definition — the
 # name, description and inputSchema a client loads before it can call anything.
-# Every session pays it whether or not the tool is used, so it is pinned rather
-# than left to drift. The pins sit exactly on the measured size: a field, an
-# option or a sentence that grows one fails here, and the number is then raised
-# deliberately, in the same change that earns it.
+# Every session pays it whether or not the tool is used, so each has an upper
+# bound: a field, an option or a sentence that grows past it fails here, and
+# the bound is then raised deliberately, in the same change that earns it. A
+# shrink needs no re-pin.
 #
-# ALL SEVEN LOWERED (the semantics-only wire): the advertised copy now drops
-# every description that carries no unit/convention/inversion/pointer marker
-# (_WIRE_PROSE_KEEP in tools/_base.py) — 68,878 -> 38,098 chars across the
-# surface. Licensed by a paired live bench: full wire vs lean wire, 11
-# requests each, both 11/11 against ground truth, lean 15% cheaper. The
-# historical comments below record how each FULL definition earned its prose;
-# that prose still exists — on the registered definition, api.reference(),
-# and spice://guide — the wire just stopped shipping the inert part of it.
+# What the wire carries: each tool's own description verbatim (a client that
+# does not show server instructions has nothing else to route on), field
+# descriptions only when they carry a unit/convention/inversion/pointer marker
+# (_WIRE_PROSE_KEEP in tools/_base.py), and no outputSchema. The full prose
+# stays on the registered definition, api.reference(), and spice://guide.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
-    # Carries view-bound cursor semantics and the columnar response row form.
-    # histogram_bins on the measurements recipe: the legacy tool could bin a
-    # .MEAS distribution and this door hard-coded zero, so a Monte Carlo's
-    # spread was readable through one door only.
-    # LOWERED 21330 -> 21024: the budget field's 786-char ladder walkthrough
-    # became one sentence (the mechanics live in spice://guide), against a
-    # +150-char description on the operating_point recipe's `device` — the one
-    # knob that turns a 45 KB unscoped bias point into a 5 KB answer, and which
-    # no caller could discover from the schema.
-    # RAISED 21024 -> 21171: 'include' now advertises the bare list of flag
-    # names, and 'include.per_run' the boolean shorthand for its default page.
-    # The list is the spelling callers reach for and the dict is what the engine
-    # wanted; advertising both is what makes the natural one findable rather
-    # than merely tolerated.
-    # RAISED 21171 -> 21437: the crossing recipe's phase axis is now named
-    # level_deg beside level_db and documents that it scans unwrapped phase.
-    # "Where does phase cross -45 degrees" previously had no findable spelling
-    # and callers fell back to pulling arrays and unwrapping by hand.
-    # RAISED 21437 -> 21487: the plot recipe's 'title' property is advertised
-    # again. The title-annotation stripper filtered the key at every level, so
-    # it also deleted the entry for the property of that name — an argument the
-    # server accepts and the handler reads was in no published schema.
-    # LOWERED 21487 -> 20772: the three recipe branches no recorded workload
-    # ever called (noise_integral, periodic, return_loss — measured over 477
-    # campaign transcripts) advertise only their discriminant and a pointer to
-    # api.reference / spice://guide. They stay fully callable; only the wire
-    # shrank. TestDormantRecipeWireStubs pins both halves.
-    # RAISED 16407 -> 16413: the include.fields example names a leaf the
-    # stability row actually carries (phase_margin_worst_deg).
-    "analyze_results": 16413,
-    # expected_sha256 now names where a caller gets one (an inspect
-    # components/net query). No read tool reported the digest before, so a
-    # first edit on an existing sheet had no in-product route to its token.
-    # RAISED 12786 -> 12987: return_views gained the touched-scope legend and
-    # its cursor. An ack-shaped edit returned all 46 pins of the sheet; the
-    # default now returns the pins of what the batch touched, which is ~2,300
-    # response chars saved on every edit for 201 chars of schema.
-    # RAISED 12987 -> 13541: the ops union is discriminated on 'op', the way the
-    # recipe union is on 'metric'. Undiscriminated, one mistyped op produced an
-    # error per branch — 30-odd of them, cut off at "… and 23 more" — so the
-    # caller learned neither which kinds exist nor what their payload lacked,
-    # and the measured recovery was reflecting over private classes. The bytes
-    # are the discriminator mapping; what they buy is every op error.
-    "edit_schematic": 6253,
-    # LOWERED 8628 -> 8008: budget prose, as above.
-    "inspect": 4002,
-    # The widget tool, kept by ruling; its schema is surface toll like any
-    # other and enters the same diet regime. RAISED 3672 -> 3686: the sibling-
-    # egress paragraph now routes to analyze_results recipes instead of the
-    # removed per-metric tools — the bytes buy referrals that resolve.
-    # RAISED 2122 -> 2174: case_id, so a run_experiments job — the only job kind
-    # the consolidated surface produces — can be plotted by case.
+    # Variations, attached analysis, and the receipt row shape. The attached
+    # recipes advertise their metric names and a pointer, not a second copy of
+    # the recipe branches: a client cannot resolve a $ref into another tool's
+    # document, so carrying the grammar twice measured 13 KB more on every
+    # session, to restate what analyze_results publishes on the same wire.
+    "run_experiments": 8103,
+    # Five actions, each advertised as its own branch: one flat property list
+    # could not say which action takes which field, so it said nothing and the
+    # server decided after the fact. Stating it costs roughly 2.3 KB more.
+    "jobs": 4001,
+    # Twenty-odd recipe branches; the largest schema on the surface.
+    "analyze_results": 16897,
+    # Five query kinds, each with its own argument shape.
+    "inspect": 4991,
+    # The typed op union plus render/compare views. Re-pinned 6760 -> 6733 when
+    # the op models' $defs keys lost their leading underscore with the move
+    # into lib/schematic_ops.py; the shapes themselves are unchanged.
+    "edit_schematic": 6733,
+    # Checks, the render policy object, and the boolean render shorthand.
+    "verify_circuit": 2535,
+    # Job/case addressing, windowing, and delivery flags.
     "plot_waveform": 2174,
-    # LOWERED 3955 -> 3378: budget prose, as above.
-    "jobs": 1253,
-    # Adds budget/attached-view inputs, a shared object/columnar receipt row,
-    # and the assign-target grammar (REF@model / INSTANCE:delvto forms) — the
-    # instance form went undiscovered by every agent while undocumented, so
-    # those bytes buy a capability that otherwise does not exist for callers.
-    # Also carries the mismatch rule's field documentation: AVT is unit-bearing
-    # (V·µm), and a coefficient written in V·m runs a hundred cases at nominal
-    # and reports success, which no result inspection can detect. Units at the
-    # call site are the only place that error is catchable.
-    # LOWERED 14249 -> 14081: budget prose, plus the mismatch descriptions cut
-    # to the two facts a result cannot recover — the units and the inversion.
-    # The prefix/BSIM prose they lost duplicated tools/advanced.py and now lives
-    # in spice://guide, which is read once rather than shipped every session.
-    # RAISED 14081 -> 14216: the attached analysis takes the same include
-    # spellings as analyze_results (a bare flag list, per_run=true). A spelling
-    # that works on one of the two places a caller writes `include` is a trap,
-    # so the two surfaces move together.
-    # RAISED 14216 -> 14462: applies_to (both variation kinds) now states its
-    # contract — circuit ids, NOT a device filter. Sealed schema probes showed
-    # agents reading the bare field as the device selector (5/5 without other
-    # prose), and the mismatch prefix description gains the one-rule-per-device
-    # pair idiom: probe agents asked for input-pair mismatch wrote prefix 'M'
-    # and silently perturbed every MOSFET — a run that completes clean and
-    # answers a different question than asked.
-    "run_experiments": 6757,
-    # RAISED 5079 -> 5137: 'render' now advertises the boolean shorthand next to
-    # the policy object. The bytes buy the spelling every first contact reaches
-    # for — render=true used to be a rejection naming a type the caller could
-    # not import, which cost three calls to recover from.
-    # RAISED 1304 -> 1668: render.delivery now states on the wire what an inline
-    # image costs (about 3k tokens, paid on every later turn). With the bare
-    # enum a bench agent chose 'both' on every post-edit verify; the three
-    # images were 86% of everything that session read back.
-    "verify_circuit": 1668,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
@@ -504,12 +535,12 @@ class TestSemanticsOnlyWire:
         from ltspice_mcp.tools._base import _WIRE_PROSE_KEEP
 
         tool_def = _registered()[name]
-        candidates = list(self._descriptions(tool_def.inputSchema))
-        if tool_def.description:
-            candidates.append(tool_def.description)
-        for text in candidates:
+        # The tool's own description ships verbatim: a client that does not
+        # surface server instructions has nothing else to route on.
+        assert tool_def.description == _source_definitions()[name].description
+        for text in self._descriptions(tool_def.inputSchema):
             assert _WIRE_PROSE_KEEP.search(text), (
-                f"{name}: advertised description without a unit/convention/"
+                f"{name}: advertised field description without a unit/convention/"
                 f"pointer marker reached the wire: {text[:120]!r}"
             )
 
@@ -545,12 +576,6 @@ class TestSemanticsOnlyWire:
         assert advertised == _strip_wire_prose(source)
 
 
-# The pins are only a ratchet while they stay on top of the real number. A pin
-# left far above what the surface actually costs has stopped catching anything,
-# so shrinking without re-pinning fails too.
-_SURFACE_BUDGET_SLACK = 128
-
-
 def _wire_sizes() -> dict[str, int]:
     """Serialized length of each advertised definition, as a client receives it."""
     return {
@@ -560,8 +585,7 @@ def _wire_sizes() -> dict[str, int]:
 
 
 class TestAdvertisedSurfaceBudget:
-    """The advertised tools' request schemas are pinned by size, in both
-    directions."""
+    """Each advertised tool definition stays under its size bound."""
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_tool_stays_within_its_pin(self, name: str):
@@ -572,16 +596,6 @@ class TestAdvertisedSurfaceBudget:
             f"{budget}). Every client pays this before calling anything — either "
             "spend the growth somewhere else in the schema or raise the pin "
             "deliberately."
-        )
-
-    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
-    def test_pin_has_not_gone_slack(self, name: str):
-        actual = _wire_sizes()[name]
-        budget = _SURFACE_BUDGET_CHARS[name]
-        assert budget - actual <= _SURFACE_BUDGET_SLACK, (
-            f"{name}: pinned at {budget} chars but actually {actual} — a pin "
-            f"{budget - actual} chars above the truth catches nothing. Re-pin it "
-            "to the size you just achieved."
         )
 
     def test_whole_surface_is_pinned(self):
