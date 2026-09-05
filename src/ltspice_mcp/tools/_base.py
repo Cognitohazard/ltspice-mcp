@@ -51,7 +51,6 @@ from ltspice_mcp.tools._schema import (
 from ltspice_mcp.lib.deck_prep import (  # noqa: F401
     asc_export_lock,
     resolve_netlist_path,
-    resolve_output_folder,
     resolve_runnable_netlist,
 )
 from ltspice_mcp.lib.projection import (  # noqa: F401
@@ -1050,8 +1049,6 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 #     read-only or atomic. The categories, one example each: result parsing
 #     (services.load_raw), batch result/log loops (compute_batch_stats),
 #     cross-process index writes (the recent-circuits touch: filelock poll
-#     plus a durable fsync write), WSL interop (the first-call cmd.exe spawn
-#     inside resolve_output_folder), and resource reads (the whole resource
 #     router behind server.read_resource). Offloaded functions must stay
 #     effect-free or atomic under cancellation: the awaiting task sees
 #     CancelledError, but a worker thread that has started runs to
