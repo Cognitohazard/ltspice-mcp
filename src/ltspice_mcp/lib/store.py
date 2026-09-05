@@ -469,10 +469,14 @@ class Store:
     def runs_root(self, simulator: type | None = None) -> Path:
         """The runner's output folder — ONE per box, deliberately.
 
-        ``RunnerManager`` caches a runner per (kind, simulator, output folder)
-        and a runner owns the concurrency semaphore that enforces
-        ``max_parallel_sims``, so a folder that varied per job would hand every
-        job its own runner and its own full quota. Per-job grouping happens a
+        The output folder is part of ``RunnerManager``'s cache key, so a folder
+        that varied per job would hand every job a different runner instance —
+        and three things live on the instance: the handles of the simulator
+        processes it has in flight, the per-job cancel state that stops a
+        running batch, and the launch permits that enforce
+        ``max_parallel_sims`` across every job in the process. Splitting the
+        runner splits all three: cancel loses the job it was meant to stop, and
+        each new instance admits a full fresh quota. Per-job grouping happens a
         level down, through :func:`run_filename_in`, which the simulator layer
         joins onto this folder without the runner ever changing.
         """

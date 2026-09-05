@@ -616,6 +616,92 @@ class TestCaseConcurrencyAndTimeouts:
         assert len(persisted_statuses) == 63
         assert persisted_statuses[-1] == "completed"
 
+    async def test_one_runner_caps_cases_across_concurrent_jobs(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The concurrency cap belongs to the runner, not to one job's share of it.
+
+        Every experiment used to get a private semaphore and nothing else
+        bounded a launch, so a server capped at one simulator process launched
+        one process PER JOB: three concurrent run_experiments calls meant three
+        simulators. The per-job semaphore still divides a job's own share; the
+        runner's is what the machine is actually protected by.
+        """
+        runner = ExperimentRunner(
+            asyncio.get_running_loop(),
+            MockSimulator,
+            work_dir,
+            max_parallel=1,
+        )
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+
+        first = await asyncio.shield(
+            runner.submit(_request(state_no_sim, work_dir, request_id="shared-cap-first"))
+        )
+        second = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="shared-cap-second",
+                    fingerprint="b" * 64,
+                )
+            )
+        )
+        await _wait_for(lambda: len(submissions) == 1)
+        # The second job's case is queued on the runner's permit, not launched.
+        await asyncio.sleep(0.05)
+        assert len(submissions) == 1
+
+        callbacks[submissions[0]](_success(work_dir, submissions[0]))
+        await _wait_for(lambda: len(submissions) == 2)
+        callbacks[submissions[1]](_success(work_dir, submissions[1]))
+
+        assert await runner.wait(first.job, 1)
+        assert await runner.wait(second.job, 1)
+        assert first.job.completeness.produced == 1
+        assert second.job.completeness.produced == 1
+
+    async def test_a_job_cannot_raise_its_share_above_the_runner_cap(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """max_parallel on a request lowers a job's share; it never raises the cap."""
+        runner = ExperimentRunner(
+            asyncio.get_running_loop(),
+            MockSimulator,
+            work_dir,
+            max_parallel=1,
+        )
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="cap-override",
+                    count=3,
+                    max_parallel=3,
+                )
+            )
+        )
+        await _wait_for(lambda: len(submissions) == 1)
+        await asyncio.sleep(0.05)
+        assert len(submissions) == 1
+        assert runner._executions[receipt.job.job_id].capacity == 1
+
+        for index in range(3):
+            await _wait_for(lambda wanted=index + 1: len(submissions) == wanted)
+            token = submissions[index]
+            callbacks[token](_success(work_dir, token))
+        assert await runner.wait(receipt.job, 1)
+        assert receipt.job.completeness.produced == 3
+
     async def test_semaphore_is_held_from_submission_until_callback(
         self,
         state_no_sim: SessionState,

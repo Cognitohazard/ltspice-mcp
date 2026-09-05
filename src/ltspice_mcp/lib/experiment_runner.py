@@ -272,8 +272,7 @@ class ExperimentRunner(RunnerBase):
                 "Unsupported request canonicalizer version "
                 f"{request.canonicalizer_version}; this server uses {CANONICALIZER_VERSION}"
             )
-        capacity = request.max_parallel if request.max_parallel is not None else self.max_parallel
-        if capacity < 1:
+        if self._case_capacity(request) < 1:
             raise SimulationError("max_parallel must be at least 1")
         job_id = request.job_id or generate_id("exp")
         validate_job_id(job_id)
@@ -479,12 +478,22 @@ class ExperimentRunner(RunnerBase):
             experiment_store.save_job(candidate)
         return _BarrierResult(candidate, replayed=False)
 
+    def _case_capacity(self, request: ExperimentRunRequest) -> int:
+        """One job's share of the runner's cap.
+
+        A request's own ``max_parallel`` divides that share; it can never raise
+        it, because the runner's permits are what the machine is protected by
+        and every other job in this process is drawing on the same pool.
+        """
+        requested = request.max_parallel if request.max_parallel is not None else self.max_parallel
+        return min(requested, self.max_parallel)
+
     def _new_execution(
         self,
         request: ExperimentRunRequest,
         job: ExperimentJob,
     ) -> _Execution:
-        capacity = request.max_parallel if request.max_parallel is not None else self.max_parallel
+        capacity = self._case_capacity(request)
         return _Execution(
             request=request,
             job=job,
@@ -725,7 +734,14 @@ class ExperimentRunner(RunnerBase):
     async def _run_case(self, execution: _Execution, case: ExperimentCase) -> None:
         acquired = False
         try:
+            # Two layers, innermost last: the job's own share of the cap, then
+            # the runner-wide permit every launch in this process competes for.
             await execution.semaphore.acquire()
+            try:
+                await self.acquire_launch_slot()
+            except BaseException:
+                execution.semaphore.release()
+                raise
             acquired = True
             execution.slots_held.add(case.case_id)
             if case.status != "queued" or execution.cancel_event.is_set():
@@ -968,6 +984,7 @@ class ExperimentRunner(RunnerBase):
         execution.slots_held.discard(case_id)
         execution.retained_slots.discard(case_id)
         execution.semaphore.release()
+        self.release_launch_slot()
 
     def _fail_if_capacity_retained(self, execution: _Execution) -> None:
         if len(execution.retained_slots) < execution.capacity:
