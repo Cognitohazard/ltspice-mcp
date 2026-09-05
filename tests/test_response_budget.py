@@ -618,7 +618,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
         )
         return receipts_mod.finalize_receipt(data), "completed"
 
-    result = await receipts_mod._render_run_receipt(
+    result = await receipts_mod.render_run_receipt(
         ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
         build,
     )

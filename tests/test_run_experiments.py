@@ -28,7 +28,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools import receipts as receipts_mod
-from ltspice_mcp.tools._schema import _build_input_schema
+from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput
 from ltspice_mcp.tools.experiments import (
     AnalysisPerRun,
@@ -75,12 +75,12 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
 
 
 def test_wait_caps_keep_the_submission_and_control_plane_contracts():
-    run_schema = _build_input_schema(RunExperimentsInput)
+    run_schema = build_input_schema(RunExperimentsInput)
     execution_schema = resolve_local_ref(
         run_schema,
         run_schema["properties"]["execution"],
     )
-    jobs_schema = _build_input_schema(JobsInput)
+    jobs_schema = build_input_schema(JobsInput)
     # The dwell cap lives on the action that takes it, so it is read through
     # that action's branch rather than off a flat property list.
     wait_branch = resolve_local_ref(
@@ -102,7 +102,7 @@ def test_variation_schema_keeps_discriminated_union_through_defs():
     """Schemas keep $defs instead of inlining: the assign/random discriminated
     union must stay fully resolvable through local refs, so a client sees the
     same composition contract inlining used to spell out."""
-    schema = _build_input_schema(RunExperimentsInput)
+    schema = build_input_schema(RunExperimentsInput)
     variations = resolve_local_ref(schema, schema["properties"]["variations"]["items"])
 
     assert variations["discriminator"]["propertyName"] == "kind"
@@ -407,7 +407,7 @@ class TestReceiptThenDwell:
         async def exploding_renderer(*_args, **_kwargs):
             raise RuntimeError("budget renderer exploded")
 
-        monkeypatch.setattr(experiments_mod, "_render_run_receipt", exploding_renderer)
+        monkeypatch.setattr(experiments_mod, "render_run_receipt", exploding_renderer)
         deck = _deck(work_dir / "budget-render-fail.cir")
 
         result = await handle_run_experiments(

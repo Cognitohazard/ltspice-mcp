@@ -35,7 +35,7 @@ from ltspice_mcp.lib.signal_analysis import (
     window_and_clean,
 )
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools._schema import _schema_for_type, schema_from_typeddict
+from ltspice_mcp.tools._schema import schema_for_type, schema_from_typeddict
 
 
 class TestPrimitives:
@@ -147,7 +147,7 @@ class TestContainers:
 
     def test_homogeneous_variadic_tuple_is_array(self):
         # tuple[X, ...] maps faithfully to an array of X.
-        assert _schema_for_type(tuple[int, ...]) == {
+        assert schema_for_type(tuple[int, ...]) == {
             "type": "array",
             "items": {"type": "integer"},
         }
@@ -157,7 +157,7 @@ class TestContainers:
         # the first element would silently drop the rest, so it must refuse loudly
         # rather than emit a schema that lies about the shape.
         with pytest.raises(TypeError, match="heterogeneous tuple"):
-            _schema_for_type(tuple[int, str])
+            schema_for_type(tuple[int, str])
 
 
 class _NestedInner(TypedDict):

@@ -26,7 +26,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._schema import _build_input_schema
+from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
     RunExperimentsInput,
     handle_run_experiments,
@@ -338,7 +338,7 @@ class TestAdvertisedActionBranches:
         ],
     )
     def test_each_action_advertises_its_own_fields(self, action: str, expected: set[str]):
-        schema = _build_input_schema(JobsInput)
+        schema = build_input_schema(JobsInput)
         branch = schema["$defs"][schema["discriminator"]["mapping"][action].split("/")[-1]]
         assert set(branch["properties"]) == expected
         assert branch["additionalProperties"] is False
@@ -346,7 +346,7 @@ class TestAdvertisedActionBranches:
 
     def test_shared_arguments_stay_at_the_top_level(self):
         """A client that reads `properties` and stops there still sees them."""
-        schema = _build_input_schema(JobsInput)
+        schema = build_input_schema(JobsInput)
         assert set(schema["properties"]) == {"action", "budget"}
         assert schema["properties"]["action"]["enum"] == list(JOBS_ACTIONS)
         assert schema["required"] == ["action"]
@@ -365,13 +365,13 @@ class TestAdvertisedActionBranches:
         validates against it first, so a call it rejects never reaches the
         handler at all."""
         del expected
-        jsonschema.Draft202012Validator(_build_input_schema(JobsInput)).validate(payload)
+        jsonschema.Draft202012Validator(build_input_schema(JobsInput)).validate(payload)
 
     def test_a_field_the_action_does_not_take_is_named_by_the_schema(self):
         with pytest.raises(jsonschema.ValidationError) as excinfo:
             jsonschema.validate(
                 instance={"action": "list", "job_id": "exp-1"},
-                schema=_build_input_schema(JobsInput),
+                schema=build_input_schema(JobsInput),
             )
         assert "job_id" in excinfo.value.message
 
@@ -382,7 +382,7 @@ class TestAdvertisedActionBranches:
         with pytest.raises(jsonschema.ValidationError) as excinfo:
             jsonschema.validate(
                 instance={"action": "frobnicate"},
-                schema=_build_input_schema(JobsInput),
+                schema=build_input_schema(JobsInput),
             )
         for action in JOBS_ACTIONS:
             assert action in excinfo.value.message

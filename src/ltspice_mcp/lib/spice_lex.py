@@ -903,7 +903,7 @@ def extract_meas_name(body: str) -> str | None:
     return parts[1]
 
 
-def _strip_matching_quotes(text: str) -> str:
+def strip_matching_quotes(text: str) -> str:
     """Strip one matching quote pair from ``text`` if present."""
     if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
         return text[1:-1]
@@ -922,7 +922,7 @@ def _extract_token_text(body: str, index: int) -> str | None:
         return None
     if len(tokens) <= index:
         return None
-    return _strip_matching_quotes(tokens[index].text)
+    return strip_matching_quotes(tokens[index].text)
 
 
 _NAME_EXTRACTORS = {
