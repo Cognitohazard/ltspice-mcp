@@ -41,7 +41,6 @@ from ltspice_mcp.tools._schema import (
     ToolInput,
     build_input_schema,
     schema_from_typeddict,
-    strip_wire_prose,
 )
 
 # isort: split
@@ -63,7 +62,6 @@ from ltspice_mcp.lib.projection import (  # noqa: F401
     split_field_path,
 )
 from ltspice_mcp.tools._schema import (  # noqa: F401
-    WIRE_PROSE_KEEP,
     prune_unreferenced_defs,
     schema_for_type,
 )
@@ -937,25 +935,19 @@ class ToolRegistry:
         tool_defs: list[types.Tool] = []
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
-            # The ADVERTISED definition keeps the tool's own description
-            # verbatim — it is the only prose a client that does not show
-            # server instructions ever sees for the tool — but serves
-            # semantics-only FIELD prose (a property description with no
-            # load-bearing marker, see WIRE_PROSE_KEEP, is dropped) and no
-            # outputSchema (it was the single largest schema block, 84% of
-            # `jobs`, -35% across the surface; return shapes are learned from
-            # responses instead). The registered definition — the dispatch
-            # side, what the doc gates scan and the conformance hook validates
-            # emissions against — keeps the full schema, and so do the models
-            # behind api.reference() and spice://guide, which is where a caller
-            # reads the depth.
-            definition = registered.definition.model_copy(
-                update={
-                    "description": registered.definition.description,
-                    "inputSchema": strip_wire_prose(registered.definition.inputSchema),
-                    "outputSchema": None,
-                }
-            )
+            # The ADVERTISED definition is the registered one with its
+            # outputSchema dropped, and nothing else changed. Every
+            # description a model declares — the tool's own and each field's
+            # — reaches the client verbatim, so reading the source tells you
+            # exactly what a client is shown; the surface is kept small by
+            # writing each description short, which the size pins in
+            # tests/test_consolidated_contracts.py hold to. The outputSchema
+            # is the one exception: it was the single largest schema block
+            # (84% of `jobs`, -35% across the surface) and a response teaches
+            # its own shape, so it stays on the registered definition — the
+            # dispatch side, which the doc gates scan and the conformance hook
+            # validates emissions against.
+            definition = registered.definition.model_copy(update={"outputSchema": None})
             tool_defs.append(definition)
             tool_dispatch[registered.definition.name] = registered
         if not tool_defs:

@@ -148,6 +148,22 @@ conflicting. On `run_experiments` these are `provenance`, `run_fields`,
 `budget`, `execution.wait_s` and `analyze.include.fields`
 (`RunExperimentsInput.PRESENTATION_FIELDS`).
 
+**What the tool listing carries.** The definitions a client loads are the
+registered ones with `outputSchema` dropped — that block was the largest on
+the surface and a response teaches its own shape. Everything else ships
+verbatim, including every field description: there is no filter between the
+models and the wire, so the source is a truthful record of what a client is
+shown. The listing is paid for once per session whether or not a tool is
+called, so each description is written short — one or two sentences carrying
+the unit, the sign or direction convention, the default, and how the field
+interacts with its siblings. Anything longer than that belongs here or in
+`spice://guide`, with a pointer on the field. `api.reference('<tool>')` and
+`spice://guide` render the same model descriptions, so a sentence written for
+the wire is the one those two channels also serve.
+`tests/test_consolidated_contracts.py` holds both ends: the advertised
+descriptions must equal the source ones, and each tool's serialized definition
+has an upper size bound.
+
 ---
 
 ## 3. Tool contracts
