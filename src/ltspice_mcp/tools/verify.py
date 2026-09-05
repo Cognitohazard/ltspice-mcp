@@ -899,7 +899,7 @@ def _reference_to_path(reference: str | Path, state: SessionState) -> Path:
 
 def _scratch_dir(state: SessionState, name: str) -> Path:
     """A server-owned scratch subdirectory (created on demand)."""
-    path = state.working_dir / ".ltspice-mcp" / "verify" / name
+    path = state.store.verify_artifact(name)
     path.mkdir(parents=True, exist_ok=True)
     return path
 

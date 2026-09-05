@@ -264,8 +264,12 @@ class TestPlatformRouting:
             NGspiceSimulator,
         )
 
+        # The staged decks sit inside the job's own run directory: they are
+        # part of what the run produced, and on the Windows-native route they
+        # have to share a filesystem with the output anyway.
+        assert paths.output_folder == tmp_path / ".ltspice-mcp" / "runs"
         assert paths.staging_root == (
-            tmp_path / ".ltspice-mcp" / "jobs" / "exp1" / "staged" / "dut"
+            tmp_path / ".ltspice-mcp" / "runs" / "exp1" / "staged" / "dut"
         )
 
 

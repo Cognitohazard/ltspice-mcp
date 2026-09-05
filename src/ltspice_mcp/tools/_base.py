@@ -49,6 +49,7 @@ from ltspice_mcp.lib.runner_base import (
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import no_simulator_message, simulator_library_roots
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -1503,7 +1504,7 @@ def _stage_deck_snapshot(net_path: Path) -> Path:
     name = f"{net_path.stem}.run-{digest}{net_path.suffix}"
     directory = net_path.parent
     if not _netlist_has_local_dependency(net_path):
-        sidecar = net_path.parent / ".ltspice-mcp" / "exports"
+        sidecar = Store.circuit_exports(net_path)
         try:
             sidecar.mkdir(parents=True, exist_ok=True)
             directory = sidecar
@@ -1694,8 +1695,8 @@ async def resolve_output_folder(
     if has_local_dep:
         return source_dir
 
-    # Default: one stable sidecar; per-job {job_id} naming isolates each run.
-    runs = state.working_dir / ".ltspice-mcp" / "runs"
+    # Default: the store's one stable runs root; each job groups under it.
+    runs = state.store.runs_root()
     runs.mkdir(parents=True, exist_ok=True)
     if runs not in state.config.allowed_paths:
         state.config.allowed_paths.append(runs)

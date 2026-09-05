@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -406,6 +407,9 @@ class TestArtifactCleanup:
         try:
             case = _cases(work_dir, 1)[0][0]
             case.run_token = "exp_case_0"
+            # The job names its own artifact directory; cleanup reconstructs
+            # the paths inside it, not beside the runner's output folder.
+            job = SimpleNamespace(job_id="exp_cleanup", output_folder=work_dir)
             case.log_file = work_dir / f"{case.run_token}.fail"
             run_netlist = work_dir / f"{case.run_token}.cir"
             raw = work_dir / f"{case.run_token}.raw"
@@ -415,7 +419,7 @@ class TestArtifactCleanup:
             case.log_file.write_text("killed")
             unrelated.write_text("keep")
 
-            runner._remove_case_artifacts(case)
+            runner._remove_case_artifacts(job, case)  # type: ignore[arg-type]
 
             assert not run_netlist.exists()
             assert not raw.exists()
