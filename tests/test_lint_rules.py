@@ -54,6 +54,12 @@ _CLEAN = "V1 in 0 1\nR1 in out 1k\n.model DFAST D(Is=1e-12)\nD1 out 0 DFAST\n.op
             "NGspiceSimulator",
         ),
         (
+            "step-ngspice",
+            "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
+            "ngspice",
+            "NGspiceSimulator",
+        ),
+        (
             "model-missing",
             "V1 in 0 1\nD1 in 0 MISSING\n.op\n.end\n",
             None,
@@ -151,6 +157,31 @@ def test_temp_as_param_blocks_and_names_the_directives_that_work(tmp_path: Path)
     reason = finding["evidence"]["reason"]
     for directive in (".temp", ".step temp", ".options temp"):
         assert directive in reason
+
+
+def test_step_ngspice_says_what_to_use_instead(tmp_path: Path):
+    """ngspice ignores a .step line in batch mode, so the deck runs once at the
+    base value and reports no error — the sweep the caller asked for silently
+    never happened. The single-run path has always refused that deck; the
+    experiment path has to say the same thing, and name the mechanism that
+    does work here."""
+    findings = lint_deck(
+        "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
+        tmp_path / "deck.cir",
+        "ngspice",
+        "NGspiceSimulator",
+    )
+    finding = next(item for item in findings if item["rule_id"] == "step-ngspice")
+
+    assert finding["severity"] == "warning"
+    assert "variations" in finding["evidence"]["reason"]
+
+
+def test_step_ngspice_is_quiet_on_ltspice(tmp_path: Path):
+    """LTspice runs .step natively; the warning is an ngspice fact only."""
+    deck = "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n"
+
+    assert "step-ngspice" not in _ids(deck, tmp_path)
 
 
 def test_model_missing_reads_staged_include_closure(tmp_path: Path):
