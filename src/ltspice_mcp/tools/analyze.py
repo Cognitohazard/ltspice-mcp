@@ -1091,13 +1091,18 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
     return work
 
 
-def _request_hash(args: AnalyzeResultsInput, *, include_fields: bool = False) -> str:
+def _request_hash(args: AnalyzeResultsInput) -> str:
+    """The identity a per_run cursor is checked against.
+
+    The row view (``include.fields``) is left out: the cursor carries its own
+    view, so changing the projection is a different page of the same request,
+    not a different request.
+    """
     assert args.sources is not None and args.recipes is not None
     include = args.include.model_dump(mode="json")
     if isinstance(include.get("per_run"), dict):
         include["per_run"]["cursor"] = None
-    if not include_fields:
-        include.pop("fields", None)
+    include.pop("fields", None)
     return result_store.canonical_hash(
         {
             "sources": [source.model_dump(mode="json") for source in args.sources],
@@ -2409,7 +2414,6 @@ class AnalysisContinuationPosition:
     row_offset: int = 0
     missing_offset: int = 0
     view_fields: tuple[str, ...] | None = None
-    has_explicit_view: bool = False
 
 
 @dataclass(frozen=True)
@@ -2458,7 +2462,6 @@ class AnalysisEvaluation:
             row_offset=self.natural_intra,
             missing_offset=self.missing_offset,
             view_fields=(tuple(self.include.fields) if self.include.fields is not None else None),
-            has_explicit_view=self.include.fields is not None,
         )
 
 
@@ -2657,6 +2660,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
             a.natural_position,
             intra_item=a.natural_intra,
             missing_offset=a.missing_offset,
+            view_fields=wide_include.fields,
         )
 
     requested_coverage_cursor = coverage_cursor_base(top)
@@ -2667,6 +2671,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
         a.natural_position,
         intra_item=a.natural_intra,
         missing_offset=missing_next,
+        view_fields=wide_include.fields,
     )
     results: dict[str, Any] = {}
     for key, requested_entry in requested_results.items():
@@ -2692,6 +2697,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
                 unit.position,
                 intra_item=unit.per_run_offset,
                 missing_offset=missing_next,
+                view_fields=wide_include.fields,
             )
         results[key] = block
     return analysis_snapshot.envelope(
@@ -3261,8 +3267,8 @@ async def _resolve_drive_start(
         if args.continuation is None and args.include.per_run is not None
         else None
     )
-    cursor_has_view = False
     cursor_fields: list[str] | None = None
+    inherited_view = False
     if continuation is not None:
         # The set is immutable, so a caller driving successive continuations can
         # hand back the one it already holds instead of re-reading it per drive.
@@ -3278,7 +3284,7 @@ async def _resolve_drive_start(
         position = continuation.work_index
         intra_item = continuation.row_offset
         missing_offset = continuation.missing_offset
-        cursor_has_view = continuation.has_explicit_view
+        inherited_view = True
         cursor_fields = (
             list(continuation.view_fields) if continuation.view_fields is not None else None
         )
@@ -3296,7 +3302,8 @@ async def _resolve_drive_start(
         position, intra_item, missing_offset = result_store.decode_cursor(
             args.continuation.cursor, item
         )
-        cursor_has_view, cursor_fields = result_store.cursor_view(args.continuation.cursor)
+        inherited_view = True
+        cursor_fields = result_store.cursor_view(args.continuation.cursor)
     else:
         assert page_cursor is not None
         item = await asyncio.to_thread(
@@ -3304,24 +3311,15 @@ async def _resolve_drive_start(
             result_store.cursor_result_set_id(page_cursor),
             state.working_dir,
         )
-        cursor_has_view, cursor_fields = result_store.cursor_view(page_cursor)
-        stored_include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
-        inherited_fields = cursor_fields if cursor_has_view else stored_include.fields
-        if "fields" in args.include.model_fields_set and args.include.fields != inherited_fields:
+        inherited_view = True
+        cursor_fields = result_store.cursor_view(page_cursor)
+        if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
             raise ResultError(
                 "The per_run cursor carries a different include.fields view; replay "
                 "page 1 with the new fields projection instead of changing fields on "
                 "a cursor call."
             )
-        request_matches = item.inputs.get("request_hash") == _request_hash(args)
-        if not request_matches and not cursor_has_view:
-            legacy_include = args.include.model_copy(update={"fields": stored_include.fields})
-            legacy_args = args.model_copy(update={"include": legacy_include})
-            request_matches = item.inputs.get("request_hash") == _request_hash(
-                legacy_args,
-                include_fields=True,
-            )
-        if not request_matches:
+        if item.inputs.get("request_hash") != _request_hash(args):
             raise ResultError(
                 "The per_run cursor does not match these sources, recipes, grouping, "
                 "and include options."
@@ -3329,10 +3327,8 @@ async def _resolve_drive_start(
         position, intra_item, missing_offset = result_store.decode_cursor(page_cursor, item)
 
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
-    if continuation is not None or args.continuation is not None or page_cursor is not None:
-        include = include.model_copy(
-            update={"fields": cursor_fields if cursor_has_view else include.fields}
-        )
+    if inherited_view:
+        include = include.model_copy(update={"fields": cursor_fields})
     return _DriveStart(item, position, intra_item, missing_offset, include)
 
 

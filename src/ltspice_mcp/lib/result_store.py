@@ -25,8 +25,6 @@ from ltspice_mcp.lib.store import KIND_RESULT_SET, Store, accept, atomic_write_j
 
 logger = logging.getLogger(__name__)
 
-NO_VIEW = object()
-
 
 def result_root(working_dir: Path) -> Path:
     return Store(working_dir).results_dir
@@ -256,15 +254,15 @@ def encode_cursor(
     *,
     intra_item: int = 0,
     missing_offset: int = 0,
-    view_fields: list[str] | None | object = NO_VIEW,
+    view_fields: list[str] | None,
 ) -> str:
     """Encode a resume point: work position, per-run offset, coverage offset.
 
     ``missing_offset`` pages the coverage view (``missing_cases``), which lives
     in the immutable inputs rather than the work list — a cursor that carries it
     with ``position == len(work)`` pages that view without redoing any work.
-    New analyze cursors pass the selected row view, including ``None`` for the
-    lean view. Compatibility cursors omit it by leaving ``view_fields`` unset.
+    Every cursor names the row view it was paged under, ``None`` being the lean
+    view; a cursor carrying no view at all does not decode.
     """
     body: dict[str, Any] = {
         "result_set_id": item.result_set_id,
@@ -272,9 +270,8 @@ def encode_cursor(
         "intra_item": intra_item,
         "missing_offset": missing_offset,
         "work_hash": item.work_hash,
+        "view": {"fields": view_fields},
     }
-    if view_fields is not NO_VIEW:
-        body["view"] = {"fields": view_fields}
     return _encode_body_cursor(body)
 
 
@@ -293,11 +290,11 @@ def cursor_result_set_id(cursor: str) -> str:
     return result_set_id
 
 
-def cursor_view(cursor: str) -> tuple[bool, list[str] | None]:
-    """Return whether a cursor carries a row view and its fields projection."""
+def cursor_view(cursor: str) -> list[str] | None:
+    """Return the fields projection the cursor was paged under (``None`` = lean)."""
     body = _decode_cursor_body(cursor)
     if "view" not in body:
-        return False, None
+        raise ResultError("Invalid analyze_results cursor: it names no row view")
     view = body["view"]
     if not isinstance(view, dict) or set(view) != {"fields"}:
         raise ResultError("Invalid analyze_results cursor: malformed render view")
@@ -306,7 +303,7 @@ def cursor_view(cursor: str) -> tuple[bool, list[str] | None]:
         not isinstance(fields, list) or not all(isinstance(field, str) for field in fields)
     ):
         raise ResultError("Invalid analyze_results cursor: malformed fields render view")
-    return True, fields
+    return fields
 
 
 def reencode_cursor(
