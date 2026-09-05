@@ -1,7 +1,7 @@
 # The Python API contract — `ltspice_mcp.api`
 
-The in-process door onto the same engine the MCP server exposes. This is its
-contract: what it promises, what it deliberately does not do, and why.
+The in-process interface onto the same engine the MCP server exposes. This is
+its contract: what it promises, what it does not do, and why.
 
 The code is the authority. Where this document and the source disagree, the
 source wins and this document is the thing to fix.
@@ -21,8 +21,8 @@ input models), the same completeness and observation semantics. What differs is
 presentation — synchronous calls, complete structured returns, exceptions for
 call-level errors, no response-budget negotiation.
 
-One evaluator per capability, two doors (MCP and Python). Anything that forks
-semantics between doors is a defect, not a feature.
+One evaluator per capability, reached through two interfaces (MCP and Python).
+Anything that forks semantics between them is a defect, not a feature.
 
 ## 2. Non-goals
 
@@ -145,7 +145,7 @@ That rule is stated where it bites, not only here:
   printed.
 - A case abandoned because its owner died recovers with an error naming the
   owning process and the rule, rather than "Server restarted" — which is a
-  guess about a mechanism the store cannot see, and wrong on this door.
+  guess about a mechanism the store cannot see, and wrong on this interface.
 
 ## 5. The six operations
 
@@ -175,11 +175,11 @@ its own completion strategy:
 | Operation | Strategy |
 |-|-|
 | `analyze_results` | A **bounded resumable neutral evaluator**. The seam returns neutral work — rows, reductions, facts, failures, missing cases — plus an internal continuation position, honoring `analysis_budget_s` per drive so the whole-call bound stays (untrusted artifacts get a hard bound either way). MCP renders that position as its opaque cursor; Python drives the evaluator repeatedly, accumulating neutral results until the position is exhausted. "No cursor merging" means no merging of *rendered* MCP pages; accumulating neutral, unprojected, unrendered work is well-defined by construction. |
-| `verify_circuit` | Evaluator seam: uncapped findings per rule. The MCP door keeps its per-rule cap plus a truncation observation on top. |
+| `verify_circuit` | Evaluator seam: uncapped findings per rule. The MCP interface keeps its per-rule cap plus a truncation observation on top. |
 | `edit_schematic` | The mutation executes once and is never replayed. The seam is the **neutral in-memory view the handler already computes while holding the edit guard**: MCP paginates that view, Python returns it whole. Views are produced inside the edit transaction and bound to the committed `sha256`, never from a post-guard file re-read — a peer session's next revision could interleave. `dry_run` gets full views the same way, in memory, with nothing on disk to read. |
-| `run_experiments`, `jobs(status\|wait)`, `jobs(runs)` | A **loop-atomic neutral receipt snapshot**: one non-suspending evaluation on the private loop copies every mutable job-derived receipt field together — canonical rows keyed `(case_id, run_index)`, status, completeness, `outcome`, `failures`, `observations`, `artifacts`, and the attached analysis's status, result, error and observations. Never multi-page collection over live mutable state: time-A completeness beside time-C rows violates the completeness rule, and a stale `outcome` or `hint` beside a fresh failed row is the same fork one level up. `outcome` and `hint` are derived *from* the snapshot after the copy; static submission fields and a wait's historical `timed_out` fact come from the same evaluation that produced the snapshot. For the three `jobs` actions this is literal: one `evaluate_jobs` call does the control-plane work, and the wire page and the Python dict are two renderings of that one evaluation, chosen by a presentation argument. Rendering by invoking the wire handler and then reading the job again — which is how this door once assembled its complete receipt — reports two reads as one answer, with a window in between for the job to move. MCP pages the snapshot created for its current invocation, and a continuation request takes a fresh atomic snapshot and applies its existing offset, so live-status semantics are unchanged. Python takes one whole snapshot because it returns one whole response, then applies the original receipt's projection policy (`run_fields`, or the lean default) to it whole — returning the existing page shape with `returned == total`, `truncated == false`, `next_cursor == null`. No `assembled` field, no shape fork, no provenance change. If snapshot or assembly fails after submission, `ApiCallError` carries the original receipt and control token. A direct `api.jobs(action="runs")` goes through the same seam: treating it as an "other action" would recreate the mixed-time inventory the seam eliminates. |
+| `run_experiments`, `jobs(status\|wait)`, `jobs(runs)` | A **loop-atomic neutral receipt snapshot**: one non-suspending evaluation on the private loop copies every mutable job-derived receipt field together — canonical rows keyed `(case_id, run_index)`, status, completeness, `outcome`, `failures`, `observations`, `artifacts`, and the attached analysis's status, result, error and observations. Never multi-page collection over live mutable state: time-A completeness beside time-C rows violates the completeness rule, and a stale `outcome` or `hint` beside a fresh failed row is the same fork one level up. `outcome` and `hint` are derived *from* the snapshot after the copy; static submission fields and a wait's historical `timed_out` fact come from the same evaluation that produced the snapshot. For the three `jobs` actions this is literal: one `evaluate_jobs` call does the control-plane work, and the wire page and the Python dict are two renderings of that one evaluation, chosen by a presentation argument. Rendering by invoking the wire handler and then reading the job again — which is how this interface once assembled its complete receipt — reports two reads as one answer, with a window in between for the job to move. MCP pages the snapshot created for its current invocation, and a continuation request takes a fresh atomic snapshot and applies its existing offset, so live-status semantics are unchanged. Python takes one whole snapshot because it returns one whole response, then applies the original receipt's projection policy (`run_fields`, or the lean default) to it whole — returning the existing page shape with `returned == total`, `truncated == false`, `next_cursor == null`. No `assembled` field, no shape fork, no provenance change. If snapshot or assembly fails after submission, `ApiCallError` carries the original receipt and control token. A direct `api.jobs(action="runs")` goes through the same seam: treating it as an "other action" would recreate the mixed-time inventory the seam eliminates. |
 | `jobs(list)` | The same single evaluation: the circuit-group inventory is read once and rendered whole, where the wire renders one offset page of it. |
-| `jobs(cancel)` | One evaluation, no collection — the kill receipts are the acknowledgement itself and are never paged on either door. |
+| `jobs(cancel)` | One evaluation, no collection — the kill receipts are the acknowledgement itself and are never paged on either interface. |
 
 **Two-phase `run_experiments`.** The API always submits with
 `execution.wait_s=0`, because the wire dwell is a presentation constant and is
@@ -221,7 +221,7 @@ The resolve chain carries an optional base directory in a context variable, and
 the `Api` sets it around every marshalled call, anchoring both the user path and
 any relative entry in `allowed_paths` (the generated TOML ships
 `allowed_paths = ["."]`, which is what made the CWD behavior bite). **MCP server
-resolution is unchanged**, and a test pins that; the base is this door's opt-in
+resolution is unchanged**, and a test pins that; the base is this interface's opt-in
 only.
 
 **For a subclass or a test double:** every public method marshals through
@@ -238,7 +238,7 @@ inherits the anchoring; `_call`'s contract is unchanged.
   recovery handle.
 - Per-item failures, and `outcome="partial"|"failed"` envelopes with
   `isError=False`, are **returned data**, not exceptions. Identical to the MCP
-  door's semantics.
+  interface's semantics.
 - The bridge never synthesizes a typed exception from an error code.
 - `structuredContent` is asserted present before unwrapping; a missing one is
   an `ApiInternalError`, not a silent `None`.
@@ -280,7 +280,7 @@ api.measurements(job_id=..., run_index=0, case_id=None)
   boundary.
 - **Arrays are detached copies.** The parsed object is shared with the handler
   cache, which assumes immutability; caller mutation must not fork later results
-  between doors.
+  between the two interfaces.
 - Experiment cases resolve through `resolve_experiment_run` and legacy jobs
   through `resolve_raw_file`. `load_raw` routes on job type and never feeds an
   experiment job to the legacy resolver.
@@ -345,7 +345,7 @@ members, the inspect query kinds, the variation rules, and public aliases for
 the schematic op models (`AddComponentOp`, `WirePinsOp`, ...) that the applier
 keeps private. A validation error names one of these types; without the module
 there was no way to import the thing the message pointed at, and the observed
-recovery was reflecting over a private module. It is deliberately a separate
+recovery was reflecting over a private module. It is a separate
 module so that `__all__` stays the pinned stability boundary and does not move.
 
 ## 10. What the tests must cover
@@ -376,7 +376,7 @@ module so that `__all__` stays the pinned stability boundary and does not move.
   lease lock* (an unlocked happy-path fork does not pin the failure); server
   lifespan and `Api` mutually exclusive in one process.
 - **Shutdown against live jobs.** Closing after a durable receipt while a
-  deliberately long-running job is active must reach `cancel_running`, proving
+  long-running job is active must reach `cancel_running`, proving
   step 3 does not wait for natural completion.
 - **Snapshot coherence.** The assembled receipt is internally consistent across
   all mutable fields: a job transitioning queued to produced during collection
@@ -404,7 +404,7 @@ module so that `__all__` stays the pinned stability boundary and does not move.
 - **Bootstrap parity.** Symbol paths, working-directory config selection,
   allowed paths, cleanup and job preload identical between a server boot and an
   `Api` boot; no root-logger mutation in library mode.
-- The archetype battery once through the API door (build, run, analyze, verify)
+- The archetype battery once through the Python API (build, run, analyze, verify)
   as an integration smoke test.
 
 ## 11. Roadmap
@@ -421,7 +421,7 @@ own, widening the existing multi-session residual.
 
 A full broker daemon — a socket-addressed detached server mode — remains the
 possible end state behind that step. It inverts the shutdown-cancels-jobs
-invariant and buys every classic daemon tax (version skew, stale sockets,
+invariant and adds the usual daemon costs (version skew, stale sockets,
 config drift), so it gets built only if the middle rung proves insufficient.
 
 `api.log_diagnostics` is deferred unless callers are seen re-parsing logs by

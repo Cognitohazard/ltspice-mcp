@@ -122,7 +122,7 @@ two halves, and only the second is automated — keep them distinct.
 ## Accepted one-way mutations
 
 Closure under inversion is the rule for the schematic op surface. A few
-tool-level mutations are deliberately *not* paired, and are recorded here so they
+tool-level mutations are *not* paired, and are recorded here so they
 are not mistaken for the absence-class bug above:
 
 - File creation (`edit_schematic` with `base: "blank"`; formerly the
@@ -159,8 +159,8 @@ above assumes them:
     (`lib/desktop.py`), and the optional cairosvg raster backend — so one
     machine can exercise every platform branch.
   - **Timeouts, lowered.** Parse deadlines and the shutdown cancel timeout are
-    dropped to fractions of a second, so a bound can be shown to bite inside
-    the suite instead of being asserted about.
+    dropped to fractions of a second, so a bound can be shown to fire inside
+    the suite instead of only being asserted about.
 
   What is *not* substituted: handlers, the response path, the SPICE lexer and
   validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the

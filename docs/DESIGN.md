@@ -48,7 +48,7 @@ scripts directly. MCP applies in specific contexts:
   seeing shape); rendered plots are the `plot` recipe and the
   `plot_waveform` tool. Both complement the structured numbers for the
   shape-recognition cases a scalar can't cover (see *Waveforms: scalars
-  first, egress and plots for shape*); they do not replace them.
+  first, export and plots for shape*); they do not replace them.
 - **No user setup.** Install the server once. No spicelib in the user's
   project venv, no Python knowledge required.
 
@@ -154,7 +154,7 @@ return `structuredContent` alongside text. When MCP clients run code
 execution against tool calls, the schemas serve as the types the
 sandboxed code consumes.
 
-### Waveforms: scalars first, egress and plots for shape
+### Waveforms: scalars first, export and plots for shape
 
 By default the analysis tools return scalars, not samples: time-weighted
 RMS, rise time, phase margin. The consumer is an LLM, and a correct scalar
@@ -172,7 +172,7 @@ Those cases fall into two groups with different needs:
   exists.
 - **Exploratory "let me look"** (why won't this converter start?) → no
   detector helps, because the metric is not known yet; you look, form a
-  hypothesis, then measure. This is the case waveform egress exists for.
+  hypothesis, then measure. This is the case waveform export exists for.
 
 What matters is who consumes the output and in what format, not scalar
 versus waveform:
@@ -190,9 +190,9 @@ versus waveform:
   Recognition reliability is not a concern here.
 
 So the surface is layered: scalar detectors for "what is X", specialized
-shape-detectors for known signatures, decimated egress for "let me look",
+shape-detectors for known signatures, decimated export for "let me look",
 and plots as a shape-recognition backup for both LLM and human. Decimated
-egress is the `waveform` recipe; rendered plots are the `plot` recipe and
+export is the `waveform` recipe; rendered plots are the `plot` recipe and
 the `plot_waveform` tool.
 
 **Scalar-guided zoom.** The waveforms this server handles (switching
@@ -207,7 +207,7 @@ picks a sub-window and re-requests it at finer resolution (the same
 `waveform` recipe with a narrower `window`), and repeats. Full-resolution
 data stays on disk; detail enters context only when a measured value
 justifies it. This is the same look-then-zoom loop an engineer uses on a
-scope, and it reuses windowed egress plus the detectors (an
+scope, and it reuses windowed export plus the detectors (an
 envelope+carrier or edge-metric descriptor is the payload for a flagged
 window at zoom time).
 
@@ -231,7 +231,7 @@ queried window, the same zoom loop re-renders it at finer scale. Off by
 default (token cost, non-vision clients); on for clients that want a plot
 with every result; a per-call override is available either way.
 
-### Egress & plot surface (as of 2026-06-13)
+### Export & plot surface (as of 2026-06-13)
 
 The layered surface above maps to three delivery channels, one per
 consumer. The channel for each is fixed even though one library choice is
@@ -557,7 +557,7 @@ geometry-aware, and LTspice-specific comes first.
 - **Cross-run analysis**: `compare_corners`, `find_worst_case`,
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
-- **Waveform egress & plotting**: shipped (see *Egress & plot surface*
+- **Waveform export & plotting**: shipped (see *Export & plot surface*
   above) — the `waveform` recipe's CSV form and both `plot_waveform`
   delivery tiers. What remains open is the opt-in static-PNG attach for the
   vision tier.
