@@ -37,6 +37,7 @@ from ltspice_mcp.tools.analysis import (
     SignalStatsInput,
     SimulationSummaryInput,
     StabilityMetricsInput,
+    StepGetInput,
     ThdInput,
     TimingBetweenInput,
     _filter_operating_point,
@@ -62,12 +63,9 @@ from ltspice_mcp.tools.analysis import (
     handle_signal_stats,
     handle_simulation_summary,
     handle_stability_metrics,
+    handle_step_get,
     handle_thd,
     handle_timing_between,
-)
-from ltspice_mcp.tools.circuit import (
-    StepGetInput,
-    handle_step_get,
 )
 from tests.conftest import stage_recorded_fixture as _stage_recorded
 

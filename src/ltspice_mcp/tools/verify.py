@@ -55,15 +55,17 @@ import base64
 import contextlib
 import hashlib
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp import types
 from pydantic import BeforeValidator, Field
+from spicelib import AscEditor
 
 from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.lib import services
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -73,6 +75,11 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage
+from ltspice_mcp.lib.schematic_ops import (
+    is_asc,
+    make_editor,
+    same_instance_dropped_segments,
+)
 from ltspice_mcp.lib.schematic_scene import (
     LayoutIssue,
     NetFlag,
@@ -80,7 +87,7 @@ from ltspice_mcp.lib.schematic_scene import (
     build_scene,
     layout_issues,
 )
-from ltspice_mcp.lib.schematic_scene import _point_on_segment as point_on_segment
+from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
 from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
@@ -101,18 +108,131 @@ from ltspice_mcp.tools._base import (
     safe_path,
     symbol_resolver_for,
 )
-from ltspice_mcp.tools.circuit import (
-    STRUCTURAL_DELTA_PROPS,
-    _components_and_directives,
-    _norm_micro,
-    _same_instance_dropped_segments,
-    parse_failure_warnings,
-)
 
-# The apply_schematic_ops geometry helpers and diff internals are reused verbatim
-# from tools/circuit.py rather than duplicated, so this module imports those
-# module-private names by design.
-# pyright: reportPrivateUsage=false
+# The wiring geometry comes from lib/schematic_ops.py rather than a second copy,
+# so a refusal the editor enforces and a finding this tool reports cannot drift.
+
+
+def _norm_micro(s: str) -> str:
+    """Map both micro codepoints (µ U+00B5, μ U+03BC) to ASCII 'u' so a value
+    LTspice renders with the micro sign compares equal to the same value
+    authored as 'u' (e.g. 1µ vs 1u). Used ONLY for diff equality, never on the
+    displayed strings — a real magnitude change like 1u vs 2u still differs."""
+    return s.replace("µ", "u").replace("μ", "u")
+
+
+def _component_signature(comp: dict) -> str:
+    """Comparable string for a component: its Value plus any extra SYMATTR
+    attributes (Value2/SpiceLine/SpiceModel). ``set_component_attribute`` edits
+    land in these attributes and change the exported netlist, so diff_circuit
+    must compare them too — otherwise such an edit reads as 'no differences'."""
+    value = str(comp["value"])
+    attrs = comp.get("attributes") or {}
+    if not attrs:
+        return value
+    attr_str = "; ".join(f"{k}={attrs[k]}" for k in sorted(attrs))
+    return f"{value} | {attr_str}"
+
+
+def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], str | None]:
+    """Return (components, directive_lines, parse_error) for a circuit file.
+
+    Reuses ``services.extract_{asc,netlist}_info`` so unparseable component
+    values, AscEditor dispatch, and directive collection all flow through the
+    canonical path. No second disk read. ``parse_error`` is None on success,
+    or a short message when the file could not be parsed — so the diff can
+    flag an unreadable file rather than treat it as an empty circuit (which
+    would report every component of the other file as a removal).
+    """
+    if is_asc(path):
+        try:
+            ed = make_editor(path)
+        except Exception as e:
+            return {}, set(), f"{path.name} could not be parsed ({e})"
+        assert isinstance(ed, AscEditor)
+        info = services.extract_asc_info(ed, path)
+        components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
+        directives = {d.strip() for d in info.get("directives", []) if d.strip().startswith(".")}
+        return components, directives, None
+    try:
+        info = services.extract_netlist_info(path)
+    except Exception as e:
+        return {}, set(), f"{path.name} could not be parsed ({e})"
+    components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
+    directives = {
+        line.strip()
+        for line in info.get("content", "").splitlines()
+        if line.strip().startswith(".")
+    }
+    return components, directives, None
+
+
+# The added/removed/changed delta both structural comparisons in this codebase
+# produce from ``_components_and_directives``: diff_circuit's own payload and
+# verify_circuit's structural_diff / sidecar-export diff. One payload, one schema
+# — declared here, beside the function whose output it describes.
+#
+# "baseline" is the first deck given (diff_circuit's ``path_a``, verify's
+# reference); "compared" is the second (``path_b``, the circuit under test).
+STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
+    "components_added": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "References present in the compared deck but absent from the baseline.",
+    },
+    "components_removed": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "References present in the baseline but absent from the compared deck.",
+    },
+    "components_changed": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Component reference, e.g. 'R1'."},
+                "before": {"type": "string", "description": "Its signature in the baseline."},
+                "after": {"type": "string", "description": "Its signature in the compared deck."},
+            },
+            "required": ["reference", "before", "after"],
+        },
+        "description": "References in both decks whose type/value signature differs.",
+    },
+    "directives_added": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "SPICE directives in the compared deck and not the baseline.",
+    },
+    "directives_removed": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "SPICE directives in the baseline and not the compared deck.",
+    },
+}
+
+
+def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]:
+    """Structured warnings for the decks a structural diff could not parse.
+
+    ``pairs`` is ``(display name, parse error or None)`` per side. An unparsed
+    deck is diffed as an EMPTY circuit, so the other side's whole content reads
+    as added or removed. That interpretation has to ride in the structured
+    channel, not only the text one: structured-aware clients never see the text
+    caveat, and the bogus added/removed lists look trustworthy without it.
+
+    Returns the interpretation first, then one message per unparsed deck.
+    """
+    errors = [err for _name, err in pairs if err]
+    if not errors:
+        return []
+    unparsed = " and ".join(name for name, err in pairs if err)
+    return [
+        f"{unparsed} could not be parsed; the diff treats it as empty, so its "
+        "components/directives appear as added/removed. Fix the file before "
+        "trusting this comparison.",
+        *errors,
+    ]
+
 
 NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
 
@@ -980,7 +1100,7 @@ def _dropped_wire_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
     segments = [(w.x1, w.y1, w.x2, w.y2) for w in scene.wires]
 
     findings: list[dict[str, Any]] = []
-    for drop in _same_instance_dropped_segments(owners, segments):
+    for drop in same_instance_dropped_segments(owners, segments):
         x1, y1, x2, y2 = drop["segment"]
         findings.append(
             _finding(

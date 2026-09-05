@@ -19,9 +19,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib import raster
+from ltspice_mcp.lib.schematic_ops import (
+    get_asc_editor,
+    run_op_batch,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
-from ltspice_mcp.tools.circuit import _get_asc_editor, _run_op_batch
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import (
     EditSchematicInput,
@@ -99,9 +102,9 @@ async def test_blank_build_parity_with_the_shared_op_runner(asc_state, work_dir)
 
     control = work_dir / "parity_runner.asc"
     control.write_text(se._BLANK_TEMPLATE)
-    editor = _get_asc_editor(control, asc_state)
+    editor = get_asc_editor(control, asc_state)
     ops = _OPS_ADAPTER.validate_python(_DIVIDER_OPS)
-    _, abort = _run_op_batch(editor, ops, control, stop_on_error=True)
+    _, abort = run_op_batch(editor, ops, control, stop_on_error=True)
     assert abort is None
     editor.save_netlist(control)
 

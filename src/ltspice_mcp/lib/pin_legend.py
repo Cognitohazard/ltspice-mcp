@@ -8,8 +8,8 @@ simulates correctly but reads as a wiring list rather than a drawn schematic.
 
 This module holds only the assembly, classification, and pagination logic. The
 connectivity itself — which net a coordinate is on, whether a wire passes
-through it — is resolved by the caller through the shared ``_net_partition`` /
-``_build_on_wire_predicate`` machinery in ``tools/circuit.py`` and handed in as
+through it — is resolved by the caller through the shared ``net_partition`` /
+``build_on_wire_predicate`` machinery in ``lib/schematic_ops.py`` and handed in as
 plain data + closures, so this stays a pure leaf module (no ``tools`` import,
 no re-implementation of the union-find).
 """
@@ -26,10 +26,10 @@ from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_curs
 DEFAULT_PAGE_SIZE = 100
 
 # Coordinate → its net's display name (a net-label like ``vout``/``0``, or
-# ``None`` when the net is unnamed). Built by the caller from ``_net_partition``.
+# ``None`` when the net is unnamed). Built by the caller from ``net_partition``.
 NetNameOf = Callable[["tuple[int, int]"], "str | None"]
 # Coordinate → whether a wire passes through it, and whether a net-label sits on
-# it. Built by the caller from ``_build_on_wire_predicate`` and the label set.
+# it. Built by the caller from ``build_on_wire_predicate`` and the label set.
 CoordPredicate = Callable[["tuple[int, int]"], bool]
 
 
@@ -39,7 +39,7 @@ def build_pin_legend(
 ) -> list[dict[str, Any]]:
     """Per-component legend: ``[{ref, pins: [{name, x, y, dir?, net}]}]``.
 
-    ``geometry`` is ``_collect_component_geometry``'s output (components with
+    ``geometry`` is ``collect_component_geometry``'s output (components with
     resolvable symbol geometry, each with a ``pins`` list). ``net_name_of``
     resolves a pin coordinate to its net name (``None`` = unnamed net).
     """

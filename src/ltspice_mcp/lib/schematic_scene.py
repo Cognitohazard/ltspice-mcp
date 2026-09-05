@@ -155,7 +155,7 @@ def wire_directions_at(wires: Sequence[Wire], x: int, y: int) -> set[str]:
             dx, dy = b[0] - a[0], b[1] - a[1]
         elif b == point:
             dx, dy = a[0] - b[0], a[1] - b[1]
-        elif _point_on_segment(point, a, b):
+        elif point_on_segment(point, a, b):
             # Strictly interior to the segment: both ways along its axis.
             if abs(b[0] - a[0]) >= abs(b[1] - a[1]):
                 out.update(("left", "right"))
@@ -1227,7 +1227,7 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
         connected = (
             bool(occupied)
             or (fl.x, fl.y) in pin_points
-            or any(_point_on_segment((fl.x, fl.y), a, b) for a, b in segments)
+            or any(point_on_segment((fl.x, fl.y), a, b) for a, b in segments)
         )
         scene.flags.append(
             replace(
@@ -1281,7 +1281,7 @@ class LayoutIssue:
         }
 
 
-def _point_on_segment(p: tuple[int, int], a: tuple[int, int], b: tuple[int, int]) -> bool:
+def point_on_segment(p: tuple[int, int], a: tuple[int, int], b: tuple[int, int]) -> bool:
     """True if ``p`` lies on the segment ``a``-``b`` (endpoints included)."""
     (px, py), (ax, ay), (bx, by) = p, a, b
     cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
@@ -1422,7 +1422,7 @@ def layout_issues(scene: Scene) -> list[LayoutIssue]:
                 continue
             if len(pin_owners.get(coord, ())) > 1:
                 continue  # shares the coordinate with another symbol's pin
-            if any(_point_on_segment(coord, a, b) for a, b in real_segments):
+            if any(point_on_segment(coord, a, b) for a, b in real_segments):
                 continue
             issues.append(
                 LayoutIssue(
@@ -1442,7 +1442,7 @@ def layout_issues(scene: Scene) -> list[LayoutIssue]:
             if end in seen_ends or end in pin_owners or end in flag_coords:
                 continue
             touches_other = any(
-                _point_on_segment(end, oa, ob)
+                point_on_segment(end, oa, ob)
                 for k, (oa, ob) in enumerate(real_segments)
                 if k != idx
             )

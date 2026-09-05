@@ -54,15 +54,30 @@ from typing import Annotated, Any, Literal, TypeAlias, get_args
 from mcp import types
 from pydantic import Field, SkipValidation, TypeAdapter, ValidationError, model_validator
 
-from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
+from ltspice_mcp.errors import (
+    LTSpiceMCPError,
+    NetlistError,
+    PathSecurityError,
+    compact_validation_error,
+)
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.library_manager import _part_aware_score, parse_library_file_cached
+from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
+from ltspice_mcp.lib.schematic_ops import (
+    get_asc_editor,
+    named_labels,
+    net_partition,
+    netlist_card_value,
+    require_asc,
+    resolve_pin,
+    same_instance_dropped_segments,
+    wire_segments_of,
+)
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
@@ -75,27 +90,203 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FORMAT_DESCRIPTION,
     HINT_SCHEMA,
     RO_ANNOTATIONS,
+    WARNINGS_SCHEMA,
     ResponseBudget,
     StrictModel,
     ToolInput,
+    declare_output_schema,
     format_response,
     registry,
     resolve_response_budget,
     safe_path,
     symbol_resolver_for,
 )
-from ltspice_mcp.tools.circuit import (
-    TraceNetInput,
-    _get_asc_editor,
-    handle_trace_net,
-    netlist_card_value,
-)
 
-# The circuit module's private editor helpers are reused verbatim rather than
-# duplicated; the .asc net/component paths depend on the SAME cached editor.
-# pyright: reportPrivateUsage=false
+
+class TraceNetInput(ToolInput):
+    path: str = Field(description="Path to an .asc schematic")
+    pin: str | None = Field(
+        default=None,
+        description=(
+            "Pin or net reference to start from: 'Ref.Pin' (e.g. 'M1.D'), "
+            "'net:NAME' (e.g. 'net:VDD'), or omit and pass x/y."
+        ),
+    )
+    x: int | None = Field(default=None, description="X coordinate (with y) to trace from")
+    y: int | None = Field(default=None, description="Y coordinate (with x) to trace from")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description=FORMAT_DESCRIPTION,
+    )
+
+
+@declare_output_schema(
+    {
+        "type": "object",
+        "properties": {
+            "start": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            },
+            "labels": {"type": "array", "items": {"type": "string"}},
+            "pins": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "reference": {"type": "string"},
+                        "pin": {"type": "string"},
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"},
+                    },
+                },
+            },
+            "coordinates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                },
+            },
+            "is_shorted": {"type": "boolean"},
+            "warnings": WARNINGS_SCHEMA,
+        },
+    }
+)
+async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.CallToolResult:
+    """Trace every pin/label/wire vertex on the net at a pin, label, or (x,y)."""
+    asc_path = safe_path(args.path, state)
+    require_asc(asc_path)
+    editor = get_asc_editor(asc_path, state)
+
+    if args.pin is not None and args.pin.startswith("net:"):
+        # A net: reference legitimately matches many same-name FLAGs — the
+        # normal case on label-wired schematics (one FLAG per pin).
+        # resolve_pin refuses ambiguous net labels, but trace_net's own
+        # name-merge step below absorbs duplicates, so just seed from any
+        # matching label coordinate (lowest, for determinism).
+        net_name = args.pin[4:]
+        matches = sorted(
+            (int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels if lbl.text == net_name
+        )
+        if not matches:
+            raise NetlistError(
+                f"Net label '{net_name}' not found in schematic. Add it with the "
+                "add_net_label op of edit_schematic first, or trace a "
+                "component pin / coordinate."
+            )
+        x, y = matches[0]
+    elif args.pin is not None:
+        x, y = resolve_pin(args.pin, editor)
+    elif args.x is not None and args.y is not None:
+        x, y = args.x, args.y
+    else:
+        raise NetlistError("trace_net needs either 'pin' or both 'x' and 'y'.")
+
+    part = net_partition(editor)
+    start = (x, y)
+    physical_members = part.members.get(part.root(start), set())
+    if start not in physical_members and start not in part.pin_owners:
+        # The coordinate isn't on any pin/label/wire endpoint — an empty point
+        # (or a bare mid-wire span carrying nothing).
+        raise NetlistError(
+            f"Nothing found at ({x},{y}): no component pin, net label, or wire "
+            "vertex sits there. Use inspect(kind='components') to inspect the layout."
+        )
+
+    # The physical partition connects by wire only; LTspice also makes FLAGs
+    # with the same NAME electrically common. Fold physical nets that share a
+    # label name together (a second union-find over physical roots) so
+    # trace_net answers "what's on net X" on label-wired schematics,
+    # not just wire-routed ones.
+    root_parent: dict[tuple[int, int], tuple[int, int]] = {}
+
+    def _rfind(r: tuple[int, int]) -> tuple[int, int]:
+        root_parent.setdefault(r, r)
+        while root_parent[r] != r:
+            root_parent[r] = root_parent[root_parent[r]]
+            r = root_parent[r]
+        return r
+
+    label_first: dict[str, tuple[int, int]] = {}
+    for root, coords in part.members.items():
+        for coord in coords:
+            for lbl in part.label_texts.get(coord, ()):
+                if lbl in label_first:
+                    ra, rb = _rfind(label_first[lbl]), _rfind(root)
+                    if ra != rb:
+                        root_parent[ra] = rb
+                else:
+                    label_first[lbl] = root
+
+    target_root = _rfind(part.root(start))
+    member_coords: set[tuple[int, int]] = set()
+    for root, coords in part.members.items():
+        if _rfind(root) == target_root:
+            member_coords |= coords
+    if not member_coords:
+        member_coords = {start}
+
+    labels: set[str] = set()
+    pins: list[dict] = []
+    for coord in member_coords:
+        labels.update(part.label_texts.get(coord, set()))
+        for ref, pin_name in part.pin_owners.get(coord, []):
+            pins.append({"reference": ref, "pin": pin_name, "x": coord[0], "y": coord[1]})
+
+    named = sorted(named_labels(frozenset(labels)))
+    is_shorted = len(named) > 1
+    pins.sort(key=lambda p: (p["reference"], p["pin"]))
+    coords = sorted(member_coords)
+
+    # LTspice drops a wire segment joining two pins of one component instance,
+    # so a net whose shape here depends on such a segment over-reports what
+    # LTspice will actually netlist. Surface each dropped segment on this net as
+    # a fact (not a verdict) — the model decides whether the tie was intended.
+    net_segments = [
+        s
+        for s in wire_segments_of(editor)
+        if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
+    ]
+    warnings = [
+        f"{d['ref']}.{d['pins'][0]} and {d['ref']}.{d['pins'][1]} are joined by a "
+        f"wire between two pins of the same component; LTspice drops that wire from "
+        f"the netlist, so this connection may not exist in simulation. Reroute the "
+        f"wire to bend out of line with the two pins, or label both pins with the "
+        f"same net name."
+        for d in same_instance_dropped_segments(part.pin_owners, net_segments)
+    ]
+
+    data: dict = {
+        "start": {"x": x, "y": y},
+        "labels": sorted(labels),
+        "pins": pins,
+        "coordinates": [{"x": cx, "y": cy} for cx, cy in coords],
+        "is_shorted": is_shorted,
+    }
+    if warnings:
+        data["warnings"] = warnings
+
+    net_name = ", ".join(sorted(labels)) if labels else "<unnamed>"
+    lines = [f"Net at ({x},{y}): {net_name}"]
+    if pins:
+        lines.append("  Pins:")
+        for p in pins:
+            lines.append(f"    {p['reference']}.{p['pin']} at ({p['x']},{p['y']})")
+    else:
+        lines.append("  (no component pins on this net)")
+    if is_shorted:
+        lines.append(f"  WARNING: net carries multiple labels {named} — likely a short.")
+    for w in warnings:
+        lines.append(f"  WARNING: {w}")
+    return format_response("\n".join(lines), data, args.format)
+
+
+# The .asc net and component paths share lib/schematic_ops.py's cached editor —
+# the same object an edit mutates, so a read never sees a stale sheet.
 
 # Fixed server-side page size for the paginated kinds. The A.5 query specs list
 # a cursor but no caller-facing limit knob, so the page is a server constant.
@@ -1009,7 +1200,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     if _route_circuit_kind(path, "components") == "asc":
         digest = await _asc_digest(path)
         # Cached editor + component reads stay on the event loop.
-        editor = _get_asc_editor(path, state)
+        editor = get_asc_editor(path, state)
         try:
             refs = sorted(editor.get_components(q.prefix) if q.prefix else editor.get_components())
         except Exception as exc:
@@ -1078,7 +1269,7 @@ def _search_libs(lib_paths: list[Path], query: str, cutoff: float = 0.6) -> list
     for lib in lib_paths:
         index = parse_library_file_cached(lib)
         for entry in index.models:
-            score = _part_aware_score(query_lower, entry.name_lower)
+            score = part_aware_score(query_lower, entry.name_lower)
             if score < cutoff or entry.name_lower in seen:
                 continue
             seen.add(entry.name_lower)
