@@ -1855,7 +1855,7 @@ class OpRemoveComponent(StrictModel):
         default=False,
         description=(
             "Also delete wires left dangling at the removed component's pins. "
-            "These wire deletions are NOT restored by a later add_component, and "
+            "These wire deletions are not restored by a later add_component, and "
             "the edit commits — keep your own copy of the sheet if you may need to "
             "undo removing the wrong component."
         ),
@@ -1937,7 +1937,7 @@ class OpRemoveWire(StrictModel):
     pin: str | None = Field(
         default=None,
         description=(
-            "Incident-point form: removes EVERY segment touching this pin, including "
+            "Incident-point form: removes every segment touching this pin, including "
             "wires belonging to other connections at a shared node."
         ),
     )

@@ -138,8 +138,8 @@ class AnalyzeSourceInput(StrictModel):
         default="all",
         description=(
             "Which runs of this source to read: 'all', a list of run indices, or "
-            "{case_ids: [...]} for an experiment job. Narrowing here is the cheapest "
-            "way to keep a large fan-out inside the call budget."
+            "{case_ids: [...]} for an experiment job. Narrow here to keep a large "
+            "fan-out inside the call budget."
         ),
     )
     label: str = Field(
@@ -366,8 +366,8 @@ class AnalyzeInclude(StrictModel):
         default=False,
         description=(
             "List the trace names each source's .raw carries, keyed by source "
-            "manifest id. Costs one raw load per run — a discovery aid for naming "
-            "signals, not something to leave on."
+            "manifest id. Costs one raw load per run; use it to find signal names, "
+            "then turn it off."
         ),
     )
     provenance: bool = Field(
@@ -375,8 +375,8 @@ class AnalyzeInclude(StrictModel):
         description=(
             "Add the artifact paths and content digests to each entry of "
             "'source_hashes'. Off by default because runs are addressed by "
-            "manifest_id and job_id, which are always present — the paths and "
-            "hashes prove what was analyzed, they are not how you reach it."
+            "manifest_id and job_id, which are always present; the paths and hashes "
+            "record what was analyzed rather than how to reach a run."
         ),
     )
     fields: list[str] | None = Field(
@@ -390,8 +390,8 @@ class AnalyzeInclude(StrictModel):
             "silently returning empty rows. A dot inside a key's own name is "
             r"escaped as '\.' — a subcircuit node or device parameter is spelled "
             r"'value.voltages.v(x1\.out)', 'value.device_op_points.@m\.x1\.m1[gm]'. "
-            "This is the payload lever for a wide sweep — on a 45-step case it cut "
-            "the rows from ~39k to ~5k characters."
+            "Use it on a wide sweep: on a 45-step case it cut the rows from ~39k to "
+            "~5k characters."
         ),
     )
 
@@ -483,8 +483,8 @@ class AnalyzeResultsInput(ToolInput):
         description=(
             "The measurements to take, up to 256, each a typed recipe returned "
             "under its own unique 'key'. Ask for every metric you want in one call "
-            "rather than one call per metric; a recipe that fails fails alone into "
-            "'failures'."
+            "rather than one call per metric; a recipe that fails is reported under "
+            "'failures' and does not fail the others."
         ),
     )
     group_by: list[str] = Field(

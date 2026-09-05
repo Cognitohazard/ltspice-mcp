@@ -358,7 +358,7 @@ class BodeCrossingRecipe(VariableRecipe):
         default=None,
         validation_alias=AliasChoices("level_deg", "phase_deg"),
         description=(
-            "Phase level to cross, in degrees, scanned on the UNWRAPPED phase so "
+            "Phase level to cross, in degrees, scanned on the unwrapped phase so "
             "a crossing past ±180° is found once rather than at every wrap. "
             "Exactly one of level_db/level_deg."
         ),
@@ -423,8 +423,8 @@ class OperatingPointRecipe(KeyedRecipe):
             "Return one device's small-signal params and terminal currents (e.g. "
             "'M6') instead of the whole bias point. Unscoped, the value carries "
             "every node voltage, every branch current, and every device's "
-            "params — tens of KB on a real opamp against a few hundred bytes "
-            "for the one device a question is usually about."
+            "params — tens of KB on a real opamp, against a few hundred bytes "
+            "for one device."
         ),
     )
 
