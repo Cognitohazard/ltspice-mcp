@@ -805,7 +805,7 @@ class ApiMethodsMixin(ABC):
         # The owner is given the call as the caller wrote it and applies the
         # same automatic-mode rules to it, dwell removal included — it is an
         # ordinary Api caller. Sending it a request that already carried
-        # execution.wait_s would hand it a control its own door refuses.
+        # execution.wait_s would hand it a control that interface refuses.
         payload = _detach.request_arguments(arguments)
         request = _validate(
             "run_experiments",
