@@ -23,6 +23,13 @@ whose model carries no docstring, and the plain-English synonyms a person
 actually types ("distortion" for ``thd``). Both are keyed by discriminant and
 both are checked for completeness, so they cannot silently fall behind the
 models.
+
+It lives in ``tools/`` rather than ``lib/`` because what it indexes *is* the
+tool layer — the input models of the seven registered tools. A ``lib`` module
+may not import ``tools`` (see ``tests/test_dispatch.py::TestLayering``), and an
+index of the tool vocabulary that could not name its sources would be an index
+of nothing. The field-reading it shares with ``api.reference()`` is the part
+that is layer-neutral, and that part is in ``lib/model_fields.py``.
 """
 
 from __future__ import annotations
@@ -436,9 +443,10 @@ def _union_branches(union: Any, discriminator: str) -> tuple[Any, ...]:
 def _sources() -> tuple[_Source, ...]:
     """Every family, in the order a reader should meet them.
 
-    Imported here rather than at module scope: the tool modules import the lib
-    layer, so a top-level import would close a cycle, and ``inspect`` is kept
-    free of ``experiments``' import cost until something actually asks.
+    Imported here rather than at module scope: ``inspect_tools`` imports this
+    module, so naming it back at import time would close a cycle, and this way
+    ``inspect`` also stays free of ``experiments``' import cost until something
+    actually asks for the index.
     """
     from ltspice_mcp.lib.recipes import RECIPE_MODELS
     from ltspice_mcp.lib.schematic_ops import SchematicOp
@@ -725,7 +733,7 @@ def _score(entry: BranchEntry, stacks: _Haystacks, phrase: str, tokens: list[str
     return total
 
 
-def search(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
+def search_branches(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
     """The best ``limit`` branches for ``query``, and how many matched at all.
 
     Ranking is by where the query's words land — branch name, then the plain

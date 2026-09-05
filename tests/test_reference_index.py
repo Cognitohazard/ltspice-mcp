@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from ltspice_mcp.lib import reference_index
 from ltspice_mcp.lib.model_fields import literal_values
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
-from ltspice_mcp.lib.reference_index import build_index, search, table_of_contents
+from ltspice_mcp.tools import reference_index
+from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
 
 
 def _entries():
@@ -200,7 +200,7 @@ RECIPE_SEARCH_PHRASES: dict[str, str] = {
 class TestSearch:
     @pytest.mark.parametrize("metric", DISCRIMINANTS)
     def test_a_recipe_is_found_by_its_own_name(self, metric: str):
-        hits, total = search(metric, limit=5)
+        hits, total = search_branches(metric, limit=5)
         assert total >= 1
         assert hits[0].name == metric and hits[0].tool == "analyze_results", (
             f"searching {metric!r} ranked {hits[0].tool}.{hits[0].name} first"
@@ -211,28 +211,28 @@ class TestSearch:
 
     @pytest.mark.parametrize(("metric", "phrase"), sorted(RECIPE_SEARCH_PHRASES.items()))
     def test_a_recipe_is_found_by_the_words_a_person_types(self, metric: str, phrase: str):
-        hits, _ = search(phrase, limit=5)
+        hits, _ = search_branches(phrase, limit=5)
         found = [hit for hit in hits if hit.tool == "analyze_results" and hit.name == metric]
         assert found, f"{phrase!r} did not reach the {metric} recipe; it returned " + ", ".join(
             f"{hit.tool}.{hit.name}" for hit in hits
         )
 
     def test_ranking_prefers_the_name_over_a_field_or_prose_hit(self):
-        hits, _ = search("waveform", limit=5)
+        hits, _ = search_branches("waveform", limit=5)
         assert hits[0].name == "waveform"
 
     def test_search_is_deterministic(self):
-        assert [entry.name for entry in search("gain", limit=8)[0]] == [
-            entry.name for entry in search("gain", limit=8)[0]
+        assert [entry.name for entry in search_branches("gain", limit=8)[0]] == [
+            entry.name for entry in search_branches("gain", limit=8)[0]
         ]
 
     def test_limit_bounds_the_hits_but_not_the_count(self):
-        hits, total = search("signal", limit=2)
+        hits, total = search_branches("signal", limit=2)
         assert len(hits) == 2
         assert total > 2
 
     def test_a_query_that_matches_nothing_returns_nothing(self):
-        hits, total = search("xyzzy quuxbar", limit=5)
+        hits, total = search_branches("xyzzy quuxbar", limit=5)
         assert hits == [] and total == 0
 
     def test_other_tools_are_reachable_too(self):
@@ -243,7 +243,7 @@ class TestSearch:
             ("trace a net", ("inspect", "net")),
             ("pelgrom mismatch", ("run_experiments", "mismatch")),
         ):
-            hits, _ = search(phrase, limit=5)
+            hits, _ = search_branches(phrase, limit=5)
             assert expected in [(hit.tool, hit.name) for hit in hits], (
                 f"{phrase!r} returned " + ", ".join(f"{h.tool}.{h.name}" for h in hits)
             )
