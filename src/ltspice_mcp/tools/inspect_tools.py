@@ -4,9 +4,11 @@ One tool answers a batch of independent read-only ``queries`` about the server
 and the circuits it can reach. Each query is one of six kinds:
 
 * ``capabilities`` — detected simulators + dialects, exporter presence, job
-  persistence, allowed roots, active profile, the configured limits, and the
-  linter version. Pulled from ``state``/``config``/``lint_rules``; nothing is
-  probed.
+  persistence, allowed roots, active profile, the configured limits, the
+  linter version, and ``diagnostics``: the startup notes (bad configured
+  simulator path, a requested engine that fell back, WSL auto-detection) that
+  say whether this server started degraded. Pulled from
+  ``state``/``config``/``lint_rules``; nothing is probed.
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
   precedence they resolve through. A ``path`` adds that schematic's own
   directory to the front of the reported precedence.
@@ -577,6 +579,12 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
         },
+        # What went wrong at startup, verbatim: a configured simulator path
+        # that does not exist, a requested engine that fell back to another,
+        # a WSL auto-detection. Otherwise these live only in the server's own
+        # stderr log, which no client reads — so a session running degraded
+        # looks identical to a healthy one from the outside.
+        "diagnostics": list(state.diagnostics),
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
         "allowed_paths": [str(p) for p in state.config.allowed_paths],
