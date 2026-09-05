@@ -39,6 +39,20 @@ turns (52 against 74) and less time (14 against 21 minutes). The MCP side has
 been rebuilt since that day and the pair has not been measured again, so these
 are numbers from that date, not properties of this release.
 
+## Using both at once
+
+The two ways are meant to run side by side. The MCP server is the
+long-lived process: it owns jobs that must outlive a call, serves the
+packaged guide and job resources, and renders the waveform widget on hosts
+that support it. A script using the Python API works in the same directory
+against the same job records, so a job started by either can be read by the
+other by its `job_id`. Today's limit: a job submitted through the Python
+API belongs to the process that submitted it, and that process exiting
+cancels it. Handing a script's job over to a running server (or to a
+detached worker) so a short-lived script can submit and leave is the next
+planned change; until then a script that submits must stay alive for the
+run, or run the job through the server.
+
 ## Quick start — Python library
 
 ```bash

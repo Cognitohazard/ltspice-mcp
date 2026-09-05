@@ -426,3 +426,20 @@ config drift), so it gets built only if the middle rung proves insufficient.
 
 `api.log_diagnostics` is deferred unless callers are seen re-parsing logs by
 hand.
+
+## Coexistence with a server
+
+The design intent is that the Python API and the MCP server share one
+working directory and one set of job records, and that a long-lived server
+process is the owner of jobs that must outlive a call, the provider of
+resources (`spice://guide`, job resources), and the renderer of the
+waveform widget — while scripts use the API for loops and complete results.
+A job either interface starts is readable by the other by `job_id`.
+
+What is implemented: shared records, shared store, one engine lease per
+process. What is not yet: hand-off. A job submitted through the API is owned
+by the submitting process; `close()` or exit cancels it, and another process
+that loads the record sees it as interrupted. The planned closing change is
+a per-job detached owner (or a hand-off to a running server) so that
+`run_experiments(wait=False)` from a short-lived script leaves a job the
+server owns. Until then a script must stay alive for its runs.
