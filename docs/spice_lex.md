@@ -19,7 +19,7 @@ corner-case behaviour:
 |-|-|-|
 | `lib/montecarlo.py` | `.MODEL` / instance / `.PARAM` rewriting (MC) | balanced expressions, quoted tokens, scope, comments |
 | `lib/library_parser.py` | `.MODEL` / `.SUBCKT` indexing for `find_model` | continuation merge, comments, nested subcircuits |
-| `tools/circuit.py:_apply_component_value` | Splits `"NMOS1 W=10u L=1u"` into model + params | quoted strings, multi-token values, `=` inside braces |
+| `lib/schematic_ops.py:_apply_component_value` | Splits `"NMOS1 W=10u L=1u"` into model + params | quoted strings, multi-token values, `=` inside braces |
 | `lib/spice_validator.py` | `.MEAS` expression checks (blocklist of known-bad patterns) | substring matching of function calls, no AST |
 
 Every caller failed differently on the same input class. The fix was one

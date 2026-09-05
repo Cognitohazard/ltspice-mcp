@@ -67,7 +67,7 @@ def _device_usage(device_type: str, name: str) -> str:
     return template.replace("<name>", name)
 
 
-def _part_aware_score(query_lower: str, candidate_lower: str) -> float:
+def part_aware_score(query_lower: str, candidate_lower: str) -> float:
     """Similarity in [0.0, 1.0] biased for part-number-style names.
 
     Base is ``rapidfuzz.fuzz.ratio`` — a length-aware (Levenshtein) whole-string
@@ -483,7 +483,7 @@ class LibraryManager:
 
         With ``exact=True`` returns at most one entry (score 1.0) when the
         name matches case-insensitively. Otherwise fuzzy-ranks via
-        ``_part_aware_score`` (rapidfuzz ratio + first-word-token bonus).
+        ``part_aware_score`` (rapidfuzz ratio + first-word-token bonus).
 
         ``include_builtin=True`` lazy-parses every built-in .lib on first
         call — hundreds of ms on a full LTspice install.
@@ -498,7 +498,7 @@ class LibraryManager:
         query_lower = name.lower()
 
         def score(entry: ModelEntry) -> float:
-            return _part_aware_score(query_lower, entry.name_lower)
+            return part_aware_score(query_lower, entry.name_lower)
 
         candidates: list[tuple[float, ModelEntry]] = []
 

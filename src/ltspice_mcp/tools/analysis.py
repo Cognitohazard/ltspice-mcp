@@ -25,6 +25,7 @@ return derived metrics. Organized by what the tool answers:
 """
 
 import asyncio
+import bisect
 import contextlib
 import csv
 import json
@@ -39,8 +40,9 @@ from typing import Any, Literal, NoReturn, NotRequired, TypedDict
 import numpy as np
 from mcp import types
 from pydantic import Field
+from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import NetlistError, ResultError
 from ltspice_mcp.lib import atomic_write, desktop, services
 from ltspice_mcp.lib.ac_analysis import (
     CrossingWithQuantity,
@@ -93,6 +95,7 @@ from ltspice_mcp.lib.raw_parser import (
     query_point_value,
     real_axis,
     safe_magnitude_db,
+    sample_to_dict,
     trace_unit,
 )
 from ltspice_mcp.lib.result_observations import (
@@ -1177,8 +1180,6 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
                 "query_value: 'step_value' is required when 'step_axis' is given.",
                 show_hint=False,
             )
-        from ltspice_mcp.tools.circuit import StepGetInput, handle_step_get
-
         result = await handle_step_get(
             StepGetInput(
                 raw_file=step_raw,
@@ -1256,8 +1257,6 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     # requested point. Reuse the step_axis path's own tolerance check so the two
     # snap flags can't drift. On a coarse sweep this matters — e.g. a .dc temp
     # sweep snapping 27 → 25 °C silently biases a tempco measurement.
-    from ltspice_mcp.tools.circuit import snap_match
-
     req_x = float(result_data["requested_x"])
     act_x = float(result_data["actual_x"])
     exact_match = snap_match(req_x, act_x)
@@ -5142,3 +5141,299 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         # summary/path, never the numbers.
         result.meta = {WIDGET_SPEC_META_KEY: widget_spec_json}
     return result
+
+
+def snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
+    """True iff ``actual`` is within ``rtol`` (relative) of ``requested``.
+
+    A query snaps to the nearest available sample (a discrete step value or the
+    nearest point on a sweep axis); a legitimate lookup lands on (or extremely
+    near) one. A large gap means the request fell outside the range and was
+    silently clamped to the nearest endpoint — worth flagging rather than
+    presenting the clamp as an exact answer. Shared by the step-axis lookup and
+    ``query_value``'s direct ``at`` path so their snap flags can't drift.
+    """
+    scale = max(abs(actual), abs(requested), 1e-30)
+    return abs(requested - actual) <= rtol * scale
+
+
+class StepGetInput(ToolInput):
+    raw_file: str = Field(description="Path to a stepped .raw result")
+    axis: str = Field(
+        description=(
+            "Step parameter name to query (e.g. ``temp``, ``RS``). For .DC "
+            "sweeps the axis is the swept variable; for .step parametric "
+            "runs it's the parameter that was stepped."
+        ),
+    )
+    value: str = Field(
+        description="SPICE-notation target value (e.g. ``27``, ``1k``, ``100u``).",
+    )
+    signal: str = Field(description="Signal to read at the chosen step (e.g. ``V(out)``).")
+    at: str | None = Field(
+        default=None,
+        description=(
+            "Optional inner-axis position to query within the chosen step "
+            "(time for .tran, frequency for .ac). Defaults to the first "
+            "sample, which is the only useful answer for stepped .op runs "
+            "but rarely the right one for .ac/.tran. SPICE notation."
+        ),
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description=FORMAT_DESCRIPTION,
+    )
+
+
+def _step_get_native_axis(
+    raw: RawRead, args: StepGetInput, signal: str, target: float
+) -> types.CallToolResult:
+    """Query on the .raw's native axis (DC sweep variable / AC frequency).
+
+    The queried axis IS the inner axis, so this is a nearest-neighbour lookup
+    on the axis values; a request beyond the axis ends is a clamp worth flagging.
+    """
+    # On the native-axis branch the queried axis IS the inner axis, so
+    # there is no second position for ``at`` to select. Silently
+    # ignoring it would return a value at ``value`` while the caller
+    # believes the ``at`` slice was applied — refuse loudly instead.
+    if args.at is not None:
+        raise NetlistError(
+            f"'at' does not apply here: {args.axis!r} is the raw file's "
+            "native axis, so the query position is 'value' itself. "
+            "'at' selects the inner-axis point only when 'axis' names a "
+            ".step parameter."
+        )
+    try:
+        axis_vals = real_axis(np.asarray(raw.get_axis(step=0))).tolist()
+    except Exception as e:
+        raise NetlistError(
+            f"Cannot read axis values: {e}. Use query_value if "
+            "the raw doesn't have an explicit axis."
+        ) from e
+    if not axis_vals:
+        raise NetlistError(f"Axis {args.axis!r} has no samples in this raw file.")
+    # nearest neighbour
+    ins = bisect.bisect_left(axis_vals, target)
+    if ins == 0:
+        idx = 0
+    elif ins == len(axis_vals):
+        idx = len(axis_vals) - 1
+    else:
+        idx = ins - 1 if abs(axis_vals[ins - 1] - target) <= abs(axis_vals[ins] - target) else ins
+    wave = raw.get_wave(signal, step=0)
+    actual = float(axis_vals[idx])
+    # This is a continuous native axis (DC sweep variable / AC frequency),
+    # not a discrete step list: an off-grid interior request is a normal
+    # nearest-neighbour lookup, and only a request beyond the axis ends is
+    # genuinely clamped. sample_to_dict keeps complex AC samples intact
+    # (magnitude/phase) instead of float() silently dropping the imag part.
+    sample_dict = sample_to_dict(wave[idx])
+    exact = snap_match(target, actual)
+    lo, hi = min(axis_vals[0], axis_vals[-1]), max(axis_vals[0], axis_vals[-1])
+    out_of_range = target < lo or target > hi
+    data = {
+        "signal": signal,
+        "axis": args.axis,
+        "requested_value": target,
+        "actual_value": actual,
+        "exact_match": exact,
+        **sample_dict,
+    }
+    sample_str = (
+        f"{sample_dict['value']:g}"
+        if "value" in sample_dict
+        else f"{sample_dict['magnitude_db']:.3f} dB / {sample_dict['phase_deg']:.2f}°"
+    )
+    summary = f"{signal} at {args.axis}={actual:g}: {sample_str}"
+    if out_of_range:
+        warning = (
+            f"Requested {args.axis}={target:g} is outside the swept range "
+            f"[{lo:g}, {hi:g}]; clamped to the nearest end {actual:g}."
+        )
+        data["warnings"] = [warning]
+        summary += f"\nWarning: {warning}"
+    return format_response(summary, data, args.format)
+
+
+def _step_get_param_lookup(
+    raw: RawRead,
+    raw_path: Path,
+    args: StepGetInput,
+    signal: str,
+    target: float,
+    axis_lower: str,
+) -> types.CallToolResult:
+    """Query by .step parameter value, using the nearest stepped run.
+
+    Falls back to .log parsing when spicelib's ``get_steps`` returns nothing
+    (which it does for ``.step param NAME`` runs — the parameter map lives in
+    the log, not the .raw header).
+    """
+    try:
+        steps = list(raw.get_steps() or [])
+    except Exception:
+        steps = []
+
+    if not any(isinstance(s, dict) and s for s in steps):
+        # parse_step_iterations swallows OSError, so no .exists() guard.
+        steps = list(parse_step_iterations(raw_path.with_suffix(".log")))
+
+    best_idx = None
+    best_actual: float | None = None
+    for i, step_record in enumerate(steps):
+        if not isinstance(step_record, dict):
+            continue
+        v = step_record.get(args.axis)
+        if v is None:
+            # try case-insensitive match
+            for k, val in step_record.items():
+                if k.lower() == axis_lower:
+                    v = val
+                    break
+        if v is None:
+            continue
+        try:
+            v_f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if best_actual is None or abs(v_f - target) < abs(best_actual - target):
+            best_actual = v_f
+            best_idx = i
+
+    if best_idx is None:
+        # Build the axis listing only on the error path.
+        available_axes: list[str] = []
+        for step_record in steps:
+            if isinstance(step_record, dict):
+                for k in step_record:
+                    if k not in available_axes:
+                        available_axes.append(k)
+        if available_axes:
+            raise NetlistError(
+                f"Step axis {args.axis!r} not found in this raw file. "
+                "Available axes: " + ", ".join(available_axes)
+            )
+        # No .step parameters at all — the caller likely meant the primary sweep
+        # axis of a bare .dc/.ac sweep, which isn't a step. Point at the direct
+        # route instead of a bare "not found".
+        raise NetlistError(
+            f"This raw file has no .step parameters, so {args.axis!r} is not a step "
+            f"axis. If {args.axis!r} is the primary sweep variable of a bare .dc/.ac "
+            f"sweep, query it directly: query_value(at='{args.value}')."
+        )
+
+    assert best_actual is not None  # set in lockstep with best_idx above
+    wave = raw.get_wave(signal, step=best_idx)
+    if len(wave) == 0:
+        raise NetlistError(
+            f"Step {best_idx} of {signal!r} contains no samples; "
+            "verify the simulation completed and the signal exists in this step."
+        )
+
+    # Pick the inner-axis sample. Default is index 0 (correct for .op
+    # results); when ``at=`` is given, find the nearest neighbour on the
+    # per-step axis (frequency for .AC, time for .TRAN).
+    inner_idx = 0
+    target_at: float | None = None
+    actual_at: float | None = None
+    warnings: list[str] = []
+    if args.at is not None:
+        try:
+            target_at = parse_spice_value(args.at)
+        except ValueError as e:
+            raise NetlistError(f"Invalid at {args.at!r}: {e}") from e
+        try:
+            inner_axis = real_axis(np.asarray(raw.get_axis(step=best_idx)))
+        except Exception as e:
+            raise NetlistError(
+                f"Cannot read inner axis for at={args.at!r}: {e}. "
+                "Drop the ``at`` argument for .op-style raws."
+            ) from e
+        if inner_axis.size == 0:
+            raise NetlistError(f"Step {best_idx} has an empty axis; ``at`` cannot be applied.")
+        inner_idx = nearest_index(inner_axis, target_at)
+        actual_at = float(inner_axis[inner_idx])
+    else:
+        # No inner coordinate requested. For .op raws index 0 is the only
+        # sample; for .ac/.tran it's the first (passband / t=0) bin, whose
+        # value is uninterpretable without knowing the coordinate. Surface
+        # the implied coordinate when there is a real inner axis.
+        try:
+            inner_axis = real_axis(np.asarray(raw.get_axis(step=best_idx)))
+        except Exception:
+            inner_axis = np.asarray([])
+        if inner_axis.size > 1:
+            actual_at = float(inner_axis[0])
+            warnings.append(
+                f"No 'at' given: returning the first inner sample at {actual_at:g}. "
+                "Pass 'at' (frequency for .ac, time for .tran) to pick a point."
+            )
+
+    if not snap_match(target, best_actual):
+        warnings.append(
+            f"Requested {args.axis}={target:g} but no step matches; using the "
+            f"nearest step {best_actual:g}."
+        )
+
+    sample_dict = sample_to_dict(wave[inner_idx])
+    data: dict = {
+        "signal": signal,
+        "axis": args.axis,
+        "requested_value": target,
+        "actual_value": best_actual,
+        "exact_match": snap_match(target, best_actual),
+        "step_index": best_idx,
+        **sample_dict,
+    }
+    if target_at is not None:
+        data["requested_at"] = target_at
+    if actual_at is not None:
+        data["actual_at"] = actual_at
+    if warnings:
+        data["warnings"] = warnings
+
+    sample_str = (
+        f"{sample_dict['value']:g}"
+        if "value" in sample_dict
+        else f"{sample_dict['magnitude_db']:.3f} dB / {sample_dict['phase_deg']:.2f}°"
+    )
+    at_str = f", at={actual_at:g}" if actual_at is not None else ""
+    summary = f"{signal} at {args.axis}={best_actual:g} (step {best_idx}){at_str}: {sample_str}"
+    for warning in warnings:
+        summary += f"\nWarning: {warning}"
+    return format_response(summary, data, args.format)
+
+
+# Internal compute adapter — exposed publicly via query_value(step_axis=, step_value=).
+# Operates on a SINGLE multi-step .raw (as produced by .step/.dc). An external
+# sweep job (configure_sweep/run_sweep) emits N single-point raws with no step
+# axis instead — use batch_results for those.
+async def handle_step_get(args: StepGetInput, state: SessionState) -> types.CallToolResult:
+    """Query a signal at a specific axis value of a stepped .raw result."""
+    raw_path = safe_path(args.raw_file, state)
+    raw = await services.load_raw(raw_path, state)
+
+    try:
+        target = parse_spice_value(args.value)
+    except ValueError as e:
+        raise NetlistError(f"Invalid value {args.value!r}: {e}") from e
+
+    signal = services.validate_signal(raw, args.signal)
+
+    # Strategy: if ``axis`` matches the .raw's axis name (case-insensitive),
+    # use the axis values directly. Otherwise fall back to .step parameter
+    # lookup via spicelib's ``get_steps``.
+    raw_axis_name = ""
+    try:
+        plot = raw.get_raw_property("Plotname")
+        if plot:
+            # Plotname doesn't carry the axis name; pull from trace 0.
+            raw_axis_name = raw.get_trace_names()[0]
+    except Exception:
+        pass
+
+    axis_lower = args.axis.lower()
+    if raw_axis_name and axis_lower == raw_axis_name.lower():
+        return _step_get_native_axis(raw, args, signal, target)
+    return _step_get_param_lookup(raw, raw_path, args, signal, target, axis_lower)

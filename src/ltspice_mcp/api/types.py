@@ -18,10 +18,6 @@ import surface from :mod:`ltspice_mcp.api`, whose ``__all__`` is a pinned
 stability boundary.
 """
 
-# The schematic op models live module-private in tools/circuit.py and
-# tools/schematic_edit.py, which is where the applier dispatches on them. Making
-# them public means aliasing those names here, not copying the classes.
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 from ltspice_mcp.lib.recipes import (
@@ -54,6 +50,18 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     Window,
 )
+from ltspice_mcp.lib.schematic_ops import (
+    OpAddComponent,
+    OpAddDirective,
+    OpAddNetLabel,
+    OpMoveComponent,
+    OpRemoveComponent,
+    OpRemoveDirective,
+    OpRemoveNetLabel,
+    OpRemoveWire,
+    OpSetComponentAttribute,
+    OpSetComponentValue,
+)
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     ComponentRule,
@@ -71,18 +79,6 @@ from ltspice_mcp.tools.analyze import (
     CaseSelection,
     ContinueInput,
     PerRunInclude,
-)
-from ltspice_mcp.tools.circuit import (
-    _OpAddComponent,
-    _OpAddDirective,
-    _OpAddNetLabel,
-    _OpMoveComponent,
-    _OpRemoveComponent,
-    _OpRemoveDirective,
-    _OpRemoveNetLabel,
-    _OpRemoveWire,
-    _OpSetComponentAttribute,
-    _OpSetComponentValue,
 )
 from ltspice_mcp.tools.experiments import (
     AnalysisInclude,
@@ -106,27 +102,26 @@ from ltspice_mcp.tools.inspect_tools import (
 from ltspice_mcp.tools.schematic_edit import (
     ConsolidatedOp,
     EditSchematicInput,
-    _OpWirePinsStrict,
-    _ViewCursors,
+    EditViewCursors,
+    OpWirePinsStrict,
 )
 from ltspice_mcp.tools.verify import RenderPolicy, VerifyCircuitInput
 
-# The schematic op models are shared verbatim with the shipped
-# apply_schematic_ops surface, where they are module-private. Aliased rather
-# than re-declared: one class per op, so an isinstance check and a validation
-# error agree about what a caller constructed.
-AddComponentOp = _OpAddComponent
-AddDirectiveOp = _OpAddDirective
-AddNetLabelOp = _OpAddNetLabel
-MoveComponentOp = _OpMoveComponent
-RemoveComponentOp = _OpRemoveComponent
-RemoveDirectiveOp = _OpRemoveDirective
-RemoveNetLabelOp = _OpRemoveNetLabel
-RemoveWireOp = _OpRemoveWire
-SetComponentAttributeOp = _OpSetComponentAttribute
-SetComponentValueOp = _OpSetComponentValue
-WirePinsOp = _OpWirePinsStrict
-ViewCursors = _ViewCursors
+# The schematic op models are the ones lib/schematic_ops.py defines and the
+# applier dispatches on. Aliased rather than re-declared: one class per op, so
+# an isinstance check and a validation error agree about what a caller built.
+AddComponentOp = OpAddComponent
+AddDirectiveOp = OpAddDirective
+AddNetLabelOp = OpAddNetLabel
+MoveComponentOp = OpMoveComponent
+RemoveComponentOp = OpRemoveComponent
+RemoveDirectiveOp = OpRemoveDirective
+RemoveNetLabelOp = OpRemoveNetLabel
+RemoveWireOp = OpRemoveWire
+SetComponentAttributeOp = OpSetComponentAttribute
+SetComponentValueOp = OpSetComponentValue
+WirePinsOp = OpWirePinsStrict
+ViewCursors = EditViewCursors
 
 __all__ = [  # noqa: RUF022 - grouped by the operation that takes them
     # The six operations' top-level argument models.

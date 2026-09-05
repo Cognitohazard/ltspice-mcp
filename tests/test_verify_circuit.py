@@ -34,8 +34,8 @@ from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
-from ltspice_mcp.tools.circuit import STRUCTURAL_DELTA_PROPS
 from ltspice_mcp.tools.verify import (
+    STRUCTURAL_DELTA_PROPS,
     VerifyCircuitInput,
     evaluate_verify_circuit,
     handle_verify_circuit,

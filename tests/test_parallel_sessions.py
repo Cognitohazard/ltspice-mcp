@@ -35,10 +35,13 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import SimulationJob
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
+from ltspice_mcp.lib.schematic_ops import (
+    get_asc_editor,
+    resolve_pin,
+)
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import circuit_lock_target
-from ltspice_mcp.tools.circuit import _get_asc_editor, _resolve_pin
 from tests._asc_ops import apply_ops, sha_of
 from tests.conftest import make_batch_job, make_sim_job
 
@@ -171,7 +174,7 @@ class TestCircuitFileLock:
         )
         t.join(5)
         assert data["outcome"] == "complete"
-        x, y = _resolve_pin("R1.1", _get_asc_editor(asc_file, asc_state))
+        x, y = resolve_pin("R1.1", get_asc_editor(asc_file, asc_state))
         text = asc_file.read_text(errors="replace")  # noqa: ASYNC240
         assert f"FLAG {x} {y} probe" in text, "label must sit at R1's post-move pin position"
 

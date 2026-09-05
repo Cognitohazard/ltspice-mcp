@@ -8,8 +8,8 @@ from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.config import VALID_PROFILES
+from ltspice_mcp.lib.schematic_ops import SchematicOp
 from ltspice_mcp.tools import _base, get_tools_for_profile
-from ltspice_mcp.tools.circuit import SchematicOp
 from tests.conftest import resolve_local_ref
 
 
@@ -199,7 +199,7 @@ _DECLARED_INVERSES: dict[str, str] = {
 }
 
 # Deprecated ``op`` discriminator aliases: a second literal value that
-# deserializes to the SAME model as its primary name (``_OpWirePins.op`` is
+# deserializes to the SAME model as its primary name (``OpWirePins.op`` is
 # ``Literal["wire_pins", "connect"]``). An alias is the same mutation under
 # an old spelling, so it shares its primary's declared inverse rather than
 # getting its own _DECLARED_INVERSES entry; test_every_alias_resolves_to_a_
@@ -213,7 +213,7 @@ _OP_ALIASES: dict[str, str] = {
 def _schematic_op_literals() -> set[str]:
     """The ``op`` discriminator strings in the SchematicOp union, derived from
     the union itself so the test cannot silently miss a newly added op. A
-    member's ``op`` field may carry more than one literal (``_OpWirePins``'s
+    member's ``op`` field may carry more than one literal (``OpWirePins``'s
     is ``Literal["wire_pins", "connect"]`` — the deprecated alias shares the
     model), so this collects every literal per member rather than assuming one."""
     literals: set[str] = set()

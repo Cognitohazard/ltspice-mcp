@@ -164,8 +164,12 @@ def _delegate_targets() -> dict[str, Any]:
     to the actual handler object. Derived from source, never hand-listed, so a
     new delegation cannot dodge the closure test."""
     providers = [
-        importlib.import_module(f"ltspice_mcp.tools.{m}")
-        for m in ("analysis", "circuit", "simulation")
+        importlib.import_module(name)
+        for name in (
+            "ltspice_mcp.tools.analysis",
+            "ltspice_mcp.tools.simulation",
+            "ltspice_mcp.lib.schematic_ops",
+        )
     ]
     targets: dict[str, Any] = {}
     for mod_name in _CONSOLIDATED_MODULES:

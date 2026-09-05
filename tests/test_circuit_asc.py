@@ -12,13 +12,12 @@ import pytest
 from mcp.types import TextContent
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.circuit import (
-    TraceNetInput,
-    _build_on_wire_predicate,
-    _point_on_segment,
-    handle_trace_net,
+from ltspice_mcp.lib.schematic_ops import (
+    build_on_wire_predicate,
+    point_on_segment,
 )
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.inspect_tools import TraceNetInput, handle_trace_net
 from tests._asc_ops import (
     add_component,
     add_net_label,
@@ -252,7 +251,10 @@ class TestEditDirectiveCommentKind:
     async def test_stacked_directives_detected(self, asc_state: SessionState, work_dir: Path):
         # A hand-authored .asc with two directives at the same anchor (bypasses
         # the auto-shift) must surface a stacked_directive advisory.
-        from ltspice_mcp.tools.circuit import _get_asc_editor, _post_op_warnings
+        from ltspice_mcp.lib.schematic_ops import (
+            get_asc_editor,
+            post_op_warnings,
+        )
 
         stacked = work_dir / "stacked.asc"
         stacked.write_text(
@@ -260,7 +262,7 @@ class TestEditDirectiveCommentKind:
             "TEXT 16 16 Left 2 !.tran 5m\n"
             "TEXT 16 16 Left 2 !.ac dec 100 1 1meg\n"
         )
-        warns = _post_op_warnings(_get_asc_editor(stacked, asc_state))
+        warns = post_op_warnings(get_asc_editor(stacked, asc_state))
         stacked_w = [w for w in warns if w["kind"] == "stacked_directive"]
         assert len(stacked_w) == 1
         assert stacked_w[0]["count"] == 2
@@ -503,7 +505,7 @@ NMOS_PIN_POSITIONS: dict[str, dict[str, tuple[int, int]]] = {
 
 @pytest.mark.asyncio
 class TestOrientationPlacementAndRouting:
-    """add_component(rotation=...) -> cached editor -> _resolve_pin -> wire_pins
+    """add_component(rotation=...) -> cached editor -> resolve_pin -> wire_pins
     must agree on absolute pin coordinates for every rotation AND mirror.
     Wire endpoints on disk are checked against hand-computed positions, so a
     sign error in any orientation transform fails here — not just an
@@ -915,22 +917,22 @@ class TestEditingAscRollback:
         self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # Inject a failure after add_component has already mutated the
-        # editor in-memory but before save: wrap _create_component so the real
+        # editor in-memory but before save: wrap create_component so the real
         # in-memory mutation runs, then raise — simulating a spicelib internal
         # error mid-edit, after the editor is dirty but before the editing
         # context saves.
-        from ltspice_mcp.tools import circuit as circuit_mod
+        from ltspice_mcp.lib import schematic_ops as circuit_mod
 
         original = asc_file.read_bytes()  # noqa: ASYNC240
         boom_calls = {"n": 0}
-        real_create = circuit_mod._create_component
+        real_create = circuit_mod.create_component
 
         def boom(*a, **kw):
             real_create(*a, **kw)  # do the real in-memory mutation
             boom_calls["n"] += 1
             raise RuntimeError("injected post-op failure")
 
-        monkeypatch.setattr(circuit_mod, "_create_component", boom)
+        monkeypatch.setattr(circuit_mod, "create_component", boom)
 
         with pytest.raises(RuntimeError, match="injected"):
             add_component(asc_state, asc_file, "R_uncommitted", "res", 700, 700)
@@ -1667,7 +1669,7 @@ class TestAddNetLabelOpValidation:
 class TestMoveRemoveOpWarnings:
     """The move/remove ops are the public path now; they must surface the same
     bbox-overlap and orphaned-wire warnings the standalone handlers did (these
-    are NOT recovered by the batch's end-of-run _post_op_warnings)."""
+    are NOT recovered by the batch's end-of-run post_op_warnings)."""
 
     async def _build_pair(self, asc_state: SessionState, name: str):
 
@@ -1755,28 +1757,28 @@ class TestMidSegmentLabelDetected:
     """
 
     def test_point_on_segment_horizontal(self) -> None:
-        from ltspice_mcp.tools.circuit import _point_on_segment
+        from ltspice_mcp.lib.schematic_ops import point_on_segment
 
         # Mid-x point on a horizontal wire.
-        assert _point_on_segment((150, 100), (100, 100), (200, 100))
+        assert point_on_segment((150, 100), (100, 100), (200, 100))
         # Same y but outside x-range.
-        assert not _point_on_segment((300, 100), (100, 100), (200, 100))
+        assert not point_on_segment((300, 100), (100, 100), (200, 100))
         # Different y.
-        assert not _point_on_segment((150, 101), (100, 100), (200, 100))
+        assert not point_on_segment((150, 101), (100, 100), (200, 100))
 
     def test_point_on_segment_vertical(self) -> None:
-        from ltspice_mcp.tools.circuit import _point_on_segment
+        from ltspice_mcp.lib.schematic_ops import point_on_segment
 
-        assert _point_on_segment((100, 150), (100, 100), (100, 200))
-        assert not _point_on_segment((100, 250), (100, 100), (100, 200))
-        assert not _point_on_segment((101, 150), (100, 100), (100, 200))
+        assert point_on_segment((100, 150), (100, 100), (100, 200))
+        assert not point_on_segment((100, 250), (100, 100), (100, 200))
+        assert not point_on_segment((101, 150), (100, 100), (100, 200))
 
     def test_named_labels_strips_ground(self) -> None:
-        from ltspice_mcp.tools.circuit import _named_labels
+        from ltspice_mcp.lib.schematic_ops import named_labels
 
-        assert _named_labels(frozenset({"OUTP", "0"})) == {"OUTP"}
-        assert _named_labels(frozenset({"0"})) == set()
-        assert _named_labels(frozenset()) == set()
+        assert named_labels(frozenset({"OUTP", "0"})) == {"OUTP"}
+        assert named_labels(frozenset({"0"})) == set()
+        assert named_labels(frozenset()) == set()
 
 
 # Relocated regression coverage from a retired test module.
@@ -1829,7 +1831,7 @@ class TestTraceNet:
         assert sc["is_shorted"] is False
 
     async def test_trace_by_net_name(self, asc_state: SessionState, work_dir: Path):
-        # net:in matches one FLAG per pin (V1.+ and R1.1) — _resolve_pin would
+        # net:in matches one FLAG per pin (V1.+ and R1.1) — resolve_pin would
         # refuse the ambiguity, but trace_net seeds from a match and name-merges.
         path = await _build_name_wired_rc("trace_byname", asc_state, work_dir)
         res = await handle_trace_net(TraceNetInput(path=path, pin="net:in"), asc_state)
@@ -1990,14 +1992,14 @@ class TestTraceNet:
 class TestOnWirePredicate:
     def test_matches_point_on_segment(self):
         segments = [((0, 0), (100, 0)), ((100, 0), (100, 80)), ((50, 50), (50, 50))]
-        on_wire = _build_on_wire_predicate(segments)
+        on_wire = build_on_wire_predicate(segments)
         probes = [(0, 0), (50, 0), (100, 0), (100, 40), (100, 80), (50, 50), (10, 10), (200, 0)]
         for p in probes:
-            expected = any(_point_on_segment(p, v1, v2) for v1, v2 in segments)
+            expected = any(point_on_segment(p, v1, v2) for v1, v2 in segments)
             assert on_wire(p) == expected, p
 
     def test_endpoints_and_spans(self):
-        on_wire = _build_on_wire_predicate([((0, 0), (0, 100))])
+        on_wire = build_on_wire_predicate([((0, 0), (0, 100))])
         assert on_wire((0, 0))
         assert on_wire((0, 50))
         assert on_wire((0, 100))
