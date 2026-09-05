@@ -399,8 +399,8 @@ Key `lib/` modules:
 
 ### The tool surface
 
-`config.tool_profile` controls which tools are exposed. Since 0.6.0 there
-is one profile.
+There is one tool profile, and no setting selects it: `config.tool_profile`
+is a fixed name the guide and the prompts are written against.
 
 |profile|tool count|use case|
 |-|-|-|
@@ -418,11 +418,10 @@ agent with file access does it natively, and a wrapper added nothing.
 profiles, and with them one tool per operation, the single-simulation and
 batch job types those tools ran, and the runners behind them. A job
 sidecar an earlier release wrote still loads, inert: reading one reports
-what it is and that it must be re-run. Their profile names are still
-accepted in `[tools] profile` and `LTSPICE_MCP_TOOL_PROFILE` for one
-release; each logs a warning and serves the consolidated surface, so a
-config that names a removed profile still starts a working server instead
-of failing. A deployment that needs the old tools pins
+what it is and that it must be re-run. `[tools]
+profile` and `LTSPICE_MCP_TOOL_PROFILE` are no longer read: a config that
+still sets one loads with the key ignored, like any other key the server
+does not read. A deployment that needs the old tools pins
 `ltspice-mcp==0.5.*`. The handlers behind those tools were kept as internal
 adapters through 0.6 development, so the consolidated surface could be shown
 to run the same code paths; they are gone now, and the numeric core they

@@ -1,18 +1,17 @@
 """Profile wiring for the consolidated tool surface — the only one since 0.6.0.
 
 Locks the exposed set, the design annotations table (mcp_v1_design.md section 3,
-normative), env-var profile selection, and error hints that never name a tool
-the surface no longer carries.
+normative), and error hints that never name a tool the surface no longer
+carries.
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.config import VALID_PROFILES, ServerConfig
+from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
 from ltspice_mcp.tools import get_tools
 from tests.conftest import TOOLS_REMOVED_IN_0_6 as _TOOLS_REMOVED_TUPLE
@@ -113,22 +112,6 @@ class TestAnnotationsTable:
             if tool_def.annotations and tool_def.annotations.open_world_hint
         }
         assert open_world == {"run_experiments", "plot_waveform"}
-
-
-class TestEnvVarProfileSelection:
-    def test_consolidated_is_a_valid_profile(self):
-        assert "consolidated" in VALID_PROFILES
-
-    def test_consolidated_selected_via_env(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "consolidated")
-        config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "consolidated"
-
-    def test_consolidated_selected_via_toml(self, work_dir: Path):
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "consolidated"\n')
-        config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "consolidated"
 
 
 class TestErrorHints:

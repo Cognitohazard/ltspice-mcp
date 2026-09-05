@@ -28,12 +28,11 @@ The same six operations are importable in-process as
 
 **How to keep the old tools.** Pin `ltspice-mcp==0.5.*`.
 
-**What happens if you don't change your config.** `[tools] profile` is still a
-recognized key for this release. The values `"full"` and `"agentic"` log a
-warning that says the profile was removed in ltspice-mcp 0.6.0, that the
-consolidated tool surface is being served instead, and that pinning
-`ltspice-mcp==0.5.*` keeps the old surface. The server then starts normally
-with the seven tools. The key is deleted in 0.7.0.
+**What happens if you don't change your config.** `[tools] profile` is not a
+recognized key any more. A config that still sets it — to `"full"`,
+`"agentic"`, or anything else — loads with the key ignored, like any other
+key the server does not read, and the server starts normally with the seven
+tools.
 
 **Where each old tool went.**
 
