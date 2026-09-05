@@ -2156,3 +2156,56 @@ class TestDuplicateLabelAdvisory:
         all_warnings = [w for r in view["results"] for w in (r.get("warnings") or [])]
         dup = [w for w in all_warnings if "already labels a net" in w]
         assert dup, all_warnings
+
+
+@pytest.mark.asyncio
+class TestSchematicReadability:
+    """Readability eval for a schematic built the way the guide recommends:
+    one edit_schematic batch, wire_pins for the signal path, add_net_label only
+    for the ground/global nets. The result must come out WIRED — not 'net-label
+    soup', where every component pin floats on its own same-named FLAG and there
+    are no wires. This is the regression guard for the blind spot that let a
+    label-only build ship: the signal junctions have to be real WIRE records,
+    and net labels stay scoped to the terminal nets.
+    """
+
+    async def test_built_schematic_is_wired_not_label_soup(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A 3-resistor chain stacked on x=200: the two internal junctions are
+        # wired by wire_pins; only the two terminal nets (in, ground) get a
+        # label. Fixture res pins: 1=(0,-48), 2=(0,48), so Rn at (200, y) has
+        # pins at (200, y-48) and (200, y+48).
+        view = batch_view(
+            asc_state,
+            blank_sheet_file(asc_state, "readable"),
+            [
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 200, "y": 200},
+                {"op": "add_component", "reference": "R2", "symbol": "res", "x": 200, "y": 400},
+                {"op": "add_component", "reference": "R3", "symbol": "res", "x": 200, "y": 600},
+                {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
+                {"op": "wire_pins", "from_pin": "R2.2", "to_pin": "R3.1"},
+                {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "0", "pin": "R3.2"},
+            ],
+        )
+        assert view["failed_count"] == 0
+        assert view["saved"] is True
+
+        asc = _sheet("readable.asc")
+        wires = _wire_segments(asc)
+        flags = _flag_records(asc)
+        flag_coords = {coord for coord, _net in flags}
+
+        # The signal path is WIRED: both internal junctions are real segments.
+        assert _has_segment(wires, (200, 248), (200, 352)), wires  # R1.2 - R2.1
+        assert _has_segment(wires, (200, 448), (200, 552)), wires  # R2.2 - R3.1
+
+        # Net labels are scoped to the two terminal nets, placed at the terminal
+        # pins — not one FLAG per junction.
+        assert sorted(net for _coord, net in flags) == ["0", "in"]
+        assert flag_coords == {(200, 152), (200, 648)}  # R1.1 (in), R3.2 (gnd)
+
+        # The anti-soup invariant: no internal junction is realized as a label.
+        for junction in ((200, 248), (200, 352), (200, 448), (200, 552)):
+            assert junction not in flag_coords, f"junction {junction} labeled, not wired"
