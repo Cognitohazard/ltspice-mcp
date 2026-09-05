@@ -459,6 +459,11 @@ sources    list[{job_id? | raw_path?, runs?: "all"|[int]|{case_ids}, label}]
 recipes    list[Recipe]   Appendix A.2; unique key; optional per-recipe
                           sources: [label]
 group_by   list[assignment param | "circuit" | step-axis name]
+step       {axis, value} | null   for a deck carrying `.step`: read the one
+                                  iteration at that axis value. Default is the
+                                  first
+all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
+                                  exclusive with `step`
 include    {per_run?: {limit?, cursor?} | bool, outliers?, signals_available?,
             provenance?, fields?: [dotted row path]}
 budget     int | null
@@ -467,6 +472,14 @@ continue   {result_set_id, cursor}   resumes a budget-truncated call; mutually
 ```
 
 `continue` is the wire spelling; the Python attribute is `continuation`.
+
+`step`/`all_steps` are call-level, not per-recipe. A run's step axis belongs to
+the run, so the choice is made once and every recipe in the call reads it; the
+per-recipe spelling asked twenty-one branches to restate one fact and let two
+recipes over the same run disagree about which iteration they measured. The
+same two arguments sit on `run_experiments`' attached `analyze` block, so an
+attached measurement and a standalone one read the same steps. They are stored
+in the result set, so a continuation replays them.
 
 - `include.fields` paths root at one of `source`, `case_id`, `run_index`,
   `step_index`, `step_values`, `assignments`, `circuit`, `deck_sha256`,
@@ -946,11 +959,18 @@ scope.
 ### A.2 Recipe
 
 21 discriminant values. Shared fields — `key` (required and unique),
-`sources?`, `step` XOR `all_steps`, `reduce`, `reduce_field`, `spec` — are
-accepted only where the reducer category allows: the per-variant accepts-matrix
-binds to the scalar / multi-field / keyed / variable-length categories in
-`lib/recipes.py`, and non-reducible variants reject `reduce` and `spec` at
-validation.
+`sources?`, `reduce`, `field`, `spec` — are accepted only where the reducer
+category allows: the per-variant accepts-matrix binds to the scalar /
+multi-field / keyed / variable-length categories in `lib/recipes.py`, and
+non-reducible variants reject `reduce` and `spec` at validation. `.step`
+selection is not among them; it is one call-level choice (§3.3).
+
+`field` is one spelling for one thing: which of a recipe's numbers a `reduce`
+or a `spec` reads. It was two — `reduce_field` beside a `spec.field` — and the
+validator demanded they agree, so the second spelling could only ever restate
+the first or be refused. A multi-field recipe requires it as soon as either
+`reduce` or `spec` is given; a keyed recipe requires it for `spec` (`reduce`
+covers every key without it); a scalar recipe takes none, having one number.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|

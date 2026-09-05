@@ -645,9 +645,9 @@ def test_analyze_collects_projected_per_run_rows_and_missing_cases_together(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
             },
         ],
+        all_steps=True,
         include={
             "per_run": {"limit": 1},
             "fields": ["case_id", "run_index", "step_index"],

@@ -858,7 +858,7 @@ class TestOptionalRequestId:
         ]
         assert (
             canonical_fingerprint(args)
-            == "88b63d15157c94a95b7ffb8cbd37b5b7e766fb0db37a88c44af3af774ccf3167"
+            == "3c5ed6e7b435eea3c31bf88c1128a54e44e0c3281158929154822a4a15938743"
         )
 
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
@@ -2614,7 +2614,11 @@ class TestReceiptWeight:
         assert canonical_fingerprint(model) == canonical_fingerprint(loud)
 
     def test_day_one_presentation_fields_leave_old_canonical_bytes_unchanged(self):
-        assert experiment_store.CANONICALIZER_VERSION == 3
+        # A tripwire, not the subject: whoever bumps the version has to come
+        # back here and confirm the presentation exclusions still change no
+        # bytes. Version 4 was the .step selection moving onto the attached
+        # analyze block, which is an execution field and does change them.
+        assert experiment_store.CANONICALIZER_VERSION == 4
         model = RunExperimentsInput.model_validate(
             {
                 "request_id": "stable-bytes",

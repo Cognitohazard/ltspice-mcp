@@ -152,8 +152,8 @@ class TestAttachedRecipeGrammar:
                         "metric": "stability",
                         "signal": "V(out)",
                         "reduce": ["min"],
-                        "reduce_field": "phase_margin_deg",
-                        "spec": {"field": "phase_margin_deg", "min": 45.0},
+                        "field": "phase_margin_deg",
+                        "spec": {"min": 45.0},
                     }
                 ]
             },
@@ -596,7 +596,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # the recipe branches: a client cannot resolve a $ref into another tool's
     # document, so carrying the grammar twice measured 13 KB more on every
     # session, to restate what analyze_results publishes on the same wire.
-    "run_experiments": 12963,
+    # The .step selection hoisted off the recipes lands here too, so an
+    # attached analysis and a standalone one read the same steps: two more
+    # arguments and one shared StepSelector definition.
+    "run_experiments": 13230,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -689,7 +692,7 @@ class TestDormantRecipeWireStubs:
                 "signal": "V(out)",
                 "window": {"start": 1e-3, "end": 2e-3},
                 "reduce": ["mean"],
-                "reduce_field": "frequency",
+                "field": "frequency",
             },
             {"key": "r", "metric": "return_loss", "signal": "V(in)/I(Rin)", "z0": 75.0},
         ]
