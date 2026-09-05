@@ -124,13 +124,11 @@ TOOLS_REMOVED_IN_0_6: tuple[str, ...] = (
 # anything emitting beneath its frame). test_conformance_hook_armed.py's
 # closure test pins the exemptions fail-closed (a name that gains a contract,
 # or stops being delegated to, fails the suite).
-NO_CONTRACT_DELEGATES: dict[str, tuple[str, bool]] = {
-    "handle_pulse_response": ("transient adapter; its former dispatcher had no schema", True),
-    "handle_disturbance_response": (
-        "transient adapter; its former dispatcher had no schema",
-        True,
-    ),
-}
+# Currently empty: every handler a consolidated module still delegates to
+# declares its own contract, so nothing needs exempting. The table stays because
+# the closure test reads it fail-closed — an exemption listed here must still be
+# a real delegation, and a delegation missing here must still declare a schema.
+NO_CONTRACT_DELEGATES: dict[str, tuple[str, bool]] = {}
 
 INTERMEDIATE_NO_SCHEMA_ADAPTERS = tuple(
     name for name, (_, emits_intermediate) in NO_CONTRACT_DELEGATES.items() if emits_intermediate
