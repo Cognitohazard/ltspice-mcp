@@ -112,6 +112,27 @@ class TestPerOperationTree:
         assert "waypoints" in text
         assert "expected_sha256" in text
 
+    def test_jobs_actions_are_enumerated_with_their_own_fields(self):
+        """jobs' arguments ARE the union, so the branches carry nearly every
+        field: a catalogue that rendered only the shared half would leave a
+        caller with no way to learn how to address, dwell on, or cancel a job."""
+        from ltspice_mcp.tools.experiments import JOBS_ACTIONS
+
+        text = _reference.reference("jobs")
+        for action in JOBS_ACTIONS:
+            assert repr(action) in text, f"jobs action {action} missing"
+        for field in (
+            "job_id",
+            "request_id",
+            "timeout_s",
+            "wait_for",
+            "control_token",
+            "circuit",
+            "limit",
+            "cursor",
+        ):
+            assert field in text, f"jobs.{field} missing from its reference"
+
     def test_nested_models_are_flattened_onto_dotted_paths(self):
         text = _reference.reference("verify_circuit")
         assert "render.mode" in text
