@@ -217,9 +217,8 @@ the op shapes lost their leading underscore (`_OpAddComponent` is now
 
 Tool registration no longer takes a profile, and there is no profile filter
 to look a tool up through: there is one surface to serve. The `[tools]
-profile` config key is unaffected and still behaves as promised — `"full"`
-and `"agentic"` log a warning and serve the consolidated surface until the
-key is deleted in 0.7.0. Serving zero tools is still a hard error.
+profile` config key is gone with it — a config that still sets it loads with
+the key ignored. Serving zero tools is still a hard error.
 
 ### Added
 
