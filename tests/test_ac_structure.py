@@ -223,12 +223,12 @@ class TestAcStructureObservationShape:
     async def test_relayed_solve_failure_has_full_shape(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        import ltspice_mcp.tools.analysis as analysis_mod
+        import ltspice_mcp.lib.metrics as metrics_mod
 
         async def _fake_solve_failures(raw_path):
             return ["singular matrix: node V(x) has no DC path"]
 
-        monkeypatch.setattr(analysis_mod, "_solve_failures", _fake_solve_failures)
+        monkeypatch.setattr(metrics_mod, "solve_failures", _fake_solve_failures)
         name = _inject_ac(state_no_sim, work_dir, "relay.raw", one_pole(1e3))
         # format="json" routes through json_response, so the autouse conformance
         # hook validates this mixed-shape observations list against the schema.
