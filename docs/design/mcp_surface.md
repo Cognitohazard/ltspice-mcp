@@ -174,7 +174,12 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
                                         [] = one plain run per circuit
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"}
-analyze              {recipes, group_by?, include?} attached analysis stage
+analyze              {recipes: list[Recipe], group_by?, include?}
+                                        attached analysis stage; `recipes` is
+                                        the Appendix A.2 union `analyze_results`
+                                        takes, advertised and validated as such
+                                        (each recipe is checked at SUBMISSION,
+                                        before a deck is staged)
 lint                 "block"|"warn"|"off"  (default "block")
 suppress             list[rule_id]
 allow_live_includes  bool (default false)

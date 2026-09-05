@@ -76,6 +76,62 @@ def _input_schemas() -> dict[str, dict[str, Any]]:
     return {name: tool_def.inputSchema for name, tool_def in _registered().items()}
 
 
+def _resolved(document: dict[str, Any], node: Any, seen: frozenset[str] = frozenset()) -> Any:
+    """``node`` with every local ``$ref`` inlined against ``document['$defs']``.
+
+    Two tools cannot share a schema document, so a shape they both advertise is
+    compared by what a client resolves, not by which ``$defs`` key it landed in.
+    A ref already being resolved is left alone, so a self-referential model
+    truncates instead of hanging.
+    """
+    if isinstance(node, list):
+        return [_resolved(document, item, seen) for item in node]
+    if not isinstance(node, dict):
+        return node
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        name = ref.split("/")[-1]
+        if name in seen:
+            return {"$recursive": name}
+        rest = {key: value for key, value in node.items() if key != "$ref"}
+        target = _resolved(document, document["$defs"][name], seen | {name})
+        return {**target, **_resolved(document, rest, seen)} if rest else target
+    return {key: _resolved(document, value, seen) for key, value in node.items()}
+
+
+class TestAttachedRecipeGrammar:
+    """``run_experiments.analyze.recipes`` IS an ``analyze_results`` request.
+
+    It was advertised as a bare object, so the recipe grammar was discoverable
+    only from the other tool — and a typo in it was caught at the analysis
+    stage, after the whole simulation had run.
+    """
+
+    @staticmethod
+    def _attached_recipes() -> tuple[dict[str, Any], dict[str, Any]]:
+        """The run_experiments document and its raw ``analyze.recipes`` node."""
+        run = _registered()["run_experiments"].inputSchema
+        # 'analyze' is optional, so the block sits in a nullable branch.
+        ref = next(
+            item["$ref"] for item in run["properties"]["analyze"]["anyOf"] if "$ref" in item
+        )
+        attached = run["$defs"][ref.split("/")[-1]]
+        return run, attached["properties"]["recipes"]
+
+    def test_it_advertises_the_same_recipe_union_analyze_results_does(self):
+        analyze = _registered()["analyze_results"].inputSchema
+        run, attached = self._attached_recipes()
+        resolved_attached = _resolved(run, attached)["items"]
+        resolved_standalone = _resolved(analyze, analyze["properties"]["recipes"])["items"]
+        assert resolved_attached == resolved_standalone
+
+    def test_the_union_is_carried_by_reference_not_copied_per_branch(self):
+        _run, attached = self._attached_recipes()
+        items = attached["items"]
+        assert items["discriminator"]["propertyName"] == "metric"
+        assert all("$ref" in branch for branch in items["oneOf"])
+
+
 def _schema_variants(schema: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """The schema itself plus each top-level oneOf branch (jobs is a oneOf)."""
     yield schema
@@ -288,8 +344,12 @@ class TestOutputSchemaCoverage:
 # (_WIRE_PROSE_KEEP in tools/_base.py), and no outputSchema. The full prose
 # stays on the registered definition, api.reference(), and spice://guide.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
-    # Variations, attached analysis, and the receipt row shape.
-    "run_experiments": 7516,
+    # Variations, attached analysis, and the receipt row shape. The attached
+    # block advertises the recipe union itself rather than "some object", which
+    # is what a second copy of the twenty-odd recipe branches costs: a client
+    # cannot resolve a $ref into another tool's document, so the grammar is
+    # carried here too. 7516 before; the branches are the whole difference.
+    "run_experiments": 20848,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
