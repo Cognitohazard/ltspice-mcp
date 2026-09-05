@@ -161,87 +161,35 @@ class TestServerConfig:
 
 
 class TestToolProfile:
-    """Tests for tool_profile configuration."""
+    """The tool profile is fixed: there is one surface and no setting for it."""
 
     def test_default_profile_is_consolidated(self):
         config = ServerConfig()
         assert config.tool_profile == "consolidated"
 
-    def test_profile_from_toml(self, work_dir: Path):
+    @pytest.mark.parametrize("value", ["consolidated", "full", "agentic", "bogus"])
+    def test_a_profile_key_in_toml_is_not_read(self, work_dir: Path, value: str):
+        """``[tools] profile`` is no longer a key this loader knows. Whatever it
+        names, the config that comes back is the one profile the server serves,
+        and the file still loads — an unknown key is ignored like any other."""
         toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "consolidated"\n')
+        toml_path.write_text(f'[tools]\nprofile = "{value}"\nlisting = "compact"\n')
         config = ServerConfig.load(toml_path)
         assert config.tool_profile == "consolidated"
+        assert config.tool_listing == "compact"
 
-    def test_invalid_profile_in_toml_falls_back(self, work_dir: Path):
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "bogus"\n')
-        config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "consolidated"
-
-    def test_invalid_env_var_falls_back(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "bogus")
+    def test_a_profile_env_var_is_not_read(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "full")
         config = ServerConfig.load(work_dir / "nonexistent.toml")
         assert config.tool_profile == "consolidated"
-
-    def test_env_var_does_not_clobber_a_valid_toml_profile(
-        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """A rejected env value leaves the configured profile standing rather
-        than resetting it — the env override only applies what it validated."""
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "consolidated"\n')
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "bogus")
-        assert ServerConfig.load(toml_path).tool_profile == "consolidated"
-
-    @pytest.mark.parametrize("removed", ["full", "agentic"])
-    def test_removed_profile_in_toml_warns_with_the_version_pin(
-        self, work_dir: Path, caplog: pytest.LogCaptureFixture, removed: str
-    ):
-        """The migration contract: a config naming a profile removed in 0.6.0
-        gets the consolidated surface AND a warning carrying the pin that
-        restores the old one. Auto-updating install channels (PyPI, uvx, plugin,
-        MCPB) change the surface under a config nobody edited, so the removal
-        has to be loud and the escape hatch has to be in the message."""
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text(f'[tools]\nprofile = "{removed}"\n')
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
-            config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "consolidated"
-        message = "\n".join(record.getMessage() for record in caplog.records)
-        assert removed in message
-        assert "0.5" in message, f"warning does not name the version pin: {message!r}"
-
-    def test_removed_profile_in_env_warns_with_the_version_pin(
-        self, work_dir: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
-            config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "consolidated"
-        message = "\n".join(record.getMessage() for record in caplog.records)
-        assert "LTSPICE_MCP_TOOL_PROFILE" in message
-        assert "0.5" in message, f"warning does not name the version pin: {message!r}"
-
-    def test_a_typo_is_not_told_to_pin_an_old_release(
-        self, work_dir: Path, caplog: pytest.LogCaptureFixture
-    ):
-        """Only a genuinely removed name earns the downgrade instruction; a
-        misspelling should be corrected, not answered with a version pin."""
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "consolidatd"\n')
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
-            ServerConfig.load(toml_path)
-        message = "\n".join(record.getMessage() for record in caplog.records)
-        assert "consolidatd" in message
-        assert "0.5" not in message
 
     def test_generated_config_includes_tools_section(self, work_dir: Path):
         path = work_dir / "generated.toml"
         generate_default_config(path)
         content = path.read_text()
         assert "[tools]" in content
-        assert "profile" in content
+        assert "listing" in content
+        assert "profile" not in content
 
 
 class TestToolListing:
@@ -610,7 +558,6 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_MAX_RAW_MB": "256",
     "LTSPICE_MCP_LOG_LEVEL": "error",
     "LTSPICE_MCP_SYMBOL_PATHS": f"/tmp/env-sym-a{os.pathsep}/tmp/env-sym-b",
-    "LTSPICE_MCP_TOOL_PROFILE": "consolidated",
     "LTSPICE_MCP_TOOL_LISTING": "full",
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "7",
@@ -649,7 +596,6 @@ level = "debug"
 symbol_paths = ["/tmp/sym-a", "/tmp/sym-b"]
 
 [tools]
-profile = "consolidated"
 listing = "compact"
 
 [state]
@@ -777,7 +723,6 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_ESTIMATED_POINTS": "0",
             "LTSPICE_MCP_MAX_RAW_MB": "0",
             "LTSPICE_MCP_LOG_LEVEL": "LOUD",
-            "LTSPICE_MCP_TOOL_PROFILE": "bogus",
             "LTSPICE_MCP_TOOL_LISTING": "sparse",
             "LTSPICE_MCP_PERSIST_JOBS": "maybe",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "-2",
@@ -814,7 +759,6 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_ESTIMATED_POINTS",
             "LTSPICE_MCP_MAX_RAW_MB",
             "LTSPICE_MCP_LOG_LEVEL",
-            "LTSPICE_MCP_TOOL_PROFILE",
             "LTSPICE_MCP_PERSIST_JOBS",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT",
         ):

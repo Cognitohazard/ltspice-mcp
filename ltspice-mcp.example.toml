@@ -54,11 +54,6 @@ default_budget = 4000
 result_set_ttl_hours = 24.0
 
 [tools]
-# Tool profile: "consolidated" is the only profile since 0.6.0.
-# The former "full"/"agentic" profiles need a ltspice-mcp==0.5.* pin.
-# The key itself is removed in 0.7.0; new configs need no [tools] section.
-profile = "consolidated"
-
 # How much of each tool definition the tool list carries. "full"
 # (the default) advertises the seven tools as registered; "compact"
 # advertises the same seven with the per-argument descriptions
