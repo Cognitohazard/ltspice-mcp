@@ -35,7 +35,7 @@ class TestServerInstructionsFloor:
     def test_names_the_planes_and_keeps_the_result_trust_tail(self):
         # Always-on floor: even with no client-side skill installed, the
         # handshake teaches the three planes and ends on the result-trust
-        # doctrine (the tail is what Claude Code's 2048-char truncation
+        # guidance (the tail is what Claude Code's 2048-char truncation
         # would eat first, so its presence is the budget test's partner).
         for tool in (
             "run_experiments",
