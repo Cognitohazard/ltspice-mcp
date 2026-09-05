@@ -271,19 +271,28 @@ class TestServerDispatch:
         assert len(result.tools) > 0
 
     async def test_call_unknown_tool(self, state_no_sim: SessionState):
-        result = await call_tool(_ctx(state_no_sim), call_tool_params("ltspice_nonexistent", {}))
-        assert result.is_error
-        assert "Unknown tool" in tool_text(result)
+        """A name the server does not serve is a protocol error, not a tool
+        result: there is no tool to attribute a result to, so the lookup
+        failure answers invalid-params the way an unknown resource URI does.
+        The message lists the names that do exist."""
+        with pytest.raises(MCPError) as excinfo:
+            await call_tool(_ctx(state_no_sim), call_tool_params("ltspice_nonexistent", {}))
+        assert excinfo.value.code == mcp_types.INVALID_PARAMS
+        message = excinfo.value.message
+        assert "ltspice_nonexistent" in message
+        for name in state_no_sim.tool_dispatch:
+            assert name in message
 
     async def test_call_removed_tool_is_unknown(self, state_no_sim: SessionState):
         """A 0.5-era tool name is gone from the registry entirely — the wire
-        answers 'Unknown tool', the same as any other unknown name (migration
-        guidance lives in the config warning and the docs)."""
-        result = await call_tool(
-            _ctx(state_no_sim), call_tool_params("run_simulation", {"netlist": "x.cir"})
-        )
-        assert result.is_error
-        assert "Unknown tool" in tool_text(result)
+        answers the same invalid-params error as any other unknown name
+        (migration guidance lives in the config warning and the docs)."""
+        with pytest.raises(MCPError) as excinfo:
+            await call_tool(
+                _ctx(state_no_sim), call_tool_params("run_simulation", {"netlist": "x.cir"})
+            )
+        assert excinfo.value.code == mcp_types.INVALID_PARAMS
+        assert "run_simulation" in excinfo.value.message
 
     async def test_call_validation_error(self, state_no_sim: SessionState):
         result = await call_tool(

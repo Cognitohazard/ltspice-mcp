@@ -775,11 +775,19 @@ class TestResources:
 
 
 class TestErrorHandling:
-    async def test_unknown_tool_returns_error(self, tmp_path):
+    async def test_unknown_tool_raises_invalid_params(self, tmp_path):
+        """Calling a name the server does not have is a lookup failure, so it
+        comes back as a JSON-RPC invalid-params error naming the available
+        tools — not as an error-flagged result from a tool that does not
+        exist."""
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "totally_fake_tool", {})
-            assert result.is_error
-            assert "Unknown tool: totally_fake_tool" in _text(result)
+            with pytest.raises(MCPError) as excinfo:
+                await _call(session, "totally_fake_tool", {})
+            assert excinfo.value.code == mcp_types.INVALID_PARAMS
+            message = excinfo.value.message
+            assert "totally_fake_tool" in message
+            for name in CONSOLIDATED_TOOLS:
+                assert name in message
 
     async def test_missing_required_arg_returns_validation_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:

@@ -52,6 +52,12 @@ receipt. Failures carry
 reserved for call-level failures; a per-item failure sets `outcome: "partial"`
 instead.
 
+**A tool name the server does not have** is answered before any tool runs, as
+a JSON-RPC invalid-params error (`-32602`) whose message names what was asked
+for and lists the seven tools that do exist. That is the same shape an unknown
+resource URI gets, and for the same reason: `isError` marks a tool that ran and
+failed, and a name that does not exist has no tool to attribute a result to.
+
 **Error codes.** `code` is a stable, public name for a failure. Which one a
 failure gets is decided by the exception's *type*, never by its message: every
 class in `errors.py` declares a `code`, and that class code is the default a
