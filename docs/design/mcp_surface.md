@@ -177,9 +177,13 @@ execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
 analyze              {recipes: list[Recipe], group_by?, include?}
                                         attached analysis stage; `recipes` is
                                         the Appendix A.2 union `analyze_results`
-                                        takes, advertised and validated as such
-                                        (each recipe is checked at SUBMISSION,
-                                        before a deck is staged)
+                                        takes. Every recipe is validated at
+                                        SUBMISSION, before a deck is staged.
+                                        The schema here advertises the metric
+                                        names and points at `analyze_results`,
+                                        which documents the fields per metric —
+                                        one copy of the grammar on the wire,
+                                        not two.
 lint                 "block"|"warn"|"off"  (default "block")
 suppress             list[rule_id]
 allow_live_includes  bool (default false)

@@ -66,7 +66,7 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
-from ltspice_mcp.lib.recipes import Recipe, validate_recipe
+from ltspice_mcp.lib.recipes import DISCRIMINANTS, Recipe, validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
@@ -94,6 +94,7 @@ from ltspice_mcp.tools._base import (
     keep_plan,
     paginate,
     project_row,
+    prune_unreferenced_defs,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -317,6 +318,35 @@ class AttachedAnalysis(StrictModel):
         ]
 
 
+#: What the wire says one attached recipe is: the metric names, the key every
+#: recipe carries, and where the per-metric field trees live.
+#:
+#: The grammar is ``analyze_results``', and that tool publishes all twenty-odd
+#: branches in full on the same wire. A second copy here measured 13 KB, paid
+#: by every client in every session whether or not it ever attaches an
+#: analysis, to say something already said one tool away. What a caller cannot
+#: derive is which metrics exist, so that is what the stub keeps — the same
+#: bargain the dormant recipe branches strike, including their two-channel
+#: pointer and their deliberate permissiveness: no ``additionalProperties``,
+#: so a client pre-validating a full recipe against this shape still sends it.
+#: The model behind it is the real union, and every attached recipe is
+#: validated at submission, before a deck is staged.
+_ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "One analyze_results recipe. This block mirrors analyze_results.recipes "
+        "exactly — same grammar, same metrics, validated the same way at "
+        "submission. Fields per metric: api.reference('analyze_results') or "
+        "spice://guide."
+    ),
+    "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "metric": {"type": "string", "enum": list(DISCRIMINANTS)},
+    },
+    "required": ["key", "metric"],
+}
+
+
 class RunExperimentsInput(ToolInput):
     # Fields that choose how the receipt is rendered rather than what runs.
     # canonical_fingerprint excludes them, so re-asking for the same experiment
@@ -370,6 +400,20 @@ class RunExperimentsInput(ToolInput):
     def canonical_fingerprint_payload(self) -> dict[str, Any]:
         """Exclude receipt fields without changing old include=None bytes."""
         return self.strip_presentation()
+
+    @classmethod
+    def wire_input_schema(cls) -> dict[str, Any]:
+        """Advertise an attached recipe as its stub, not a second recipe union.
+
+        The stub replaces the union only in what is published; the model still
+        validates against the union, so this changes nothing a call is allowed
+        to send. Definitions the union kept alive are then unreachable, and an
+        unreferenced definition is weight no client can use.
+        """
+        schema = copy.deepcopy(super().wire_input_schema())
+        recipes = schema["$defs"][AttachedAnalysis.__name__]["properties"]["recipes"]
+        recipes["items"] = copy.deepcopy(_ATTACHED_RECIPE_WIRE_STUB)
+        return prune_unreferenced_defs(schema)
 
     request_id: str = Field(
         default_factory=lambda: generate_id("req"),
