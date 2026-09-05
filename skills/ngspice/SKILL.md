@@ -25,7 +25,7 @@ description: >
 
 - `.END` must be last line. No statements after it.
 - `+` at start of line continues previous statement.
-- Comments: `*` (full line) or `$` (inline). Note: `;` is NOT the inline comment character in ngspice (that's LTspice).
+- Comments: `*` (full line) or `$` (inline). Note: `;` is not the inline comment character in ngspice (that's LTspice).
 
 ### Component Syntax
 
@@ -50,7 +50,7 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | G | giga | 1e9 |
 | T | tera | 1e12 |
 
-**`M` means MILLI, not mega. Use `MEG` for 1e6.**
+**`M` means milli, not mega. Use `MEG` for 1e6.**
 `1M` = 0.001, not 1000000. Unrecognized suffix letters are silently ignored:
 no error, just a wrong value.
 
@@ -111,7 +111,7 @@ PWL(t1 v1 t2 v2 ...)
 ### General Pitfalls
 
 - **Node "0" is ground**. Using `GND` without `.global GND` or tying it to 0 creates a floating node — no error, wrong results.
-- **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does NOT auto-connect bulk to source (LTspice does).
+- **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does not auto-connect bulk to source (LTspice does).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
 - **Parameter sweep**: ngspice has **no native `.step`** (that is LTspice syntax). The MCP runs parametric sweeps through `run_experiments` `variations` (an `assign` grid or a `random` rule), which stage and simulate one deck per case. For a hand-written deck outside the MCP, use a `.control` block with an `alter`/loop. A `.step` line in a deck handed to `run_experiments` is rejected with a pointer to `variations`.
 
@@ -129,7 +129,7 @@ PWL(t1 v1 t2 v2 ...)
 ```
 
 - Expressions in braces `{expr}` or single quotes `'expr'` — both work.
-- Expressions without delimiters work only when spaces are absent: `.param c=a+123` OK, `.param c = a + 123` FAILS silently (assigns only first token).
+- Expressions without delimiters work only when spaces are absent: `.param c=a+123` OK, `.param c = a + 123` fails silently (assigns only first token).
 - Self-referential params fail silently: `.param x = {x+3}` does not work.
 - Parameter names: must start with alpha; may contain `! # $ % [ ] _`. Cannot use reserved words: `time`, `temper`, `hertz`, `not`, `and`, `or`, `div`, `mod`, `sqr`, `sqrt`, `sin`, `cos`, `exp`, `ln`, `log`, `log10`, `arctan`, `abs`, `pwr`, `defined`.
 - String-valued params supported with limited concatenation.
@@ -178,7 +178,7 @@ B1 out 0 V=<expression>
 B2 out 0 I=<expression> [tc1=x] [tc2=x] [temp=x]
 ```
 
-**Conditional:** uses ternary `cond ? true : false` — NOT `IF()` (that's LTspice). Put a space before `?` so the parser doesn't confuse it with other tokens. Nested ternaries need explicit parentheses.
+**Conditional:** uses ternary `cond ? true : false`, not `IF()` (that's LTspice). Put a space before `?` so the parser doesn't confuse it with other tokens. Nested ternaries need explicit parentheses.
 
 **Available functions (B source context):** `cos`, `sin`, `tan`, `acos`, `asin`, `atan`, `cosh`, `sinh`, `acosh`, `asinh`, `atanh`, `exp`, `ln`, `log`, `log10`, `abs`, `sqrt`, `u` (unit step), `u2` (ramp 0-1), `uramp`, `floor`, `ceil`, `min`, `max`, `pow`, `**`, `pwr`, `^`, `i(device)`
 
@@ -210,9 +210,9 @@ X1 input output myfilter rval=1k cval=1n
 ```
 
 **Key differences from LTspice:**
-- Parameters on `.subckt` line do NOT need `params:` keyword — just `name=value` after nodes.
+- Parameters on `.subckt` line do not need `params:` keyword — just `name=value` after nodes.
 - `.lib` behavior depends on the compatibility mode, and no single `.lib` form works in every mode. For unconditional whole-file inclusion use `.include <file>`, which works in every ngspice mode (verified on ngspice-42). If you use `.lib`:
-  - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does NOT load the file's models.
+  - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does not load the file's models.
   - **This server's default `kiltpsa`** (a PSPICE-family mode) is the reverse: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select form) is split by the `lt`/`ps` tokens into two plain includes that drop the section, and the run fails with `could not find include file`. Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_experiments` emits this hint when a failed run matches the pattern.
 - `.param` inside subcircuits is local scope (masks globals). Nesting up to 10 levels.
 - Subcircuit and model names are global — must be unique across the entire netlist.
@@ -226,7 +226,7 @@ X1 input output myfilter rval=1k cval=1n
 ```
 
 - Without `.save`, all node voltages and source currents are saved (can create huge files).
-- Adding even ONE `.save` line drops all defaults — only listed signals are saved.
+- Adding even one `.save` line drops all defaults — only listed signals are saved.
 - To keep defaults plus extras: `.save all @m2[vdsat]`
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
 - **Read internals back as named numbers** (no rawfile parsing, no `.control`):

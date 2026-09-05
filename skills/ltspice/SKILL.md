@@ -50,7 +50,7 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | G | giga | 1e9 |
 | T | tera | 1e12 |
 
-**`M` means MILLI, not mega. Use `MEG` for 1e6.**
+**`M` means milli, not mega. Use `MEG` for 1e6.**
 `1M` = 0.001, not 1000000. Unrecognized suffix letters are silently ignored:
 no error, just a wrong value.
 
@@ -127,10 +127,10 @@ PWL file=<filename>
 .func myfn(x) {x*2}
 ```
 
-- Component values referencing params MUST use braces: `R1 in out {Rval}`
-- `.param` using other params MUST use braces: `.param x={y*2}`
+- Component values referencing params must use braces: `R1 in out {Rval}`
+- `.param` using other params must use braces: `.param x={y*2}`
 - `.func` body uses braces: `.func myfn(x) {x*2}`
-- B source expressions: do NOT wrap the expression itself in curly braces — parameters inside B source expressions DO use braces: `B1 out 0 V=V(in)*{Rval}`
+- B source expressions: do not wrap the expression itself in curly braces — parameters inside B source expressions do use braces: `B1 out 0 V=V(in)*{Rval}`
 
 ### Behavioral Sources (B sources)
 
@@ -143,7 +143,7 @@ B3 out 0 R=<expression>                       ; resistor (undocumented)
 B4 out 0 P=<expression> [VprXover=x]          ; power sink (undocumented)
 ```
 
-**Conditional:** `IF(cond, true, false)` — NOT ternary `?:` (that's ngspice).
+**Conditional:** `IF(cond, true, false)`, not ternary `?:` (that's ngspice).
 B source expressions must be single-line in schematics (netlists can use `+` continuation).
 
 **Operator precedence:**
@@ -287,7 +287,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 | R180 | Right | D bottom, S top | PMOS mirrored (gate faces right) |
 
 **Choose orientation based on where the gate connects:**
-- Gate wire must NOT cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
+- Gate wire must not cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
 - Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
 - For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
@@ -296,7 +296,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 #### Schematic layout best practices
 
 **Component placement:**
-- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
+- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) must share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
 - **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
@@ -305,11 +305,11 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 **Wiring:**
 - **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `wire_pins` for L-shaped or multi-segment routes.
-- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
-- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
+- **Horizontal buses must route outside all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is inside the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates before placing components.
+- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, not straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed `wire_pins` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `edit_schematic` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
+- **Read the `wiring` profile `edit_schematic` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.

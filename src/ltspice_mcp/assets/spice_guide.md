@@ -115,7 +115,7 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | G | giga | 1e9 |
 | T | tera | 1e12 |
 
-**`M` means MILLI, not mega. Use `MEG` for 1e6.**
+**`M` means milli, not mega. Use `MEG` for 1e6.**
 `1M` = 0.001, not 1000000.
 Unrecognized suffix letters are silently ignored — no error, just wrong value.
 
@@ -191,7 +191,7 @@ Or use the `resonance` recipe (AC) for peak frequency + Q + bandwidth in one ste
 
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
-- **`MAX` on a signed (always-negative) trace is a silent trap**: for a PMOS
+- **`MAX` on a signed (always-negative) trace does not give the peak magnitude**: for a PMOS
   drain current that swings −3 mA…−1 mA, `.meas TRAN imax MAX I(V1)` returns
   **−1 mA** (the least-negative sample), not the 3 mA peak magnitude — no
   error, just the wrong "peak". Wrap it: `.meas TRAN imax MAX abs(I(V1))`
@@ -267,14 +267,14 @@ recipes resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
 
 An amplifier with 60-100 dB of DC gain multiplies any input offset by
 1,000-100,000. Driving both inputs from ideal DC sources at the same potential
-does NOT put the output at mid-rail: the amplifier's own input-referred offset
+does not put the output at mid-rail: the amplifier's own input-referred offset
 (even tens of microvolts) drives the output to a supply rail, and the gain,
 bandwidth and phase you then measure are those of a saturated transistor
 stack, not of the amplifier in its linear region. Symptoms: DC gain tens of dB
 lower than expected, an `.op` output voltage within ~100 mV of either rail,
 device operating regions showing triode/cutoff where saturation was intended.
 
-ALWAYS check `V(out)` in the `.op` result before trusting an AC sweep. If it is
+Always check `V(out)` in the `.op` result before trusting an AC sweep. If it is
 not near the intended quiescent level, the measurement is invalid.
 
 ### DC servo for open-loop AC analysis
@@ -306,7 +306,7 @@ open-loop transfer function.
   unstable mode that a first-crossing readout misses.
 - Phase: unwrap before computing margin; wrapped (modulo-360) phase can show
   a margin that is not there.
-- Supply current: measure the supply SOURCE current at the `.op` point, not a
+- Supply current: measure the supply source current at the `.op` point, not a
   sum of device currents.
 - Check `.op` first and AC second: is the output within the linear region?
 - Compare measured DC gain with `gm*ro` expectations. A roughly 25 dB shortfall
@@ -322,7 +322,7 @@ decks. A useful dictionary has `DUT_INCLUDE`, `DUT_INSTANCE`, `VDD`, `VCM`,
 `CL`, `TEMP`, and analysis limits such as `FSTART`, `FSTOP`, or `TSTOP`.
 Render the `@NAME@` host placeholders below, preserve SPICE `{PARAM}` braces,
 and reject output containing an unresolved `@NAME@`. Keep the title first and
-`.end` last. Use absolute or deck-relative include paths deliberately.
+`.end` last. Choose include paths (absolute or deck-relative) explicitly.
 
 #### Operating-point and supply-current archetype
 
@@ -533,10 +533,10 @@ the 6 dB divider loss.
 .func myfn(x) {x*2}
 ```
 
-- Component values referencing params MUST use braces: `R1 in out {Rval}`
-- `.param` using other params MUST use braces: `.param x={y*2}`
+- Component values referencing params must use braces: `R1 in out {Rval}`
+- `.param` using other params must use braces: `.param x={y*2}`
 - `.func` body uses braces: `.func myfn(x) {x*2}`
-- B source expressions: do NOT wrap the expression itself in curly braces — parameters inside B source expressions DO use braces: `B1 out 0 V=V(in)*{Rval}`
+- B source expressions: do not wrap the expression itself in curly braces — parameters inside B source expressions do use braces: `B1 out 0 V=V(in)*{Rval}`
 
 ### Behavioral Sources (B sources)
 
@@ -549,7 +549,7 @@ B3 out 0 R=<expression>                       ; resistor (undocumented)
 B4 out 0 P=<expression> [VprXover=x]          ; power sink (undocumented)
 ```
 
-**Conditional:** `IF(cond, true, false)` — NOT ternary `?:` (that's ngspice).
+**Conditional:** `IF(cond, true, false)`, not ternary `?:` (that's ngspice).
 B source expressions must be single-line in schematics (netlists can use `+` continuation).
 
 **Operator precedence:**
@@ -761,7 +761,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 | R180 | Right | D bottom, S top | PMOS mirrored (gate faces right) |
 
 **Choose orientation based on where the gate connects:**
-- Gate wire must NOT cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
+- Gate wire must not cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
 - Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
 - For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
@@ -780,7 +780,7 @@ section, require it to build with `edit_schematic` (never by hand-writing the
 `inspect(kind="components")`.
 
 **Component placement:**
-- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
+- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) must share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
 - **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
@@ -789,11 +789,11 @@ section, require it to build with `edit_schematic` (never by hand-writing the
 
 **Wiring:**
 - **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in the `wire_pins` op for L-shaped or multi-segment routes.
-- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
-- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
+- **Horizontal buses must route outside all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is inside the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates before placing components.
+- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, not straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `edit_schematic` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with the `wire_pins` op for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
+- **Read the `wiring` profile `edit_schematic` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with the `wire_pins` op for local nets; reserve net-labels for ground, power rails, and distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
@@ -841,20 +841,20 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   `set no_auto_gnd` if you need `gnd` to be a distinct net.
 - Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
   `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
-- `.meas` is suppressed only when batch mode (`-b`) AND a command-line `-r
+- `.meas` is suppressed only when batch mode (`-b`) and a command-line `-r
   rawfile` are combined — ngspice prints "No .measure possible in batch mode
-  (-b) with -r rawfile set!" (the invocation this server uses). It is NOT a
+  (-b) with -r rawfile set!" (the invocation this server uses). It is not a
   blanket batch limitation: move the measurement into a `.control ... run ...
   .endc` block and write it as the dot-less interactive `meas` command (e.g.
   `meas tran vmax MAX V(out)` — no leading dot; a dotted `.meas` inside
   `.control` is not a valid ngspice command and computes nothing). The result
-  prints to the run's log. (`set measoutfile` / `.option measoutfile` does NOT
+  prints to the run's log. (`set measoutfile` / `.option measoutfile` does not
   help here — the `-b -r` combination suppresses the measurement before any
   output routing, so no file is written.) For named signals and device
   operating-point params you usually need none of this — `.save` them and read
   the raw back with `run_experiments` plus the `waveform`, `value`, or
   `operating_point` recipe. Reserve `.control` / `wrdata` for in-engine computation you
-  genuinely can't express as a saved signal.
+  cannot express as a saved signal.
 
 ### Parameters and Expressions
 
@@ -867,7 +867,7 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
 
 - Expressions in braces `{expr}` or single quotes `'expr'` — both work.
 - Expressions without delimiters work only when spaces are absent:
-  `.param c=a+123` OK, `.param c = a + 123` FAILS silently (assigns first token).
+  `.param c=a+123` OK, `.param c = a + 123` fails silently (assigns first token).
 - Self-referential params fail silently: `.param x = {x+3}` does not work.
 - Parameter names must start with alpha; may contain `! # $ % [ ] _`. Cannot use
   reserved words: `time`, `temper`, `hertz`, `not`, `and`, `or`, `div`, `mod`,
@@ -920,7 +920,7 @@ B1 out 0 V=<expression>
 B2 out 0 I=<expression> [tc1=x] [tc2=x] [temp=x]
 ```
 
-**Conditional:** ternary `cond ? true : false` — NOT `IF()` (that is LTspice).
+**Conditional:** ternary `cond ? true : false`, not `IF()` (that is LTspice).
 Put a space before `?` so the parser does not confuse it with other tokens.
 Nested ternaries need explicit parentheses.
 
@@ -955,7 +955,7 @@ C1 p1 0 {cval}
 X1 input output myfilter rval=1k cval=1n
 ```
 
-- Parameters on the `.subckt` line do NOT need a `params:` keyword — just
+- Parameters on the `.subckt` line do not need a `params:` keyword — just
   `name=value` after the nodes.
 - `.lib` loading depends on ngspice's compatibility mode, and no single `.lib`
   form works in every mode — so for unconditional whole-file inclusion use
@@ -963,7 +963,7 @@ X1 input output myfilter rval=1k cval=1n
   you use `.lib`:
   - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>`
     pulls just that `.lib section … .endl` block; a bare `.lib <file>` with no
-    section does NOT load the file's models.
+    section does not load the file's models.
   - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
     mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a
     sectioned `.lib <file> <section>` (the PDK corner idiom) is mis-split by the
@@ -985,9 +985,9 @@ X1 input output myfilter rval=1k cval=1n
 ```
 
 - Without `.save`, all node voltages and source currents are saved (huge files).
-- Adding even ONE `.save` line drops all defaults — only listed signals saved.
+- Adding even one `.save` line drops all defaults — only listed signals saved.
 - Resistor current is the internal vector `@r1[i]` (via `.save @r1[i]` or
-  `.options savecurrents`); under this path the `i(r1)` read-function does NOT
+  `.options savecurrents`); under this path the `i(r1)` read-function does not
   resolve it — `i()`/`I()` only resolve `name#branch` vectors (voltage sources,
   and the sense source a separate `.probe I(R1)` directive inserts). This server
   reads the `@r1[i]` form.
@@ -1047,14 +1047,14 @@ R1 a b 'agauss(10k, 500, 3)'      $ 10k, ±500 absolute, /3 sigma
 C1 c 0 '{unif(1n, 0.1)}'          $ 1n, ±10% relative, uniform
 ```
 
-These are built into the numparam frontend (no build flag) but live ONLY there,
-NOT in the nutmeg/`.control` interpreter. For a distribution, re-run the deck N
+These are built into the numparam frontend (no build flag) but live only there,
+not in the nutmeg/`.control` interpreter. For a distribution, re-run the deck N
 times (set `.options seed=<value>`); a `run_experiments` random `variations`
 entry automates the N-run draw + aggregation.
 
 **(2) `.control` loop with `alter`** — vary within one ngspice invocation. Inside
 `.control` only `sgauss(0)` (Gaussian, mean 0, σ 1) and `sunif(0)` (uniform
-[-1,1]) are built in — scale them yourself (`agauss`/`gauss` are NOT nutmeg
+[-1,1]) are built in — scale them yourself (`agauss`/`gauss` are not nutmeg
 functions here unless you `define` them first):
 
 ```spice

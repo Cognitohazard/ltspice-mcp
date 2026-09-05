@@ -19,7 +19,7 @@ wording.
 
 An amplifier with 60-100 dB of DC gain multiplies any input offset by
 1,000-100,000. Driving both inputs from ideal DC sources at the same
-potential does NOT put the output at mid-rail: the amplifier's own
+potential does not put the output at mid-rail: the amplifier's own
 input-referred offset (even tens of microvolts) drives the output to a
 supply rail, and the gain, bandwidth and phase you then measure are those
 of a saturated transistor stack, not of the amplifier in its linear
@@ -27,7 +27,7 @@ region. Symptoms: DC gain tens of dB lower than expected, an .op
 output voltage within ~100 mV of either rail, device operating regions
 showing triode/cutoff where saturation was intended.
 
-ALWAYS check v(out) in the .op result before trusting an AC sweep. If it
+Always check v(out) in the .op result before trusting an AC sweep. If it
 is not near the intended quiescent level, the measurement is invalid.
 
 ## DC servo for open-loop AC analysis
@@ -57,7 +57,7 @@ open-loop transfer function.
   an unstable mode that a first-crossing readout misses.
 - Phase: unwrap before computing margin; wrapped (modulo-360) phase can
   show a margin that is not there.
-- Supply current: measure the supply SOURCE current at the .op point,
+- Supply current: measure the supply source current at the .op point,
   not a sum of device currents.
 
 ## Sanity checks for measurement benches
