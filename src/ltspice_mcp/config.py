@@ -738,6 +738,9 @@ def generate_default_config(path: Path) -> None:
     tools_tbl = table()
     tools_tbl.add(comment('Tool profile: "consolidated" is the only profile since 0.6.0.'))
     tools_tbl.add(comment('The former "full"/"agentic" profiles need a ltspice-mcp==0.5.* pin.'))
+    tools_tbl.add(
+        comment("The key itself is removed in 0.7.0; new configs need no [tools] section.")
+    )
     tools_tbl.add("profile", "consolidated")
     doc.add("tools", tools_tbl)
     doc.add(nl())
