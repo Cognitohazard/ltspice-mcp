@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import secrets
+import shutil
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -55,6 +56,26 @@ _DRIFT_REASONS = {
     "source_modified_after_staging": "content changed",
     "source_unavailable_after_staging": "no longer readable",
 }
+
+
+def _discard_unadopted_run_dir(candidate: ExperimentJob) -> None:
+    """Remove the run directory of a candidate job that never became durable.
+
+    Only ever called for a job id this submission minted and no record names,
+    so nothing else can be reading the tree. The name check keeps a malformed
+    ``output_folder`` from turning this into a delete of the shared runs root;
+    failure is logged and swallowed, because leaving a directory behind must
+    not fail a submission that otherwise succeeded.
+    """
+    run_dir = candidate.output_folder
+    if run_dir is None or run_dir.name != candidate.job_id:
+        return
+    try:
+        shutil.rmtree(run_dir)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning("Could not discard unadopted run directory %s: %s", run_dir, exc)
 
 
 class IdempotencyConflictError(SimulationError):
@@ -386,6 +407,31 @@ class ExperimentRunner(RunnerBase):
 
     @staticmethod
     def _durable_barrier(
+        request: ExperimentRunRequest,
+        candidate: ExperimentJob,
+    ) -> _BarrierResult:
+        """Resolve the durable submission, discarding a candidate nobody adopts.
+
+        Decks are staged before the gate is taken, so two calls sharing a
+        ``request_id`` in one turn each stage a full deck set under their own
+        job id — but only one of them becomes a job. Whichever loses leaves a
+        ``runs/{job_id}/`` tree no record claims, in a runs root every session
+        on the box shares; provenance comes from a record, so an unclaimed tree
+        is exactly what misleads a later inventory of that folder. The gate is
+        the one place that knows which candidate was adopted, so it is where
+        the other one is cleaned up.
+        """
+        try:
+            result = ExperimentRunner._resolve_durable_submission(request, candidate)
+        except Exception:
+            _discard_unadopted_run_dir(candidate)
+            raise
+        if result.job is not candidate:
+            _discard_unadopted_run_dir(candidate)
+        return result
+
+    @staticmethod
+    def _resolve_durable_submission(
         request: ExperimentRunRequest,
         candidate: ExperimentJob,
     ) -> _BarrierResult:
