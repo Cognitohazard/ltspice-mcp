@@ -350,6 +350,23 @@ class TestServerDispatch:
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         assert "Unknown" in excinfo.value.message
 
+    async def test_read_resource_crash_is_reported_as_a_server_fault(
+        self, state_no_sim: SessionState
+    ):
+        """An unhandled exception in a resource handler is this server's bug.
+
+        Reported as invalid-params it would tell a client that keys recovery on
+        that code to keep trying other URIs, when no URI it can send avoids a
+        fault in the router.
+        """
+        with (
+            patch("ltspice_mcp.server.handle_read_resource", side_effect=TypeError("boom")),
+            pytest.raises(MCPError) as excinfo,
+        ):
+            await read_resource(_ctx(state_no_sim), _read_params("spice://config"))
+        assert excinfo.value.code == mcp_types.INTERNAL_ERROR
+        assert "TypeError" in excinfo.value.message
+
     async def test_read_resource_valid(self, state_no_sim: SessionState):
         result = await read_resource(_ctx(state_no_sim), _read_params("spice://config"))
         assert len(result.contents) > 0
