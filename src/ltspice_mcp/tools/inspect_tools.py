@@ -359,7 +359,7 @@ _CURSOR_DESCRIPTION = (
 # The file-backed kinds bind the file itself, so the stronger claim holds there.
 _CURSOR_DESCRIPTION_FILE = (
     "Opaque page token taken verbatim from a previous page's 'next_cursor' — echo "
-    "it back unmodified. It is bound to this exact query AND to the file's size and "
+    "it back unmodified. It is bound to this exact query and to the file's size and "
     "modification time, so it will not resume a different one, and a tampered token "
     "— or one minted before an edit to the file — is rejected instead of resuming at "
     "a stale offset."
@@ -384,7 +384,7 @@ class SymbolsQuery(StrictModel):
     path: str | None = Field(
         default=None,
         description=(
-            "Optional schematic whose OWN directory is put at the front of the "
+            "Optional schematic whose own directory is put at the front of the "
             "reported precedence — pass it to see what that sheet would resolve."
         ),
     )
@@ -469,7 +469,7 @@ class ModelQuery(StrictModel):
     mode: Literal["search", "enumerate"] = Field(
         description=(
             "'search' fuzzy-matches 'query' and requires it. 'enumerate' lists every "
-            "model in 'libs' and REJECTS a 'query' rather than echoing back a filter "
+            "model in 'libs' and rejects a 'query' rather than echoing back a filter "
             "it never applied."
         )
     )
@@ -1036,7 +1036,7 @@ def _lex_warnings(lexed: LexResult) -> list[str]:
 
 
 def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
-    """Card-membership for a node in a netlist — NO geometry keys (by contract)."""
+    """Card-membership for a node in a netlist — no geometry keys (by contract)."""
     lexed = lex(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
@@ -1441,7 +1441,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         "type": "object",
                         "description": (
                             "Paging counters for this item, summed over every collection "
-                            "it pages (a .asc net pages pins AND coordinates under one "
+                            "it pages (a .asc net pages pins and coordinates under one "
                             "cursor)."
                         ),
                         "properties": {
@@ -1451,7 +1451,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             },
                             "returned": {
                                 "type": "integer",
-                                "description": "Rows in THIS page.",
+                                "description": "Rows in this page.",
                             },
                             "truncated": {
                                 "type": "boolean",
@@ -1522,7 +1522,7 @@ INSPECT_DESCRIPTION = (
     "a 'query'; enumerate lists every model in the given 'libs'). A denied path, a "
     "stale or tampered cursor, an unknown kind, or a malformed query fails only that "
     "item — every other query still returns. Paginated kinds resume via 'cursor'. "
-    "This is the surface's only honestly read-only tool."
+    "It is the only tool on this surface that never writes."
 )
 
 

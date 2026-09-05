@@ -485,7 +485,7 @@ _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
         "An X instance whose .subckt definition was found nowhere, left as a black "
-        "box. A fact, not a difference — it does not flip 'equivalent'."
+        "box. A fact, not a difference: it does not change 'equivalent'."
     ),
     "properties": {
         "name": {"type": "string", "description": "The subcircuit name that was asked for."},
@@ -509,7 +509,7 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
         "A subcircuit defined more than once; SPICE keeps the first in textual "
-        "order. A fact, not a difference — it does not flip 'equivalent'."
+        "order. A fact, not a difference: it does not change 'equivalent'."
     ),
     "properties": {
         "name": {"type": "string", "description": "The duplicated subcircuit name."},
@@ -546,9 +546,9 @@ _COMPARISON_SCHEMA: dict[str, Any] = {
         "equivalent": {
             "type": ["boolean", "null"],
             "description": (
-                "The single-glance verdict. In equivalence mode: structurally "
-                "isomorphic AND no component, value, parameter, anchor or arity "
-                "difference. In structural_diff mode: the delta is empty."
+                "The overall verdict. In equivalence mode: structurally isomorphic "
+                "and no component, value, parameter, anchor or arity difference. In "
+                "structural_diff mode: the delta is empty."
             ),
         },
         "structurally_equivalent": {
@@ -688,7 +688,7 @@ def _failure(
 # ---------------------------------------------------------------------------
 
 _ANCHORS_DESCRIPTION = (
-    "Named nets that must map BY NAME between the reference and this circuit — "
+    "Named nets that must map by name between the reference and this circuit — "
     "ports, rails, outputs, measurement nets. A design that is structurally "
     "isomorphic but puts 'vout' in the wrong place fails on these. Ground is "
     "always an implicit anchor. Only meaningful with 'reference' in equivalence mode."
@@ -708,7 +708,7 @@ class VerifyRenderPolicy(RenderPolicy):
         default="with_checks",
         description=(
             "'with_checks' renders the drawing in addition to running the checks; "
-            "'only' renders and skips every check (a fast look with no analysis)."
+            "'only' renders and skips every check, which is faster."
         ),
     )
     delivery: Literal["artifact", "inline", "both"] = Field(
@@ -769,8 +769,8 @@ class VerifyCircuitInput(ToolInput):
         default=None,
         description=(
             "Compare this circuit against a reference netlist. Omit when there is "
-            "no reference — the syntax, symbol, export, layout and quality checks "
-            "are self-checks and stand on their own."
+            "no reference: the syntax, symbol, export, layout and quality checks "
+            "need no reference to run."
         ),
     )
     reference: str | None = Field(
@@ -841,7 +841,7 @@ class VerifyCircuitInput(ToolInput):
         description=(
             "Where the exported netlist goes. 'managed' writes into the server's "
             "scratch directory and leaves your files untouched. 'sidecar' writes the "
-            "conventional <name>.net next to the schematic, OVERWRITING any existing "
+            "conventional <name>.net next to the schematic, overwriting any existing "
             "one — use it only when you want that file on disk."
         ),
     )

@@ -405,7 +405,7 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "items": {"type": ["number", "null"]},
                 "description": (
                     "Per-.step scalar(s). For a WHEN/AT measurement this is the "
-                    "constant trigger LEVEL, not the crossing point — read 'at' "
+                    "constant trigger level, not the crossing point; read 'at' "
                     "for the crossing time/frequency."
                 ),
             },
@@ -424,7 +424,7 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "items": {"type": ["number", "null"]},
                 "description": (
                     "Crossing time (.tran) or frequency (.ac) for a WHEN/AT point "
-                    "measurement — THIS is the answer for a WHEN rise-time/crossing "
+                    "measurement. This is the answer for a WHEN rise-time/crossing "
                     "query; 'values' holds the constant level. Null for plain "
                     "value measurements."
                 ),
@@ -685,9 +685,9 @@ class RenderPolicy(StrictModel):
         ge=0.5,
         le=4.0,
         description=(
-            "Render scale — the cost dial. Image token cost tracks pixel area, so "
-            "halving the scale costs about a quarter as much. Raise it only when "
-            "detail is genuinely unreadable."
+            "Render scale. Image token cost tracks pixel area, so halving the scale "
+            "costs about a quarter as much. Raise it only when the detail is "
+            "unreadable."
         ),
     )
     max_pixels: int | None = Field(
@@ -712,7 +712,7 @@ class CompareSpec(StrictModel):
     anchors: list[str] | None = Field(
         default=None,
         description=(
-            "Named nets that must map BY NAME between the reference and this "
+            "Named nets that must map by name between the reference and this "
             "circuit — ports, rails, outputs, measurement nets. A design that is "
             "structurally isomorphic but puts 'vout' in the wrong place fails on "
             "these. Ground is always an implicit anchor."

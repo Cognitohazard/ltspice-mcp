@@ -294,7 +294,7 @@ class TestRandomExpansion:
         assign_doc = AssignVariation.model_fields["id"].description or ""
         random_doc = RandomVariation.model_fields["id"].description or ""
         assert "_random_id" in random_doc
-        assert "NOT" in assign_doc and "assignments" in assign_doc
+        assert "does not reach case assignments" in assign_doc
 
     def test_mismatch_min_wl_um2_must_be_positive(self):
         # min_wl_um2 is the √(W·L) denominator floor; <= 0 would divide by zero

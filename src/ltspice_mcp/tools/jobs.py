@@ -154,8 +154,8 @@ class _AddressedJobsInput(JobsInput):
         default=None,
         min_length=1,
         description=(
-            "Address the job by the idempotency key it was submitted under — the "
-            "way back to a job whose id was lost. Alternative to job_id."
+            "Address the job by the idempotency key it was submitted under; use it "
+            "when the job_id was lost. Alternative to job_id."
         ),
     )
 
@@ -185,13 +185,13 @@ class JobsWaitInput(_AddressedJobsInput):
         description=(
             "How long to block, 0-300s. Timing out is not a failure — the response "
             "comes back with timed_out set and the job keeps running, so wait again. "
-            "Polling with 'status' in a loop costs calls this avoids."
+            "Polling with 'status' in a loop uses more calls."
         ),
     )
     wait_for: Literal["all", "runs"] = Field(
         default="all",
         description=(
-            "'all' waits for the runs AND any attached analysis stage; 'runs' "
+            "'all' waits for the runs and any attached analysis stage; 'runs' "
             "returns as soon as the last run is terminal, before the analysis it "
             "would then have to wait for separately."
         ),
