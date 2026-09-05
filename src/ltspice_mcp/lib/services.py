@@ -21,7 +21,13 @@ from typing import Any, Literal, NoReturn, TypeVar
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    BatchJobError,
+    JobNotFoundError,
+    ResultError,
+    SimulationError,
+)
 from ltspice_mcp.lib import experiment_store, job_store, recent
 from ltspice_mcp.lib.batch_results import (
     compute_batch_stats,
@@ -895,11 +901,11 @@ async def bounded_parse(
     if call_deadline is not None:
         timeout_s = min(timeout_s, max(0.0, call_deadline - now_mono))
     if timeout_s <= 0:
-        raise ResultError(f"Parsing {path.name} exceeded the analysis item deadline")
+        raise AnalysisDeadlineExceeded(f"Parsing {path.name} exceeded the analysis item deadline")
     wedged_until = _wedged_raw_paths.get(path)
     if wedged_until is not None:
         if now_mono < wedged_until:
-            raise ResultError(
+            raise AnalysisDeadlineExceeded(
                 f"Parsing {path.name} recently exceeded its deadline and "
                 "its worker is still abandoned; retries are paused for "
                 f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
@@ -919,7 +925,7 @@ async def bounded_parse(
             raise
     except TimeoutError:
         _wedged_raw_paths[path] = loop.time() + cooldown_s
-        raise ResultError(
+        raise AnalysisDeadlineExceeded(
             f"Parsing {path.name} exceeded {timeout_s:.3g}s and was "
             "abandoned — the file may be corrupt in a way that wedges the parser, "
             "or on a stalled mount. The file was not modified; retries are "
