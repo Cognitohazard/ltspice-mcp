@@ -32,7 +32,6 @@ from ltspice_mcp.lib import (
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.job_store import JOBS_SUBDIR, SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import (
     diagnostic_collapse_key,
     extract_log_diagnostics,
@@ -68,7 +67,7 @@ from ltspice_mcp.lib.recipes import (
     recipe_error,
     validate_recipe,
 )
-from ltspice_mcp.state import SessionState
+from ltspice_mcp.state import SessionState, legacy_record_message
 from ltspice_mcp.tools._base import (
     ABSENT,
     ResponseBudget,
@@ -687,10 +686,6 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
     return runs
 
 
-def _legacy_record_path(job: Any) -> Path:
-    return job.netlist.parent / SIDECAR_DIRNAME / JOBS_SUBDIR / f"{job.job_id}.json"
-
-
 async def _resolve_sources(
     inputs: list[AnalyzeSourceInput], state: SessionState
 ) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[dict[str, Any]]]:
@@ -780,8 +775,8 @@ async def _resolve_sources(
                 }
             )
             continue
-        record = job.store_path if isinstance(job, ExperimentJob) else _legacy_record_path(job)
-        source_jobs[job.job_id] = str(record) if record.is_file() else None
+        record = job.store_path if isinstance(job, ExperimentJob) else None
+        source_jobs[job.job_id] = str(record) if record is not None and record.is_file() else None
 
         if isinstance(job, ExperimentJob):
             # Per-case readiness is gated below, not here.
@@ -852,52 +847,18 @@ async def _resolve_sources(
                 await state.note_recent_circuit(case.circuit_path.resolve())
             continue
 
-        # The shared seam preserves the legacy resolve_run completed-only gate;
-        # do not inspect trusted artifact paths directly here.
-        if source_input.runs == "all":
-            candidate_indices = [run.index for run in services.runs_of(job)]
-        elif isinstance(source_input.runs, list):
-            candidate_indices = source_input.runs
-        else:
-            missing.append(
-                {
-                    "label": source_input.label,
-                    "case_id": None,
-                    "run_index": None,
-                    "code": "case_selection_wrong_job_kind",
-                }
-            )
-            continue
-        for index in candidate_indices:
-            try:
-                source = services.resolve_analysis_source(
-                    SimpleNamespace(
-                        raw_file=None,
-                        job_id=job.job_id,
-                        run_index=index,
-                    ),
-                    state,
-                )
-            except LTSpiceMCPError as exc:
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": None,
-                        "run_index": index,
-                        "code": "run_unavailable",
-                        "detail": str(exc),
-                    }
-                )
-                continue
-            runs.append(
-                _ResolvedRun(
-                    f"{source_input.label}:{index}",
-                    source_input.label,
-                    source,
-                    job.job_id,
-                )
-            )
-        await state.note_recent_circuit(job.netlist.resolve())
+        # Anything that is not an experiment is a record an earlier release
+        # wrote. Say so once, against the source the caller named: reporting it
+        # as an empty run set would read as a job that simply produced nothing.
+        missing.append(
+            {
+                "label": source_input.label,
+                "case_id": None,
+                "run_index": None,
+                "code": "legacy_job_record",
+                "detail": legacy_record_message(job.job_id),
+            }
+        )
     observations.extend(await _relay_solve_failures(runs))
     return runs, missing, source_jobs, observations
 
@@ -3024,61 +2985,20 @@ def _without_warnings(warnings: list[str], *substrings: str) -> list[str]:
     ]
 
 
-def _legacy_passthrough(result: dict[str, Any], fields: list[str] | None) -> dict[str, Any]:
-    """Return a legacy public result verbatim when the requested view is recoverable."""
-    rendered = copy.deepcopy(result)
-    if not fields:
-        return rendered
-    unavailable: list[str] = [
-        "include.fields='value' requests the whole value block, whose nested "
-        "content was not retained by legacy lean rendering"
-        for field in fields
-        if split_field_path(field) == ["value"]
-    ]
-    for entry in rendered.get("results", {}).values():
-        surfaces: list[list[dict[str, Any]]] = []
-        values = entry.get("values")
-        if isinstance(values, list):
-            surfaces.append([row for row in values if isinstance(row, dict)])
-        per_run = entry.get("per_run")
-        if isinstance(per_run, dict) and isinstance(per_run.get("items"), list):
-            surfaces.append([row for row in per_run["items"] if isinstance(row, dict)])
-        records = [row for surface in surfaces for row in surface]
-        if records:
-            unavailable.extend(_projection_warnings(records, fields))
-            for field in fields:
-                segments = split_field_path(field)
-                if (
-                    len(segments) == 1
-                    and segments != ["value"]
-                    and not any(segments[0] in row for row in records)
-                ):
-                    unavailable.append(
-                        f"include.fields={field!r} names a row key absent from this legacy result"
-                    )
-    if unavailable:
-        raise ResultError(
-            "The stored attached analysis is a legacy rendered result and cannot "
-            "recover the requested projection: " + " ".join(unavailable)
-        )
-    return rendered
-
-
 def render_attached_analysis(
     stored: dict[str, Any],
     *,
     fields: list[str] | None,
     answer_channel: bool = False,
     row_limit: int | None = None,
-) -> tuple[dict[str, Any], bool]:
-    """Render one public attached result from a snapshot copy or legacy response."""
+) -> dict[str, Any]:
+    """Render one public attached result from its stored neutral snapshot."""
     snapshot_kind = analysis_snapshot.classify(stored)
     if snapshot_kind != "snapshot":
-        if snapshot_kind == "unsupported":
-            raise ResultError(
-                "The attached analysis snapshot version is unsupported by this build"
-            )
-        return _legacy_passthrough(stored, fields), True
+        raise ResultError(
+            "The attached analysis was stored by an earlier release in a shape this "
+            "build cannot render — re-run analyze_results against the job."
+        )
 
     data = copy.deepcopy(stored["top"])
     _rebind_snapshot_cursors(data, fields)
@@ -3262,7 +3182,7 @@ def render_attached_analysis(
             if has_failures or missing_total or data["next"] is not None
             else "complete"
         )
-    return data, False
+    return data
 
 
 def columnarize_analysis_view(data: dict[str, Any]) -> None:

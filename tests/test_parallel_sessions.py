@@ -29,11 +29,16 @@ import psutil
 import pytest
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import job_store, now
+from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib import proc_kill as proc_kill_mod
+from ltspice_mcp.lib.experiment_types import (
+    Completeness,
+    ExperimentCase,
+    ExperimentJob,
+    SourceRecord,
+)
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
-from ltspice_mcp.lib.job_types import SimulationJob
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
@@ -43,7 +48,6 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import circuit_lock_target
 from tests._asc_ops import apply_ops, sha_of
-from tests.conftest import make_batch_job, make_sim_job
 
 #: The line a peer session appends while holding the lock.
 _PEER_MARKER = b"TEXT -48 320 Left 2 ;external marker\n"
@@ -209,8 +213,47 @@ class TestCircuitFileLock:
         assert not (work_dir / f"{asc_file.name}.lock").exists()
 
 
-def _make_running_job(work_dir: Path, job_id: str, pid: int) -> SimulationJob:
-    return make_sim_job(job_id, status="running", netlist=work_dir / "deck.cir", owner_pid=pid)
+def _running_experiment(work_dir: Path, job_id: str, pid: int) -> ExperimentJob:
+    """A running experiment recorded as owned by ``pid``."""
+    circuit = work_dir / "deck.cir"
+    if not circuit.exists():
+        circuit.write_text(".op\n.end\n", encoding="utf-8")
+    job = ExperimentJob(
+        job_id=job_id,
+        request_id=f"request-{job_id}",
+        fingerprint="f" * 64,
+        canonicalizer_version=1,
+        control_token="control-secret",
+        store_path=experiment_store.record_path(job_id, work_dir),
+        cases=[
+            ExperimentCase(
+                case_id="case_0000",
+                run_index=0,
+                circuit="dut",
+                circuit_path=circuit,
+                staged_deck=circuit,
+                deck_sha256="a" * 64,
+                assignments={},
+                status="queued",
+            )
+        ],
+        sources=[
+            SourceRecord(
+                circuit="dut",
+                path=circuit,
+                sha256="b" * 64,
+                staged_deck=circuit,
+                manifest=[],
+                simulator="FakeSim",
+                dialect="ltspice",
+            )
+        ],
+        simulator="FakeSim",
+        completeness=Completeness(declared=1, expanded=1),
+        status="running",
+    )
+    job.owner_pid = pid
+    return job
 
 
 @pytest.fixture(scope="module")
@@ -228,136 +271,90 @@ def live_peer_pid():
 
 class TestOwnerPidLiveness:
     def test_running_job_with_live_owner_stays_running(self, work_dir: Path, live_peer_pid: int):
-        job = _make_running_job(work_dir, "sim_1_livepeer", live_peer_pid)
-        job_store.save_job(job)
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert len(sim_jobs) == 1
-        assert sim_jobs[0].status == "running"
-        assert sim_jobs[0].owner_pid == live_peer_pid
-        assert sim_jobs[0].error is None
+        job = _running_experiment(work_dir, "exp_livepeer", live_peer_pid)
+        experiment_store.save_job(job)
+
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+        assert loaded is not None
+        assert loaded.status == "running"
+        assert loaded.owner_pid == live_peer_pid
 
     def test_running_job_with_dead_owner_loads_interrupted(self, work_dir: Path):
         proc = subprocess.Popen([sys.executable, "-c", "pass"])
         proc.wait()  # pid is now dead
-        job = _make_running_job(work_dir, "sim_1_deadpeer", proc.pid)
-        job_store.save_job(job)
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert sim_jobs[0].status == "interrupted"
+        job = _running_experiment(work_dir, "exp_deadpeer", proc.pid)
+        experiment_store.save_job(job)
 
-    def test_running_record_without_pid_loads_interrupted(self, work_dir: Path):
-        # Records from builds that predate the pid field: no liveness signal,
-        # so the pre-pid behavior (interrupted) stands.
-        job = _make_running_job(work_dir, "sim_1_legacy", os.getpid())
-        data = job_store.serialize_job(job)
-        del data["pid"]
-        target = job_store.sidecar_dir(job.netlist) / f"{job.job_id}.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        import json
-
-        target.write_text(json.dumps(data, default=str))
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert sim_jobs[0].status == "interrupted"
-        assert sim_jobs[0].owner_pid == 0
-
-    def test_own_pid_in_record_counts_as_dead(self, work_dir: Path):
-        # A record carrying OUR pid can't be ours (it isn't in our registry),
-        # so it must be a recycled pid — treated as a dead owner.
-        job = _make_running_job(work_dir, "sim_1_recycled", os.getpid())
-        job_store.save_job(job)
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert sim_jobs[0].status == "interrupted"
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+        assert loaded is not None
+        assert loaded.status == "interrupted"
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_only_own_jobs(self, work_dir: Path, live_peer_pid: int):
-        registry = JobRegistry(persist_enabled=False)
-        own = _make_running_job(work_dir, "sim_1_own", os.getpid())
-        foreign = _make_running_job(work_dir, "sim_1_foreign", live_peer_pid)
+        registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
+        own = _running_experiment(work_dir, "exp_own", os.getpid())
+        foreign = _running_experiment(work_dir, "exp_foreign", live_peer_pid)
         registry.jobs[own.job_id] = own
         registry.jobs[foreign.job_id] = foreign
 
         cancelled: list[str] = []
 
         class _StubRunners:
-            def get_existing_sim_runner(self, simulator=None):
+            def get_experiment_runner_for(self, job):
                 return self
 
-            async def cancel(self, job, state):
+            async def cancel(self, job, **kwargs):
                 cancelled.append(job.job_id)
+                job.status = "cancelled"
+                job.done_event.set()
+                return []
 
         await registry.cancel_running(_StubRunners(), None)
-        assert cancelled == ["sim_1_own"]
+        assert cancelled == ["exp_own"]
         assert foreign.status == "running", "a parallel session's live job must be left alone"
 
-    @pytest.mark.asyncio
-    async def test_refresh_foreign_job_picks_up_owner_completion(
+    def test_refresh_foreign_job_picks_up_owner_completion(
         self, work_dir: Path, live_peer_pid: int
     ):
-        # Async test: the registry swap is loop-only, so this runs on a loop.
-        registry = JobRegistry(persist_enabled=True)
-        stale = _make_running_job(work_dir, "sim_1_refresh", live_peer_pid)
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        stale = _running_experiment(work_dir, "exp_refresh", live_peer_pid)
         registry.jobs[stale.job_id] = stale
         # The owner finishes the job and persists the terminal state.
-        done = _make_running_job(work_dir, "sim_1_refresh", live_peer_pid)
+        done = _running_experiment(work_dir, "exp_refresh", live_peer_pid)
         done.status = "completed"
-        done.completed_at = now()
-        job_store.save_job(done)
+        done.cases[0].status = "produced"
+        done.completeness.produced = 1
+        experiment_store.save_job(done)
 
         fresh = registry.refresh_foreign_job(stale)
         assert fresh.status == "completed"
-        assert registry.jobs["sim_1_refresh"] is fresh
+        # Off the loop (the worker-thread situation a resource read runs in):
+        # the caller gets the owner's latest state, but the loop-owned registry
+        # must not be mutated from a thread.
+        assert registry.jobs["exp_refresh"] is stale
 
-    async def test_refresh_foreign_job_async_matches_sync(
+    @pytest.mark.asyncio
+    async def test_refresh_on_the_loop_swaps_the_registry_entry(
         self, work_dir: Path, live_peer_pid: int
     ):
-        # The async variant offloads the sidecar read (loop-freeze fix) but must
-        # produce the same result + registry swap as the sync path on a loop.
-        registry = JobRegistry(persist_enabled=True)
-        stale = _make_running_job(work_dir, "sim_1_async_refresh", live_peer_pid)
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        stale = _running_experiment(work_dir, "exp_async_refresh", live_peer_pid)
         registry.jobs[stale.job_id] = stale
-        done = _make_running_job(work_dir, "sim_1_async_refresh", live_peer_pid)
+        done = _running_experiment(work_dir, "exp_async_refresh", live_peer_pid)
         done.status = "completed"
-        done.completed_at = now()
-        job_store.save_job(done)
+        done.cases[0].status = "produced"
+        done.completeness.produced = 1
+        experiment_store.save_job(done)
 
         fresh = await registry.refresh_foreign_job_async(stale)
         assert fresh.status == "completed"
-        assert registry.jobs["sim_1_async_refresh"] is fresh
-
-    def test_refresh_off_loop_returns_fresh_without_registry_swap(
-        self, work_dir: Path, live_peer_pid: int
-    ):
-        # Sync test = no running loop, the worker-thread situation (resource
-        # reads run there). The caller still gets the owner's latest state,
-        # but the loop-owned registry must not be mutated off-loop.
-        registry = JobRegistry(persist_enabled=True)
-        stale = _make_running_job(work_dir, "sim_1_threadview", live_peer_pid)
-        registry.jobs[stale.job_id] = stale
-        done = _make_running_job(work_dir, "sim_1_threadview", live_peer_pid)
-        done.status = "completed"
-        done.completed_at = now()
-        job_store.save_job(done)
-
-        fresh = registry.refresh_foreign_job(stale)
-        assert fresh.status == "completed"
-        assert registry.jobs["sim_1_threadview"] is stale
+        assert registry.jobs["exp_async_refresh"] is fresh
 
     def test_refresh_foreign_job_leaves_own_jobs_alone(self, work_dir: Path):
-        registry = JobRegistry(persist_enabled=True)
-        own = _make_running_job(work_dir, "sim_1_mine", os.getpid())
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        own = _running_experiment(work_dir, "exp_mine", os.getpid())
         registry.jobs[own.job_id] = own
         assert registry.refresh_foreign_job(own) is own
-
-    def test_batch_jobs_roundtrip_owner_pid(self, work_dir: Path, live_peer_pid: int):
-        bj = make_batch_job(
-            "sweep_1_peer",
-            status="running",
-            netlist=work_dir / "deck.cir",
-            owner_pid=live_peer_pid,
-        )
-        job_store.save_job(bj)
-        _, batch_jobs = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert batch_jobs[0].status == "running"
-        assert batch_jobs[0].owner_pid == live_peer_pid
 
 
 class _FakeProc:

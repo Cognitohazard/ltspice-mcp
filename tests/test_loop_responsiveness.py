@@ -18,12 +18,13 @@ import pytest
 from pydantic import AnyUrl
 from spicelib.raw.raw_read import RawRead
 
+from ltspice_mcp import resources
 from ltspice_mcp.lib import recent, services
 from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import _FakeServer, make_sim_job, stage_recorded_fixture
+from tests.conftest import _FakeServer, stage_recorded_fixture
 
 # Stands in for a multi-hundred-MB parse over /mnt/c. The only deliberate
 # slow-op in this module; every timing assertion keeps >=4x margin to it.
@@ -135,22 +136,27 @@ async def test_resource_read_served_off_loop(
     concurrent light request.
 
     Drives the real router seam — ``server.read_resource`` over the
-    ``spice://results/{job}/signals`` route, with the parse patched to
-    take SLOW_OP_SECONDS — concurrently with a light ``inspect`` query.
+    ``spice://netlists/{filename}`` route, with the decode patched to take
+    SLOW_OP_SECONDS — concurrently with a light ``inspect`` query.
     """
-    raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    job = make_sim_job("resjob", raw_file=raw_path)
-    state_no_sim.jobs[job.job_id] = job
+    deck = work_dir / "slow.cir"
+    deck.write_text("* slow read\nR1 in 0 1k\n.end\n", encoding="utf-8")
 
-    monkeypatch.setattr(services, "RawRead", slow_rawread)
+    real_read = resources.read_spice_text
+
+    def slow_read(path):
+        time.sleep(SLOW_OP_SECONDS)
+        return real_read(path)
+
+    monkeypatch.setattr(resources, "read_spice_text", slow_read)
 
     with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
         # Keep this wrapper: create_task needs a true coroutine, and the
         # SDK's read_resource is typed as returning a plain Awaitable.
-        async def _read_signals_resource():
-            return await read_resource(AnyUrl("spice://results/resjob/signals"))
+        async def _read_netlist_resource():
+            return await read_resource(AnyUrl("spice://netlists/slow.cir"))
 
-        heavy = asyncio.create_task(_read_signals_resource())
+        heavy = asyncio.create_task(_read_netlist_resource())
         # One loop tick: the read task starts and hands the router to a worker.
         await asyncio.sleep(0)
 
@@ -163,4 +169,4 @@ async def test_resource_read_served_off_loop(
         assert len(contents) == 1
         body = contents[0].content
         assert isinstance(body, str)
-        assert "V(out)" in body
+        assert "R1 in 0 1k" in body

@@ -25,7 +25,7 @@ from ltspice_mcp.tools.analysis import (
     _union_panel,
     handle_plot_waveform,
 )
-from tests.conftest import make_experiment_job, make_sim_job, stage_recorded_fixture
+from tests.conftest import make_experiment_job, stage_recorded_fixture
 
 
 def _read(path: Path) -> str:
@@ -523,20 +523,6 @@ class TestDeliveryAndSecurity:
                 state_no_sim,
             )
 
-    async def test_job_id_plots_next_to_circuit(self, state_no_sim: SessionState, work_dir: Path):
-        raw_dir = work_dir / "elsewhere"
-        raw_dir.mkdir()
-        raw = stage_recorded_fixture(raw_dir, "ltspice_tran_rc")
-        netlist = work_dir / "circuit.cir"
-        job = make_sim_job(
-            "jp", status="completed", netlist=netlist, raw_file=raw, simulator="ltspice"
-        )
-        state_no_sim.add_job(job)
-        data = await _plot(state_no_sim, job_id="jp", run_index=0, signals=["V(out)"])
-        out = Path(data["path"])
-        assert (work_dir / ".ltspice-mcp" / "plots") in out.parents
-        assert raw_dir not in out.parents
-
     async def test_experiment_job_id_plots_a_case(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -559,16 +545,12 @@ class TestDeliveryAndSecurity:
             assert raw_dir not in out.parents
         assert "run1" in Path(by_case["path"]).name
 
-    async def test_case_id_needs_an_experiment_job(
+    async def test_case_id_needs_a_job_that_has_cases(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        state_no_sim.add_job(
-            make_sim_job("jp", status="completed", netlist=work_dir / "c.cir", raw_file=raw)
-        )
-        with pytest.raises(ResultError, match="case_id"):
-            await _plot(state_no_sim, job_id="jp", case_id="case-0000", signals=["V(out)"])
-        # And never silently dropped beside a raw_file (the API refuses the pair too).
+        # Never silently dropped beside a raw_file: a case id names a run of a
+        # job, and a bare raw path is not one.
         with pytest.raises(ResultError, match="case_id"):
             await _plot(state_no_sim, raw_file=str(raw), case_id="case-0000", signals=["V(out)"])
 

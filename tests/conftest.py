@@ -1,10 +1,10 @@
 """Shared fixtures and helpers for ltspice-mcp tests."""
 
 import asyncio
+import json
 import shutil
 import typing
 from collections.abc import Coroutine, Iterator
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.runner_base import RunOutcome
-from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
+from ltspice_mcp.state import LegacyJobRecord, SessionState
 
 _T = typing.TypeVar("_T")
 
@@ -129,7 +129,6 @@ NO_CONTRACT_DELEGATES: dict[str, tuple[str, bool]] = {
         "transient adapter; its former dispatcher had no schema",
         True,
     ),
-    "handle_cancel_job": ("text-only confirmation; emits no structuredContent of its own", False),
 }
 
 INTERMEDIATE_NO_SCHEMA_ADAPTERS = tuple(
@@ -268,25 +267,49 @@ def resolve_local_ref(schema: dict, node: dict) -> dict:
             return node
 
 
-def make_sim_job(job_id: str = "j1", *, status: str = "completed", **overrides) -> SimulationJob:
-    """SimulationJob with test defaults; any dataclass field is overridable.
+def write_legacy_sidecar(
+    circuit: Path,
+    job_id: str = "j1",
+    *,
+    kind: str = "simulation",
+    status: str = "completed",
+    **extra,
+) -> Path:
+    """Write a job sidecar in the shape a pre-0.6 release wrote.
 
-    A ``completed`` job gets a ``completed_at`` one second after
-    ``started_at`` unless the caller overrides it.
+    The records this build meets in the wild were written by a version whose
+    job types it no longer has, so a test about loading one has to write the
+    old shape by hand rather than serialize a live object.
     """
-    started_at = overrides.pop("started_at", None) or now()
-    fields: dict = {
-        "netlist": Path("/tmp/test.cir"),
+    from ltspice_mcp.lib import job_store
+
+    record: dict = {
+        "schema": job_store.SCHEMA,
+        "schema_version": job_store.SCHEMA_VERSION,
+        "job_id": job_id,
+        "kind": kind,
+        "netlist": str(circuit.resolve()),
         "simulator": "ltspice",
-        "completed_at": started_at + timedelta(seconds=1) if status == "completed" else None,
+        "status": status,
+        "started_at": now().isoformat(),
+        "completed_at": now().isoformat() if status == "completed" else None,
+        "raw_file": str(circuit.with_suffix(".raw")),
+        "log_file": str(circuit.with_suffix(".log")),
+        "pid": 0,
     }
+    record.update(extra)
+    target = job_store.sidecar_dir(circuit)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{job_id}.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
+def make_legacy_record(job_id: str = "j1", *, status: str = "completed", **overrides):
+    """The inert record a pre-0.6 sidecar loads as."""
+    fields: dict = {"netlist": Path("/tmp/test.cir"), "kind": "sim"}
     fields.update(overrides)
-    return SimulationJob(
-        job_id=job_id,
-        status=status,  # type: ignore[arg-type]
-        started_at=started_at,
-        **fields,
-    )
+    return LegacyJobRecord(job_id=job_id, status=status, **fields)
 
 
 class SyncApi(ApiMethodsMixin):
@@ -392,28 +415,6 @@ def make_experiment_job(
     )
     state.add_experiment_job(job, already_persisted=True)
     return job
-
-
-def make_batch_job(job_id: str = "b1", *, status: str = "completed", **overrides) -> BatchJob:
-    """BatchJob with test defaults; any dataclass field is overridable.
-
-    A ``completed`` job gets a ``completed_at`` one second after
-    ``started_at`` unless the caller overrides it.
-    """
-    fields: dict = {
-        "job_type": "sweep",
-        "netlist": Path("/tmp/test.cir"),
-        "total_runs": 2,
-    }
-    fields.update(overrides)
-    bj = BatchJob(
-        job_id=job_id,
-        status=status,  # type: ignore[arg-type]
-        **fields,
-    )
-    if status == "completed" and bj.completed_at is None:
-        bj.completed_at = bj.started_at + timedelta(seconds=1)
-    return bj
 
 
 class _FakeSession:

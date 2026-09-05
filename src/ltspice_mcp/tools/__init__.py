@@ -12,7 +12,6 @@ from . import (  # noqa: F401
     experiments,
     inspect_tools,
     schematic_edit,
-    simulation,
     verify,
 )
 

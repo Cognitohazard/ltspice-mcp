@@ -14,8 +14,8 @@ import ltspice_mcp.api as api_module
 import ltspice_mcp.api._primitives as primitives_module
 from ltspice_mcp.api import Api, RawResult
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import now, services
-from ltspice_mcp.state import SessionState, SimulationJob
+from ltspice_mcp.lib import services
+from ltspice_mcp.state import SessionState
 from tests.conftest import (
     LTSPICE_TRAN_RC_VFINAL,
     SyncApi,
@@ -98,23 +98,6 @@ METRIC_NAMES = EXPECTED_ALL[9:33]
 VALUE_HELPER_NAMES = EXPECTED_ALL[33:34]
 ALIAS_NAMES = EXPECTED_ALL[34:40]
 OUTPUT_TYPE_NAMES = EXPECTED_ALL[40:]
-
-
-def _legacy_job(state: SessionState, job_id: str, raw: Path) -> SimulationJob:
-    deck = state.working_dir / f"{job_id}.cir"
-    deck.write_text(".tran 1m\n.end\n", encoding="utf-8")
-    job = SimulationJob(
-        job_id=job_id,
-        netlist=deck,
-        simulator="LTspice",
-        status="completed",
-        started_at=now(),
-        completed_at=now(),
-        raw_file=raw,
-        log_file=raw.with_suffix(".log"),
-    )
-    state.jobs[job_id] = job
-    return job
 
 
 def test_raw_result_xor_step_slicing_and_mutation_isolation(
@@ -227,47 +210,6 @@ def test_raw_result_uses_bounded_sibling_log_fallback(
     assert bounded_paths == [raw_path.with_suffix(".log")]
 
 
-def test_experiment_and_legacy_addressing_use_disjoint_resolvers(
-    state_no_sim: SessionState,
-    work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    legacy_raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    experiment_raw = work_dir / "experiment.raw"
-    experiment_raw.write_bytes(legacy_raw.read_bytes())
-    experiment_raw.with_suffix(".log").write_bytes(legacy_raw.with_suffix(".log").read_bytes())
-    legacy = _legacy_job(state_no_sim, "sim-api", legacy_raw)
-    experiment = make_experiment_job(
-        state_no_sim, job_id="exp-api", case_id="case-selected", run_index=4, raw=experiment_raw
-    )
-
-    legacy_calls: list[str] = []
-    experiment_calls: list[str] = []
-    original_legacy = services.resolve_raw_file
-    original_experiment = services.experiment_run_context
-
-    def track_legacy(job_id: str, state: SessionState, run_index: int = 0) -> Path:
-        legacy_calls.append(job_id)
-        return original_legacy(job_id, state, run_index)
-
-    def track_experiment(*args: Any, **kwargs: Any):
-        experiment_calls.append(args[0].job_id)
-        return original_experiment(*args, **kwargs)
-
-    monkeypatch.setattr(services, "resolve_raw_file", track_legacy)
-    monkeypatch.setattr(services, "experiment_run_context", track_experiment)
-    api = SyncApi(state_no_sim)
-
-    legacy_result = api.load_raw(job_id=legacy.job_id)
-    experiment_result = api.load_raw(job_id=experiment.job_id, case_id="case-selected")
-
-    assert legacy_result.source == legacy_raw
-    assert experiment_result.source == experiment_raw
-    assert legacy_calls == [legacy.job_id]
-    assert experiment_calls == [experiment.job_id]
-    assert experiment.job_id not in legacy_calls
-
-
 def test_raw_parse_deadline_propagates_through_api(
     state_no_sim: SessionState,
     work_dir: Path,
@@ -321,17 +263,14 @@ def test_measurements_support_cases_and_enforce_a_bounded_log_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw_path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    legacy = _legacy_job(state_no_sim, "sim-measurements", raw_path)
     experiment = make_experiment_job(
         state_no_sim, job_id="exp-measurements", case_id="case-selected", run_index=4, raw=raw_path
     )
     sync_api = SyncApi(state_no_sim)
-    legacy_parsed = sync_api.measurements(job_id=legacy.job_id)
     parsed = sync_api.measurements(
         job_id=experiment.job_id,
         case_id="case-selected",
     )
-    assert legacy_parsed["measurements"]["vfinal"]["values"] == [LTSPICE_TRAN_RC_VFINAL]
     assert parsed["measurements"]["vfinal"]["values"] == [LTSPICE_TRAN_RC_VFINAL]
 
     release = threading.Event()

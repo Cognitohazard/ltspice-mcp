@@ -17,7 +17,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.lib import experiment_store, recent, response_budget, result_store, wsl
+from ltspice_mcp.lib import experiment_store, response_budget, result_store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
@@ -37,7 +37,6 @@ from ltspice_mcp.tools.experiments import (
 )
 from tests.conftest import (
     fake_simulator,
-    make_sim_job,
     recorded_fixture_simulator,
     resolve_local_ref,
 )
@@ -1855,102 +1854,6 @@ class TestAttachedAnalysis:
         restored = _assert_schema(await handle_run_experiments(request, state_with_sim))
         assert restored["analysis"]["result"]["signals_available"]
 
-    async def test_v1_public_result_survives_restart_replay_and_foreign_status(
-        self,
-        state_with_sim: SessionState,
-        work_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "state"))
-        recorded_fixture_simulator(monkeypatch)
-        deck = _deck(work_dir / "attached-v1.cir")
-        request = _args(
-            deck,
-            "attached-v1",
-            analyze={
-                "recipes": [{"key": "summary", "metric": "summary"}],
-                "include": {"signals_available": True},
-            },
-        )
-        first = _assert_schema(await handle_run_experiments(request, state_with_sim))
-        legacy_result = first["analysis"]["result"]
-        await state_with_sim.job_registry.drain_pending()
-
-        record = experiment_store.record_path(first["job_id"], work_dir)
-        stored = json.loads(record.read_text())
-        stored["schema_version"] = 1
-        stored["analysis"]["result"] = legacy_result
-        record.write_text(json.dumps(stored))
-        recent.touch(deck)
-
-        restarted = SessionState.create(
-            state_with_sim.config,
-            available=state_with_sim.available_simulators,
-        )
-        foreign = SessionState.create(
-            state_with_sim.config,
-            available=state_with_sim.available_simulators,
-        )
-        assert restarted.job_registry.preload_recent() == 1
-        assert foreign.job_registry.preload_recent() == 1
-
-        replay = _assert_schema(await handle_run_experiments(request, restarted))
-        assert replay["analysis"]["result"] == legacy_result
-        assert any(
-            item["code"] == "legacy_analysis_result" for item in replay["analysis"]["observations"]
-        )
-
-        status_call = await handle_jobs(
-            JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
-            foreign,
-        )
-        status = status_call.structuredContent
-        assert status is not None
-        assert status["analysis"]["result"] == legacy_result
-        assert any(
-            item["code"] == "legacy_analysis_result" for item in status["analysis"]["observations"]
-        )
-
-        assert request.analyze is not None and request.analyze.include is not None
-        available_projection = await handle_run_experiments(
-            request.model_copy(
-                update={
-                    "analyze": request.analyze.model_copy(
-                        update={
-                            "include": request.analyze.include.model_copy(
-                                update={"fields": ["case_id"]}
-                            )
-                        }
-                    )
-                }
-            ),
-            restarted,
-        )
-        available_data = _assert_schema(available_projection)
-        assert not available_projection.isError
-        assert available_data["analysis"]["result"] == legacy_result
-
-        projected = await handle_run_experiments(
-            request.model_copy(
-                update={
-                    "analyze": request.analyze.model_copy(
-                        update={
-                            "include": request.analyze.include.model_copy(
-                                update={"fields": ["value"]}
-                            )
-                        }
-                    )
-                }
-            ),
-            restarted,
-        )
-        projected_data = _assert_schema(projected)
-        assert projected.isError
-        assert "legacy rendered result" in projected_data["error"]["message"]
-
-        intact = _assert_schema(await handle_run_experiments(request, restarted))
-        assert intact["analysis"]["result"] == legacy_result
-
     async def test_successful_analysis_does_not_report_partial(
         self,
         state_with_sim: SessionState,
@@ -2652,18 +2555,6 @@ class TestReceiptWeight:
         )
         assert canonical_fingerprint(quick) == canonical_fingerprint(patient)
         assert canonical_fingerprint(quick) != canonical_fingerprint(other_engine)
-
-    def test_a_legacy_job_source_omits_provenance_it_never_had(self):
-        """Empty-string digests and an empty manifest say nothing, at a cost.
-
-        A non-experiment job stages nothing, so it has no digest and no
-        manifest. Absence states that; placeholders spend bytes to state it
-        while looking like real provenance.
-        """
-        job = make_sim_job(netlist=Path("/tmp/legacy.cir"), simulator="ngspice")
-        payload = experiments_mod._legacy_source(job, dialect="ngspice")
-
-        assert set(payload) == {"circuit", "path", "simulator", "dialect"}
 
     def test_the_lean_manifest_filter_fails_closed(self):
         """An entry that is neither staged, live, nor explained is an anomaly.

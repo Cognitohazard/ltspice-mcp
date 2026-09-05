@@ -23,8 +23,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.runner_base import RunnerBase
-from ltspice_mcp.lib.sim_runner import RunOutcome
+from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
 
 

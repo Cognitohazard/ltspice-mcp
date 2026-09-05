@@ -28,7 +28,7 @@ from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
     build_widget_html,
 )
-from ltspice_mcp.state import SessionState, SimulationJob
+from ltspice_mcp.state import SessionState, legacy_record_message
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +421,7 @@ def _read_netlist_content(
 def _read_results_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List simulation, batch, and experiment jobs with their status."""
+    """List experiment jobs, and the records earlier releases left behind."""
     del params
     items: list[dict] = []
 
@@ -429,19 +429,7 @@ def _read_results_list(
     # run on a worker thread, where the refresh returns fresh views without
     # touching the loop-owned registry.)
     for job in state.job_registry.refreshed_jobs():
-        if isinstance(job, SimulationJob):
-            items.append(
-                {
-                    "job_id": job.job_id,
-                    "type": "simulation",
-                    "netlist": job.netlist.name,
-                    "simulator": job.simulator,
-                    "status": job.status,
-                    "started_at": job.started_at.isoformat() if job.started_at else None,
-                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
-                }
-            )
-        elif isinstance(job, ExperimentJob):
+        if isinstance(job, ExperimentJob):
             items.append(
                 {
                     "job_id": job.job_id,
@@ -462,17 +450,17 @@ def _read_results_list(
                 }
             )
         else:
+            # A record an earlier release wrote. It is listed so it is not
+            # simply missing, with the one fact this version can offer.
             items.append(
                 {
                     "job_id": job.job_id,
-                    "type": job.job_type,
+                    "type": "legacy",
                     "netlist": job.netlist.name,
                     "status": job.status,
-                    "total_runs": job.total_runs,
-                    "completed_runs": job.completed_runs,
-                    "failed_runs": job.failed_runs,
-                    "started_at": (job.started_at.isoformat() if job.started_at else None),
-                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
+                    "started_at": None,
+                    "completed_at": None,
+                    "note": legacy_record_message(job.job_id),
                 }
             )
 
@@ -481,14 +469,29 @@ def _read_results_list(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
+def _per_run_read_pointer(job_id: str, state: SessionState) -> str:
+    """Why a per-job read has to go somewhere else, for this job.
+
+    Both per-job result routes addressed a single run by job id — the shape
+    only the pre-0.6 job types had. An experiment's runs are case-addressed,
+    and a legacy record has no readable results at all.
+    """
+    job = services.resolve_job(job_id, state)
+    if isinstance(job, ExperimentJob):
+        return (
+            f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
+            "with analyze_results (job_id plus run_index or case_id)."
+        )
+    return legacy_record_message(job_id)
+
+
 @_router.route("spice://results/{job_id}/signals")
 def _read_signals(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List signal/trace names from a completed simulation's .raw file."""
+    """Explain where a job's trace names are read from."""
     job_id = params["job_id"]
-    signal_names = services.load_signal_names(job_id, state)
-    data = {"job_id": job_id, "signals": signal_names}
+    data = {"job_id": job_id, "signals": [], "note": _per_run_read_pointer(job_id, state)}
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
@@ -496,12 +499,13 @@ def _read_signals(
 def _read_measurements(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Return .MEAS measurement results from a completed simulation's log file."""
+    """Explain where a job's .MEAS results are read from."""
     job_id = params["job_id"]
-    meas_data = services.load_measurements(job_id, state, include_log_text=True)
-    data: dict[str, Any] = {"job_id": job_id, "measurements": meas_data["measurements"]}
-    if "log_text" in meas_data:
-        data["log_text"] = meas_data["log_text"]
+    data: dict[str, Any] = {
+        "job_id": job_id,
+        "measurements": {},
+        "note": _per_run_read_pointer(job_id, state),
+    }
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 

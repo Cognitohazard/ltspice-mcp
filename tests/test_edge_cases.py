@@ -6,7 +6,6 @@ input, and edge cases that the happy-path tests don't cover.
 """
 
 import hashlib
-import math
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -15,7 +14,6 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.batch_results import filter_runs_by_params
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics
 from ltspice_mcp.lib.raw_parser import (
@@ -147,29 +145,6 @@ class TestLogDiagnosticsFalsePositives:
 # ---------------------------------------------------------------------------
 
 
-class TestFilterRunsByParamsNaN:
-    """NaN should never match a numeric filter (NaN comparisons return False)."""
-
-    def test_nan_value_does_not_match_exact(self):
-        runs = {
-            0: {"params": {"R": 1000.0}},
-            1: {"params": {"R": math.nan}},
-            2: {"params": {"R": 1000.0}},
-        }
-        result = filter_runs_by_params(runs, {"R": "1k"})
-        assert result == [0, 2]  # NaN run #1 must NOT match
-
-    def test_nan_value_does_not_match_range(self):
-        runs = {0: {"params": {"R": math.nan}}}
-        result = filter_runs_by_params(runs, {"R": "0..10k"})
-        assert result == []
-
-    def test_nan_filter_target_matches_nothing(self):
-        runs = {0: {"params": {"R": 1000.0}}}
-        result = filter_runs_by_params(runs, {"R": "nan"})
-        assert result == []
-
-
 # ---------------------------------------------------------------------------
 # compute_placed_geometry assumes symbol bbox starts at (0,0),
 # producing a bounding box that doesn't enclose pins on centered symbols.
@@ -212,45 +187,6 @@ class TestSymbolGeometryBboxContainsPins:
 # ---------------------------------------------------------------------------
 # get_progress_snapshot can produce negative ETA / negative elapsed
 # ---------------------------------------------------------------------------
-
-
-class TestGetProgressSnapshotEdgeCases:
-    def test_overshoot_does_not_produce_negative_eta(self):
-        import time
-        from pathlib import Path
-
-        from ltspice_mcp.lib.batch_results import get_progress_snapshot
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/x"),
-            total_runs=10,
-            completed_runs=15,  # overshoot
-            failed_runs=0,
-        )
-        snap = get_progress_snapshot(bj, time.time() - 1)
-        # ETA should be 0 (already done), not negative
-        assert snap["eta_s"] is None or snap["eta_s"] >= 0
-
-    def test_future_start_time_clamps_elapsed(self):
-        import time
-        from pathlib import Path
-
-        from ltspice_mcp.lib.batch_results import get_progress_snapshot
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/x"),
-            total_runs=10,
-            completed_runs=5,
-        )
-        snap = get_progress_snapshot(bj, time.time() + 100)
-        # Negative elapsed is nonsensical; should be clamped to 0
-        assert snap["elapsed_s"] >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -564,77 +500,9 @@ class TestConfigTomlValidation:
 # ---------------------------------------------------------------------------
 
 
-class TestResolveResultFileEmpty:
-    def test_batch_empty_string_path_rejected(self, state_no_sim):
-        from datetime import timedelta
-
-        from ltspice_mcp.errors import ResultError
-        from ltspice_mcp.lib import now, services
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/tmp/x.cir"),
-            total_runs=1,
-            completed_runs=1,
-            status="completed",
-        )
-        bj.completed_at = now() + timedelta(seconds=1)
-        bj.run_results = {0: {"raw_file": "", "log_file": "", "params": {}}}
-        state_no_sim.batch_jobs["b1"] = bj
-
-        with pytest.raises(ResultError, match="no raw file"):
-            services.resolve_raw_file("b1", state_no_sim)
-
-
 # ---------------------------------------------------------------------------
 # get_batch_signal_data accepted negative offset / zero limit
 # ---------------------------------------------------------------------------
-
-
-class TestBatchPaginationValidation:
-    def _make_bj(self, state, n_runs: int = 10):
-        from datetime import timedelta
-
-        from ltspice_mcp.lib import now
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/tmp/x.cir"),
-            total_runs=n_runs,
-            completed_runs=n_runs,
-            status="completed",
-        )
-        bj.completed_at = now() + timedelta(seconds=1)
-        bj.run_results = {
-            i: {
-                "raw_file": Path(f"/tmp/r{i}.raw"),
-                "log_file": Path(f"/tmp/r{i}.log"),
-                "params": {},
-            }
-            for i in range(n_runs)
-        }
-        state.batch_jobs["b1"] = bj
-        return bj
-
-    async def test_negative_offset_rejected(self, state_no_sim):
-        from ltspice_mcp.errors import BatchJobError
-        from ltspice_mcp.lib import services
-
-        bj = self._make_bj(state_no_sim)
-        with pytest.raises(BatchJobError, match="offset"):
-            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=-5, limit=5)
-
-    async def test_zero_limit_rejected(self, state_no_sim):
-        from ltspice_mcp.errors import BatchJobError
-        from ltspice_mcp.lib import services
-
-        bj = self._make_bj(state_no_sim)
-        with pytest.raises(BatchJobError, match="limit"):
-            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=0, limit=0)
 
 
 # ---------------------------------------------------------------------------

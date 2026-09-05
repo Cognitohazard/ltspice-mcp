@@ -21,7 +21,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_dc_analysis,
     is_noise_analysis,
 )
-from ltspice_mcp.state import SessionState
+from ltspice_mcp.state import SessionState, legacy_record_message
 
 
 def _analysis_type(raw: RawRead) -> str:
@@ -161,10 +161,7 @@ async def load_raw_result(
             resolved = context.raw
             dialect = context.dialect
         else:
-            if case_id is not None:
-                raise TypeError("case_id is only valid when job_id identifies an experiment job")
-            resolved = services.resolve_raw_file(job_id, state, run_index)
-            dialect = services.raw_dialect_for(resolved, state)
+            raise ResultError(legacy_record_message(job_id))
 
     raw = await services.load_raw(resolved, state)
     step_count, steps = await _aligned_steps(raw, resolved)
@@ -192,9 +189,7 @@ async def load_measurement_results(
             raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
         log_path = context.log
     else:
-        if case_id is not None:
-            raise TypeError("case_id is only valid when job_id identifies an experiment job")
-        log_path = services.resolve_log_file(job_id, state, run_index)
+        raise ResultError(legacy_record_message(job_id))
 
     parsed = await services.bounded_parse(
         log_path,
