@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import errno
+import importlib
 import os
+import pkgutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import ltspice_mcp
+from ltspice_mcp import tools
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
+    LTSpiceMCPError,
     NetlistError,
     NoAxisError,
     ResultError,
@@ -255,3 +261,236 @@ class TestPortArityIsTyped:
         )
         with pytest.raises(PortArityMismatch):
             flatten_graph(graph)
+
+
+# ---------------------------------------------------------------------------
+# The vocabulary
+# ---------------------------------------------------------------------------
+
+# Constructors whose FIRST positional argument is the wire code, so the scan
+# below reads codes out of them. The list names constructors, never codes: the
+# codes themselves are always read from the source.
+_CODE_FIRST_CONSTRUCTORS = frozenset(
+    {
+        "_JobsActionError",
+        "_QueryError",
+        "VariationError",
+        "DeckStagingError",
+        "MismatchPlanError",
+    }
+)
+
+
+def _string_literals(node: ast.AST) -> set[str]:
+    """Every string a value expression can evaluate to, where that is decidable."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.IfExp):
+        return _string_literals(node.body) | _string_literals(node.orelse)
+    if isinstance(node, ast.BoolOp):
+        return set().union(*(_string_literals(value) for value in node.values))
+    return set()
+
+
+def _classifier_returns(tree: ast.AST) -> set[ast.Return]:
+    """Tuple returns of functions whose first parameter is an exception.
+
+    ``_circuit_error(exc, ...)`` and ``_jobs_error_details(exc)`` answer with
+    ``(code, stage, ...)``. Keying on the parameter name keeps the scan off the
+    many other functions in these modules that return a tuple whose first member
+    is a plain string (a field name, a unit).
+    """
+    out: set[ast.Return] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        args = node.args.posonlyargs + node.args.args
+        if not args or args[0].arg != "exc":
+            continue
+        out.update(child for child in ast.walk(node) if isinstance(child, ast.Return))
+    return out
+
+
+def _codes_in_tool_sources() -> dict[str, set[str]]:
+    """Read the emitted codes out of ``tools/*.py`` rather than listing them."""
+    found: dict[str, set[str]] = {}
+    tools_dir = Path(tools.__file__).parent
+    for path in sorted(tools_dir.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        classifier_returns = _classifier_returns(tree)
+        for node in ast.walk(tree):
+            values: set[str] = set()
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values, strict=True):
+                    if isinstance(key, ast.Constant) and key.value == "code":
+                        values |= _string_literals(value)
+            elif isinstance(node, ast.keyword) and node.arg == "code":
+                values |= _string_literals(node.value)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and (
+                        target.id == "code" or target.id.endswith("_code")
+                    ):
+                        values |= _string_literals(node.value)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+                if name in _CODE_FIRST_CONSTRUCTORS and node.args:
+                    values |= _string_literals(node.args[0])
+            elif (
+                isinstance(node, ast.Return)
+                and node in classifier_returns
+                and isinstance(node.value, ast.Tuple)
+                and node.value.elts
+            ):
+                values |= _string_literals(node.value.elts[0])
+            for value in values:
+                found.setdefault(value, set()).add(path.name)
+    return found
+
+
+def _error_classes() -> list[type[LTSpiceMCPError]]:
+    """Every error class in the package, with every module imported first."""
+    for module in pkgutil.walk_packages(ltspice_mcp.__path__, "ltspice_mcp."):
+        if module.name.endswith("__main__"):
+            continue
+        importlib.import_module(module.name)
+
+    def descend(cls: type[LTSpiceMCPError]):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from descend(sub)
+
+    return [LTSpiceMCPError, *descend(LTSpiceMCPError)]
+
+
+# Every error code the server can emit: the `code` on each error class, plus the
+# codes built into the failure and observation records in `tools/*.py`. Codes
+# constructed inside `lib/*.py` (variation, staging and mismatch codes, and the
+# observation codes) reach the wire through those two routes or through
+# `exc.code`, and are not scanned here; widening `_codes_in_tool_sources` to a
+# second directory is the change that would bring them in.
+#
+# ADDING a code is fine — add it here in the same commit and the test passes.
+# RENAMING or REMOVING one is a public, client-visible change: a caller that
+# branches on `error.code` or reads an observation code has no way to notice,
+# so it needs a CHANGELOG entry saying which code changed and what replaced it.
+FROZEN_ERROR_CODES = (
+    "analysis_deadline",
+    "artifact_publish_failed",
+    "artifact_too_large",
+    "asc_export_unavailable",
+    "batch_job_error",
+    "cancel_failed",
+    "cancel_not_authorized",
+    "cancel_unavailable",
+    "case_not_found",
+    "case_selection_wrong_job_kind",
+    "commit_failed",
+    "completeness_mismatch",
+    "complex_format_used",
+    "constant_window",
+    "decimated",
+    "device_op_points_absent",
+    "downsampled",
+    "error",
+    "export_written",
+    "failures_truncated",
+    "idempotency_conflict",
+    "idempotent_replay",
+    "internal_error",
+    "invalid_at",
+    "invalid_cursor",
+    "invalid_prefix",
+    "invalid_query",
+    "job_not_found",
+    "job_not_terminal",
+    "jobs_failed",
+    "legacy_analysis_result",
+    "library_error",
+    "lint_blocked",
+    "log_unread",
+    "max_pk_pk_bucket",
+    "max_points_not_applied",
+    "multiple_random_variations",
+    "netlist_invalid",
+    "no_axis",
+    "no_raw_output",
+    "non_finite",
+    "not_found",
+    "op_failed",
+    "open_failed",
+    "open_skipped",
+    "parse_deadline",
+    "parse_error",
+    "path_denied",
+    "phase_unwrapped",
+    "plot_written",
+    "post_commit_failed",
+    "raster_unavailable",
+    "raw_not_produced",
+    "raw_path_without_deck_provenance",
+    "read_error",
+    "receipt_failed",
+    "recipe_failed",
+    "recipe_invalid",
+    "result_unreadable",
+    "revision_conflict",
+    "run_failed",
+    "run_not_found",
+    "run_unavailable",
+    "search_error",
+    "simulation_failed",
+    "solve_failure",
+    "source_drift",
+    "source_not_found",
+    "source_unavailable",
+    "sparse_sweep",
+    "step_axis_unioned",
+    "step_value_unavailable",
+    "submission_failed",
+    "symbol_not_found",
+    "symbol_unresolved",
+    "unrecognized_save",
+    "unsupported_file",
+    "unsupported_variant",
+    "widget_delivered",
+    "widget_unavailable",
+    "window_applied",
+    "window_empty_steps",
+)
+
+
+class TestErrorCodeVocabulary:
+    def test_every_error_class_declares_its_own_code(self):
+        missing = [cls.__name__ for cls in _error_classes() if "code" not in vars(cls)]
+        assert not missing, (
+            "These error classes inherit their wire code instead of naming one: "
+            f'{sorted(missing)}. Declare `code = "..."` on each, and add it to '
+            "FROZEN_ERROR_CODES."
+        )
+
+    def test_error_class_codes_are_distinct(self):
+        by_code: dict[str, list[str]] = {}
+        for cls in _error_classes():
+            by_code.setdefault(vars(cls)["code"], []).append(cls.__name__)
+        collisions = {code: names for code, names in by_code.items() if len(names) > 1}
+        assert not collisions, f"One code, two meanings: {collisions}"
+
+    def test_vocabulary_matches_the_frozen_list(self):
+        emitted = set(_codes_in_tool_sources()) | {vars(cls)["code"] for cls in _error_classes()}
+        frozen = set(FROZEN_ERROR_CODES)
+        added = sorted(emitted - frozen)
+        gone = sorted(frozen - emitted)
+        assert not added, (
+            f"New error codes are not in FROZEN_ERROR_CODES: {added}. Adding a code "
+            "is fine — list it there (sorted) in the same commit."
+        )
+        assert not gone, (
+            f"These error codes are no longer emitted: {gone}. Renaming or removing "
+            "a code is a client-visible change: give it a CHANGELOG entry naming the "
+            "old code and its replacement, then update FROZEN_ERROR_CODES."
+        )
+
+    def test_frozen_list_is_sorted_and_unique(self):
+        assert list(FROZEN_ERROR_CODES) == sorted(set(FROZEN_ERROR_CODES))

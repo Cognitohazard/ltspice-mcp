@@ -50,9 +50,41 @@ receipt. Failures carry
 `error {code, message, stage, retryable, commit_state, item_id?}` where
 `commit_state` is `not_started`, `committed` or `unknown`. MCP's `isError` is
 reserved for call-level failures; a per-item failure sets `outcome: "partial"`
-instead. The stable error codes are `path_denied`, `revision_conflict`,
-`idempotency_conflict`, `asc_export_unavailable`, `job_not_found`,
-`cancel_not_authorized`, `unsupported_variant` (with the supported list),
+instead.
+
+**Error codes.** `code` is a stable, public name for a failure. Which one a
+failure gets is decided by the exception's *type*, never by its message: every
+class in `errors.py` declares a `code`, and that class code is the default a
+handler may override with the stage that failed — a result read that fails
+while a deck is being staged reports `submission_failed`, not
+`result_unreadable`. Adding a code is routine; renaming or removing one is a
+client-visible change and needs a CHANGELOG entry. The complete vocabulary,
+envelope codes and `observations` codes together, is frozen by
+`tests/test_error_codes.py::FROZEN_ERROR_CODES`.
+
+From the error hierarchy:
+
+| code | meaning |
+|-|-|
+| `path_denied` | the path resolves outside `allowed_paths` |
+| `netlist_invalid` | the netlist, or a component reference in it, could not be read |
+| `symbol_unresolved` | the schematic opened, but a symbol, sub-sheet or library it refers to was not found |
+| `simulation_failed` | the simulator could not be started, or the run failed |
+| `result_unreadable` | a `.raw` or `.log` could not be read |
+| `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
+| `no_axis` | the result is an operating point: no sweep axis to query at |
+| `job_not_found` | no job with that `job_id` or `request_id` |
+| `idempotency_conflict` | a `request_id` was reused for a different payload |
+| `cancel_not_authorized` | neither the owning process nor a matching `control_token` |
+| `cancel_failed` | cancellation was authorized but could not be carried out |
+| `library_error` | a component library failed to load, parse, or resolve |
+| `batch_job_error` | a sweep or Monte Carlo config could not be used |
+| `raster_unavailable` | a PNG was asked for without the optional `raster` extra |
+| `internal_error` | an unclassified server failure |
+
+Named by the stage instead, where the stage is the more useful fact:
+`submission_failed`, `receipt_failed`, `revision_conflict`,
+`asc_export_unavailable`, `unsupported_variant` (with the supported list),
 `ambiguous_target`, `parse_deadline`, `lint_blocked`.
 
 **Page object.** Nothing returns an unbounded collection. Every potentially
