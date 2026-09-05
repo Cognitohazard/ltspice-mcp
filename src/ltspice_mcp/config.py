@@ -3,10 +3,10 @@
 import logging
 import os
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import tomlkit
 from tomlkit import comment, document, nl, table
@@ -132,6 +132,322 @@ SIM_PATH_KEY = "path"
 SIM_ENABLED_KEY = "enabled"
 SIM_PATH_ENV = "LTSPICE_MCP_SIMULATOR_EXE"
 SIM_ENABLED_ENV = "LTSPICE_MCP_ENABLED_SIMULATORS"
+
+
+#: Returned by a coercer that rejected its input: the field keeps whatever the
+#: lower-precedence source (or the dataclass default) already put there. It is
+#: not the same as ``None``, which several fields use as a real value.
+_SKIP: Any = object()
+
+
+def _toml_simulator(value: Any) -> Any:
+    """An empty ``default`` means auto-select, not the empty string."""
+    return value or None
+
+
+def _toml_simulator_exe(value: Any) -> Any:
+    return Path(value) if value else _SKIP
+
+
+def _toml_enabled_simulators(value: Any) -> Any:
+    names = _validated_string_list(value, f"{SIM_SECTION}.{SIM_ENABLED_KEY}")
+    return _SKIP if names is None else [x.strip().lower() for x in names]
+
+
+def _toml_ngbehavior(value: Any) -> Any:
+    if not isinstance(value, str):
+        logger.warning("config: simulator.ngbehavior must be a string; ignoring %r", value)
+        return _SKIP
+    return value.strip() or _SKIP
+
+
+def _toml_path_list(field_name: str) -> Callable[[Any], Any]:
+    """Coercer for a TOML list-of-strings read as filesystem paths."""
+
+    def coerce(value: Any) -> Any:
+        paths = _validated_string_list(value, field_name)
+        return _SKIP if paths is None else [Path(p) for p in paths]
+
+    return coerce
+
+
+def _toml_log_level(value: Any) -> Any:
+    level = str(value).upper()
+    if level in VALID_LOG_LEVELS:
+        return level
+    logger.warning(
+        "config: invalid log level %r; must be one of %s", value, sorted(VALID_LOG_LEVELS)
+    )
+    return _SKIP
+
+
+def _toml_tool_profile(value: Any) -> Any:
+    return _validated_profile(value, "config") or _SKIP
+
+
+def _toml_persist_jobs(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    logger.warning("config: state.persist_jobs must be boolean; ignoring %r", value)
+    return _SKIP
+
+
+def _toml_preload_recent_count(value: Any) -> Any:
+    if isinstance(value, int) and value >= 0:
+        return value
+    logger.warning(
+        "config: state.preload_recent_count must be a non-negative integer; ignoring %r", value
+    )
+    return _SKIP
+
+
+def _env_path(value: str) -> Any:
+    return Path(value)
+
+
+def _env_path_list(value: str) -> Any:
+    return [Path(p) for p in value.split(os.pathsep)]
+
+
+def _env_enabled_simulators(value: str) -> Any:
+    # Comma- or os.pathsep-separated list of simulator names.
+    sep = "," if "," in value else os.pathsep
+    return [x.strip().lower() for x in value.split(sep) if x.strip()]
+
+
+def _env_ngbehavior(value: str) -> Any:
+    return value.strip() or _SKIP
+
+
+def _env_log_level(value: str) -> Any:
+    level = value.upper()
+    if level in VALID_LOG_LEVELS:
+        return level
+    logger.warning(
+        "LTSPICE_MCP_LOG_LEVEL: invalid value %r; must be one of %s",
+        value,
+        sorted(VALID_LOG_LEVELS),
+    )
+    return _SKIP
+
+
+def _env_tool_profile(value: str) -> Any:
+    return _validated_profile(value, "LTSPICE_MCP_TOOL_PROFILE") or _SKIP
+
+
+def _env_persist_jobs(value: str) -> Any:
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    logger.warning("LTSPICE_MCP_PERSIST_JOBS: invalid boolean %r; ignoring", value)
+    return _SKIP
+
+
+def _env_preload_recent_count(value: str) -> Any:
+    try:
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError("must be >= 0")
+    except ValueError as e:
+        logger.warning(
+            "LTSPICE_MCP_PRELOAD_RECENT_COUNT: invalid integer %r (%s); ignoring", value, e
+        )
+        return _SKIP
+    return parsed
+
+
+@dataclass(frozen=True)
+class _Bounds:
+    """Range a numeric setting is validated against, from either source."""
+
+    type_fn: type
+    min_val: float
+    max_val: float
+    exclusive_min: bool = False
+
+
+@dataclass(frozen=True)
+class _Setting:
+    """One config field and the two places a value for it can come from.
+
+    ``bounds`` replaces both coercers for a numeric field: the TOML value is
+    taken as written and range-checked after the whole file is read (so the
+    file's own values are validated with the same bounds as the environment's),
+    and the environment value goes through the same check as it is read.
+    """
+
+    field: str
+    section: str | None = None
+    key: str | None = None
+    from_toml: Callable[[Any], Any] | None = None
+    env: str | None = None
+    from_env: Callable[[str], Any] | None = None
+    bounds: _Bounds | None = None
+    env_accepts_empty: bool = False
+    """Whether an empty environment value is a value to validate (and warn
+    about) rather than an absent override. True only for the two settings
+    whose readers distinguish 'set to something invalid' from 'unset'."""
+
+
+#: Every setting the loader reads, in TOML-section order. Driven once for the
+#: TOML file and once for the environment, so a new setting is one row rather
+#: than one branch in each pass — the shape that let a key be added to one pass
+#: and forgotten in the other.
+_SETTINGS: tuple[_Setting, ...] = (
+    _Setting(
+        field="simulator",
+        section=SIM_SECTION,
+        key="default",
+        from_toml=_toml_simulator,
+        env="LTSPICE_MCP_SIMULATOR",
+    ),
+    _Setting(
+        field="simulator_exe",
+        section=SIM_SECTION,
+        key=SIM_PATH_KEY,
+        from_toml=_toml_simulator_exe,
+        env=SIM_PATH_ENV,
+        from_env=_env_path,
+    ),
+    _Setting(
+        field="enabled_simulators",
+        section=SIM_SECTION,
+        key=SIM_ENABLED_KEY,
+        from_toml=_toml_enabled_simulators,
+        env=SIM_ENABLED_ENV,
+        from_env=_env_enabled_simulators,
+    ),
+    _Setting(
+        field="ngbehavior",
+        section=SIM_SECTION,
+        key="ngbehavior",
+        from_toml=_toml_ngbehavior,
+        env="LTSPICE_MCP_NGBEHAVIOR",
+        from_env=_env_ngbehavior,
+    ),
+    _Setting(
+        field="allowed_paths",
+        section="security",
+        key="allowed_paths",
+        from_toml=_toml_path_list("security.allowed_paths"),
+        env="LTSPICE_MCP_ALLOWED_PATHS",
+        from_env=_env_path_list,
+    ),
+    _Setting(
+        field="max_parallel_sims",
+        section="simulation",
+        key="max_parallel",
+        env="LTSPICE_MCP_MAX_PARALLEL",
+        bounds=_Bounds(int, 1, 128),
+    ),
+    _Setting(
+        field="max_experiment_cases",
+        section="simulation",
+        key="max_experiment_cases",
+        env="LTSPICE_MCP_MAX_EXPERIMENT_CASES",
+        bounds=_Bounds(int, 1, 1_000_000),
+    ),
+    _Setting(
+        field="default_timeout",
+        section="simulation",
+        key="timeout",
+        env="LTSPICE_MCP_TIMEOUT",
+        bounds=_Bounds(float, 0, 86400, exclusive_min=True),
+    ),
+    _Setting(
+        field="max_estimated_points",
+        section="simulation",
+        key="max_estimated_points",
+        env="LTSPICE_MCP_MAX_ESTIMATED_POINTS",
+        bounds=_Bounds(int, 1, 100_000_000_000),
+    ),
+    _Setting(
+        field="max_raw_mb",
+        section="simulation",
+        key="max_raw_mb",
+        env="LTSPICE_MCP_MAX_RAW_MB",
+        bounds=_Bounds(int, 1, 10_000_000),
+    ),
+    _Setting(
+        field="max_points_returned",
+        section="analysis",
+        key="max_points",
+        env="LTSPICE_MCP_MAX_POINTS",
+        bounds=_Bounds(int, 1, 10_000_000),
+    ),
+    _Setting(
+        field="analysis_budget_s",
+        section="analysis",
+        key="analysis_budget_s",
+        env="LTSPICE_MCP_ANALYSIS_BUDGET_S",
+        bounds=_Bounds(float, 0, 3600, exclusive_min=True),
+    ),
+    _Setting(
+        field="default_budget",
+        section="analysis",
+        key="default_budget",
+        env="LTSPICE_MCP_DEFAULT_BUDGET",
+        bounds=_Bounds(int, 0, 10_000_000),
+    ),
+    _Setting(
+        field="result_set_ttl_hours",
+        section="analysis",
+        key="result_set_ttl_hours",
+        env="LTSPICE_MCP_RESULT_SET_TTL_HOURS",
+        bounds=_Bounds(float, 0, 87600, exclusive_min=True),
+    ),
+    _Setting(
+        field="log_level",
+        section="logging",
+        key="level",
+        from_toml=_toml_log_level,
+        env="LTSPICE_MCP_LOG_LEVEL",
+        from_env=_env_log_level,
+    ),
+    _Setting(
+        field="symbol_paths",
+        section="schematic",
+        key="symbol_paths",
+        from_toml=_toml_path_list("schematic.symbol_paths"),
+        env="LTSPICE_MCP_SYMBOL_PATHS",
+        from_env=_env_path_list,
+    ),
+    _Setting(
+        field="tool_profile",
+        section="tools",
+        key="profile",
+        from_toml=_toml_tool_profile,
+        env="LTSPICE_MCP_TOOL_PROFILE",
+        from_env=_env_tool_profile,
+    ),
+    _Setting(
+        field="persist_jobs",
+        section="state",
+        key="persist_jobs",
+        from_toml=_toml_persist_jobs,
+        env="LTSPICE_MCP_PERSIST_JOBS",
+        from_env=_env_persist_jobs,
+        env_accepts_empty=True,
+    ),
+    _Setting(
+        field="preload_recent_count",
+        section="state",
+        key="preload_recent_count",
+        from_toml=_toml_preload_recent_count,
+        env="LTSPICE_MCP_PRELOAD_RECENT_COUNT",
+        from_env=_env_preload_recent_count,
+        env_accepts_empty=True,
+    ),
+    # Environment-only: the working directory is where the config file itself
+    # is looked up, so it cannot be configured from inside that file.
+    _Setting(
+        field="working_dir",
+        env="LTSPICE_MCP_WORKING_DIR",
+        from_env=_env_path,
+    ),
+)
 
 
 @dataclass
@@ -283,281 +599,52 @@ class ServerConfig:
             with open(config_path, "rb") as f:
                 toml_data = tomllib.load(f)
 
-            # Map TOML structure to config fields
-            if SIM_SECTION in toml_data:
-                if "default" in toml_data[SIM_SECTION]:
-                    config_dict["simulator"] = toml_data[SIM_SECTION]["default"] or None
-                if SIM_PATH_KEY in toml_data[SIM_SECTION] and toml_data[SIM_SECTION][SIM_PATH_KEY]:
-                    config_dict["simulator_exe"] = Path(toml_data[SIM_SECTION][SIM_PATH_KEY])
-                if SIM_ENABLED_KEY in toml_data[SIM_SECTION]:
-                    names = _validated_string_list(
-                        toml_data[SIM_SECTION][SIM_ENABLED_KEY],
-                        f"{SIM_SECTION}.{SIM_ENABLED_KEY}",
-                    )
-                    if names is not None:
-                        config_dict["enabled_simulators"] = [x.strip().lower() for x in names]
-                if "ngbehavior" in toml_data[SIM_SECTION]:
-                    raw = toml_data[SIM_SECTION]["ngbehavior"]
-                    if isinstance(raw, str):
-                        if raw.strip():
-                            config_dict["ngbehavior"] = raw.strip()
-                    else:
-                        logger.warning(
-                            "config: simulator.ngbehavior must be a string; ignoring %r", raw
-                        )
+            for setting in _SETTINGS:
+                if setting.section is None or setting.section not in toml_data:
+                    continue
+                section = toml_data[setting.section]
+                if setting.key not in section:
+                    continue
+                raw = section[setting.key]
+                value = setting.from_toml(raw) if setting.from_toml else raw
+                if value is not _SKIP:
+                    config_dict[setting.field] = value
 
-            if "security" in toml_data and "allowed_paths" in toml_data["security"]:
-                paths = _validated_string_list(
-                    toml_data["security"]["allowed_paths"], "security.allowed_paths"
-                )
-                if paths is not None:
-                    config_dict["allowed_paths"] = [Path(p) for p in paths]
-
-            if "simulation" in toml_data:
-                if "max_parallel" in toml_data["simulation"]:
-                    config_dict["max_parallel_sims"] = toml_data["simulation"]["max_parallel"]
-                if "max_experiment_cases" in toml_data["simulation"]:
-                    config_dict["max_experiment_cases"] = toml_data["simulation"][
-                        "max_experiment_cases"
-                    ]
-                if "timeout" in toml_data["simulation"]:
-                    config_dict["default_timeout"] = toml_data["simulation"]["timeout"]
-                if "max_estimated_points" in toml_data["simulation"]:
-                    config_dict["max_estimated_points"] = toml_data["simulation"][
-                        "max_estimated_points"
-                    ]
-                if "max_raw_mb" in toml_data["simulation"]:
-                    config_dict["max_raw_mb"] = toml_data["simulation"]["max_raw_mb"]
-
-            if "analysis" in toml_data:
-                if "max_points" in toml_data["analysis"]:
-                    config_dict["max_points_returned"] = toml_data["analysis"]["max_points"]
-                if "analysis_budget_s" in toml_data["analysis"]:
-                    config_dict["analysis_budget_s"] = toml_data["analysis"]["analysis_budget_s"]
-                if "default_budget" in toml_data["analysis"]:
-                    config_dict["default_budget"] = toml_data["analysis"]["default_budget"]
-                if "result_set_ttl_hours" in toml_data["analysis"]:
-                    config_dict["result_set_ttl_hours"] = toml_data["analysis"][
-                        "result_set_ttl_hours"
-                    ]
-
-            if "logging" in toml_data and "level" in toml_data["logging"]:
-                level = str(toml_data["logging"]["level"]).upper()
-                if level in VALID_LOG_LEVELS:
-                    config_dict["log_level"] = level
-                else:
-                    logger.warning(
-                        "config: invalid log level %r; must be one of %s",
-                        toml_data["logging"]["level"],
-                        sorted(VALID_LOG_LEVELS),
+            # Range-checked after the whole file is read, so a numeric key gets
+            # the same bounds (and the same warning) from the file as from the
+            # environment; a value outside them is dropped, not clamped.
+            for setting in _SETTINGS:
+                if setting.bounds is not None:
+                    _validate_numeric(
+                        config_dict,
+                        setting.field,
+                        setting.bounds.type_fn,
+                        setting.bounds.min_val,
+                        setting.bounds.max_val,
+                        exclusive_min=setting.bounds.exclusive_min,
+                        source="config",
                     )
 
-            if "schematic" in toml_data and "symbol_paths" in toml_data["schematic"]:
-                paths = _validated_string_list(
-                    toml_data["schematic"]["symbol_paths"], "schematic.symbol_paths"
+        for setting in _SETTINGS:
+            if setting.env is None:
+                continue
+            if setting.bounds is not None:
+                _load_bounded_env(
+                    setting.env,
+                    config_dict,
+                    setting.field,
+                    setting.bounds.type_fn,
+                    setting.bounds.min_val,
+                    setting.bounds.max_val,
+                    exclusive_min=setting.bounds.exclusive_min,
                 )
-                if paths is not None:
-                    config_dict["symbol_paths"] = [Path(p) for p in paths]
-
-            if (
-                "tools" in toml_data
-                and "profile" in toml_data["tools"]
-                and (p := _validated_profile(toml_data["tools"]["profile"], "config"))
-            ):
-                config_dict["tool_profile"] = p
-
-            if "state" in toml_data and "persist_jobs" in toml_data["state"]:
-                raw = toml_data["state"]["persist_jobs"]
-                if isinstance(raw, bool):
-                    config_dict["persist_jobs"] = raw
-                else:
-                    logger.warning("config: state.persist_jobs must be boolean; ignoring %r", raw)
-
-            if "state" in toml_data and "preload_recent_count" in toml_data["state"]:
-                raw = toml_data["state"]["preload_recent_count"]
-                if isinstance(raw, int) and raw >= 0:
-                    config_dict["preload_recent_count"] = raw
-                else:
-                    logger.warning(
-                        "config: state.preload_recent_count must be a non-negative "
-                        "integer; ignoring %r",
-                        raw,
-                    )
-
-            _validate_numeric(config_dict, "max_parallel_sims", int, 1, 128, source="config")
-            _validate_numeric(
-                config_dict,
-                "max_experiment_cases",
-                int,
-                1,
-                1_000_000,
-                source="config",
-            )
-            _validate_numeric(
-                config_dict,
-                "default_timeout",
-                float,
-                0,
-                86400,
-                exclusive_min=True,
-                source="config",
-            )
-            _validate_numeric(
-                config_dict, "max_estimated_points", int, 1, 100_000_000_000, source="config"
-            )
-            _validate_numeric(config_dict, "max_raw_mb", int, 1, 10_000_000, source="config")
-            _validate_numeric(
-                config_dict,
-                "max_points_returned",
-                int,
-                1,
-                10_000_000,
-                source="config",
-            )
-            _validate_numeric(
-                config_dict,
-                "analysis_budget_s",
-                float,
-                0,
-                3600,
-                exclusive_min=True,
-                source="config",
-            )
-            _validate_numeric(
-                config_dict,
-                "default_budget",
-                int,
-                0,
-                10_000_000,
-                source="config",
-            )
-            _validate_numeric(
-                config_dict,
-                "result_set_ttl_hours",
-                float,
-                0,
-                87600,
-                exclusive_min=True,
-                source="config",
-            )
-
-        if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
-            config_dict["simulator"] = env_sim
-
-        if env_enabled := os.getenv(SIM_ENABLED_ENV):
-            # Comma- or os.pathsep-separated list of simulator names.
-            sep = "," if "," in env_enabled else os.pathsep
-            config_dict["enabled_simulators"] = [
-                x.strip().lower() for x in env_enabled.split(sep) if x.strip()
-            ]
-
-        if env_exe := os.getenv(SIM_PATH_ENV):
-            config_dict["simulator_exe"] = Path(env_exe)
-
-        if (env_ngb := os.getenv("LTSPICE_MCP_NGBEHAVIOR")) and env_ngb.strip():
-            config_dict["ngbehavior"] = env_ngb.strip()
-
-        if env_wd := os.getenv("LTSPICE_MCP_WORKING_DIR"):
-            config_dict["working_dir"] = Path(env_wd)
-
-        if env_paths := os.getenv("LTSPICE_MCP_ALLOWED_PATHS"):
-            config_dict["allowed_paths"] = [Path(p) for p in env_paths.split(os.pathsep)]
-
-        _load_bounded_env(
-            "LTSPICE_MCP_MAX_PARALLEL", config_dict, "max_parallel_sims", int, 1, 128
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_MAX_EXPERIMENT_CASES",
-            config_dict,
-            "max_experiment_cases",
-            int,
-            1,
-            1_000_000,
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_TIMEOUT",
-            config_dict,
-            "default_timeout",
-            float,
-            0,
-            86400,
-            exclusive_min=True,
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_MAX_POINTS", config_dict, "max_points_returned", int, 1, 10_000_000
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_ANALYSIS_BUDGET_S",
-            config_dict,
-            "analysis_budget_s",
-            float,
-            0,
-            3600,
-            exclusive_min=True,
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_DEFAULT_BUDGET", config_dict, "default_budget", int, 0, 10_000_000
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_RESULT_SET_TTL_HOURS",
-            config_dict,
-            "result_set_ttl_hours",
-            float,
-            0,
-            87600,
-            exclusive_min=True,
-        )
-        _load_bounded_env(
-            "LTSPICE_MCP_MAX_ESTIMATED_POINTS",
-            config_dict,
-            "max_estimated_points",
-            int,
-            1,
-            100_000_000_000,
-        )
-        _load_bounded_env("LTSPICE_MCP_MAX_RAW_MB", config_dict, "max_raw_mb", int, 1, 10_000_000)
-        if env_log := os.getenv("LTSPICE_MCP_LOG_LEVEL"):
-            env_log_upper = env_log.upper()
-            if env_log_upper in VALID_LOG_LEVELS:
-                config_dict["log_level"] = env_log_upper
-            else:
-                logger.warning(
-                    "LTSPICE_MCP_LOG_LEVEL: invalid value %r; must be one of %s",
-                    env_log,
-                    sorted(VALID_LOG_LEVELS),
-                )
-
-        if env_sym := os.getenv("LTSPICE_MCP_SYMBOL_PATHS"):
-            config_dict["symbol_paths"] = [Path(p) for p in env_sym.split(os.pathsep)]
-
-        if (env_profile := os.getenv("LTSPICE_MCP_TOOL_PROFILE")) and (
-            p := _validated_profile(env_profile, "LTSPICE_MCP_TOOL_PROFILE")
-        ):
-            config_dict["tool_profile"] = p
-
-        if (env_persist := os.getenv("LTSPICE_MCP_PERSIST_JOBS")) is not None:
-            normalized = env_persist.strip().lower()
-            if normalized in ("1", "true", "yes", "on"):
-                config_dict["persist_jobs"] = True
-            elif normalized in ("0", "false", "no", "off"):
-                config_dict["persist_jobs"] = False
-            else:
-                logger.warning(
-                    "LTSPICE_MCP_PERSIST_JOBS: invalid boolean %r; ignoring", env_persist
-                )
-
-        if (env_preload := os.getenv("LTSPICE_MCP_PRELOAD_RECENT_COUNT")) is not None:
-            try:
-                parsed = int(env_preload)
-                if parsed < 0:
-                    raise ValueError("must be >= 0")
-                config_dict["preload_recent_count"] = parsed
-            except ValueError as e:
-                logger.warning(
-                    "LTSPICE_MCP_PRELOAD_RECENT_COUNT: invalid integer %r (%s); ignoring",
-                    env_preload,
-                    e,
-                )
+                continue
+            raw_env = os.getenv(setting.env)
+            if raw_env is None or (not raw_env and not setting.env_accepts_empty):
+                continue
+            value = setting.from_env(raw_env) if setting.from_env else raw_env
+            if value is not _SKIP:
+                config_dict[setting.field] = value
 
         if overrides:
             config_dict.update(overrides)
@@ -651,6 +738,9 @@ def generate_default_config(path: Path) -> None:
     tools_tbl = table()
     tools_tbl.add(comment('Tool profile: "consolidated" is the only profile since 0.6.0.'))
     tools_tbl.add(comment('The former "full"/"agentic" profiles need a ltspice-mcp==0.5.* pin.'))
+    tools_tbl.add(
+        comment("The key itself is removed in 0.7.0; new configs need no [tools] section.")
+    )
     tools_tbl.add("profile", "consolidated")
     doc.add("tools", tools_tbl)
     doc.add(nl())

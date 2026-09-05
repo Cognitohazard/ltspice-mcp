@@ -187,6 +187,23 @@ async def test_syntax_finding_shape(state_no_sim, work_dir):
         assert f["severity"] == "error"
 
 
+async def test_lexer_warnings_reach_the_observations(state_no_sim, work_dir):
+    """The lexer already reports what it had to guess about — an unclosed
+    .SUBCKT, a mismatched .ENDS, a stray continuation. The syntax check lexes
+    the deck and then read only its cards, so those notes were computed and
+    dropped: the caller was told the deck is clean when the lexer had said the
+    subcircuit never closes."""
+    deck = _write(
+        work_dir,
+        "unclosed.cir",
+        "* unclosed\n.subckt AMP a b\nR1 a b 1k\nV1 a 0 1\n.end\n",
+    )
+
+    data = await _run(state_no_sim, path=str(deck))
+
+    assert any("unclosed .SUBCKT" in note for note in data["observations"]), data["observations"]
+
+
 async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     state_no_sim,
     work_dir,
@@ -700,12 +717,12 @@ def test_render_true_is_the_default_policy():
 
 
 def test_advertised_delivery_states_the_inline_cost():
-    """The wire copy of render.delivery must say what an inline image costs.
+    """The advertised copy of render.delivery must say what an inline image costs.
 
     The choice is paid on every later turn (the image stays in context), and
-    the bare enum gave a caller no reason to prefer the default: a bench agent
-    asked for 'both' on every post-edit verify and the three images were 86%
-    of everything the session read back.
+    the bare enum gave a caller no reason to prefer the default: one caller
+    asked for 'both' on every post-edit verify, and the three images came to
+    86% of everything that session read back.
     """
     from ltspice_mcp.tools import registry
 

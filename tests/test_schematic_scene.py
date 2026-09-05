@@ -149,8 +149,8 @@ class TestFlagPlacement:
         assert resolve_flag_placement(False, set()) == ("up", False)
 
     def test_junction_picks_a_side_no_wire_occupies(self) -> None:
-        # Documented fallback, not a verified rule. The probe's single corner
-        # sample (wire from W meeting one running S) drew horizontal text above,
+        # Documented fallback, not a verified rule. The reference schematic's
+        # single corner sample (wire from W meeting one running S) drew text above,
         # which "first free side" reproduces for a label.
         assert resolve_flag_placement(False, {"left", "down"}) == ("up", False)
         # A ground at that same corner cannot rest downward without sitting on
@@ -210,7 +210,7 @@ class TestFlagPlacement:
     @pytest.mark.parametrize(
         ("wire", "flag_xy", "expected"),
         [
-            # Mirrors the four probe cases; wire endpoint listed away from the flag.
+            # Mirrors the four reference cases; wire endpoint listed away from the flag.
             ("WIRE 96 32 96 96", (96, 96), "down"),  # from N
             ("WIRE 288 160 288 96", (288, 96), "up"),  # from S
             ("WIRE 416 96 480 96", (480, 96), "right"),  # from W
@@ -422,10 +422,11 @@ class TestAscParsing:
         assert texts["5"] == (116, 124)
 
     def test_sideways_symbol_attributes_do_not_overprint(self, tmp_path: Path) -> None:
-        # Field regression: nine independent raters read a sideways capacitor's
-        # "C1" and "100n" as the single string "1001n". The windows are 16 units
-        # apart in the symbol's y; a quarter turn moved that gap onto the
-        # baseline, where a four-character value is more than twice as wide.
+        # Field regression: readers of a rendered sheet read a sideways
+        # capacitor's "C1" and "100n" as the single string "1001n". The windows
+        # are 16 units apart in the symbol's y; a quarter turn moved that gap
+        # onto the baseline, where a four-character value is more than twice as
+        # wide.
         _write(tmp_path / "stacked.asy", STACKED_ATTRS_ASY)
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs("R90"))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))

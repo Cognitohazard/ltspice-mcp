@@ -23,7 +23,7 @@ from ltspice_mcp.lib.spice_validator import PROBE_REF_RE, validate_netlist_arity
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "1"
+linter_version = "2"
 
 _SIGNAL_RE = PROBE_REF_RE
 _MILLI_SUFFIX_RE = re.compile(
@@ -146,6 +146,37 @@ def _meas_ngspice_batch(
         for card in context.cards
         if card.kind == "meas" and card.scope == ()
     ]
+
+
+def _step_ngspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    if not context.ngspice:
+        return []
+    findings = []
+    for card in context.cards:
+        if card.kind != "directive" or _directive_head(card) != ".step":
+            continue
+        findings.append(
+            _finding(
+                context,
+                rule,
+                line=card.line_start,
+                subject=".step",
+                evidence={
+                    "directive": card.body,
+                    "reason": (
+                        "ngspice has no .step: in batch mode it ignores the line, so "
+                        "the deck runs once at the base value and reports no error — "
+                        "the sweep never happens. Run the sweep as run_experiments "
+                        "variations (one deck per value) instead, or set the parameter "
+                        "to a fixed value."
+                    ),
+                },
+            )
+        )
+    return findings
 
 
 def _lib_section_ngspice(
@@ -394,6 +425,11 @@ RULES: tuple[LintRule, ...] = (
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
     LintRule("model-missing", "blocking", _model_missing),
     LintRule("directive-arity", "blocking", _directive_arity),
+    # A warning, not blocking: the run still answers a real question at the base
+    # value, and the single-run path's hard refusal of the same deck is the
+    # stricter reading of one behavior. What matters is that the caller learns
+    # the sweep did not happen, since ngspice itself says nothing.
+    LintRule("step-ngspice", "warning", _step_ngspice),
     LintRule("include-relative", "warning", _include_relative),
     LintRule("suffix-mega-milli", "warning", _suffix_mega_milli),
     # Blocking, not a warning: a .param TEMP does not set temperature, so the

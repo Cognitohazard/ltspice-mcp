@@ -53,8 +53,7 @@ The mechanisms below exist to cover the third column.
 must be **closed under inversion**: for every op that mutates the `.asc`, an
 inverse op exists (or it is self-inverse). It checks that an undo capability
 exists, not that state round-trips byte-for-byte (e.g.
-`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore;
-`reset_schematic` covers those). Each op in the `SchematicOp` union is either
+`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore). Each op in the `SchematicOp` union is either
 paired with an inverse op that exists, or declared self-inverse (re-applying it
 with the prior arguments reverts it). The pairing table forces the decision: a
 new `add_*` / `wire_pins` / `create` op with no entry fails the test, so a
@@ -129,8 +128,7 @@ are not mistaken for the absence-class bug above:
 - File creation (`edit_schematic` with `base: "blank"`; formerly the
   `create_netlist` / `create_schematic` tools) has no delete pair; removing a
   file is a native filesystem operation, intentionally out of scope for a
-  circuit editor. `reset_schematic` semantics revert in-session edits but do
-  not remove a created file.
+  circuit editor.
 - The pre-0.6.0 `configure_sweep` / `configure_montecarlo` tools created a
   persisted config with no delete-config tool. A delete tool had low value (a
   stale config is inert). The question is moot now: sweeps are
@@ -145,8 +143,28 @@ The following practices were already sound. They are kept, and everything
 above assumes them:
 
 - **Real-path tests.** Tests drive actual code paths — `tests/test_e2e.py`
-  launches the real server over stdio and speaks the client protocol; tests go
-  through config and startup, not by monkey-patching internals.
+  launches the real server over stdio and speaks the client protocol, and the
+  rest go through config and startup rather than constructing state by hand.
+  Substitution is confined to a few named seams, and the suite does use
+  `monkeypatch` for them:
+  - **The simulator subprocess boundary.** `fake_simulator` and
+    `recorded_fixture_simulator` (`tests/conftest.py`) replace
+    `ExperimentRunner.submit_netlist` — the one call that spawns a simulator.
+    The first hands back a minimal artifact pair on a controllable delay (that
+    delay is what catches a caller who printed a receipt for a job still in
+    flight); the second copies a recorded real-LTspice `.raw`/`.log` pair in,
+    so an analysis stage parses genuine simulator output.
+  - **Platform and environment seams.** WSL detection and path conversion
+    (`lib/wsl.py`), simulator detection at bootstrap, desktop browser launch
+    (`lib/desktop.py`), and the optional cairosvg raster backend — so one
+    machine can exercise every platform branch.
+  - **Timeouts, lowered.** Parse deadlines and the shutdown cancel timeout are
+    dropped to fractions of a second, so a bound can be shown to bite inside
+    the suite instead of being asserted about.
+
+  What is *not* substituted: handlers, the response path, the SPICE lexer and
+  validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the
+  job registry and store. A test for any of those runs the real thing.
 - **Ground-truth-first numeric validation.** Numeric results are checked against
   closed-form expected values, not "it didn't crash."
 - **Recorded-real fixtures.** Real simulator `.raw` / `.log` output is captured

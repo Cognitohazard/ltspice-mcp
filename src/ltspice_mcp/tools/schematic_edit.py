@@ -63,6 +63,7 @@ from ltspice_mcp.lib.schematic_ops import (
     OpWirePins,
     blank_sheet,
     build_on_wire_predicate,
+    collapse_result_warnings,
     collect_component_geometry,
     edit_guard,
     get_asc_editor,
@@ -742,14 +743,34 @@ def _apply_ops(
 
     Delegates the loop to the shared ``run_op_batch`` runner (abort-on-first-
     failure unless ``dry_run``), then splits its unified entries into this
-    surface's separate success/failure lists.
+    surface's separate success/failure lists. Identical advisories across the
+    batch are collapsed on the way out — see ``_op_warnings``.
     """
     entries, abort_reason = run_op_batch(editor, ops, target, stop_on_error=not dry_run)
+    collapse_result_warnings(entries)
     results = [e for e in entries if e["ok"]]
     failures = [
         {"index": e["index"], "op": e["op"], "error": e["error"]} for e in entries if not e["ok"]
     ]
     return results, failures, abort_reason
+
+
+def _op_warnings(results: list[dict]) -> list[str]:
+    """The batch's per-op advisories, attributed to the op that raised them.
+
+    An op can succeed and still have something to say — a duplicate net label,
+    a bbox-crossing wire, orphaned wires left behind by a removal. The envelope
+    carries one flat ``warnings`` list, so each is prefixed with its op; the
+    repeats are already collapsed by ``collapse_result_warnings``, which keeps
+    the first occurrence and annotates it with how many ops it covers (the
+    documented per-pin-label style repeats one advisory on every label op, and
+    a converter-scale batch would otherwise spend hundreds of lines on it).
+    """
+    return [
+        f"op {entry['index']} ({entry['op']}): {message}"
+        for entry in results
+        for message in entry.get("warnings", ())
+    ]
 
 
 def _mirror_commit_state(commit_state: str) -> Literal["not_started", "committed", "unknown"]:
@@ -885,14 +906,50 @@ async def _evaluate_edit_schematic(
         exists = target.exists()
         expected = args.expected_sha256.lower() if args.expected_sha256 else None
         if exists:
-            if expected is None:
-                raise NetlistError(
-                    f"{target.name} already exists; pass expected_sha256 (the SHA-256 of "
-                    "the file you edited against) so a concurrent edit can't be lost. "
-                    "An inspect components or net query on this sheet returns it as "
-                    "'sha256'."
-                )
             current = sha256_file(target)
+            if expected is None:
+                # The guard stands — nothing is written without the token — but
+                # the refusal hands the token over rather than sending the
+                # caller off to fetch it. A digest read here is a fact about
+                # the file as it is right now, under the same edit guard the
+                # write would take, so a retry that quotes it is exactly as
+                # safe as one quoting a prior read: a peer's write between the
+                # two still loses the race and comes back as revision_conflict.
+                _stage("revision_check", False, "expected_sha256 missing")
+                return finish(
+                    EditSchematicEvaluation(
+                        data=_envelope(
+                            outcome="failed",
+                            commit_state="not_committed",
+                            target=target,
+                            build_id=build_id,
+                            base=args.base,
+                            stages=stages,
+                            sha256=current,
+                            error={
+                                "code": "expected_sha256_required",
+                                "message": (
+                                    f"{target.name} already exists, so expected_sha256 is "
+                                    "required — it is what keeps a concurrent edit from "
+                                    f"being lost. Its current sha256 is {current}; resubmit "
+                                    "with that if it is the revision you edited against."
+                                ),
+                                "stage": "revision_check",
+                                "retryable": True,
+                            },
+                            hint=(
+                                "Nothing was written. Resubmit the same ops with "
+                                f"expected_sha256={current}."
+                            ),
+                        ),
+                        text=(
+                            f"edit_schematic: {target.name} exists and needs "
+                            f"expected_sha256; its current sha256 is {current}. "
+                            "Nothing was written."
+                        ),
+                        format=args.format,
+                    )
+                )
             if current != expected:
                 _stage("revision_check", False, "sha mismatch")
                 return finish(
@@ -971,7 +1028,9 @@ async def _evaluate_edit_schematic(
             profile, legend, label_only = _wiring_and_legend(
                 editor, include_legend=bool({"pin_legend", "touched"} & set(args.return_views))
             )
-            warnings = [w["message"] for w in post_op_warnings(editor)]
+            # Two sources, one channel: what the ops themselves reported, then
+            # what the finished sheet reports about itself.
+            warnings = _op_warnings(results) + [w["message"] for w in post_op_warnings(editor)]
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 

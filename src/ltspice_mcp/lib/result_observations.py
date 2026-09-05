@@ -9,7 +9,7 @@ label is a false accusation the model may parrot or learn to ignore). Instead it
 model judge.
 
 This module is the canonical implementation of the repo-wide "Result-trust
-doctrine — surface, don't judge" in CLAUDE.md. Design rules:
+rules — surface, don't judge" in CLAUDE.md. Design rules:
 - **Severity is relayed, never invented.** Relay observations carry the
   simulator's own classification (it called it an error). Value observations
   carry none — just the fact and its evidence; the magnitude speaks for itself.
@@ -31,7 +31,7 @@ Two surfacing channels, deliberately kept distinct (do not merge them):
 - ``observations`` answer *is the underlying data/solve trustworthy?* — facts
   about the result and the simulator's own behavior (a relayed log error, a
   non-finite or rail-pinned value, a coverage gap). Structured, code-tagged,
-  doctrine-governed by this module.
+  governed by the rules in this module.
 - ``warnings`` (on the analysis tools — ``signal_stats``, ``edge_metrics``,
   ``bode_metrics``, ...) answer *did this measurement have to make assumptions?*
   — per-request caveats about the measurement just performed (a clamped window,
@@ -78,7 +78,7 @@ _EXTREME_VALUE_SALIENCE = 1e8
 # reaching ≥10 kV and standing ~1e5× its own median trips it. The ratio is set
 # below the cited buck's actual peak/median (~9e5 rail-dominant, ~1.8e6 idle-
 # dominant) with margin, so detection does not hinge on which regime the median
-# lands in. Doctrine: a relative signature, surfaced as a fact, not a verdict.
+# lands in. Rule: a relative signature, surfaced as a fact, not a verdict.
 _EXTREME_VALUE_FLOOR = 1e4  # below this a spike is never "diverged", whatever the ratio
 _EXTREME_VALUE_RATIO = 1e5  # peak ≥ this many × the trace's own median ⇒ blow-up signature
 
@@ -91,7 +91,7 @@ _EXTREME_VALUE_RATIO = 1e5  # peak ≥ this many × the trace's own median ⇒ b
 # under ~10×) while still catching a moderate runaway measured against the
 # supply rail — an 850 V runaway on a 12 V-railed deck is only ~71×, invisible
 # at a 100× cutoff. Resonant/transformer step-up past 20× gets a true fact
-# surfaced, which the model dismisses cheaply in context (doctrine above).
+# surfaced, which the model dismisses cheaply in context (rule above).
 _SOURCE_RELATIVE_RATIO = 20.0  # peak |V| ≥ this many × the largest V-source amplitude
 
 # Transient-function keywords a V-card may carry; used by the best-effort
@@ -634,8 +634,9 @@ def surface_observations(
                 "detail": (
                     "Result is too large to scan (trace samples exceed the value-scan "
                     "budget); traces were not scanned for NaN/Inf or extreme values. "
-                    "Inspect specific signals with signal_stats/query_value if a "
-                    "degenerate result is suspected."
+                    "Inspect specific signals with the analyze_results "
+                    "'signal_stats' or 'value' recipes if a degenerate result "
+                    "is suspected."
                 ),
                 "evidence": {"point_count": summary.get("point_count")},
             }

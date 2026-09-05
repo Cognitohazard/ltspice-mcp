@@ -9,7 +9,7 @@ magnitude alone cannot reveal: whether the system is non-minimum-phase (an
 RHP zero or transport delay) and any pure transport delay.
 
 It surfaces FACTS, not verdicts (see ``lib/result_observations.py`` for the
-doctrine): every located corner carries a frequency RANGE rather than a single
+rules): every located corner carries a frequency RANGE rather than a single
 exact number, closely-spaced features are flagged as merged rather than split
 into invented precise corners, and an observation always recommends checking
 the result against the actual Bode plot.
@@ -50,7 +50,7 @@ from ltspice_mcp.lib.raw_parser import safe_magnitude_db
 # Re-exported for the tool layer: the reader's own facts carry
 # ``code``/``detail``; facts relayed from the simulator (spliced in by the
 # tool layer) additionally carry ``kind``/``severity``/``evidence`` — all
-# optional on the canonical doctrine shape, so both flavors fit.
+# optional on the canonical Observation shape, so both flavors fit.
 from ltspice_mcp.lib.result_observations import Observation
 
 # ---------------------------------------------------------------------------

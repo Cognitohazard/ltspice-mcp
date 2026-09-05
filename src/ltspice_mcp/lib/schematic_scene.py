@@ -126,11 +126,11 @@ def decode_text_lines(raw: str) -> list[str]:
 # from the connection point. The glyph continues the wire's direction of travel,
 # i.e. it is drawn on the far side of the point from the wire.
 #
-# Verified against LTspice itself: benchmarks/render_gate/flag_probe.asc isolates
-# a ground and a net label approached from each of N/S/E/W plus the wireless and
-# corner cases, and the rendered result was compared case by case with a
-# screenshot of the same file open in LTspice. All four single-wire directions
-# match this mapping for both flag kinds.
+# Verified against LTspice itself: a reference schematic isolates a ground and a
+# net label approached from each of N/S/E/W plus the wireless and corner cases,
+# and the rendered result was compared case by case with a screenshot of the
+# same file open in LTspice. All four single-wire directions match this mapping
+# for both flag kinds.
 _GLYPH_AWAY_FROM = {"up": "down", "down": "up", "left": "right", "right": "left"}
 
 # Resting order used when the wire geometry does not determine a side. The first
@@ -182,25 +182,25 @@ def resolve_flag_placement(
     apex, or the side a net label's text sits on. ``text_vertical`` is True when
     a net label's text is rotated a quarter turn to run along the wire axis.
 
-    Verified from the LTspice screenshot of the probe schematic: with a single
-    attached wire the glyph always continues the wire's travel, and a net label
-    on a *vertical* wire has its text rotated to read bottom-to-top while one on
-    a horizontal wire stays horizontal.
+    Verified against an LTspice screenshot of the reference schematic: with a
+    single attached wire the glyph always continues the wire's travel, and a net
+    label on a *vertical* wire has its text rotated to read bottom-to-top while
+    one on a horizontal wire stays horizontal.
 
-    Two cases are **not** verified and are documented fallbacks, because the
-    probe yielded only one sample of each:
+    Two cases are **not** verified and are documented fallbacks, because that
+    schematic yielded only one sample of each:
 
     * More than one wire — a corner, or a flag dropped mid-span — where no
       single wire determines a side. The code scans for the first side no wire
-      occupies, in resting-first order. For the probe's one corner sample (a
+      occupies, in resting-first order. For the one corner sample available (a
       wire from the west meeting one running south) that yields a horizontal
       label above the point, which is what LTspice drew; note the scan can give
-      a *ground* at that same corner "up" rather than its usual "down", which
-      the probe does not cover. So: one observed sample, plus a
+      a *ground* at that same corner "up" rather than its usual "down", a case
+      the reference schematic does not cover. So: one observed sample, plus a
       collision-avoidance rule of ours — not an established LTspice rule.
-    * The rotated text read bottom-to-top in both of the probe's vertical
-      samples, so that is implemented unconditionally; whether LTspice ever
-      flips the reading direction by side is untested.
+    * The rotated text read bottom-to-top in both vertical samples available, so
+      that is implemented unconditionally; whether LTspice ever flips the
+      reading direction by side is untested.
     """
     dirs = set(occupied)
     if len(dirs) == 1:
