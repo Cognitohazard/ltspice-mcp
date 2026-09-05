@@ -172,12 +172,11 @@ Error codes that only those handlers emitted are gone with them:
   through a task-local that overrode the argument. Results are identical (the
   recorded fixtures pin them); the last retained 0.5 handlers are deleted.
 
-- `edit_schematic` takes the same `render` policy object `verify_circuit`
-  takes (`format`, `scale`, `max_pixels`, or `render: true`) and a `compare`
-  object (`reference`, `anchors`, `rtol`) instead of its own flat spellings.
-  The flat `render_format`, `render_scale`, and bare `reference` arguments
-  are still accepted in 0.6 as aliases and go away in 0.7; passing both
-  spellings of one argument in a call is refused.
+- `edit_schematic` takes the same `compare` object `verify_circuit` takes
+  (`reference`, `anchors`, `rtol`) in place of its own flat spellings. The flat
+  `render_format`, `render_scale` and bare `reference` arguments were removed
+  before this release rather than kept as aliases, so the object form is the
+  only spelling; rendering itself is `verify_circuit`'s (see Removed).
 - Every tool's response is built from one envelope (`outcome`, `failures`,
   `observations`, `warnings`, `hint`) with one outcome rule, and a finding's
   location carries the same fields on every tool. The advertised schemas
