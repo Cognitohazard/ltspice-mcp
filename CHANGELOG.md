@@ -369,15 +369,20 @@ key is deleted in 0.7.0. Serving zero tools is still a hard error.
   contracts under `docs/design/`; the spicelib bug ledger is published as
   `docs/spicelib_bugs.md`.
 
-- The advertised tool definitions are shorter. A sentence of schema or tool
-  description is kept in the tool listing only if it states a unit, a
-  convention, a sign or an inversion, a context cost, or where fuller
-  documentation lives. Names, structure, enums, and defaults are unchanged, and
-  the full text is still available through `api.reference('...')` and the
-  `spice://guide` resource. Output schemas are no longer advertised either;
-  response shapes are learned from responses. The tool listing a client loads
-  drops from about 69,000 to about 38,000 characters, roughly 8,000 tokens per
-  session.
+- The advertised tool definitions are exactly what the source says. Every
+  description declared on a tool or one of its arguments is served verbatim in
+  the tool listing, so reading the models tells you what a client is shown, and
+  the one text also feeds `api.reference('...')` and the `spice://guide`
+  resource. What keeps the listing small is that the descriptions themselves
+  are short: each states the unit, the convention, the default, and how the
+  field interacts with its siblings, and the fuller explanation lives in
+  `docs/design/mcp_surface.md` or the guide with a pointer on the field. Output
+  schemas are still not advertised — response shapes are learned from
+  responses, and dropping them is what pays for the argument prose. The listing
+  a client loads is about 67,000 characters: shortening the descriptions took
+  about 9,000 characters off what the full text would otherwise cost.
+  `tests/test_consolidated_contracts.py` holds an upper bound per tool, so the
+  listing cannot grow without someone raising a number.
 - Three `analyze_results` recipes — `noise_integral`, `periodic`, and
   `return_loss` — advertise only their `metric` and a one-line documentation
   pointer, about 700 characters less schema per session. They remain fully

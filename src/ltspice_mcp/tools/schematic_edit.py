@@ -106,17 +106,16 @@ _BLANK_TEMPLATE = blank_sheet()
 _DEFAULT_VIEW_LIMIT = 100
 
 
+# ``OpWirePins`` still accepts the deprecated ``connect`` alias; this surface
+# drops it. The parent's applier dispatches on ``isinstance(op, OpWirePins)``
+# and reads ``op.op``, so narrowing the literal is all that is needed — a
+# ``connect`` payload no longer validates and never reaches the applier. The
+# payload fields (and their descriptions) are the parent's; only the
+# discriminator is narrowed, and this class's own docstring is what the schema
+# shows for the op.
 class OpWirePinsStrict(OpWirePins):
     """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
-    collision, or an overlapping wire junction rather than drawing them.
-
-    The shipped ``OpWirePins`` still accepts the deprecated ``connect`` alias;
-    this consolidated surface drops it. Because the parent's applier dispatches
-    on ``isinstance(op, OpWirePins)`` and reads ``op.op``, narrowing the literal
-    is all that is needed — a ``connect`` payload no longer validates and never
-    reaches the applier. The payload fields (and their descriptions) are the
-    parent's; only the discriminator is narrowed.
-    """
+    collision, or an overlapping wire junction rather than drawing them."""
 
     op: Literal["wire_pins"] = "wire_pins"  # pyright: ignore[reportIncompatibleVariableOverride]
 
@@ -174,40 +173,32 @@ class EditSchematicInput(ToolInput):
     base: Literal["existing", "blank"] = Field(
         default="existing",
         description=(
-            "'existing' (default) applies the ops as deltas onto the current file, "
-            "preserving untouched content. 'blank' treats the sheet as empty before "
-            "applying the ops (a whole-circuit one-call build)."
+            "'existing' (default) applies the ops as deltas onto the current "
+            "file; 'blank' treats the sheet as empty first (a whole-circuit "
+            "one-call build)."
         ),
     )
     expected_sha256: str | None = Field(
         default=None,
         description=(
-            "Required whenever the target already exists (either base). The SHA-256 "
-            "of the file you edited against, reported as 'sha256' by an inspect "
-            "components/net query on the sheet and by every edit that commits; a "
-            "mismatch means a peer committed first and the call returns "
-            "revision_conflict with nothing written."
+            "Required when the target exists: the SHA-256 of the file you "
+            "edited against, reported as 'sha256' by inspect and by every "
+            "commit. A mismatch returns revision_conflict, writing nothing."
         ),
     )
     ops: list[ConsolidatedOp] = Field(
         description=(
-            "Typed edit ops applied in order against one in-memory editor, each tagged "
-            "by its 'op' field: add_component, move_component, remove_component, "
-            "set_component_value, set_component_attribute, add_net_label, "
-            "remove_net_label, wire_pins, remove_wire, add_directive, remove_directive. "
-            "The whole batch commits atomically or not at all: the first op that fails "
-            "aborts the transaction and nothing is written. " + COORDINATE_DESCRIPTION
+            "Typed edit ops, each tagged by its 'op' field, applied in order "
+            "and committed atomically: the first failure aborts the batch and "
+            "nothing is written. " + COORDINATE_DESCRIPTION
         )
     )
     compare: CompareSpec | None = Field(
         default=None,
         description=(
-            "Verify the committed sheet against a reference netlist (.cir/.net): the "
-            "sheet is exported on a copy and compared for connectivity equivalence. "
-            "It runs after the commit, so a mismatch is reported but does not undo "
-            "it. The reference path itself is checked up front, so one outside the "
-            "allowed "
-            "roots is refused before the sheet is written, not after."
+            "Verify the committed sheet against a reference netlist (.cir/.net) "
+            "by exporting a copy and comparing connectivity. It runs after the "
+            "commit, so a mismatch is reported but not undone."
         ),
     )
     reference: str | None = Field(
@@ -217,9 +208,8 @@ class EditSchematicInput(ToolInput):
     dry_run: bool = Field(
         default=False,
         description=(
-            "Resolve, validate, and compute geometry without writing. Every op is "
-            "attempted so all problems surface at once; the target and its caches, "
-            "snapshots, and artifacts are left untouched."
+            "Resolve, validate, and compute geometry without writing. Every op "
+            "is attempted, so all problems surface at once."
         ),
     )
     write_failed_draft: bool = Field(
@@ -232,19 +222,18 @@ class EditSchematicInput(ToolInput):
     return_views: list[Literal["touched", "pin_legend", "render"]] = Field(
         default_factory=lambda: ["touched"],
         description=(
-            "Which geometry views to return. 'touched' (default) is the pin/net table "
-            "for just the components this batch's ops named; 'pin_legend' is the same "
-            "table for the whole sheet; 'render' is an SVG/PNG of it. A render needs a "
-            "committed file, so under dry_run it reports metadata only and writes no "
-            "artifact."
+            "Which geometry views to return: 'touched' (default) is the pin/net "
+            "table for the components this batch named, 'pin_legend' the whole "
+            "sheet, 'render' an SVG/PNG. Under dry_run a render reports "
+            "metadata only."
         ),
     )
     view_cursors: EditViewCursors | None = Field(
         default=None,
         description=(
             "Resume a paginated view by echoing back that page's next_cursor "
-            "unmodified. Each cursor is bound to its own view and is checked before "
-            "any work runs, so a bad one cannot surface after the sheet is committed."
+            "unmodified. Checked before any work runs, so a bad one cannot "
+            "surface after the sheet is committed."
         ),
     )
     view_limit: int = Field(
@@ -256,9 +245,8 @@ class EditSchematicInput(ToolInput):
     render: RenderArgument = Field(
         default=None,
         description=(
-            "How to draw the sheet: true for the defaults, false to draw nothing "
-            "even if return_views asks for it, or an object. Passing it also asks "
-            "for the render view, so return_views need not name it."
+            "How to draw the sheet: true for the defaults, false to draw "
+            "nothing, or an object. Passing it also asks for the render view."
         ),
     )
     render_format: Literal["png", "svg"] | None = Field(

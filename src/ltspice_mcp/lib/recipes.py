@@ -246,7 +246,7 @@ class MeasurementsRecipe(KeyedRecipe):
         ge=0,
         description=(
             "Bin count for a distribution histogram over each .MEAS name's "
-            "per-run values (the shape a Monte Carlo spread is read from). "
+            "per-run values (the shape a Monte Carlo spread is read from); "
             "0, the default, computes none."
         ),
     )
@@ -348,7 +348,7 @@ class BodeCrossingRecipe(VariableRecipe):
     signal: str
     level_db: float | None = Field(
         default=None,
-        description="Magnitude level to cross, in dB. Exactly one of level_db/level_deg.",
+        description="Magnitude level to cross, in dB; exactly one of level_db/level_deg.",
     )
     # Named for its axis the way level_db is, and reachable under the older
     # 'phase_deg' spelling. The pair reads as one choice of level on one of two
@@ -358,9 +358,9 @@ class BodeCrossingRecipe(VariableRecipe):
         default=None,
         validation_alias=AliasChoices("level_deg", "phase_deg"),
         description=(
-            "Phase level to cross, in degrees, scanned on the unwrapped phase so "
-            "a crossing past ±180° is found once rather than at every wrap. "
-            "Exactly one of level_db/level_deg."
+            "Phase level to cross, in degrees, scanned on the unwrapped phase "
+            "so a crossing past ±180° is found once; exactly one of "
+            "level_db/level_deg."
         ),
     )
 
@@ -420,11 +420,9 @@ class OperatingPointRecipe(KeyedRecipe):
     device: str | None = Field(
         default=None,
         description=(
-            "Return one device's small-signal params and terminal currents (e.g. "
-            "'M6') instead of the whole bias point. Unscoped, the value carries "
-            "every node voltage, every branch current, and every device's "
-            "params — tens of KB on a real opamp, against a few hundred bytes "
-            "for one device, which is what most questions are about."
+            "Return one device's small-signal params and terminal currents "
+            "(e.g. 'M6') instead of the whole bias point — a few hundred bytes "
+            "against tens of KB for a real opamp."
         ),
     )
 

@@ -1793,8 +1793,8 @@ _RotationLiteral = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M2
 # coordinate convention is stated once on the ``ops`` field instead of on the
 # dozen x/y pairs below.
 _ROTATION_DESCRIPTION = (
-    "'R<deg>' rotates clockwise by that many degrees; 'M<deg>' mirrors "
-    "horizontally and then rotates. Pins move with the body."
+    "'R<deg>' rotates clockwise by that many degrees, 'M<deg>' mirrors "
+    "horizontally and then rotates; pins move with the body."
 )
 _REFERENCE_DESCRIPTION = "Reference designator of an existing component, e.g. 'R1', 'M3'."
 COORDINATE_DESCRIPTION = (
@@ -1811,8 +1811,8 @@ class OpAddComponent(StrictModel):
     )
     symbol: str = Field(
         description=(
-            "Symbol name without the .asy extension, e.g. 'res', 'nmos4'. It must be "
-            "one the active symbol libraries resolve."
+            "Symbol name without the .asy extension, e.g. 'res', 'nmos4'; it "
+            "must be one the active symbol libraries resolve."
         )
     )
     x: int
@@ -1854,10 +1854,8 @@ class OpRemoveComponent(StrictModel):
     cleanup_wires: bool = Field(
         default=False,
         description=(
-            "Also delete wires left dangling at the removed component's pins. "
-            "These wire deletions are not restored by a later add_component, and "
-            "the edit commits — keep your own copy of the sheet if you may need to "
-            "undo removing the wrong component."
+            "Also delete wires left dangling at the removed component's pins; a "
+            "later add_component does not restore them, and there is no undo."
         ),
     )
 
@@ -1870,7 +1868,7 @@ class OpMoveComponent(StrictModel):
     x: int
     y: int
     rotation: _RotationLiteral | None = Field(
-        default=None, description=f"Omit to keep the current rotation. {_ROTATION_DESCRIPTION}"
+        default=None, description=f"Omit to keep the current rotation; {_ROTATION_DESCRIPTION}"
     )
 
 
@@ -1881,7 +1879,7 @@ class OpAddNetLabel(StrictModel):
     net: str = Field(description="Net name the label declares, e.g. 'VDD', 'out'.")
     pin: str | None = Field(
         default=None,
-        description="Place at this pin, e.g. 'M1.D'. Give this or x/y, not both.",
+        description="Place at this pin, e.g. 'M1.D'; give this or x/y, not both.",
     )
     x: int | None = None
     y: int | None = None
@@ -1902,8 +1900,8 @@ class OpWirePins(StrictModel):
     waypoints: list[WaypointInput] = Field(
         default_factory=list,
         description=(
-            "Corner points the route must pass through, in order. Omit to let the "
-            "router pick the elbow; supply them to steer around other parts."
+            "Corner points the route must pass through, in order; omit to let "
+            "the router pick the elbow."
         ),
     )
 
@@ -1913,7 +1911,7 @@ class OpRemoveNetLabel(StrictModel):
 
     op: Literal["remove_net_label"]
     pin: str | None = Field(
-        default=None, description="The pin the label sits on. Give this or x/y, not both."
+        default=None, description="The pin the label sits on; give this or x/y, not both."
     )
     x: int | None = None
     y: int | None = None
@@ -1927,8 +1925,9 @@ class OpRemoveWire(StrictModel):
     x1: int | None = Field(
         default=None,
         description=(
-            "Segment form: with y1/x2/y2, removes only this segment (either "
-            "direction). Byte-identical duplicates all go at once; 'removed' counts them."
+            "Segment form: with y1/x2/y2, removes only this segment, in either "
+            "direction; byte-identical duplicates all go at once and 'removed' "
+            "counts them."
         ),
     )
     y1: int | None = None
@@ -1973,9 +1972,8 @@ class OpRemoveDirective(StrictModel):
     op: Literal["remove_directive"]
     instruction: str = Field(
         description=(
-            "Directive or comment text to remove. Matched literally (exact) by "
-            "default; prefix with 'regex:' to match by pattern. Inverse of "
-            "add_directive."
+            "Directive or comment text to remove, matched literally by default; "
+            "prefix with 'regex:' to match by pattern."
         )
     )
 

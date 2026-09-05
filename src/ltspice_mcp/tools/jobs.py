@@ -94,10 +94,10 @@ class JobsInput(ToolInput):
 
     action: str = Field(
         description=(
-            "'status' snapshots a job now; 'wait' blocks until it finishes or "
-            "timeout_s elapses; 'cancel' stops it; 'list' pages recent circuits and "
-            "their job counts; 'runs' pages one job's per-run records. Each action "
-            "takes only its own fields, listed under that action below."
+            "'status' snapshots a job; 'wait' blocks until it finishes or "
+            "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
+            "circuits; 'runs' pages one job's runs. Each action takes only its "
+            "own fields, listed below."
         ),
     )
     budget: int | None = Field(
@@ -183,17 +183,15 @@ class JobsWaitInput(_AddressedJobsInput):
         ge=0.0,
         le=JOBS_WAIT_CAP_S,
         description=(
-            "How long to block, 0-300s. Timing out is not a failure — the response "
-            "comes back with timed_out set and the job keeps running, so wait again. "
-            "Polling with 'status' in a loop uses more calls."
+            "How long to block, 0-300s. Timing out is not a failure: the "
+            "response says timed_out and the job keeps running, so wait again."
         ),
     )
     wait_for: Literal["all", "runs"] = Field(
         default="all",
         description=(
-            "'all' waits for the runs and any attached analysis stage; 'runs' "
-            "returns as soon as the last run is terminal, before the analysis it "
-            "would then have to wait for separately."
+            "'all' waits for the runs and any attached analysis; 'runs' returns "
+            "as soon as the last run is terminal."
         ),
     )
 
@@ -206,9 +204,9 @@ class JobsCancelInput(_AddressedJobsInput):
         default=None,
         min_length=1,
         description=(
-            "The token from the original run_experiments receipt. Needed only when "
-            "this process did not submit the job — the owning process may always "
-            "cancel its own. Status and list never disclose it."
+            "The token from the original run_experiments receipt. Needed only "
+            "when this process did not submit the job; status and list never "
+            "disclose it."
         ),
     )
 

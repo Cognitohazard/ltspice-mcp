@@ -575,37 +575,39 @@ class TestOutputSchemaCoverage:
 # description is kept short at the source, and the depth it cannot hold moves
 # to docs/design/mcp_surface.md or spice://guide with a pointer left behind.
 # The only thing the advertised copy drops is outputSchema.
+#
+# The bounds below were re-pinned when the prose filter was removed. About half
+# of what a client now loads is structure the discriminated unions cannot say
+# in fewer characters; the rest is the 210 descriptions inside those schemas
+# plus the seven tool descriptions.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Variations, attached analysis, and the receipt row shape. The attached
     # recipes advertise their metric names and a pointer, not a second copy of
     # the recipe branches: a client cannot resolve a $ref into another tool's
     # document, so carrying the grammar twice measured 13 KB more on every
     # session, to restate what analyze_results publishes on the same wire.
-    "run_experiments": 14967,
+    "run_experiments": 12937,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
-    "jobs": 5838,
+    "jobs": 5227,
     # Twenty-odd recipe branches; the largest schema on the surface.
-    "analyze_results": 20763,
+    "analyze_results": 19416,
     # Five query kinds, each with its own argument shape.
-    "inspect": 8008,
-    # The typed op union plus render/compare views. Re-pinned 6760 -> 6733 when
-    # the op models' $defs keys lost their leading underscore with the move
-    # into lib/schematic_ops.py, then 6733 -> 7491 when render and compare
-    # became the same two objects verify_circuit takes. Both tools now
-    # advertise BOTH spellings — the objects, and the flat fields retained as
-    # aliases for 0.6 — which is what the compatibility window costs; the
-    # growth comes back when the aliases go.
-    "edit_schematic": 15655,
+    "inspect": 6410,
+    # The typed op union — eleven ops, each its own branch — plus the render
+    # and compare views. It advertises BOTH spellings of those two: the
+    # objects, and the flat fields retained as aliases for 0.6. That
+    # compatibility window is a measurable part of this number, and it comes
+    # back when the aliases go.
+    "edit_schematic": 14046,
     # Checks, the shared render policy and compare spec (each with the
     # verify-only fields on a subclass), and the flat compare fields retained
-    # as aliases. Re-pinned 2535 -> 3009 for that same second spelling, then
-    # 3009 -> 3142 when the netlist path gained the connectivity checks: a
+    # as aliases. The checks are named in the tool's own description because a
     # caller cannot ask for what the description does not say it looks at.
-    "verify_circuit": 6872,
+    "verify_circuit": 5476,
     # Job/case addressing, windowing, and delivery flags.
-    "plot_waveform": 3871,
+    "plot_waveform": 3283,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

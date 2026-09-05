@@ -687,22 +687,13 @@ def _failure(
 # Input models
 # ---------------------------------------------------------------------------
 
-_ANCHORS_DESCRIPTION = (
-    "Named nets that must map by name between the reference and this circuit — "
-    "ports, rails, outputs, measurement nets. A design that is structurally "
-    "isomorphic but puts 'vout' in the wrong place fails on these. Ground is "
-    "always an implicit anchor. Only meaningful with 'reference' in equivalence mode."
-)
 
-
+# ``mode`` and ``delivery`` are here rather than on ``RenderPolicy`` because
+# only this tool has checks to skip and an image channel to deliver into; an
+# edit's render has neither, and advertising them there would name choices that
+# tool cannot honour.
 class VerifyRenderPolicy(RenderPolicy):
-    """The shared render policy, plus what only this tool can decide.
-
-    ``mode`` and ``delivery`` are here rather than on ``RenderPolicy`` because
-    only this tool has checks to skip and an image channel to deliver into; an
-    edit's render has neither, and advertising them there would name choices
-    that tool cannot honour.
-    """
+    """The shared render policy, plus what only this tool can decide."""
 
     mode: Literal["with_checks", "only"] = Field(
         default="with_checks",
@@ -714,11 +705,10 @@ class VerifyRenderPolicy(RenderPolicy):
     delivery: Literal["artifact", "inline", "both"] = Field(
         default="artifact",
         description=(
-            "'artifact' (default) writes the image to disk and returns its path; "
-            "'inline' and 'both' also return the PNG as image content. An inline "
-            "image costs about 3k tokens at the default scale and stays in context "
-            "for every later turn — use it only to look at the drawing, otherwise "
-            "open the path. PNG only: SVG is markup clients do not show as a picture."
+            "'artifact' (default) writes the image and returns its path; "
+            "'inline' and 'both' also return the PNG as image content. An "
+            "inline image costs about 3k tokens at the default scale and stays "
+            "in context for every later turn. PNG only."
         ),
     )
 
@@ -729,15 +719,11 @@ class VerifyCompareSpec(CompareSpec):
     mode: Literal["equivalence", "structural_diff"] = Field(
         default="equivalence",
         description=(
-            "'equivalence' graph-compares connectivity (component set, values, "
-            "normalized parameters, node partitions by canonical labeling, arity, "
-            "and 'anchors'); a deck it cannot read yields a compare failure and no "
-            "'comparison' at all, because isomorphism is undefined without both "
-            "graphs. 'structural_diff' reports the added/removed/changed component "
-            "and directive delta between the two decks; a deck it cannot read is "
-            "diffed as empty, so the delta still comes back but 'equivalent' is null "
-            "and a warning names the deck that failed. Either way the outcome is "
-            "'partial' and the reason is in the response."
+            "'equivalence' graph-compares connectivity (components, values, "
+            "parameters, node partitions, arity, 'anchors') and returns no "
+            "'comparison' if either deck cannot be read; 'structural_diff' "
+            "reports the added/removed/changed delta and still returns one, "
+            "with 'equivalent' null."
         ),
     )
 
@@ -758,10 +744,9 @@ class VerifyCircuitInput(ToolInput):
         Field(
             default=None,
             description=(
-                "Narrow the checks. Default is every check applicable to this file "
-                "type: syntax and quality for netlists; symbols, export, layout and "
-                "quality for schematics; compare whenever 'reference' is given. Use "
-                "this only to skip something expensive — 'export' runs LTspice."
+                "Narrow the checks. Default is every check applicable to the "
+                "file type, plus compare whenever 'reference' is given. Use it "
+                "to skip something expensive — 'export' runs LTspice."
             ),
         )
     )
@@ -776,9 +761,9 @@ class VerifyCircuitInput(ToolInput):
     reference: str | None = Field(
         default=None,
         description=(
-            "Retained alias for compare.reference: the reference netlist as a file "
-            "path or literal netlist text (anything containing a newline is read as "
-            "text). Pass compare or these flat fields, not both."
+            "Retained alias for compare.reference: a netlist path or literal "
+            "netlist text (anything containing a newline is read as text). Pass "
+            "compare or the flat fields, not both."
         ),
     )
     compare_mode: Literal["equivalence", "structural_diff"] | None = Field(
@@ -787,7 +772,7 @@ class VerifyCircuitInput(ToolInput):
     )
     anchors: list[str] | None = Field(
         default=None,
-        description="Retained alias for compare.anchors. " + _ANCHORS_DESCRIPTION,
+        description="Retained alias for compare.anchors.",
     )
     rtol: float | None = Field(
         default=None,
@@ -839,10 +824,10 @@ class VerifyCircuitInput(ToolInput):
     export_to: Literal["managed", "sidecar"] = Field(
         default="managed",
         description=(
-            "Where the exported netlist goes. 'managed' writes into the server's "
-            "scratch directory and leaves your files untouched. 'sidecar' writes the "
-            "conventional <name>.net next to the schematic, overwriting any existing "
-            "one — use it only when you want that file on disk."
+            "Where the exported netlist goes: 'managed' writes into the "
+            "server's scratch directory and leaves your files alone; 'sidecar' "
+            "writes <name>.net next to the schematic, overwriting any existing "
+            "one."
         ),
     )
 
@@ -860,8 +845,7 @@ VERIFY_DESCRIPTION = (
     "facts (net connected only by label stubs with no drawn wire; text anchored "
     "inside a symbol). Supply 'reference' to graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
-    "Every fixable finding carries its location and subject. Apart from that "
-    "sidecar, nothing is written outside the server's scratch directory."
+    "Every fixable finding carries its location and subject."
 )
 
 

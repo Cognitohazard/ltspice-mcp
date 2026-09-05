@@ -349,28 +349,22 @@ _JOBS_WAIT_MAX_S = 300.0
 
 
 _CURSOR_DESCRIPTION = (
-    "Opaque page token taken verbatim from a previous page's 'next_cursor' — echo "
-    "it back unmodified. It is bound to this exact query, so it will not resume a "
-    "different one, and a tampered token is rejected. It carries a row offset, not "
-    "a snapshot: if the underlying libraries or directories change between pages, "
-    "it still resumes at that offset."
+    "Page token from a previous 'next_cursor' — echo it back unmodified. It "
+    "binds this query and carries a row offset, not a snapshot."
 )
 
 # The file-backed kinds bind the file itself, so the stronger claim holds there.
 _CURSOR_DESCRIPTION_FILE = (
-    "Opaque page token taken verbatim from a previous page's 'next_cursor' — echo "
-    "it back unmodified. It is bound to this exact query and to the file's size and "
-    "modification time, so it will not resume a different one, and a tampered token "
-    "— or one minted before an edit to the file — is rejected instead of resuming at "
-    "a stale offset."
+    "Page token from a previous 'next_cursor' — echo it back unmodified. It "
+    "binds this query and the file's size and modification time, so a token "
+    "minted before an edit is rejected."
 )
 
 
 class CapabilitiesQuery(StrictModel):
-    """What this server can do: the detected simulators and the raw dialect each
-    parses, whether the .asc netlist exporter is available, job persistence, the
-    allowed path roots, the active tool profile, the configured limits and dwell
-    caps, and the linter version. Takes no arguments and probes nothing."""
+    """What this server can do: detected simulators and their raw dialects,
+    whether the .asc exporter is available, job persistence, allowed roots, the
+    configured limits, and the linter version. Takes no arguments."""
 
     kind: Literal["capabilities"]
 
@@ -397,8 +391,8 @@ class SymbolsQuery(StrictModel):
 
 class SymbolQuery(StrictModel):
     """One symbol's geometry: pin positions at every rotation, bounding box, and
-    origin. This is the non-destructive pre-placement view — the pins reported
-    for a rotation are where they land when the part is placed at it."""
+    origin. The pins reported for a rotation are where they land when the part
+    is placed at it."""
 
     kind: Literal["symbol"]
     name: str = Field(
@@ -414,16 +408,15 @@ class SymbolQuery(StrictModel):
 class NetQuery(StrictModel):
     """Everything on one net. On a .asc this is a geometric trace — pins, wire
     vertices, net labels, and whether two labels short the net. On a netlist it
-    is card membership — which element cards reference the node — with no
-    geometry at all."""
+    is card membership, with no geometry."""
 
     kind: Literal["net"]
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
     at: str | list[int] = Field(
         description=(
-            "Where the net is: 'REF.PIN' (e.g. 'M1.D'), 'net:NAME', or [x, y]. A "
-            "netlist carries no geometry, so there it takes 'net:NAME', a bare node "
-            "name, or 'REF.<terminal-number>', and rejects a coordinate."
+            "Where the net is: 'REF.PIN' (e.g. 'M1.D'), 'net:NAME', or [x, y]; "
+            "on a netlist, which has no geometry, it takes 'net:NAME', a node "
+            "name, or 'REF.<terminal-number>' and rejects a coordinate."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -453,9 +446,9 @@ class ComponentsQuery(StrictModel):
     detail: Literal["list", "full"] = Field(
         default="list",
         description=(
-            "'list' returns reference and value only. 'full' adds nodes, model and "
-            "params on a netlist, and symbol, position, rotation, pins and bounding "
-            "box on a schematic."
+            "'list' returns reference and value only; 'full' adds nodes, model "
+            "and params on a netlist, and symbol, position, rotation, pins and "
+            "bounding box on a schematic."
         ),
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -468,28 +461,27 @@ class ModelQuery(StrictModel):
     kind: Literal["model"]
     mode: Literal["search", "enumerate"] = Field(
         description=(
-            "'search' fuzzy-matches 'query' and requires it. 'enumerate' lists every "
-            "model in 'libs' and rejects a 'query' rather than echoing back a filter "
-            "it never applied."
+            "'search' fuzzy-matches 'query' and requires it; 'enumerate' lists "
+            "every model in 'libs' and rejects a 'query' rather than echoing "
+            "back a filter it never applied."
         )
     )
     query: str | None = Field(
         default=None,
-        description="Part name or fragment to match. Required by 'search', refused by 'enumerate'.",
+        description="Part name or fragment to match; required by 'search', refused by 'enumerate'.",
     )
     libs: list[str] | None = Field(
         default=None,
         description=(
-            "Library files to read. Required by 'enumerate'; optional for 'search', "
-            "which searches the session's loaded libraries when it is omitted."
+            "Library files to read: required by 'enumerate', optional for "
+            "'search', which searches the session's loaded libraries when omitted."
         ),
     )
     cursor: str | None = Field(
         default=None,
         description=(
-            _CURSOR_DESCRIPTION_FILE + " Those files are the ones named in 'libs'; with "
-            "'libs' omitted the rows come from the session's loaded libraries instead, "
-            "and the token binds the query alone."
+            _CURSOR_DESCRIPTION_FILE + " The files are those named in 'libs'; "
+            "with 'libs' omitted it binds the query alone."
         ),
     )
 
@@ -549,10 +541,9 @@ class InspectInput(ToolInput):
         min_length=1,
         max_length=64,
         description=(
-            "Independent read-only lookups, 1-64 per call, each tagged by its 'kind'. "
-            "Batch freely: they share one round trip and are isolated from each other, "
-            "so a denied path, a stale cursor, an unknown kind, or a malformed query "
-            "fails only its own item and every other query still returns its data."
+            "Independent read-only lookups, 1-64 per call, each tagged by its "
+            "'kind'. Batch freely: they share one round trip and are isolated, "
+            "so a bad path, cursor or kind fails only its own item."
         ),
     )
     budget: int | None = Field(
@@ -1511,18 +1502,12 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
-    "independent 'queries'. Kinds: 'capabilities' (simulators, dialects, exporter, "
-    "job persistence, allowed roots, profile, limits, linter version); 'symbols' "
-    "(legal .asy names + resolution-order precedence; a 'path' adds that "
-    "schematic's own directory to the front); 'symbol' (one symbol's pins per "
-    "rotation R0..M270, bounding box, origin); 'net' (on a .asc: a geometric trace "
-    "of pins, wire vertices, labels, and shorts; on a .cir/.net/.sp: which element "
-    "cards reference the node, with no geometry); 'components' (the component list, "
-    "or full per-component detail with detail='full'); 'model' (search fuzzy-matches "
-    "a 'query'; enumerate lists every model in the given 'libs'). A denied path, a "
-    "stale or tampered cursor, an unknown kind, or a malformed query fails only that "
-    "item — every other query still returns. Paginated kinds resume via 'cursor'. "
-    "It is the only tool on this surface that never writes."
+    "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
+    "'components', 'model' — each with its own arguments, described on its branch "
+    "of the query schema. A denied path, a stale cursor, an unknown kind, or a "
+    "malformed query fails only that item; every other query still returns, and "
+    "paginated kinds resume via 'cursor'. It is the only tool on this surface "
+    "that never writes."
 )
 
 
