@@ -38,10 +38,10 @@ SKILL_BUDGETS = (
     pytest.param(BENCH_SKILL_PATH, 8300, id="spice-bench-craft"),
 )
 
-# Two rules share this denylist. (1) Absent behavior: "rerun" and "case_axis"
-# name things this six-tool surface does not have, and a doc that names them
-# teaches calls that do not exist; "columnar" is the ladder rung's internal
-# name — the doc teaches the effect (rows as value arrays), not the jargon.
+# Two rules share this denylist. (1) Absent behavior: "rerun", "case_axis" and
+# "columnar" name things this six-tool surface does not have, and a doc that
+# names them teaches calls that do not exist — the budget ladder's columnar
+# rung was removed before 0.6.0, so rows are objects at every budget.
 # (2) Scoped knobs the doc deliberately does not teach: "control_token" (its
 # cancel teaching stays scoped to the submitting session) and the
 # analysis_budget_s deferral knob. The blanket "budget"/"token" bans that
