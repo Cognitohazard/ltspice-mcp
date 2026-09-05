@@ -238,7 +238,7 @@ the key ignored. Serving zero tools is still a hard error.
   `compact` advertises the same seven tools and the same schemas with every
   per-argument description removed: structure, enums, defaults, `required`
   and `$defs` are intact, so a client can still build a valid call, and the
-  server validates and answers exactly as before. It takes roughly 40% off
+  server validates and answers exactly as before. It takes roughly 45% off
   what a session loads before it can call anything. Both listings are static.
 - `inspect(kind="reference")`: a searchable lookup over the tools' own
   vocabulary — each tool's top-level arguments, plus the branches (analysis
