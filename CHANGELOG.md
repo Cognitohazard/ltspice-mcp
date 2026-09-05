@@ -217,6 +217,22 @@ every sample to a file and returns its path.
 
 ### Changed
 
+- `jobs` publishes each action's own argument shape. `status`, `wait`,
+  `cancel`, `list`, and `runs` are separate branches of one schema keyed on
+  `action`, instead of nine optional fields policed after the fact by the
+  server. Every call that was accepted before is still accepted, unchanged;
+  a call that is not now names the legal actions, or the exact field that
+  action does not take, before it is dispatched.
+- `run_experiments`' `analyze.recipes` is validated against the same typed
+  recipe grammar `analyze_results` takes, so a malformed recipe is refused
+  before any deck is staged instead of after the simulation has run. The
+  schema advertises the metric names and points at `analyze_results` for the
+  fields each one takes, rather than carrying a second copy of the grammar
+  that every client would download in every session.
+- One `jobs` call reads its job once. The MCP response and the in-process
+  API result are two renderings of the same evaluation, so they can no
+  longer describe two different moments of the same job.
+
 - Every error class declares a stable `code`. No code a client sees has
   changed; the full vocabulary (82 codes) is pinned by
   `tests/test_error_codes.py`, and renaming or removing one is a breaking
