@@ -116,13 +116,13 @@ def _write(work_dir: Path, name: str, text: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-async def test_netlist_default_runs_syntax_only(state_no_sim, work_dir):
+async def test_netlist_default_runs_the_text_deck_checks(state_no_sim, work_dir):
     deck = _write(work_dir, "d.cir", _BASE)
     data = await _run(state_no_sim, path=str(deck))
     assert data["kind"] == "netlist"
-    assert data["checks_run"] == ["syntax"]
+    assert data["checks_run"] == ["syntax", "quality"]
     skipped = {s["check"]: s["reason"] for s in data["checks_skipped"]}
-    for check in ("symbols", "export", "layout", "quality"):
+    for check in ("symbols", "export", "layout"):
         assert "not applicable to a netlist file" in skipped[check]
     assert "no reference supplied" in skipped["compare"]
 
@@ -183,7 +183,7 @@ async def test_path_denied_is_error(state_no_sim):
 async def test_syntax_finding_shape(state_no_sim, work_dir):
     # R with only one node is an element-arity fault the validator catches.
     deck = _write(work_dir, "bad.cir", "* bad\nR1 a 1k\n.end\n")
-    data = await _run(state_no_sim, path=str(deck))
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
     assert data["outcome"] == "partial"
     assert data["findings"], "a one-node resistor should yield an arity finding"
     for f in data["findings"]:
@@ -553,6 +553,65 @@ async def test_simulator_library_include_is_read_though_the_sandbox_denies_it(
     assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"]
     assert data["comparison"]["unresolved_subckts"] == []
     assert data["comparison"]["equivalent"] is True
+
+
+# ---------------------------------------------------------------------------
+# netlist quality checks (connectivity)
+# ---------------------------------------------------------------------------
+
+# 'out' is wired to R1 and to nothing else.
+_DANGLING_NODE_DECK = "* stub\nV1 in 0 5\nR1 in out 1k\n.op\n.end\n"
+# The .meas names a node the deck never declares — the classic unlabelled-net
+# export, where the directive silently measures nothing.
+_UNDEFINED_REF_DECK = (
+    "* probe\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n"
+    ".meas tran vx FIND V(vref) AT 1m\n.tran 1m\n.end\n"
+)
+# 'mid' has two terminals but both are capacitor plates, so it reaches ground
+# through no DC-conductive element and its operating point is undefined.
+_FLOATING_NET_DECK = "* ac coupled\nV1 in 0 5\nC1 in mid 1u\nC2 mid 0 1u\n.op\n.end\n"
+
+
+async def test_netlist_quality_reports_a_node_with_one_terminal(state_no_sim, work_dir):
+    deck = _write(work_dir, "dangling.cir", _DANGLING_NODE_DECK)
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    assert data["checks_run"] == ["quality"]
+    dangling = [f for f in data["findings"] if f["rule_id"] == "dangling_node"]
+    assert len(dangling) == 1, data["findings"]
+    assert "out" in dangling[0]["evidence"]["detail"]
+    assert dangling[0]["at"]["file"] == str(deck)
+    # Legal SPICE — a deliberately unterminated fragment is a fact the caller
+    # weighs, not a fault, so it must not turn the call partial.
+    assert dangling[0]["severity"] == "observation"
+    assert data["outcome"] == "complete"
+
+
+async def test_netlist_quality_reports_a_directive_naming_nothing(state_no_sim, work_dir):
+    deck = _write(work_dir, "probe.cir", _UNDEFINED_REF_DECK)
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    missing = [f for f in data["findings"] if f["rule_id"] == "undefined_reference"]
+    assert len(missing) == 1, data["findings"]
+    assert "vref" in missing[0]["evidence"]["detail"]
+    assert missing[0]["severity"] == "warning"
+    assert data["outcome"] == "partial"
+
+
+async def test_netlist_quality_reports_a_net_with_no_dc_path_to_ground(state_no_sim, work_dir):
+    deck = _write(work_dir, "floating.cir", _FLOATING_NET_DECK)
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    floating = [f for f in data["findings"] if f["rule_id"] == "floating_net"]
+    assert len(floating) == 1, data["findings"]
+    assert "mid" in floating[0]["evidence"]["detail"]
+    assert floating[0]["severity"] == "warning"
+    assert data["outcome"] == "partial"
+
+
+async def test_netlist_quality_silent_on_a_clean_deck(state_no_sim, work_dir):
+    deck = _write(work_dir, "clean.cir", _BASE)
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    assert data["checks_run"] == ["quality"]
+    assert data["findings"] == []
+    assert data["outcome"] == "complete"
 
 
 # ---------------------------------------------------------------------------
