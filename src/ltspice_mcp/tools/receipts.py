@@ -708,9 +708,12 @@ def _runs_page(
     cap: int = _RUN_PAGE_LIMIT,
 ) -> dict[str, Any]:
     # Paged first, projected second: the projection is one row in, one row out,
-    # so it only has to run over the rows this page actually carries.
+    # so it only has to run over the rows this page actually carries. The cap is
+    # floored at one row for the same reason ``page`` floors its limit — a page
+    # of none would report itself truncated with a cursor back at the same
+    # offset, which is a pagination loop that never advances.
     rows = _project_run_rows(
-        [_run_item(case) for case in cases[:cap]],
+        [_run_item(case) for case in cases[: max(1, cap)]],
         run_fields,
         lean_default=True,
     )
