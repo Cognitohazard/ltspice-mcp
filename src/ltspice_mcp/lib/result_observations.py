@@ -1,4 +1,4 @@
-"""Result observation surfacing — a "surfacer", deliberately not a "judger".
+"""Result observation surfacing: report the facts, do not rate the result.
 
 The consumer of a simulation result here is an LLM agent with its own physics
 knowledge: it already knows 1e30 V is a floating node. So this layer does NOT
@@ -9,7 +9,7 @@ label is a false accusation the model may parrot or learn to ignore). Instead it
 model judge.
 
 This module is the canonical implementation of the repo-wide "Result-trust
-rules — surface, don't judge" in CLAUDE.md. Design rules:
+rules — report facts, do not rate them" in CLAUDE.md. Design rules:
 - **Severity is relayed, never invented.** Relay observations carry the
   simulator's own classification (it called it an error). Value observations
   carry none — just the fact and its evidence; the magnitude speaks for itself.

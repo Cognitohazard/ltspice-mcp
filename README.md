@@ -144,9 +144,9 @@ Other requests that work the same way:
 
 Everything operates on ordinary LTspice and SPICE files. You and the assistant can edit the same files:
 
-- Sketch a schematic in LTspice, then hand it over: *"what's the bias point?"*, *"why doesn't the output move?"*, *"add compensation and check the phase margin."*
-- Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state — the assistant picks up from there on the next request.
-- Changes can flow either direction mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
+- Sketch a schematic in LTspice, then ask the assistant to work on it: *"what's the bias point?"*, *"why doesn't the output move?"*, *"add compensation and check the phase margin."*
+- Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state, which the assistant reads on the next request.
+- Either of you can change the file mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
 
 ### When to shell out instead
 

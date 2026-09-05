@@ -27,7 +27,7 @@ Anything that forks semantics between them is a defect, not a feature.
 ## 2. Non-goals
 
 - No MCP resources, and no response-budget negotiation surface (see §7 for the
-  single-page escape hatch).
+  single-page mode).
 - No new analysis capability.
 - No physical package split: `ltspice_mcp.api` ships in the existing package.
 - No server-side arbitrary code execution.
@@ -131,7 +131,7 @@ stop. So:
 persisted identity and results, not detached execution. Work that must outlive
 the interpreter goes to a long-lived server process.
 
-That rule is stated where it bites, not only here:
+That rule is stated where it applies, not only here:
 
 - `reference()` and `reference('run_experiments')` say that `wait=False`
   returns a receipt *and* that the submitting process must outlive the run,
@@ -220,7 +220,7 @@ class-definition time from the same renderer, so `help(api.edit_schematic)` and
 The resolve chain carries an optional base directory in a context variable, and
 the `Api` sets it around every marshalled call, anchoring both the user path and
 any relative entry in `allowed_paths` (the generated TOML ships
-`allowed_paths = ["."]`, which is what made the CWD behavior bite). **MCP server
+`allowed_paths = ["."]`, which is what exposed the CWD behavior). **MCP server
 resolution is unchanged**, and a test pins that; the base is this interface's opt-in
 only.
 
@@ -249,7 +249,7 @@ Exception hierarchy: `ApiError` is the base; `ApiCallError`, `ApiSessionError`
 `KeyboardInterrupt`, so ordinary `except ValueError` / Ctrl-C handling still
 works.
 
-## 7. Door policy for wire-only controls
+## 7. Policy for wire-only controls
 
 Default (automatic) mode **rejects** `budget`, any cursor or continuation
 field, `view_cursors`, and `execution.wait_s`, with a message naming the
@@ -261,7 +261,7 @@ collectors, not from mutating the submitted request. Presentation-only fields �
 `include.fields`, `run_fields`, `provenance` — pass through freely.
 
 `raw_page=True` accepts every wire control verbatim and returns exactly one
-handler page. It is the preview and MCP-parity hatch.
+handler page. It is the preview mode, and the one way to get MCP-identical paging.
 
 ## 8. Curated primitives
 
@@ -375,8 +375,8 @@ module so that `__all__` stays the pinned stability boundary and does not move.
   stale lease, including a controlled fork *while another thread holds the
   lease lock* (an unlocked happy-path fork does not pin the failure); server
   lifespan and `Api` mutually exclusive in one process.
-- **Shutdown against live jobs.** Closing after a durable receipt while a
-  long-running job is active must reach `cancel_running`, proving
+- **Shutdown against live jobs.** Closing after a durable receipt while a job
+  the test keeps running is active must reach `cancel_running`, proving
   step 3 does not wait for natural completion.
 - **Snapshot coherence.** The assembled receipt is internally consistent across
   all mutable fields: a job transitioning queued to produced during collection

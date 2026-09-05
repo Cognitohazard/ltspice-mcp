@@ -211,7 +211,7 @@ scope, and it reuses windowed export plus the detectors (an
 envelope+carrier or edge-metric descriptor is the payload for a flagged
 window at zoom time).
 
-**Surface, don't judge — applied to navigation.** The stat-envelope and
+**Report facts without rating them — applied to navigation.** The stat-envelope and
 any ranking follow the same rule as the rest of the result layer: the tool
 reports measured conditions (crest factor, a bucket's spread relative to
 its neighbors, `mean` drift, alternating-peak spacing, spectral

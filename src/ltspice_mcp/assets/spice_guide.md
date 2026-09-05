@@ -189,7 +189,7 @@ find where the signal equals it):
 ```
 Or use the `resonance` recipe (AC) for peak frequency + Q + bandwidth in one step.
 
-**Gotchas:**
+**Important behavior:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - **`MAX` on a signed (always-negative) trace does not give the peak magnitude**: for a PMOS
   drain current that swings −3 mA…−1 mA, `.meas TRAN imax MAX I(V1)` returns
@@ -199,14 +199,14 @@ Or use the `resonance` recipe (AC) for peak frequency + Q + bandwidth in one ste
 - If TRIG event never occurs, measurement silently fails (no error, no warning).
 - Without `TD=` parameter, TARG matches from t=0 — can hit wrong edge.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
-- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target LEVEL, not the crossing point.
+- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target level, not the crossing point.
 - **Quantized / staircase signals** (transmission-line reflections, DAC steps):
   read each plateau level directly with a `value` recipe (`{"metric": "value",
   "expr": "V(out)", "at": …}`), or take the full table with a `waveform` recipe
   at `"format": "csv"` — don't reconstruct levels from the inline `waveform`
   envelope's bucket statistics.
 
-### General Pitfalls
+### General notes
 
 - **Node "0" vs "00"**: Different nodes. Ground is `0` (or `GND`).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
@@ -590,7 +590,7 @@ B1 out 0 V=V(in) Laplace=1/(1+s/{2*pi*fc})
 ```
 In Laplace expressions, `^` means exponentiation (not XOR). Response must roll off at high frequencies.
 
-**Gotchas:**
+**Important behavior:**
 - `^` is **XOR** in normal expressions, exponentiation only in Laplace. Use `**` for power.
 - `R=<expr>` behavioral resistor: value must never reach zero (causes convergence failure).
 - `NoJacob` flag exists but "greatly increases risk of convergence problems" — avoid.
@@ -799,8 +799,8 @@ section, require it to build with `edit_schematic` (never by hand-writing the
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use the `wire_pins` op with `net:0`** when multiple ground labels exist — it errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins is the idiomatic way to tie them — the netlist merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with the `wire_pins` op. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
-- **Label any net you reference by name in a directive.** The `wire_pins` op wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. Rule of thumb: wire-only is fine for nets you never name; **label any net a directive mentions by name.**
+- **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins ties them together — the netlist merges same-name labels into one net (correct, not a short), and no routing is needed. Wire nearby pins with the `wire_pins` op. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
+- **Label any net you reference by name in a directive.** The `wire_pins` op wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. A wire with no label is enough for a net you never name; **label any net a directive mentions by name.**
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
@@ -939,7 +939,7 @@ Bdio 1 0 I = pwl(v(A), 0,0, 33,10m, 100,33m, 200,50m)
 x values must be monotonically increasing — non-monotonic stops execution. Can
 use `time` or expressions as the independent variable.
 
-**Gotchas:**
+**Important behavior:**
 - `exp()` is internally capped at argument=14 — beyond that it becomes linear.
 - `log`/`ln`/`sqrt` of negatives use `fabs()` automatically — no error.
 - Division by zero or `log(0)` causes an error.
@@ -981,7 +981,7 @@ X1 input output myfilter rval=1k cval=1n
 ```spice
 .save V(out) I(Vin)               $ save only these signals
 .save @m1[id] @m1[gm]             $ save device operating-point params
-.save all @m2[vdsat]              $ save defaults PLUS extras
+.save all @m2[vdsat]              $ save defaults plus extras
 ```
 
 - Without `.save`, all node voltages and source currents are saved (huge files).

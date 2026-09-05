@@ -4,7 +4,7 @@ description: >
   Use when writing or editing LTspice circuit netlists (.cir, .net, .sp),
   working with LTspice schematics (.asc), or interpreting simulation results
   (.raw, .log). Covers LTspice-specific SPICE syntax, behavioral sources,
-  waveform sources, .MEAS, parameters, convergence, and common gotchas that
+  waveform sources, .MEAS, parameters, convergence, and the conditions that
   cause silent errors. Use this skill whenever the user mentions LTspice,
   circuit simulation, filter design, frequency response, transient analysis,
   or any SPICE netlist work targeting LTspice.
@@ -101,14 +101,14 @@ PWL file=<filename>
 .meas TRAN energy INTEG V(out)*I(R1)
 ```
 
-**Gotchas:**
+**Important behavior:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails (no error, no warning).
 - Without `TD=` parameter, TARG matches from t=0 — can hit wrong edge.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
-- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target LEVEL, not the crossing point.
+- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target level, not the crossing point.
 
-### General Pitfalls
+### General notes
 
 - **Node "0" vs "00"**: Different nodes. Ground is `0` (or `GND`).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
@@ -184,7 +184,7 @@ B1 out 0 V=V(in) Laplace=1/(1+s/{2*pi*fc})
 ```
 In Laplace expressions, `^` means exponentiation (not XOR). Response must roll off at high frequencies.
 
-**Gotchas:**
+**Important behavior:**
 - `^` is **XOR** in normal expressions, exponentiation only in Laplace. Use `**` for power.
 - `R=<expr>` behavioral resistor: value must never reach zero (causes convergence failure).
 - `NoJacob` flag exists but "greatly increases risk of convergence problems" — avoid.
@@ -315,7 +315,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `wire_pins` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Repeating the same net label at distant pins is the idiomatic way to tie them — the netlister merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
+- **Named nets (VDD, outp, etc.)**: Repeating the same net label at distant pins ties them together — the netlister merges same-name labels into one net (correct, not a short), and no routing is needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
