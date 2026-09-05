@@ -58,9 +58,25 @@ _DRIFT_REASONS = {
 class IdempotencyConflictError(SimulationError):
     """A request id was reused for a different canonical payload."""
 
+    code = "idempotency_conflict"
+
 
 class ExperimentCancellationError(SimulationError):
     """An experiment could not be cancelled by this coordinator."""
+
+    code = "cancel_failed"
+
+
+class CancelNotAuthorized(ExperimentCancellationError):
+    """The caller holds neither ownership of the job nor its control token.
+
+    A refusal to cancel is told from every other cancellation failure by this
+    type. Reading it out of the message ("not authorized") tied a wire code to
+    a sentence, so rewording the refusal — or any other cancellation failure
+    borrowing those words — silently reclassified it.
+    """
+
+    code = "cancel_not_authorized"
 
 
 def canonical_fingerprint(request_model: Any) -> str:
@@ -1098,7 +1114,7 @@ class ExperimentRunner(RunnerBase):
     ) -> list[dict[str, Any]]:
         """Stop further submissions and kill active cases when authorized."""
         if not experiment_store.cancel_authorized(job, control_token):
-            raise ExperimentCancellationError(
+            raise CancelNotAuthorized(
                 f"Cancellation is not authorized for experiment job {job.job_id}"
             )
         execution = self._executions.get(job.job_id)
