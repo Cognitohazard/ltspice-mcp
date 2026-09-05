@@ -320,8 +320,11 @@ def _operations() -> tuple[_Operation, ...]:
                 "wait=False returns the submission receipt immediately, but the "
                 "job is owned by this process and is cancelled when it exits — "
                 "Api.close(), the end of a 'with' block, or the interpreter "
-                "exiting. Keep the process alive until the job finishes, or run "
-                "work that must outlive it through a long-lived server."
+                "exiting. Add detach=True (only with wait=False) to hand the job "
+                "to a process spawned for it, which supervises it to the end and "
+                "outlives this one; the receipt then names that owner's pid and "
+                "log, and cancelling takes jobs(action='cancel') with the "
+                "receipt's control_token."
             ),
         ),
         _Operation(

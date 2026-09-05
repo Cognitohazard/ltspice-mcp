@@ -46,12 +46,11 @@ long-lived process: it owns jobs that must outlive a call, serves the
 packaged guide and job resources, and renders the waveform widget on hosts
 that support it. A script using the Python API works in the same directory
 against the same job records, so a job started by either can be read by the
-other by its `job_id`. Today's limit: a job submitted through the Python
-API belongs to the process that submitted it, and that process exiting
-cancels it. Handing a script's job over to a running server (or to a
-detached worker) so a short-lived script can submit and leave is the next
-planned change; until then a script that submits must stay alive for the
-run, or run the job through the server.
+other by its `job_id`. A job the script submits belongs to the script, and
+exiting cancels it — unless it asks for a detached owner
+(`run_experiments(wait=False, detach=True)`), which hands that one job to a
+process spawned to supervise it. The script can then exit, and the job, the
+server and any later script all still see the same record.
 
 ## Quick start — Python library
 
@@ -184,11 +183,14 @@ MCP server. Its interface differs from MCP in the following ways:
   MCP-only controls such as response budgets, pagination cursors, and wait
   dwells instead of rewriting them. This keeps replayed calls consistent
   between MCP and Python.
-- **The Python process owns its jobs.** `run_experiments(wait=False)` returns
-  a receipt immediately. Unfinished jobs are cancelled by `api.close()`, at
-  the end of a `with` block, or during normal interpreter shutdown. Keep the
-  process running until the job finishes. Use a long-lived server for work
-  that must continue after the process exits.
+- **The Python process owns its jobs, unless you detach them.**
+  `run_experiments(wait=False)` returns a receipt immediately, and unfinished
+  jobs are cancelled by `api.close()`, at the end of a `with` block, or during
+  normal interpreter shutdown. Adding `detach=True` gives that job its own
+  supervising process instead: the call still returns as soon as the
+  submission is durable, the receipt names the owner and its log, and the job
+  runs on after this process exits. Read it back or cancel it later by
+  `job_id`, from here, a later script, or a server.
 - **One live engine per process.** An `Api` created inside a running server
   process raises an error. A cold `Api()` starts in well under a second; the
   heavy imports are loaded by the first call that needs them.
