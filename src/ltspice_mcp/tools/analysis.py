@@ -779,9 +779,8 @@ class PlotWaveformInput(ToolInput):
     job_id: str | None = Field(
         default=None,
         description=(
-            "Plot one run of a finished job — a run_experiments job or a legacy "
-            "single/sweep/MC job — instead of a raw_file path; pick the run with "
-            "``run_index`` (or ``case_id`` for an experiment)."
+            "Plot one run of a finished job instead of a raw_file path; pick "
+            "the run with ``run_index`` (or ``case_id`` for an experiment)."
         ),
     )
     run_index: int = Field(
@@ -826,25 +825,23 @@ class PlotWaveformInput(ToolInput):
     open: bool = Field(
         default=True,
         description=(
-            "Open the written HTML in the local browser. Applies to terminal clients "
-            "only — ignored when the chart is delivered as an in-chat widget (MCP Apps "
-            "host). Set false to only write the file."
+            "Open the written HTML in the local browser. Terminal clients only "
+            "— ignored when the chart is delivered as an in-chat widget."
         ),
     )
     annotate: bool = Field(
         default=True,
         description=(
-            "Annotate an AC/Bode plot with detected corner markers (vertical lines) + "
-            "an out-of-phase-zero / delay flag, from ac_structure. AC plots only; ignored "
-            "for transient/DC."
+            "Annotate an AC/Bode plot with detected corner markers and an "
+            "out-of-phase-zero / delay flag. AC only; ignored for transient/DC."
         ),
     )
     out_dir: str | None = Field(
         default=None,
         description=(
-            "Directory to write the HTML into (resolved under an allowed path; "
-            "created if needed). Default: a '.ltspice-mcp/plots/' sidecar next to "
-            "the circuit for a job_id, or next to the raw for a raw_file."
+            "Directory for the HTML (under an allowed path; created if needed). "
+            "Default: a '.ltspice-mcp/plots/' sidecar next to the circuit or "
+            "the raw file."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -856,24 +853,18 @@ class PlotWaveformInput(ToolInput):
 @registry.tool(
     name="plot_waveform",
     description=(
-        "Render an interactive chart of one or more signals for a person to look at "
-        "(zoom/pan/hover). It returns no data values to the model; it produces a "
-        "picture.\n\n"
-        "Picks the chart from the run type: transient (V/I vs time), DC sweep, AC "
-        "Bode (stacked magnitude-dB + phase-deg vs log frequency), noise (vs log "
-        "frequency); a .step / Monte-Carlo run overlays every step as a labelled "
-        "trace (or pass ``step`` for one). Full fidelity by default, with a "
-        "min/max-preserving downsample above ``max_points`` that keeps spikes and "
-        "reports that it downsampled. Writes a self-contained HTML file and returns "
-        "its path "
-        "— into ``out_dir`` if given, else a '.ltspice-mcp/plots/' sidecar next to "
-        "the circuit (for a job_id) or next to the raw (for a raw_file); on a host "
-        "that supports MCP Apps the chart is "
-        "also embedded as an interactive in-chat widget, otherwise it opens in your "
-        "local browser.\n\n"
+        "Render an interactive chart (zoom/pan/hover) of one or more signals for "
+        "a person to look at. It returns a picture, not data values: the chart "
+        "type follows the run (transient, DC sweep, AC Bode, noise) and a .step "
+        "or Monte Carlo run overlays every step.\n\n"
+        "Writes a self-contained HTML file and returns its path — into "
+        "``out_dir`` if given, else a '.ltspice-mcp/plots/' sidecar next to the "
+        "circuit or the raw. On a host that supports MCP Apps the chart is also "
+        "embedded as an in-chat widget; otherwise it opens in your local "
+        "browser.\n\n"
         "For numbers use analyze_results instead: the waveform recipe returns a "
-        "decimated table in context (or every sample as CSV on disk), and "
-        "signal_stats and the bode_* recipes return scalars."
+        "table (or CSV on disk), and signal_stats and the bode_* recipes return "
+        "scalars."
     ),
     input_model=PlotWaveformInput,
     annotations=types.ToolAnnotations(

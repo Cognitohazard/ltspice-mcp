@@ -77,10 +77,8 @@ LADDER: tuple[int, ...] = tuple(sorted(_RUNG_NAMES))
 # reads once, not what every session should pay for on the wire.
 BUDGET_DESCRIPTION = (
     "Approximate response-token cap (compact characters / 4, minimum 500). "
-    "Presentation degrades in a fixed order; facts — failures, observations, "
-    "warnings, completeness — are never cut. Omitted, the server's own default "
-    "budget applies and only strips empty blocks and the identity echo. "
-    "Presentation only: it is not part of a result's identity. See spice://guide."
+    "Presentation only: facts are never cut. Omitted, the server's default "
+    "applies. Ladder: spice://guide."
 )
 
 

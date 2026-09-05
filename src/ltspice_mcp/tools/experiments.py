@@ -121,9 +121,9 @@ class _CircuitPreparation:
 class ExperimentCircuit(StrictModel):
     path: str = Field(
         description=(
-            "Deck to run: .cir/.net/.sp, or an .asc exported through LTspice first. "
-            "It is staged content-addressed at submission, so later edits to the "
-            "file cannot change what this job ran."
+            "Deck to run: .cir/.net/.sp (export an .asc through LTspice first). It "
+            "is staged content-addressed at submission, so later edits to the file "
+            "cannot change what this job ran."
         ),
     )
     id: str | None = Field(
@@ -265,8 +265,7 @@ class AttachedAnalysis(StrictModel):
     recipes: list[SkipValidation[Recipe]] = Field(
         description=(
             "analyze_results recipes, in that tool's exact shape, run over this "
-            "job's own runs once they finish. Saves a round trip when the "
-            "measurements are known up front."
+            "job's own runs once they finish."
         ),
     )
     group_by: list[str] = Field(
@@ -321,10 +320,9 @@ class AttachedAnalysis(StrictModel):
 _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "type": "object",
     "description": (
-        "One analyze_results recipe. This block mirrors analyze_results.recipes "
-        "exactly — same grammar, same metrics, validated the same way at "
-        "submission. Fields per metric: api.reference('analyze_results') or "
-        "spice://guide."
+        "One entry of analyze_results.recipes: same grammar, same metrics, "
+        "validated at submission. Fields per metric: "
+        "api.reference('analyze_results') or spice://guide."
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},
@@ -406,57 +404,52 @@ class RunExperimentsInput(ToolInput):
         default_factory=lambda: generate_id("req"),
         min_length=1,
         description=(
-            "Idempotency key, optional. Omit it for a one-off run — a fresh id is "
-            "generated and echoed on the receipt. Pass your own to make submission "
-            "durable: the same id with the same arguments and unchanged source "
-            "decks replays the existing receipt instead of running anything again; "
-            "the same id after either changed is a conflict, not a replay."
+            "Idempotency key, optional. Reusing one replays that receipt when the "
+            "arguments and decks are unchanged, and is a conflict when either "
+            "changed. Omitted, a fresh id is generated and echoed back."
         ),
     )
     circuits: list[ExperimentCircuit] = Field(
         min_length=1,
         description=(
-            "Decks to run. Several circuits in one call share the variation grid "
-            "and one job, which is how designs are compared under identical "
-            "conditions; scope a variation to one of them with its 'applies_to'."
+            "Decks to run. Several in one call share one variation grid and one "
+            "job, which compares designs under identical conditions; scope a "
+            "variation to one of them with 'applies_to'."
         ),
     )
     variations: list[Variation] = Field(
         default_factory=list,
         description=(
             "The sweep. 'assign' entries build the case grid (cartesian across "
-            "entries, or lock-step within one entry via combine:'zip'); at most one "
-            "'random' entry adds Monte Carlo runs. Cases run in parallel up to the "
-            "concurrency cap, so a whole grid takes little more wall-clock time "
-            "than a single case; express the sweep here rather than as repeated "
-            "one-case calls. Empty runs each circuit once as authored."
+            "entries, lock-step within one via combine:'zip'); at most one "
+            "'random' entry adds Monte Carlo runs. Cases run in parallel — ask "
+            "for the whole grid in one call. Empty runs each circuit as "
+            "authored."
         ),
     )
     execution: ExperimentExecution = Field(
         default_factory=ExperimentExecution,
         description=(
-            "How the job runs and how long this call dwells: wait_s bounds only "
-            "this response (the job is durable either way), plus per-case "
-            "timeout_s, simulator choice, and the parallelism cap. Defaults suit "
-            "a quick check."
+            "How the job runs and how long this call dwells. wait_s bounds only "
+            "this response — the job is durable either way. Defaults suit a quick "
+            "check."
         ),
     )
     analyze: AttachedAnalysis | None = Field(
         default=None,
         description=(
-            "Measure the runs as a stage of this job, so terminal responses carry "
-            "the numbers already. Its failure does not fail the runs; it sets its "
-            "own analysis status and the runs stay analyzable with analyze_results."
+            "Measure the runs as a stage of this job, so the terminal response "
+            "carries the numbers. A failed analysis does not fail the runs, which "
+            "stay analyzable with analyze_results."
         ),
     )
     lint: Literal["block", "warn", "off"] = Field(
         default="block",
         description=(
-            "What to do with SPICE lint findings on the staged deck. 'block' refuses "
-            "to submit a circuit with a blocking finding (its cases are reported "
-            "'skipped'); 'warn' runs anyway and reports them; 'off' skips linting. "
-            "Prefer 'suppress' over lowering this: the rules catch decks that run "
-            "without an error and return wrong answers."
+            "What to do with lint findings on the staged deck: 'block' refuses to "
+            "submit a circuit with a blocking finding (its cases report "
+            "'skipped'), 'warn' runs anyway, 'off' skips linting. Prefer "
+            "'suppress' over lowering this."
         ),
     )
     suppress: list[str] = Field(
@@ -469,34 +462,26 @@ class RunExperimentsInput(ToolInput):
     allow_live_includes: bool = Field(
         default=False,
         description=(
-            "Let a .include/.lib that cannot be staged (outside the allowed roots, "
-            "or past the recursion depth) be read live at run time instead of "
-            "failing that circuit's submission. The job then cannot prove what "
-            "those files held when it ran: the manifest marks the reference "
-            "live:true, an observation says so, and reusing its request_id runs "
-            "the experiment again rather than replaying a receipt whose inputs "
-            "cannot be checked."
+            "Let a .include/.lib that cannot be staged (outside the allowed "
+            "roots, or past the recursion depth) be read live at run time "
+            "instead of failing that circuit. The job cannot then prove what "
+            "those files held, so its request_id re-runs rather than replaying."
         ),
     )
     provenance: bool = Field(
         default=False,
         description=(
-            "Emit the full audit trail on each source: content digests, the staged "
-            "deck path, every staged file, and the linter version. Off by default "
-            "because it is a third of a receipt's bytes and names files you do not "
-            "open — the analysis tools address runs by job_id. Entries that say "
-            "something actionable (a live, unprovable include) are reported either "
-            "way."
+            "Emit the full audit trail on each source: content digests, the "
+            "staged deck path, every staged file, and the linter version. "
+            "Actionable entries are reported either way."
         ),
     )
     run_fields: list[str] | None = Field(
         default=None,
         description=(
-            "Keep only these keys on each row of 'runs.items', dotted for nesting "
-            "(e.g. 'case_id', 'assignments.RDEG'). Nesting is preserved, so a row "
-            "reads the same way with fewer keys. Use it on a wide sweep: the run "
-            "list is per-case and grows with the grid. Escape a dot inside a key "
-            "name as '\\.'."
+            "Keep only these keys on each row of 'runs.items', dotted for "
+            "nesting (e.g. 'assignments.RDEG'); escape a dot inside a key name "
+            "as '\\.'."
         ),
     )
     budget: int | None = Field(
