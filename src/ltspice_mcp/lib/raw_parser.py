@@ -14,12 +14,14 @@ from __future__ import annotations
 import contextlib
 import re
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 from spicelib.log.ltsteps import LTSpiceLogReader
+from spicelib.raw.raw_classes import SpiceReadException
 from spicelib.raw.raw_read import RawRead
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
@@ -28,6 +30,35 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
 )
 from ltspice_mcp.lib.result_observations import surface_observations
+
+# What a raw accessor raises when the thing being asked for is not there: a
+# missing property (ValueError), a missing trace (IndexError from spicelib,
+# KeyError from a name-keyed lookup), a raw with no axis (RuntimeError), a file
+# it cannot read that far (SpiceReadException), or an alias form it does not
+# implement (NotImplementedError). Catching this tuple instead of every
+# Exception keeps a bug on OUR side (AttributeError, TypeError) from being
+# swallowed as "the trace isn't there" and answered with a fallback value.
+_RAW_ACCESS_ERRORS = (
+    ValueError,
+    IndexError,
+    KeyError,
+    RuntimeError,
+    NotImplementedError,
+    SpiceReadException,
+)
+
+
+def _parse_failure(what: str, exc: BaseException) -> str:
+    """One line naming a summary field whose parser raised.
+
+    A parse fault used to leave the field simply absent, which on the wire is
+    indistinguishable from "the deck asked for nothing" — a log this build
+    could not read looked exactly like a run with no ``.meas`` in it. Naming
+    the field and the exception makes the difference visible without judging
+    the result.
+    """
+    return f"{what} unavailable: {type(exc).__name__}: {exc}"
+
 
 # LTspice .raw header magic. Classic files start with ASCII ``Title:``; newer
 # LTspice writes a UTF-16 LE BOM followed by the same ``Title:``.
@@ -246,7 +277,9 @@ def detect_sim_type(raw: RawRead) -> str:
         plot_name = raw.get_raw_property("Plotname")
         if plot_name:
             return str(plot_name)
-    except Exception:
+    except _RAW_ACCESS_ERRORS:
+        # A raw with no Plotname property is a real shape, not a fault: the
+        # caller gets the "Unknown" it documents.
         pass
     return "Unknown"
 
@@ -290,7 +323,7 @@ def get_step_count(raw: RawRead) -> int:
     """
     try:
         return len(raw.get_steps())
-    except Exception:
+    except _RAW_ACCESS_ERRORS:
         return 1
 
 
@@ -364,7 +397,9 @@ def trace_unit(raw: RawRead, name: str) -> str | None:
     (e.g. it won't claim ``@m1[gm]`` is siemens unless the simulator typed the
     trace as ``admittance``) — that would be a vendor catalog, not a relay.
     """
-    with contextlib.suppress(Exception):
+    # A trace this raw doesn't carry has no declared type — fall through to the
+    # name prefix rather than reporting a fault the caller can do nothing with.
+    with contextlib.suppress(*_RAW_ACCESS_ERRORS):
         unit = whattype_unit(getattr(raw.get_trace(name), "whattype", None))
         if unit:
             return unit
@@ -384,7 +419,8 @@ def dc_axis_name(raw: RawRead) -> tuple[str | None, str | None]:
     swept variable (e.g. ``Vin`` / ``Vin_V``) instead of a generic ``t``/``sweep``
     tag — the one place that introspection lives, shared by the text and CSV paths.
     """
-    with contextlib.suppress(Exception):
+    # An axis-less raw (a stepped ``.op``) legitimately has no trace 0 to name.
+    with contextlib.suppress(*_RAW_ACCESS_ERRORS):
         ax = raw.get_trace(0)
         name = getattr(ax, "name", None)
         if name:
@@ -514,7 +550,10 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     """Compute -3 dB bandwidth and unity-gain frequency for AC simulations.
 
     Returns a dict with ``bandwidth_3db`` and ``unity_gain_freq`` (each a
-    Python float or None). The bandwidth is the first −3 dB crossing
+    Python float or None), plus a ``warnings`` list naming any metric whose
+    computation raised — a None that means "this run has no such crossing"
+    and a None that means "the computation failed" are otherwise the same
+    value. The bandwidth is the first −3 dB crossing
     relative to DC gain (low cutoff for LPFs, low edge for BPFs). The
     unity-gain frequency is the worst-case 0 dB crossover from the full
     stability sweep — meaningful for amplifier-shaped responses.
@@ -534,16 +573,18 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
         prepare_ac_arrays,
     )
 
-    metrics: dict[str, float | None] = {
+    metrics: dict[str, Any] = {
         "bandwidth_3db": None,
         "unity_gain_freq": None,
     }
+    failures: list[str] = []
 
     try:
         axis_raw = raw.get_axis(step=step)
         wave_raw = raw.get_wave(trace_name, step=step)
         freqs, H = prepare_ac_arrays(np.asarray(axis_raw), np.asarray(wave_raw))
-    except Exception:
+    except _RAW_ACCESS_ERRORS as exc:
+        metrics["warnings"] = [_parse_failure(f"AC data for {trace_name!r}", exc)]
         return metrics
 
     # -3 dB bandwidth relative to the low-frequency (DC) gain. For LPFs
@@ -556,8 +597,8 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
         crossings = detect_crossings(freqs, mag_db, ref_db + HALF_POWER_DB, direction="falling")
         if crossings:
             metrics["bandwidth_3db"] = float(crossings[0]["frequency_hz"])
-    except Exception:
-        pass
+    except Exception as exc:
+        failures.append(_parse_failure("bandwidth_3db", exc))
 
     try:
         stability = compute_stability_metrics(freqs, H)
@@ -571,9 +612,11 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
             # by a smaller positive one (matches compute_stability_metrics).
             worst_pm = min(pm_entries, key=lambda m: m["margin_deg"])
             metrics["unity_gain_freq"] = float(worst_pm["frequency_hz"])
-    except Exception:
-        pass
+    except Exception as exc:
+        failures.append(_parse_failure("unity_gain_freq", exc))
 
+    if failures:
+        metrics["warnings"] = failures
     return metrics
 
 
@@ -597,7 +640,9 @@ def _raw_node_data_is_finite(raw: RawRead, trace_names: list[str], step: int) ->
             continue
         try:
             arr = np.asarray(raw.get_wave(name, step=step))
-        except Exception:
+        except _RAW_ACCESS_ERRORS:
+            # A trace this raw can't produce vouches for nothing; ``checked``
+            # stays where it was, so an all-unreadable raw still answers False.
             continue
         if arr.size == 0:
             continue
@@ -646,12 +691,22 @@ def build_simulation_summary(
         optional measurements, warnings, Fourier data, duration, and an
         always-present ``observations`` list (see ``result_observations``).
         All numpy types converted to Python float.
+
+        A field whose parser raised is reported in ``warnings``, naming the
+        field and the exception, rather than being left out: an absent
+        ``measurements`` key is otherwise the same wire shape whether the deck
+        had no ``.meas`` or the log could not be read at all.
     """
     sim_type = detect_sim_type(raw)
     trace_names = raw.get_trace_names()
     step_count = get_step_count(raw)
 
-    # Stepped ``.op`` raw files have no axis — spicelib raises
+    # Collected here rather than in the log block below so a fault anywhere in
+    # this function has somewhere to land; attached to the summary once, at the
+    # end, so a warning raised after the attachment point is not lost.
+    warnings: list[str] = []
+
+    # Stepped ``.op`` raw files have no axis — spicelib raises RuntimeError
     # "This RAW file does not have an axis." Treat that as a valid degenerate
     # case (no range, no point_count beyond step_count) instead of aborting
     # the whole summary.
@@ -659,10 +714,18 @@ def build_simulation_summary(
         axis = raw.get_axis(step=step)
         point_count = len(axis)
         has_axis = True
-    except Exception:
+    except RuntimeError:
         axis = None  # type: ignore[assignment]
         point_count = step_count
         has_axis = False
+    except _RAW_ACCESS_ERRORS as exc:
+        # Any OTHER read fault is not the axis-less shape above: the range and
+        # point count are missing because the raw could not be read, and that
+        # is a different fact from "this analysis has no axis".
+        axis = None  # type: ignore[assignment]
+        point_count = step_count
+        has_axis = False
+        warnings.append(_parse_failure("axis (range, point_count)", exc))
 
     range_info: dict = {}
     if has_axis and point_count > 0 and axis is not None:
@@ -719,8 +782,13 @@ def build_simulation_summary(
             summary["tnom_c"] = tnom_c
 
         log_reader: LTSpiceLogReader | None = None
-        with contextlib.suppress(Exception):
+        try:
             log_reader = make_log_reader(log_path)
+        except ResultError as exc:
+            # Without a reader neither measurements nor Fourier data can be
+            # produced. Say so once here rather than leaving both keys absent,
+            # which reads as a deck that asked for neither.
+            warnings.append(_parse_failure("measurements and fourier (log reader)", exc))
 
         if log_reader is not None:
             try:
@@ -733,19 +801,20 @@ def build_simulation_summary(
                 failed = meas_data.get("failed_measurements") or []
                 if failed:
                     summary["failed_measurements"] = list(failed)
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.append(_parse_failure("measurements", exc))
 
-        warnings: list[str] = []
         try:
             diagnostics = extract_log_diagnostics(log_path)
-            warnings = list(diagnostics["warnings"])
+            warnings.extend(diagnostics["warnings"])
             if diagnostics["errors"]:
                 summary["errors"] = diagnostics["errors"]
             if diagnostics.get("meas_errors"):
                 summary["meas_errors"] = diagnostics["meas_errors"]
-        except Exception:
-            pass
+        except Exception as exc:
+            # The diagnostics channel itself: an empty ``errors`` list here
+            # otherwise reads as a clean run.
+            warnings.append(_parse_failure("log diagnostics (errors, warnings)", exc))
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails),
@@ -814,9 +883,6 @@ def build_simulation_summary(
                 "point iterations but the .raw only carries step 0. " + suggestion
             )
 
-        if warnings:
-            summary["warnings"] = warnings
-
         if log_reader is not None:
             try:
                 fourier_data = parse_fourier_data(log_path, reader=log_reader)
@@ -828,8 +894,8 @@ def build_simulation_summary(
                     ]
                     if fourier_data:
                         summary["fourier"] = fourier_data
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.append(_parse_failure("fourier", exc))
 
     if duration is not None:
         summary["duration"] = float(duration)
@@ -847,13 +913,27 @@ def build_simulation_summary(
         # node at ~1e30) — exactly the case this scan exists to catch.
         axis_name = trace_names[0] if (has_axis and trace_names) else None
         value_traces = {}
+        unreadable: list[str] = []
         for name in trace_names:
             if name == axis_name:
                 continue
             try:
                 value_traces[name] = np.asarray(raw.get_wave(name, step=step))
-            except Exception:
-                continue
+            except _RAW_ACCESS_ERRORS:
+                unreadable.append(name)
+        if unreadable:
+            # The scan reports on what it read. A trace it could not read is a
+            # hole in that coverage, and silently narrowing the scan makes the
+            # remaining traces look like the whole picture.
+            shown = ", ".join(unreadable[:10])
+            more = f" (+{len(unreadable) - 10} more)" if len(unreadable) > 10 else ""
+            warnings.append(
+                f"{len(unreadable)} trace(s) not read during the value scan: {shown}{more}"
+            )
+
+    if warnings:
+        summary["warnings"] = warnings
+
     summary["observations"] = surface_observations(
         summary,
         requested=requested,
