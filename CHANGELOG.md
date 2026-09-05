@@ -18,7 +18,7 @@ server now advertises seven tools:
 |`run_experiments`|Stage decks, expand declared variations (sweeps, corners, Monte Carlo), and run them as one durable job|
 |`jobs`|Job lifecycle by `job_id` or `request_id`: `status`, `wait` (long-poll), `cancel`, `runs` (per-run pages), and `list` (recent circuits and their job counts)|
 |`analyze_results`|Typed measurement recipes over finished runs and `.raw` files, with reductions, group splits, and spec verdicts|
-|`inspect`|Read-only lookups: `capabilities`, `symbols`, `symbol`, `net`, `components`, `model`|
+|`inspect`|Read-only lookups: `capabilities`, `symbols`, `symbol`, `net`, `components`, `model`, `reference`|
 |`edit_schematic`|A transactional, revision-guarded batch of typed ops on one `.asc` sheet|
 |`verify_circuit`|Lint, symbol and pin resolution, netlist export, layout and quality checks, comparison against a reference, optional rendering|
 |`plot_waveform`|An interactive HTML chart of a run, for a person to look at|
@@ -90,6 +90,15 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- `analyze_results`' description names every recipe with the plain words a
+  caller searches for, so a host matching a request against tool descriptions
+  can route "phase margin", "distortion" or "bias point" to this tool. The
+  handshake instructions name the reference lookup.
+- A job whose owner process has exited but has not yet been collected by its
+  parent now reads as interrupted rather than running. Liveness used to ask
+  only whether the pid existed, and a finished child keeps its pid until the
+  process that started it collects it.
+
 - `analyze_results` computes every recipe through one numeric function per
   metric (`ltspice_mcp.lib.metrics`) that takes the result source as an
   argument. It used to reach its numbers by calling the removed 0.5 tool
@@ -149,6 +158,30 @@ and `"agentic"` log a warning and serve the consolidated surface until the
 key is deleted in 0.7.0. Serving zero tools is still a hard error.
 
 ### Added
+
+- `[tools] listing` (env `LTSPICE_MCP_TOOL_LISTING`) selects how much of each
+  tool definition the tool list carries. `full`, the default, is unchanged.
+  `compact` advertises the same seven tools and the same schemas with every
+  per-argument description removed: structure, enums, defaults, `required`
+  and `$defs` are intact, so a client can still build a valid call, and the
+  server validates and answers exactly as before. It takes roughly 40% off
+  what a session loads before it can call anything. Both listings are static.
+- `inspect(kind="reference")`: a searchable lookup over the tools' own branch
+  vocabulary (analysis recipes, schematic ops, variation kinds, query kinds,
+  checks and job actions). A plain-words `query` ("phase margin", "connect two
+  pins") returns the closest branches with their fields, types, defaults,
+  bounds and units; with no `query` it returns the table of contents. `limit`
+  defaults to 5 and caps at 20. The index is built from the same input models
+  the wire validates against, so a branch cannot be missing from it. It is the
+  route to a branch's arguments on the `compact` tool listing, where
+  per-argument descriptions are not published.
+- `Api.run_experiments(wait=False, detach=True)` hands the job to a small
+  owner process that outlives the caller: the caller validates the request,
+  the owner submits, supervises the job to a terminal status, and exits. The
+  caller's `close()` leaves a detached job alone; `jobs(action="cancel")`
+  from any process stops it through the existing foreign-owner path; a
+  running server sees it as another session's live job. The receipt names
+  the owner's pid and log file. Requires `[state] persist_jobs`.
 
 - `verify_circuit`'s `quality` check runs on a `.cir`/`.net`/`.sp` netlist,
   not only on a schematic. Three connectivity rules that had been written but
