@@ -2325,6 +2325,37 @@ async def test_measurements_recipe_bins_the_distribution_on_request(
     assert plain["histogram"] == []
 
 
+@pytest.mark.asyncio
+async def test_field_narrows_a_keyed_recipes_reduction_to_that_key(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """'field' names one number on every recipe category, never two things.
+
+    A keyed recipe that read 'field' for its spec but reduced every key
+    answered a request for "the mean of gain" with one row per .meas name, in
+    dict order, and said nothing about the field it had been handed. A caller
+    reading the first row got another measurement's statistic.
+    """
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    shutil.copy(FIXTURES_DIR / "ltspice_step_when.log", raw.with_suffix(".log"))
+
+    narrowed = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "m", "metric": "measurements", "field": "vfinal", "reduce": ["max"]}],
+    )
+    assert {row["field"] for row in narrowed["results"]["m"]["reduced"]} == {"vfinal"}
+
+    # Absent, it still covers every key — that is what the description promises.
+    every = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "m", "metric": "measurements", "reduce": ["max"]}],
+    )
+    assert {row["field"] for row in every["results"]["m"]["reduced"]} == {"vfinal", "tcross"}
+
+
 # ---------------------------------------------------------------------------
 # artifact handles reach the caller
 # ---------------------------------------------------------------------------
