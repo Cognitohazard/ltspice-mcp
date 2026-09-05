@@ -46,6 +46,39 @@ applies to both the server and the library. Relevant considerations:
   can therefore do anything the simulator binary can do on your machine.
   Treat third-party `.asc`, `.cir`, and `.lib` files the same way you would
   treat any untrusted executable input.
+- **Job-addressed result reads bypass the sandbox by design** — when
+  `analyze_results` or a job tool reads a `.raw` or `.log` for a `job_id`, the
+  path comes from the server's own job record rather than from the caller, so
+  it is not re-checked against `allowed_paths`. Those files are artifacts this
+  server produced. A result addressed by path instead (`raw_path`, `log_file`)
+  goes through the normal `allowed_paths` check.
+- **Simulation artifacts can sit outside `allowed_paths`** — normally staged
+  decks and run output go under `{working_dir}/.ltspice-mcp/`. On WSL with
+  LTspice they go to a Windows temp directory instead, because LTspice cannot
+  write the SQLite file behind `.MEAS` results over the `\\wsl.localhost`
+  share. That directory is one per machine, not one per server process: the
+  artifacts of every session on the box sit there together under job-id-
+  prefixed names, readable by anything running as that user. An artifact's
+  provenance comes from the job record that names it, never from its presence
+  in that folder.
+- **Deck staging trust roots** — before a run, the deck and every file its
+  `.include`/`.lib` directives reach are copied into a staging directory and
+  hashed. A reference is staged only if it resolves inside
+  `[security] allowed_paths` or inside the detected simulator's own shipped
+  library directory (LTspice's netlister appends a `.lib` into its install for
+  any schematic with a MOSFET on it). Anything else is refused and the run does
+  not start. `allow_live_includes=true` overrides that refusal: the file is
+  then read in place at run time, and the response records that its content is
+  not covered by the deck's snapshot hash. Include recursion is bounded at 8
+  levels by default.
+- **`plot_waveform` opens a local window by default** — where the client
+  cannot render the chart in-chat, the tool writes an HTML file and, with
+  `open` (default `true`), spawns a detached local process to display it in a
+  browser or app window. Pass `open=false` to write the file only.
+- **The Claude Desktop extension defaults to your Documents folder** — the
+  `.mcpb` folder picker sets `allowed_paths`, and its default is
+  `${HOME}/Documents`. Point it at your circuits directory for a narrower
+  sandbox.
 - **Dependency supply chain** — runtime dependencies are pinned in
   `uv.lock`. The `publish.yml` workflow builds and publishes to PyPI from
   version tags only, via PyPI Trusted Publishing (OIDC).
