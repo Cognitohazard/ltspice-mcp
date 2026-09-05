@@ -40,7 +40,7 @@ import numpy as np
 from mcp import types
 from pydantic import Field
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, NoAxisError, ResultError
 from ltspice_mcp.lib import atomic_write, desktop, services
 from ltspice_mcp.lib.ac_analysis import (
     CrossingWithQuantity,
@@ -1320,7 +1320,7 @@ def _build_and_write(
                 chunk.append(row)
                 if len(chunk) >= 4096:
                     if should_abort is not None and should_abort():
-                        raise ResultError(
+                        raise AnalysisDeadlineExceeded(
                             "CSV artifact exceeded its analysis item deadline; "
                             "narrow the window or export fewer signals."
                         )
@@ -1328,7 +1328,7 @@ def _build_and_write(
                     chunk.clear()
             if chunk:
                 if should_abort is not None and should_abort():
-                    raise ResultError(
+                    raise AnalysisDeadlineExceeded(
                         "CSV artifact exceeded its analysis item deadline; "
                         "narrow the window or export fewer signals."
                     )
@@ -1728,17 +1728,17 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
 
     try:
         result_data = query_point_value(raw, signal, target_x, step)
+    except NoAxisError as e:
+        # Operating-point raws have no time/frequency axis. Give a precise,
+        # actionable message instead of the generic failure + misleading
+        # check_job hint.
+        raise ResultError(
+            "This is an Operating Point result (no time/frequency axis to "
+            "query). Use operating_point to read node voltages and branch "
+            "currents.",
+            show_hint=False,
+        ) from e
     except Exception as e:
-        # Operating-point raws have no time/frequency axis; spicelib raises
-        # "This RAW file does not have an axis." Give a precise, actionable
-        # message instead of the generic failure + misleading check_job hint.
-        if "does not have an axis" in str(e).lower():
-            raise ResultError(
-                "This is an Operating Point result (no time/frequency axis to "
-                "query). Use operating_point to read node voltages and branch "
-                "currents.",
-                show_hint=False,
-            ) from e
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)

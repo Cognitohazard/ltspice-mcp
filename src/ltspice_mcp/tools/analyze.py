@@ -20,7 +20,7 @@ import numpy as np
 from mcp import types
 from pydantic import BeforeValidator, Field, SkipValidation, model_validator
 
-from ltspice_mcp.errors import LTSpiceMCPError, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, LTSpiceMCPError, ResultError
 from ltspice_mcp.lib import (
     _fsync_dir,
     _fsync_fd,
@@ -1075,7 +1075,7 @@ async def _create_result_set(
                     "job_id": run.job_id,
                     "digest_code": (
                         "analysis_deadline"
-                        if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+                        if isinstance(exc, AnalysisDeadlineExceeded)
                         else "source_unavailable"
                     ),
                     "digest_error": str(exc),
@@ -1135,7 +1135,7 @@ async def _verify_direct_sources(
         except (LTSpiceMCPError, OSError) as exc:
             code = (
                 "analysis_deadline"
-                if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+                if isinstance(exc, AnalysisDeadlineExceeded)
                 else "source_drift"
             )
             failures[manifest_id] = f"{code}: {exc}"
@@ -2208,7 +2208,7 @@ async def _evaluate_item(
                 {
                     "code": (
                         "analysis_deadline"
-                        if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+                        if isinstance(exc, AnalysisDeadlineExceeded)
                         else "recipe_failed"
                     ),
                     "stage": "analyze",
@@ -3741,7 +3741,7 @@ async def _evaluate_analysis_drive(
         await asyncio.to_thread(_remove_pending, all_pending)
         publish_code = (
             "analysis_deadline"
-            if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+            if isinstance(exc, AnalysisDeadlineExceeded)
             else "artifact_publish_failed"
         )
         for unit in processed:
