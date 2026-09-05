@@ -13,12 +13,16 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.metrics import (
+    classify_analysis as _classify_analysis,
+)
+from ltspice_mcp.lib.metrics import (
+    window_indices as _window_indices,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
-    _build_and_write,
-    _classify_analysis,
     _complex_columns,
-    _window_indices,
+    build_waveform_csv,
 )
 from tests.conftest import stage_recorded_fixture
 
@@ -105,7 +109,7 @@ class TestBuildAndWriteWorker:
                 return wave
 
         out = work_dir / "out.csv"
-        facts = _build_and_write(
+        facts = build_waveform_csv(
             _MockRaw(),
             work_dir / "mock.raw",
             ["V(out)"],
@@ -139,7 +143,7 @@ class TestBuildAndWriteWorker:
                 return axes[step] * 10.0
 
         out = work_dir / "stepped.csv"
-        facts = _build_and_write(
+        facts = build_waveform_csv(
             _StepMock(),
             work_dir / "m.raw",
             ["V(o)"],
@@ -170,7 +174,7 @@ class TestBuildAndWriteWorker:
                 return axis * (step + 1.0)
 
         out = work_dir / "nolog.csv"
-        facts = _build_and_write(
+        facts = build_waveform_csv(
             _StepMock(),
             work_dir / "nolog.raw",
             ["V(o)"],
@@ -193,7 +197,7 @@ class TestBuildAndWriteWorker:
         raw = services.load_raw_sync(raw_path, state_no_sim)
         _, analysis_type, _, _ = _classify_analysis(raw)
         out = work_dir / "dc.csv"
-        _build_and_write(
+        build_waveform_csv(
             raw,
             raw_path,
             ["V(out)"],

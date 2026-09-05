@@ -491,7 +491,7 @@ async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
             # deadline is carried by the exception type, not its wording.
             raise AnalysisDeadlineExceeded("CSV artifact exceeded its analysis item deadline")
 
-    monkeypatch.setattr(analysis, "_build_and_write", slow_writer)
+    monkeypatch.setattr(analysis, "build_waveform_csv", slow_writer)
     data = await _analyze(
         state_no_sim,
         raw,
@@ -1130,7 +1130,7 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from ltspice_mcp.tools import analysis
+    from ltspice_mcp.lib import metrics
 
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 0.05
@@ -1140,7 +1140,7 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
         time.sleep(0.2)
         return {}
 
-    monkeypatch.setattr(analysis, "build_simulation_summary", slow_summary)
+    monkeypatch.setattr(metrics, "build_simulation_summary", slow_summary)
     summary = await _analyze(
         state_no_sim,
         raw,
@@ -1161,7 +1161,7 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
         time.sleep(0.2)
         return {}, {}, "0 step(s)", {}
 
-    monkeypatch.setattr(analysis, "_aggregate_log_measurements", slow_measurements)
+    monkeypatch.setattr(metrics, "aggregate_log_measurements", slow_measurements)
     measurements = await _analyze(
         state_no_sim,
         second,

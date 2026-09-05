@@ -14,6 +14,27 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.metrics import (
+    filter_operating_point as _filter_operating_point,
+)
+from ltspice_mcp.lib.metrics import (
+    guarded_axis as _guarded_axis,
+)
+from ltspice_mcp.lib.metrics import (
+    has_active_device,
+)
+from ltspice_mcp.lib.metrics import (
+    noise_input_source_unit as _noise_input_source_unit,
+)
+from ltspice_mcp.lib.metrics import (
+    parse_freq as _parse_freq,
+)
+from ltspice_mcp.lib.metrics import (
+    split_ratio as _split_ratio,
+)
+from ltspice_mcp.lib.metrics import (
+    trace_device as _trace_device,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
     AcStructureInput,
@@ -38,10 +59,6 @@ from ltspice_mcp.tools.analysis import (
     StepGetInput,
     ThdInput,
     TimingBetweenInput,
-    _filter_operating_point,
-    _noise_input_source_unit,
-    _split_ratio,
-    _trace_device,
     handle_ac_structure,
     handle_bode_metrics,
     handle_disturbance_response,
@@ -388,8 +405,6 @@ def test_has_active_device_detects_transistor_currents():
     # has_active_device is one arm of the empty op-point note's gate (the other
     # is an ngspice run); an RC circuit trips neither, so it stays note-free. Sync
     # test, kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
-    from ltspice_mcp.tools.analysis import has_active_device
-
     assert has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
     assert has_active_device({"Ic(Q2)": 1e-3})
     assert not has_active_device({"I(R1)": 1e-3, "I(V1)": 2e-3})
@@ -717,11 +732,11 @@ class TestSummarySuggestions:
     async def test_suggestions_in_schema_and_text(
         self, state_no_sim: SessionState, fake_raw: Path, monkeypatch
     ):
-        import ltspice_mcp.tools.analysis as analysis_mod
+        import ltspice_mcp.lib.metrics as metrics_mod
 
         fake = {"MYMODEL": [{"name": "MyModel", "score": 88, "source_path": "/libs/foo.lib"}]}
         monkeypatch.setattr(
-            analysis_mod.services,
+            metrics_mod.services,
             "suggestions_from_errors",
             lambda errors, libraries: fake,
         )
@@ -1408,22 +1423,18 @@ class TestParseFreqUnitTolerance:
     """Frequency parsing accepts a trailing Hz/kHz unit."""
 
     def test_bare_number(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("1000") == pytest.approx(1000.0)
 
     def test_hz_suffix(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("159Hz") == pytest.approx(159.0)
 
     def test_khz_suffix(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("15.9kHz") == pytest.approx(15900.0)
 
     def test_si_prefix_still_works(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("1k") == pytest.approx(1000.0)
         assert _parse_freq("1meg") == pytest.approx(1e6)
@@ -2222,12 +2233,12 @@ class TestSimulationSummaryBuildFailureHint:
     ):
         # The raw loads fine; force build_simulation_summary to raise so we hit
         # the self-referential-hint suppression path.
-        import ltspice_mcp.tools.analysis as analysis_mod
+        import ltspice_mcp.lib.metrics as metrics_mod
 
         def _boom(*_args, **_kwargs):
             raise ValueError("synthetic build failure")
 
-        monkeypatch.setattr(analysis_mod, "build_simulation_summary", _boom)
+        monkeypatch.setattr(metrics_mod, "build_simulation_summary", _boom)
         with pytest.raises(ResultError) as excinfo:
             await handle_simulation_summary(
                 SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
@@ -2950,14 +2961,12 @@ class TestGuardedAxisSteppedOpHint:
         return raw
 
     def test_plain_op_points_at_operating_point(self, work_dir: Path):
-        from ltspice_mcp.tools.analysis import _guarded_axis
 
         raw_path = work_dir / "op.raw"  # no sibling .log
         with pytest.raises(ResultError, match="operating_point"):
             _guarded_axis(self._no_axis_raw(), 0, raw_path)
 
     def test_stepped_op_points_at_dc_conversion(self, work_dir: Path):
-        from ltspice_mcp.tools.analysis import _guarded_axis
 
         raw_path = work_dir / "stepped_op.raw"
         raw_path.with_suffix(".log").write_text(".step temp=-40\n.step temp=25\n.step temp=85\n")

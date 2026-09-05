@@ -25,6 +25,7 @@ from ltspice_mcp.lib import (
     analysis_snapshot,
     fsync_dir,
     fsync_fd,
+    metrics,
     response_budget,
     result_store,
     services,
@@ -67,6 +68,7 @@ from ltspice_mcp.lib.recipes import (
     recipe_error,
     validate_recipe,
 )
+from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState, legacy_record_message
 from ltspice_mcp.tools._base import (
     ABSENT,
@@ -1209,7 +1211,7 @@ async def _adapter_value(
             raw = await services.load_raw(source.raw, state)
             services.validate_step(raw, step)
             try:
-                axis = an._guarded_axis(raw, step, source.raw)
+                axis = metrics.guarded_axis(raw, step, source.raw)
             except ResultError:
                 operating_point = structured(
                     await an.handle_operating_point(
@@ -1351,7 +1353,7 @@ async def _adapter_value(
             raw = await services.load_raw(source.raw, state)
             reference = services.validate_signal(raw, recipe.input)
             if start is None:
-                axis = an._guarded_axis(raw, step, source.raw)
+                axis = metrics.guarded_axis(raw, step, source.raw)
                 wave = np.asarray(raw.get_wave(reference, step=step))
                 if np.iscomplexobj(wave) or len(wave) < 2:
                     raise ResultError(
@@ -1541,14 +1543,13 @@ def _absence_observations(
     semiconductor is present, so a passive circuit's bias point stays
     note-free and the two channels cannot disagree about when to speak.
     """
-    from ltspice_mcp.tools import analysis as an
 
     if not isinstance(recipe, OperatingPointRecipe):
         return []
     values = [record["value"] for record in records if isinstance(record.get("value"), dict)]
     if not values or any(value.get("device_op_points") for value in values):
         return []
-    if not any(an.has_active_device(value.get("currents") or {}) for value in values):
+    if not any(metrics.has_active_device(value.get("currents") or {}) for value in values):
         return []
     return [
         {
@@ -1559,7 +1560,7 @@ def _absence_observations(
                 f"semiconductor terminal currents, but no per-device @dev[param] "
                 f"values: neither the raw's @-param traces nor the run's .log "
                 f"'Semiconductor Device Operating Points:' block held any. "
-                f"{an.NO_DEVICE_OP_POINTS_NOTE}"
+                f"{metrics.NO_DEVICE_OP_POINTS_NOTE}"
             ),
             "evidence": {"recipe": key, "runs": len(values)},
         }
@@ -1597,24 +1598,24 @@ async def _waveform(
         point_limit = min(recipe.max_points, state.config.max_points_returned)
         for signal_input in recipe.signals:
             signal = services.validate_signal(raw, signal_input)
-            axis = an._guarded_axis(raw, step, run.source.raw)
+            axis = metrics.guarded_axis(raw, step, run.source.raw)
             wave = np.asarray(raw.get_wave(signal, step=step))
             if start is not None or end is not None:
-                lo, hi = an._window_indices(
+                lo, hi = metrics.window_indices(
                     axis,
-                    an._parse_time(start, "start"),
-                    an._parse_time(end, "end"),
+                    metrics.parse_time(start, "start"),
+                    metrics.parse_time(end, "end"),
                 )
                 axis, wave = axis[lo:hi], wave[lo:hi]
             total_max = max(total_max, len(axis))
             if len(axis) > point_limit:
                 if np.iscomplexobj(wave):
-                    x, mag = an.downsample_minmax(
+                    x, mag = downsample_minmax(
                         axis,
                         safe_magnitude_db(wave),
                         point_limit,
                     )
-                    _, phase = an.downsample_minmax(
+                    _, phase = downsample_minmax(
                         axis,
                         np.degrees(np.angle(wave)),
                         point_limit,
@@ -1625,7 +1626,7 @@ async def _waveform(
                         "phase_deg": phase.tolist(),
                     }
                 else:
-                    x, y = an.downsample_minmax(axis, wave, point_limit)
+                    x, y = downsample_minmax(axis, wave, point_limit)
                     series = {"x": x.tolist(), "y": y.tolist()}
             elif np.iscomplexobj(wave):
                 series = {
@@ -1659,7 +1660,7 @@ async def _waveform(
             raise ResultError(f"{requested!r} is the sweep axis, not a signal")
         if signal not in cols:
             cols.append(signal)
-    _, analysis_type, _, _ = an._classify_analysis(raw)
+    _, analysis_type, _, _ = metrics.classify_analysis(raw)
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
     pending, final = result_store.artifact_paths(
         item,
@@ -1670,14 +1671,14 @@ async def _waveform(
     )
     pending.parent.mkdir(parents=True, exist_ok=True)
     facts = await asyncio.to_thread(
-        an._build_and_write,
+        an.build_waveform_csv,
         raw,
         run.source.raw,
         cols,
         get_step_count(raw),
         analysis_type,
-        an._parse_time(start, "start"),
-        an._parse_time(end, "end"),
+        metrics.parse_time(start, "start"),
+        metrics.parse_time(end, "end"),
         "mag_phase",
         pending,
         lambda: time.monotonic() >= item_deadline,
@@ -1720,7 +1721,7 @@ async def _plot(
     cols = [services.validate_signal(raw, signal) for signal in recipe.signals]
     if axis_name in cols:
         raise ResultError("The sweep axis cannot be plotted as a signal")
-    _, analysis_type, _, x_is_log = an._classify_analysis(raw)
+    _, analysis_type, _, x_is_log = metrics.classify_analysis(raw)
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
     pending, final = result_store.artifact_paths(
         item,
@@ -1732,7 +1733,7 @@ async def _plot(
     pending.parent.mkdir(parents=True, exist_ok=True)
     span = recipe.span
     facts = await asyncio.to_thread(
-        an._build_plot_and_write,
+        an.build_plot_file,
         raw,
         run.source.raw,
         cols,
@@ -1740,9 +1741,9 @@ async def _plot(
         [values for _, values in steps],
         analysis_type,
         x_is_log if recipe.log_x is None else recipe.log_x,
-        an._parse_time(_spice(span.start) if span else None, "span.start"),
-        an._parse_time(_spice(span.end) if span else None, "span.end"),
-        min(100_000, an._PLOT_MAX_POINTS_CEILING),
+        metrics.parse_time(_spice(span.start) if span else None, "span.start"),
+        metrics.parse_time(_spice(span.end) if span else None, "span.end"),
+        min(100_000, an.PLOT_MAX_POINTS_CEILING),
         pending,
         recipe.title or f"{run.source.raw.stem} — {analysis_type}",
     )
