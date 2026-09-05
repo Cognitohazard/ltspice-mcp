@@ -629,7 +629,9 @@ async def handle_run_experiments(
             loop=asyncio.get_running_loop(),
             simulator_class=simulator,
             output_folder=route.output_folder,
-            max_parallel=args.execution.max_parallel or state.config.max_parallel_sims,
+            # The runner's cap is the SERVER's, shared by every experiment it
+            # runs; a request's own max_parallel divides that share below.
+            max_parallel=state.config.max_parallel_sims,
         )
         request = ExperimentRunRequest(
             state=state,

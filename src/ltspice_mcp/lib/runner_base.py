@@ -466,7 +466,7 @@ process to become visible to the next scan."""
 
 
 class RunnerBase:
-    """Shared constructor + thread-safe callback bridging."""
+    """Shared constructor, launch capacity, and thread-safe callback bridging."""
 
     def __init__(
         self,
@@ -478,10 +478,42 @@ class RunnerBase:
         self.loop = loop
         self.simulator_class = simulator_class
         self.output_folder = output_folder
-        self.max_parallel = max_parallel
+        self._max_parallel = max_parallel
+        # The launch permits every simulator process this runner starts must
+        # hold for its whole life. It lives on the RUNNER, so concurrent jobs
+        # share one cap instead of each getting a private one; a job may divide
+        # its own share further, but nothing gets past this.
+        self._launch_slots = asyncio.Semaphore(max_parallel)
+        self._slots_out = 0
         # Submitted SimRunners, held until their simulation thread is done.
         # See _retire_finished_runners for why letting one go early is a trap.
         self._inflight_runners: dict[str, SimRunner] = {}
+
+    @property
+    def max_parallel(self) -> int:
+        """Simulator processes this runner will have in flight at once."""
+        return self._max_parallel
+
+    @max_parallel.setter
+    def max_parallel(self, value: int) -> None:
+        self._max_parallel = value
+        # A semaphore's permit count cannot be changed while permits are out
+        # without losing track of them, so a new cap takes effect the next time
+        # the runner is idle; runs already admitted keep the cap they started
+        # under. With no permits out there can be no waiter either (a waiter
+        # only exists once the permits are gone), so nothing is stranded here.
+        if self._slots_out == 0:
+            self._launch_slots = asyncio.Semaphore(value)
+
+    async def acquire_launch_slot(self) -> None:
+        """Take one launch permit. Call on the event loop, release when done."""
+        await self._launch_slots.acquire()
+        self._slots_out += 1
+
+    def release_launch_slot(self) -> None:
+        """Return a permit taken by ``acquire_launch_slot``."""
+        self._launch_slots.release()
+        self._slots_out -= 1
 
     def _build_sim_runner(self) -> SimRunner:
         """Construct a spicelib SimRunner with this runner's settings."""
