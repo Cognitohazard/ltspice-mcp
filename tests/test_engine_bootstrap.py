@@ -83,7 +83,7 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
     )
 
     monkeypatch.chdir(working_dir)
-    monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "state-home"))
+    monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "state-home-server"))
     monkeypatch.setattr(engine, "detect_simulators", _detect_without_simulators)
     monkeypatch.setattr(AscEditor, "custom_lib_paths", [])
     await _stage_persisted_job(working_dir, circuit)
@@ -95,6 +95,12 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
             server_snapshot = _startup_snapshot(context["state"], server_expired)
     assert basic_config.call_count == 1
     assert basic_config.call_args.kwargs["force"] is True
+
+    # A second home, seeded the same way, so the two bootstraps read equal but
+    # independent indexes. The preload prunes and rewrites the index it reads,
+    # which would otherwise make the first bootstrap an input to the second.
+    monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "state-home-library"))
+    recent.touch(circuit)
 
     library_expired = _stage_expired_result_set(working_dir)
     boot = await engine.bootstrap_library_engine(working_dir=working_dir)
