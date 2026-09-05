@@ -560,7 +560,7 @@ async def _build_edit_views(
             }
         else:
             try:
-                artifacts_dir = state.working_dir / ".ltspice-mcp" / "renders"
+                artifacts_dir = state.store.renders_dir
                 rendered = await asyncio.to_thread(
                     _render_committed_text,
                     committed_text,
@@ -692,7 +692,7 @@ async def _run_reference_stage(
     is already committed and stays so.
     """
     verification: dict[str, Any] = {"reference": str(ref_path)}
-    export_root = state.working_dir / ".ltspice-mcp" / "edit-exports" / build_id
+    export_root = state.store.edit_export(build_id)
     copy_asc = export_root / "committed.asc"
     try:
         await asyncio.to_thread(

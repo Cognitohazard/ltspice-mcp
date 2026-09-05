@@ -23,17 +23,12 @@ from pathlib import Path
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, atomic_write_json, now
 from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.store import KIND_RECENT, accept, envelope
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAP = 20
 INDEX_FILENAME = "recent.json"
-
-SCHEMA = "ltspice-mcp/recent"
-SCHEMA_VERSION = 1
-# Versions this build can READ. A file must carry a recognised
-# ``schema_version``; anything else is ignored.
-SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
 
 
 def index_path() -> Path:
@@ -65,18 +60,12 @@ def _read_index(path: Path) -> list[dict]:
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Ignoring unreadable recent index %s: %s", path, e)
         return []
-    if not isinstance(data, dict):
-        return []
-    # Schema check: require a recognised ``schema_version``. Reject
-    # versionless files and anything from a newer build so we don't
-    # silently drop unknown fields on the next write.
-    raw_version = data.get("schema_version")
-    if not isinstance(raw_version, int) or raw_version not in SUPPORTED_VERSIONS:
-        logger.warning(
-            "Ignoring recent index %s: unsupported schema_version %r",
-            path,
-            raw_version,
-        )
+    # Reject versionless files and anything from a newer build so we don't
+    # silently drop unknown fields on the next write. This index is global —
+    # it is the one store record a session written by a different build is
+    # likely to meet — so the version gate matters here even though the file
+    # holds nothing but paths and timestamps.
+    if not accept(data, path, kind=KIND_RECENT, log=logger):
         return []
     entries = data.get("circuits")
     if not isinstance(entries, list):
@@ -93,12 +82,8 @@ def _read_index(path: Path) -> list[dict]:
 
 
 def _index_payload(entries: list[dict]) -> dict:
-    """Build the full on-disk payload: schema header + circuit entries."""
-    return {
-        "schema": SCHEMA,
-        "schema_version": SCHEMA_VERSION,
-        "circuits": entries,
-    }
+    """Build the full on-disk payload: store envelope + circuit entries."""
+    return envelope(KIND_RECENT, circuits=entries)
 
 
 def touch(circuit_path: Path, cap: int = DEFAULT_CAP) -> None:
