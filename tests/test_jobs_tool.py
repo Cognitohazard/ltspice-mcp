@@ -149,6 +149,20 @@ def _args(action: str, **values) -> JobsInput:
     return JobsInput.model_validate({"action": action, **values})
 
 
+def _jobs_branch_ref(schema: dict, action: str) -> str:
+    """The ``$ref`` the jobs schema selects for one action.
+
+    Read off the ``if``/``then`` pairs, which are what the server SDK validates
+    against; the discriminator carries only ``propertyName``, because a branch
+    table would repeat these pairs.
+    """
+    return next(
+        entry["then"]["$ref"]
+        for entry in schema["allOf"]
+        if entry["if"]["properties"]["action"]["const"] == action
+    )
+
+
 # ---------------------------------------------------------------------------
 # Accepted argument spellings
 # ---------------------------------------------------------------------------
@@ -339,7 +353,7 @@ class TestAdvertisedActionBranches:
     )
     def test_each_action_advertises_its_own_fields(self, action: str, expected: set[str]):
         schema = build_input_schema(JobsInput)
-        branch = schema["$defs"][schema["discriminator"]["mapping"][action].split("/")[-1]]
+        branch = schema["$defs"][_jobs_branch_ref(schema, action).split("/")[-1]]
         assert set(branch["properties"]) == expected
         assert branch["additionalProperties"] is False
         assert branch["properties"]["action"]["const"] == action

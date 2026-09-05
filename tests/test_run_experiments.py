@@ -86,7 +86,11 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
     # that action's branch rather than off a flat property list.
     wait_branch = resolve_local_ref(
         jobs_schema,
-        {"$ref": jobs_schema["discriminator"]["mapping"]["wait"]},
+        next(
+            entry["then"]
+            for entry in jobs_schema["allOf"]
+            if entry["if"]["properties"]["action"]["const"] == "wait"
+        ),
     )
 
     assert execution_schema["properties"]["wait_s"]["maximum"] == 120
