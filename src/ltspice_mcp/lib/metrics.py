@@ -913,7 +913,12 @@ async def summary(
     log_path = source.log if source.log is not None and source.log.exists() else None
     try:
         # ``raw`` here is fully loaded (services.load_raw reads all traces), so
-        # the value scan is affordable and surfaces NaN/extreme-value facts.
+        # the value scan is affordable and surfaces NaN/extreme-value facts —
+        # it walks arrays already in memory rather than deciding what to read.
+        # What bounds this path is ``bounded_parse``: a wall-clock deadline on
+        # the summary build, on the load before it, and a cooldown on a file
+        # that has already blown one, so a raw shaped to wedge a parser fails
+        # its own call instead of the session.
         facts = await services.bounded_parse(
             source.raw,
             lambda: build_simulation_summary(
