@@ -120,26 +120,24 @@ class AnalyzeSourceInput(StrictModel):
     job_id: str | None = Field(
         default=None,
         description=(
-            "Analyze the results of a job this server ran — an experiment, "
-            "simulation, sweep or Monte Carlo id. Exactly one of job_id or "
-            "raw_path. Its runs must have finished; a job still running is "
-            "reported under coverage.missing_cases instead of failing the call."
+            "Analyze the results of a job this server ran. Exactly one of "
+            "job_id or raw_path. A job still running is reported under "
+            "coverage.missing_cases instead of failing the call."
         ),
     )
     raw_path: str | None = Field(
         default=None,
         description=(
-            "Analyze a .raw file directly, for results this server did not run. "
-            "It has no job provenance, so its rows carry deck_sha256: null and an "
-            "observation says so. Exactly one of job_id or raw_path."
+            "Analyze a .raw file this server did not run. It has no job "
+            "provenance, so its rows carry deck_sha256: null. Exactly one of "
+            "job_id or raw_path."
         ),
     )
     runs: Literal["all"] | list[int] | CaseSelection = Field(
         default="all",
         description=(
-            "Which runs of this source to read: 'all', a list of run indices, or "
-            "{case_ids: [...]} for an experiment job. Narrow here to keep a large "
-            "fan-out inside the call budget."
+            "Which runs of this source to read: 'all', a list of run indices, "
+            "or {case_ids: [...]} for an experiment job."
         ),
     )
     label: str = Field(
@@ -336,9 +334,8 @@ class PerRunInclude(StrictModel):
 
 
 class AnalyzeInclude(StrictModel):
-    """Optional response blocks. The default response carries reductions, groups
-    and spec verdicts; per-run rows, outlier records and signal listings are
-    opt-in because each one grows the payload."""
+    """Optional response blocks. The default carries reductions, groups and spec
+    verdicts; per-run rows, outliers and signal listings are opt-in."""
 
     per_run: Annotated[
         PerRunInclude | None,
@@ -351,8 +348,7 @@ class AnalyzeInclude(StrictModel):
         description=(
             "Return the individual attributed rows, paginated; true takes the "
             "default page. Omitted, a recipe with 'reduce' returns only its "
-            "reductions and a recipe without one inlines up to 100 unpaged rows. "
-            "Pair with 'fields' on a wide sweep."
+            "reductions and one without inlines up to 100 rows."
         ),
     )
     outliers: bool = Field(
@@ -373,10 +369,9 @@ class AnalyzeInclude(StrictModel):
     provenance: bool = Field(
         default=False,
         description=(
-            "Add the artifact paths and content digests to each entry of "
-            "'source_hashes'. Off by default because runs are addressed by "
-            "manifest_id and job_id, which are always present; the paths and hashes "
-            "are the evidence of what was analyzed, not the way to reach a run."
+            "Add artifact paths and content digests to each 'source_hashes' "
+            "entry. Off by default: runs are addressed by manifest_id and "
+            "job_id, which are always present."
         ),
     )
     fields: list[str] | None = Field(
@@ -384,14 +379,9 @@ class AnalyzeInclude(StrictModel):
         min_length=1,
         max_length=32,
         description=(
-            "Keep only these dotted row paths (e.g. 'value.phase_margin_worst_deg', "
-            "'step_values') on per_run/values rows. Paths root at one of "
-            f"{', '.join(_ROW_KEYS)}; an unknown root is rejected rather than "
-            "silently returning empty rows. A dot inside a key's own name is "
-            r"escaped as '\.' — a subcircuit node or device parameter is spelled "
-            r"'value.voltages.v(x1\.out)', 'value.device_op_points.@m\.x1\.m1[gm]'. "
-            "Use it on a wide sweep: on a 45-step case it cut the rows from ~39k to "
-            "~5k characters."
+            "Keep only these dotted row paths on per_run/values rows. Roots: "
+            f"{', '.join(_ROW_KEYS)}. Escape a dot inside a key's own name as "
+            r"'\.', as in 'value.voltages.v(x1\.out)'."
         ),
     )
 
@@ -469,10 +459,9 @@ class AnalyzeResultsInput(ToolInput):
         default=None,
         max_length=64,
         description=(
-            "What to read — up to 64 jobs and/or .raw files, each under a unique "
-            "label. Every recipe runs against every source unless the recipe names "
-            "a subset itself. Each source's .raw is parsed once and shared by all "
-            "recipes in the call. Required unless 'continue' is given."
+            "What to read — up to 64 jobs and/or .raw files, each under a "
+            "unique label. Every recipe runs against every source unless it "
+            "names a subset. Required unless 'continue' is given."
         ),
     )
     # SkipValidation preserves the strict A.2 union in JSON Schema while
@@ -481,18 +470,17 @@ class AnalyzeResultsInput(ToolInput):
         default=None,
         max_length=256,
         description=(
-            "The measurements to take, up to 256, each a typed recipe returned "
-            "under its own unique 'key'. Ask for every metric you want in one call "
-            "rather than one call per metric; a recipe that fails is reported under "
-            "'failures' and does not fail the others."
+            "The measurements to take, up to 256, each returned under its own "
+            "unique 'key'. Ask for every metric in one call; a recipe that "
+            "fails is reported under 'failures' and does not fail the others."
         ),
     )
     group_by: list[str] = Field(
         default_factory=list,
         description=(
-            "Split each recipe's reductions into groups along these dimensions: a "
-            "variation assignment parameter name, 'circuit', or a .step axis name. "
-            "Empty gives one reduction over every row."
+            "Split each recipe's reductions along these dimensions: a variation "
+            "assignment parameter name, 'circuit', or a .step axis name. Empty "
+            "gives one reduction over every row."
         ),
     )
     include: Annotated[
@@ -505,10 +493,8 @@ class AnalyzeResultsInput(ToolInput):
         default_factory=AnalyzeInclude,
         description=(
             "Named opt-in response blocks — per_run rows, outliers, "
-            "signals_available, provenance, and the 'fields' row projection. "
-            "A bare list of flag names switches them on. The default response "
-            "carries reductions, groups and spec verdicts; each opt-in grows "
-            "the payload, so ask only for what you will read."
+            "signals_available, provenance, and the 'fields' row projection; a "
+            "bare list of names switches them on. Each one grows the payload."
         ),
     )
     budget: int | None = Field(

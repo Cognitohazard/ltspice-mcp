@@ -424,6 +424,14 @@ continue   {result_set_id, cursor}   resumes a budget-truncated call; mutually
 
 `continue` is the wire spelling; the Python attribute is `continuation`.
 
+- `include.fields` paths root at one of `source`, `case_id`, `run_index`,
+  `step_index`, `step_values`, `assignments`, `circuit`, `deck_sha256`,
+  `value`; an unknown root is rejected rather than silently returning empty
+  rows. A dot inside a key's own name is escaped as `\.`, so a subcircuit node
+  or a device parameter is spelled `value.voltages.v(x1\.out)` or
+  `value.device_op_points.@m\.x1\.m1[gm]`. It is worth using on a wide sweep:
+  on a 45-step case the projection cut the rows from about 39k to about 5k
+  characters.
 - `include.fields` is a presentation-only row view. The selected view is
   encoded inside every opaque cursor that resumes it, and every continuation
   applies that view over the neutral stored request. `fields` is excluded from
@@ -625,6 +633,16 @@ destructive, which the annotation table reflects.
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
 as a file.
+
+The two comparison modes differ in what an unreadable deck does to them.
+`equivalence` graph-compares connectivity — component set, values, normalized
+parameters, node partitions by canonical labeling, arity, and `anchors` — and a
+deck it cannot read yields a compare failure with no `comparison` block at all,
+because isomorphism is undefined without both graphs. `structural_diff` reports
+the added, removed and changed component and directive delta; a deck it cannot
+read is diffed as empty, so the delta still comes back, `equivalent` is null,
+and a warning names the deck that failed. Either way the call's outcome is
+`partial` and the reason is in the response.
 
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, width, height, downscaled}`, a scene summary, `outcome`

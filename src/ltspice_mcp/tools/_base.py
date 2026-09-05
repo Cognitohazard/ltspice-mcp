@@ -674,8 +674,7 @@ class RenderPolicy(StrictModel):
         default="png",
         description=(
             "PNG (lossless, what a model looks at) needs the optional 'raster' "
-            "extra; without it the render degrades to SVG and says so. SVG always "
-            "works and writes the vector artifact."
+            "extra; without it the render degrades to SVG and says so."
         ),
     )
     scale: float = Field(
@@ -683,9 +682,8 @@ class RenderPolicy(StrictModel):
         ge=0.5,
         le=4.0,
         description=(
-            "Render scale. Image token cost tracks pixel area, so halving the scale "
-            "costs about a quarter as much. Raise it only when the detail is "
-            "unreadable."
+            "Render scale. Image token cost tracks pixel area, so halving the "
+            "scale costs about a quarter as much."
         ),
     )
     max_pixels: int | None = Field(
@@ -711,9 +709,8 @@ class CompareSpec(StrictModel):
         default=None,
         description=(
             "Named nets that must map by name between the reference and this "
-            "circuit — ports, rails, outputs, measurement nets. A design that is "
-            "structurally isomorphic but puts 'vout' in the wrong place fails on "
-            "these. Ground is always an implicit anchor."
+            "circuit — ports, rails, outputs. A design that is isomorphic but "
+            "puts 'vout' in the wrong place fails on these. Ground is implicit."
         ),
     )
     rtol: float = Field(

@@ -140,11 +140,9 @@ class TestDestructiveAnnotations:
         # edit_schematic earns the hint because its batch can run the
         # remove_component op (and commit a whole-file rewrite); keep the two
         # tied so the hint can't silently rot if that op is ever dropped. The
-        # tie lives on the SOURCE definition — the advertised wire serves
-        # semantics-only prose and may drop this sentence.
-        _, dispatch = get_tools()
-        ops_field = dispatch["edit_schematic"].definition.inputSchema["properties"]["ops"]
-        assert "remove_component" in (ops_field.get("description") or "")
+        # tie is the op union itself, which names every op it accepts.
+        ops = tool.inputSchema["properties"]["ops"]["items"]
+        assert "remove_component" in ops["discriminator"]["mapping"]
 
 
 # A self-inverse op reverts itself: re-applying it with the prior arguments

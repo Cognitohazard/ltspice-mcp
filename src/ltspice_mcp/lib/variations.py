@@ -104,27 +104,20 @@ class AssignVariation(VariationModel):
     id: str | None = Field(
         default=None,
         description=(
-            "Label for this entry in error messages only. Unlike a random "
-            "variation's id it does not reach case assignments (several assign "
-            "entries can combine into one case, so there is no single id to "
-            "record); group cases by the assigned target names instead."
+            "Label for this entry in error messages only; unlike a random "
+            "variation's id it does not reach case assignments. Group cases by "
+            "the assigned target names instead."
         ),
     )
     combine: Literal["grid", "zip"] = "grid"
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     assign: dict[str, list[ScalarValue]] = Field(
         description=(
-            "Target → value list. Explicit target forms are recognized before "
-            "bare-name resolution: 'REF@model' (glob 'M*@model' allowed) swaps "
-            "the instance's model card; 'X1:delvto' / 'X1:mulu0' applies a "
-            "per-instance mismatch delta to the FET inside subckt instance X1 "
-            "(ngspice BSIM3/4 through one X→M level; a multi-FET body needs "
-            "the qualified 'X1.M0:delvto'). Otherwise a declared .param name "
-            "substitutes that param, else a component reference substitutes "
-            "its value. Per-case rows: combine:'zip' applies every target's "
-            "i-th value together as case i — e.g. {'X1:delvto': [1m, -2m], "
-            "'X2:delvto': [-1m, 0]} runs two cases with explicit per-instance "
-            "offsets."
+            "Target → value list, resolved in order as a 'REF@model' (glob "
+            "allowed) model swap, an 'X1:delvto'/'X1:mulu0' per-instance "
+            "mismatch delta, a declared .param, then a component reference — "
+            "forms in spice://guide. With combine:'zip' the i-th value of "
+            "every target runs together as case i."
         )
     )
 
@@ -181,38 +174,34 @@ class ModelRule(RandomRuleBase):
     param: str
 
 
+# The field descriptions here carry the two facts a caller cannot recover from
+# a result: the coefficients' units, and the inversion from a target sigma.
+# Prefix conventions and BSIM parameter names are in ``spice://guide``, which a
+# caller reads once, rather than on the wire in every session.
 class MismatchRule(VariationModel):
-    """Pelgrom mismatch rule.
-
-    σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L), sampled independently per
-    instance per run.
-
-    The field descriptions carry the two facts a caller cannot recover from a
-    result: the coefficients' units, and the inversion from a target sigma.
-    Prefix conventions and BSIM parameter names are in ``spice://guide``, which
-    a caller reads once, rather than on the wire in every session.
-    """
+    """Pelgrom mismatch rule: σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L),
+    sampled independently per instance per run. Worked examples, prefix
+    conventions and BSIM parameter names: spice://guide."""
 
     rule: Literal["mismatch"]
     prefix: str = Field(
         default="M",
         description=(
-            "Device prefix (case-insensitive), matched on leading characters — "
-            "'M1' also claims M10. 'X' reaches subckt-wrapped FETs. Scope a "
-            "pair with one rule per device ('M1' plus 'M2'); bare 'M' perturbs "
-            "every MOSFET."
+            "Device prefix, case-insensitive, matched on leading characters — "
+            "'M1' also claims M10, 'X' reaches subckt-wrapped FETs, and bare "
+            "'M' perturbs every MOSFET."
         ),
     )
     AVT: float = Field(
         default=0.0,
         description=(
-            "VTH-mismatch coefficient in V·µm (3e-3 = 3 mV·µm). For a target sigma, "
-            "invert: AVT = sigma·√(W_µm·L_µm). 0 disables it."
+            "VTH-mismatch coefficient in V·µm (3e-3 = 3 mV·µm); for a target "
+            "sigma, invert: AVT = sigma·√(W_µm·L_µm), and 0 disables it."
         ),
     )
     AK: float = Field(
         default=0.0,
-        description="K-mismatch coefficient in fraction·µm (0.02 = 2%·µm). 0 disables it.",
+        description="K-mismatch coefficient in fraction·µm (0.02 = 2%·µm), 0 disables it.",
     )
     distribution: Distribution = Field(
         default="normal",
