@@ -482,6 +482,18 @@ mid-run included — the record names a pid that is gone, and the existing
 restart reconciliation classifies the job `interrupted`, promoting any case
 whose artifacts are on disk. That is the same path a crashed server takes.
 
+That reconciliation depends on an owner-liveness answer the pid alone cannot
+give: a process that has exited but has not been collected by the process that
+started it keeps its pid in the table, and the caller of a detached submission
+is exactly that process. `owner_liveness` therefore asks what the process is
+doing, and reads an exited one as dead.
+
+**A caller that stops waiting.** The wait for the handshake bounds itself at
+five minutes; past that the owner is stopped and the call raises. A Ctrl-C
+during it raises `KeyboardInterrupt` and leaves the owner running — it is in
+its own session, so the signal never reached it. Neither loses the job: asking
+again with the same `request_id` replays whatever it submitted.
+
 **Ownership.** The calling process never owns a detached job. `close()`,
 leaving a `with` block and interpreter exit cancel jobs whose `owner_pid` is
 this process, so they leave a detached job alone. Reading it back is the
