@@ -509,10 +509,18 @@ detail:   names the owning pid, says this process does not own the job and
 evidence: {"owner_pid": <int>, "log_file": "<path>"}
 ```
 
-**Known cost, stated not fixed:** `max_parallel_sims` is a per-process cap held
-by a runner instance, so every detached owner carries its own. N detached jobs
-run at up to N x the cap between them, which widens the multi-session residual
-already recorded in `CLAUDE.md`.
+**Refused when nothing is persisted.** A session with `[state] persist_jobs`
+off keeps its jobs in memory, so an owner's job would be invisible to the
+caller that asked for it. `detach=True` is an `ApiValidationError` there rather
+than a receipt for a job nothing can read back.
+
+**Known costs, stated not fixed.** `max_parallel_sims` is a per-process cap
+held by a runner instance, so every detached owner carries its own; N detached
+jobs run at up to N x the cap between them, which widens the multi-session
+residual already recorded in `CLAUDE.md`. And `start_new_session` is a POSIX
+call: on Windows the owner starts in the caller's console process group, so a
+Ctrl-C in that console reaches it as well. Everything else — ownership,
+records, cancellation — is the same on both.
 
 ### Still ahead
 
