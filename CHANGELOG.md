@@ -49,6 +49,59 @@ with the seven tools. The key is deleted in 0.7.0.
 CSV waveform export is the `waveform` recipe with `format: "csv"`, which writes
 every sample to a file and returns its path.
 
+
+### Removed — the pre-0.6 tool handlers and job machinery
+
+The handlers behind the removed 0.5 tools were kept in place through 0.6
+development so a tool could be re-exposed by putting its decorator back.
+That seam is gone: a handler with no caller has been deleted, along with
+its argument model, its output schema, and the helpers only it used. The
+seven tools and the Python API are unaffected — the advertised schemas and
+`ltspice_mcp.api.__all__` are unchanged. Restoring one of the old tools
+now means restoring its module from v0.5.x.
+
+Gone with them: the single-simulation and batch job types, the sweep and
+Monte Carlo runners, and the batch result reader. Every job the server runs
+is an experiment, on one runner. The Monte Carlo perturbation engine is
+unchanged — it is what `run_experiments` draws its random variations from.
+
+Error codes that only those handlers emitted are gone with them:
+`legacy_analysis_result` (now `legacy_job_record`),
+`case_selection_wrong_job_kind`, `run_unavailable` (now `case_not_found`),
+`run_failed`, `no_raw_output`, `parse_deadline` (now `analysis_deadline`),
+`decimated`, `window_applied`, `complex_format_used`, `unrecognized_save`,
+`max_pk_pk_bucket`, and `export_written`.
+
+### Changed — a job record from an earlier release is inert, not broken
+
+A job sidecar written by a pre-0.6 release still loads, and loading one
+never breaks the registry or the startup preload. It comes back as a record
+of what it was — id, circuit, kind, and the status that release persisted,
+with any still-running status reported as interrupted, since nothing in
+this process is running it. Every read of one carries the same fact: the
+job was written by an earlier release, its results are not readable through
+this version, and it must be re-run. `analyze_results` refuses it with that
+sentence rather than returning an empty result.
+
+### Changed — the schematic edit engine moved into the core
+
+The `.asc` edit engine is now `ltspice_mcp.lib.schematic_ops`, and every
+name another module imports from it is public. It lived in the tool layer,
+which meant core modules importing back up into the tools package (a latent
+import cycle that depended on import order). Nothing about `edit_schematic`,
+`inspect`, or `verify_circuit` changes; the one visible difference is in the
+JSON Schema `edit_schematic` advertises, where the internal `$defs` keys for
+the op shapes lost their leading underscore (`_OpAddComponent` is now
+`OpAddComponent`). References resolve exactly as before.
+
+### Removed — the internal tool-profile filter
+
+Tool registration no longer takes a profile, and there is no profile filter
+to look a tool up through: there is one surface to serve. The `[tools]
+profile` config key is unaffected and still behaves as promised — `"full"`
+and `"agentic"` log a warning and serve the consolidated surface until the
+key is deleted in 0.7.0. Serving zero tools is still a hard error.
+
 ### Added
 
 - `inspect(kind="capabilities")` reports `diagnostics`: the startup notes (a
