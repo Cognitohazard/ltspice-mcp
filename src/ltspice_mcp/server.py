@@ -518,6 +518,17 @@ async def list_resource_templates(
     return types.ListResourceTemplatesResult(resource_templates=get_resource_templates())
 
 
+def _resource_error(message: str) -> MCPError:
+    """The JSON-RPC error a failed resource read answers with.
+
+    A read has no result to carry a message, so a failure has to be a protocol
+    error. The 2026-07-28 revision dropped the separate resource-not-found code
+    that earlier revisions used, so a URI that names nothing this server serves
+    is an invalid parameter like any other.
+    """
+    return MCPError(types.INVALID_PARAMS, message)
+
+
 async def read_resource(
     ctx: ServerRequestContext, params: types.ReadResourceRequestParams
 ) -> types.ReadResourceResult:
@@ -548,16 +559,6 @@ async def read_resource(
     except Exception as e:
         logger.exception(f"Unexpected error reading resource {uri}")
         raise _resource_error(f"Internal error reading resource: {type(e).__name__}: {e}") from e
-
-
-def _resource_error(message: str) -> MCPError:
-    """The JSON-RPC error a failed resource read answers with.
-
-    The 2026-07-28 revision dropped the separate resource-not-found code that
-    earlier revisions used, so a URI that names nothing this server serves is
-    an invalid parameter like any other.
-    """
-    return MCPError(types.INVALID_PARAMS, message)
 
 
 async def list_prompts(
