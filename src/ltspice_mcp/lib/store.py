@@ -283,13 +283,31 @@ def owner_liveness(pid: int | None, *, own_is_alive: bool = False) -> OwnerLiven
     A record with no usable pid answers DEAD, not UNKNOWN: that is a record
     written before pids were stored, and the recovery of those interrupted
     jobs is the behaviour that predates this probe.
+
+    An exited process whose parent has not collected it yet still holds its pid
+    in the process table, and answers DEAD: it has stopped running, so it is no
+    longer supervising anything. This is not a corner case since jobs can be
+    detached — the process that spawned a detached owner is exactly the parent
+    that has not collected it, and without this a job whose owner died would
+    read as running for as long as that process lived.
     """
     if not pid:
         return OwnerLiveness.DEAD
     if pid == os.getpid():
         return OwnerLiveness.ALIVE if own_is_alive else OwnerLiveness.DEAD
     try:
-        return OwnerLiveness.ALIVE if psutil.pid_exists(pid) else OwnerLiveness.DEAD
+        if not psutil.pid_exists(pid):
+            return OwnerLiveness.DEAD
+        try:
+            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                return OwnerLiveness.DEAD
+        except psutil.NoSuchProcess:
+            return OwnerLiveness.DEAD
+        except psutil.Error:
+            # The process exists but would not say what it is doing. Existing
+            # is the answer this probe has always given on that evidence.
+            pass
+        return OwnerLiveness.ALIVE
     except Exception:
         # Deliberately broad, and deliberately NOT an answer: whatever went
         # wrong reaching the process table, the one thing this call must never
