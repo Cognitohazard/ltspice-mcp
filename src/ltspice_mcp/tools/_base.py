@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, TypedDict
 
 from mcp import types
 
@@ -477,6 +477,177 @@ def format_observations(observations: list[dict[str, Any]]) -> list[str]:
     lines = ["Observations (facts to weigh, not a verdict):"]
     lines.extend(f"  [{o.get('kind')}] {o.get('detail')}" for o in surfaced)
     return lines
+
+
+# ---------------------------------------------------------------------------
+# The shared response envelope
+#
+# Every consolidated tool's payload carries these five keys, and they mean the
+# same thing on all of them. Defined once here so agreement is a property of
+# the construction rather than of a test that compares six hand-written
+# schemas.
+# ---------------------------------------------------------------------------
+
+#: The ratified call-level outcome vocabulary, in escalating order.
+CONTRACT_OUTCOMES: tuple[str, ...] = ("complete", "partial", "failed", "in_progress")
+
+CallOutcome = Literal["complete", "partial", "failed", "in_progress"]
+
+
+class Envelope(TypedDict, total=False):
+    """The five keys shared by every consolidated tool's payload.
+
+    ``outcome`` — the call-level verdict, from ``CONTRACT_OUTCOMES``, decided
+    by ``outcome_of``.
+
+    ``failures`` — what did not work. One channel, but deliberately NOT one row
+    shape: a verify failure names the stage that failed, and a receipt failure
+    names the case that failed. Each tool declares its own row schema; what is
+    shared is that the channel exists, is an array, and is separate from the
+    two below.
+
+    ``observations`` — is the data trustworthy: relayed simulator errors,
+    coverage gaps, provenance facts. Structured on the tools that have a
+    structured vocabulary (``OBSERVATIONS_SCHEMA``), free text on the rest.
+
+    ``warnings`` — did this measurement assume something: a clamped window, an
+    unparseable deck diffed as empty. Free text, always actionable.
+
+    ``hint`` — the one next step, mirrored from the text channel because a
+    structured-aware client renders only ``structuredContent``.
+
+    ``observations`` and ``warnings`` are never merged; see the
+    surface-don't-judge rules in ``lib/result_observations.py``.
+    """
+
+    outcome: CallOutcome
+    failures: list[Any]
+    observations: list[Any]
+    warnings: list[str]
+    hint: str
+
+
+#: The envelope's keys, in declaration order. Derived from the type so the
+#: contract battery reads one declaration instead of restating the list.
+ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
+
+#: The three fact channels, which stay separate on every tool that has them.
+ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
+
+
+def outcome_of(
+    failures: Any,
+    *,
+    partial: bool = False,
+    in_progress: bool = False,
+    delivered: bool = True,
+) -> CallOutcome:
+    """The one call-level outcome rule.
+
+    ``failures`` is anything truthy-when-non-empty (a list, a count, a bool).
+
+    * ``in_progress`` — the work has not reached a terminal state, so nothing
+      else is decided yet. It outranks every other signal.
+    * ``failed`` — something failed AND nothing came back with it. Pass
+      ``delivered=False`` from a surface where a failure means the whole call
+      produced nothing; the default is the read/batch case, where a failed item
+      sits beside items that answered.
+    * ``partial`` — something failed, or the caller-visible shortfall in
+      ``partial`` was recorded, but results came back too.
+    * ``complete`` — nothing failed and nothing fell short.
+
+    The shortfalls each tool counts as ``partial`` are its own — a finding of
+    error severity, a comparison mismatch, a truncated page, a run that never
+    produced — so they arrive as one already-decided flag rather than as a
+    growing pile of tool-specific branches in here.
+    """
+    if in_progress:
+        return "in_progress"
+    has_failures = bool(failures)
+    if has_failures and not delivered:
+        return "failed"
+    if has_failures or partial:
+        return "partial"
+    return "complete"
+
+
+def outcome_schema(*outcomes: str) -> dict[str, Any]:
+    """The ``outcome`` property, restricted to the outcomes a tool can reach.
+
+    A read that cannot fail the whole call never returns ``failed``, and a tool
+    with no durable job never returns ``in_progress``; declaring the values a
+    tool can actually produce is what makes the enum worth reading. Every value
+    must come from ``CONTRACT_OUTCOMES``.
+    """
+    chosen = outcomes or CONTRACT_OUTCOMES
+    stray = [value for value in chosen if value not in CONTRACT_OUTCOMES]
+    if stray:
+        raise ValueError(f"outcome(s) {stray} are not in the ratified vocabulary")
+    return {"type": "string", "enum": list(chosen)}
+
+
+OUTCOME_SCHEMA: dict[str, Any] = outcome_schema()
+
+
+def failures_schema(row: dict[str, Any]) -> dict[str, Any]:
+    """The ``failures`` channel over one tool's failure-row shape."""
+    return {"type": "array", "items": row}
+
+
+# One lint/check finding, wherever findings are reported. ``at`` locates it as
+# precisely as the checked artifact allows: a netlist has a file and a line, a
+# schematic also has coordinates, and only ``file`` is guaranteed.
+FINDING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "rule_id": {"type": "string"},
+        "severity": {"type": "string"},
+        "ok": {"type": "boolean"},
+        "evidence": {},
+        "at": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string"},
+                "line": {"type": "integer"},
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+            },
+            "required": ["file"],
+        },
+        "subject": {"type": "string"},
+    },
+    "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
+}
+
+#: The keys every offset page declares — see ``tools/_page.page``.
+PAGE_REQUIRED: list[str] = ["items", "total", "returned", "truncated", "next_cursor"]
+
+
+def page_schema(
+    items: dict[str, Any] | None = None,
+    **extra_properties: dict[str, Any],
+) -> dict[str, Any]:
+    """The offset-page object: the five shared keys plus a tool's own additions.
+
+    ``items`` overrides the item-array schema (a row-page tool passes its
+    columnar-aware fragment). ``extra_properties`` are declared but not
+    required, so a reader of any page can rely on the five without knowing
+    which tool produced it.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "items": items
+            if items is not None
+            else {"type": "array", "items": {"type": "object"}},
+            "total": {"type": "integer"},
+            "returned": {"type": "integer"},
+            "truncated": {"type": "boolean"},
+            **extra_properties,
+            "next_cursor": {"type": ["string", "null"]},
+        },
+        "required": list(PAGE_REQUIRED),
+    }
 
 
 RO_ANNOTATIONS = types.ToolAnnotations(

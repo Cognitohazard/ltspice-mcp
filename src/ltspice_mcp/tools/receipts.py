@@ -37,7 +37,16 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
-from ltspice_mcp.tools._base import ResponseBudget, format_response, paginate
+from ltspice_mcp.tools._base import (
+    FINDING_SCHEMA,
+    OUTCOME_SCHEMA,
+    CallOutcome,
+    ResponseBudget,
+    failures_schema,
+    format_response,
+    outcome_of,
+    paginate,
+)
 from ltspice_mcp.tools._page import encode_offset_cursor
 from ltspice_mcp.tools._page import page as _page
 
@@ -56,26 +65,6 @@ _TERMINAL_EXPERIMENT_STATUSES = frozenset(
 )
 
 Job = LegacyJobRecord | ExperimentJob
-
-_FINDING_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "rule_id": {"type": "string"},
-        "severity": {"type": "string"},
-        "ok": {"type": "boolean"},
-        "evidence": {},
-        "at": {
-            "type": "object",
-            "properties": {
-                "file": {"type": "string"},
-                "line": {"type": "integer"},
-            },
-            "required": ["file"],
-        },
-        "subject": {"type": "string"},
-    },
-    "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
-}
 
 _MANIFEST_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -110,7 +99,8 @@ _OBSERVATION_SCHEMA: dict[str, Any] = {
     "required": ["code", "kind", "detail"],
 }
 
-_FAILURE_SCHEMA: dict[str, Any] = {
+#: A receipt failure names the case that failed, not a stage (see Envelope).
+_CASE_FAILURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "case_id": {"type": "string"},
@@ -228,10 +218,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "request_id": {"type": "string"},
         "control_token": {"type": "string"},
         "status": {"type": "string"},
-        "outcome": {
-            "type": "string",
-            "enum": ["complete", "partial", "failed", "in_progress"],
-        },
+        "outcome": OUTCOME_SCHEMA,
         "source": {
             "type": "array",
             "items": {
@@ -268,7 +255,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "circuit": {"type": "string"},
-                    "findings": {"type": "array", "items": _FINDING_SCHEMA},
+                    "findings": {"type": "array", "items": FINDING_SCHEMA},
                 },
                 "required": ["circuit", "findings"],
             },
@@ -295,7 +282,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "observations",
             ],
         },
-        "failures": {"type": "array", "items": _FAILURE_SCHEMA},
+        "failures": failures_schema(_CASE_FAILURE_SCHEMA),
         "observations": {"type": "array", "items": _OBSERVATION_SCHEMA},
         "warnings": {"type": "array", "items": {"type": "string"}},
         "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA},
@@ -515,7 +502,7 @@ class ReceiptSnapshot:
     analysis_request: dict[str, Any] | None
 
     @property
-    def outcome(self) -> Literal["complete", "partial", "failed", "in_progress"]:
+    def outcome(self) -> CallOutcome:
         """Receipt outcome derived only from copied status and completeness."""
         if self.job_type == "experiment":
             return _terminal_outcome(self)
@@ -780,20 +767,21 @@ def project_receipt_runs(
     return _page(rows, offset=offset, limit=page_limit)
 
 
-def _terminal_outcome(
-    snapshot: ReceiptSnapshot,
-) -> Literal["complete", "partial", "failed", "in_progress"]:
-    if snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES:
-        return "in_progress"
-    if snapshot.status == "failed":
-        return "failed"
-    if snapshot.status == "cancelled":
-        # A cancelled experiment never delivered what it promised, whatever the
-        # counters say: a cancel landing after every run but before the
-        # analysis leaves them fully reconciled, and one landing before
-        # expansion leaves them all at zero.
-        return "partial"
-    return "partial" if snapshot.completeness.fell_short else "complete"
+def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
+    """An experiment receipt's outcome, read off its own status and counters.
+
+    ``delivered=False``: an experiment that failed produced nothing to read, so
+    a failure here IS the call's outcome rather than one item among many. A
+    cancelled experiment is partial whatever the counters say — a cancel
+    landing after every run but before the analysis leaves them fully
+    reconciled, and one landing before expansion leaves them all at zero.
+    """
+    return outcome_of(
+        snapshot.status == "failed",
+        partial=snapshot.status == "cancelled" or snapshot.completeness.fell_short,
+        in_progress=snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES,
+        delivered=False,
+    )
 
 
 # Case count at which a terminal receipt starts pointing at the in-process
@@ -853,26 +841,35 @@ def _job_type_name(job: Job) -> str:
     return "experiment" if isinstance(job, ExperimentJob) else "legacy"
 
 
-def _jobs_outcome(
-    snapshot: ReceiptSnapshot,
-) -> Literal["complete", "partial", "failed", "in_progress"]:
-    if snapshot.status in NON_TERMINAL_LIVE_STATUSES:
-        return "in_progress"
-    if snapshot.status in {"failed", "timeout", "interrupted"}:
-        return "failed"
-    if snapshot.status == "completed_with_failures":
-        # The coordinator marks an experiment completed_with_failures when its
-        # attached analysis fails even though every run landed, so read an
-        # experiment's outcome off its own run counters rather than its status.
-        # Only this status: a cancelled experiment is partial no matter how the
-        # counters read, including the cancel that lands before expansion and
-        # leaves them all at zero.
-        if snapshot.job_type == "experiment":
-            return "partial" if snapshot.completeness.fell_short else "complete"
-        return "partial"
-    if snapshot.status == "cancelled":
-        return "partial"
-    return "complete"
+#: Statuses on which a job delivered nothing at all, so the whole call failed.
+_FAILED_JOB_STATUSES = frozenset({"failed", "timeout", "interrupted"})
+
+
+def _jobs_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
+    """A jobs receipt's outcome — the same rule, read off the job's status.
+
+    What differs from ``_terminal_outcome`` is which statuses count. The
+    ``jobs`` control plane reports a wider set as outright failure (a timeout
+    and an interrupt deliver nothing either), and it takes terminality from the
+    lifecycle's live-status set rather than the experiment status list.
+
+    ``completed_with_failures`` is the one status that has to consult the
+    counters: the coordinator sets it when an attached analysis fails even
+    though every run landed, so an experiment's shortfall is read off its own
+    run counters instead. Only this status — a cancelled experiment is partial
+    no matter how the counters read, including the cancel that lands before
+    expansion and leaves them all at zero.
+    """
+    shortfall = snapshot.status == "cancelled" or (
+        snapshot.status == "completed_with_failures"
+        and (snapshot.job_type != "experiment" or snapshot.completeness.fell_short)
+    )
+    return outcome_of(
+        snapshot.status in _FAILED_JOB_STATUSES,
+        partial=shortfall,
+        in_progress=snapshot.status in NON_TERMINAL_LIVE_STATUSES,
+        delivered=False,
+    )
 
 
 def snapshot_receipt(

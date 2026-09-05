@@ -46,8 +46,11 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    HINT_SCHEMA,
+    OUTCOME_SCHEMA,
     ResponseBudget,
     ToolInput,
+    failures_schema,
     format_response,
     registry,
     resolve_response_budget,
@@ -57,7 +60,7 @@ from ltspice_mcp.tools._page import page as _page
 from ltspice_mcp.tools._page import unpaged
 from ltspice_mcp.tools.experiments import JOBS_WAIT_CAP_S
 from ltspice_mcp.tools.receipts import (
-    _FAILURE_SCHEMA,
+    _CASE_FAILURE_SCHEMA,
     _JOBS_PAGE_LIMIT,
     _OBSERVATION_SCHEMA,
     _RUN_RECORD_SCHEMA,
@@ -322,14 +325,11 @@ _JOBS_ERROR_SCHEMA: dict[str, Any] = {
 }
 
 _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
-    "outcome": {
-        "type": "string",
-        "enum": ["complete", "partial", "failed", "in_progress"],
-    },
+    "outcome": OUTCOME_SCHEMA,
     "observations": {"type": "array", "items": _OBSERVATION_SCHEMA},
     "warnings": {"type": "array", "items": {"type": "string"}},
-    "failures": {"type": "array", "items": _FAILURE_SCHEMA},
-    "hint": {"type": "string"},
+    "failures": failures_schema(_CASE_FAILURE_SCHEMA),
+    "hint": HINT_SCHEMA,
     "error": _JOBS_ERROR_SCHEMA,
 }
 
