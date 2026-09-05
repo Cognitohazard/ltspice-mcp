@@ -45,10 +45,10 @@ from ltspice_mcp.tools._base import (
     failures_schema,
     format_response,
     outcome_of,
-    paginate,
+    page_schema,
 )
-from ltspice_mcp.tools._page import encode_offset_cursor
 from ltspice_mcp.tools._page import page as _page
+from ltspice_mcp.tools._page import page_of
 
 _RUN_PAGE_LIMIT = 50
 
@@ -163,17 +163,7 @@ _RUN_RECORD_SCHEMA: dict[str, Any] = {
 }
 
 _RUNS_PAGE_SCHEMA: dict[str, Any] = response_budget.row_page_schema(
-    {
-        "type": "object",
-        "properties": {
-            "items": {"type": "array", "items": _RUN_RECORD_SCHEMA},
-            "total": {"type": "integer"},
-            "returned": {"type": "integer"},
-            "truncated": {"type": "boolean"},
-            "next_cursor": {"type": ["string", "null"]},
-        },
-        "required": ["items", "total", "returned", "truncated", "next_cursor"],
-    },
+    page_schema({"type": "array", "items": _RUN_RECORD_SCHEMA}),
     item_schema=_RUN_RECORD_SCHEMA,
 )
 
@@ -717,28 +707,14 @@ def _runs_page(
     *,
     cap: int = _RUN_PAGE_LIMIT,
 ) -> dict[str, Any]:
-    page, total, offset, _limit = paginate(cases, None, cap=cap)
+    # Paged first, projected second: the projection is one row in, one row out,
+    # so it only has to run over the rows this page actually carries.
     rows = _project_run_rows(
-        [_run_item(case) for case in page],
+        [_run_item(case) for case in cases[:cap]],
         run_fields,
         lean_default=True,
     )
-    # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
-    # receipt assembly reads this key to build the continuation hint.
-    # The cursor key is always present and nullable, so readers may do an
-    # unconditional ``page["next_cursor"]``. Omitting the key on the last page
-    # instead makes those readers raise KeyError.
-    data: dict[str, Any] = {
-        "items": [],
-        "total": total,
-        "returned": 0,
-        "truncated": False,
-        "next_cursor": None,
-    }
-    next_offset = analyze.retotal_page(data, rows, offset)
-    if data["truncated"]:
-        data["next_cursor"] = encode_offset_cursor(next_offset)
-    return data
+    return page_of(rows, offset=0, total=len(cases))
 
 
 def project_receipt_runs(
