@@ -28,7 +28,7 @@ Canonical loops:
 
 ```
 netlist loop:   write deck (natively) -> run_experiments -> analyze_results -> edit natively -> ...
-schematic new:  inspect(symbols) -> edit_schematic{base:"blank", ops, reference, render} -> revise ops -> done
+schematic new:  inspect(symbols) -> edit_schematic{base:"blank", ops, compare, render} -> revise ops -> done
 schematic edit: inspect existing .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
 debug loop:     verify_circuit(lint) -> fix natively -> run_experiments -> analyze_results -> inspect(net)
 long runs:      run_experiments (receipt) -> jobs(wait) -> analyze_results
@@ -472,7 +472,12 @@ expected_sha256     REQUIRED whenever target exists, under either base;
                     Both refusals — missing and mismatched — report the
                     target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
-reference           post-commit netlist compare, inside the transaction
+compare             {reference, anchors?, rtol} — post-commit netlist
+                    compare, inside the transaction
+render              {format: "png"|"svg", scale?, max_pixels?}; `true` selects
+                    the default policy, `false` draws nothing even if
+                    return_views asked. Passing it also asks for the render
+                    view
 dry_run             resolve, validate and return geometry; no write
 write_failed_draft  quarantine a failed batch to
                     <target>.draft-<build_id>.asc (build_id server-assigned
@@ -482,7 +487,18 @@ return_views        subset ["touched", "pin_legend", "render"],
 view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
                     next_cursor from a previous page of that view
 budget              int | null
+
+retained aliases (0.6; removed in 0.7)
+reference           = compare.reference
+render_format       = render.format
+render_scale        = render.scale
 ```
+
+`render` and `compare` are the same two models `verify_circuit` takes, so "draw
+this sheet" and "compare it against that netlist" are written the same way on
+both tools. The flat fields this tool shipped with stay accepted for 0.6 and map
+onto the objects; passing both spellings of the same thing is refused rather
+than resolved one way, because there is no defined precedence between them.
 
 `touched` is the pin/net table scoped to the references the op batch addressed.
 The whole-sheet `pin_legend` was about 2,700 characters of unrequested default
@@ -561,17 +577,30 @@ views?, warnings, failures, observations, artifacts, hint`.
 ```
 path          .asc | .cir | .net | .sp
 checks        subset [syntax, symbols, export, layout, quality, compare]
-reference     path?
-compare_mode  "equivalence" | "structural_diff"
-anchors       list[str]?
-rtol          float
-render        {mode: "with_checks"|"only", delivery: "artifact"|"inline"|"both",
-               format: "png"|"svg", scale?, max_pixels?}
+compare       {reference, anchors?, rtol,
+               mode: "equivalence"|"structural_diff"}
+render        {format: "png"|"svg", scale?, max_pixels?,
+               mode: "with_checks"|"only",
+               delivery: "artifact"|"inline"|"both"}
               `true` selects the default policy; `false` or omitted renders
               nothing
 export_to     "managed" (default) | "sidecar"
 budget        int | null
+
+retained aliases (0.6; removed in 0.7)
+reference     = compare.reference
+compare_mode  = compare.mode
+anchors       = compare.anchors
+rtol          = compare.rtol
 ```
+
+`compare` and `render` are shared with `edit_schematic`. The shared halves —
+`{reference, anchors, rtol}` and `{format, scale, max_pixels}` — mean the same
+thing on both tools; `compare.mode` and `render`'s `mode`/`delivery` are on a
+subclass here because only this tool has two comparisons to choose between,
+checks to skip, and an image channel to deliver into. A tool never advertises a
+field it cannot honour. The flat spellings stay accepted for 0.6 and map onto
+the objects; passing both is refused rather than resolved one way.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
@@ -670,9 +699,16 @@ than merely have it tolerated:
 | tool | field | added spelling |
 |-|-|-|
 | `verify_circuit` | `render` | `true` = default policy; `false`/omitted = no render |
+| `edit_schematic` | `render` | the same, plus `false` withdrawing the render view |
 | `analyze_results` | `include` | a bare list of flag names becomes `{name: true}` |
 | `analyze_results` | `include.per_run` | `true` = the default page |
 | `run_experiments` | `analyze.include` | the same two spellings |
+
+The flat `render_format`/`render_scale`/`reference` on `edit_schematic` and
+`reference`/`compare_mode`/`anchors`/`rtol` on `verify_circuit` are **retained
+aliases**, advertised alongside the objects for 0.6 and removed in 0.7. Both
+spellings of one argument in a single call is refused, naming the object as the
+one to keep.
 
 An unrecognized flag name still fails, enumerating the valid set and naming
 `fields` as the one that takes row paths rather than a boolean. A `render`
