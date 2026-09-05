@@ -18,7 +18,6 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
-from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     run_op_batch,
@@ -375,7 +374,7 @@ async def test_parallel_session_revision_race(config, work_dir, asc_symbols):
 # ---------------------------------------------------------------------------
 
 
-async def test_crash_before_rename_leaves_target_and_writes_draft(
+async def test_crash_before_rename_leaves_the_target_and_writes_nothing_else(
     asc_state, work_dir, monkeypatch
 ):
     first = await _build_blank(asc_state, "crash", _DIVIDER_OPS)
@@ -391,7 +390,6 @@ async def test_crash_before_rename_leaves_target_and_writes_draft(
             _edit_input(
                 target="crash.asc",
                 expected_sha256=sha0,
-                write_failed_draft=True,
                 ops=[
                     {
                         "op": "add_component",
@@ -416,12 +414,11 @@ async def test_crash_before_rename_leaves_target_and_writes_draft(
     assert data["build_id"]  # echoed
     # Target untouched.
     assert _sha(work_dir / "crash.asc") == sha0
-    # Quarantine draft written and named for the build.
-    draft = work_dir / f"crash.draft-{data['build_id']}.asc"
-    assert draft.is_file()
-    assert "R3" in draft.read_text()
-    # No staging temp left behind.
+    # Nothing else is written either: no staging temp, and no quarantined
+    # draft beside the target. The caller still holds its own ops, and the
+    # response names the stage that failed.
     assert not list(work_dir.glob("crash.asc.staging-*"))
+    assert not list(work_dir.glob("crash.draft-*.asc"))
 
 
 async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypatch):
@@ -432,7 +429,9 @@ async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypat
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", boom_export)
 
-    data = await _build_blank(asc_state, "aftercommit", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(
+        asc_state, "aftercommit", _DIVIDER_OPS, compare={"reference": "ref.cir"}
+    )
     # The rename succeeded, so the sheet is committed even though a post-rename
     # (reference-export) stage failed. The failed stage is the shortfall that
     # keeps the call off "complete".
@@ -485,7 +484,7 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
                 target="dry.asc",
                 expected_sha256=sha0,
                 dry_run=True,
-                return_views=["pin_legend", "render"],
+                return_views=["pin_legend"],
                 ops=[
                     {
                         "op": "add_component",
@@ -503,7 +502,7 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
     assert data["commit_state"] == "not_committed"
     # Every op validated, geometry computed, nothing written.
     assert data["wiring"]["pins_total"] == 6  # R1, R2, R3
-    assert data["views"]["render"]["status"] == "dry_run"
+    assert {row["ref"] for row in data["views"]["pin_legend"]["items"]} == {"R1", "R2", "R3"}
     # Directory fingerprint and target sha both unchanged.
     assert _fingerprint(work_dir) == before
     assert _sha(work_dir / "dry.asc") == sha0
@@ -601,8 +600,6 @@ async def test_views_are_bound_to_the_committed_bytes_not_a_later_file_revision(
     monkeypatch,
 ):
     original_commit = se._commit_asc
-    rendered_sources: list[str] = []
-    original_render = se._render_view
 
     def commit_then_peer_revision(text, target, build_id, encoding):
         outcome = original_commit(text, target, build_id, encoding)
@@ -610,26 +607,20 @@ async def test_views_are_bound_to_the_committed_bytes_not_a_later_file_revision(
             target.write_text("Version 4.1\nSHEET 1 880 680\nTEXT 32 32 Left 2 ;peer revision\n")
         return outcome
 
-    def record_render_source(path, *args, **kwargs):
-        rendered_sources.append(path.read_text())
-        return original_render(path, *args, **kwargs)
-
     monkeypatch.setattr(se, "_commit_asc", commit_then_peer_revision)
-    monkeypatch.setattr(se, "_render_view", record_render_source)
     args = _edit_input(
         target="interleaved.asc",
         base="blank",
-        return_views=["pin_legend", "render"],
-        render_format="svg",
+        return_views=["pin_legend"],
         ops=_DIVIDER_OPS,
     )
     neutral = await evaluate_edit_schematic(args, asc_state)
     assert neutral.views is not None
     assert neutral.data["sha256"] == neutral.views.sha256
     assert neutral.views.sha256 != _sha(work_dir / "interleaved.asc")
+    # The legend describes the bytes this transaction committed, not the
+    # peer's revision that landed on the target a moment later.
     assert {row["ref"] for row in neutral.views.pin_legend} == {"R1", "R2"}
-    assert rendered_sources and "SYMATTR InstName R1" in rendered_sources[0]
-    assert "peer revision" not in rendered_sources[0]
 
     complete = complete_edit_schematic_data(neutral, args)
     assert complete["sha256"] == neutral.views.sha256
@@ -745,48 +736,52 @@ async def test_cross_view_cursor_rejected(asc_state):
 
 
 # ---------------------------------------------------------------------------
-# Render view
+# Views this tool does not have
 # ---------------------------------------------------------------------------
 
 
-async def test_render_svg(asc_state, work_dir):
-    data = await _build_blank(
-        asc_state, "rsvg", _DIVIDER_OPS, return_views=["render"], render_format="svg"
-    )
-    render = data["views"]["render"]
-    assert render["image_format"] == "svg"
-    assert render["path"].endswith(".svg")
-    assert Path(render["path"]).is_file()  # noqa: ASYNC240
-    assert data["artifacts"][0]["kind"] == "render"
+@pytest.mark.parametrize("view", ["render", "occupancy"])
+async def test_a_view_this_tool_does_not_have_is_rejected(asc_state, view: str):
+    """Strict validation rejects the variant at the schema, so no dead stub
+    path can exist behind it.
 
-
-@pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
-async def test_render_png_when_raster_available(asc_state):
-    data = await _build_blank(
-        asc_state, "rpng", _DIVIDER_OPS, return_views=["render"], render_format="png"
-    )
-    render = data["views"]["render"]
-    assert render["image_format"] == "png"
-    assert render["path"].endswith(".png")
-    assert render["width"] and render["height"]
-
-
-async def test_render_png_falls_back_to_svg_without_raster(asc_state, monkeypatch):
-    # Force the optional dependency absent regardless of the environment.
-    monkeypatch.setattr(raster, "_load_cairosvg", lambda: None)
-    data = await _build_blank(
-        asc_state, "rfallback", _DIVIDER_OPS, return_views=["render"], render_format="png"
-    )
-    render = data["views"]["render"]
-    assert render["image_format"] == "svg"
-    assert "raster" in (render["note"] or "")
-
-
-async def test_occupancy_view_variant_is_rejected(asc_state):
-    """'occupancy' is not a return view; strict validation rejects the
-    variant at the schema so no dead stub path can exist behind it."""
+    'render' is verify_circuit's — its policy carries a pixel cap, a delivery
+    channel and a render-only mode this one never had — and 'occupancy' was
+    measured against the plain views and produced no placement defect either
+    way, so it was never shipped."""
     with pytest.raises(ValidationError):
-        await _build_blank(asc_state, "occ", _DIVIDER_OPS, return_views=["occupancy"])
+        await _build_blank(asc_state, f"noview-{view}", _DIVIDER_OPS, return_views=[view])
+
+
+async def test_the_edit_response_carries_no_render_block(asc_state):
+    data = await _build_blank(asc_state, "norender", _DIVIDER_OPS)
+    assert "render" not in data["views"]
+    assert data["artifacts"] == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"render": True},
+        {"render_format": "svg"},
+        {"render_scale": 2.0},
+        {"reference": "ref.cir"},
+        {"write_failed_draft": True},
+        {"format": "json"},
+    ],
+    ids=["render", "render-format", "render-scale", "flat-reference", "draft", "format"],
+)
+def test_the_arguments_this_tool_no_longer_takes(payload: dict):
+    """Each of these had somewhere better to be, or nothing to do.
+
+    Drawing belongs to verify_circuit; the flat 'reference' was a second
+    spelling of 'compare'; a failed batch writes nothing by design, so there
+    was no draft to quarantine that the caller's own ops did not already
+    describe; and 'format' chose a text rendering that structured-aware
+    clients drop, which the other six tools stopped advertising.
+    """
+    with pytest.raises(ValidationError):
+        _edit_input(target="gone.asc", base="blank", ops=_DIVIDER_OPS, **payload)
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +799,7 @@ async def test_reference_success(asc_state, work_dir, monkeypatch):
         return _REF_DECK
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(asc_state, "refok", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(asc_state, "refok", _DIVIDER_OPS, compare={"reference": "ref.cir"})
     assert data["commit_state"] == "committed"
     assert data["verification"]["equivalent"] is True
     assert data["netlist"] == _REF_DECK
@@ -818,7 +813,7 @@ async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypat
         return _REF_DECK_DIFFERENT
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(asc_state, "refbad", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(asc_state, "refbad", _DIVIDER_OPS, compare={"reference": "ref.cir"})
     assert data["commit_state"] == "committed"
     assert data["verification"]["equivalent"] is False
     # A difference is data, not a failure: the sheet stays committed.
@@ -839,7 +834,9 @@ async def test_reference_mismatch_is_a_partial_outcome(asc_state, work_dir, monk
         return _REF_DECK_DIFFERENT
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(asc_state, "refpartial", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(
+        asc_state, "refpartial", _DIVIDER_OPS, compare={"reference": "ref.cir"}
+    )
     assert data["verification"]["equivalent"] is False
     assert data["outcome"] == "partial"
     assert data["commit_state"] == "committed"
@@ -857,27 +854,11 @@ async def test_reference_export_failure_is_a_partial_outcome(asc_state, work_dir
         raise RuntimeError("injected export failure")
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", boom_export)
-    data = await _build_blank(asc_state, "refnoverdict", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(
+        asc_state, "refnoverdict", _DIVIDER_OPS, compare={"reference": "ref.cir"}
+    )
     assert data["verification"]["equivalent"] is None
     assert data["verification"]["export_error"]
-    assert data["outcome"] == "partial"
-    assert data["commit_state"] == "committed"
-
-
-async def test_render_view_failure_is_a_partial_outcome(asc_state, monkeypatch):
-    """A view that failed is recorded in ``failures``, so the call is partial.
-
-    The commit itself stands; what the caller asked for and did not get is the
-    render, and the outcome has to say so rather than reporting ``complete``
-    beside a populated failures channel.
-    """
-
-    def boom(*_a, **_kw):
-        raise RuntimeError("injected render failure")
-
-    monkeypatch.setattr(se, "_render_committed_text", boom)
-    data = await _build_blank(asc_state, "renderfail", _DIVIDER_OPS, return_views=["render"])
-    assert [f["stage"] for f in data["failures"]] == ["render"]
     assert data["outcome"] == "partial"
     assert data["commit_state"] == "committed"
 
@@ -891,7 +872,10 @@ async def test_rejected_reference_path_refuses_before_committing(asc_state, work
     """
     with pytest.raises(PathSecurityError):
         await _build_blank(
-            asc_state, "denied_ref", _DIVIDER_OPS, reference="/etc/ltspice-mcp-not-allowed.cir"
+            asc_state,
+            "denied_ref",
+            _DIVIDER_OPS,
+            compare={"reference": "/etc/ltspice-mcp-not-allowed.cir"},
         )
     # Nothing was written: the rejection lands before the commit protocol runs.
     assert not (work_dir / "denied_ref.asc").exists()
@@ -914,7 +898,7 @@ async def test_post_commit_reference_error_returns_committed_envelope(
 
     monkeypatch.setattr(se, "_write_export_copy", boom)
 
-    data = await _build_blank(asc_state, "refboom", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(asc_state, "refboom", _DIVIDER_OPS, compare={"reference": "ref.cir"})
     committed = work_dir / "refboom.asc"
     assert committed.is_file()
     # The caller learns the commit happened AND the sha it must edit against next.
@@ -973,7 +957,9 @@ async def test_failure_after_a_completed_stage_is_not_reported_against_it(
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
     monkeypatch.setattr(se, "_commit_hint", boom)
 
-    data = await _build_blank(asc_state, "hintboom", _DIVIDER_OPS, reference="ref.cir")
+    data = await _build_blank(
+        asc_state, "hintboom", _DIVIDER_OPS, compare={"reference": "ref.cir"}
+    )
     assert data["commit_state"] == "committed"
     assert data["outcome"] == "partial"
     assert [s for s in data["stages"] if s["stage"] == "reference"] == [
