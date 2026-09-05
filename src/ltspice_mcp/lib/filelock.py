@@ -19,12 +19,13 @@ parks a worker thread instead of freezing every in-flight request.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -115,3 +116,82 @@ def file_lock(
             _release(fd)
     finally:
         os.close(fd)
+
+
+# ---------------------------------------------------------------------------
+# Per-circuit locking: the in-process lock and the cross-process one, layered
+# ---------------------------------------------------------------------------
+#
+# These live here rather than in the tool layer because the schematic edit
+# engine (a lib module) takes them, and a core module must not import the layer
+# that imports it. ``tools/_base`` re-exports them.
+
+SIDECAR_DIRNAME = ".ltspice-mcp"
+
+
+def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> asyncio.Lock:
+    """Get or create a per-path lock in ``registry``, LRU-bounded at ``cap``.
+
+    Shared mechanism behind every per-file lock registry (schematic edits,
+    ``.asc`` exports): refresh recency on hit; at capacity evict the oldest
+    *unheld* lock — if all are held, overshoot temporarily rather than break
+    mutual exclusion by evicting a lock someone is inside.
+    """
+    if path in registry:
+        registry[path] = registry.pop(path)
+        return registry[path]
+    if len(registry) >= cap:
+        for candidate in list(registry):
+            if not registry[candidate].locked():
+                del registry[candidate]
+                break
+    registry[path] = asyncio.Lock()
+    return registry[path]
+
+
+def circuit_lock_target(path: Path) -> Path:
+    """Anchor for the cross-process lock on one circuit file.
+
+    Lives under the circuit's ``.ltspice-mcp/locks/`` sidecar directory
+    (``file_lock`` appends ``.lock``) so user directories aren't littered
+    with lock files next to their circuits.
+    """
+    return path.parent / SIDECAR_DIRNAME / "locks" / path.name
+
+
+@contextlib.asynccontextmanager
+async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
+    """Cross-process lock for mutations/exports of one circuit file.
+
+    Parallel MCP server processes editing the same circuit serialize here —
+    without it, the whole-file read-modify-write saves are last-writer-wins
+    and a concurrent session's edit is silently lost. Acquisition polls in a
+    worker thread (per this module's contract, so a contended lock never
+    stalls the event loop); release is two fast syscalls, done inline.
+
+    Acquire this BEFORE fetching a cached editor: the editor cache re-stats
+    the file on every fetch, so taking the lock first guarantees the stat
+    sees a concurrent writer's completed save rather than a mid-edit state.
+    (Residual: on coarse-mtime filesystems like WSL's /mnt/c a same-size
+    rewrite within one mtime tick can still go undetected — see FileCache.)
+    """
+    # Acquire INSIDE the try so stack.close() always runs: a cancel landing at
+    # the await boundary right after the worker thread took the flock would
+    # otherwise leak it until process exit. (Residual: if the cancel lands
+    # while the worker is still blocked acquiring, the thread can register the
+    # lock after close() already ran — inherent to to_thread, not fixable
+    # without a cancel-aware lock; the narrow window is cancel-only.)
+    from ltspice_mcp.errors import NetlistError
+
+    stack = contextlib.ExitStack()
+    try:
+        try:
+            await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
+        except TimeoutError as e:
+            raise NetlistError(
+                f"{path.name} is locked by another ltspice-mcp process "
+                f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
+            ) from e
+        yield
+    finally:
+        stack.close()

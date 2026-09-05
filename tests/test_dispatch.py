@@ -563,3 +563,36 @@ class TestAdvertisedOrderIsStable:
             "edit_schematic",
             "verify_circuit",
         ]
+
+
+class TestLayering:
+    """``lib`` must not import ``tools``.
+
+    The layering is not decoration: ``tools/_base`` imports half of ``lib``, so
+    a ``lib`` module reaching back up closes a cycle. It resolves silently
+    whenever a tool module happens to be imported first and explodes on the one
+    entry point that imports the lib module first — which is how the schematic
+    engine's move out of ``tools/`` shipped a latent ImportError that only one
+    test file's import order revealed.
+    """
+
+    def test_no_lib_module_imports_the_tool_layer(self):
+        import ast
+        from pathlib import Path
+
+        lib = Path(__file__).resolve().parent.parent / "src" / "ltspice_mcp" / "lib"
+        offenders: list[str] = []
+        for path in sorted(lib.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                    "ltspice_mcp.tools"
+                ):
+                    offenders.append(f"{path.name}:{node.lineno} -> {node.module}")
+                elif isinstance(node, ast.Import):
+                    offenders.extend(
+                        f"{path.name}:{node.lineno} -> {alias.name}"
+                        for alias in node.names
+                        if alias.name.startswith("ltspice_mcp.tools")
+                    )
+        assert not offenders, "lib modules importing the tool layer: " + "; ".join(offenders)

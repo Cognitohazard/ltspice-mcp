@@ -15,9 +15,7 @@ What lives here:
   ``plan_connect_route``, ``net_partition``, ``trace_nets``);
 - the post-op validation pass (``post_op_warnings``) and the wiring profile.
 
-Names imported by another module are public. The one upward dependency is on
-``tools/_base`` for ``StrictModel`` and the two file-lock helpers; those are
-generic utilities that happen to live in the tool layer today.
+Names imported by another module are public.
 
 Extension-based dispatch: the file extension picks the spicelib editor
 (SpiceEditor for .cir/.net, AscEditor for .asc). Schematic-only operations
@@ -63,18 +61,15 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
 from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import (
-    StrictModel,
-    circuit_file_lock,
-    path_lock,
-)
 
 
 def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None:

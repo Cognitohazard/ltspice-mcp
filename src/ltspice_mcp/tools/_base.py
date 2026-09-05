@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, Union, get_args, get_origin, get_type_hints
 
 from mcp import types
-from pydantic import BaseModel, ConfigDict
 
 from ltspice_mcp.config import (
     SIM_PATH_ENV as _SIM_PATH_ENV,
@@ -29,10 +28,13 @@ from ltspice_mcp.config import (
 from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
-from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
+from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
-from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
-from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
+from ltspice_mcp.lib.filelock import (
+    circuit_file_lock,
+    path_lock,
+)
+from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raster import RenderedImage, render_image
@@ -464,16 +466,6 @@ RO_ANNOTATIONS = types.ToolAnnotations(
     idempotentHint=True,
     openWorldHint=False,
 )
-
-
-class StrictModel(BaseModel):
-    """Shared Pydantic config for all strict models (tool inputs and nested schemas)."""
-
-    model_config = ConfigDict(
-        extra="forbid",
-        str_strip_whitespace=True,
-        validate_assignment=True,
-    )
 
 
 class ToolInput(StrictModel):
@@ -1309,72 +1301,6 @@ def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
     if not netlist_path.exists():
         raise SimulationError(f"Netlist file not found: {netlist_path}")
     return netlist_path
-
-
-def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> asyncio.Lock:
-    """Get or create a per-path lock in ``registry``, LRU-bounded at ``cap``.
-
-    Shared mechanism behind every per-file lock registry (schematic edits,
-    ``.asc`` exports): refresh recency on hit; at capacity evict the oldest
-    *unheld* lock — if all are held, overshoot temporarily rather than break
-    mutual exclusion by evicting a lock someone is inside.
-    """
-    if path in registry:
-        registry[path] = registry.pop(path)
-        return registry[path]
-    if len(registry) >= cap:
-        for candidate in list(registry):
-            if not registry[candidate].locked():
-                del registry[candidate]
-                break
-    registry[path] = asyncio.Lock()
-    return registry[path]
-
-
-def circuit_lock_target(path: Path) -> Path:
-    """Anchor for the cross-process lock on one circuit file.
-
-    Lives under the circuit's ``.ltspice-mcp/locks/`` sidecar directory
-    (``file_lock`` appends ``.lock``) so user directories aren't littered
-    with lock files next to their circuits.
-    """
-    return path.parent / SIDECAR_DIRNAME / "locks" / path.name
-
-
-@contextlib.asynccontextmanager
-async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
-    """Cross-process lock for mutations/exports of one circuit file.
-
-    Parallel MCP server processes editing the same circuit serialize here —
-    without it, the whole-file read-modify-write saves are last-writer-wins
-    and a concurrent session's edit is silently lost. Acquisition polls in a
-    worker thread (per filelock's contract, so a contended lock never stalls
-    the event loop); release is two fast syscalls, done inline.
-
-    Acquire this BEFORE fetching a cached editor: the editor cache re-stats
-    the file on every fetch, so taking the lock first guarantees the stat
-    sees a concurrent writer's completed save rather than a mid-edit state.
-    (Residual: on coarse-mtime filesystems like WSL's /mnt/c a same-size
-    rewrite within one mtime tick can still go undetected — see FileCache.)
-    """
-    # Acquire INSIDE the try so stack.close() always runs: a cancel (cancel_job
-    # / shutdown) landing at the await boundary right after the worker thread
-    # took the flock would otherwise leak it until process exit. (Residual: if
-    # the cancel lands while the worker is still blocked acquiring, the thread
-    # can register the lock after close() already ran — inherent to to_thread,
-    # not fixable without a cancel-aware lock; the narrow window is cancel-only.)
-    stack = contextlib.ExitStack()
-    try:
-        try:
-            await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
-        except TimeoutError as e:
-            raise NetlistError(
-                f"{path.name} is locked by another ltspice-mcp process "
-                f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
-            ) from e
-        yield
-    finally:
-        stack.close()
 
 
 # LTspice's ``create_netlist`` always writes the sidecar ``<name>.net`` next to

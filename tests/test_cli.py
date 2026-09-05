@@ -53,10 +53,9 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.filelock import circuit_lock_target, file_lock
 from ltspice_mcp.lib.runner_base import RunnerBase
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools._base import circuit_lock_target
 from tests.conftest import (
     LTSPICE_TRAN_RC_VFINAL,
     FakeSim,
