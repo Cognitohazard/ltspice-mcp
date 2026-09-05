@@ -47,18 +47,6 @@ recipe, `reduce`/`spec` on `periodic` or `return_loss` needs `reduce_field`):
   `reflection_coefficient` vs frequency (reducible) from an `.AC` impedance
   trace.
 
-Later sections show some examples with the tool names of this server's older
-releases, which are not exposed here. Read them through this map: for
-`run_simulation` use `run_experiments`; for `measurement_stats`, `bode_metrics`,
-`signal_stats`, `edge_metrics`, `transient_response`, `thd`, `operating_point`,
-`query_value`, `get_waveform`, `export_waveform`, `plot_waveform` and the other
-analysis tools use the `analyze_results` recipe of the same name; for
-`create_schematic` / `apply_schematic_ops` / `wire_pins` use `edit_schematic`;
-for `symbol_info` / `component_info` use `inspect(kind="symbol")`, for
-`trace_net` `inspect(kind="net")`, for `read_circuit` / `list_components`
-`inspect(kind="components")`, for `find_model` `inspect(kind="model")`, and for
-`export_netlist`'s equivalence check `verify_circuit`. The SPICE is identical.
-
 ### The response budget
 
 `run_experiments`, `jobs`, `analyze_results` and `inspect` take a `budget` in
@@ -180,12 +168,12 @@ PWL file=<filename>
 
 **Prefer `.meas` for any scalar it can express.** The simulator computes it,
 and it stays in the deck, so it is reproducible and can be re-run in the
-LTspice GUI; results come back through `measurement_stats`. The post-hoc
-analysis tools (`bode_metrics`, `signal_stats`, `thd`, …) parse the `.raw`
+LTspice GUI; results come back through the `measurements` recipe. The post-hoc
+recipes (`bode_filter`, `signal_stats`, `thd`, …) parse the `.raw`
 in-process, which `.meas` avoids. Use them for derived metrics `.meas` cannot
 express (FFT/THD, structural Bode, arbitrary windowed stats) or to skip a
 re-run, not as the default for a scalar `.meas` could compute. Exception: ngspice skips `.meas` under the server's `-b -r`
-batch mode — on ngspice, read the trace with the analysis tools or use a
+batch mode — on ngspice, read the trace with an `analyze_results` recipe or use a
 dot-less `meas` inside a `.control` block (see the `.meas`-under-batch note in
 the ngspice section below; also the ngspice skill).
 
@@ -197,7 +185,7 @@ find where the signal equals it):
 .meas AC vpeak  MAX  mag(V(out))
 .meas AC fcenter FIND frequency WHEN mag(V(out))=vpeak
 ```
-Or call `resonance` (AC) for peak frequency + Q + bandwidth in one step.
+Or use the `resonance` recipe (AC) for peak frequency + Q + bandwidth in one step.
 
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
@@ -211,9 +199,10 @@ Or call `resonance` (AC) for peak frequency + Q + bandwidth in one step.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
 - WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target LEVEL, not the crossing point.
 - **Quantized / staircase signals** (transmission-line reflections, DAC steps):
-  read the plateau levels directly with `query_value(at=...)` per plateau, or
-  `export_waveform` for the full table — don't reconstruct levels from
-  `get_waveform` bucket statistics.
+  read each plateau level directly with a `value` recipe (`{"metric": "value",
+  "expr": "V(out)", "at": …}`), or take the full table with a `waveform` recipe
+  at `"format": "csv"` — don't reconstruct levels from the inline `waveform`
+  envelope's bucket statistics.
 
 ### General Pitfalls
 
@@ -232,7 +221,7 @@ numbers**; no rawfile parsing or `.control`/`wrdata` block is needed. Both
 simulators expose them, in different files; pick the method below by what you
 need.
 
-### One device at a single bias → `operating_point` (works on LTspice)
+### One device at a single bias → the `operating_point` recipe (works on LTspice)
 
 ```spice
 M1 d g 0 0 nch L=0.18u W=2u
@@ -242,28 +231,30 @@ Vg g 0 0.9
 .lib /path/to/models.lib
 .end
 ```
-`run_simulation` then `operating_point(device='M1')` returns gm, gds, vth, vdsat,
+Run it with `run_experiments`, then read
+`{"metric": "operating_point", "device": "M1"}`: gm, gds, vth, vdsat,
 the caps and terminal currents at that bias. On **LTspice** these come from the
-log's *Semiconductor Device Operating Points* block — `run_simulation` adds
+log's *Semiconductor Device Operating Points* block — the server adds
 `.options logopinfo` automatically for `.op` runs (LTspice writes the block only
 under that option, and only for `.op`). On **ngspice**, `.save @m1[gm] @m1[gds]
-@m1[vth] @m1[id]` puts them in the raw; `operating_point` reads either uniformly.
+@m1[vth] @m1[id]` puts them in the raw; the recipe reads either uniformly.
 
-### gm/ID curve vs a swept bias (the sizing table) → ngspice `.dc` + `export_waveform`
+### gm/ID curve vs a swept bias (the sizing table) → ngspice `.dc` + a `waveform` recipe
 
 ```spice
 .dc Vg 0 1.8 0.01      ; sweep the gate
 .save @m1[gm] @m1[gds] @m1[vth] @m1[id]
 ```
-`export_waveform(signals=['m1.gm','m1.gds','m1.id'])` is the gm/ID table; one
-value at a chosen bias → `query_value(signal='m1.gm', at=...)`. This swept form
+A `waveform` recipe — `{"metric": "waveform", "signals": ["m1.gm", "m1.gds",
+"m1.id"], "format": "csv"}` — is the gm/ID table; one value at a chosen bias →
+`{"metric": "value", "expr": "m1.gm", "at": …}`. This swept form
 needs **ngspice** (LTspice's `logopinfo` is `.op`-only; for a swept gm on LTspice
 you'd differentiate the drain current, `d(Id(M1))`, instead). Don't use
-`configure_sweep` for this: a native `.dc Vds Vgs` is one deck, not N separate
-runs.
+`run_experiments` `variations` for this: a native `.dc Vds Vgs` is one deck, not
+N separate runs.
 
 Address an operating-point param by the `m1.gm` shorthand or its literal `@m1[gm]` name; the
-tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
+recipes resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
 `x1.m1.gm`, for you. Values carry SI units where the simulator declares the type.
 
 ---
@@ -423,7 +414,7 @@ meas ac unity when vdb(out)=0 cross=1
 .endc
 ```
 
-Prefer saved traces plus the server's analysis tools when they express the
+Prefer saved traces plus the server's `analyze_results` recipes when they express the
 metric. If using `wrdata`, its columns repeat the scale vector for every dumped
 vector: dumping `V(out)` and `I(VDD)` yields `scale, V(out), scale, I(VDD)`, not
 one shared scale followed by both values. Parse repeated scale/value groups,
@@ -434,8 +425,8 @@ too if later server analysis needs a rawfile.
 
 ## Impedance, return loss, and noise figure (RF / two-port idioms)
 
-`return_loss` computes Γ / return loss / VSWR from the impedance trace in one
-call (see below). S-parameters (S21) and noise figure have no dedicated tool —
+The `return_loss` recipe computes Γ / return loss / VSWR from the impedance
+trace in one call (see below). S-parameters (S21) and noise figure have no recipe —
 they are a short arithmetic step from an ordinary `.ac`/`.noise` run; the idioms
 below are what to build.
 
@@ -451,7 +442,8 @@ I1 0 in AC 1      ; + at ground, - at the probed node
 ```
 
 `V(in)` comes back complex: magnitude = |Zin| in ohms, phase = ∠Zin. Read it with
-`query_value` at one frequency or `export_waveform` for the full |Zin|(f) table;
+a `value` recipe at one frequency, or a `waveform` recipe at `"format": "csv"`
+for the full |Zin|(f) table;
 `resonance` finds the peak/notch frequency. Note that a `magnitude_db` reading of
 this trace is **dBΩ**, not dBV — e.g. -10.56 dB means 0.30 Ω, not a -10.56 dB
 dip; `magnitude_linear` gives the ohms directly.
@@ -469,7 +461,7 @@ RL_dB = -20*log10(|Γ|)              ; return loss (positive dB = better match)
 VSWR  = (1 + |Γ|) / (1 - |Γ|)
 ```
 
-The `return_loss` tool applies exactly this — pass the impedance trace and `z0`
+The `return_loss` recipe applies exactly this — pass the impedance trace and `z0`
 (default 50), and it returns Γ (mag/phase), `return_loss_db`, and `vswr` at a
 given `at` frequency, or the worst-match point across the sweep when `at` is
 omitted. It flags a negative-real Zin (a reversed probe) in its warnings.
@@ -521,7 +513,7 @@ why the reference resistance is explicit).
 ### Insertion loss / S21
 
 A matched source and load (`Rs = RL`) form a 2:1 divider, a fixed **-6 dB** offset
-at the load. `bode_metrics(mode="filter")` measures the -3 dB corner *relative to
+at the load. The `bode_filter` recipe measures the -3 dB corner *relative to
 the measured passband*, so that -6 dB offset does not move the corner — no
 normalization needed for bandwidth/corner reporting. For **absolute-dB** S21 where
 the matched passband should read 0 dB, drive the source with `AC 2` to pre-cancel
@@ -693,7 +685,7 @@ to steer it (it's only an initial guess, released before the final solve).
 What works: a startup circuit in the deck (as in real silicon); ramping the
 supply with `.tran` + `V1 ... PWL(0 0 1m VDD)` and reading the settled state;
 or `.dc` sweeping the supply *upward* so each solution seeds the next. Verify
-which root you got (e.g. `operating_point` on a known-current branch) instead
+which root you got (e.g. the `operating_point` recipe on a known-current branch) instead
 of trusting `status: completed`.
 
 **Hidden defaults (LTspice-specific):**
@@ -753,7 +745,7 @@ C1 out 0 {C}
 | res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `symbol_info` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `inspect(kind="symbol")` for exact positions.
 
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols are 3-terminal — a MOSFET's bulk ties internally to its source, and a BJT has no separate substrate pin. When you need the body/substrate on its own net (e.g. a non-source bulk bias), use the 4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
 
@@ -771,7 +763,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
 - For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
-- Use `symbol_info` with the intended rotation to verify pin directions before placing.
+- Use `inspect(kind="symbol")` and read the pins for the intended rotation to verify pin directions before placing.
 
 #### Schematic layout best practices
 
@@ -779,33 +771,34 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 mechanical work. An agent doing design and layout in one pass tends to tag
 pins with net labels instead of routing wires. If your environment supports
 subagents, hand the schematic build to one whose only brief is this section: give it the final netlist and this guide
-section, require it to build with `create_schematic` / `apply_schematic_ops` /
-`wire_pins` (never by hand-writing the `.asc`), and have it verify before
-returning — `export_netlist` must match the source netlist, and `trace_net`
-must show no multi-label shorts. Review the result with `read_circuit`.
+section, require it to build with `edit_schematic` (never by hand-writing the
+`.asc`), and have it verify before returning — `verify_circuit` with the
+`export` and `compare` checks must match the source netlist, and
+`inspect(kind="net")` must show no multi-label shorts. Review the result with
+`inspect(kind="components")`.
 
 **Component placement:**
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
-- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
+- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
-- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `symbol_info` to check bbox extents at the intended rotation.
+- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `inspect(kind="symbol")` to check bbox extents at the intended rotation.
 
 **Wiring:**
-- **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `wire_pins` for L-shaped or multi-segment routes.
-- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `symbol_info` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
+- **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in the `wire_pins` op for L-shaped or multi-segment routes.
+- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
 - **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
-- **Heed `wire_pins` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `apply_schematic_ops` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
+- **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
+- **Read the `wiring` profile `edit_schematic` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with the `wire_pins` op for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
 
 **Ground and net labels:**
-- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
+- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
-- **Do not use `wire_pins` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins is the idiomatic way to tie them — the netlist merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
-- **Label any net you reference by name in a directive.** `wire_pins` wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. Rule of thumb: wire-only is fine for nets you never name; **label any net a directive mentions by name.**
+- **Do not use the `wire_pins` op with `net:0`** when multiple ground labels exist — it errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
+- **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins is the idiomatic way to tie them — the netlist merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with the `wire_pins` op. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
+- **Label any net you reference by name in a directive.** The `wire_pins` op wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. Rule of thumb: wire-only is fine for nets you never name; **label any net a directive mentions by name.**
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
@@ -838,16 +831,17 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   stepping convergence aid in standard builds, not a transient soft-start — the
   true supply-ramp needs an `XSPICE_EXP` build. Ramp a source by hand with a
   PWL/PULSE rise instead.)
-- No native `.step`. Run parametric sweeps through `configure_sweep` +
-  `run_sweep` (one netlist per value); a `.step` line handed to `run_simulation`
-  is rejected with a pointer to `configure_sweep`.
+- No native `.step`. Run parametric sweeps as `run_experiments` `variations`
+  (one netlist per value); ngspice ignores a `.step` line in batch mode, so a
+  deck that carries one runs once at the base value with no error. The lint
+  warns (`step-ngspice`) rather than letting that pass silently.
 - `gnd` is auto-converted to ground (node `0`) by default; disable with
   `set no_auto_gnd` if you need `gnd` to be a distinct net.
 - Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
   `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
 - `.meas` is suppressed only when batch mode (`-b`) AND a command-line `-r
   rawfile` are combined — ngspice prints "No .measure possible in batch mode
-  (-b) with -r rawfile set!" (the invocation run_simulation uses). It is NOT a
+  (-b) with -r rawfile set!" (the invocation this server uses). It is NOT a
   blanket batch limitation: move the measurement into a `.control ... run ...
   .endc` block and write it as the dot-less interactive `meas` command (e.g.
   `meas tran vmax MAX V(out)` — no leading dot; a dotted `.meas` inside
@@ -856,8 +850,8 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   help here — the `-b -r` combination suppresses the measurement before any
   output routing, so no file is written.) For named signals and device
   operating-point params you usually need none of this — `.save` them and read
-  the raw back with run_simulation + export_waveform / query_value /
-  operating_point. Reserve `.control` / `wrdata` for in-engine computation you
+  the raw back with `run_experiments` plus the `waveform`, `value`, or
+  `operating_point` recipe. Reserve `.control` / `wrdata` for in-engine computation you
   genuinely can't express as a saved signal.
 
 ### Parameters and Expressions
@@ -996,10 +990,10 @@ X1 input output myfilter rval=1k cval=1n
   and the sense source a separate `.probe I(R1)` directive inserts). This server
   reads the `@r1[i]` form.
 - Saved device operating-point params (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
-  by `operating_point` in a `device_op_points` bucket (a bare `.op`), and on a
-  `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — `query_value`/
-  `signal_stats`/`export_waveform` accept `m1.gm` and resolve it to the actual
-  trace. This is the gm/ID idiom: `.dc Vg …` + `.save @m1[gm] @m1[id]`, then read
+  by the `operating_point` recipe in a `device_op_points` bucket (a bare `.op`),
+  and on a `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — the
+  `value`, `signal_stats`, and `waveform` recipes accept `m1.gm` and resolve it
+  to the actual trace. This is the gm/ID idiom: `.dc Vg …` + `.save @m1[gm] @m1[id]`, then read
   `m1.gm`/`m1.id` per sweep point.
 
 ### .control / .endc Blocks
@@ -1018,13 +1012,13 @@ wrdata output.txt V(out)          $ save as CSV-like text
 
 **Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
 default raw output, so a script that never calls `write`/`wrdata` produces no
-rawfile even though the run completes cleanly. `run_simulation` auto-injects
-a `write <rawpath>` before `.endc` when it detects this (exactly one
-`.control` block, no existing `write`/`wrdata` in the deck), so results still
-reach `get_waveform`/`signal_stats`/etc. That injected write only captures
-the current/last plot — a script running multiple analyses, or writing
-per-iteration in a Monte Carlo loop, still needs its own `write`/`wrdata`
-calls; any `write`/`wrdata` already in the script disables the auto-injection.
+rawfile even though the run completes cleanly. `run_experiments` fills that
+gap: when the deck has exactly one `.control` block and no `write`/`wrdata`
+of its own, it adds a `write <the run's raw path>` before `.endc` and says so
+in the receipt's `observations`. Your own `write` (or `wrdata`) anywhere in
+the deck turns the injection off — and you need one, per result you want
+kept, whenever the script runs several analyses or writes per iteration in a
+Monte Carlo loop: `write` captures the current plot only.
 
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.
@@ -1053,8 +1047,8 @@ C1 c 0 '{unif(1n, 0.1)}'          $ 1n, ±10% relative, uniform
 
 These are built into the numparam frontend (no build flag) but live ONLY there,
 NOT in the nutmeg/`.control` interpreter. For a distribution, re-run the deck N
-times (set `.options seed=<value>`); `run_montecarlo` automates the N-run draw +
-aggregation.
+times (set `.options seed=<value>`); a `run_experiments` random `variations`
+entry automates the N-run draw + aggregation.
 
 **(2) `.control` loop with `alter`** — vary within one ngspice invocation. Inside
 `.control` only `sgauss(0)` (Gaussian, mean 0, σ 1) and `sunif(0)` (uniform
@@ -1131,7 +1125,7 @@ Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
 | MOSFET bulk | auto-tied to source only on 3-term VDMOS symbols | required 4th terminal |
 | `GND` node | alias for `0` | auto-converted to `0` (disable: `set no_auto_gnd`) |
 | `.tran startup` | supported | not supported (no transient soft-start) |
-| Parameter sweep | `.step` | `configure_sweep`/`run_sweep` (no `.step`) |
+| Parameter sweep | `.step` | `run_experiments` `variations` (no `.step`) |
 | Monte Carlo | `.step` + `mc()` | `agauss`/`gauss`/`unif` on device values (primary); or `.control` `alter` loop |
 | Post-processing | — | `.control` scripting (`let`/`plot`/`write`/`fft`) |
 | Default saving | saves all | `.save` (one line drops defaults; `.save all` keeps) |

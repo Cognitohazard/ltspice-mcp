@@ -447,6 +447,21 @@ def _render_union(
     return lines
 
 
+def _render_arguments(model: type[BaseModel]) -> list[str]:
+    """One operation's whole argument tree.
+
+    An operation whose arguments ARE a union (``jobs``, keyed by ``action``)
+    declares its branches as ``VARIANTS``; the model itself then carries only
+    what every branch shares, and the branches are rendered after it — the
+    fields the caller actually writes live there.
+    """
+    lines = _render_model(model)
+    branches = tuple(getattr(model, "VARIANTS", ()))
+    if branches:
+        lines.extend(_render_union(branches, "the call", seen=frozenset(), depth=1, indent=0))
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # The catalogue
 # ---------------------------------------------------------------------------
@@ -563,7 +578,7 @@ def op_reference(name: str) -> str:
     """One operation's resolved argument tree and a worked example."""
     operation = _find(name)
     lines = [f"{operation.name} — {operation.summary}", "", "arguments"]
-    lines.extend(_render_model(operation.model))
+    lines.extend(_render_arguments(operation.model))
     lines.extend(["", "example", *(f"{_INDENT}{line}" for line in operation.example.splitlines())])
     lines.extend(_note_lines(operation))
     return "\n".join(lines)
@@ -608,7 +623,7 @@ def method_doc(name: str) -> str:
             f"the same text api.reference({operation.name!r}) prints.",
             "",
             "arguments",
-            *_render_model(operation.model),
+            *_render_arguments(operation.model),
             "",
             "example",
             *(f"{_INDENT}{line}" for line in operation.example.splitlines()),

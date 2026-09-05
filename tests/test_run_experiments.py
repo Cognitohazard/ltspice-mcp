@@ -8,6 +8,7 @@ import dataclasses
 import itertools
 import json
 import re
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -75,9 +76,15 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
         run_schema["properties"]["execution"],
     )
     jobs_schema = _build_input_schema(JobsInput)
+    # The dwell cap lives on the action that takes it, so it is read through
+    # that action's branch rather than off a flat property list.
+    wait_branch = resolve_local_ref(
+        jobs_schema,
+        {"$ref": jobs_schema["discriminator"]["mapping"]["wait"]},
+    )
 
     assert execution_schema["properties"]["wait_s"]["maximum"] == 120
-    assert jobs_schema["properties"]["timeout_s"]["maximum"] == 300
+    assert wait_branch["properties"]["timeout_s"]["maximum"] == 300
 
     with pytest.raises(ValidationError) as excinfo:
         experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})
@@ -87,7 +94,7 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():
-    """Schemas keep $defs (followups item 30): the assign/random discriminated
+    """Schemas keep $defs instead of inlining: the assign/random discriminated
     union must stay fully resolvable through local refs, so a client sees the
     same composition contract inlining used to spell out."""
     schema = _build_input_schema(RunExperimentsInput)
@@ -315,9 +322,10 @@ class TestReceiptThenDwell:
     ):
         """Submission is irreversible, so a later failure cannot say nothing started.
 
-        The fleet is running by then and the job_id plus control_token are the
-        only handles that reach it; reporting not_started with a null job_id
-        leaves the caller no way to poll or cancel real simulator work.
+        The simulator runs are under way by then and the job_id plus
+        control_token are the only handles that reach them; reporting
+        not_started with a null job_id leaves the caller no way to poll or
+        cancel real simulator work.
         """
         callbacks = {}
 
@@ -799,6 +807,65 @@ class TestOptionalRequestId:
     def test_explicit_request_id_is_preserved(self, work_dir: Path):
         assert _args(work_dir / "a.cir", "chosen-id").request_id == "chosen-id"
 
+    def test_an_attached_analysis_hashes_the_recipes_the_caller_sent(self):
+        """The durable idempotency key over a request carrying recipes.
+
+        Typing `analyze.recipes` as the recipe union put a model annotation
+        where plain dicts had been, and the fingerprint is a hash of the
+        serialized request: had that serialization started filling in recipe
+        defaults or reordering keys, every stored request index would point at
+        a fingerprint no retry could reproduce, and every replay would come
+        back a conflict. The value below was taken before the change.
+        """
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "fingerprint-pin",
+                "circuits": [{"path": "dut.cir"}],
+                "variations": [{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+                "analyze": {
+                    "recipes": [
+                        {
+                            "key": "pm",
+                            "metric": "stability",
+                            "signal": "V(out)",
+                            "reduce": ["min"],
+                        },
+                        {"key": "vout", "metric": "summary"},
+                    ],
+                    "group_by": ["R1"],
+                    "include": {"per_run": {"limit": 7}, "fields": ["case_id"]},
+                },
+            }
+        )
+
+        assert args.strip_presentation()["analyze"]["recipes"] == [
+            {"key": "pm", "metric": "stability", "signal": "V(out)", "reduce": ["min"]},
+            {"key": "vout", "metric": "summary"},
+        ]
+        assert (
+            canonical_fingerprint(args)
+            == "88b63d15157c94a95b7ffb8cbd37b5b7e766fb0db37a88c44af3af774ccf3167"
+        )
+
+    def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
+        """Every submission dumps this block twice — for the fingerprint and
+        for the persisted request. The declared union would make pydantic warn
+        on each of those dumps about the plain dicts skipped validation left
+        behind, so the block serializes them itself."""
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "serializer-quiet",
+                "circuits": [{"path": "dut.cir"}],
+                "analyze": {"recipes": [{"key": "vout", "metric": "summary"}]},
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            args.strip_presentation()
+            args.model_dump(mode="json")
+
     @pytest.mark.asyncio
     async def test_omitted_id_runs_echoes_and_stays_durable(
         self,
@@ -1125,6 +1192,42 @@ class TestLintModes:
         assert any(
             finding["rule_id"] == "suffix-mega-milli" for finding in data["lint"][0]["findings"]
         )
+
+    async def test_a_step_deck_on_ngspice_is_told_the_sweep_will_not_happen(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ngspice ignores .step in batch mode and reports no error, so the run
+        comes back complete having swept nothing. The default lint mode has to
+        say so — this is the deck's only warning that the answer is one point,
+        not a curve."""
+        from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+        state_with_sim.available_simulators["ngspice"] = NGspiceSimulator
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "stepped.cir",
+            "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
+        )
+
+        result = await handle_run_experiments(
+            _args(
+                deck,
+                "ngspice-step",
+                execution={"wait_s": 1.0, "simulator": "ngspice"},
+            ),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert len(submissions) == 1
+        finding = next(
+            item for item in data["lint"][0]["findings"] if item["rule_id"] == "step-ngspice"
+        )
+        assert "variations" in finding["evidence"]["reason"]
 
     async def test_block_resolves_models_through_staged_includes(
         self,
@@ -2219,10 +2322,9 @@ class TestVariationsReachIntoIncludes:
 class TestReceiptWeight:
     """A receipt carries what the caller acts on; provenance is opt-in.
 
-    Provenance was measured at 29% of an experiment receipt's bytes on a real
-    fleet run — absolute paths repeated four ways and a digest per staged file,
-    none of which a caller opens, because the analysis tools address runs by
-    job_id.
+    Provenance was 29% of the bytes in one measured experiment receipt —
+    absolute paths repeated four ways and a digest per staged file, none of
+    which a caller opens, because the analysis tools address runs by job_id.
     """
 
     async def test_provenance_is_absent_by_default_and_returned_on_request(

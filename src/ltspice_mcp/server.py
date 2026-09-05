@@ -239,9 +239,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         )
 
         if state.diagnostics:
-            logger.warning(
-                "Startup diagnostics (also surfaced via an inspect capabilities query):"
-            )
+            logger.warning("Startup diagnostics:")
             for diag in state.diagnostics:
                 logger.warning(f"  - {diag}")
 
@@ -276,11 +274,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # prefix: Claude Code silently truncates server instructions at 2048 chars,
 # and the tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
-For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics. Author .cir/.net/.sp decks with your own file tools; this consolidated profile's six tools run, analyze, gate, and edit .asc geometry-aware. Routing: run quick one-off ngspice yourself and bring the .raw — analyze_results raw_path parses runs this server never executed (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts). run_experiments earns its keep on LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
+For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics. Author .cir/.net/.sp decks with your own file tools; the six tools below run, analyze, gate, and edit .asc geometry-aware, and plot_waveform draws. Routing: run quick one-off ngspice yourself and bring the .raw — analyze_results raw_path parses runs this server never executed (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts). run_experiments earns its keep on LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
 Simulate, don't deliberate: runs are cheap — spot-check instead of reasoning it out.
 
-EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); required request_id = durable, idempotent submission; quick jobs return inline, longer a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api — the same ops in-process.
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id — pass your own for a durable, idempotent submission; quick jobs return inline, longer a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api — the same ops in-process.
 
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continuable via result_set_id + cursor. inspect: read-only — capabilities, symbols, net trace, components, models.
 

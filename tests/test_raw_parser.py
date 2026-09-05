@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 import numpy as np
 import pytest
 from spicelib import RawRead
 
+from ltspice_mcp.lib import raw_parser
 from ltspice_mcp.lib.raw_parser import (
     extract_operating_point,
     nearest_index,
@@ -300,3 +302,170 @@ class TestMultiPlotNoiseRaw:
         assert not t.is_alive(), "parsing the two-plot noise raw hung (guard regressed)"
         assert result["plots"] == 2  # both plots preserved, not just the first
         assert "onoise_spectrum" in result["traces"]
+
+
+class TestSummarySurfacesParserFaults:
+    """A parser that raises must leave a fact behind, not just a missing key.
+
+    Every field below is optional on the wire, so an exception used to produce
+    exactly the same summary as a run that legitimately had nothing to report:
+    no measurements, no errors, no Fourier block, and no way for the consumer
+    to tell the two apart.
+    """
+
+    @staticmethod
+    def _tran_fixture() -> tuple[RawRead, Path]:
+        from tests.conftest import FIXTURES_DIR
+
+        raw = RawRead(
+            str(FIXTURES_DIR / "ltspice_tran_rc.raw"), traces_to_read="*", dialect="ltspice"
+        )
+        return raw, FIXTURES_DIR / "ltspice_tran_rc.log"
+
+    @staticmethod
+    def _raiser(exc: Exception):
+        def boom(*args, **kwargs):
+            raise exc
+
+        return boom
+
+    def test_the_fixture_reports_these_fields_when_nothing_raises(self):
+        """Baseline: the fields the fault tests remove are really there."""
+        raw, log = self._tran_fixture()
+        summary = raw_parser.build_simulation_summary(raw, log)
+        assert "vfinal" in {k.lower() for k in summary["measurements"]}
+        assert summary.get("warnings") is None
+
+    def test_measurement_parse_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
+        raw, log = self._tran_fixture()
+        monkeypatch.setattr(
+            raw_parser, "parse_measurements", self._raiser(ValueError("bad measure block"))
+        )
+        summary = raw_parser.build_simulation_summary(raw, log)
+        assert "measurements" not in summary
+        joined = " ".join(summary["warnings"])
+        assert "measurements" in joined
+        assert "ValueError" in joined
+        assert "bad measure block" in joined
+
+    def test_log_diagnostics_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
+        """The diagnostics channel itself: no errors list must not be able to
+        mean "the error scan crashed"."""
+        raw, log = self._tran_fixture()
+        monkeypatch.setattr(
+            raw_parser, "extract_log_diagnostics", self._raiser(RuntimeError("walker died"))
+        )
+        summary = raw_parser.build_simulation_summary(raw, log)
+        assert "errors" not in summary
+        joined = " ".join(summary["warnings"])
+        assert "log diagnostics" in joined
+        assert "RuntimeError" in joined
+        assert "walker died" in joined
+
+    def test_fourier_parse_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
+        raw, log = self._tran_fixture()
+        monkeypatch.setattr(raw_parser, "parse_fourier_data", self._raiser(KeyError("harmonics")))
+        summary = raw_parser.build_simulation_summary(raw, log)
+        assert "fourier" not in summary
+        joined = " ".join(summary["warnings"])
+        assert "fourier" in joined
+        assert "KeyError" in joined
+
+    def test_unreadable_log_names_both_fields_it_costs(self, monkeypatch: pytest.MonkeyPatch):
+        """A log no reader can open costs measurements AND Fourier data."""
+        from ltspice_mcp.errors import ResultError
+        from ltspice_mcp.lib import log_parser
+
+        raw, log = self._tran_fixture()
+        monkeypatch.setattr(
+            log_parser, "make_log_reader", self._raiser(ResultError("Could not parse log file"))
+        )
+        summary = raw_parser.build_simulation_summary(raw, log)
+        assert "measurements" not in summary
+        assert "fourier" not in summary
+        joined = " ".join(summary["warnings"])
+        assert "measurements and fourier" in joined
+        assert "ResultError" in joined
+
+    def test_an_axis_read_fault_is_named_but_an_axis_less_raw_is_not(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The two reasons for a missing range are different facts.
+
+        A stepped ``.op`` raw has no axis at all — spicelib says so with a
+        RuntimeError, and that is the documented degenerate shape, not a
+        problem. Any other read fault means the range is missing because the
+        file could not be read, which the caller should be told."""
+        from spicelib.raw.raw_classes import SpiceReadException
+
+        raw, log = self._tran_fixture()
+        monkeypatch.setattr(
+            raw, "get_axis", self._raiser(RuntimeError("This RAW file does not have an axis."))
+        )
+        quiet = raw_parser.build_simulation_summary(raw, log)
+        assert quiet["range"] == {}
+        assert not [w for w in (quiet.get("warnings") or []) if "axis" in w]
+
+        raw2, log2 = self._tran_fixture()
+        monkeypatch.setattr(
+            raw2, "get_axis", self._raiser(SpiceReadException("Not enough data in the binary"))
+        )
+        loud = raw_parser.build_simulation_summary(raw2, log2)
+        assert loud["range"] == {}
+        joined = " ".join(loud["warnings"])
+        assert "axis" in joined
+        assert "SpiceReadException" in joined
+
+    def test_a_trace_the_value_scan_cannot_read_is_reported(self, monkeypatch: pytest.MonkeyPatch):
+        """A narrowed scan must not look like a complete one."""
+        raw, log = self._tran_fixture()
+        real_get_wave = raw.get_wave
+
+        def refuse_one(trace, step=0):
+            if str(trace).lower() == "v(out)":
+                raise IndexError(f'does not contain trace "{trace}"')
+            return real_get_wave(trace, step)
+
+        monkeypatch.setattr(raw, "get_wave", refuse_one)
+        summary = raw_parser.build_simulation_summary(raw, log, value_scan="scan")
+        joined = " ".join(summary["warnings"])
+        assert "value scan" in joined
+        assert "V(out)" in joined
+
+
+class TestAcBandwidthMetricsSurfaceFaults:
+    """``bandwidth_3db``/``unity_gain_freq`` are None both when the response has
+    no such crossing and when computing it raised. Only the second is a fact
+    the caller can act on, so it gets said."""
+
+    @staticmethod
+    def _ac_raw() -> RawRead:
+        from tests.conftest import FIXTURES_DIR
+
+        return RawRead(
+            str(FIXTURES_DIR / "ltspice_ac_rc.raw"), traces_to_read="*", dialect="ltspice"
+        )
+
+    def test_unity_gain_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
+        from ltspice_mcp.lib import ac_analysis
+
+        def boom(*args, **kwargs):
+            raise ZeroDivisionError("empty sweep")
+
+        monkeypatch.setattr(ac_analysis, "compute_stability_metrics", boom)
+        metrics = raw_parser.compute_ac_bandwidth_metrics(self._ac_raw(), "V(out)")
+        assert metrics["unity_gain_freq"] is None
+        joined = " ".join(metrics["warnings"])
+        assert "unity_gain_freq" in joined
+        assert "ZeroDivisionError" in joined
+
+    def test_a_missing_trace_names_the_trace(self):
+        metrics = raw_parser.compute_ac_bandwidth_metrics(self._ac_raw(), "V(nope)")
+        assert metrics["bandwidth_3db"] is None
+        assert metrics["unity_gain_freq"] is None
+        assert "V(nope)" in " ".join(metrics["warnings"])
+
+    def test_a_clean_run_carries_no_warnings_key(self):
+        metrics = raw_parser.compute_ac_bandwidth_metrics(self._ac_raw(), "V(out)")
+        assert "warnings" not in metrics
+        assert metrics["bandwidth_3db"] is not None

@@ -38,12 +38,14 @@ from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raster import RenderedImage, render_image
-from ltspice_mcp.lib.runner_base import NGSPICE_CONTROL_WRITE_MARKER
 
-# Re-exported, not defined here: the logopinfo injection lives in the runner
-# layer so the experiment coordinator (lib/) can call it without importing
-# tools/, and the tool handlers keep reaching it through this module as before.
+# Re-exported, not defined here: both netlist injections live in the runner
+# layer so the experiment coordinator (lib/) can call them without importing
+# tools/, and the tool handlers keep reaching them through this module as before.
 from ltspice_mcp.lib.runner_base import inject_logopinfo as inject_logopinfo
+from ltspice_mcp.lib.runner_base import (
+    inject_ngspice_control_write as inject_ngspice_control_write,
+)
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import no_simulator_message, simulator_library_roots
@@ -128,7 +130,7 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
     NaN/Inf are not JSON: pydantic silently serializes them as null on the
     wire while the text channel prints "nan" — the two channels contradict
     each other exactly on degenerate results. Per the emit-a-null-over-a-
-    meaningless-number doctrine (lib/result_observations.py), substitute null
+    meaningless-number rule (lib/result_observations.py), substitute null
     OURSELVES and say so, naming the affected keys, so the substitution is a
     surfaced fact instead of a serializer accident.
     """
@@ -251,7 +253,7 @@ FORMAT_DESCRIPTION = (
 # contract). Sites needing a custom description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
-# Free-text measurement caveats (see the observations-vs-warnings doctrine in
+# Free-text measurement caveats (see the observations-vs-warnings rule in
 # lib/result_observations.py).
 WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 
@@ -471,7 +473,16 @@ RO_ANNOTATIONS = types.ToolAnnotations(
 class ToolInput(StrictModel):
     """Base for top-level tool input models registered via @registry.tool(input_model=...)."""
 
-    pass
+    @classmethod
+    def wire_input_schema(cls) -> dict[str, Any]:
+        """The JSON Schema this tool advertises, before the shrinking passes.
+
+        The model's own schema, except for a tool whose arguments are a
+        top-level union: pydantic emits a bare ``oneOf`` for one of those, and
+        MCP requires an object schema at the top level. Such a model overrides
+        this to wrap its branches; ``_build_input_schema`` calls it either way.
+        """
+        return cls.model_json_schema()
 
 
 @dataclass(frozen=True)
@@ -726,12 +737,52 @@ def _hoist_shared_fragments(schema: dict[str, Any]) -> dict[str, Any]:
     return rewritten
 
 
+def _referenced_defs(node: Any) -> set[str]:
+    """Every ``#/$defs/<name>`` this node names, at any depth."""
+    if isinstance(node, list):
+        return {name for item in node for name in _referenced_defs(item)}
+    if not isinstance(node, dict):
+        return set()
+    found: set[str] = set()
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        found.add(ref.split("/")[-1])
+    for value in node.values():
+        found |= _referenced_defs(value)
+    return found
+
+
+def prune_unreferenced_defs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop the ``$defs`` entries nothing in the schema body reaches.
+
+    A tool that advertises a compact stand-in for one sub-schema orphans
+    whatever only the replaced shape referenced. An orphan is pure weight on
+    the wire — every client downloads it and no ``$ref`` leads to it — so it
+    goes. Reachability is transitive: a definition kept alive only by another
+    orphan is an orphan too.
+    """
+    defs = schema.get("$defs")
+    if not isinstance(defs, dict):
+        return schema
+    body = {key: value for key, value in schema.items() if key != "$defs"}
+    reachable: set[str] = set()
+    frontier = _referenced_defs(body)
+    while frontier:
+        name = frontier.pop()
+        if name in reachable or name not in defs:
+            continue
+        reachable.add(name)
+        frontier |= _referenced_defs(defs[name])
+    kept = {name: body_ for name, body_ in defs.items() if name in reachable}
+    return {**body, "$defs": kept} if kept else body
+
+
 def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     """Generate a cleaned MCP-ready JSON schema from a Pydantic model.
 
     ``$defs`` are kept as Pydantic emits them, not inlined: a shared submodel
     appears once and every use site is a ``$ref``, which measured 21% smaller
-    on the consolidated surface (followups item 30). Every ref is internal to
+    on the consolidated surface. Every ref is internal to
     the one schema document, so any conformant client resolves it locally.
 
     Two further passes shrink the *advertised* shape only — the Pydantic model
@@ -745,7 +796,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     seven shared fields. ``tests/test_consolidated_contracts.py`` pins the
     resulting size per tool.
     """
-    schema = _strip_titles(input_model.model_json_schema())
+    schema = _strip_titles(input_model.wire_input_schema())
     return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 
@@ -761,7 +812,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
 # class: the lean wire lost nothing and cost 15% less. Names, structure,
 # enums, and defaults always stay; the full text remains on the registered
 # definition and the models, so api.reference() and spice://guide carry the
-# depth. The fleet harness's schema-prune tooling mirrors this pattern —
+# depth. The benchmark harness's schema-prune tooling mirrors this pattern —
 # keep them in step if either changes.
 _WIRE_PROSE_KEEP = re.compile(
     r"(dB|degrees?|unwrapp?ed|percent|fraction|volts?|seconds?|hertz|Hz|µm|"
@@ -977,7 +1028,7 @@ def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
 def _stamp_output_schema(fn: Callable, schema: dict[str, Any]) -> None:
     """Stamp a handler's structuredContent contract onto the handler itself.
 
-    The single choke point for the "contract belongs to the handler" doctrine:
+    The single choke point for the "contract belongs to the handler" rule:
     both ``@registry.tool`` and ``declare_output_schema`` stamp through here.
     Written via ``__dict__`` because a plain attribute assignment on a function
     is a pyright error, and ruff auto-rewrites ``setattr()`` back into one.
@@ -1085,19 +1136,21 @@ class ToolRegistry:
         tool_defs: list[types.Tool] = []
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
-            # The ADVERTISED definition serves semantics-only prose (any
-            # description string carrying no load-bearing marker — see
-            # _WIRE_PROSE_KEEP — is dropped from the wire copy) and no
+            # The ADVERTISED definition keeps the tool's own description
+            # verbatim — it is the only prose a client that does not show
+            # server instructions ever sees for the tool — but serves
+            # semantics-only FIELD prose (a property description with no
+            # load-bearing marker, see _WIRE_PROSE_KEEP, is dropped) and no
             # outputSchema (it was the single largest schema block, 84% of
             # `jobs`, -35% across the surface; return shapes are learned from
             # responses instead). The registered definition — the dispatch
             # side, what the doc gates scan and the conformance hook validates
-            # emissions against — keeps the full text and the schema, and so do
-            # the models behind api.reference() and spice://guide, which is
-            # where a caller reads the depth.
+            # emissions against — keeps the full schema, and so do the models
+            # behind api.reference() and spice://guide, which is where a caller
+            # reads the depth.
             definition = registered.definition.model_copy(
                 update={
-                    "description": _keep_wire_prose(registered.definition.description),
+                    "description": registered.definition.description,
                     "inputSchema": _strip_wire_prose(registered.definition.inputSchema),
                     "outputSchema": None,
                 }
@@ -1231,7 +1284,7 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     — doing that unasked would silently answer a different question.
 
     Only the four consolidated tools that advertise ``budget`` consult this, so
-    the default reaches exactly the surface it was ruled for; ``0`` disables it
+    the default reaches exactly the surface it was designed for; ``0`` disables it
     and restores the fully undegraded default response.
 
     The API's automatic door gets no default at all. That door promises complete
@@ -1274,8 +1327,8 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
         if sim_cls is None:
             raise SimulationError(
                 f"Simulator '{requested}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}). server_status "
-                "lists the detected simulators.",
+                f"(detected: {list(state.available_simulators)}). "
+                "inspect(kind='capabilities') lists the detected simulators.",
                 show_hint=False,
             )
         return sim_cls
@@ -1464,134 +1517,6 @@ def _stage_deck_snapshot(net_path: Path) -> Path:
     if not snapshot.exists():
         atomic_write_bytes(snapshot, data, durable=False)
     return snapshot
-
-
-# A ``.control``...``.endc`` block, case-insensitive. Group 1 is the body —
-# everything between the ``.control`` line and the ``.endc`` line — so
-# ``match.end(1)`` is exactly where the ``.endc`` line begins (the fallback
-# insertion point when the block has no ``quit``/``exit``).
-_RE_CONTROL_BLOCK = re.compile(rb"(?ims)^[ \t]*\.control\b[^\n]*\n(.*?)^[ \t]*\.endc\b[^\n]*$")
-# A ``write``/``wrdata`` command starting a line, anywhere in the deck — not
-# just inside the block, since a script could call either from a subckt or a
-# second block this pass doesn't otherwise recognize.
-_RE_EXISTING_WRITE = re.compile(rb"(?im)^[ \t]*(?:write|wrdata)\b")
-# ``quit``/``exit`` end control-script execution; a command placed after one
-# would never run, so the injected ``write`` must land before the LAST one.
-_RE_QUIT_EXIT = re.compile(rb"(?im)^[ \t]*(?:quit|exit)\b.*$")
-# A tail (from just after a quit/exit line to the block's .endc) that is only
-# blank lines and ``*`` comments — i.e. the quit/exit was the block's LAST
-# statement. Used to tell a script-ending trailing quit from one nested in an
-# if/while (which must NOT anchor the injected write, or it lands inside that
-# conditional and never runs on the success path).
-_RE_TRIVIAL_TAIL = re.compile(rb"(?m)\A(?:[ \t]*(?:\*.*)?(?:\n|\Z))*\Z")
-
-
-def inject_ngspice_control_write(
-    netlist_path: Path, simulator: type, job_id: str, output_folder: Path
-) -> Path:
-    """Return a runnable netlist with a ``write`` injected into its
-    ``.control`` block, for ngspice decks that drive their own analyses via
-    scripting.
-
-    This is ngspice runtime behavior, not a spicelib bug: a ``.control``
-    block replaces the raw ngspice would otherwise write from the ``-r
-    <rawfile>`` switch spicelib always passes — the script runs instead, and
-    unless it calls ``write``/``wrdata`` itself, no raw file is ever
-    produced. ``collect_run_outcome`` already classifies that as a clean
-    log-only completion (not a failure), but nothing then exists for
-    get_waveform/signal_stats/etc. to read. Injecting a canonical ``write
-    <rawpath>`` gives the deck a raw at the exact path the runner expects for
-    this job, so the existing raw>0 code path (raw_parser + every analysis
-    tool) picks it up unchanged — no new parser, no new tool.
-
-    Limitation: a bare ``write`` captures ngspice's current/last plot only. A
-    script that runs multiple analyses, or writes per Monte-Carlo iteration
-    inside a loop, needs its own explicit writes to capture each one — guard
-    (c) below leaves any deck that already writes its own output alone
-    rather than duplicating or fighting it. A second, unrelated limitation:
-    ngspice's ``write`` parser cannot handle a target containing whitespace
-    at all — neither quoting nor backslash-escaping works, both fail with
-    "No such file or directory" (verified empirically). So a run whose
-    output folder path contains a space can't get an auto-injected write
-    either (guard (d)) — that run just stays log-only, same as today.
-
-    Guards (all required, or the original path is returned unchanged):
-    (a) ngspice only (LTspice has no ``.control``; ``inject_logopinfo``
-        covers its own op-point injection separately).
-    (b) exactly one ``.control``...``.endc`` block (ambiguous otherwise —
-        e.g. which block's last analysis is "the" result).
-    (c) no existing ``write``/``wrdata`` anywhere in the deck — never
-        override a user who already captures their own output.
-    (d) the write target has no whitespace (see the limitation above).
-
-    The ``write`` target is the ABSOLUTE path ``{output_folder}/{job_id}.raw``
-    — the same path spicelib's own (suppressed) ``-r`` would use, since it
-    derives the rawfile from the staged netlist's own path via
-    ``.with_suffix('.raw')``. It must be absolute: the runner's SimRunner
-    passes no ``cwd``, so ngspice inherits the MCP server's own working
-    directory, not the output folder — a relative ``write`` target would land
-    there instead. Written UNQUOTED — see the whitespace limitation above.
-    Inserted before the block's LAST ``quit``/``exit`` (if any) so it
-    actually runs — those commands end script execution, so a ``write``
-    placed after one would never fire; otherwise inserted just before
-    ``.endc``.
-
-    Same per-job sibling-file technique as ``runner_base.inject_logopinfo``
-    (see its docstring): append-only into a leading-dot, ``job_id``-stamped copy so
-    the user's deck is never touched and relative ``.include``/``.lib``
-    paths still resolve. Returns the original path when injection doesn't
-    apply or the sibling can't be written.
-
-    Scope: single runs only. A sweep/Monte-Carlo batch's per-sub-run raw
-    naming isn't static the way a one-shot job's is, so this is not wired
-    into those batch paths.
-    """
-    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
-
-    if not (isinstance(simulator, type) and issubclass(simulator, NGspiceSimulator)):
-        return netlist_path
-    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
-        return netlist_path
-    try:
-        data = netlist_path.read_bytes()
-    except OSError:
-        return netlist_path
-
-    if _RE_EXISTING_WRITE.search(data):
-        return netlist_path
-    blocks = list(_RE_CONTROL_BLOCK.finditer(data))
-    if len(blocks) != 1:
-        return netlist_path
-    block = blocks[0]
-    body_start, body_end = block.start(1), block.end(1)
-
-    raw_path = (output_folder / f"{job_id}.raw").as_posix()
-    # ngspice's `write` parser cannot handle a spaced target at all — not
-    # quoted, not escaped (verified empirically) — so a spaced output folder
-    # can't get an auto-injected write; that run just stays log-only.
-    if any(c.isspace() for c in raw_path):
-        return netlist_path
-    write_line = f"write {raw_path}\n".encode()
-
-    # Insert before .endc, UNLESS the block's last statement is an
-    # unconditional trailing quit/exit — a write after that would never run. A
-    # quit/exit nested in an if/while is not the last statement (an ``end`` and
-    # possibly more follow it), so anchoring on it is skipped: the write goes
-    # before .endc and runs on the normal path.
-    insert_at = body_end
-    quit_matches = list(_RE_QUIT_EXIT.finditer(data, body_start, body_end))
-    if quit_matches and _RE_TRIVIAL_TAIL.match(data[quit_matches[-1].end() : body_end]):
-        insert_at = quit_matches[-1].start()
-    augmented = data[:insert_at] + write_line + data[insert_at:]
-
-    run_path = netlist_path.with_name(
-        f".{netlist_path.stem}.{job_id}{NGSPICE_CONTROL_WRITE_MARKER}{netlist_path.suffix}"
-    )
-    try:
-        run_path.write_bytes(augmented)
-    except OSError:
-        return netlist_path
-    return run_path
 
 
 # ---------------------------------------------------------------------------

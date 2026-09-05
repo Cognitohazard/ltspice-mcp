@@ -13,6 +13,17 @@ ver="${1:?usage: release.sh <version>  (e.g. 0.5.1)}"
 ver="${ver#v}"  # tolerate a leading v
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Refuse to tag a dirty tree or an unwritten release note: the tag is what
+# PyPI builds from, and the changelog section is what users read for it.
+if [ -n "$(git -C "$root" status --porcelain)" ]; then
+  echo "release.sh: working tree is not clean; commit or stash first" >&2
+  exit 1
+fi
+if ! grep -qE "^## \[$ver\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" "$root/CHANGELOG.md"; then
+  echo "release.sh: CHANGELOG.md has no dated '## [$ver] - YYYY-MM-DD' section" >&2
+  exit 1
+fi
+
 # Rewrite every `"version": "..."` slot across the plugin + Desktop-extension
 # manifests (the four spots test_bundle_versions_agree pins together). sed, not
 # a JSON round-trip, so the diff is one line per slot and em dashes survive.

@@ -55,11 +55,12 @@ CONSOLIDATED_TOOLS = (
     "inspect",
 )
 
-# The advertised surface: the six plus the plot widget, which is registered by
-# ruling but predates the envelope — it joins surface-wide checks (size pins,
-# completeness) and stays out of the envelope contract matrix. Membership is
-# pinned BY NAME, never derived from schema shape: a tool that lost its
-# envelope marker must fail a contract test, not silently reclassify.
+# The advertised surface: the six plus the plot widget, which is deliberately
+# kept on the surface even though it predates the envelope — it joins
+# surface-wide checks (size pins, completeness) and stays out of the envelope
+# contract matrix. Membership is pinned BY NAME, never derived from schema
+# shape: a tool that lost its envelope marker must fail a contract test, not
+# silently reclassify.
 REGISTERED_TOOLS = (*CONSOLIDATED_TOOLS, "plot_waveform")
 
 # Every tool name removed in 0.6.0 when the consolidated profile became the
@@ -254,9 +255,9 @@ def recorded_fixture_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
 def resolve_local_ref(schema: dict, node: dict) -> dict:
     """Follow a local ``$ref`` (possibly allOf-wrapped) into ``schema['$defs']``.
 
-    Input schemas keep ``$defs`` instead of inlining (followups item 30);
-    contract tests that assert on a nested submodel's shape resolve it the
-    way a conformant client would.
+    Input schemas keep ``$defs`` instead of inlining them; contract tests that
+    assert on a nested submodel's shape resolve it the way a conformant client
+    would.
     """
     while True:
         if "$ref" in node:

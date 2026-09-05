@@ -75,7 +75,8 @@ class SessionState:
         runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
         tool_defs / tool_dispatch / field_owners: Profile-filtered MCP tool exposure
-        sweep_configs / mc_configs: Saved configs keyed by config_id
+        sweep_configs / mc_configs: Sweep and Monte Carlo run configurations
+            held for the session, keyed by config_id
         job_registry: Owns the union job store + disk persistence
     """
 
@@ -90,8 +91,9 @@ class SessionState:
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
-    auto-detection). Surfaced via ``server_status`` so silent degradation is
-    visible to the client instead of buried in the server log."""
+    auto-detection). Logged at startup and carried verbatim on the ``inspect``
+    capabilities payload, which is where a client can see the degradation —
+    the log itself reaches nobody but whoever started the server."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
@@ -163,7 +165,7 @@ class SessionState:
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session for ``server_status`` to surface.
+        on the session and logged at startup.
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
 

@@ -150,6 +150,16 @@ class NetlistGraphError(ValueError):
         super().__init__(" ".join(parts))
 
 
+class PortArityMismatch(NetlistGraphError):
+    """A subcircuit instance connects a different node count than it declares.
+
+    Its own type so the comparison path can recover from exactly this fault —
+    re-flattening the offending instances as black boxes — while every other
+    flattening failure still aborts. Matching on the message text instead meant
+    a reworded sentence would silently abort a comparison that used to succeed.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Graph model
 # ---------------------------------------------------------------------------
@@ -734,8 +744,8 @@ def _follow_include(
     path = resolve_reference(base_dir, target)
     if include_resolver is not None:
         # Gate the open BEFORE any read: a denied include contributes nothing and
-        # its bytes are never touched (the sandbox property U6/the tool layer
-        # relies on). The resolver may also redirect to a canonical safe path.
+        # its bytes are never touched — the sandbox property the tool layer
+        # relies on. The resolver may also redirect to a canonical safe path.
         approved = include_resolver(path)
         if approved is None:
             registry.missing.append(MissingInclude(target, "path denied by include resolver"))
@@ -876,7 +886,7 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     if len(comp.nodes) != len(sub.ports):
-        raise NetlistGraphError(
+        raise PortArityMismatch(
             f"port-arity mismatch: instance {comp.ref} connects {len(comp.nodes)} node(s) "
             f"but .SUBCKT {sub.name} declares {len(sub.ports)} port(s)",
             line=comp.line,
@@ -1056,9 +1066,7 @@ def _coerce_capturing_arity(src: NetlistGraph | str | Path) -> _FlattenOutcome:
     graph = src if isinstance(src, NetlistGraph) else parse_netlist_graph(src)
     try:
         return _FlattenOutcome(flat=flatten_graph(graph), arity_errors=[], graph=graph)
-    except NetlistGraphError as exc:
-        if "port-arity mismatch" not in str(exc):
-            raise
+    except PortArityMismatch:
         # Re-flatten skipping the offending instances so the rest still compares.
         flat, arity = _flatten_lenient(graph)
         return _FlattenOutcome(flat=flat, arity_errors=arity, graph=graph)
