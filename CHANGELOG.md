@@ -74,6 +74,13 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- `analyze_results` computes every recipe through one numeric function per
+  metric (`ltspice_mcp.lib.metrics`) that takes the result source as an
+  argument. It used to reach its numbers by calling the removed 0.5 tool
+  handlers and unwrapping their responses, with the file to read passed
+  through a task-local that overrode the argument. Results are identical (the
+  recorded fixtures pin them); the last retained 0.5 handlers are deleted.
+
 - `edit_schematic` takes the same `render` policy object `verify_circuit`
   takes (`format`, `scale`, `max_pixels`, or `render: true`) and a `compare`
   object (`reference`, `anchors`, `rtol`) instead of its own flat spellings.
