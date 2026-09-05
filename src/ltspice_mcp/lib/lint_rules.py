@@ -23,7 +23,7 @@ from ltspice_mcp.lib.spice_validator import PROBE_REF_RE, validate_netlist_arity
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "1"
+linter_version = "2"
 
 _SIGNAL_RE = PROBE_REF_RE
 _MILLI_SUFFIX_RE = re.compile(
