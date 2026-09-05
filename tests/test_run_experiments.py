@@ -26,16 +26,19 @@ from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
+from ltspice_mcp.tools import receipts as receipts_mod
 from ltspice_mcp.tools._schema import _build_input_schema
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput
 from ltspice_mcp.tools.experiments import (
-    RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     AnalysisPerRun,
-    JobsInput,
     RunExperimentsInput,
-    handle_jobs,
     handle_run_experiments,
 )
+from ltspice_mcp.tools.jobs import (
+    JobsInput,
+    handle_jobs,
+)
+from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests.conftest import (
     fake_simulator,
     recorded_fixture_simulator,
@@ -620,10 +623,10 @@ class TestLeanReceipt:
     ):
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / f"{request_id}.cir")
-        captured: list[experiments_mod.ReceiptSnapshot] = []
+        captured: list[receipts_mod.ReceiptSnapshot] = []
         snapshot_receipt = experiments_mod.snapshot_receipt
 
-        def capture_snapshot(*args: Any, **kwargs: Any) -> experiments_mod.ReceiptSnapshot:
+        def capture_snapshot(*args: Any, **kwargs: Any) -> receipts_mod.ReceiptSnapshot:
             snapshot = snapshot_receipt(*args, **kwargs)
             captured.append(snapshot)
             return snapshot
@@ -643,7 +646,7 @@ class TestLeanReceipt:
         )
 
         (snapshot,) = captured
-        expected = experiments_mod.project_receipt_runs(
+        expected = receipts_mod.project_receipt_runs(
             snapshot,
             run_fields,
             lean_default=True,
@@ -1892,7 +1895,7 @@ class TestAttachedAnalysis:
             response_budget.RUNG_TRIM,
             budget=10_000,
             measured=0,
-            reserve=experiments_mod._RUN_BUDGET_NOTES.reserve,
+            reserve=receipts_mod._RUN_BUDGET_NOTES.reserve,
         )
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
         manual_snapshot = experiments_mod.snapshot_receipt(
@@ -1906,7 +1909,7 @@ class TestAttachedAnalysis:
                 control_token=job.control_token,
             )
         )
-        experiments_mod._degrade_receipt(trim_view, trim_rung)
+        receipts_mod._degrade_receipt(trim_view, trim_rung)
         answer_view = experiments_mod.finalize_receipt(
             experiments_mod.render_receipt_snapshot(
                 manual_snapshot,
@@ -1914,7 +1917,7 @@ class TestAttachedAnalysis:
                 analysis_answer_channel=True,
             )
         )
-        experiments_mod._degrade_receipt(answer_view, answer_rung)
+        receipts_mod._degrade_receipt(answer_view, answer_rung)
         trim_size = response_budget.estimate_tokens(trim_view)
         answer_size = response_budget.estimate_tokens(answer_view)
         assert answer_size < trim_size
@@ -1923,11 +1926,9 @@ class TestAttachedAnalysis:
         # budget a third of the rung gap above the measured answer size —
         # still below trim — instead of exactly at it.
         budget = (
-            answer_size
-            + (trim_size - answer_size) // 3
-            + experiments_mod._RUN_BUDGET_NOTES.reserve
+            answer_size + (trim_size - answer_size) // 3 + receipts_mod._RUN_BUDGET_NOTES.reserve
         )
-        assert trim_size > budget - experiments_mod._RUN_BUDGET_NOTES.reserve
+        assert trim_size > budget - receipts_mod._RUN_BUDGET_NOTES.reserve
         answer = _assert_schema(
             await handle_run_experiments(
                 request.model_copy(update={"budget": budget}),
@@ -2678,7 +2679,7 @@ class TestReceiptWeight:
             manifest=[ordinary, anomalous],
         )
 
-        lean = experiments_mod._source_payload(record, provenance=False)
+        lean = receipts_mod._source_payload(record, provenance=False)
 
         kept = [entry["path"] for entry in lean.get("manifest", [])]
         assert str(anomalous.path) in kept, "an unexplained un-staged entry must survive"

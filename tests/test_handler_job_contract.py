@@ -23,7 +23,10 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.state import TERMINAL_STATUSES, SessionState
-from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+from ltspice_mcp.tools.jobs import (
+    JobsInput,
+    handle_jobs,
+)
 
 pytestmark = pytest.mark.asyncio
 

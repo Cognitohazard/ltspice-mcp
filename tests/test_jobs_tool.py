@@ -27,14 +27,18 @@ from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._schema import _build_input_schema
 from ltspice_mcp.tools.experiments import (
+    RunExperimentsInput,
+    handle_run_experiments,
+)
+from ltspice_mcp.tools.jobs import (
     _RECENT_JOBS_CAP,
     JOBS_ACTIONS,
     JOBS_OUTPUT_SCHEMA,
-    RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     JobsInput,
-    RunExperimentsInput,
     handle_jobs,
-    handle_run_experiments,
+)
+from ltspice_mcp.tools.receipts import (
+    RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     progress_from_completeness,
     project_receipt_runs,
     render_receipt_snapshot,
@@ -994,7 +998,7 @@ class TestWait:
         assert stale is not None
         foreign_state.all_jobs[stale.job_id] = stale
         monkeypatch.setattr(
-            "ltspice_mcp.tools.experiments._FOREIGN_WAIT_POLL_S",
+            "ltspice_mcp.tools.jobs._FOREIGN_WAIT_POLL_S",
             0.01,
         )
 

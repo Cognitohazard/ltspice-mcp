@@ -28,7 +28,10 @@ from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
-from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+from ltspice_mcp.tools.jobs import (
+    JobsInput,
+    handle_jobs,
+)
 from tests.conftest import (
     NO_CONTRACT_DELEGATES,
     make_experiment_job,

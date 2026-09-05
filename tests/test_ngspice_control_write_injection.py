@@ -20,7 +20,10 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.tools._base import inject_ngspice_control_write
-from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+from ltspice_mcp.tools.experiments import (
+    RunExperimentsInput,
+    handle_run_experiments,
+)
 from tests.conftest import fake_simulator
 
 
