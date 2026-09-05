@@ -957,7 +957,7 @@ class ApiMethodsMixin(ABC):
         run_index: int = 0,
         case_id: str | None = None,
     ) -> dict[str, Any]:
-        """Return parsed ``.meas`` data for one legacy run or experiment case."""
+        """Return parsed ``.meas`` data for one experiment case."""
         self._check_process_and_thread()
         return self._marshal(
             load_measurement_results(

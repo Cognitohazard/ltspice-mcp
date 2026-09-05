@@ -1,20 +1,27 @@
-"""What a session puts on disk, and where.
+"""What a session puts on disk, and where — plus who the store says owns it.
 
 The store's whole point is that one object decides the layout, so the layout is
-checkable. These two tests are that check from both ends: what a real session
+checkable. Two tests are that check from both ends: what a real session
 actually creates, and what the ``Store`` API is capable of creating. Adding a
 root is then a deliberate edit here rather than a directory that quietly
-appears in someone's project.
+appears in someone's project. The owner-liveness probe lives here too: it is
+the store's answer to "is the process that wrote this record still running?".
 """
 
 from __future__ import annotations
 
 import inspect
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
+import psutil
 import pytest
 
+from ltspice_mcp.lib import store as store_module
 from ltspice_mcp.lib.deck_staging import resolve_experiment_paths
 from ltspice_mcp.lib.store import Store, StoreError
 from ltspice_mcp.state import SessionState
@@ -172,7 +179,6 @@ _OUTSIDE_THE_STORE: dict[str, str] = {
     "circuit_sidecar": "belongs to the user's circuit, not to a session",
     "circuit_exports": "a receipt's provenance names it; it outlives the session",
     "circuit_plots": "a plot belongs beside the circuit it was made from",
-    "legacy_jobs_dir": "written by releases before 0.6; read, never written",
     "artifact_base": "returns the routing decision, not a path",
 }
 
@@ -232,3 +238,69 @@ def test_deck_staging_reads_its_staging_root_from_the_store(tmp_path: Path) -> N
     assert paths.staging_root == Store(tmp_path).staged_deck_root(
         "exp_staging", "dut", FakeNonLTspice
     )
+
+
+_FOREIGN_PID = 999_999_999
+
+
+class TestOwnerLivenessUnknown:
+    """A probe that could not reach an answer must not read as "owner dead".
+
+    Sessions share a working directory, and "the owner is gone" is exactly the
+    reading that licenses one session to rewrite another's running job as
+    interrupted. A psutil call that raises is not evidence of anything, so the
+    record stands as the owning server wrote it. The job records this probe
+    guards are exercised in tests/test_experiment_job.py; what is pinned here
+    is the probe's own three answers.
+    """
+
+    @staticmethod
+    def _break_the_probe(monkeypatch: Any) -> None:
+        def boom(pid: int) -> bool:
+            raise OSError("process table unavailable")
+
+        monkeypatch.setattr(store_module.psutil, "pid_exists", boom)
+
+    def test_probe_reports_unknown_rather_than_dead(self, monkeypatch: Any) -> None:
+        self._break_the_probe(monkeypatch)
+        liveness = store_module.owner_liveness(_FOREIGN_PID)
+        assert liveness is store_module.OwnerLiveness.UNKNOWN
+        assert liveness.is_dead is False
+
+    def test_probe_still_answers_dead_and_alive(self, monkeypatch: Any) -> None:
+        """The two real answers must survive the third one being added."""
+        monkeypatch.setattr(store_module.psutil, "pid_exists", lambda pid: False)
+        assert store_module.owner_liveness(_FOREIGN_PID) is store_module.OwnerLiveness.DEAD
+        monkeypatch.undo()
+        # A real live process for the ALIVE answer: the probe now also asks
+        # what the process is doing, and a pid that exists only in a stub has
+        # nothing to answer with.
+        assert store_module.owner_liveness(os.getppid()) is store_module.OwnerLiveness.ALIVE
+        # A record with no pid predates pid tracking; recovering those jobs is
+        # the behaviour this probe was added to, not something it takes away.
+        assert store_module.owner_liveness(None) is store_module.OwnerLiveness.DEAD
+
+
+class TestOwnerLivenessExitedProcess:
+    """A process that has exited is not an owner, collected or not.
+
+    An exited child keeps its pid in the process table until the process that
+    started it collects it, so the pid alone still reads as "there". A job
+    whose owner stopped there has nobody supervising it, and reading that as
+    running is what keeps the restart reconciliation from ever running.
+    """
+
+    def test_probe_reports_an_exited_uncollected_process_as_dead(self) -> None:
+        child = subprocess.Popen([sys.executable, "-c", ""])
+        try:
+            deadline = time.monotonic() + 30
+            # Deliberately never poll() or wait() here: either would collect
+            # the child and remove the state under test.
+            while psutil.Process(child.pid).status() != psutil.STATUS_ZOMBIE:
+                if time.monotonic() >= deadline:
+                    pytest.fail("the child process never exited")
+                time.sleep(0.02)
+            assert psutil.pid_exists(child.pid)
+            assert store_module.owner_liveness(child.pid) is store_module.OwnerLiveness.DEAD
+        finally:
+            child.wait(timeout=30)

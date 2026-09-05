@@ -1,15 +1,12 @@
-"""In-memory registry for simulation, batch, and experiment jobs.
+"""In-memory registry for experiment jobs.
 
-Owns the single union ``jobs`` dict
-plus all disk-persistence coordination (sidecar writes, eviction,
-interrupted-job recovery). Split out of ``SessionState`` so the
-per-session container stays focused on simulator catalog, caches, and
-configuration.
+Owns the ``jobs`` dict plus all disk-persistence coordination (record
+writes, eviction, interrupted-job recovery). Split out of ``SessionState``
+so the per-session container stays focused on simulator catalog, caches,
+and configuration.
 
 ``SessionState`` delegates its job-facing API to this class; call sites
-continue to use ``state.jobs``, ``state.add_job``, etc. The ``sim_jobs``,
-``batch_jobs``, and ``experiment_jobs`` attributes are type-filtered
-writable views over the union store.
+continue to use ``state.all_jobs``, ``state.add_experiment_job``, etc.
 """
 
 from __future__ import annotations
@@ -18,29 +15,24 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Awaitable, Callable, Iterator, MutableMapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import transition
-from ltspice_mcp.lib.job_types import (
-    NON_TERMINAL_LIVE_STATUSES,
-    TERMINAL_STATUSES,
-    LegacyJobRecord,
-)
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
 
-# Bound to the union job type so the typed views and per-type eviction stay
-# scoped to one job class at a time.
-Job = LegacyJobRecord | ExperimentJob
-J = TypeVar("J", bound=Job)
+# Every job this server runs is an experiment; the name stays for the call
+# sites that read "a job" rather than "an experiment".
+Job = ExperimentJob
 
-# Maximum finished jobs to retain per job type (single-sim, batch, experiment).
+# Maximum finished jobs to retain.
 _MAX_FINISHED_JOBS = 200
 
 # How long shutdown waits on one stage of cancels (see ``_issue_cancels``).
@@ -108,61 +100,6 @@ def _cancel_tasks(jobs: list[ExperimentJob]) -> list[Awaitable[Any]]:
     return pending
 
 
-class _TypedJobView(MutableMapping[str, J]):
-    """Permanent typed access layer over the union job store.
-
-    This is the type-scoped surface of the registry: per-type eviction caps,
-    type-scoped iteration for resources and status reporting, and
-    write-through with a runtime type guard. Lookups (``[]``, ``get``,
-    ``in``), iteration, and ``len`` surface only entries of the view's job
-    type — a batch id accessed through the sim view behaves as absent, and
-    vice versa. Writes (``view[key] = job``) go straight through to the
-    union dict but reject values of the wrong job type, and ``del`` removes
-    only entries of the view's type.
-
-    Rule for new code: use the typed view (``registry.sim_jobs``,
-    ``registry.batch_jobs``, or ``registry.experiment_jobs``) when the code
-    is scoped to one job type; use
-    ``registry.jobs`` / ``state.all_jobs`` plus ``isinstance`` when handling
-    either type.
-    """
-
-    def __init__(self, store: dict[str, Job], job_type: type[J]) -> None:
-        self._store = store
-        self._job_type = job_type
-
-    def __getitem__(self, key: str) -> J:
-        job = self._store[key]
-        if not isinstance(job, self._job_type):
-            raise KeyError(key)
-        return job
-
-    def __setitem__(self, key: str, value: J) -> None:
-        # Guard at runtime: a wrong-type job written through this view would
-        # land in the union store but be invisible through the view that
-        # stored it — a silent misroute that static typing alone can't stop.
-        # Widen to ``object`` so the type checker keeps the failure branch
-        # live: with the parameter typed ``J`` it narrows the negative
-        # isinstance branch to Never, but untyped callers reach it at runtime.
-        candidate: object = value
-        if not isinstance(candidate, self._job_type):
-            raise TypeError(
-                f"{self._job_type.__name__} view cannot store {type(value).__name__} (key {key!r})"
-            )
-        self._store[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        if not isinstance(self._store[key], self._job_type):
-            raise KeyError(key)
-        del self._store[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return (k for k, v in self._store.items() if isinstance(v, self._job_type))
-
-    def __len__(self) -> int:
-        return sum(1 for v in self._store.values() if isinstance(v, self._job_type))
-
-
 @dataclass
 class JobRegistry:
     """Tracks all job kinds with optional disk persistence.
@@ -171,9 +108,7 @@ class JobRegistry:
         persist_enabled: When True, sidecar files are written alongside
             circuits and evictions delete them. When False, the registry
             behaves as a pure in-memory store.
-        jobs: The single source of truth for every job regardless of run
-            type. ``sim_jobs``, ``batch_jobs``, and ``experiment_jobs`` are
-            type-filtered views over it.
+        jobs: The single source of truth for every job this session knows.
     """
 
     persist_enabled: bool
@@ -192,19 +127,10 @@ class JobRegistry:
     allocate a second lock while the old one is still held.
     """
 
-    # ------------------------------------------------------------------
-    # Typed views
-    # ------------------------------------------------------------------
-
     @property
-    def legacy_records(self) -> _TypedJobView[LegacyJobRecord]:
-        """Writable view of the pre-0.6 records loaded from disk."""
-        return _TypedJobView(self.jobs, LegacyJobRecord)
-
-    @property
-    def experiment_jobs(self) -> _TypedJobView[ExperimentJob]:
-        """Writable view of multi-circuit experiment jobs."""
-        return _TypedJobView(self.jobs, ExperimentJob)
+    def experiment_jobs(self) -> dict[str, ExperimentJob]:
+        """The job store itself, under the name callers scoped to experiments use."""
+        return self.jobs
 
     # ------------------------------------------------------------------
     # Registration
@@ -218,27 +144,25 @@ class JobRegistry:
     ) -> None:
         """Register an experiment after its durable receipt barrier."""
         self.jobs[job.job_id] = job
-        self._evict_from(self.experiment_jobs)
+        self._evict_finished()
         if not already_persisted:
             self.persist_job(job)
         emit_job_event("submitted", job, total_cases=job.completeness.expanded)
 
-    def _evict_from(self, jobs_view: MutableMapping[str, J]) -> None:
-        """Evict oldest terminal jobs of one job type when over the limit.
+    def _evict_finished(self) -> None:
+        """Evict the oldest terminal jobs once the registry is over the limit.
 
-        ``jobs_view`` is a typed view over the union store, so the cap is
-        enforced per job type (200 finished jobs of each kind). When
-        persistence is enabled, the on-disk record is
-        deleted alongside the in-memory entry so the two never drift. Async
-        deletion drains earlier writes before it drops the per-job lock.
+        When persistence is enabled, the on-disk record is deleted alongside
+        the in-memory entry so the two never drift. Async deletion drains
+        earlier writes before it drops the per-job lock.
         """
-        finished = [(jid, j) for jid, j in jobs_view.items() if j.status in TERMINAL_STATUSES]
+        finished = [(jid, j) for jid, j in self.jobs.items() if j.status in TERMINAL_STATUSES]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
         finished.sort(key=lambda pair: getattr(pair[1], "started_at", None) or 0)
         for jid, j in finished[:overflow]:
-            del jobs_view[jid]
+            del self.jobs[jid]
             self._delete_persisted(j)
 
     # ------------------------------------------------------------------
@@ -271,9 +195,7 @@ class JobRegistry:
         if not self._on_event_loop():
             return job
         self.jobs[job.job_id] = job
-        if isinstance(job, ExperimentJob) and any(
-            item.get("code") == "server_restarted" for item in job.observations
-        ):
+        if any(item.get("code") == "server_restarted" for item in job.observations):
             self.persist_job(job)
         return job
 
@@ -316,15 +238,10 @@ class JobRegistry:
         return self._adopt(loaded) if loaded is not None else None
 
     def _load_foreign_job_sync(self, job: Job) -> Job | None:
-        """Blocking store dispatch for refreshing one foreign-owned job."""
-        if isinstance(job, ExperimentJob):
-            from ltspice_mcp.lib import experiment_store
+        """Blocking store read for refreshing one foreign-owned job."""
+        from ltspice_mcp.lib import experiment_store
 
-            return experiment_store.load_job_from_path(job.store_path, self.working_dir)
-
-        from ltspice_mcp.lib import job_store
-
-        return job_store.load_job(job.job_id, job.netlist)
+        return experiment_store.load_job_from_path(job.store_path, self.working_dir)
 
     def refresh_foreign_job(self, job: Job) -> Job:
         """Re-read a parallel session's live job from its sidecar.
@@ -437,11 +354,6 @@ class JobRegistry:
             fn(job)
 
     def _persist_sync(self, job: Job) -> None:
-        # A legacy record is read-only: this version never wrote it and has
-        # nothing new to say about it, so persisting one would only risk
-        # rewriting an earlier release's file in a shape it cannot read.
-        if not isinstance(job, ExperimentJob):
-            return
         try:
             from ltspice_mcp.lib import experiment_store
 
@@ -511,17 +423,12 @@ class JobRegistry:
     def _read_persisted_jobs(
         self,
         resolved: Path,
-    ) -> tuple[list, list, list] | None:
+    ) -> tuple[list, list] | None:
         """File-read half of the load — offloadable (touches no registry state)."""
         try:
-            from ltspice_mcp.lib import experiment_store, job_store
+            from ltspice_mcp.lib import experiment_store
 
-            legacy_records = job_store.load_jobs_for_circuit(resolved)
-            experiment_jobs, observations = experiment_store.load_jobs_for_circuit(
-                resolved,
-                self.working_dir,
-            )
-            return legacy_records, experiment_jobs, observations
+            return experiment_store.load_jobs_for_circuit(resolved, self.working_dir)
         except Exception as e:
             logger.warning("Failed to load persisted jobs for %s: %s", resolved, e)
             return None
@@ -530,11 +437,11 @@ class JobRegistry:
         """Load any persisted jobs for this circuit into memory, once per session.
 
         No-op when persistence is disabled, the path is not a circuit file,
-        or the sidecar directory doesn't exist. Jobs in non-terminal states
+        or the store holds no record naming it. Jobs in non-terminal states
         at load time are marked ``interrupted`` (their owning server is gone).
 
         Synchronous — for off-loop callers (startup ``preload_recent``). On the
-        event loop use ``ensure_loaded_for_async`` so the sidecar read (a glob +
+        event loop use ``ensure_loaded_for_async`` so the store read (a glob +
         JSON reads that stalls the whole loop on a wedged ``/mnt/c``) is offloaded.
         """
         resolved = self._claim_circuit_load(circuit_path)
@@ -547,7 +454,7 @@ class JobRegistry:
     async def ensure_loaded_for_async(self, circuit_path: Path) -> None:
         """Loop-safe ``ensure_loaded_for``: offload the read, apply on the loop.
 
-        The sidecar read runs in a worker thread (an unresponsive filesystem
+        The store read runs in a worker thread (an unresponsive filesystem
         must not freeze the shared event loop — this runs on the common tool-
         dispatch path). The registry mutation stays on the loop, per the
         loop-only contract that also governs the cached editors.
@@ -572,19 +479,10 @@ class JobRegistry:
 
     def _apply_loaded_jobs(
         self,
-        legacy_records: list[LegacyJobRecord],
         experiment_jobs: list[ExperimentJob],
         observations: list[dict],
     ) -> None:
-        """Registry-mutation half of the load — loop-only (mutates ``self.jobs``).
-
-        A legacy record is registered so a caller asking about it is told what
-        it is; there is no recovery to attempt, because this version has no
-        runner that could resume or re-read it.
-        """
-        for record in legacy_records:
-            if record.job_id not in self.jobs:
-                self.jobs[record.job_id] = record
+        """Registry-mutation half of the load — loop-only (mutates ``self.jobs``)."""
         for experiment in experiment_jobs:
             if experiment.job_id in self.jobs:
                 continue
@@ -662,9 +560,8 @@ class JobRegistry:
         #
         # Only THIS process's jobs are cancelled: a parallel server session's
         # live job also sits in the registry as running (loaded from its
-        # sidecar with the owner still alive) and must not be killed or
-        # relabeled by our shutdown. A legacy record is never running under
-        # this version — nothing here could have launched one.
+        # record with the owner still alive) and must not be killed or
+        # relabeled by our shutdown.
         experiments = list(self.experiment_jobs.values())
         await _issue_cancels(
             [

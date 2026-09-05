@@ -112,8 +112,8 @@ is an experiment, on one runner. The Monte Carlo perturbation engine is
 unchanged — it is what `run_experiments` draws its random variations from.
 
 Error codes that only those handlers emitted are gone with them:
-`legacy_analysis_result` (now `legacy_job_record`),
-`case_selection_wrong_job_kind`, `run_unavailable` (now `case_not_found`),
+`legacy_analysis_result`, `case_selection_wrong_job_kind`,
+`run_unavailable` (now `case_not_found`),
 `run_failed`, `no_raw_output`, `parse_deadline` (now `analysis_deadline`),
 `decimated`, `window_applied`, `complex_format_used`, `unrecognized_save`,
 `max_pk_pk_bucket`, and `export_written`.
@@ -190,19 +190,17 @@ Error codes that only those handlers emitted are gone with them:
   (every artifact one job produced, with its staged decks), `results/`,
   `renders/`, `verify/`, `edit-exports/`, and `locks/`, stamped with a single
   `store_version`. The per-circuit pointer files that let a circuit's sidecar
-  find working-directory jobs are gone; the store's own index does that. A
-  job sidecar written by 0.5 still loads as an inert record.
+  find working-directory jobs are gone; the store's own index does that.
 
-### Changed — how a job record from an earlier release loads
+### Removed — reading the job sidecars earlier releases wrote
 
-A job sidecar written by a pre-0.6 release still loads, and loading one
-never breaks the registry or the startup preload. It comes back as a record
-of what it was — id, circuit, kind, and the status that release persisted,
-with any still-running status reported as interrupted, since nothing in
-this process is running it. Every read of one carries the same fact: the
-job was written by an earlier release, its results are not readable through
-this version, and it must be re-run. `analyze_results` refuses it with that
-sentence rather than returning an empty result.
+Releases before 0.6 wrote a job record beside each circuit, at
+`.ltspice-mcp/jobs/<job_id>.json`. Those files are no longer read: a job id
+that only one of them names is simply not found, and `jobs` says so like it
+would for any other unknown id. Nothing was ever written there by 0.6, and
+the files themselves are left alone — delete them by hand if you want the
+space back. The `legacy_job_record` observation code is gone with the
+reading of them.
 
 ### Changed — the schematic edit engine moved into the core
 

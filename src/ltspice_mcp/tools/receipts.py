@@ -28,11 +28,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.job_types import (
-    NON_TERMINAL_LIVE_STATUSES,
-    LegacyJobRecord,
-    legacy_record_observation,
-)
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.pagination import page_of
@@ -64,7 +60,7 @@ TERMINAL_EXPERIMENT_STATUSES = frozenset(
     }
 )
 
-Job = LegacyJobRecord | ExperimentJob
+Job = ExperimentJob
 
 _MANIFEST_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -478,6 +474,9 @@ class ReceiptSnapshot:
 
     job_id: str
     request_id: str | None
+    #: What kind of job the receipt describes. Every job is an experiment, so
+    #: this is one value today; it stays on the wire because a client reads it
+    #: to tell a receipt apart from the error envelope, which says "unknown".
     job_type: str
     status: str
     dialect: str | None
@@ -498,9 +497,7 @@ class ReceiptSnapshot:
     @property
     def outcome(self) -> CallOutcome:
         """Receipt outcome derived only from copied status and completeness."""
-        if self.job_type == "experiment":
-            return _terminal_outcome(self)
-        return _jobs_outcome(self)
+        return _terminal_outcome(self)
 
 
 def render_receipt_snapshot(
@@ -547,8 +544,7 @@ def render_receipt_snapshot(
         "hint": (
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
             "job_id to continue waiting."
-            if snapshot.job_type == "experiment"
-            and snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
+            if snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
             else _terminal_hint(snapshot, runs["truncated"])
         ),
     }
@@ -783,8 +779,6 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     that DID produce data are still analyzable by job_id — so the obvious move
     was to re-run an experiment whose results were sitting on disk.
     """
-    if snapshot.job_type != "experiment":
-        return ""
     if truncated:
         routes = [
             f"The inline run page is truncated; use jobs(runs) with job_id "
@@ -820,10 +814,6 @@ def _api_pointer_route(snapshot: ReceiptSnapshot) -> list[str]:
     ]
 
 
-def _job_type_name(job: Job) -> str:
-    return "experiment" if isinstance(job, ExperimentJob) else "legacy"
-
-
 #: Statuses on which a job delivered nothing at all, so the whole call failed.
 _FAILED_JOB_STATUSES = frozenset({"failed", "timeout", "interrupted"})
 
@@ -844,8 +834,7 @@ def _jobs_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     expansion and leaves them all at zero.
     """
     shortfall = snapshot.status == "cancelled" or (
-        snapshot.status == "completed_with_failures"
-        and (snapshot.job_type != "experiment" or snapshot.completeness.fell_short)
+        snapshot.status == "completed_with_failures" and snapshot.completeness.fell_short
     )
     return outcome_of(
         snapshot.status in _FAILED_JOB_STATUSES,
@@ -868,91 +857,57 @@ def snapshot_receipt(
     call.  Outcome and guidance are intentionally absent from that live-read
     interval; renderers derive them only from the returned detached value.
     """
-    if isinstance(job, ExperimentJob):
-        lint_map: dict[str, list[dict[str, Any]]]
-        if lint_by_circuit is None:
-            lint_map = {}
-            for case in job.cases:
-                lint_map.setdefault(case.circuit, [])
-            for source in job.sources:
-                lint_map[source.circuit] = source.lint_findings
-        else:
-            lint_map = lint_by_circuit
-
-        observations = copy.deepcopy(job.observations)
-        seen_observations = {(item.get("code"), item.get("detail")) for item in observations}
-        runs_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    lint_map: dict[str, list[dict[str, Any]]]
+    if lint_by_circuit is None:
+        lint_map = {}
         for case in job.cases:
-            row = copy.deepcopy(_run_item(case))
-            runs_by_key[(case.case_id, case.run_index)] = row
-            for observation in case.observations:
-                copied = copy.deepcopy(observation)
-                key = (copied.get("code"), copied.get("detail"))
-                if key not in seen_observations:
-                    observations.append(copied)
-                    seen_observations.add(key)
+            lint_map.setdefault(case.circuit, [])
+        for source in job.sources:
+            lint_map[source.circuit] = source.lint_findings
+    else:
+        lint_map = lint_by_circuit
 
-        analysis = job.analysis
-        return ReceiptSnapshot(
-            job_id=job.job_id,
-            request_id=job.request_id,
-            job_type="experiment",
-            status=job.status,
-            dialect=services.dialect_for_job(job, state) if state is not None else None,
-            control_token=control_token,
-            sources=tuple(copy.deepcopy(job.sources)),
-            lint=tuple(
-                copy.deepcopy(
-                    [
-                        {"circuit": circuit, "findings": findings}
-                        for circuit, findings in lint_map.items()
-                        if findings
-                    ]
-                )
-            ),
-            runs_by_key=runs_by_key,
-            completeness=copy.deepcopy(job.completeness),
-            failures=tuple(copy.deepcopy(job.failures)),
-            observations=tuple(observations),
-            artifacts=tuple(copy.deepcopy(job.artifacts)),
-            analysis_status=analysis.status,
-            analysis_result=copy.deepcopy(analysis.result),
-            analysis_error=analysis.error,
-            analysis_observations=tuple(copy.deepcopy(analysis.observations)),
-            analysis_request=copy.deepcopy(analysis.request),
-        )
+    observations = copy.deepcopy(job.observations)
+    seen_observations = {(item.get("code"), item.get("detail")) for item in observations}
+    runs_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    for case in job.cases:
+        row = copy.deepcopy(_run_item(case))
+        runs_by_key[(case.case_id, case.run_index)] = row
+        for observation in case.observations:
+            copied = copy.deepcopy(observation)
+            key = (copied.get("code"), copied.get("detail"))
+            if key not in seen_observations:
+                observations.append(copied)
+                seen_observations.add(key)
 
-    # A record an earlier release wrote. Its runs are not readable here, so the
-    # receipt carries what it is and why, and claims no results: reporting an
-    # empty run list as a completed job would be the silent-skip this exists to
-    # avoid.
-    assert isinstance(job, LegacyJobRecord)
+    analysis = job.analysis
     return ReceiptSnapshot(
         job_id=job.job_id,
-        request_id=None,
-        job_type=_job_type_name(job),
+        request_id=job.request_id,
+        job_type="experiment",
         status=job.status,
-        dialect=None,
+        dialect=services.dialect_for_job(job, state) if state is not None else None,
         control_token=control_token,
-        sources=(
-            {
-                "circuit": job.netlist.stem,
-                "path": str(job.netlist),
-                "simulator": "",
-                "dialect": None,
-            },
+        sources=tuple(copy.deepcopy(job.sources)),
+        lint=tuple(
+            copy.deepcopy(
+                [
+                    {"circuit": circuit, "findings": findings}
+                    for circuit, findings in lint_map.items()
+                    if findings
+                ]
+            )
         ),
-        lint=(),
-        runs_by_key={},
-        completeness=Completeness(),
-        failures=(),
-        observations=(legacy_record_observation(job.job_id),),
-        artifacts=(),
-        analysis_status="not_requested",
-        analysis_result=None,
-        analysis_error=None,
-        analysis_observations=(),
-        analysis_request=None,
+        runs_by_key=runs_by_key,
+        completeness=copy.deepcopy(job.completeness),
+        failures=tuple(copy.deepcopy(job.failures)),
+        observations=tuple(observations),
+        artifacts=tuple(copy.deepcopy(job.artifacts)),
+        analysis_status=analysis.status,
+        analysis_result=copy.deepcopy(analysis.result),
+        analysis_error=analysis.error,
+        analysis_observations=tuple(copy.deepcopy(analysis.observations)),
+        analysis_request=copy.deepcopy(analysis.request),
     )
 
 

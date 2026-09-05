@@ -30,7 +30,6 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
-from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import (
@@ -60,7 +59,7 @@ from ltspice_mcp.lib.recipes import (
     validate_recipe,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
-from ltspice_mcp.state import SessionState, legacy_record_message
+from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     ResponseBudget,
     StrictModel,
@@ -882,90 +881,76 @@ async def _resolve_sources(
                 }
             )
             continue
-        record = job.store_path if isinstance(job, ExperimentJob) else None
-        source_jobs[job.job_id] = str(record) if record is not None and record.is_file() else None
+        record = job.store_path
+        source_jobs[job.job_id] = str(record) if record.is_file() else None
 
-        if isinstance(job, ExperimentJob):
-            # Per-case readiness is gated below, not here.
-            if not runs_terminal(job.status):
+        # Per-case readiness is gated below, not here.
+        if not runs_terminal(job.status):
+            missing.append(
+                {
+                    "label": source_input.label,
+                    "case_id": None,
+                    "run_index": None,
+                    "code": "job_not_terminal",
+                    "detail": (
+                        f"Experiment job {job.job_id!r} has no readable runs yet "
+                        f"(status={job.status!r})"
+                    ),
+                }
+            )
+            continue
+        if isinstance(source_input.runs, CaseSelection):
+            wanted = set(source_input.runs.case_ids)
+            selected = [case for case in job.cases if case.case_id in wanted]
+            found = {case.case_id for case in selected}
+            for case_id in sorted(wanted - found):
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": case_id,
+                        "run_index": None,
+                        "code": "case_not_found",
+                    }
+                )
+        elif isinstance(source_input.runs, list):
+            wanted_indices = set(source_input.runs)
+            selected = [case for case in job.cases if case.run_index in wanted_indices]
+            found_indices = {case.run_index for case in selected}
+            for index in sorted(wanted_indices - found_indices):
                 missing.append(
                     {
                         "label": source_input.label,
                         "case_id": None,
-                        "run_index": None,
-                        "code": "job_not_terminal",
-                        "detail": (
-                            f"Experiment job {job.job_id!r} has no readable runs yet "
-                            f"(status={job.status!r})"
-                        ),
+                        "run_index": index,
+                        "code": "run_not_found",
+                    }
+                )
+        else:
+            selected = list(job.cases)
+        for case in selected:
+            if case.status != "produced" or case.raw_file is None:
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": case.case_id,
+                        "run_index": case.run_index,
+                        "code": "raw_not_produced",
+                        "detail": f"case status is {case.status!r}",
                     }
                 )
                 continue
-            if isinstance(source_input.runs, CaseSelection):
-                wanted = set(source_input.runs.case_ids)
-                selected = [case for case in job.cases if case.case_id in wanted]
-                found = {case.case_id for case in selected}
-                for case_id in sorted(wanted - found):
-                    missing.append(
-                        {
-                            "label": source_input.label,
-                            "case_id": case_id,
-                            "run_index": None,
-                            "code": "case_not_found",
-                        }
-                    )
-            elif isinstance(source_input.runs, list):
-                wanted_indices = set(source_input.runs)
-                selected = [case for case in job.cases if case.run_index in wanted_indices]
-                found_indices = {case.run_index for case in selected}
-                for index in sorted(wanted_indices - found_indices):
-                    missing.append(
-                        {
-                            "label": source_input.label,
-                            "case_id": None,
-                            "run_index": index,
-                            "code": "run_not_found",
-                        }
-                    )
-            else:
-                selected = list(job.cases)
-            for case in selected:
-                if case.status != "produced" or case.raw_file is None:
-                    missing.append(
-                        {
-                            "label": source_input.label,
-                            "case_id": case.case_id,
-                            "run_index": case.run_index,
-                            "code": "raw_not_produced",
-                            "detail": f"case status is {case.status!r}",
-                        }
-                    )
-                    continue
-                ctx = services.experiment_run_context(job, state, case_id=case.case_id)
-                resolved = services.source_for_run(ctx)
-                runs.append(
-                    _ResolvedRun(
-                        f"{source_input.label}:{case.case_id}",
-                        source_input.label,
-                        resolved,
-                        job.job_id,
-                    )
+            ctx = services.experiment_run_context(job, state, case_id=case.case_id)
+            resolved = services.source_for_run(ctx)
+            runs.append(
+                _ResolvedRun(
+                    f"{source_input.label}:{case.case_id}",
+                    source_input.label,
+                    resolved,
+                    job.job_id,
                 )
-                await state.note_recent_circuit(case.circuit_path.resolve())
-            continue
+            )
+            await state.note_recent_circuit(case.circuit_path.resolve())
 
-        # Anything that is not an experiment is a record an earlier release
-        # wrote. Say so once, against the source the caller named: reporting it
-        # as an empty run set would read as a job that simply produced nothing.
-        missing.append(
-            {
-                "label": source_input.label,
-                "case_id": None,
-                "run_index": None,
-                "code": "legacy_job_record",
-                "detail": legacy_record_message(job.job_id),
-            }
-        )
     observations.extend(await _relay_solve_failures(runs))
     return runs, missing, source_jobs, observations
 

@@ -1,10 +1,8 @@
 """Per-session container: config, simulators, caches, job registry.
 
-The job domain types (``SimulationJob``, ``BatchJob``, ``SweepConfig``,
-``SweepDimension``, ``MonteCarloConfig``) and status constants live in
-``lib/job_types.py``; they're re-exported here so call sites that
-imported them from ``state`` keep working. Splitting them out broke a
-cluster of import cycles — see ``lib/job_types.py`` for the full story.
+The job status constants live in ``lib/job_types.py``; they're re-exported
+here so call sites can read them from either place. Splitting them out broke
+a cluster of import cycles — see ``lib/job_types.py`` for the full story.
 """
 
 import asyncio
@@ -19,13 +17,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
-from ltspice_mcp.lib.job_types import (
-    NON_TERMINAL_LIVE_STATUSES,
-    TERMINAL_STATUSES,
-    LegacyJobRecord,
-    legacy_record_message,
-    legacy_record_observation,
-)
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
@@ -43,16 +35,13 @@ logger = logging.getLogger(__name__)
 # eviction past this just re-parses on the next access.
 RESULT_CACHE_MAXSIZE = 32
 
-# Re-export the job-type surface so existing
-# ``from ltspice_mcp.state import LegacyJobRecord`` imports keep working.
+# Re-export the job-status vocabulary so a caller can read it from either
+# ``ltspice_mcp.state`` or ``ltspice_mcp.lib.job_types``.
 __all__ = [
     "NON_TERMINAL_LIVE_STATUSES",
     "TERMINAL_STATUSES",
     "ExperimentJob",
-    "LegacyJobRecord",
     "SessionState",
-    "legacy_record_message",
-    "legacy_record_observation",
 ]
 
 
@@ -205,18 +194,13 @@ class SessionState:
     # ------------------------------------------------------------------
 
     @property
-    def legacy_records(self) -> MutableMapping[str, LegacyJobRecord]:
-        """Type-filtered view of the job records earlier releases wrote."""
-        return self.job_registry.legacy_records
-
-    @property
     def experiment_jobs(self) -> MutableMapping[str, ExperimentJob]:
-        """Type-filtered view of experiment coordinator jobs."""
+        """The registry's experiment jobs, keyed by job id."""
         return self.job_registry.experiment_jobs
 
     @property
-    def all_jobs(self) -> dict[str, "LegacyJobRecord | ExperimentJob"]:
-        """The union job store — every job regardless of run type."""
+    def all_jobs(self) -> dict[str, ExperimentJob]:
+        """The job store — every job this session knows."""
         return self.job_registry.jobs
 
     def add_experiment_job(
@@ -230,7 +214,7 @@ class SessionState:
             already_persisted=already_persisted,
         )
 
-    def persist_job(self, job: "LegacyJobRecord | ExperimentJob") -> None:
+    def persist_job(self, job: ExperimentJob) -> None:
         self.job_registry.persist_job(job)
 
     def ensure_jobs_loaded_for(self, circuit_path: Path) -> None:
