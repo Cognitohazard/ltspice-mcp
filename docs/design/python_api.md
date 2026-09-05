@@ -1,0 +1,425 @@
+# The Python API contract — `ltspice_mcp.api`
+
+The in-process door onto the same engine the MCP server exposes. This is its
+contract: what it promises, what it deliberately does not do, and why.
+
+The code is the authority. Where this document and the source disagree, the
+source wins and this document is the thing to fix.
+
+---
+
+## 1. Goal, and the one design move that follows from it
+
+Give a Python-native caller — an agent writing code in its own interpreter — the
+same engine the MCP server exposes, with its loops and intermediate data
+outside model context.
+
+**The API does not get a new contract.** It binds the consolidated six-operation
+MCP contract (`docs/design/mcp_surface.md`) to Python: the same ops language,
+the same argument shapes, the same validation (literally the same Pydantic
+input models), the same completeness and observation semantics. What differs is
+presentation — synchronous calls, complete structured returns, exceptions for
+call-level errors, no response-budget negotiation.
+
+One evaluator per capability, two doors (MCP and Python). Anything that forks
+semantics between doors is a defect, not a feature.
+
+## 2. Non-goals
+
+- No MCP resources, and no response-budget negotiation surface (see §7 for the
+  single-page escape hatch).
+- No new analysis capability.
+- No physical package split: `ltspice_mcp.api` ships in the existing package.
+- No server-side arbitrary code execution.
+- No cross-process ownership changes. The existing filesystem mechanisms —
+  circuit-file locks, owner-pid liveness, token-scoped kill — are untouched, so
+  a separate-process API and MCP server sharing a working directory is
+  supported. **Same-process coexistence is not** (see §4).
+
+## 3. Shared engine bootstrap
+
+`server_lifespan` and `Api.__init__` call one bootstrap function
+(`engine.bootstrap_server_engine` / `engine.bootstrap_library_engine`) that
+owns, in order: config load, simulator detection, `SessionState.create`,
+`_configure_asc_editor` symbol-path setup, result-set cleanup, and persisted
+job preload. The last three used to live only in server startup; an `Api` that
+skipped them would silently lose schematic support and job recovery.
+
+Config precedence is explicit: constructor keyword arguments beat environment,
+which beats TOML, which beats defaults. `Api(working_dir=...)` resolves the
+TOML **under that directory**, not the process CWD, and the `allowed_paths`
+defaults follow it. An unknown or irrelevant constructor override raises
+`TypeError` rather than being silently ignored (`tool_profile` is irrelevant
+here and is rejected).
+
+Library mode never calls `logging.basicConfig`. The server's `force=True`
+logging setup stays in server startup; the library uses module loggers only.
+
+## 4. The `Api` object
+
+```python
+from ltspice_mcp.api import Api
+
+with Api(working_dir="~/designs/ldo") as api:
+    receipt = api.run_experiments(...)
+```
+
+**One live engine session per process**, enforced by an atomic PID-scoped
+lease. A second concurrent `Api` — or an `Api` inside a process already running
+the MCP server — raises `ApiSessionError`, because shutdown ownership is
+owner-pid scoped and two same-PID sessions would cancel each other's jobs.
+Lease semantics:
+
+- acquired under a process-local lock, so two racing constructor threads cannot
+  both pass;
+- a lease recorded by *another* PID is inherited and stale (a post-`fork()`
+  child) and is replaced without touching the parent's resources;
+- the lease lock itself is fork-safe: an `os.register_at_fork(after_in_child=)`
+  hook resets the lock in the child, because a lock held by a parent thread at
+  fork time is inherited *locked* by a child that has no thread to release it,
+  while the lease record is retained so the stale-PID replacement rule can run;
+- released only when instance identity and PID both match;
+- released on bootstrap *failure* as well as on a successful `close()`;
+- the server lifespan acquires and releases the same lease.
+
+**Private event loop thread.** One persistent loop thread per `Api`; handler
+coroutines are marshalled onto it with `run_coroutine_threadsafe`. They run
+concurrently on that loop rather than being serialized to completion —
+`jobs(cancel)` has to run while another caller thread is blocked in a wait.
+This is load-bearing: a per-call loop would invalidate the entire runner cache
+on every call (loop invalidation lives in `RunnerManager._get_or_create`) and
+split the `max_parallel_sims` semaphore. Editors are touched only on that loop,
+so the `tools/_base.py` contract holds unchanged.
+
+**Fork guard.** `Api` records its creator PID and re-checks on every call,
+raising `ApiSessionError` after a `fork()` — an inherited loop thread is dead in
+the child. The child creates a fresh `Api`, which the lease's stale-PID rule
+lets succeed.
+
+**Loop-thread re-entry.** Every synchronous method, `close()` included, detects
+being called *from* the private loop thread and raises `ApiSessionError`
+immediately. Blocking on `run_coroutine_threadsafe(...).result()` from that
+thread deadlocks, and `close()` cannot join its own thread.
+
+**`close()` state machine.** Task ownership is split, and draining "everything
+state-touching" would deadlock behind a running simulation, because
+runner- and registry-owned tasks live until `cancel_running()` asks them to
+stop. So:
+
+1. Mark closing; new calls raise `ApiClosedError`.
+2. Cancel cancelable **bridge invocation tasks** — waits, pagination and
+   collector loops, reads. Never cancel effectful handler tasks.
+3. Drain **bridge invocation tasks only**: handlers, evaluators, reads, waits
+   and collectors, with effectful ones run to their safe return boundary and
+   cancelled ones awaited to settled cancellation. Do *not* drain
+   runner- or registry-owned background tasks (submission pipelines, experiment
+   coordinators, case tasks, deadline watchers, attached-analysis tasks) —
+   those are `state.shutdown()`'s to cancel.
+4. Run `state.shutdown()` on the private loop: cache clears, `cancel_running`,
+   `drain_pending`, in that existing order. Step 3 guarantees no bridge task is
+   still using the caches it clears.
+5. Bounded-drain the residual loop tasks shutdown left behind, *without*
+   joining abandoned bounded-parser worker threads — those are unjoinable by
+   design, their loop-facing task settles, and a late worker completion cannot
+   re-enter a closed loop. Then `shutdown_asyncgens`, stop the loop, close it on
+   its own thread, join.
+6. `close()` is idempotent. Concurrent callers get a deterministic
+   `ApiClosedError` (or a `CancelledError` mapped to one). The session lease is
+   released last.
+
+**Live jobs do not survive `close()` or process exit.** Durability covers
+persisted identity and results, not detached execution. Work that must outlive
+the interpreter goes to a long-lived server process.
+
+That rule is stated where it bites, not only here:
+
+- `reference()` and `reference('run_experiments')` say that `wait=False`
+  returns a receipt *and* that the submitting process must outlive the run,
+  because a job is cancelled when its owning process exits. The receipt itself
+  carries a `process_owned_job` observation, but the catalogue is where a
+  caller looks *before* submitting.
+- During interpreter teardown the registry's async persist would raise
+  `RuntimeError: cannot schedule new futures after shutdown`; that path falls
+  back to a synchronous persist (blocking is fine during teardown), so the
+  record gets written instead of an alarming and irrelevant traceback getting
+  printed.
+- A case abandoned because its owner died recovers with an error naming the
+  owning process and the rule, rather than "Server restarted" — which is a
+  guess about a mechanism the store cannot see, and wrong on this door.
+
+## 5. The six operations
+
+Methods take a `dict` in and return a `dict` out, validated by the operation's
+own input model. Validation failures raise `ApiValidationError` (a
+`ValueError`) whose message comes from `compact_validation_error(...)` — the
+same renderer the server dispatch uses, with the same `field_owners` context
+passed, so locations, semantics and cross-tool referrals match the wire exactly.
+A raw `pydantic.ValidationError` renders differently and is not what is
+promised.
+
+```python
+api.run_experiments(**args)   # two-phase; see below
+api.jobs(**args)
+api.analyze_results(**args)
+api.inspect(**args)
+api.edit_schematic(**args)
+api.verify_circuit(**args)
+```
+
+**Handler caps are real, so generic depagination is not possible.**
+`budget=None` is already the fullest handler rendering, and several operations
+cap irreversibly (analyze failures, verify findings per rule, 50-run receipt
+pages, paged pin legends on a non-idempotent mutation). So each operation gets
+its own completion strategy:
+
+| Operation | Strategy |
+|-|-|
+| `analyze_results` | A **bounded resumable neutral evaluator**. The seam returns neutral work — rows, reductions, facts, failures, missing cases — plus an internal continuation position, honoring `analysis_budget_s` per drive so the whole-call bound stays (untrusted artifacts get a hard bound either way). MCP renders that position as its opaque cursor; Python drives the evaluator repeatedly, accumulating neutral results until the position is exhausted. "No cursor merging" means no merging of *rendered* MCP pages; accumulating neutral, unprojected, unrendered work is well-defined by construction. |
+| `verify_circuit` | Evaluator seam: uncapped findings per rule. The MCP door keeps its per-rule cap plus a truncation observation on top. |
+| `edit_schematic` | The mutation executes once and is never replayed. The seam is the **neutral in-memory view the handler already computes while holding the edit guard**: MCP paginates that view, Python returns it whole. Views are produced inside the edit transaction and bound to the committed `sha256`, never from a post-guard file re-read — a peer session's next revision could interleave. `dry_run` gets full views the same way, in memory, with nothing on disk to read. |
+| `run_experiments`, `jobs(status\|wait)`, `jobs(runs)` | A **loop-atomic neutral receipt snapshot**: one non-suspending evaluation on the private loop copies every mutable job-derived receipt field together — canonical rows keyed `(case_id, run_index)`, status, completeness, `outcome`, `failures`, `observations`, `artifacts`, and the attached analysis's status, result, error and observations. Never multi-page collection over live mutable state: time-A completeness beside time-C rows violates the completeness rule, and a stale `outcome` or `hint` beside a fresh failed row is the same fork one level up. `outcome` and `hint` are derived *from* the snapshot after the copy; static submission fields and a wait's historical `timed_out` fact are retained from the invocation. MCP pages the snapshot created for its current invocation, and a continuation request takes a fresh atomic snapshot and applies its existing offset, so live-status semantics are unchanged. Python takes one whole snapshot because it returns one whole response, then applies the original receipt's projection policy (`run_fields`, or the lean default) to it whole — returning the existing page shape with `returned == total`, `truncated == false`, `next_cursor == null`. No `assembled` field, no shape fork, no provenance change. If snapshot or assembly fails after submission, `ApiCallError` carries the original receipt and control token. A direct `api.jobs(action="runs")` goes through the same seam: treating it as an "other action" would recreate the mixed-time inventory the seam eliminates. |
+| `jobs(list)` | Flat cursor collection — plain offset, flat collections only. |
+| `jobs(cancel)` | One handler call, no collection. |
+
+**Two-phase `run_experiments`.** The API always submits with
+`execution.wait_s=0`, because the wire dwell is a presentation constant and is
+rejected as caller input (§7). The submission future is never cancelled on
+Ctrl-C; it settles either to a pre-submit failure or to a durable receipt.
+`wait=True` (the default) then blocks in successive `jobs(wait)` calls:
+
+- Ctrl-C cancels only the current wait task. The job keeps running, and the API
+  raises `ApiInterrupted` (a `KeyboardInterrupt`) **carrying the receipt and
+  job id**, so the handle is never lost.
+- `api.wait(job_id, timeout=None)` is the public wait. On timeout it returns
+  the current `jobs(wait)` snapshot with `timed_out: true` and leaves the job
+  running.
+- `wait=False` returns the submission receipt immediately, annotated with the
+  process-owned-job observation.
+- Exiting the `Api` context still cancels owned live jobs (§4).
+
+**`Api.reference(op=None) -> str`** is the argument catalogue.
+`reference()` returns the six-operation index; `reference('edit_schematic')`
+returns that operation's resolved argument tree — every field with type,
+default, enum members and union branches written out, nested models flattened
+onto dotted paths, and one worked example. No JSON Schema syntax, no `$ref`
+chains. It is a **staticmethod**: reading the catalogue must not require an
+engine session nor take the process's single session lease, so
+`Api.reference('inspect')` works before anything is opened. It renders from the
+same Pydantic models the call validates against, so it cannot drift.
+
+`python -m ltspice_mcp.api reference [OP]` prints the same catalogue with no
+engine boot. The package's lazy `__init__` (PEP 562) plus a stdlib-and-pydantic
+catalogue module keep scipy and the MCP SDK out of the interpreter; a
+cold-subprocess test pins that they stay out of `sys.modules`.
+
+The six methods carry that same text as their `__doc__`, installed at
+class-definition time from the same renderer, so `help(api.edit_schematic)` and
+`inspect.getdoc` answer directly.
+
+**Relative path arguments are taken from `working_dir`**, not the process CWD.
+The resolve chain carries an optional base directory in a context variable, and
+the `Api` sets it around every marshalled call, anchoring both the user path and
+any relative entry in `allowed_paths` (the generated TOML ships
+`allowed_paths = ["."]`, which is what made the CWD behavior bite). **MCP server
+resolution is unchanged**, and a test pins that; the base is this door's opt-in
+only.
+
+**For a subclass or a test double:** every public method marshals through
+`ApiMethodsMixin._marshal`, which wraps the coroutine with the working-dir
+anchor before handing it to `_call`. A host that mixes in `ApiMethodsMixin`
+inherits the anchoring; `_call`'s contract is unchanged.
+
+## 6. Errors
+
+- A typed engine exception that *escapes* a handler propagates unchanged.
+- `result.isError=True` raises `ApiCallError`, carrying the complete structured
+  payload plus convenience attributes `code`, `commit_state`, `job_id` and
+  `control_token` — a post-submit or post-commit payload preserves every
+  recovery handle.
+- Per-item failures, and `outcome="partial"|"failed"` envelopes with
+  `isError=False`, are **returned data**, not exceptions. Identical to the MCP
+  door's semantics.
+- The bridge never synthesizes a typed exception from an error code.
+- `structuredContent` is asserted present before unwrapping; a missing one is
+  an `ApiInternalError`, not a silent `None`.
+
+Exception hierarchy: `ApiError` is the base; `ApiCallError`, `ApiSessionError`
+(with `ApiClosedError` beneath it) and `ApiInternalError` derive from it.
+`ApiValidationError` derives from `ValueError` and `ApiInterrupted` from
+`KeyboardInterrupt`, so ordinary `except ValueError` / Ctrl-C handling still
+works.
+
+## 7. Door policy for wire-only controls
+
+Default (automatic) mode **rejects** `budget`, any cursor or continuation
+field, `view_cursors`, and `execution.wait_s`, with a message naming the
+remedy. It never auto-flips request fields that participate in the idempotency
+fingerprint: `per_run`, `outliers` and `signals_available` stay exactly as the
+caller wrote them, so an API replay of an MCP request never becomes an
+idempotency conflict. Detail beyond the handler's rendering comes from the §5
+collectors, not from mutating the submitted request. Presentation-only fields —
+`include.fields`, `run_fields`, `provenance` — pass through freely.
+
+`raw_page=True` accepts every wire control verbatim and returns exactly one
+handler page. It is the preview and MCP-parity hatch.
+
+## 8. Curated primitives
+
+```python
+raw = api.load_raw(raw_path=...)                    # XOR: raw_path | job_id
+raw = api.load_raw(job_id=..., run_index=0, case_id=None)
+raw.signals                    # list[str]
+raw.trace("V(out)", step=0)    # np.ndarray — complex preserved for .AC
+raw.axis(step=0)               # real array (time or frequency)
+raw.step_count; raw.steps      # metadata list aligned per step (log fallback)
+raw.analysis_type; raw.dialect; raw.source          # provenance
+api.measurements(job_id=..., run_index=0, case_id=None)
+```
+
+- `RawResult` is this project's wrapper; spicelib types never cross the
+  boundary.
+- **Arrays are detached copies.** The parsed object is shared with the handler
+  cache, which assumes immutability; caller mutation must not fork later results
+  between doors.
+- Experiment cases resolve through `resolve_experiment_run` and legacy jobs
+  through `resolve_raw_file`. `load_raw` routes on job type and never feeds an
+  experiment job to the legacy resolver.
+- All parsing goes through the bounded-parse wrapper, and `measurements`
+  performs a bounded log parse — the synchronous inline loader is not called.
+
+The AC and transient metric functions are re-exported under their existing
+names: arrays in, dict- or TypedDict-shaped mappings out, complex `H` for AC
+and real axes.
+
+- AC: `prepare_ac_arrays`, `unwrap_phase_safe`, `log_interp`,
+  `log_interp_complex`, `detect_crossings`, `find_crossings_any_quantity`,
+  `gain_at_frequencies`, `compute_filter_metrics`, `compute_stability_metrics`,
+  `compute_roll_off`, `compute_resonances`, `compute_return_loss`,
+  `integrate_noise`, `classify_filter`, `analyze_ac_structure`.
+- Transient: `window_and_clean`, `analyze_edge`, `analyze_pulse_response`,
+  `analyze_disturbance_response`, `analyze_timing_between`, `analyze_periodic`,
+  `analyze_thd`, `compute_signal_stats`, `compute_measurement_stats`.
+- Also `parse_spice_value`, which is not a metric but a value reader: variation
+  values cross the boundary as SPICE literals (`'5p'`) in both directions, and
+  nothing else on the facade parses one.
+
+**Typing-surface policy.** Every *project-defined* alias, TypedDict or nested
+output type appearing in a public annotation is importable from
+`ltspice_mcp.api`. Standard-library and dependency types (`numpy.ndarray`,
+`Sequence`, ...) are exempt. The type's defining module is an implementation
+detail: re-binding cannot change `__module__` or postponed-annotation globals,
+so `__module__`, reprs, documentation links and pickling behavior are
+observable but explicitly **not stable** — only importability from the facade
+is promised. A `typing.get_type_hints` test per public function pins that every
+referenced type resolves and is importable from the facade.
+
+## 9. `__all__` — the stability boundary
+
+`__all__` is what this package promises. Additions are minor; removals and
+renames are major. Dict return shapes track the MCP contract's versioning,
+because they are the same shapes. Signatures, units and array conventions for
+the §8 functions are frozen by their docstrings and pinned by an
+`__all__`-coverage test.
+
+It contains `Api`, `RawResult`, the exception types, the §8 function names, and
+the literal typing surface:
+
+- aliases: `Quantity`, `SearchDirection`, `CrossingDirection` (defined
+  identically in both metric modules and re-exported once), `FilterType`,
+  `StabilityLabel`, `CornerKind`;
+- outputs and their nested types: `CrossingWithQuantity`, `GainAtPoint`,
+  `ReturnLossOutput`, `FilterMetricsOutput`, `StabilityMetricsOutput`
+  (`Crossover`, `PhaseMargin`, `GainMargin`), `RollOffOutput`,
+  `ResonancesOutput` (`ResonancePeak`), `NoiseIntegralOutput`,
+  `EdgeMetricsOutput`, `PulseResponseOutput`, `DisturbanceResponseOutput`,
+  `TimingBetweenOutput`, `PeriodicMetricsOutput`, `SignalStatsOutput`,
+  `ThdOutput` (`HarmonicEntry`), `MeasurementStatsEntry`, `HistogramBin`,
+  `AcStructureResult`, `Corner`, `Observation`.
+
+A separate module, **`ltspice_mcp.api.types`**, re-exports the *argument* models
+the six operations validate against: `RenderPolicy`, the recipe union and its
+members, the inspect query kinds, the variation rules, and public aliases for
+the schematic op models (`AddComponentOp`, `WirePinsOp`, ...) that the applier
+keeps private. A validation error names one of these types; without the module
+there was no way to import the thing the message pointed at, and the observed
+recovery was reflecting over a private module. It is deliberately a separate
+module so that `__all__` stays the pinned stability boundary and does not move.
+
+## 10. What the tests must cover
+
+- **Parity.** `raw_page=True` with identical presentation arguments equals the
+  handler's `structuredContent` verbatim, with a drift pin per operation.
+  Default-mode results compare against an explicit composition of handler calls.
+- **Three-part parity oracle for capped data**, since "equals fully-collected
+  MCP pages" is impossible past an irreversible cap: (a) neutral evaluator
+  output equals Python output; (b) MCP output equals the documented projection
+  or cap of that neutral output; (c) every omitted record reconciles through
+  totals and truncation observations.
+- **Collectors.** More than 50 runs; more than 100 analyze rows or failures;
+  more than 25 verify findings per rule; more than 100 pin rows on one edit; a
+  batched `inspect` with several live cursors; an `.asc` net with pins *and*
+  coordinates paged; an analyze continuation with per-run rows, missing cases,
+  multiple recipes and a view-carrying `include.fields`; projected
+  (`run_fields`) and lean-default run assembly both preserving the receipt's
+  projection; a collector failure after a durable receipt keeping receipt and
+  control token in the raised error; an inspect restart discarding
+  pre-staleness partials (the two-revision mix test).
+- **Edit views.** Revision interleaving — a peer session commits between our
+  commit and any read, and the views still match *our* `sha256`; `dry_run`
+  returns full views with nothing on disk.
+- **Lease.** Concurrent constructors with exactly one winner; bootstrap failure
+  releasing the lease; a forked child constructing fresh over the inherited
+  stale lease, including a controlled fork *while another thread holds the
+  lease lock* (an unlocked happy-path fork does not pin the failure); server
+  lifespan and `Api` mutually exclusive in one process.
+- **Shutdown against live jobs.** Closing after a durable receipt while a
+  deliberately long-running job is active must reach `cancel_running`, proving
+  step 3 does not wait for natural completion.
+- **Snapshot coherence.** The assembled receipt is internally consistent across
+  all mutable fields: a job transitioning queued to produced during collection
+  can never yield produced rows beside `produced == 0`; a case failing between
+  invocation and snapshot can never yield `status="completed_with_failures"`
+  rows beside a stale `outcome="in_progress"`, a missing failure entry, or a
+  keep-waiting hint; an attached-analysis transition is captured atomically
+  with the rows it describes.
+- **Typing surface.** `typing.get_type_hints` resolves every public function,
+  and every referenced type is importable from `ltspice_mcp.api`.
+- **Lifecycle.** Close during pre-receipt submission, during a shielded rename,
+  during a jobs wait, during a bounded parse; concurrent calls plus close;
+  double close; calls after close; the fork guard; loop-thread re-entry.
+- **Interrupt.** Ctrl-C before and after the durable receipt, with the handle
+  preserved and the job not cancelled; `api.wait` timing out leaves the job
+  running.
+- **Parallel processes.** API and MCP server sharing a working directory, each
+  shutdown cancelling only its own jobs.
+- **`RawResult`.** Step slicing, experiment-case resolution, log fallback,
+  array-mutation isolation (mutate a returned array, cached result unchanged),
+  parse-deadline propagation, and AC complex-dtype pins on recorded fixtures.
+- **Door policy.** Budget and cursor rejection in automatic mode; exact
+  one-page behavior in raw mode; fingerprint identity — the same request via
+  MCP and then via the API replays idempotently.
+- **Bootstrap parity.** Symbol paths, working-directory config selection,
+  allowed paths, cleanup and job preload identical between a server boot and an
+  `Api` boot; no root-logger mutation in library mode.
+- The archetype battery once through the API door (build, run, analyze, verify)
+  as an integration smoke test.
+
+## 11. Roadmap
+
+**A per-job detached owner.** On `wait=False` from a process that will not stay
+alive, spawn a minimal supervisor process for that one job: it submits,
+supervises to terminality, updates the record, and exits. It fits the existing
+model with almost no change — ownership is already an owner-pid with liveness
+checks, cancellation is already token-scoped, and other sessions already treat
+a live owner correctly — needs no rendezvous or daemon lifecycle, and cannot
+skew versions because it is spawned from the same install at call time. Known
+cost: the parallelism cap is per process, so each detached owner carries its
+own, widening the existing multi-session residual.
+
+A full broker daemon — a socket-addressed detached server mode — remains the
+possible end state behind that step. It inverts the shutdown-cancels-jobs
+invariant and buys every classic daemon tax (version skew, stale sockets,
+config drift), so it gets built only if the middle rung proves insufficient.
+
+`api.log_diagnostics` is deferred unless callers are seen re-parsing logs by
+hand.
