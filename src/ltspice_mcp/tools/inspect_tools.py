@@ -1,7 +1,7 @@
 """inspect — the consolidated read-only UNDERSTAND surface.
 
 One tool answers a batch of independent read-only ``queries`` about the server
-and the circuits it can reach. Each query is one of six kinds:
+and the circuits it can reach. Each query is one of seven kinds:
 
 * ``capabilities`` — detected simulators + dialects, exporter presence, job
   persistence, allowed roots, active profile, the configured limits, the
@@ -33,6 +33,13 @@ refused with the current digest attached, so that path costs one retry rather
 than a hunt.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
   ``enumerate`` lists every model defined in the given ``libs``.
+* ``reference`` — the tools' own branch vocabulary (``lib/reference_index.py``):
+  a plain-words ``query`` returns the closest analysis recipes, schematic ops,
+  variation kinds, checks and job actions with their full field tables, and no
+  ``query`` returns the table of contents. It is the answer to "which recipe
+  gives me phase margin" and to "what does this branch take" on the ``compact``
+  tool listing, where per-argument descriptions are not on the wire at all. It
+  reads no file and touches no session state.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
@@ -68,7 +75,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib import reference_index, response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -353,6 +360,11 @@ _CURSOR_DESCRIPTION = (
     "binds this query and carries a row offset, not a snapshot."
 )
 
+#: Most matches one reference lookup will return. Each match carries a full
+#: field table, so the cap is what stops a vague query from answering with the
+#: whole vocabulary at full detail.
+REFERENCE_LIMIT_CAP = 20
+
 # The file-backed kinds bind the file itself, so the stronger claim holds there.
 _CURSOR_DESCRIPTION_FILE = (
     "Page token from a previous 'next_cursor' — echo it back unmodified. It "
@@ -500,15 +512,43 @@ class ModelQuery(StrictModel):
         return self
 
 
+class ReferenceQuery(StrictModel):
+    """Look up the branch vocabulary of this server's tools — analysis recipes,
+    schematic ops, variation kinds, query kinds, checks and job actions — and
+    get each branch's fields with their types, defaults and units."""
+
+    kind: Literal["reference"]
+    query: str | None = Field(
+        default=None,
+        description=(
+            "What you are trying to measure or do, in plain words: 'phase "
+            "margin', 'connect two pins'. Omit it for the table of contents: "
+            "every branch name and one line, no fields."
+        ),
+    )
+    limit: int = Field(
+        default=5,
+        ge=1,
+        le=REFERENCE_LIMIT_CAP,
+        description="How many matches to return with their full field tables.",
+    )
+
+
 Query: TypeAlias = Annotated[
-    CapabilitiesQuery | SymbolsQuery | SymbolQuery | NetQuery | ComponentsQuery | ModelQuery,
+    CapabilitiesQuery
+    | SymbolsQuery
+    | SymbolQuery
+    | NetQuery
+    | ComponentsQuery
+    | ModelQuery
+    | ReferenceQuery,
     Field(discriminator="kind"),
 ]
 
 _QUERY_ADAPTER = TypeAdapter(Query)
-_QUERY_MODELS: tuple[type[StrictModel], ...] = get_args(get_args(Query)[0])
+QUERY_MODELS: tuple[type[StrictModel], ...] = get_args(get_args(Query)[0])
 SUPPORTED_KINDS: tuple[str, ...] = tuple(
-    get_args(model.model_fields["kind"].annotation)[0] for model in _QUERY_MODELS
+    get_args(model.model_fields["kind"].annotation)[0] for model in QUERY_MODELS
 )
 _SUPPORTED_KIND_SET = frozenset(SUPPORTED_KINDS)
 
@@ -1368,6 +1408,52 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
 
 
 # ---------------------------------------------------------------------------
+# reference
+# ---------------------------------------------------------------------------
+
+_REFERENCE_CONTENTS_HINT = (
+    "Ask again with a 'query' in plain words — inspect(kind='reference', "
+    "query='phase margin') — for a branch's fields, types, defaults and units."
+)
+
+
+def _do_reference(q: ReferenceQuery) -> dict[str, Any]:
+    """Search the tools' branch vocabulary, or list it when no query is given.
+
+    Nothing here reads a file or the session, so there is no path to resolve,
+    no cursor to bind and nothing to offload: the index is derived from the
+    input models once per process and searched in memory.
+    """
+    if q.query is None:
+        return {
+            "data": {
+                "contents": reference_index.table_of_contents(),
+                "total_branches": len(reference_index.build_index()),
+                "hint": _REFERENCE_CONTENTS_HINT,
+            }
+        }
+
+    matches, total = reference_index.search(q.query, limit=q.limit)
+    data: dict[str, Any] = {
+        "query": q.query,
+        "matches": [entry.as_dict() for entry in matches],
+        "total_matches": total,
+        "returned": len(matches),
+    }
+    if not matches:
+        data["hint"] = (
+            f"Nothing matched {q.query!r}. Call inspect(kind='reference') with no "
+            "query for the whole vocabulary, or read spice://guide."
+        )
+    elif total > len(matches):
+        data["hint"] = (
+            f"{total} branches matched; the {len(matches)} closest are shown. Raise "
+            f"'limit' (up to {REFERENCE_LIMIT_CAP}) or narrow the query."
+        )
+    return {"data": data}
+
+
+# ---------------------------------------------------------------------------
 # Shared per-item helpers + dispatch
 # ---------------------------------------------------------------------------
 
@@ -1391,6 +1477,8 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return await _do_net(query, state, view)
     if isinstance(query, ComponentsQuery):
         return await _do_components(query, state, view)
+    if isinstance(query, ReferenceQuery):
+        return _do_reference(query)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -1403,6 +1491,84 @@ _ERROR_SCHEMA: dict[str, Any] = {
         "supported": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["code", "message"],
+}
+
+#: The ``reference`` kind's payload, declared inside the otherwise-open per-item
+#: ``data``. ``matches`` and ``contents`` are names no other kind returns, so
+#: declaring them here says what a reference answer looks like without saying
+#: anything about a net trace or a component list.
+_REFERENCE_FIELD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "Argument name; dotted inside a nested object."},
+        "type": {
+            "type": "string",
+            "description": "The type, with enum members written out and any bounds appended.",
+        },
+        "required": {"type": "boolean", "description": "Present only when the field is required."},
+        "default": {
+            "type": "string",
+            "description": "The default as JSON, or a word for what a factory produces.",
+        },
+        "description": {
+            "type": "string",
+            "description": "Units and conventions, where it has any.",
+        },
+    },
+    "required": ["name", "type"],
+}
+
+_REFERENCE_BRANCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string"},
+        "family": {
+            "type": "string",
+            "description": "What this branch is to its tool: recipe, op, check, action, ...",
+        },
+        "name": {"type": "string", "description": "The discriminant value to pass."},
+        "summary": {"type": "string"},
+        "call": {"type": "string", "description": "How the call carrying this branch is written."},
+        "fields": {"type": "array", "items": _REFERENCE_FIELD_SCHEMA},
+    },
+    "required": ["tool", "family", "name", "summary"],
+}
+
+_REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
+    # Echoed by the 'reference' and 'model' kinds alike, and null on a 'model'
+    # enumerate, which asks for everything rather than for a match.
+    "query": {"type": ["string", "null"]},
+    "matches": {
+        "type": "array",
+        "items": _REFERENCE_BRANCH_SCHEMA,
+        "description": "Best matches first, each with its full field table.",
+    },
+    "total_matches": {"type": "integer"},
+    "contents": {
+        "type": "array",
+        "description": "The table of contents, returned when no query was given.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "family": {"type": "string"},
+                "branches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}, "summary": {"type": "string"}},
+                        "required": ["name", "summary"],
+                    },
+                },
+            },
+            "required": ["tool", "family", "branches"],
+        },
+    },
+    "total_branches": {"type": "integer"},
+    "hint": {
+        "type": "string",
+        "description": "What to ask next: how to narrow, widen, or reach the full guide.",
+    },
 }
 
 _OUTPUT_SCHEMA: dict[str, Any] = {
@@ -1425,8 +1591,11 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "ok": {"type": "boolean"},
                     "error": _ERROR_SCHEMA,
                     # Kind-specific payload; its shape is documented per kind in
-                    # the module docstring and stays open here by design.
-                    "data": {"type": "object"},
+                    # the module docstring and stays open here by design. The
+                    # reference lookup's two collections are named because
+                    # nothing else on this tool returns them, so declaring them
+                    # constrains that kind without constraining any other.
+                    "data": {"type": "object", "properties": _REFERENCE_DATA_PROPERTIES},
                     "next_cursor": {"type": ["string", "null"]},
                     "page": {
                         "type": "object",
@@ -1503,11 +1672,12 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'model' — each with its own arguments, described on its branch "
-    "of the query schema. A denied path, a stale cursor, an unknown kind, or a "
-    "malformed query fails only that item; every other query still returns, and "
-    "paginated kinds resume via 'cursor'. It is the only tool on this surface "
-    "that never writes."
+    "'components', 'model', 'reference' — each with its own arguments, described "
+    "on its branch of the query schema. 'reference' searches every tool's "
+    "recipes, ops, checks and their fields in plain words ('phase margin'). A "
+    "denied path, a stale cursor, an unknown kind, or a malformed query fails "
+    "only that item; every other query still returns, and paginated kinds resume "
+    "via 'cursor'. It is the only tool on this surface that never writes."
 )
 
 
