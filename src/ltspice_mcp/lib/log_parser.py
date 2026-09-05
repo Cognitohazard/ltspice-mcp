@@ -18,7 +18,6 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
-from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.spice_validator import validate_directive
 
 logger = logging.getLogger(__name__)
@@ -88,23 +87,11 @@ class MeasurementsOutput(TypedDict):
     failed_measurements: list[str]
 
 
-_MAX_DIAGNOSTICS = 50
-
 # Cap on how much of a log ``extract_error_context`` reads (total bytes; half
 # head, half tail). The excerpt only ever needs the head (parse errors) and the
 # tail (abort/convergence dump), and a pathological abort log — a .control loop
 # echoing per step, a runaway node-voltage dump — can reach hundreds of MB.
 _ERROR_CONTEXT_READ_CAP = 8 * 1024 * 1024
-
-# Above this many ESTIMATED trace samples (axis points × number of non-axis
-# traces) a completed result is loaded axis-only and the per-trace value scan
-# (NaN/Inf/extreme-magnitude detection) is skipped, with the gap surfaced as a
-# coverage observation. At or below it, all traces are loaded and scanned so the
-# value facts are surfaced and no skip is reported. Budgeting on TOTAL samples,
-# not axis points alone, bounds the actual load: a wide node dump with a
-# moderate point count costs as much memory as a long single-probe .tran, and
-# both must skip. 5M samples ≈ 40 MB (real) / 80 MB (complex AC).
-_VALUE_SCAN_SAMPLE_BUDGET = 5_000_000
 
 # Error keywords to search for in log files (case-insensitive). The trailing
 # entries are LTspice convergence-abort phrases (the one-word "Timestep too
@@ -845,8 +832,8 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 _RE_FILE_LINE_PREFIX = re.compile(r"^(?P<path>.+?)\((?P<line>\d+)\):\s+(?P<msg>.+)$")
 
 # How many distinguishing line numbers to list in a collapsed family before
-# truncating with a ``(+N more)`` tail — bounds a huge family's manifest the
-# same way ``cap_list`` bounds the diagnostics list itself.
+# truncating with a ``(+N more)`` tail, so a huge family's manifest stays
+# bounded.
 _FAMILY_EXAMPLE_CAP = 12
 
 
@@ -1069,136 +1056,6 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
     except Exception as e:
         logger.error(f"Error reading log file {log_file}: {e}")
         return f"(Error reading log file: {e})"
-
-
-def parse_success_summary(
-    raw_file: Path,
-    log_file: Path,
-    duration: float,
-    *,
-    dialect: str | None = None,
-    netlist: Path | None = None,
-) -> dict:
-    """Build the success-path summary that ``run_simulation`` returns.
-
-    Delegates to ``raw_parser.build_simulation_summary`` so the canonical
-    summary fields (``range``, ``measurements``, ``fourier``, ``meas_errors``)
-    are included alongside the legacy ``sim_type``/``step_count``/``signals``
-    fields. Adds ``raw_file``/``log_file`` for downstream tool chains that
-    feed these back into ``simulation_summary``, ``measurement_stats``, etc.
-
-    ``netlist`` (when supplied and readable) enables the requested-vs-produced
-    reconciliation in the observation surfacer.
-
-    Value surfacing respects the bounded-load contract: single-point results
-    (operating points) load full traces and are scanned for NaN/extremes;
-    multi-point results stay axis-only and record the skipped scan as a coverage
-    observation rather than materialising every trace on every completion.
-
-    Truncates ``warnings``/``errors`` to ``_MAX_DIAGNOSTICS`` entries with
-    the ``*_truncated`` sibling preserved from the prior implementation.
-
-    Returns partial data on parse errors (graceful degradation): an
-    unparseable raw still yields a dict carrying the paths and duration.
-    """
-    from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, build_simulation_summary
-    from ltspice_mcp.lib.result_observations import deck_observation_inputs
-
-    requested: dict[str, list[str]] | None = None
-    source_amplitudes: dict[str, float] | None = None
-    if netlist is not None:
-        requested, source_amplitudes = deck_observation_inputs(netlist)
-
-    result: dict = {
-        "sim_type": "Unknown",
-        "duration": duration,
-        "step_count": 1,
-        "warnings": [],
-        "signals": [],
-        "raw_file": str(raw_file),
-        "log_file": str(log_file),
-    }
-
-    try:
-        # Two-step load to keep the success-path bounded: read the header
-        # (no trace data) to discover the axis trace name, then re-open
-        # loading ONLY that single trace. ``build_simulation_summary``
-        # needs the axis to populate ``range`` and ``point_count``; it
-        # does NOT need V(*)/I(*) trace data. Loading "*" would
-        # materialise every signal on every completion — fine for a
-        # short .op, but a long .tran has no upper bound on how much that
-        # would read, so the success path must never load "*" blindly.
-        header = OffsetAwareRawRead(str(raw_file), traces_to_read=None, dialect=dialect)
-        trace_names = header.get_trace_names()
-        # Decide value-scan coverage by the ESTIMATED total sample count (axis
-        # points × number of non-axis traces) — the real memory/time cost of
-        # loading "*", not the axis length alone. At or below the budget, load
-        # all traces and scan (every normal interactive run, including a
-        # single-point operating point and the floating-node / 1e30 case worth
-        # scanning); above it (a long .tran OR a wide node dump) stay axis-only
-        # and let the surfacer record the skipped scan, bounding the worst-case
-        # load. Reading the header counts avoids a throwaway open to size it.
-        try:
-            point_count = header.nPoints
-        except Exception:
-            point_count = 1
-        trace_count = max(0, len(trace_names) - 1)  # exclude the axis
-        if point_count * trace_count <= _VALUE_SCAN_SAMPLE_BUDGET:
-            raw_read = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect=dialect)
-            value_scan = "scan"
-        else:
-            axis_only = [trace_names[0]] if trace_names else None
-            raw_read = OffsetAwareRawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
-            value_scan = "skipped_large"
-    except Exception as e:
-        logger.warning(f"Could not parse raw file {raw_file}: {e}")
-        # The raw exists but could not be read. That fact must reach the
-        # response, not just the server's stderr: without it the degraded
-        # summary below (sim_type Unknown, zero signals) renders as a clean
-        # success and the agent has no way to know the data was never read.
-        result["errors"] = [f"Raw file could not be parsed: {type(e).__name__}: {e}"]
-        result["observations"] = [
-            {
-                "code": "raw_parse_failed",
-                "kind": "coverage",
-                "detail": (
-                    "The .raw file exists but could not be parsed; signals, range, "
-                    "and point counts below reflect no data from this run. "
-                    f"Parser error: {type(e).__name__}: {e}"
-                ),
-            }
-        ]
-        # Surface what diagnostics we can from the log alongside it.
-        if log_file.exists():
-            try:
-                diagnostics = extract_log_diagnostics(log_file)
-                result["warnings"] = diagnostics["warnings"]
-                if diagnostics["errors"]:
-                    result["errors"] = [*result["errors"], *diagnostics["errors"]]
-            except Exception as log_e:
-                logger.warning(f"Could not parse log file {log_file}: {log_e}")
-        return result
-
-    log_path = log_file if log_file.exists() else None
-    summary = build_simulation_summary(
-        raw_read,
-        log_path,
-        duration,
-        requested=requested,
-        value_scan=value_scan,
-        source_amplitudes=source_amplitudes,
-    )
-    # ``summary`` doesn't carry ``raw_file``/``log_file``; they're already
-    # set in ``result`` above and survive ``update``.
-    result.update(summary)
-
-    # Diagnostics truncation (preserved from the legacy contract).
-    for key in ("warnings", "errors"):
-        items = result.get(key) or []
-        if items:
-            cap_list(result, key, items, _MAX_DIAGNOSTICS)
-
-    return result
 
 
 # Suffixes that spicelib's LTSpiceLogReader peels off into separate flat
