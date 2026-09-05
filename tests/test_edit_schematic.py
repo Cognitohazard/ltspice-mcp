@@ -781,7 +781,8 @@ async def test_a_view_this_tool_does_not_have_is_rejected(asc_state, view: str):
 async def test_the_edit_response_carries_no_render_block(asc_state):
     data = await _build_blank(asc_state, "norender", _DIVIDER_OPS)
     assert "render" not in data["views"]
-    assert data["artifacts"] == []
+    # Rendering was this tool's only artifact producer, so the key went with it.
+    assert "artifacts" not in data
 
 
 @pytest.mark.parametrize(
