@@ -186,10 +186,12 @@ The former `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6
 The two interfaces are meant to run side by side: the MCP server is the
 long-lived process that owns jobs which outlive a call, serves resources, and
 renders the widget; the Python API is for loops and complete results in the
-same working directory, reading and writing the same job records. The hand-off
-of a script's job to a running server is not built yet (a job belongs to the
-process that submitted it) — see docs/design/python_api.md, "Coexistence with a
-server".
+same working directory, reading and writing the same job records. A job the
+API submits belongs to the process that submitted it, unless
+`run_experiments(wait=False, detach=True)` hands it to a per-job owner
+(`detached_owner.py`) spawned to supervise it — which is what lets a
+short-lived script leave a job running. See docs/design/python_api.md §11 and
+"Coexistence with a server".
 
 The same six ops are importable: `Api(working_dir=...)` boots the engine in-process (`engine.bootstrap_library_engine` — the same bootstrap `server_lifespan` enters via `bootstrap_server_engine`) and exposes them as synchronous methods with **complete** results where the wire pages or caps, plus `load_raw`/`measurements` (numpy access, detached copies) and the AC/transient metric functions under their existing names. One evaluator, two interfaces (MCP and Python) — the handlers and the API consume the same evaluate/render seams, so anything that would fork semantics between them is a defect.
 
