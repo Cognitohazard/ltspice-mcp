@@ -42,7 +42,7 @@ class TestServerInstructionsFloor:
             "inspect",
         ):
             assert tool in CONSOLIDATED_INSTRUCTIONS
-        assert "completed is not correct" in CONSOLIDATED_INSTRUCTIONS
+        assert "status completed and still hold a degenerate result" in CONSOLIDATED_INSTRUCTIONS
 
 
 class TestGuideIsEngineGeneral:

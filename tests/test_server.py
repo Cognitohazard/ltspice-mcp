@@ -55,7 +55,7 @@ class TestServerInstructions:
         assert "deck" in text.lower()
         assert "run_experiments" in text and "analyze_results" in text
         assert "edit_schematic" in text
-        assert "completed is not correct" in text
+        assert "status completed and still hold a degenerate result" in text
         # must name no tool the surface does not expose
         for dead in ("run_simulation", "check_job", "bode_metrics", "create_netlist"):
             assert dead not in text
