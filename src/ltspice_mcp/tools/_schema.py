@@ -1,16 +1,21 @@
 """Schema generation and shrinking for the advertised tool surface.
 
-Three jobs, all of them about the JSON Schema a tool publishes rather than
-about what a tool *does*:
+Two jobs, both about the JSON Schema a tool publishes rather than about what a
+tool *does*:
 
 * ``ToolInput`` and ``build_input_schema`` — turn a Pydantic input model into
   the ``inputSchema`` the registry advertises, through the shrinking passes
   (title strip, type-keyword compaction, shared-fragment ``$defs`` hoist).
-* ``strip_wire_prose`` — the advertised copy of a schema, carrying only the
-  load-bearing field prose (see ``WIRE_PROSE_KEEP``).
 * ``schema_from_typeddict`` — the output-schema generator, so a tool's
   ``structuredContent`` contract is derived from the TypedDict the lib already
   returns instead of being hand-written twice.
+
+Every pass here is structural: it changes how a schema is spelled, never what
+it says. The prose is not filtered — every description on a model is a
+description a client is shown — so the way the surface stays small is that
+each description is written short. ``tests/test_consolidated_contracts.py``
+pins both halves: the advertised descriptions equal the source ones, and each
+tool's serialized definition stays under its size bound.
 
 Split out of ``tools/_base`` so a change to how schemas are shrunk stops being
 a change to the module every tool imports. ``tools/_base`` re-exports what the
@@ -346,65 +351,6 @@ def build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     """
     schema = _strip_titles(input_model.wire_input_schema())
     return _hoist_shared_fragments(_compact_type_keywords(schema))
-
-
-# What earns a description a place on the advertised wire: unit, convention,
-# inversion, and protocol-contract markers — the sentence class measured as
-# load-bearing (agents who lost it silently guessed field units wrong by
-# orders of magnitude), against routing/derivable prose measured as inert.
-# Substring semantics are deliberate and fail-open: a marker inside a longer
-# token (the 'hz' in 'from_hz', the 'db' in 'level_db') KEEPS the text — an
-# over-match ships a sentence it could have cut, never the reverse — and the
-# surface-size pins ratchet what over-matching may cost.
-# A live A/B over the full 11-request bench then licensed serving ONLY this
-# class: the lean wire lost nothing and cost 15% less. Names, structure,
-# enums, and defaults always stay; the full text remains on the registered
-# definition and the models, so api.reference() and spice://guide carry the
-# depth. The benchmark harness's schema-prune tooling mirrors this pattern —
-# keep them in step if either changes.
-WIRE_PROSE_KEEP = re.compile(
-    r"(dB|degrees?|unwrapp?ed|percent|fraction|volts?|seconds?|hertz|Hz|µm|"
-    r"V·µm|mV|sigma|√|sqrt|·|0 disables|echo it back|verbatim|clockwise|"
-    # A pointer to the depth channels is protocol-contract prose: dropping it
-    # would orphan the very branch stubs that rely on it (the dormant-recipe
-    # stubs advertise nothing BUT their pointer).
-    r"mirrors|api\.reference|spice://guide|"
-    # Context cost is a unit statement too: an argument that makes every later
-    # turn more expensive (an inline image) names its price in tokens. Word-
-    # bounded, unlike the rest: the bare stem would also ship every sentence
-    # that mentions a control_token.
-    r"\btokens\b)",
-    re.I,
-)
-
-
-def _keep_wire_prose(description: str | None) -> str | None:
-    """The advertised copy of one description: itself, or nothing."""
-    if description is not None and WIRE_PROSE_KEEP.search(description):
-        return description
-    return None
-
-
-def strip_wire_prose(node: Any) -> Any:
-    """Advertised-schema copy with every non-load-bearing description dropped.
-
-    Unlike ``_strip_titles`` this walker needs no name-map awareness: it only
-    ever touches a ``description`` key whose VALUE is a string, so a property
-    that happens to be named ``description`` keeps its (dict) schema intact.
-    """
-    if isinstance(node, dict):
-        out = {}
-        for key, value in node.items():
-            if key == "description" and isinstance(value, str):
-                kept = _keep_wire_prose(value)
-                if kept is not None:
-                    out[key] = kept
-                continue
-            out[key] = strip_wire_prose(value)
-        return out
-    if isinstance(node, list):
-        return [strip_wire_prose(value) for value in node]
-    return node
 
 
 # ---------------------------------------------------------------------------

@@ -89,12 +89,11 @@ class TestToolSchemas:
 
 
 class TestConsolidatedInputDocumentation:
-    """Every top-level argument must say what it is for AT THE SOURCE — the
-    registered definition, which is what api.reference() and spice://guide
-    render from. The ADVERTISED wire deliberately serves semantics-only prose
-    (only unit/convention/inversion/pointer sentences survive — see
-    WIRE_PROSE_KEEP), so the wire copy is allowed to carry bare names; the
-    documentation obligation moved to the depth channels, not away."""
+    """Every top-level argument must say what it is for. The description on
+    the model is what a client is shown, what api.reference() prints, and what
+    spice://guide renders — one text, three readers — so an argument with none
+    is undocumented everywhere at once. Keep each one short; the depth belongs
+    in docs/design/mcp_surface.md or the guide, with a pointer left behind."""
 
     def test_every_consolidated_top_level_field_is_documented(self):
         _, dispatch = get_tools()

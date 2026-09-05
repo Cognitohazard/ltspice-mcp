@@ -570,26 +570,26 @@ class TestOutputSchemaCoverage:
 # the bound is then raised deliberately, in the same change that earns it. A
 # shrink needs no re-pin.
 #
-# What the wire carries: each tool's own description verbatim (a client that
-# does not show server instructions has nothing else to route on), field
-# descriptions only when they carry a unit/convention/inversion/pointer marker
-# (WIRE_PROSE_KEEP in tools/_schema.py), and no outputSchema. The full prose
-# stays on the registered definition, api.reference(), and spice://guide.
+# The rule these bounds enforce: source equals wire. Every description a model
+# declares ships verbatim — nothing is filtered on the way out — so a
+# description is kept short at the source, and the depth it cannot hold moves
+# to docs/design/mcp_surface.md or spice://guide with a pointer left behind.
+# The only thing the advertised copy drops is outputSchema.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Variations, attached analysis, and the receipt row shape. The attached
     # recipes advertise their metric names and a pointer, not a second copy of
     # the recipe branches: a client cannot resolve a $ref into another tool's
     # document, so carrying the grammar twice measured 13 KB more on every
     # session, to restate what analyze_results publishes on the same wire.
-    "run_experiments": 8103,
+    "run_experiments": 14967,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
-    "jobs": 4001,
+    "jobs": 5838,
     # Twenty-odd recipe branches; the largest schema on the surface.
-    "analyze_results": 16897,
+    "analyze_results": 20763,
     # Five query kinds, each with its own argument shape.
-    "inspect": 4991,
+    "inspect": 8008,
     # The typed op union plus render/compare views. Re-pinned 6760 -> 6733 when
     # the op models' $defs keys lost their leading underscore with the move
     # into lib/schematic_ops.py, then 6733 -> 7491 when render and compare
@@ -597,15 +597,15 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # advertise BOTH spellings — the objects, and the flat fields retained as
     # aliases for 0.6 — which is what the compatibility window costs; the
     # growth comes back when the aliases go.
-    "edit_schematic": 7491,
+    "edit_schematic": 15655,
     # Checks, the shared render policy and compare spec (each with the
     # verify-only fields on a subclass), and the flat compare fields retained
     # as aliases. Re-pinned 2535 -> 3009 for that same second spelling, then
     # 3009 -> 3142 when the netlist path gained the connectivity checks: a
     # caller cannot ask for what the description does not say it looks at.
-    "verify_circuit": 3142,
+    "verify_circuit": 6872,
     # Job/case addressing, windowing, and delivery flags.
-    "plot_waveform": 2174,
+    "plot_waveform": 3871,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
@@ -707,69 +707,47 @@ class TestDormantRecipeWireStubs:
                 assert field in segment, f"{metric} lost {field} in the catalogue"
 
 
-class TestSemanticsOnlyWire:
-    """The advertised wire serves only load-bearing prose; the depth stays at
-    the source. Pins both halves of that split so neither can silently rot:
-    a description reaching the wire without a marker means the strip stopped
-    running; a source definition losing its prose means the depth channels
-    (api.reference, spice://guide, the doc gates) went blind."""
+class TestAdvertisedProseIsTheSource:
+    """A client is shown exactly the prose the source declares.
+
+    Nothing filters descriptions between the registered definition and the
+    advertised one, so a reader of the models knows what ships. The surface
+    stays small because each description is written short — the size pins
+    below are what holds that — not because some of them are hidden. A
+    transform that started dropping or rewriting prose on the way out would
+    fail here.
+    """
 
     @staticmethod
-    def _descriptions(node: Any) -> Iterator[str]:
+    def _descriptions(node: Any, path: str = "") -> dict[str, str]:
+        """Every description in a schema, keyed by where it sits."""
+        found: dict[str, str] = {}
         if isinstance(node, dict):
             for key, value in node.items():
                 if key == "description" and isinstance(value, str):
-                    yield value
+                    found[path or "<root>"] = value
                 else:
-                    yield from TestSemanticsOnlyWire._descriptions(value)
+                    found |= TestAdvertisedProseIsTheSource._descriptions(
+                        value, f"{path}.{key}" if path else key
+                    )
         elif isinstance(node, list):
-            for item in node:
-                yield from TestSemanticsOnlyWire._descriptions(item)
+            for index, item in enumerate(node):
+                found |= TestAdvertisedProseIsTheSource._descriptions(item, f"{path}[{index}]")
+        return found
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
-    def test_every_advertised_description_carries_a_keep_marker(self, name: str):
-        from ltspice_mcp.tools._schema import WIRE_PROSE_KEEP
-
-        tool_def = _registered()[name]
-        # The tool's own description ships verbatim: a client that does not
-        # surface server instructions has nothing else to route on.
-        assert tool_def.description == _source_definitions()[name].description
-        for text in self._descriptions(tool_def.inputSchema):
-            assert WIRE_PROSE_KEEP.search(text), (
-                f"{name}: advertised field description without a unit/convention/"
-                f"pointer marker reached the wire: {text[:120]!r}"
-            )
-
-    def test_the_source_definition_keeps_prose_the_wire_dropped(self):
-        source = _source_definitions()["edit_schematic"]
-        advertised = _registered()["edit_schematic"]
-        source_ops = source.inputSchema["properties"]["ops"].get("description") or ""
-        advertised_ops = advertised.inputSchema["properties"]["ops"].get("description")
-        assert "remove_component" in source_ops
-        assert advertised_ops is None, (
-            "the ops description carries no keep marker, so the wire copy "
-            "should have dropped it — the strip is not running"
+    def test_advertised_descriptions_equal_the_source(self, name: str):
+        source = _source_definitions()[name]
+        advertised = _registered()[name]
+        assert advertised.description == source.description
+        source_fields = self._descriptions(source.inputSchema)
+        advertised_fields = self._descriptions(advertised.inputSchema)
+        assert set(advertised_fields) == set(source_fields), (
+            f"{name}: the advertised schema documents different places than the "
+            "source does — the two definitions must carry the same descriptions"
         )
-
-    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
-    def test_structure_survives_the_strip(self, name: str):
-        """Names, enums, and defaults are untouchable — only prose moves."""
-        from ltspice_mcp.tools._schema import strip_wire_prose
-
-        source = _source_definitions()[name].inputSchema
-        advertised = _registered()[name].inputSchema
-
-        def skeleton(node: Any) -> Any:
-            if isinstance(node, dict):
-                return {k: skeleton(v) for k, v in node.items() if k != "description"}
-            if isinstance(node, list):
-                return [skeleton(v) for v in node]
-            return node
-
-        assert skeleton(advertised) == skeleton(source)
-        # And the advertised copy is exactly the strip of the source — no
-        # second transformation hiding in the pipeline.
-        assert advertised == strip_wire_prose(source)
+        for where, text in source_fields.items():
+            assert advertised_fields[where] == text, f"{name}: {where} differs from the source"
 
 
 def _wire_sizes() -> dict[str, int]:
