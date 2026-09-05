@@ -424,7 +424,7 @@ class OperatingPointRecipe(KeyedRecipe):
             "'M6') instead of the whole bias point. Unscoped, the value carries "
             "every node voltage, every branch current, and every device's "
             "params — tens of KB on a real opamp, against a few hundred bytes "
-            "for one device."
+            "for one device, which is what most questions are about."
         ),
     )
 

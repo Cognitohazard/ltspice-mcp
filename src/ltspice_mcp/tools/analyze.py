@@ -376,7 +376,7 @@ class AnalyzeInclude(StrictModel):
             "Add the artifact paths and content digests to each entry of "
             "'source_hashes'. Off by default because runs are addressed by "
             "manifest_id and job_id, which are always present; the paths and hashes "
-            "record what was analyzed rather than how to reach a run."
+            "are the evidence of what was analyzed, not the way to reach a run."
         ),
     )
     fields: list[str] | None = Field(
