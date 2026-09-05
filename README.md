@@ -125,7 +125,7 @@ Once connected, you ask for circuit work in plain language. The assistant design
 
 > **"Bias this NMOS common-source stage into saturation at the target drain current and report gm/ID."**
 
-The assistant writes the netlist, solves the bias point on LTspice, and reads the device's operating point back by name — drain current, gm, gds, VDS against VDSAT to confirm it's in saturation, and the gm/ID that analog designers size to. If the bias is off, it nudges the gate reference or W/L and re-runs, a couple of seconds per pass.
+The assistant writes the netlist, solves the bias point on LTspice, and reads the device's operating point back by name — drain current, gm, gds, VDS against VDSAT to confirm it's in saturation, and the gm/ID that analog designers size to. If the bias is off, it adjusts the gate reference or W/L and re-runs, a couple of seconds per pass.
 
 Other requests that work the same way:
 
@@ -133,14 +133,14 @@ Other requests that work the same way:
 - *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."* — perturbs components per run, simulates the batch, and reports mean, sigma, and worst-case values per measurement.
 - *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."* — parameter sweep with per-run results.
 - *"Characterize this NMOS: gm and gm/ID vs VGS."* — writes a `.dc Vgs` deck with `.save @m1[gm] @m1[id]`, runs it on ngspice, and returns the gm/ID table as one CSV (no `.control` block, no rawfile parsing).
-- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."* — searches the libraries the deck pulls in for a part (`inspect(kind="model")`), drops it into a pulsed-gate transient, and reads Vds(on) and load current back from the `.meas` results.
+- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."* — searches the libraries the deck pulls in for a part (`inspect(kind="model")`), puts it into a pulsed-gate transient, and reads Vds(on) and load current back from the `.meas` results.
 - *"Build this differential pair as a schematic I can open in LTspice."* — places and wires the components into a real `.asc`, with orthogonal routing and pin-collision checks.
 - *"Is this loop stable?"* — AC analysis of the loop gain; reports phase and gain margin at every crossover, not just the first.
 - *"What's the resonant frequency and Q of this series RLC?"* — runs an AC sweep and reports each peak's center frequency, Q, and −3 dB bandwidth.
 
 **Warnings are returned with the measurements they affect.** A simulator such as ngspice can report a "singular matrix" warning in its log and still finish the run and write plausible values. The server includes that diagnostic in an `observations` field next to the returned value.
 
-### Co-design on the same files
+### Working on the same files
 
 Everything operates on ordinary LTspice and SPICE files. You and the assistant can edit the same files:
 
@@ -202,7 +202,7 @@ MCP server. Its interface differs from MCP in the following ways:
 
 ## Configuration
 
-Works with defaults out of the box. To customize, copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml`; any setting can be overridden with an `LTSPICE_MCP_`-prefixed environment variable, and `--config PATH` or `LTSPICE_MCP_CONFIG` picks the file. Key options:
+No configuration is required. To customize, copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml`; any setting can be overridden with an `LTSPICE_MCP_`-prefixed environment variable, and `--config PATH` or `LTSPICE_MCP_CONFIG` picks the file. Key options:
 
 ```toml
 [simulator]

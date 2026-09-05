@@ -24,7 +24,7 @@ server now advertises seven tools:
 |`plot_waveform`|An interactive HTML chart of a run, for a person to look at|
 
 The same six operations are importable in-process as
-`from ltspice_mcp.api import Api` — one engine behind two doors.
+`from ltspice_mcp.api import Api` — one engine, two interfaces.
 
 **How to keep the old tools.** Pin `ltspice-mcp==0.5.*`.
 
@@ -116,7 +116,9 @@ Error codes that only those handlers emitted are gone with them:
   `renders/`, `verify/`, `edit-exports/`, and `locks/`, stamped with a single
   `store_version`. The per-circuit pointer files that let a circuit's sidecar
   find working-directory jobs are gone; the store's own index does that. A
-  job sidecar written by 0.5 still loads as an inert record. — a job record from an earlier release is inert, not broken
+  job sidecar written by 0.5 still loads as an inert record.
+
+### Changed — a job record from an earlier release is inert, not broken
 
 A job sidecar written by a pre-0.6 release still loads, and loading one
 never breaks the registry or the startup preload. It comes back as a record
@@ -428,7 +430,7 @@ key is deleted in 0.7.0. Serving zero tools is still a hard error.
   negative is possible — never a sentinel. It adds notes on the three- versus
   four-terminal transistor symbols (`nmos4`, `pnp4`, and the rest), the diode
   symbol's built-in default-`D` model collision, and the `AC <mag>` small-signal
-  source syntax; the `.meas MAX` signed-trace trap, where `MAX I(...)` on an
+  source syntax; the `.meas MAX` signed-trace case, where `MAX I(...)` on an
   always-negative current returns the least-negative sample rather than the peak
   magnitude, so wrap it in `abs()`; and how to steer bistable circuits —
   bandgaps, mirrors, latches — to the intended DC root when `.nodeset` alone will

@@ -56,7 +56,7 @@ Third-party code is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 - **A regression test must fail before the fix and pass after.** If it never
   failed, it does not pin the behaviour. Run it against the unfixed code to
-  prove it bites.
+  confirm it fails there.
 - **Test through real code paths and assert on real values.** A test that
   stubs the mechanism it claims to cover passes for the wrong reason. See
   `docs/TESTING.md` for what the suite does and does not mock.

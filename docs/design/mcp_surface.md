@@ -21,8 +21,8 @@ source wins and this document is the thing to fix.
 | AUTHOR | `verify_circuit` | gate: lint/syntax, symbols, export, layout, quality, compare (equivalence or structural diff), render |
 
 A seventh tool, `plot_waveform`, is registered alongside them. It is the
-interactive MCP Apps waveform widget; it predates this envelope and is
-deliberately outside it.
+interactive MCP Apps waveform widget; it predates this envelope and stays
+outside it.
 
 Canonical loops:
 
@@ -120,18 +120,19 @@ headline rows (label, promoted headline scalars, verdicts) plus a one-line
 completeness count. Detail sits behind named opt-ins — full nested `value`
 dicts, full run records, the `source_hashes` identity echo, and `provenance`.
 Never trimmed in any mode: failures, errors, observations, warnings, and any
-completeness shortfall. Lean cuts success ceremony, never the fact channels.
+completeness shortfall. Lean drops the confirming detail of a success, never
+the fact channels.
 
 The reason is response cost: every response byte is re-read on every later
 turn of the conversation, and measurement put the tool path at several times
 the cost of a hand-rolled shell table for identical numbers even with the
-opt-in levers applied. Two consequences worth knowing:
+opt-in reductions applied. Two consequences worth knowing:
 
 - A completed row drops its raw/log artifact paths (reachable through
   `jobs(runs)` with `run_fields`), but a **non-completed** row keeps them:
   failure entries carry only `{case_id, code, message}`, so the failed row's
   log path is its diagnostic and belongs on the fact channel.
-- An empty per-circuit lint entry is ceremony and is dropped. A circuit absent
+- An empty per-circuit lint entry says nothing and is dropped. A circuit absent
   from `lint` is clean; findings always emit.
 
 Pagination is exempt from the lean rule: `next_cursor` is a
@@ -154,8 +155,8 @@ conflicting. On `run_experiments` these are `provenance`, `run_fields`,
 ### 3.1 `run_experiments` — effectful fan-out
 
 **Submission and idempotency.** `request_id` is optional; omitted, the server
-mints one and echoes it on the receipt, so a one-off spot check pays no
-idempotency ceremony. The auto id is a real id: `jobs` and `analyze_results`
+mints one and echoes it on the receipt, so a one-off spot check needs no
+idempotency argument of its own. The auto id is a real id: `jobs` and `analyze_results`
 address the run by it as usual, and it writes the same request-index record as
 an explicit id, through one uniform code path.
 
@@ -173,7 +174,7 @@ representation of a *previously valid* request changes. A presentation field
 excluded from canonicalization from its first valid day changes no old
 canonical bytes and never triggers a bump.
 
-`allow_live_includes` is deliberately *not* a presentation field: a job whose
+`allow_live_includes` is *not* a presentation field: a job whose
 inputs cannot be proven cannot be replayed on the strength of a stored
 fingerprint, so reusing its `request_id` runs the experiment again.
 
@@ -643,8 +644,8 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 **Why `inspect` and `edit_schematic` are separate.** The boundary is
 read-versus-write, not amount of aid. `inspect` aids before or without mutation
 — vocabulary discovery (which symbols exist, their pins per rotation) and
-reading a foreign sheet (components, net truth) — and it is the surface's only
-honestly read-only tool, which the annotation gating depends on.
+reading a foreign sheet (components, net truth) — and it is the only tool on
+the surface that never writes, which the annotation gating depends on.
 `edit_schematic` aids *at* mutation time — coordinate resolution, validation,
 default routing, warnings, the wiring metric — inside a transaction that must
 carry destructive annotations. Merging them would put read-only lookups behind
@@ -714,14 +715,14 @@ value that is neither a policy nor a boolean is refused with the accepted
 spellings and the `mode` values inline.
 
 **Server logging.** The server's default stderr level is `WARNING`. A long INFO
-startup banner on a door where the server's stderr is the caller's own stderr
+startup banner where the server's stderr is the caller's own stderr
 gets answered with a blanket `2>/dev/null`, which then hides real tracebacks.
 `[logging] level = "INFO"` or `LTSPICE_MCP_LOG_LEVEL` restores it; MCP protocol
 log notifications are a separate channel and are unaffected.
 
 ---
 
-## 5. What the six tools deliberately do not do
+## 5. What the six tools do not do
 
 No deck text editing. No temperature or lib-section sweep knobs. No autorouting
 or aesthetics. No trust verdicts. No library session state. No per-wire
@@ -860,7 +861,7 @@ validation.
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
-| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the UNWRAPPED phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
+| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
 | `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
 | `ac_structure` | ac | `signal` | structural poles and zeros |
