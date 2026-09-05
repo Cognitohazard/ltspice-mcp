@@ -13,7 +13,6 @@ from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Annotated, Any, Literal
 
 import numpy as np
@@ -695,10 +694,7 @@ async def _resolve_sources(
                 continue
             try:
                 raw = safe_path(source_input.raw_path, state)
-                resolved = services.resolve_analysis_source(
-                    SimpleNamespace(raw_file=str(raw), job_id=None, run_index=0),
-                    state,
-                )
+                resolved = services.source_for_raw_path(raw, state)
             except (LTSpiceMCPError, OSError) as exc:
                 missing.append(
                     {
@@ -725,7 +721,6 @@ async def _resolve_sources(
                     "step_values": {},
                 },
             )
-            source = services.resolve_analysis_source(None, state, injected=source)
             runs.append(
                 _ResolvedRun(
                     f"{source_input.label}:0",
@@ -820,7 +815,7 @@ async def _resolve_sources(
                     )
                     continue
                 ctx = services.experiment_run_context(job, state, case_id=case.case_id)
-                resolved = services.resolve_analysis_source(None, state, injected=ctx)
+                resolved = services.source_for_run(ctx)
                 runs.append(
                     _ResolvedRun(
                         f"{source_input.label}:{case.case_id}",
@@ -1732,7 +1727,7 @@ async def _evaluate_item(
             )
             continue
         try:
-            with services.analysis_source_context(run.source, deadline=item_deadline):
+            with services.analysis_deadline(item_deadline):
                 step_plan = await _step_plan(recipe, run.source, state, step_cache)
                 if isinstance(recipe, PlotRecipe):
                     value, artifacts = await _plot(

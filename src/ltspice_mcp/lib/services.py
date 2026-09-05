@@ -14,7 +14,7 @@ import contextvars
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -266,19 +266,15 @@ class AnalysisSource:
 
     @classmethod
     def for_raw(cls, raw_path: Path) -> AnalysisSource:
-        """The log/netlist companions of ``raw_path``, resolved through one seam.
+        """The companions of a bare ``.raw`` path: its sibling ``.log``, nothing else.
 
-        When the consolidated path injected a task-local source for this raw, its
-        netlist and dialect win and its log is filled with the sibling ``.log``
-        when it carries none. A direct read (no matching injected source) gets
-        the sibling ``.log`` and no netlist — the uniform fallback every read
-        shares. ``log`` is always a concrete path (existence not guaranteed);
-        ``netlist`` is present only when a producing job supplied one.
+        For a read that has only a path to go on. ``log`` is always a concrete
+        path (existence not guaranteed); ``netlist``, ``dialect`` and
+        ``identity`` are null because a bare path names no producing run. A read
+        that DOES know the run gets its source from ``source_for_run`` or
+        ``resolve_analysis_source`` instead — those carry the deck and identity
+        this cannot.
         """
-        injected = current_analysis_source()
-        if injected is not None and injected.raw == raw_path:
-            log = injected.log if injected.log is not None else raw_path.with_suffix(".log")
-            return replace(injected, log=log)
         return cls(
             raw=raw_path,
             log=raw_path.with_suffix(".log"),
@@ -289,10 +285,44 @@ class AnalysisSource:
         )
 
 
-_analysis_source: contextvars.ContextVar[AnalysisSource | None] = contextvars.ContextVar(
-    "ltspice-mcp.analysis-source",
-    default=None,
-)
+def source_for_raw_path(raw: Path, state: SessionState) -> AnalysisSource:
+    """The source an already-validated caller-supplied ``.raw`` path resolves to.
+
+    Unlike :meth:`AnalysisSource.for_raw` this consults the session: the log is
+    reported only when it exists, and the dialect is the one recorded for the
+    run that produced this raw. The path must already have passed
+    ``safe_path`` — this is the shared tail of the caller-path branch, not a
+    way around it.
+    """
+    sibling = raw.with_suffix(".log")
+    return AnalysisSource(
+        raw=raw,
+        log=sibling if sibling.is_file() else None,
+        netlist=None,
+        dialect=raw_dialect_for(raw, state),
+        identity=None,
+        trusted_job_artifact=False,
+    )
+
+
+def source_for_run(run: RunContext) -> AnalysisSource:
+    """A resolved experiment case as the source its readers take.
+
+    Trusted: the raw, log and staged deck are this server's own artifacts, so
+    they are read where the record says they are rather than re-validated
+    against ``allowed_paths`` — a reloaded job's raw legitimately lives outside
+    it.
+    """
+    return AnalysisSource(
+        raw=run.raw,
+        log=run.log,
+        netlist=run.netlist,
+        dialect=run.dialect,
+        identity=run.identity,
+        trusted_job_artifact=True,
+    )
+
+
 _analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "ltspice-mcp.analysis-deadline",
     default=None,
@@ -300,24 +330,21 @@ _analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVa
 
 
 @contextlib.contextmanager
-def analysis_source_context(
-    source: AnalysisSource,
-    *,
-    deadline: float | None = None,
-):
-    """Inject a trusted source and optional monotonic deadline into adapters."""
-    source_token = _analysis_source.set(source)
-    deadline_token = _analysis_deadline.set(deadline)
+def analysis_deadline(deadline: float | None):
+    """Bound every result parse under this block to one monotonic deadline.
+
+    Ambient on purpose, and the only thing about a read that is: a deadline is
+    a property of the CALL, and every parse below it — the raw, the log, a
+    digest — has to answer to the same one. Nothing takes a deadline argument
+    that this could contradict. What a read is reading, by contrast, travels as
+    an argument: an ambient source would let a call name one file and read
+    another.
+    """
+    token = _analysis_deadline.set(deadline)
     try:
         yield
     finally:
-        _analysis_deadline.reset(deadline_token)
-        _analysis_source.reset(source_token)
-
-
-def current_analysis_source() -> AnalysisSource | None:
-    """Return the task-local adapter source, if the consolidated path set one."""
-    return _analysis_source.get()
+        _analysis_deadline.reset(token)
 
 
 def resolve_experiment_run(
@@ -392,43 +419,20 @@ def experiment_run_context(
 
 
 def resolve_analysis_source(
-    args: Any,
     state: SessionState,
     *,
-    injected: AnalysisSource | RunContext | None = None,
+    raw_file: str | None = None,
+    log_file: str | None = None,
+    job_id: str | None = None,
 ) -> AnalysisSource:
-    """Resolve an adapter source without weakening the legacy completion gate.
+    """Resolve the source a direct ``raw_file``/``log_file``/``job_id`` call reads.
 
-    Consolidated callers inject a pre-resolved source, so trusted artifacts
-    never pass through ``safe_path`` and experiment cases never re-enter
-    ``resolve_run``.  Direct callers use the same completed-only legacy
-    resolver as before.
+    The caller-path route: every path here is untrusted input and goes through
+    ``safe_path``. A caller that already resolved a run uses ``source_for_run``
+    instead — this one deliberately cannot reach a job's artifacts. Whether
+    naming both a raw and a job is an error is the caller's rule, not this
+    one's: a read that offers only a log has no such pair to refuse.
     """
-    if isinstance(injected, AnalysisSource):
-        return injected
-    if isinstance(injected, RunContext):
-        return AnalysisSource(
-            raw=injected.raw,
-            log=injected.log,
-            netlist=injected.netlist,
-            dialect=injected.dialect,
-            identity=injected.identity,
-            trusted_job_artifact=True,
-        )
-    contextual = current_analysis_source()
-    if contextual is not None:
-        return contextual
-
-    raw_file = getattr(args, "raw_file", None)
-    log_file = getattr(args, "log_file", None)
-    job_id = getattr(args, "job_id", None)
-    if hasattr(args, "raw_file") and bool(raw_file) == bool(job_id):
-        raise ResultError(
-            "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
-            "an existing result — if you only have a netlist, run_experiments "
-            "produces the job_id/raw to analyze.",
-            show_hint=False,
-        )
     if job_id:
         # Every job this version creates is an experiment, and an experiment's
         # runs are case-addressed — the consolidated callers inject a resolved
@@ -442,15 +446,8 @@ def resolve_analysis_source(
             )
         raise ResultError(legacy_record_message(job_id))
     if raw_file:
-        raw = resolve_safe_path(str(raw_file), state.config.allowed_paths)
-        sibling = raw.with_suffix(".log")
-        return AnalysisSource(
-            raw=raw,
-            log=sibling if sibling.is_file() else None,
-            netlist=None,
-            dialect=raw_dialect_for(raw, state),
-            identity=None,
-            trusted_job_artifact=False,
+        return source_for_raw_path(
+            resolve_safe_path(str(raw_file), state.config.allowed_paths), state
         )
     if log_file:
         log = resolve_safe_path(str(log_file), state.config.allowed_paths)

@@ -34,7 +34,6 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
@@ -239,27 +238,17 @@ def _ac_source_for(raw_file: str | Path, state: SessionState) -> services.Analys
     return services.AnalysisSource.for_raw(raw_path)
 
 
-def _effective_raw_path(
-    raw_file: str | None, job_id: str | None, run_index: int, state: SessionState
-) -> Path:
-    """Resolve the .raw to analyze from EITHER a user ``raw_file`` OR a job run.
+def _direct_source(
+    raw_file: str | None, job_id: str | None, state: SessionState
+) -> services.AnalysisSource:
+    """The source a direct call names, refusing an ambiguous or empty pair.
 
-    A user-supplied ``raw_file`` is untrusted input → validated via ``safe_path``.
-    A job run's ``raw_file`` is a server-generated artifact (the same trust model
-    ``batch_results`` uses for ``run_results`` paths), so it is used directly and
-    may legitimately live outside ``allowed_paths`` (e.g. a WSL temp dir). This is
-    what lets a sweep/MC run be analyzed by the same tools as a standalone raw.
+    A user-supplied ``raw_file`` is untrusted input → validated via
+    ``safe_path``. Truthiness, not identity: an empty/whitespace raw_file
+    (StrictModel strips to "") must count as absent, else it slips past and
+    safe_path("") resolves to the working dir → a confusing "not a valid .raw"
+    error downstream.
     """
-    injected = services.current_analysis_source()
-    if injected is not None:
-        return services.resolve_analysis_source(
-            SimpleNamespace(raw_file=raw_file, job_id=job_id, run_index=run_index),
-            state,
-        ).raw
-
-    # Truthiness, not identity: an empty/whitespace raw_file (StrictModel strips
-    # to "") must count as absent, else it slips past and safe_path("") resolves
-    # to the working dir → a confusing "not a valid .raw" error downstream.
     if bool(raw_file) == bool(job_id):
         # Complete redirect, so no generic hint: the analysis tools read an
         # existing result — a caller holding only a netlist runs it first.
@@ -269,11 +258,15 @@ def _effective_raw_path(
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
-    source = services.resolve_analysis_source(
-        SimpleNamespace(raw_file=raw_file, job_id=job_id, run_index=run_index),
-        state,
-    )
-    return source.raw
+    return services.resolve_analysis_source(state, raw_file=raw_file, job_id=job_id)
+
+
+def _effective_raw_path(
+    raw_file: str | None, job_id: str | None, run_index: int, state: SessionState
+) -> Path:
+    """The .raw a direct call reads, from EITHER a user ``raw_file`` OR a job run."""
+    del run_index  # a job's runs are case-addressed; this route resolves neither
+    return _direct_source(raw_file, job_id, state).raw
 
 
 async def _experiment_case(
@@ -1125,8 +1118,8 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 )
 async def handle_simulation_summary(args: SimulationSummaryInput, state: SessionState):
     """Get comprehensive simulation summary."""
-    source = services.resolve_analysis_source(args, state)
-    if args.log_file is not None and services.current_analysis_source() is None:
+    source = _direct_source(args.raw_file, args.job_id, state)
+    if args.log_file is not None:
         source = replace(source, log=safe_path(args.log_file, state))
     elif source.log is None:
         # Callers shouldn't have to pass both ``raw_file`` and the adjacent
@@ -1944,21 +1937,19 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     if args.log_file is None and args.job_id is None:
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
-    source = services.current_analysis_source()
-    if source is None:
-        if args.job_id is not None:
-            # Both shapes this branch served — a batch's per-run log walk and a
-            # single simulation's one log — belonged to job types earlier
-            # releases wrote. An experiment's .MEAS results are read per case
-            # through analyze_results, which resolves the source itself.
-            job = await services.resolve_job_async(args.job_id, state)
-            if isinstance(job, ExperimentJob):
-                raise ResultError(
-                    f"Job {args.job_id!r} is an experiment; its .MEAS results are read per "
-                    "case. Use analyze_results with the measurements recipe."
-                )
-            raise ResultError(legacy_record_message(args.job_id))
-        source = services.resolve_analysis_source(args, state)
+    if args.job_id is not None:
+        # Both shapes this branch served — a batch's per-run log walk and a
+        # single simulation's one log — belonged to job types earlier releases
+        # wrote. An experiment's .MEAS results are read per case through
+        # analyze_results, which resolves the source itself.
+        job = await services.resolve_job_async(args.job_id, state)
+        if isinstance(job, ExperimentJob):
+            raise ResultError(
+                f"Job {args.job_id!r} is an experiment; its .MEAS results are read per "
+                "case. Use analyze_results with the measurements recipe."
+            )
+        raise ResultError(legacy_record_message(args.job_id))
+    source = services.resolve_analysis_source(state, log_file=args.log_file)
     if source.log is None:
         raise ResultError("This source has no log artifact for measurement results.")
 
