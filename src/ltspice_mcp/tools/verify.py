@@ -2066,6 +2066,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
 
 @registry.tool(
     name="verify_circuit",
+    title="Check Circuit",
     description=VERIFY_DESCRIPTION,
     input_model=VerifyCircuitInput,
     # Not read-only: export writes a file on every path (managed scratch by
