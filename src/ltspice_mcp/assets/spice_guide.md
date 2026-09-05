@@ -28,8 +28,18 @@ same response), follow a receipt with `jobs`, measure a finished job with
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
 | symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
+| find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
+
+`inspect(kind="reference")` is the lookup for this surface's own vocabulary.
+Each tool holds many capabilities behind a discriminator — twenty-one
+`analyze_results` recipes, eleven `edit_schematic` ops, the variation kinds,
+the `verify_circuit` checks, the `jobs` actions — and a `query` in plain words
+returns the closest ones with their fields, types, defaults and units. With no
+`query` it returns the table of contents. Reach for it instead of guessing a
+name or re-reading this guide, and always when the server is serving the
+compact tool listing, where the per-argument descriptions are not on the wire.
 
 ### What an `assign` variation can target
 
