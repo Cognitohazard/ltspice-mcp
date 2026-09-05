@@ -11,9 +11,10 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, TypedDict
+from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
 
 from mcp import types
+from pydantic import Field
 
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
@@ -23,7 +24,7 @@ from ltspice_mcp.lib import atomic_write_bytes, response_budget
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.raster import RenderedImage, render_image
+from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 
 # Re-exported, not defined here: both netlist injections live in the runner
 # layer so the experiment coordinator (lib/) can call them without importing
@@ -647,6 +648,132 @@ def page_schema(
         },
         "required": list(PAGE_REQUIRED),
     }
+
+
+# ---------------------------------------------------------------------------
+# Shared argument models
+#
+# "Draw this sheet" and "compare it against that netlist" are the same two
+# requests wherever they are asked, so both tools that ask them take the same
+# two models. A tool that can do more than the shared model describes
+# SUBCLASSES it (verify's render also chooses a delivery and whether to skip
+# the checks) rather than growing a parallel spelling — so every field on the
+# base means the same thing on every tool, and a field a tool cannot honour is
+# not advertised there at all.
+# ---------------------------------------------------------------------------
+
+
+class RenderPolicy(StrictModel):
+    """How to draw a schematic: the choices any renderer here can honour."""
+
+    format: Literal["png", "svg"] = Field(
+        default="png",
+        description=(
+            "PNG (lossless, what a model looks at) needs the optional 'raster' "
+            "extra; without it the render degrades to SVG and says so. SVG always "
+            "works and writes the vector artifact."
+        ),
+    )
+    scale: float = Field(
+        default=DEFAULT_SCALE,
+        ge=0.5,
+        le=4.0,
+        description=(
+            "Render scale — the cost dial. Image token cost tracks pixel area, so "
+            "halving the scale costs about a quarter as much. Raise it only when "
+            "detail is genuinely unreadable."
+        ),
+    )
+    max_pixels: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Cap the rendered pixel area. A PNG larger than this is re-rendered at "
+            "a reduced scale that fits, and 'downscaled' is set. Bounds inline cost."
+        ),
+    )
+
+
+class CompareSpec(StrictModel):
+    """What to compare a circuit against, and how closely."""
+
+    reference: str = Field(
+        description=(
+            "Reference netlist: a file path, or literal netlist text (anything "
+            "containing a newline is read as text)."
+        ),
+    )
+    anchors: list[str] | None = Field(
+        default=None,
+        description=(
+            "Named nets that must map BY NAME between the reference and this "
+            "circuit — ports, rails, outputs, measurement nets. A design that is "
+            "structurally isomorphic but puts 'vout' in the wrong place fails on "
+            "these. Ground is always an implicit anchor."
+        ),
+    )
+    rtol: float = Field(
+        default=1e-6,
+        description="Relative tolerance when comparing numeric values and parameters.",
+    )
+
+
+def render_spellings(policy: type[RenderPolicy]) -> str:
+    """The refusal text for a bad ``render`` argument, listing what does work.
+
+    Read off the policy's own fields — names, and for a closed choice its
+    values — so a tool that adds a field (or has fewer) cannot advertise a
+    spelling its model would reject, and a renamed value cannot leave the
+    refusal naming the old one.
+    """
+    parts: list[str] = []
+    for name in sorted(policy.model_fields):
+        annotation = policy.model_fields[name].annotation
+        choices = get_args(annotation) if get_origin(annotation) is Literal else ()
+        parts.append(f"{name} {'|'.join(repr(c) for c in choices)}" if choices else name)
+    return (
+        "render takes true (draw with the default policy), false or omitted (do "
+        f"not draw), or an object with any of: {', '.join(parts)}"
+    )
+
+
+def coerce_render_policy(value: Any, *, policy: type[RenderPolicy] = RenderPolicy) -> Any:
+    """Accept the bare-boolean spellings of "just draw it" / "do not draw".
+
+    Bind it into a tool's ``render`` field with ``BeforeValidator`` and a
+    ``json_schema_input_type`` naming that tool's policy class; see the
+    ``RenderArgument`` alias in verify.py and schematic_edit.py.
+
+    ``render=True`` is what a caller reaches for first, and rejecting it used to
+    name the policy class — a type the message gave no way to reach — instead of
+    the keys and values that actually work. The boolean is coerced here so the
+    policy object stays the single source of truth for the defaults, and the
+    refusal for anything else enumerates the accepted spellings inline.
+    """
+    if value is True:
+        return {}
+    if value is False:
+        return None
+    if value is None or isinstance(value, (Mapping, RenderPolicy)):
+        return value
+    raise ValueError(render_spellings(policy))
+
+
+def one_spelling(chosen: Any, aliases: Mapping[str, Any], *, argument: str) -> None:
+    """Refuse a call that says the same thing twice, naming the one to keep.
+
+    The flat spellings retained as aliases are equivalent to the object form,
+    never additive: two of them in one call have no defined precedence, so the
+    call is refused rather than silently resolved one way.
+    """
+    if chosen is None:
+        return
+    named = sorted(key for key, value in aliases.items() if value is not None)
+    if named:
+        raise ValueError(
+            f"{argument} and {', '.join(named)} say the same thing — pass one. "
+            f"The flat spelling is a retained alias for {argument}."
+        )
 
 
 RO_ANNOTATIONS = types.ToolAnnotations(
