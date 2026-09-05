@@ -62,17 +62,17 @@ class LTSpiceMCPError(Exception):
     ``suggestions`` — optional ranked candidate dicts surfaced by the MCP
     dispatch layer as ``structuredContent`` on the error response.
 
-    ``show_hint`` — when False, the dispatch layer does NOT append the generic
+    ``show_hint`` — when False, the dispatch layer does not append the generic
     per-error-type hint. Set it on errors that already carry precise, actionable
     guidance (e.g. "use operating_point for .OP raws"), so the generic
     "verify with check_job / simulation_summary" hint doesn't misdirect.
 
     ``code`` — the wire code for this class of failure. Every subclass declares
-    its own, and it is the DEFAULT, not the last word: a handler that knows
+    its own, and it is the default, not the last word: a handler that knows
     which stage failed may name the failure by that stage instead, because the
     stage is often the more useful fact (a result read that fails while a deck
     is being staged is a submission failure, not a result failure). More
-    specific still is a code set on the INSTANCE at the raise site, which names
+    specific still is a code set on the instance at the raise site, which names
     that one failure — see :func:`raise_site_code`, the lookup handlers use so a
     class default cannot quietly outrank the stage they are reporting.
 
@@ -176,7 +176,7 @@ class BatchJobError(LTSpiceMCPError):
 def raise_site_code(exc: BaseException) -> str | None:
     """Return the code an exception named at its own raise site, if any.
 
-    Only an INSTANCE attribute counts. A class-level ``code`` (see
+    Only an instance attribute counts. A class-level ``code`` (see
     :attr:`LTSpiceMCPError.code`) is the default for a type, and a handler that
     reports a failure by the stage it happened in must keep that name rather
     than inherit the type's; only a code chosen at the raise site is specific

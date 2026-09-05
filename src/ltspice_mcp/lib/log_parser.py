@@ -1163,7 +1163,7 @@ def parse_success_summary(
                 "kind": "coverage",
                 "detail": (
                     "The .raw file exists but could not be parsed; signals, range, "
-                    "and point counts below reflect NO data from this run. "
+                    "and point counts below reflect no data from this run. "
                     f"Parser error: {type(e).__name__}: {e}"
                 ),
             }
