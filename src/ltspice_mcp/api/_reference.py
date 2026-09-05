@@ -472,7 +472,14 @@ def _operations() -> tuple[_Operation, ...]:
     # Imported here rather than at module import: this module is also what sets
     # the methods' docstrings, and the tool modules import back into the api
     # package.
-    from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
+    from ltspice_mcp.tools import (
+        analyze,
+        experiments,
+        inspect_tools,
+        jobs,
+        schematic_edit,
+        verify,
+    )
 
     return (
         _Operation(
@@ -497,7 +504,7 @@ def _operations() -> tuple[_Operation, ...]:
         _Operation(
             name="jobs",
             summary="EXECUTE — status, wait, cancel, list circuits, or page one job's runs.",
-            model=experiments.JobsInput,
+            model=jobs.JobsInput,
             example='api.jobs(action="status", job_id="exp_opamp_1785...")',
         ),
         _Operation(

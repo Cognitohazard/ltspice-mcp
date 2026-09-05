@@ -22,6 +22,8 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as exp_mod
 from ltspice_mcp.tools import inspect_tools as insp
+from ltspice_mcp.tools import jobs as jobs_mod
+from ltspice_mcp.tools import receipts as receipts_mod
 from ltspice_mcp.tools._base import ResponseBudget
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
@@ -29,12 +31,12 @@ from ltspice_mcp.tools.analyze import (
     _request_hash,
     handle_analyze_results,
 )
-from ltspice_mcp.tools.experiments import (
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from ltspice_mcp.tools.jobs import (
     JOBS_OUTPUT_SCHEMA,
     JobsInput,
     handle_jobs,
 )
-from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
 # Every rung-0 allowlist the three budget-aware tools declare, paired with the
@@ -45,8 +47,8 @@ _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
     (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
     (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
-    (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
-    (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod._jobs_receipt_schema("status")),
+    (receipts_mod, "_TRIM_REMOVE_RECEIPT", receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
+    (receipts_mod, "_TRIM_REMOVE_RECEIPT", jobs_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
 ]
 
@@ -614,15 +616,15 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
                 },
             }
         )
-        return exp_mod.finalize_receipt(data), "completed"
+        return receipts_mod.finalize_receipt(data), "completed"
 
-    result = await exp_mod._render_run_receipt(
+    result = await receipts_mod._render_run_receipt(
         ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
         build,
     )
     data = result.structuredContent
     assert data is not None
-    jsonschema.Draft202012Validator(exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+    jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     page = data["runs"]
     assert 0 < page["returned"] < 50
     assert page["items_columns"] == [
@@ -633,7 +635,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
         "status",
     ]
     assert page["next_cursor"] is not None
-    offset = exp_mod._decode_jobs_cursor(page["next_cursor"])
+    offset = jobs_mod._decode_jobs_cursor(page["next_cursor"])
     assert offset == page["returned"]
     rendered_rows = _uncolumnar(page, "items")
     assert all("raw" not in row and "log" not in row for row in rendered_rows)
@@ -761,7 +763,7 @@ class TestJobsBudget:
                 "receipt",
             )
 
-        data, _ = await exp_mod._negotiate_jobs(ResponseBudget(600), build, 50)
+        data, _ = await jobs_mod._negotiate_jobs(ResponseBudget(600), build, 50)
 
         assert built_for == [False, True]
         assert data["analysis"]["view"] == "answer"

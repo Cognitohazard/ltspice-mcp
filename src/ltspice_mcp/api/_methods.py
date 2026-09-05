@@ -29,7 +29,14 @@ from ltspice_mcp.state import SessionState
 if TYPE_CHECKING:
     from mcp import types
 
-    from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
+    from ltspice_mcp.tools import (
+        analyze,
+        experiments,
+        inspect_tools,
+        jobs,
+        schematic_edit,
+        verify,
+    )
 else:
     # Deferred imports (PEP 562-style proxies): the tool modules pull the MCP
     # SDK and the analysis chain — over a second of import an Api() that only
@@ -53,6 +60,7 @@ else:
     analyze = _DeferredModule("ltspice_mcp.tools.analyze")
     experiments = _DeferredModule("ltspice_mcp.tools.experiments")
     inspect_tools = _DeferredModule("ltspice_mcp.tools.inspect_tools")
+    jobs = _DeferredModule("ltspice_mcp.tools.jobs")
     schematic_edit = _DeferredModule("ltspice_mcp.tools.schematic_edit")
     verify = _DeferredModule("ltspice_mcp.tools.verify")
 
@@ -461,7 +469,7 @@ async def _collect_inspect(
 
 
 async def _collect_jobs(
-    request: experiments.JobsInput,
+    request: jobs.JobsInput,
     state: SessionState,
 ) -> dict[str, Any]:
     """Collect one jobs action: the whole circuit list, or a complete receipt.
@@ -470,8 +478,8 @@ async def _collect_jobs(
     evaluation as a page — the doors differ by that presentation argument and
     by nothing else, so neither can report a job the other did not read.
     """
-    evaluation = await experiments.evaluate_jobs(request, state)
-    data = experiments.complete_jobs_data(evaluation)
+    evaluation = await jobs.evaluate_jobs(request, state)
+    data = jobs.complete_jobs_data(evaluation)
     if evaluation.is_error:
         message = _payload_message(data) or "The engine returned a call-level error"
         raise ApiCallError(message, payload=data)
@@ -656,8 +664,8 @@ class ApiMethodsMixin(ABC):
         """Control jobs, collecting list and receipt pages in automatic mode."""
         return self._dispatch(
             "jobs",
-            experiments.JobsInput,
-            experiments.handle_jobs,
+            jobs.JobsInput,
+            jobs.handle_jobs,
             _collect_jobs,
             raw_page=raw_page,
             arguments=arguments,

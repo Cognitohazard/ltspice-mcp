@@ -34,6 +34,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.recipes import RECIPE_MODELS
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments
@@ -920,7 +921,7 @@ def _completed_with_failures_experiment(
         fingerprint="f" * 64,
         canonicalizer_version=experiment_store.CANONICALIZER_VERSION,
         control_token="secret",
-        store_path=experiment_store.record_path("experiment_analysis", work_dir),
+        store_path=Store(work_dir).job_record("experiment_analysis"),
         cases=[produced, failed],
         sources=[source],
         simulator="LTspice",

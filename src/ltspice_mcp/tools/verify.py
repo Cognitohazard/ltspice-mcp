@@ -53,20 +53,23 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import functools
 import hashlib
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self, TypeAlias
 
 from mcp import types
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, model_validator
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
     NetlistGraph,
@@ -74,7 +77,7 @@ from ltspice_mcp.lib.netlist_graph import (
     compare_graphs,
     parse_netlist_graph,
 )
-from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage
+from ltspice_mcp.lib.raster import RenderedImage
 from ltspice_mcp.lib.schematic_ops import (
     is_asc,
     make_editor,
@@ -96,13 +99,19 @@ from ltspice_mcp.lib.spice_validator import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FINDING_SCHEMA,
+    HINT_SCHEMA,
     WARNINGS_SCHEMA,
-    StrictModel,
+    CompareSpec,
+    RenderPolicy,
     ToolInput,
-    asc_export_lock,
-    circuit_file_lock,
+    coerce_render_policy,
+    failures_schema,
     format_response,
     make_include_resolver,
+    one_spelling,
+    outcome_of,
+    outcome_schema,
     registry,
     render_scene_artifact,
     safe_path,
@@ -276,35 +285,14 @@ LAYOUT_COVERAGE = "Layout scan excludes WINDOW attribute text."
 # Response fragments
 # ---------------------------------------------------------------------------
 
-_FINDING_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "rule_id": {"type": "string"},
-        "severity": {"type": "string"},
-        "ok": {"type": "boolean"},
-        "evidence": {},
-        "at": {
-            "type": "object",
-            "properties": {
-                "file": {"type": "string"},
-                "line": {"type": "integer"},
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-            },
-            "required": ["file"],
-        },
-        "subject": {"type": "string"},
-    },
-    "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
-}
-
 _CHECK_SKIPPED_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"check": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["check", "reason"],
 }
 
-_FAILURE_SCHEMA: dict[str, Any] = {
+#: A verify failure names the stage that failed, not a case (see Envelope).
+_STAGE_FAILURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "stage": {"type": "string"},
@@ -623,10 +611,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {"type": "string"},
         "kind": {"type": "string"},
-        "outcome": {"type": "string", "enum": ["complete", "partial", "failed"]},
+        "outcome": outcome_schema("complete", "partial", "failed"),
         "checks_run": {"type": "array", "items": {"type": "string"}},
         "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
-        "findings": {"type": "array", "items": _FINDING_SCHEMA},
+        "findings": {"type": "array", "items": FINDING_SCHEMA},
         "comparison": _COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
@@ -649,8 +637,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "these before trusting 'comparison' or 'export.diff_vs_prior'."
             ),
         },
-        "failures": {"type": "array", "items": _FAILURE_SCHEMA},
-        "hint": {"type": "string"},
+        "failures": failures_schema(_STAGE_FAILURE_SCHEMA),
+        "hint": HINT_SCHEMA,
     },
     "required": ["path", "kind", "outcome", "checks_run", "findings", "failures"],
 }
@@ -700,8 +688,14 @@ _ANCHORS_DESCRIPTION = (
 )
 
 
-class RenderPolicy(StrictModel):
-    """How (and whether) to draw the schematic alongside the checks."""
+class VerifyRenderPolicy(RenderPolicy):
+    """The shared render policy, plus what only this tool can decide.
+
+    ``mode`` and ``delivery`` are here rather than on ``RenderPolicy`` because
+    only this tool has checks to skip and an image channel to deliver into; an
+    edit's render has neither, and advertising them there would name choices
+    that tool cannot honour.
+    """
 
     mode: Literal["with_checks", "only"] = Field(
         default="with_checks",
@@ -720,65 +714,35 @@ class RenderPolicy(StrictModel):
             "open the path. PNG only: SVG is markup clients do not show as a picture."
         ),
     )
-    format: Literal["png", "svg"] = Field(
-        default="png",
+
+
+class VerifyCompareSpec(CompareSpec):
+    """The shared comparison spec, plus the two comparisons only this tool runs."""
+
+    mode: Literal["equivalence", "structural_diff"] = Field(
+        default="equivalence",
         description=(
-            "PNG (lossless, what a model looks at) needs the optional 'raster' "
-            "extra; without it the render degrades to SVG and a per-item failure "
-            "names the missing extra. SVG always works and writes the vector artifact."
-        ),
-    )
-    scale: float = Field(
-        default=DEFAULT_SCALE,
-        ge=0.5,
-        le=4.0,
-        description=(
-            "Render scale — the cost dial. Image token cost tracks pixel area, so "
-            "halving the scale costs about a quarter as much. Raise it only when "
-            "detail is genuinely unreadable."
-        ),
-    )
-    max_pixels: int | None = Field(
-        default=None,
-        gt=0,
-        description=(
-            "Cap the rendered pixel area. A PNG larger than this is re-rendered at "
-            "a reduced scale that fits, and 'downscaled' is set. Bounds inline cost."
+            "'equivalence' graph-compares connectivity (component set, values, "
+            "normalized parameters, node partitions by canonical labeling, arity, "
+            "and 'anchors'); a deck it cannot read yields a compare failure and no "
+            "'comparison' at all, because isomorphism is undefined without both "
+            "graphs. 'structural_diff' reports the added/removed/changed component "
+            "and directive delta between the two decks; a deck it cannot read is "
+            "diffed as empty, so the delta still comes back but 'equivalent' is null "
+            "and a warning names the deck that failed. Either way the outcome is "
+            "'partial' and the reason is in the response."
         ),
     )
 
 
-#: What ``render`` accepts, spelled out once for the schema and for the refusal.
-_RENDER_SPELLINGS = (
-    "render takes true (draw with the default policy), false or omitted (do not "
-    "draw), or an object: mode 'with_checks'|'only', delivery "
-    "'artifact'|'inline'|'both', format 'png'|'svg', scale, max_pixels"
-)
-
-
-def _coerce_render_policy(value: Any) -> Any:
-    """Accept the bare-boolean spellings of "just draw it" / "do not draw".
-
-    ``render=True`` is what a caller reaches for first, and rejecting it used to
-    name ``RenderPolicy`` — a type the message gave no way to reach — instead of
-    the keys and values that actually work. The boolean is coerced here so the
-    policy object stays the single source of truth for the defaults, and the
-    refusal for anything else enumerates the accepted spellings inline.
-    """
-    if value is True:
-        return {}
-    if value is False:
-        return None
-    if value is None or isinstance(value, (Mapping, RenderPolicy)):
-        return value
-    raise ValueError(_RENDER_SPELLINGS)
-
-
-RenderArgument = Annotated[
-    RenderPolicy | None,
-    BeforeValidator(_coerce_render_policy, json_schema_input_type=RenderPolicy | bool | None),
+RenderArgument: TypeAlias = Annotated[
+    VerifyRenderPolicy | None,
+    BeforeValidator(
+        functools.partial(coerce_render_policy, policy=VerifyRenderPolicy),
+        json_schema_input_type=VerifyRenderPolicy | bool | None,
+    ),
 ]
-"""``RenderPolicy | None`` that also takes ``True``/``False`` on either door."""
+"""``VerifyRenderPolicy | None`` that also takes ``True``/``False``."""
 
 
 class VerifyCircuitInput(ToolInput):
@@ -794,33 +758,33 @@ class VerifyCircuitInput(ToolInput):
             ),
         )
     )
-    reference: str | None = Field(
+    compare: VerifyCompareSpec | None = Field(
         default=None,
         description=(
-            "Reference netlist to compare against: a file path, or literal netlist "
-            "text (anything containing a newline is read as text). Omit when there "
-            "is no reference — the syntax, symbol, export, layout and quality checks "
+            "Compare this circuit against a reference netlist. Omit when there is "
+            "no reference — the syntax, symbol, export, layout and quality checks "
             "are self-checks and stand on their own."
         ),
     )
-    compare_mode: Literal["equivalence", "structural_diff"] = Field(
-        default="equivalence",
+    reference: str | None = Field(
+        default=None,
         description=(
-            "'equivalence' graph-compares connectivity (component set, values, "
-            "normalized parameters, node partitions by canonical labeling, arity, "
-            "and 'anchors'); a deck it cannot read yields a compare failure and no "
-            "'comparison' at all, because isomorphism is undefined without both "
-            "graphs. 'structural_diff' reports the added/removed/changed component "
-            "and directive delta between the two decks; a deck it cannot read is "
-            "diffed as empty, so the delta still comes back but 'equivalent' is null "
-            "and a warning names the deck that failed. Either way the outcome is "
-            "'partial' and the reason is in the response."
+            "Retained alias for compare.reference: the reference netlist as a file "
+            "path or literal netlist text (anything containing a newline is read as "
+            "text). Pass compare or these flat fields, not both."
         ),
     )
-    anchors: list[str] | None = Field(default=None, description=_ANCHORS_DESCRIPTION)
-    rtol: float = Field(
-        default=1e-6,
-        description="Relative tolerance when comparing numeric values and parameters (equivalence).",
+    compare_mode: Literal["equivalence", "structural_diff"] | None = Field(
+        default=None,
+        description="Retained alias for compare.mode.",
+    )
+    anchors: list[str] | None = Field(
+        default=None,
+        description="Retained alias for compare.anchors. " + _ANCHORS_DESCRIPTION,
+    )
+    rtol: float | None = Field(
+        default=None,
+        description="Retained alias for compare.rtol.",
     )
     render: RenderArgument = Field(
         default=None,
@@ -829,6 +793,42 @@ class VerifyCircuitInput(ToolInput):
             "defaults below; omitted or false draws nothing."
         ),
     )
+
+    @model_validator(mode="after")
+    def _one_compare_spelling(self) -> Self:
+        one_spelling(
+            self.compare,
+            {
+                "reference": self.reference,
+                "compare_mode": self.compare_mode,
+                "anchors": self.anchors,
+                "rtol": self.rtol,
+            },
+            argument="compare",
+        )
+        return self
+
+    @property
+    def render_policy(self) -> VerifyRenderPolicy | None:
+        """The resolved render policy, or None when nothing is to be drawn."""
+        return self.render
+
+    @property
+    def compare_spec(self) -> VerifyCompareSpec | None:
+        """One comparison, however it was spelled; None when none was asked for."""
+        if self.compare is not None:
+            return self.compare
+        if self.reference is None:
+            return None
+        fields: dict[str, Any] = {"reference": self.reference}
+        if self.compare_mode is not None:
+            fields["mode"] = self.compare_mode
+        if self.anchors is not None:
+            fields["anchors"] = self.anchors
+        if self.rtol is not None:
+            fields["rtol"] = self.rtol
+        return VerifyCompareSpec(**fields)
+
     export_to: Literal["managed", "sidecar"] = Field(
         default="managed",
         description=(
@@ -899,7 +899,7 @@ def _reference_to_path(reference: str | Path, state: SessionState) -> Path:
 
 def _scratch_dir(state: SessionState, name: str) -> Path:
     """A server-owned scratch subdirectory (created on demand)."""
-    path = state.working_dir / ".ltspice-mcp" / "verify" / name
+    path = state.store.verify_artifact(name)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -1508,7 +1508,7 @@ def _render_scene(
 async def _do_render(
     scene: Scene | None,
     kind: str,
-    policy: RenderPolicy,
+    policy: VerifyRenderPolicy,
     path: Path,
     state: SessionState,
 ) -> tuple[dict[str, Any] | None, RenderedImage | None, list[dict[str, Any]], list[str]]:
@@ -1612,13 +1612,19 @@ def _outcome(
     failures: list[dict[str, Any]],
     comparison: dict[str, Any] | None,
 ) -> str:
-    if failures:
-        return "partial"
-    if any(f["severity"] in ("error", "warning") for f in findings):
-        return "partial"
-    if _comparison_mismatch(comparison):
-        return "partial"
-    return "complete"
+    """This tool's shortfalls, handed to the shared outcome rule.
+
+    A check that failed to run, a finding at error or warning severity, and a
+    comparison that came back non-equivalent are each a reason the caller did
+    not get the clean answer they asked for. None of them fails the whole call
+    — the checks that did run still reported — so this surface never returns
+    ``failed`` from here.
+    """
+    return outcome_of(
+        failures,
+        partial=any(f["severity"] in ("error", "warning") for f in findings)
+        or _comparison_mismatch(comparison),
+    )
 
 
 def _hint(data: dict[str, Any]) -> str:
@@ -1728,10 +1734,12 @@ async def evaluate_verify_circuit(
 ) -> VerifyCircuitEvaluation:
     """Evaluate every requested check without applying MCP finding caps."""
     data = _base_data(args.path)
+    compare = args.compare_spec
+    render = args.render_policy
 
     try:
         path = safe_path(args.path, state)
-        reference = _resolve_reference(args.reference, state) if args.reference else None
+        reference = _resolve_reference(compare.reference, state) if compare else None
     except PathSecurityError as exc:
         data["findings"] = [
             _finding(
@@ -1761,7 +1769,7 @@ async def evaluate_verify_circuit(
     data["kind"] = kind
     applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
     requested = set(args.checks) if args.checks is not None else None
-    render_only = args.render is not None and args.render.mode == "only"
+    render_only = render is not None and render.mode == "only"
 
     findings: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
@@ -1816,7 +1824,7 @@ async def evaluate_verify_circuit(
         or wanted.get("layout")
         or wanted.get("quality")
         or wanted.get("export")
-        or args.render is not None
+        or render is not None
     )
     want_issues = bool(wanted.get("layout") or wanted.get("quality"))
     if needs_scene:
@@ -1890,7 +1898,8 @@ async def evaluate_verify_circuit(
         else:
             ref_source = reference if isinstance(reference, Path) else path
             compared: CompareResult
-            if args.compare_mode == "equivalence":
+            assert compare is not None  # guarded by `reference is not None`
+            if compare.mode == "equivalence":
                 # Reuse the netlist text already read for syntax, so the candidate
                 # is not read+lexed a second time; the export path has no such text.
                 cand_input: str | Path = (
@@ -1902,8 +1911,8 @@ async def evaluate_verify_circuit(
                     cand_input,
                     ref_source,
                     candidate,
-                    args.anchors,
-                    args.rtol,
+                    compare.anchors,
+                    compare.rtol,
                     make_include_resolver(state),
                 )
             else:
@@ -1920,9 +1929,9 @@ async def evaluate_verify_circuit(
 
     # --- render -------------------------------------------------------------
     inline_image: RenderedImage | None = None
-    if args.render is not None:
+    if render is not None:
         render_payload, inline_image, render_failures, render_obs = await _do_render(
-            scene, kind, args.render, path, state
+            scene, kind, render, path, state
         )
         if render_payload is not None:
             data["render"] = render_payload

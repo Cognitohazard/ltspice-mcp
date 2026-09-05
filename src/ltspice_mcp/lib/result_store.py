@@ -21,20 +21,15 @@ from ltspice_mcp.lib.cursor_codec import canonical_json as canonical_json
 from ltspice_mcp.lib.cursor_codec import decode_cursor as _decode_body_cursor
 from ltspice_mcp.lib.cursor_codec import encode_cursor as _encode_body_cursor
 from ltspice_mcp.lib.deck_staging import sha256_file as sha256_file  # re-export
-from ltspice_mcp.lib.store_common import accept_schema, atomic_write_json, schema_envelope
+from ltspice_mcp.lib.store import KIND_RESULT_SET, Store, accept, atomic_write_json, envelope
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = "ltspice-mcp/result-set"
-SCHEMA_VERSION = 1
-SUPPORTED_VERSIONS = frozenset({SCHEMA_VERSION})
-RESULTS_SUBDIR = "results"
-ARTIFACTS_SUBDIR = "artifacts"
 NO_VIEW = object()
 
 
 def result_root(working_dir: Path) -> Path:
-    return (working_dir / ".ltspice-mcp" / RESULTS_SUBDIR).resolve()
+    return Store(working_dir).results_dir
 
 
 def result_path(result_set_id: str, working_dir: Path) -> Path:
@@ -45,11 +40,10 @@ def result_path(result_set_id: str, working_dir: Path) -> Path:
         or any(char not in "0123456789abcdef" for char in suffix)
     ):
         raise ResultError(f"Invalid result_set_id: {result_set_id!r}")
-    root = result_root(working_dir)
-    path = (root / f"{result_set_id}.json").resolve()
-    if path.parent != root:
-        raise ResultError(f"Invalid result_set_id: {result_set_id!r}")
-    return path
+    try:
+        return Store(working_dir).result_set(result_set_id)
+    except ValueError as exc:
+        raise ResultError(f"Invalid result_set_id: {result_set_id!r}") from exc
 
 
 def composite_digest(raw_sha256: str, log_sha256: str | None, log_present: bool) -> str:
@@ -93,9 +87,8 @@ class ResultSet:
         }
 
     def to_dict(self) -> dict[str, Any]:
-        return schema_envelope(
-            SCHEMA,
-            SCHEMA_VERSION,
+        return envelope(
+            KIND_RESULT_SET,
             **self.snapshot(),
             work_hash=self.work_hash,
             snapshot_hash=self.snapshot_hash,
@@ -129,20 +122,14 @@ def create(
         snapshot_hash="",
     )
     item = replace(item, snapshot_hash=canonical_hash(item.snapshot()))
-    atomic_write_json(result_path(result_set_id, working_dir), item.to_dict())
+    store = Store(working_dir)
+    store.ensure_root()
+    atomic_write_json(store.result_set(result_set_id), item.to_dict())
     return item
 
 
 def _decode(data: dict[str, Any], path: Path) -> ResultSet:
-    if not accept_schema(
-        data,
-        path,
-        schema=SCHEMA,
-        current_version=SCHEMA_VERSION,
-        supported_versions=SUPPORTED_VERSIONS,
-        migrations={},
-        logger=logger,
-    ):
+    if not accept(data, path, kind=KIND_RESULT_SET, log=logger):
         raise ResultError(f"Result set {path.stem!r} uses an unsupported storage schema")
     try:
         return ResultSet(
@@ -171,9 +158,8 @@ def _job_record_missing(item: ResultSet) -> str | None:
 
 
 def _delete_artifacts(working_dir: Path, result_set_id: str) -> None:
-    artifact_dir = result_root(working_dir) / ARTIFACTS_SUBDIR / result_set_id
-    with contextlib.suppress(OSError):
-        shutil.rmtree(artifact_dir)
+    with contextlib.suppress(OSError, ValueError):
+        shutil.rmtree(Store(working_dir).result_artifacts(result_set_id))
 
 
 def load(result_set_id: str, working_dir: Path) -> ResultSet:
@@ -379,7 +365,7 @@ def artifact_paths(
             "recipe_hash": recipe_hash,
         }
     )
-    root = result_root(Path(item.inputs["working_dir"])) / ARTIFACTS_SUBDIR / item.result_set_id
+    root = Store(Path(item.inputs["working_dir"])).result_artifacts(item.result_set_id)
     final = root / f"{identity}.{suffix.lstrip('.')}"
     pending = root / f".{identity}.{os.getpid()}.{secrets.token_hex(8)}.pending"
     return pending, final
