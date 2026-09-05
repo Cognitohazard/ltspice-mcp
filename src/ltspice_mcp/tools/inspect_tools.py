@@ -314,9 +314,9 @@ NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
 class _View:
     """How much of an answer a query pass renders — the budget ladder's inputs.
 
-    Frozen and hashable so a pass can be reused: the ladder walks four rungs but
-    only two of them change what a query has to read, and re-reading a library
-    tree per rung would pay for the budget twice.
+    Frozen and hashable so a pass can be reused: the ladder walks three rungs
+    but only two of them change what a query has to read, and re-reading a
+    library tree per rung would pay for the budget twice.
     """
 
     # Read at construction, not at class definition, so the module constant
@@ -1614,7 +1614,7 @@ _TRIM_REMOVE_EXHAUSTED: tuple[str, ...] = ("page", "next_cursor")
 
 
 def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
-    """Apply the budget ladder's presentation rungs to an inspect envelope.
+    """Apply the budget ladder's in-place trim rung to an inspect envelope.
 
     The answer rung and the shrink rung are not here: both change what a query
     reads, so they are inputs to the query pass (``_View``) rather than edits to
@@ -1632,13 +1632,6 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
             ):
                 for key in _TRIM_REMOVE_EXHAUSTED:
                     item.pop(key, None)
-    if rung.columnar:
-        for item in data["results"]:
-            payload = item.get("data")
-            if not isinstance(payload, dict):
-                continue
-            for key in list(payload):
-                response_budget.columnarize(payload, key)
 
 
 #: This tool's budget epilogue. The hint mirror is why it is a value: the note's
@@ -1656,25 +1649,15 @@ _BUDGET_NOTES = response_budget.Notes(
 
 
 def _paged_rows(data: dict[str, Any]) -> list[Any]:
-    """Every row the answered batch is currently showing, across all items.
-
-    The columnar rung's ``*_columns`` siblings are skipped. They are not rows —
-    they are one list of column names per row surface, they shrink only when the
-    rows they describe do, and counting them would inflate both the row count and
-    the per-row cost the shrink rung sizes its page against.
-    """
+    """Every row the answered batch is currently showing, across all items."""
     rows: list[Any] = []
     for item in data["results"]:
         payload = item.get("data")
         if not isinstance(payload, dict):
             continue
-        for key, value in payload.items():
-            if not isinstance(value, list):
-                continue
-            described = key.removesuffix(response_budget.COLUMNS_SUFFIX)
-            if described != key and isinstance(payload.get(described), list):
-                continue
-            rows.extend(value)
+        for value in payload.values():
+            if isinstance(value, list):
+                rows.extend(value)
     return rows
 
 
@@ -1682,8 +1665,8 @@ async def _negotiate_inspect(
     args: InspectInput, state: SessionState, budget: ResponseBudget
 ) -> types.CallToolResult:
     """Answer the batch at the mildest ladder rung that fits ``budget``."""
-    # One pass per distinct view, not one per rung: the trim and columnar rungs
-    # re-render an answered batch, only the answer and shrink rungs re-ask it.
+    # One pass per distinct view, not one per rung: the trim rung re-renders an
+    # answered batch, only the answer and shrink rungs re-ask it.
     passes: dict[_View, list[dict[str, Any]]] = {}
     rendered: dict[str, Any] = {"results": []}
     # The view the standing envelope was built from. A rung that does not change
