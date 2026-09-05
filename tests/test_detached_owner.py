@@ -9,6 +9,7 @@ record another process can read, or about an owner that is killed.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import shutil
 import signal
@@ -19,7 +20,7 @@ from typing import cast
 import psutil
 import pytest
 
-from ltspice_mcp.api import Api, ApiValidationError
+from ltspice_mcp.api import Api, ApiValidationError, _detach
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -114,6 +115,40 @@ def _submit_slow(api: Api, work_dir: Path, request_id: str) -> dict:
     )
 
 
+def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> None:
+    """One caller process: open an engine, detach the shared request, report back.
+
+    A separate process because the engine lease is per process — two callers
+    sharing a working directory is what this exercises, and it is what the
+    idempotent-replay contract invites a user to do.
+    """
+    from ltspice_mcp.api import Api
+
+    work = Path(work_dir)
+    start.wait(60)
+    api = None
+    try:
+        api = Api(
+            working_dir=work,
+            simulator="ngspice",
+            allowed_paths=[work],
+            max_parallel_sims=1,
+        )
+        receipt = api.run_experiments(
+            wait=False,
+            detach=True,
+            request_id=request_id,
+            circuits=[{"path": deck, "id": "div"}],
+        )
+        note = next(item for item in receipt["observations"] if item["code"] == "detached_owner")
+        result.put((receipt["job_id"], note["evidence"]["log_file"], None))
+    except Exception as exc:
+        result.put((None, None, f"{type(exc).__name__}: {exc}"))
+    finally:
+        if api is not None:
+            api.close()
+
+
 # ---------------------------------------------------------------------------
 # Argument policy — no engine, no process
 # ---------------------------------------------------------------------------
@@ -184,6 +219,13 @@ def test_a_detached_job_outlives_the_session_that_submitted_it(work_dir: Path) -
     assert str(log_file) in observation["detail"]
     assert log_file.is_file()
 
+    # The caller was the receipt's only reader, and the owner reads its request
+    # once. Neither survives the call: a script detaching under a fresh
+    # request_id per run would otherwise leave one of each behind for good.
+    detached_dir = Store(work_dir).detached_dir
+    assert not list(detached_dir.glob("*.receipt.json"))
+    assert not list(detached_dir.glob("*.request.json"))
+
     # Closing the session that submitted it is what cancels a job this process
     # owns. This one is not ours, so it has to survive the close.
     api.close()
@@ -233,6 +275,75 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
     # The owner named on the replay is the process that actually owns the
     # record, not the owner just spawned to look it up.
     assert again["evidence"]["owner_pid"] != os.getpid()
+
+
+def test_finished_hand_off_logs_are_capped(work_dir: Path) -> None:
+    """One log per call needs a bound, or a loop leaves one file per run."""
+    detached_dir = Store(work_dir).detached_dir
+    detached_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for index in range(_detach._KEPT_HANDOFF_LOGS + 12):
+        log = detached_dir / f"digest.{index:04d}.log"
+        log.write_text(f"owner {index}\n")
+        os.utime(log, (index, index))
+        written.append(log)
+
+    _detach._prune_handoff_logs(detached_dir)
+
+    kept = sorted(path.name for path in detached_dir.glob("*.log"))
+    assert len(kept) == _detach._KEPT_HANDOFF_LOGS
+    # The newest survive, so a live owner's log is never the one dropped.
+    assert kept == sorted(path.name for path in written[-_detach._KEPT_HANDOFF_LOGS :])
+
+
+def test_two_callers_detaching_one_request_id_do_not_trade_reports(
+    work_dir: Path,
+) -> None:
+    """The hand-off files belong to a call, not to a request id.
+
+    Two scripts in one working directory replaying the same request_id is the
+    advertised idempotent use. Sharing one receipt path lets either delete the
+    other's report — the caller then hears its submission never reported, for
+    a job that is running — or read the other owner's receipt and log as its
+    own.
+    """
+    deck = str(work_dir / "shared.cir")
+    (work_dir / "shared.cir").write_text(FAST_DECK)
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    result = context.Queue()
+    callers = [
+        context.Process(
+            target=_detach_worker,
+            args=(str(work_dir), deck, "detach-shared", start, result),
+        )
+        for _ in range(2)
+    ]
+    for caller in callers:
+        caller.start()
+    start.set()
+    outcomes = [result.get(timeout=HANDOFF_TIMEOUT_S) for _ in callers]
+    for caller in callers:
+        caller.join(HANDOFF_TIMEOUT_S)
+        assert caller.exitcode == 0
+
+    errors = [error for _job_id, _log, error in outcomes if error is not None]
+    assert not errors, errors
+    job_ids = {job_id for job_id, _log, _error in outcomes}
+    assert len(job_ids) == 1, outcomes
+
+    logs = {log for _job_id, log, _error in outcomes}
+    assert len(logs) == 2, f"both callers were handed one owner log: {logs}"
+    for log in logs:
+        assert Path(log).is_file(), log
+
+    records = sorted(Store(work_dir).experiments_dir.glob("*.json"))
+    assert [path.stem for path in records] == sorted(job_ids)
+
+    for job_id in job_ids:
+        with _api(work_dir) as fresh:
+            final = fresh.wait(job_id, timeout=HANDOFF_TIMEOUT_S)
+            assert final["status"] == "completed", final
 
 
 def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
@@ -307,7 +418,8 @@ def test_the_owner_holds_its_own_engine_lease_and_releases_it(work_dir: Path) ->
 
         owner = api._detached_children[-1]
         assert owner.wait(timeout=HANDOFF_TIMEOUT_S) == 0
-        log = Store(work_dir).detached_log("detach-lease").read_text(encoding="utf-8")
+        log_file = Path(_detached(receipt)["evidence"]["log_file"])
+        log = log_file.read_text(encoding="utf-8")
         assert "finished with status completed" in log
         assert "Traceback" not in log
     finally:

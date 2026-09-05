@@ -12,8 +12,10 @@ names a live supervising process from its first byte; see
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -44,6 +46,12 @@ HANDSHAKE_POLL_S = 0.02
 
 #: How much of the owner's log an error message carries back.
 _LOG_TAIL_BYTES = 2000
+
+#: How many finished calls' hand-off logs the directory keeps. Every call now
+#: writes its own, so without a bound a script detaching in a loop leaves one
+#: file per run behind for good. Pruning is by modification time, newest kept,
+#: so a live owner's log — always among the newest — is not the one dropped.
+_KEPT_HANDOFF_LOGS = 50
 
 
 @dataclass(frozen=True)
@@ -192,14 +200,18 @@ def submit(
     store = state.store
     store.ensure_root()
     store.detached_dir.mkdir(parents=True, exist_ok=True)
-    request_path = store.detached_request(request_id)
-    report_path = store.detached_receipt(request_id)
-    log_path = store.detached_log(request_id)
+    # This call's own hand-off, not this request id's. Two scripts in one
+    # working directory replaying the same request_id — the advertised use —
+    # would otherwise unlink each other's report, read each other's receipt,
+    # and append to one log; the report path is what the owner is told to
+    # write, so a name only this call knows is what makes "a report exists"
+    # mean "the owner this call spawned wrote one".
+    nonce = secrets.token_hex(8)
+    request_path = store.detached_request(request_id, nonce)
+    report_path = store.detached_receipt(request_id, nonce)
+    log_path = store.detached_log(request_id, nonce)
+    _prune_handoff_logs(store.detached_dir)
 
-    # Any report at this path belongs to an earlier call. Removing it before
-    # the owner starts is what makes "a report exists" mean "this owner wrote
-    # one" rather than "someone did, once".
-    report_path.unlink(missing_ok=True)
     atomic_write_json(
         request_path,
         envelope(
@@ -238,7 +250,12 @@ def submit(
         ) from exc
     children.append(process)
 
-    report = _await_report(process, report_path, request_id, log_path)
+    try:
+        report = _await_report(process, report_path, request_id, log_path)
+    finally:
+        # The caller is the only reader, and it has read. Leaving the file
+        # behind would accumulate one per call for the life of the directory.
+        report_path.unlink(missing_ok=True)
     if not report.get("ok"):
         error = report.get("error")
         message = error.get("message") if isinstance(error, Mapping) else None
@@ -259,6 +276,25 @@ def submit(
         supervisor_pid=supervisor_pid if isinstance(supervisor_pid, int) else process.pid,
         log_file=log_path,
     )
+
+
+def _prune_handoff_logs(detached_dir: Path) -> None:
+    """Keep the newest hand-off logs and drop the rest.
+
+    Best-effort housekeeping, never a reason to fail a call: a directory that
+    cannot be listed or a file another process removed first is ignored.
+    """
+    try:
+        logs = sorted(
+            detached_dir.glob("*.log"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return
+    for stale in logs[_KEPT_HANDOFF_LOGS:]:
+        with contextlib.suppress(OSError):
+            stale.unlink()
 
 
 def _await_report(
