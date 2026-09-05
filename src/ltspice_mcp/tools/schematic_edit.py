@@ -1142,6 +1142,7 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
     for kind, cursor in (
         ("label_only_pins", cursors.label_only_pins),
         ("pin_legend", cursors.pin_legend),
+        ("touched", cursors.touched),
     ):
         if cursor is None:
             continue
