@@ -61,6 +61,7 @@ from ltspice_mcp.lib.schematic_ops import (
     OpRemoveWire,
     OpSetComponentAttribute,
     OpSetComponentValue,
+    OpWirePins,
 )
 from ltspice_mcp.lib.variations import (
     AssignVariation,
@@ -103,7 +104,6 @@ from ltspice_mcp.tools.schematic_edit import (
     ConsolidatedOp,
     EditSchematicInput,
     EditViewCursors,
-    OpWirePinsStrict,
 )
 from ltspice_mcp.tools.verify import (
     CompareSpec,
@@ -126,7 +126,7 @@ RemoveNetLabelOp = OpRemoveNetLabel
 RemoveWireOp = OpRemoveWire
 SetComponentAttributeOp = OpSetComponentAttribute
 SetComponentValueOp = OpSetComponentValue
-WirePinsOp = OpWirePinsStrict
+WirePinsOp = OpWirePins
 ViewCursors = EditViewCursors
 
 __all__ = [  # noqa: RUF022 - grouped by the operation that takes them

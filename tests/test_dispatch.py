@@ -178,24 +178,12 @@ _DECLARED_INVERSES: dict[str, str] = {
     "move_component": _SELF_INVERSE,
 }
 
-# Deprecated ``op`` discriminator aliases: a second literal value that
-# deserializes to the SAME model as its primary name (``OpWirePins.op`` is
-# ``Literal["wire_pins", "connect"]``). An alias is the same mutation under
-# an old spelling, so it shares its primary's declared inverse rather than
-# getting its own _DECLARED_INVERSES entry; test_every_alias_resolves_to_a_
-# declared_op still forces a linkage to exist so a stray/typo'd alias can't
-# silently escape the closure guard.
-_OP_ALIASES: dict[str, str] = {
-    "connect": "wire_pins",
-}
-
 
 def _schematic_op_literals() -> set[str]:
     """The ``op`` discriminator strings in the SchematicOp union, derived from
     the union itself so the test cannot silently miss a newly added op. A
-    member's ``op`` field may carry more than one literal (``OpWirePins``'s
-    is ``Literal["wire_pins", "connect"]`` — the deprecated alias shares the
-    model), so this collects every literal per member rather than assuming one."""
+    member's ``op`` field may carry more than one literal, so this collects
+    every literal per member rather than assuming one."""
     literals: set[str] = set()
     for member in typing.get_args(SchematicOp):
         literals.update(typing.get_args(member.model_fields["op"].annotation))
@@ -215,11 +203,10 @@ class TestOpInverseClosure:
     property over the op union catches it the moment the asymmetry lands."""
 
     def test_every_op_has_a_declared_inverse(self):
-        """Each op in the union must classify its inverse in _DECLARED_INVERSES,
-        or be a declared alias of one that does (_OP_ALIASES). A new op with no
-        entry fails here, forcing the author to add an inverse op (or declare
-        it self-inverse) rather than ship a one-way mutation."""
-        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys() - _OP_ALIASES.keys()
+        """Each op in the union must classify its inverse in _DECLARED_INVERSES.
+        A new op with no entry fails here, forcing the author to add an inverse
+        op (or declare it self-inverse) rather than ship a one-way mutation."""
+        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys()
         assert not undeclared, (
             f"Schematic ops with no declared inverse: {sorted(undeclared)}. "
             "Add an inverse op to the SchematicOp union (mirroring "
@@ -227,22 +214,6 @@ class TestOpInverseClosure:
             "_DECLARED_INVERSES, or map it to _SELF_INVERSE if re-applying it "
             "with the prior arguments undoes it."
         )
-
-    def test_every_alias_resolves_to_a_declared_op(self):
-        """Every _OP_ALIASES entry must be a real literal in the union and
-        must resolve to a primary op that IS in _DECLARED_INVERSES — an alias
-        pointing at an unrecognized or undeclared primary name would silently
-        escape the inverse-closure guard above."""
-        literals = _schematic_op_literals()
-        for alias, primary in _OP_ALIASES.items():
-            assert alias in literals, (
-                f"Alias {alias!r} is declared in _OP_ALIASES but is not a real "
-                "op literal in the SchematicOp union."
-            )
-            assert primary in _DECLARED_INVERSES, (
-                f"Alias {alias!r} resolves to {primary!r}, which has no "
-                "declared inverse in _DECLARED_INVERSES."
-            )
 
     def test_no_stale_inverse_entries(self):
         """_DECLARED_INVERSES must not name ops that no longer exist — a stale
