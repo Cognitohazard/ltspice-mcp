@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
+import errno
 import itertools
 import json
 import re
@@ -592,6 +593,89 @@ class TestRequestGateContention:
         assert data["error"]["commit_state"] == "unknown"
         assert data["error"]["retryable"] is True
         assert "held-by-a-peer" in data["error"]["message"]
+
+
+@pytest.mark.asyncio
+class TestPostClaimFailures:
+    """Once the request index and the record are written, nothing started is a lie."""
+
+    async def test_unwritable_store_still_returns_the_durable_submission(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The circuit index is discovery, not identity.
+
+        A read-only store fails ``register_circuits`` and the save that would
+        record the note about it. The record the claim wrote is still the
+        durable one, and failing the whole submission over a lost note leaves
+        a job that exists, is queued, and has nothing running it.
+        """
+        fake_simulator(monkeypatch)
+        real_save_job = experiment_store.save_job
+        fallback_failed: list[str] = []
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        def flaky_save_job(job, *args, **kwargs):
+            noted = any(
+                item.get("code") == "experiment_index_write_failed" for item in job.observations
+            )
+            if noted and not fallback_failed:
+                fallback_failed.append(job.job_id)
+                raise OSError(errno.EROFS, "read-only file system")
+            return real_save_job(job, *args, **kwargs)
+
+        monkeypatch.setattr(experiment_store, "register_circuits", unwritable_index)
+        monkeypatch.setattr(experiment_store, "save_job", flaky_save_job)
+        deck = _deck(work_dir / "unwritable-index.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "unwritable-index", wait_s=1.0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert not result.is_error, data
+        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["status"] == "completed", data
+        assert fallback_failed == [data["job_id"]]
+        assert _observation_code(data, "experiment_index_write_failed") is not None
+        assert experiment_store.load_request_index("unwritable-index", work_dir) is not None
+
+    async def test_a_failure_after_the_claim_is_not_reported_as_not_started(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The record exists under this request_id before this can be reached.
+
+        A caller told not_started resubmits, typically under a fresh
+        request_id, and the same experiment runs twice — while the record it
+        was not told about sits at queued with nothing running it.
+        """
+        fake_simulator(monkeypatch)
+
+        def broken_index(*_args, **_kwargs):
+            raise ValueError("the circuit index digest is not a directory name")
+
+        monkeypatch.setattr(experiment_store, "register_circuits", broken_index)
+        deck = _deck(work_dir / "post-claim.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "post-claim-failure", wait_s=1.0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert result.is_error
+        assert data["error"]["commit_state"] == "committed"
+        assert data["error"]["code"] == "submission_committed"
+        assert "post-claim-failure" in data["error"]["message"]
+        assert experiment_store.load_request_index("post-claim-failure", work_dir) is not None
 
 
 class TestIdempotency:

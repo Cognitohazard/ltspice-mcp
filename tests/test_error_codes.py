@@ -440,6 +440,7 @@ FROZEN_ERROR_CODES = (
     "sparse_sweep",
     "step_axis_unioned",
     "step_value_unavailable",
+    "submission_committed",
     "submission_failed",
     "symbol_not_found",
     "symbol_unresolved",

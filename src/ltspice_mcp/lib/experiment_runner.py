@@ -86,6 +86,25 @@ class RequestGateBusy(SimulationError):
     code = "request_gate_busy"
 
 
+class SubmissionCommitted(SimulationError):
+    """The submission is durable, and something after the claim failed.
+
+    The request index and the coordinator record are both on disk under this
+    request_id before anything this wraps can go wrong. A caller told nothing
+    started resubmits, typically under a fresh id, and the same experiment
+    runs twice.
+    """
+
+    code = "submission_committed"
+
+    def __init__(self, request_id: str, cause: BaseException) -> None:
+        super().__init__(
+            f"The submission for request_id {request_id!r} is recorded, but the "
+            f"call could not be completed: {cause}. Ask again with the same "
+            "request_id to read back what was committed."
+        )
+
+
 class ExperimentCancellationError(SimulationError):
     """An experiment could not be cancelled by this coordinator."""
 
@@ -415,47 +434,62 @@ class ExperimentRunner(RunnerBase):
                 )
             self._validate_request(request)
             barrier = await self._durable_barrier(request)
-
-            # Registration and execution-task creation intentionally have no
-            # await between them. A replay racing the original barrier can
-            # therefore never observe a durable job that this process has not
-            # either registered or recognized as already registered.
-            registered = request.state.all_jobs.get(barrier.job.job_id)
-            if isinstance(registered, ExperimentJob):
-                job = registered
-            else:
-                job = barrier.job
-                request.state.add_experiment_job(job, already_persisted=True)
-            execution = None
-            if not barrier.replayed and job.task is None:
-                execution = self._new_execution(request, job)
-                self._executions[job.job_id] = execution
-            if barrier.replayed and not any(
-                item.get("code") == "idempotent_replay" for item in job.observations
-            ):
-                job.observations.append(
-                    {
-                        "code": "idempotent_replay",
-                        "kind": "submission",
-                        "detail": (
-                            "The request_id and canonical payload matched an existing "
-                            "durable experiment; its receipt was returned without "
-                            "resubmitting cases."
-                        ),
-                    }
-                )
-            receipt = ExperimentReceipt(
-                job=job,
-                replayed=barrier.replayed,
-                control_token=job.control_token,
-            )
-            if not receipt_ready.done():
-                receipt_ready.set_result(receipt)
-            if execution is not None:
-                job.task = self.loop.create_task(self._run_job(execution))
+            try:
+                await self._start_committed(request, barrier, receipt_ready)
+            except Exception as exc:
+                raise SubmissionCommitted(request.request_id, exc) from exc
         except Exception as exc:
             if not receipt_ready.done():
                 receipt_ready.set_exception(exc)
+
+    async def _start_committed(
+        self,
+        request: ExperimentRunRequest,
+        barrier: _BarrierResult,
+        receipt_ready: asyncio.Future[ExperimentReceipt],
+    ) -> None:
+        """Register the durable job and start it.
+
+        Split out so the caller can wrap it whole: past the barrier the job
+        exists on disk, and every failure from here has to say so.
+        """
+        # Registration and execution-task creation intentionally have no
+        # await between them. A replay racing the original barrier can
+        # therefore never observe a durable job that this process has not
+        # either registered or recognized as already registered.
+        registered = request.state.all_jobs.get(barrier.job.job_id)
+        if isinstance(registered, ExperimentJob):
+            job = registered
+        else:
+            job = barrier.job
+            request.state.add_experiment_job(job, already_persisted=True)
+        execution = None
+        if not barrier.replayed and job.task is None:
+            execution = self._new_execution(request, job)
+            self._executions[job.job_id] = execution
+        if barrier.replayed and not any(
+            item.get("code") == "idempotent_replay" for item in job.observations
+        ):
+            job.observations.append(
+                {
+                    "code": "idempotent_replay",
+                    "kind": "submission",
+                    "detail": (
+                        "The request_id and canonical payload matched an existing "
+                        "durable experiment; its receipt was returned without "
+                        "resubmitting cases."
+                    ),
+                }
+            )
+        receipt = ExperimentReceipt(
+            job=job,
+            replayed=barrier.replayed,
+            control_token=job.control_token,
+        )
+        if not receipt_ready.done():
+            receipt_ready.set_result(receipt)
+        if execution is not None:
+            job.task = self.loop.create_task(self._run_job(execution))
 
     async def _durable_barrier(self, request: ExperimentRunRequest) -> _BarrierResult:
         """Claim the request id first, then stage under it.
@@ -498,7 +532,10 @@ class ExperimentRunner(RunnerBase):
             await asyncio.to_thread(self._claim_request_id, request, candidate)
         # Outside the gate: the per-circuit index is discovery, not identity,
         # so a slow directory here holds up nothing but this submission.
-        await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+        try:
+            await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+        except Exception as exc:
+            raise SubmissionCommitted(request.request_id, exc) from exc
         return _BarrierResult(candidate, replayed=False)
 
     @staticmethod
@@ -584,7 +621,16 @@ class ExperimentRunner(RunnerBase):
                     ),
                 }
             )
-            experiment_store.save_job(candidate)
+            try:
+                experiment_store.save_job(candidate)
+            except OSError:
+                # The note about the index could not be persisted either. It
+                # still reaches this submission's receipt, and the record the
+                # claim wrote is the durable one — losing a note is no reason
+                # to fail a job that exists and can run.
+                logger.warning(
+                    "could not record the circuit-index failure on %s", candidate.job_id
+                )
 
     def _case_capacity(self, request: ExperimentRunRequest) -> int:
         """One job's share of the runner's cap.
