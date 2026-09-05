@@ -279,6 +279,11 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
     # The owner named on the replay is the process that actually owns the
     # record, not the owner just spawned to look it up.
     assert again["evidence"]["owner_pid"] != os.getpid()
+    # And that process finished long ago. Telling the caller a dead pid is
+    # supervising the job and can be cancelled is an instruction it may act on,
+    # and a recycled pid makes acting on it worse.
+    assert "supervises it until it is terminal" not in again["detail"]
+    assert "nothing is supervising it now" in again["detail"]
 
 
 def test_the_handshake_budget_outlasts_the_owners_own_gate_wait() -> None:
@@ -402,7 +407,10 @@ def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
     receipt = _submit_slow(api, work_dir, "detach-cancel")
     job_id = receipt["job_id"]
     control_token = receipt["control_token"]
-    owner_pid = _detached(receipt)["evidence"]["owner_pid"]
+    observation = _detached(receipt)
+    owner_pid = observation["evidence"]["owner_pid"]
+    # This one really is being supervised, so the live wording is the true one.
+    assert "supervises it until it is terminal" in observation["detail"]
     api.close()
 
     with _api(work_dir) as fresh:
