@@ -4,9 +4,11 @@ One tool answers a batch of independent read-only ``queries`` about the server
 and the circuits it can reach. Each query is one of six kinds:
 
 * ``capabilities`` — detected simulators + dialects, exporter presence, job
-  persistence, allowed roots, active profile, the configured limits, and the
-  linter version. Pulled from ``state``/``config``/``lint_rules``; nothing is
-  probed.
+  persistence, allowed roots, active profile, the configured limits, the
+  linter version, and ``diagnostics``: the startup notes (bad configured
+  simulator path, a requested engine that fell back, WSL auto-detection) that
+  say whether this server started degraded. Pulled from
+  ``state``/``config``/``lint_rules``; nothing is probed.
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
   precedence they resolve through. A ``path`` adds that schematic's own
   directory to the front of the reported precedence.
@@ -19,10 +21,16 @@ and the circuits it can reach. Each query is one of six kinds:
 * ``components`` — the component list (``detail:"list"``) or full per-component
   detail (``detail:"full"``) of any circuit file.
 
+On a netlist, ``net`` and ``components`` add ``warnings`` when the lexer had to
+guess about the deck (an unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a
+stray continuation) — the answer was read from cards that mean something other
+than the file says, and the key is absent when it read cleanly.
+
 Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
-— the token ``edit_schematic`` requires as ``expected_sha256``. This is the only
-place on the profile that hands it out, so a read here is what lets a first
-edit commit in one call instead of mining the digest out of an error.
+— the token ``edit_schematic`` requires as ``expected_sha256``. Reading it here
+is what lets a first edit commit in one call; an edit attempted without it is
+refused with the current digest attached, so that path costs one retry rather
+than a hunt.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
   ``enumerate`` lists every model defined in the given ``libs``.
 
@@ -70,7 +78,7 @@ from ltspice_mcp.lib.simulator import (
     dialect_for_simulator_name,
     simulator_remediation,
 )
-from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 from ltspice_mcp.state import SessionState
@@ -577,6 +585,12 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
         },
+        # What went wrong at startup, verbatim: a configured simulator path
+        # that does not exist, a requested engine that fell back to another,
+        # a WSL auto-detection. Otherwise these live only in the server's own
+        # stderr log, which no client reads — so a session running degraded
+        # looks identical to a healthy one from the outside.
+        "diagnostics": list(state.diagnostics),
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
         "allowed_paths": [str(p) for p in state.config.allowed_paths],
@@ -784,9 +798,10 @@ async def _asc_digest(path: Path) -> str:
     """The sheet's SHA-256 — the edit token ``edit_schematic`` takes as
     ``expected_sha256``.
 
-    Read tools are where a caller can get it: nothing else on this profile
-    reports it, so without this a fresh session has no supported way to obtain
-    its first one. Taken BEFORE the rows are read, so the digest can never be
+    Read tools are where a caller gets it alongside the content it describes;
+    ``edit_schematic``'s own refusals also report the target's current digest,
+    so a caller who edits without reading first still recovers in one retry.
+    Taken BEFORE the rows are read, so the digest can never be
     newer than the content reported alongside it — a token from the future
     would let an edit made against stale rows commit, while a stale token only
     conflicts, which is the safe direction.
@@ -813,9 +828,24 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     )
 
 
+def _lex_warnings(lexed: LexResult) -> list[str]:
+    """The lexer's own notes about what it had to guess, for a payload's
+    ``warnings``.
+
+    An unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a continuation with
+    no card to continue: each means the cards this answer was read from say
+    something other than the file does (an unclosed subcircuit swallows every
+    card after it into its scope). The lexer assigns no severity, so these are
+    relayed as written. Reading only ``.cards`` dropped them and made the
+    answer look authoritative.
+    """
+    return [f"netlist lexer: {note}" for note in lexed.warnings]
+
+
 def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
     """Card-membership for a node in a netlist — NO geometry keys (by contract)."""
-    cards = lex(text).cards
+    lexed = lex(text)
+    cards = lexed.cards
     by_ref = instances_by_ref(cards)
     parsed: dict[str, InstanceLine] = {}
     nodes_of: dict[str, list[str]] = {}
@@ -837,7 +867,14 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
             if n.lower() == node_lower:
                 members.append({"reference": line.ref, "terminal": i})
     members.sort(key=lambda m: (m["reference"], m["terminal"]))
-    return {"node": node, "members": members, "unparseable_cards": unparseable}
+    payload: dict[str, Any] = {
+        "node": node,
+        "members": members,
+        "unparseable_cards": unparseable,
+    }
+    if lexed.warnings:
+        payload["warnings"] = _lex_warnings(lexed)
+    return payload
 
 
 async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -937,10 +974,12 @@ def _check_prefix(prefix: str | None) -> None:
 
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The component rows, plus the lexer's notes about how the deck read."""
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
-    cards = lex(text).cards
+    lexed = lex(text)
+    cards = lexed.cards
     by_ref = instances_by_ref(cards)
     upper = prefix.upper() if prefix else None
     rows: list[dict[str, Any]] = []
@@ -962,7 +1001,7 @@ def _components_netlist_payload(
                 entry["params"] = dict(line.params)
         rows.append(entry)
     rows.sort(key=lambda r: r["reference"])
-    return rows
+    return rows, _lex_warnings(lexed)
 
 
 def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
@@ -1005,6 +1044,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     detail = "list" if view.lean else q.detail
     identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
     digest: str | None = None
+    lex_notes: list[str] = []
 
     if _route_circuit_kind(path, "components") == "asc":
         digest = await _asc_digest(path)
@@ -1022,7 +1062,9 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
         try:
-            all_rows = await asyncio.to_thread(_components_netlist_payload, text, q.prefix, detail)
+            all_rows, lex_notes = await asyncio.to_thread(
+                _components_netlist_payload, text, q.prefix, detail
+            )
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
         page = _paginate(all_rows, "components", identity, q.cursor, [path], view)
@@ -1037,6 +1079,11 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     }
     if digest is not None:
         data["sha256"] = digest
+    if lex_notes:
+        # Every page of this deck carries them: they describe the read the rows
+        # came out of, and a caller who pages past the first one is reading the
+        # same suspect scoping.
+        data["warnings"] = lex_notes
     return {
         "data": data,
         "next_cursor": page["next_cursor"],
