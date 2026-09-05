@@ -21,6 +21,11 @@ and the circuits it can reach. Each query is one of six kinds:
 * ``components`` — the component list (``detail:"list"``) or full per-component
   detail (``detail:"full"``) of any circuit file.
 
+On a netlist, ``net`` and ``components`` add ``warnings`` when the lexer had to
+guess about the deck (an unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a
+stray continuation) — the answer was read from cards that mean something other
+than the file says, and the key is absent when it read cleanly.
+
 Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
 — the token ``edit_schematic`` requires as ``expected_sha256``. This is the only
 place on the profile that hands it out, so a read here is what lets a first
@@ -72,7 +77,7 @@ from ltspice_mcp.lib.simulator import (
     dialect_for_simulator_name,
     simulator_remediation,
 )
-from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 from ltspice_mcp.state import SessionState
@@ -821,9 +826,24 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     )
 
 
+def _lex_warnings(lexed: LexResult) -> list[str]:
+    """The lexer's own notes about what it had to guess, for a payload's
+    ``warnings``.
+
+    An unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a continuation with
+    no card to continue: each means the cards this answer was read from say
+    something other than the file does (an unclosed subcircuit swallows every
+    card after it into its scope). The lexer assigns no severity, so these are
+    relayed as written. Reading only ``.cards`` dropped them and made the
+    answer look authoritative.
+    """
+    return [f"netlist lexer: {note}" for note in lexed.warnings]
+
+
 def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
     """Card-membership for a node in a netlist — NO geometry keys (by contract)."""
-    cards = lex(text).cards
+    lexed = lex(text)
+    cards = lexed.cards
     by_ref = instances_by_ref(cards)
     parsed: dict[str, InstanceLine] = {}
     nodes_of: dict[str, list[str]] = {}
@@ -845,7 +865,14 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
             if n.lower() == node_lower:
                 members.append({"reference": line.ref, "terminal": i})
     members.sort(key=lambda m: (m["reference"], m["terminal"]))
-    return {"node": node, "members": members, "unparseable_cards": unparseable}
+    payload: dict[str, Any] = {
+        "node": node,
+        "members": members,
+        "unparseable_cards": unparseable,
+    }
+    if lexed.warnings:
+        payload["warnings"] = _lex_warnings(lexed)
+    return payload
 
 
 async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -945,10 +972,12 @@ def _check_prefix(prefix: str | None) -> None:
 
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The component rows, plus the lexer's notes about how the deck read."""
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
-    cards = lex(text).cards
+    lexed = lex(text)
+    cards = lexed.cards
     by_ref = instances_by_ref(cards)
     upper = prefix.upper() if prefix else None
     rows: list[dict[str, Any]] = []
@@ -970,7 +999,7 @@ def _components_netlist_payload(
                 entry["params"] = dict(line.params)
         rows.append(entry)
     rows.sort(key=lambda r: r["reference"])
-    return rows
+    return rows, _lex_warnings(lexed)
 
 
 def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
@@ -1013,6 +1042,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     detail = "list" if view.lean else q.detail
     identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
     digest: str | None = None
+    lex_notes: list[str] = []
 
     if _route_circuit_kind(path, "components") == "asc":
         digest = await _asc_digest(path)
@@ -1030,7 +1060,9 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
         try:
-            all_rows = await asyncio.to_thread(_components_netlist_payload, text, q.prefix, detail)
+            all_rows, lex_notes = await asyncio.to_thread(
+                _components_netlist_payload, text, q.prefix, detail
+            )
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
         page = _paginate(all_rows, "components", identity, q.cursor, [path], view)
@@ -1045,6 +1077,11 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     }
     if digest is not None:
         data["sha256"] = digest
+    if lex_notes:
+        # Every page of this deck carries them: they describe the read the rows
+        # came out of, and a caller who pages past the first one is reading the
+        # same suspect scoping.
+        data["warnings"] = lex_notes
     return {
         "data": data,
         "next_cursor": page["next_cursor"],
