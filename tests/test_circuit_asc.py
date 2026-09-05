@@ -1,4 +1,10 @@
-"""Integration tests for .asc schematic editing tools using fixture symbols."""
+"""Integration tests for .asc schematic editing using fixture symbols.
+
+The ops, the route planner, the symbol-geometry layer and the post-op validation
+pass are the live implementation behind ``edit_schematic``; the tests drive them
+through the shared op runner (``tests/_asc_ops.py``) and then read the sheet back
+off disk, so a claim about geometry is checked against what was actually written.
+"""
 
 from pathlib import Path
 
@@ -8,45 +14,20 @@ from mcp.types import TextContent
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
-    AddComponentInput,
-    ApplySchematicOpsInput,
-    CircuitReadInput,
-    ComponentInfoInput,
-    CreateSchematicInput,
-    DiffCircuitInput,
-    EditDirectiveInput,
-    ListComponentsInput,
-    MoveComponentInput,
-    NetLabelInput,
-    RemoveComponentInput,
-    ResetSchematicInput,
-    SetComponentAttributeInput,
-    SetComponentValueInput,
-    SymbolInfoInput,
     TraceNetInput,
-    ValidateNetlistInput,
-    WaypointInput,
-    WirePinsInput,
     _build_on_wire_predicate,
     _point_on_segment,
-    handle_add_component,
-    handle_add_net_label,
-    handle_apply_schematic_ops,
-    handle_component_info,
-    handle_create_schematic,
-    handle_diff_circuit,
-    handle_edit_directive,
-    handle_list_components,
-    handle_move_component,
-    handle_read_circuit,
-    handle_remove_component,
-    handle_reset_schematic,
-    handle_set_component_attribute,
-    handle_set_component_value,
-    handle_symbol_info,
     handle_trace_net,
-    handle_validate_netlist,
-    handle_wire_pins,
+)
+from tests._asc_ops import (
+    add_component,
+    add_net_label,
+    apply_one,
+    batch_view,
+    blank_sheet_file,
+    components_of,
+    inspect_one,
+    wire_pins,
 )
 
 
@@ -55,6 +36,68 @@ def _result_text(result) -> str:
     item = result.content[0]
     assert isinstance(item, TextContent)
     return item.text
+
+
+def _sheet(name: str) -> Path:
+    """A sheet path relative to the session's working directory.
+
+    The op helpers take a real path; the tests name sheets the way a caller
+    does, so this resolves the name against the fixture working dir.
+    """
+    return _WORK_DIR / name
+
+
+_WORK_DIR = Path()
+
+
+@pytest.fixture(autouse=True)
+def _bind_work_dir(work_dir: Path):
+    """Let ``_sheet`` resolve bare sheet names for the duration of a test."""
+    global _WORK_DIR
+    previous = _WORK_DIR
+    _WORK_DIR = work_dir
+    yield
+    _WORK_DIR = previous
+
+
+def _sheet_facts(state: SessionState, name: str) -> dict:
+    """Components, wires and labels as written to the sheet on disk.
+
+    Reads the .asc itself rather than any in-memory model, so an assertion about
+    what an op produced is an assertion about the file a simulator would open.
+    """
+    path = _sheet(name) if not Path(name).is_absolute() else Path(name)
+    components: list[dict] = []
+    wires: list[dict] = []
+    labels: list[dict] = []
+    directives: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if parts[0] == "WIRE" and len(parts) >= 5:
+            wires.append(
+                {
+                    "x1": int(parts[1]),
+                    "y1": int(parts[2]),
+                    "x2": int(parts[3]),
+                    "y2": int(parts[4]),
+                }
+            )
+        elif parts[0] == "FLAG" and len(parts) >= 4:
+            labels.append({"x": int(parts[1]), "y": int(parts[2]), "text": parts[3]})
+        elif parts[0] == "TEXT" and "!" in line:
+            # "TEXT <x> <y> <align> <size> !<directive>"
+            directives.append(line.split("!", 1)[1])
+        elif parts[0] == "SYMATTR" and len(parts) >= 3 and parts[1] == "InstName":
+            components.append({"reference": parts[2]})
+    return {
+        "components": components,
+        "wires": wires,
+        "labels": labels,
+        "directives": directives,
+        "wire_count": len(wires),
+    }
 
 
 def _copy_file(src: Path, dst: Path) -> None:
@@ -115,273 +158,34 @@ FLAG 100 0 0
 
 
 @pytest.mark.asyncio
-class TestReadAscCircuit:
-    async def test_reads_components(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
-        text = _result_text(result)
-        assert "C1" in text
-        assert "R1" in text
-        assert "V1" in text
-        # Net labels
-        assert "filtered" in text
-        assert result.structuredContent["type"] == "asc"
-
-    async def test_asc_read_carries_wiring_norm(self, asc_state: SessionState, asc_file: Path):
-        # Co-design entry point: reading an inherited .asc states the wiring goal.
-        result = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
-        assert "wiring list" in result.structuredContent["hint"]
-
-    async def test_netlist_read_has_no_wiring_norm(
-        self, asc_state: SessionState, sample_netlist: Path
-    ):
-        # The norm is .asc-only; a .cir read must not carry it.
-        result = await handle_read_circuit(CircuitReadInput(path=sample_netlist.name), asc_state)
-        assert "hint" not in (result.structuredContent or {})
-
-    async def test_list_components_asc(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_list_components(
-            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
-        )
-        text = _result_text(result)
-        assert "C1" in text
-        assert "R1" in text
-
-
-@pytest.mark.asyncio
-class TestGetSymbolInfo:
-    async def test_valid_symbol(self, asc_state: SessionState):
-        result = await handle_symbol_info(
-            SymbolInfoInput(symbol="res", x=0, y=0, rotation="R0"), asc_state
-        )
-        text = _result_text(result)
-        assert "res" in text
-        assert "Pins" in text
-
-    async def test_unknown_symbol(self, asc_state: SessionState):
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_symbol_info(SymbolInfoInput(symbol="bogus_xyz_zzz"), asc_state)
-
-
-@pytest.mark.asyncio
-class TestGetComponentInfo:
-    async def test_existing(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_component_info(
-            ComponentInfoInput(path=asc_file.name, reference="R1"), asc_state
-        )
-        text = _result_text(result)
-        assert "R1" in text
-        assert "1k" in text
-        assert "Pins:" in text
-
-    async def test_missing_ref(self, asc_state: SessionState, asc_file: Path):
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_component_info(
-                ComponentInfoInput(path=asc_file.name, reference="ZZZ"), asc_state
-            )
-
-    async def test_requires_asc(self, asc_state: SessionState, work_dir: Path):
-        cir = work_dir / "x.cir"
-        cir.write_text("R1 1 0 1k\n.END\n")
-        with pytest.raises(NetlistError, match=r"requires an \.asc"):
-            await handle_component_info(
-                ComponentInfoInput(path=cir.name, reference="R1"), asc_state
-            )
-
-
-@pytest.mark.asyncio
-class TestRemoveComponent:
-    async def test_remove(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_remove_component(
-            RemoveComponentInput(path=asc_file.name, reference="C1"), asc_state
-        )
-        assert "Removed C1" in _result_text(result)
-        # Confirm not present anymore
-        read = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
-        comp_refs = [c["reference"] for c in read.structuredContent["components"]]
-        assert "C1" not in comp_refs
-
-    async def test_remove_unknown(self, asc_state: SessionState, asc_file: Path):
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_remove_component(
-                RemoveComponentInput(path=asc_file.name, reference="ZZZ"), asc_state
-            )
-
-
-@pytest.mark.asyncio
-class TestMoveComponent:
-    async def test_move(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200),
-            asc_state,
-        )
-        assert "Moved R1" in _result_text(result)
-
-    async def test_move_with_rotation(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200, rotation="R180"),
-            asc_state,
-        )
-        assert "R180" in _result_text(result)
-
-    async def test_keep_rotation(self, asc_state: SessionState, asc_file: Path):
-        # Omit rotation to exercise the "keep current" branch
-        result = await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=400, y=400),
-            asc_state,
-        )
-        assert "R1" in _result_text(result)
-
-
-@pytest.mark.asyncio
-class TestSetComponentAttribute:
-    async def test_set(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_set_component_attribute(
-            SetComponentAttributeInput(
-                path=asc_file.name, reference="R1", attribute="SpiceLine", value="tol=1%"
-            ),
-            asc_state,
-        )
-        assert "SpiceLine" in _result_text(result)
-
-
-@pytest.mark.asyncio
-class TestDiffCircuitAttributes:
-    async def test_attribute_change_detected(
-        self, asc_state: SessionState, asc_file: Path, work_dir: Path
-    ) -> None:
-        # Regression: diff_circuit compared only the Value field, so a
-        # set_component_attribute edit (SpiceLine/Value2/SpiceModel) — which
-        # lands in the exported netlist — falsely showed "no differences".
-        a = work_dir / "diff_a.asc"
-        b = work_dir / "diff_b.asc"
-        _copy_file(asc_file, a)
-        _copy_file(asc_file, b)
-        await handle_set_component_attribute(
-            SetComponentAttributeInput(
-                path="diff_b.asc", reference="R1", attribute="SpiceLine", value="tol=1"
-            ),
-            asc_state,
-        )
-        result = await handle_diff_circuit(
-            DiffCircuitInput(path_a="diff_a.asc", path_b="diff_b.asc"), asc_state
-        )
-        data = result.structuredContent
-        assert data is not None
-        changed = {c["reference"]: c for c in data["components_changed"]}
-        assert "R1" in changed
-        assert "tol=1" in changed["R1"]["after"]
-        assert changed["R1"]["before"] != changed["R1"]["after"]
-
-
-@pytest.mark.asyncio
-class TestAddComponent:
-    async def test_add(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_add_component(
-            AddComponentInput(
-                path=asc_file.name,
-                reference="R2",
-                symbol="res",
-                x=400,
-                y=300,
-                value="2k",
-            ),
-            asc_state,
-        )
-        text = _result_text(result)
-        assert "Added R2" in text
-        assert "2k" in text
-        data = result.structuredContent
-        assert data is not None
-        assert data["reference"] == "R2"
-        assert "pins" in data
-
-    async def test_add_duplicate(self, asc_state: SessionState, asc_file: Path):
-        with pytest.raises(NetlistError, match="already exists"):
-            await handle_add_component(
-                AddComponentInput(path=asc_file.name, reference="R1", symbol="res", x=0, y=0),
-                asc_state,
-            )
-
-
-@pytest.mark.asyncio
-class TestAddNetLabel:
-    async def test_add_at_xy(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="VCC", x=100, y=100),
-            asc_state,
-        )
-        assert "VCC" in _result_text(result)
-
-    async def test_add_ground(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="0", x=200, y=400),
-            asc_state,
-        )
-        assert "ground" in _result_text(result)
-
-    async def test_missing_xy_and_pin(self, asc_state: SessionState, asc_file: Path):
-        with pytest.raises(NetlistError, match="Either pin or both"):
-            await handle_add_net_label(NetLabelInput(path=asc_file.name, net="X"), asc_state)
-
-    async def test_remove_existing(self, asc_state: SessionState, asc_file: Path):
-        # Draft1.asc has "filtered" label at (208, 128)
-        result = await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="filtered", x=208, y=128, action="remove"),
-            asc_state,
-        )
-        assert "Removed" in _result_text(result)
-
-    async def test_remove_nonexistent(self, asc_state: SessionState, asc_file: Path):
-        with pytest.raises(NetlistError, match="No"):
-            await handle_add_net_label(
-                NetLabelInput(path=asc_file.name, net="zz", x=999, y=999, action="remove"),
-                asc_state,
-            )
-
-    async def test_duplicate_warning(self, asc_state: SessionState, asc_file: Path):
-        # Add a second 'filtered' label at a different position
-        result = await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="filtered", x=400, y=400),
-            asc_state,
-        )
-        assert "Warning" in _result_text(result)
-
-
-@pytest.mark.asyncio
 class TestEditDirectiveCommentKind:
     async def test_add_comment_via_edit_directive(self, asc_state: SessionState, asc_file: Path):
         """Free-text annotations now go through ``edit_directive`` with
         ``kind='comment'`` instead of the old ``add_text`` tool."""
-        result = await handle_edit_directive(
-            EditDirectiveInput(
-                path=asc_file.name,
-                action="add",
-                instruction="Test note",
-                kind="comment",
-                x=100,
-                y=200,
-            ),
+        result = apply_one(
             asc_state,
+            asc_file,
+            {
+                "op": "add_directive",
+                "instruction": "Test note",
+                "kind": "comment",
+                "x": 100,
+                "y": 200,
+            },
         )
-        assert "Test note" in _result_text(result)
+        assert result["instruction"] == "Test note"
 
     async def test_add_directive_honors_placement(self, asc_state: SessionState, asc_file: Path):
         """x/y/size on the .asc DIRECTIVE branch must place the directive at
         the given coordinates — previously only the comment branch read
         them, and spicelib's add_instruction silently picked its own spot
         and font size."""
-        result = await handle_edit_directive(
-            EditDirectiveInput(
-                path=asc_file.name,
-                action="add",
-                instruction=".tran 5m",
-                x=320,
-                y=240,
-                size=3,
-            ),
+        result = apply_one(
             asc_state,
+            asc_file,
+            {"op": "add_directive", "instruction": ".tran 5m", "x": 320, "y": 240, "size": 3},
         )
-        assert "Added directive" in _result_text(result)
+        assert result["op"] == "add_directive"
         content = _read_bytes(asc_file)
         # LTspice TEXT record: "TEXT <x> <y> <align> <size> !<directive>"
         assert b"!.tran 5m" in content
@@ -395,17 +199,17 @@ class TestEditDirectiveCommentKind:
         """Raw newlines in directive text must be stored as LTspice's literal
         \\n escapes — a real newline splits the TEXT record and corrupts the
         .asc (surfacing later as an unrelated 'Primitive not supported')."""
-        result = await handle_edit_directive(
-            EditDirectiveInput(
-                path=asc_file.name,
-                action="add",
-                instruction=".options reltol=1e-4\n.ic V(out)=0",
-                x=600,
-                y=600,
-            ),
+        result = apply_one(
             asc_state,
+            asc_file,
+            {
+                "op": "add_directive",
+                "instruction": ".options reltol=1e-4\n.ic V(out)=0",
+                "x": 600,
+                "y": 600,
+            },
         )
-        assert "Added directive" in _result_text(result)
+        assert result["op"] == "add_directive"
         content = _read_bytes(asc_file)
         line = next(ln for ln in content.splitlines() if b"!.options reltol=1e-4" in ln)
         assert b"!.options reltol=1e-4\\n.ic V(out)=0" in line
@@ -418,17 +222,16 @@ class TestEditDirectiveCommentKind:
         # Two add_directive ops without coordinates both default to (16,16);
         # the auto-declutter must nudge the second down so no two directives
         # share an anchor (which would render them on top of each other).
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=asc_file.name,
-                ops=[
-                    {"op": "add_directive", "instruction": ".tran 5m"},  # type: ignore[list-item]
-                    {"op": "add_directive", "instruction": ".ac dec 100 1 1meg"},  # type: ignore[list-item]
-                ],
-            ),
+        result = batch_view(
             asc_state,
+            asc_file,
+            [
+                {"op": "add_directive", "instruction": ".tran 5m"},  # type: ignore[list-item]
+                {"op": "add_directive", "instruction": ".ac dec 100 1 1meg"},  # type: ignore[list-item]
+            ],
+            stop_on_error=True,
         )
-        assert not result.isError, _result_text(result)
+        assert result["saved"] is True, result
         anchors = _directive_anchors(_read_bytes(asc_file))
         assert len(anchors) >= 2
         assert len(anchors) == len(set(anchors))  # every directive anchor distinct
@@ -441,10 +244,7 @@ class TestEditDirectiveCommentKind:
         # repeated adds must not land on the same anchor. (.tran and .four
         # coexist — .four is not an analysis directive that .tran replaces.)
         for instr in (".tran 5m", ".four 1k V(out)"):
-            await handle_edit_directive(
-                EditDirectiveInput(path=asc_file.name, action="add", instruction=instr),
-                asc_state,
-            )
+            apply_one(asc_state, asc_file, {"op": "add_directive", "instruction": instr})
         anchors = _directive_anchors(_read_bytes(asc_file))
         assert len(anchors) >= 2
         assert len(anchors) == len(set(anchors))  # no two directives share an anchor
@@ -466,47 +266,18 @@ class TestEditDirectiveCommentKind:
         assert stacked_w[0]["count"] == 2
         assert (stacked_w[0]["x"], stacked_w[0]["y"]) == (16, 16)
 
-    async def test_comment_rejects_directive_prefix(self, asc_state: SessionState, asc_file: Path):
-        """``kind='comment'`` with an instruction that starts with
-        ``!`` or ``.`` is almost always a mis-typed kind — refuse and
-        steer the caller to ``kind='directive'``."""
-        from ltspice_mcp.errors import NetlistError
-
-        for instruction in ("!.tran 1m", ".ac dec 100 1 1Meg"):
-            with pytest.raises(NetlistError, match="looks like a SPICE directive"):
-                await handle_edit_directive(
-                    EditDirectiveInput(
-                        path=asc_file.name,
-                        action="add",
-                        instruction=instruction,
-                        kind="comment",
-                    ),
-                    asc_state,
-                )
-
     async def test_remove_spans_directive_and_comment(
         self, asc_state: SessionState, asc_file: Path
     ):
         """``remove`` should hit comments too — previously you could
         ``add_text`` a stray ``;.foo`` line and ``edit_directive remove``
         couldn't touch it."""
-        await handle_edit_directive(
-            EditDirectiveInput(
-                path=asc_file.name,
-                action="add",
-                instruction="zap me",
-                kind="comment",
-            ),
+        apply_one(
             asc_state,
+            asc_file,
+            {"op": "add_directive", "instruction": "zap me", "kind": "comment"},
         )
-        await handle_edit_directive(
-            EditDirectiveInput(
-                path=asc_file.name,
-                action="remove",
-                instruction="regex:zap me",
-            ),
-            asc_state,
-        )
+        apply_one(asc_state, asc_file, {"op": "remove_directive", "instruction": "regex:zap me"})
         # Comment should be gone — re-removing yields no error since the
         # underlying spicelib calls are tolerant of misses. ASC files may
         # contain Latin-1 µ characters, so read raw bytes and replace.
@@ -518,33 +289,16 @@ class TestEditDirectiveCommentKind:
 class TestWirePins:
     async def test_diagonal_rejected(self, asc_state: SessionState, asc_file: Path):
         # First add a unique net label, then try a diagonal route to it
-        await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="X", x=100, y=200), asc_state
-        )
+        add_net_label(asc_state, asc_file, "X", x=100, y=200)
         with pytest.raises(NetlistError, match="not orthogonal"):
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="net:filtered",
-                    to_pin="net:X",
-                    waypoints=[],
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, asc_file, "net:filtered", "net:X", waypoints=[])
 
     async def test_multiple_ground_labels_error(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Multiple '0'") as exc_info:
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="net:filtered",
-                    to_pin="net:0",
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, asc_file, "net:filtered", "net:0")
         # Guidance must reference the actual ambiguous net, not a canned example.
         msg = str(exc_info.value)
-        assert "add_net_label op of apply_schematic_ops (net='0'" in msg
+        assert "add_net_label op of edit_schematic (net='0'" in msg
         assert "M3.S" not in msg
 
     async def test_multiple_label_error_names_actual_net(
@@ -552,66 +306,27 @@ class TestWirePins:
     ):
         # Two same-name labels on a non-ground net: the ambiguity guidance
         # must name that net dynamically.
-        await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="SIG", x=100, y=200), asc_state
-        )
-        await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="SIG", x=300, y=200), asc_state
-        )
+        add_net_label(asc_state, asc_file, "SIG", x=100, y=200)
+        add_net_label(asc_state, asc_file, "SIG", x=300, y=200)
         with pytest.raises(NetlistError, match="Multiple 'SIG'") as exc_info:
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="net:filtered",
-                    to_pin="net:SIG",
-                ),
-                asc_state,
-            )
-        assert "add_net_label op of apply_schematic_ops (net='SIG'" in str(exc_info.value)
+            wire_pins(asc_state, asc_file, "net:filtered", "net:SIG")
+        assert "add_net_label op of edit_schematic (net='SIG'" in str(exc_info.value)
 
     async def test_invalid_pin_format(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Invalid pin reference"):
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="badformat",
-                    to_pin="net:0",
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, asc_file, "badformat", "net:0")
 
     async def test_unknown_component(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="ZZZ.A",
-                    to_pin="net:0",
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, asc_file, "ZZZ.A", "net:0")
 
     async def test_missing_net_label(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Net label"):
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="net:nonexistent",
-                    to_pin="net:0",
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, asc_file, "net:nonexistent", "net:0")
 
     async def test_pin_unknown(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_wire_pins(
-                WirePinsInput(
-                    path=asc_file.name,
-                    from_pin="R1.ZZ",
-                    to_pin="net:0",
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, asc_file, "R1.ZZ", "net:0")
 
     async def test_same_instance_tie_refused(self, asc_state: SessionState, work_dir: Path):
         # A direct wire between two pins of ONE component is dropped by LTspice
@@ -620,15 +335,9 @@ class TestWirePins:
         # won't exist electrically. Fixture res pins: 1=(200,152), 2=(200,248).
         asc = work_dir / "self_tie.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(path="self_tie.asc", reference="R1", symbol="res", x=200, y=200),
-            asc_state,
-        )
+        add_component(asc_state, _sheet("self_tie.asc"), "R1", "res", 200, 200)
         with pytest.raises(NetlistError, match="same-instance wire") as exc_info:
-            await handle_wire_pins(
-                WirePinsInput(path="self_tie.asc", from_pin="R1.1", to_pin="R1.2"),
-                asc_state,
-            )
+            wire_pins(asc_state, _sheet("self_tie.asc"), "R1.1", "R1.2")
         msg = str(exc_info.value)
         # Names the actual instance/pins and both remedies (waypoint / net label).
         assert "R1.1" in msg and "R1.2" in msg
@@ -644,21 +353,16 @@ class TestWirePins:
         # LTspice keeps it. This is the escape hatch the refusal points at.
         asc = work_dir / "self_tie_wp.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(path="self_tie_wp.asc", reference="R1", symbol="res", x=200, y=200),
+        add_component(asc_state, _sheet("self_tie_wp.asc"), "R1", "res", 200, 200)
+        result = wire_pins(
             asc_state,
+            _sheet("self_tie_wp.asc"),
+            "R1.1",
+            "R1.2",
+            waypoints=[{"x": 300, "y": 152}, {"x": 300, "y": 248}],
         )
-        result = await handle_wire_pins(
-            WirePinsInput(
-                path="self_tie_wp.asc",
-                from_pin="R1.1",
-                to_pin="R1.2",
-                waypoints=[{"x": 300, "y": 152}, {"x": 300, "y": 248}],  # type: ignore[list-item]
-            ),
-            asc_state,
-        )
-        assert result.structuredContent is not None
-        assert result.structuredContent["wire_count"] == 3
+        assert result is not None
+        assert result["wire_count"] == 3
         # No segment directly joins the two pins, so none is dropped by LTspice.
         assert len(_wire_segments(asc)) == 3
 
@@ -672,21 +376,14 @@ class TestWirePins:
         # x=200; (200,200) is their in-line midpoint.
         asc = work_dir / "self_tie_collinear.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(
-                path="self_tie_collinear.asc", reference="R1", symbol="res", x=200, y=200
-            ),
-            asc_state,
-        )
+        add_component(asc_state, _sheet("self_tie_collinear.asc"), "R1", "res", 200, 200)
         with pytest.raises(NetlistError, match="same-instance wire") as exc_info:
-            await handle_wire_pins(
-                WirePinsInput(
-                    path="self_tie_collinear.asc",
-                    from_pin="R1.1",
-                    to_pin="R1.2",
-                    waypoints=[{"x": 200, "y": 200}],  # type: ignore[list-item]
-                ),
+            wire_pins(
                 asc_state,
+                _sheet("self_tie_collinear.asc"),
+                "R1.1",
+                "R1.2",
+                waypoints=[{"x": 200, "y": 200}],
             )
         assert "out of line" in str(exc_info.value).lower()
         assert _wire_segments(asc) == []
@@ -696,20 +393,11 @@ class TestWirePins:
         # instances is a normal net LTspice keeps, and must still be allowed.
         asc = work_dir / "cross.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(path="cross.asc", reference="R1", symbol="res", x=200, y=200),
-            asc_state,
-        )
-        await handle_add_component(
-            AddComponentInput(path="cross.asc", reference="R2", symbol="res", x=200, y=400),
-            asc_state,
-        )
-        result = await handle_wire_pins(
-            WirePinsInput(path="cross.asc", from_pin="R1.2", to_pin="R2.1"),
-            asc_state,
-        )
-        assert result.structuredContent is not None
-        assert result.structuredContent["wire_count"] == 1
+        add_component(asc_state, _sheet("cross.asc"), "R1", "res", 200, 200)
+        add_component(asc_state, _sheet("cross.asc"), "R2", "res", 200, 400)
+        result = wire_pins(asc_state, _sheet("cross.asc"), "R1.2", "R2.1")
+        assert result is not None
+        assert result["wire_count"] == 1
 
     async def test_route_over_own_pin_interior_refused_as_same_instance(
         self, asc_state: SessionState, work_dir: Path
@@ -723,29 +411,17 @@ class TestWirePins:
         # names it as a same-instance wire, not a "passes through" collision.
         asc = work_dir / "route_over_own_pin.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(
-                path="route_over_own_pin.asc", reference="R1", symbol="res", x=200, y=200
-            ),
-            asc_state,
-        )
-        await handle_add_component(
-            AddComponentInput(
-                path="route_over_own_pin.asc", reference="R2", symbol="res", x=400, y=400
-            ),
-            asc_state,
-        )
+        add_component(asc_state, _sheet("route_over_own_pin.asc"), "R1", "res", 200, 200)
+        add_component(asc_state, _sheet("route_over_own_pin.asc"), "R2", "res", 400, 400)
         # R1.1=(200,152), R1.2=(200,248), R2.1=(400,352). Route:
         # (200,152)->(200,352)->(400,352); the first leg passes over R1.2.
         with pytest.raises(NetlistError, match="same-instance wire") as exc_info:
-            await handle_wire_pins(
-                WirePinsInput(
-                    path="route_over_own_pin.asc",
-                    from_pin="R1.1",
-                    to_pin="R2.1",
-                    waypoints=[{"x": 200, "y": 352}],  # type: ignore[list-item]
-                ),
+            wire_pins(
                 asc_state,
+                _sheet("route_over_own_pin.asc"),
+                "R1.1",
+                "R2.1",
+                waypoints=[{"x": 200, "y": 352}],
             )
         msg = str(exc_info.value)
         assert "R1.1" in msg and "R1.2" in msg
@@ -758,21 +434,17 @@ class TestWirePins:
         # refusal must reach the batch surface too.
         asc = work_dir / "self_tie_ops.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(path="self_tie_ops.asc", reference="R1", symbol="res", x=200, y=200),
+        add_component(asc_state, _sheet("self_tie_ops.asc"), "R1", "res", 200, 200)
+        result = batch_view(
             asc_state,
+            _sheet("self_tie_ops.asc"),
+            [
+                # pydantic validates dicts
+                {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.2"},  # type: ignore[arg-type]
+            ],
+            stop_on_error=True,
         )
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="self_tie_ops.asc",
-                ops=[
-                    # pydantic validates dicts
-                    {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.2"},  # type: ignore[arg-type]
-                ],
-            ),
-            asc_state,
-        )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["saved"] is False
         assert data["results"][0]["ok"] is False
@@ -844,47 +516,30 @@ class TestOrientationPlacementAndRouting:
         asc = work_dir / "orient.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
 
-        added = await handle_add_component(
-            AddComponentInput(
-                path="orient.asc",
-                reference="M1",
-                symbol="nmos",
-                x=400,
-                y=200,
-                rotation=rotation,  # type: ignore[arg-type]  # parametrized literal
-            ),
-            asc_state,
+        added = add_component(
+            asc_state, _sheet("orient.asc"), "M1", "nmos", 400, 200, rotation=rotation
         )
-        assert added.structuredContent is not None
-        reported = {p["name"]: (p["x"], p["y"]) for p in added.structuredContent["pins"]}
+        reported = {p["name"]: (p["x"], p["y"]) for p in added["pins"]}
         assert reported == NMOS_PIN_POSITIONS[rotation]
 
         # Fixed second component, far enough from M1 that no route below can
         # collide with its pins. Fixture res pins: 1=(0,-48) -> R9.1=(700,452).
-        await handle_add_component(
-            AddComponentInput(path="orient.asc", reference="R9", symbol="res", x=700, y=500),
-            asc_state,
-        )
+        add_component(asc_state, _sheet("orient.asc"), "R9", "res", 700, 500)
 
         # wire_pins re-resolves M1.G from the cached editor's stored placement,
         # so the wire endpoint proves the rotation survived the round trip.
         gx, gy = NMOS_PIN_POSITIONS[rotation]["G"]
-        connected = await handle_wire_pins(
-            WirePinsInput(
-                path="orient.asc",
-                from_pin="M1.G",
-                to_pin="R9.1",
-                waypoints=[WaypointInput(x=gx, y=452)],
-            ),
-            asc_state,
+        connected = wire_pins(
+            asc_state, _sheet("orient.asc"), "M1.G", "R9.1", waypoints=[{"x": gx, "y": 452}]
         )
-        sc = connected.structuredContent
-        assert sc is not None
-        assert sc["from"] == {"ref": "M1.G", "x": gx, "y": gy}
-        assert sc["to"] == {"ref": "R9.1", "x": 700, "y": 452}
+        sc = connected
+        assert sc["from_pin"] == "M1.G"
+        assert sc["to_pin"] == "R9.1"
 
         # Re-read the file from disk: the persisted wire must start at the
-        # hand-computed absolute G coordinate and land on R9.1.
+        # hand-computed absolute G coordinate and land on R9.1. This is the
+        # load-bearing check — it proves the rotation survived placement, the
+        # cached editor, and the route planner's own pin resolution.
         segments = _wire_segments(asc)
         assert _has_segment(segments, (gx, gy), (gx, 452)), segments
         assert _has_segment(segments, (gx, 452), (700, 452)), segments
@@ -921,12 +576,8 @@ class TestArchetypeBuildCoverage:
         asc = work_dir / f"arch_{symbol}.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
 
-        added = await handle_add_component(
-            AddComponentInput(path=asc.name, reference="X1", symbol=symbol, x=400, y=300),
-            asc_state,
-        )
-        assert added.structuredContent is not None
-        pins = {p["name"]: (p["x"], p["y"]) for p in added.structuredContent["pins"]}
+        added = add_component(asc_state, asc, "X1", symbol, 400, 300)
+        pins = {p["name"]: (p["x"], p["y"]) for p in added["pins"]}
         # The symbol-geometry layer must report every terminal of the class. This
         # extends the nmos-only orientation coverage to the 2-terminal active and
         # 4-terminal controlled-source classes, so a PIN-parser regression that
@@ -945,15 +596,10 @@ class TestArchetypeBuildCoverage:
         name = pin_names[-1]
         px, py = pins[name]
         out_x = px + (300 if px >= 400 else -300)
-        await handle_add_component(
-            AddComponentInput(path=asc.name, reference="RL", symbol="res", x=out_x, y=py + 48),
-            asc_state,
+        add_component(
+            asc_state, asc, "RL", "res", out_x, py + 48
         )  # res pin 1 = (0,-48) offset -> (out_x, py), collinear with X1.{name}
-        connected = await handle_wire_pins(
-            WirePinsInput(path=asc.name, from_pin=f"X1.{name}", to_pin="RL.1"),
-            asc_state,
-        )
-        assert connected.structuredContent is not None
+        wire_pins(asc_state, asc, f"X1.{name}", "RL.1")
         # Re-read from disk: the named terminal resolved and the wire persisted.
         assert _has_segment(_wire_segments(asc), (px, py), (out_x, py)), (name, asc.read_text())
 
@@ -966,23 +612,14 @@ class TestWirePinsPersistsWires:
     async def test_wire_written_and_persisted(self, asc_state: SessionState, work_dir: Path):
         asc = work_dir / "wire_persist.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
-        await handle_add_component(
-            AddComponentInput(path="wire_persist.asc", reference="R1", symbol="res", x=200, y=200),
-            asc_state,
-        )
-        await handle_add_component(
-            AddComponentInput(path="wire_persist.asc", reference="R2", symbol="res", x=200, y=400),
-            asc_state,
-        )
+        add_component(asc_state, _sheet("wire_persist.asc"), "R1", "res", 200, 200)
+        add_component(asc_state, _sheet("wire_persist.asc"), "R2", "res", 200, 400)
         before = _wire_segments(asc)
         assert before == []  # add_component places no wires
 
-        result = await handle_wire_pins(
-            WirePinsInput(path="wire_persist.asc", from_pin="R1.2", to_pin="R2.1"),
-            asc_state,
-        )
-        assert "Connected R1.2 to R2.1" in _result_text(result)
-        sc = result.structuredContent
+        result = wire_pins(asc_state, _sheet("wire_persist.asc"), "R1.2", "R2.1")
+        assert (result["from_pin"], result["to_pin"]) == ("R1.2", "R2.1")
+        sc = result
         assert sc is not None
         assert sc["wire_count"] == 1
 
@@ -990,83 +627,6 @@ class TestWirePinsPersistsWires:
         after = _wire_segments(asc)
         assert len(after) == len(before) + sc["wire_count"]
         assert _has_segment(after, (200, 248), (200, 352)), after
-
-
-@pytest.mark.asyncio
-class TestSchematicReadability:
-    """Readability eval for a schematic built the way the guide recommends:
-    apply_schematic_ops + wire_pins for the signal path, add_net_label only for
-    the ground/global nets. The result must come out WIRED — not 'net-label
-    soup', where every component pin floats on its own same-named FLAG and there
-    are no wires. This is the regression guard for the blind spot that let a
-    label-only build ship: the signal junctions have to be real WIRE records,
-    and net labels stay scoped to the terminal nets.
-    """
-
-    async def test_built_schematic_is_wired_not_label_soup(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
-
-        await handle_create_schematic(CreateSchematicInput(name="readable"), asc_state)
-        # A 3-resistor chain stacked on x=200: the two internal junctions are
-        # wired by wire_pins; only the two terminal nets (in, ground) get a label.
-        # Fixture res pins: 1=(0,-48), 2=(0,48), so Rn at (200, y) has pins at
-        # (200, y-48) and (200, y+48).
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="readable.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 200,
-                        "y": 200,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "R2",
-                        "symbol": "res",
-                        "x": 200,
-                        "y": 400,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "R3",
-                        "symbol": "res",
-                        "x": 200,
-                        "y": 600,
-                    },
-                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
-                    {"op": "wire_pins", "from_pin": "R2.2", "to_pin": "R3.1"},
-                    {"op": "add_net_label", "net": "in", "pin": "R1.1"},
-                    {"op": "add_net_label", "net": "0", "pin": "R3.2"},
-                ],
-            ),
-            asc_state,
-        )
-        assert result.structuredContent is not None
-        assert result.structuredContent["failed_count"] == 0
-        assert result.structuredContent["saved"] is True
-
-        asc = work_dir / "readable.asc"
-        wires = _wire_segments(asc)
-        flags = _flag_records(asc)
-        flag_coords = {coord for coord, _net in flags}
-
-        # The signal path is WIRED: both internal junctions are real segments.
-        assert _has_segment(wires, (200, 248), (200, 352)), wires  # R1.2 - R2.1
-        assert _has_segment(wires, (200, 448), (200, 552)), wires  # R2.2 - R3.1
-
-        # Net labels are scoped to the two terminal nets, placed at the terminal
-        # pins — not one FLAG per junction.
-        assert sorted(net for _coord, net in flags) == ["0", "in"]
-        assert flag_coords == {(200, 152), (200, 648)}  # R1.1 (in), R3.2 (gnd)
-
-        # The anti-soup invariant: no internal junction is realized as a label.
-        for junction in ((200, 248), (200, 352), (200, 448), (200, 552)):
-            assert junction not in flag_coords, f"junction {junction} labeled, not wired"
 
 
 @pytest.mark.asyncio
@@ -1078,29 +638,21 @@ class TestAscValueExcludesValue2:
     async def test_list_components_excludes_value2(
         self, asc_state: SessionState, work_dir: Path
     ) -> None:
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="value2"), asc_state)
-        await handle_add_component(
-            AddComponentInput(
-                path="value2.asc",
-                reference="M1",
-                symbol="nmos",
-                x=200,
-                y=200,
-                value="NMOS_VTH04",
-                attributes={"Value2": "tag1", "SpiceLine": "W=10u L=0.5u"},
-            ),
+        blank_sheet_file(asc_state, "value2")
+        add_component(
             asc_state,
+            _sheet("value2.asc"),
+            "M1",
+            "nmos",
+            200,
+            200,
+            value="NMOS_VTH04",
+            attributes={"Value2": "tag1", "SpiceLine": "W=10u L=0.5u"},
         )
 
-        result = await handle_list_components(
-            ListComponentsInput.model_validate({"path": "value2.asc"}), asc_state
-        )
-        comps = result.structuredContent["components"]  # type: ignore[index]
+        result = await components_of(asc_state, _sheet("value2.asc"))
+        comps = result["components"]  # type: ignore[index]
         m1 = next(c for c in comps if c["reference"] == "M1")
         # Value field is the Value SYMATTR alone, not "NMOS_VTH04 tag1".
         assert m1["value"] == "NMOS_VTH04"
@@ -1110,30 +662,23 @@ class TestAscValueExcludesValue2:
     async def test_single_ref_lookup_excludes_value2(
         self, asc_state: SessionState, work_dir: Path
     ) -> None:
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
+
+        blank_sheet_file(asc_state, "value2_single")
+        add_component(
+            asc_state,
+            _sheet("value2_single.asc"),
+            "M1",
+            "nmos",
+            200,
+            200,
+            value="NMOS_VTH04",
+            attributes={"Value2": "tag1"},
         )
 
-        await handle_create_schematic(CreateSchematicInput(name="value2_single"), asc_state)
-        await handle_add_component(
-            AddComponentInput(
-                path="value2_single.asc",
-                reference="M1",
-                symbol="nmos",
-                x=200,
-                y=200,
-                value="NMOS_VTH04",
-                attributes={"Value2": "tag1"},
-            ),
-            asc_state,
-        )
-
-        result = await handle_list_components(
-            ListComponentsInput.model_validate({"path": "value2_single.asc", "reference": "M1"}),
-            asc_state,
-        )
-        assert result.structuredContent["value"] == "NMOS_VTH04"  # type: ignore[index]
+        data = await components_of(asc_state, _sheet("value2_single.asc"))
+        m1 = next(c for c in data["components"] if c["reference"] == "M1")
+        # Value field is the Value SYMATTR alone, not "NMOS_VTH04 tag1".
+        assert m1["value"] == "NMOS_VTH04"
 
 
 @pytest.mark.asyncio
@@ -1146,16 +691,8 @@ class TestEmptyAttributeHandling:
     async def test_empty_attribute_raises(self, asc_state: SessionState, asc_file: Path):
         original = asc_file.read_bytes()  # noqa: ASYNC240
         with pytest.raises(NetlistError, match="empty value"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="M_bad",
-                    symbol="res",
-                    x=600,
-                    y=600,
-                    attributes={"SpiceModel": ""},
-                ),
-                asc_state,
+            add_component(
+                asc_state, asc_file, "M_bad", "res", 600, 600, attributes={"SpiceModel": ""}
             )
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
 
@@ -1167,14 +704,9 @@ class TestEmptyAttributeHandling:
         # value corrupts the .asc the same way an empty attribute does.
         original = asc_file.read_bytes()  # noqa: ASYNC240
         with pytest.raises(NetlistError, match="empty value"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name, reference="RX", symbol="res", x=600, y=600, value=bad_value
-                ),
-                asc_state,
-            )
+            add_component(asc_state, asc_file, "RX", "res", 600, 600, value=bad_value)
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+        _sheet_facts(asc_state, asc_file.name)
 
     async def test_add_component_unknown_attribute_rejected(
         self, asc_state: SessionState, asc_file: Path
@@ -1183,46 +715,35 @@ class TestEmptyAttributeHandling:
         # add_component now refuses it the same way set_component_attribute does.
         original = asc_file.read_bytes()  # noqa: ASYNC240
         with pytest.raises(NetlistError, match="Unknown attribute"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="RX",
-                    symbol="res",
-                    x=600,
-                    y=600,
-                    attributes={"Val": "10k"},
-                ),
-                asc_state,
-            )
+            add_component(asc_state, asc_file, "RX", "res", 600, 600, attributes={"Val": "10k"})
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
 
     async def test_apply_ops_add_component_empty_value_rejected(
         self, asc_state: SessionState, asc_file: Path
     ):
         original = asc_file.read_bytes()  # noqa: ASYNC240
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=asc_file.name,
-                ops=[
-                    {  # type: ignore[arg-type]
-                        "op": "add_component",
-                        "reference": "RX",
-                        "symbol": "res",
-                        "x": 600,
-                        "y": 600,
-                        "value": "",
-                    },
-                ],
-            ),
+        result = batch_view(
             asc_state,
+            asc_file,
+            [
+                {  # type: ignore[arg-type]
+                    "op": "add_component",
+                    "reference": "RX",
+                    "symbol": "res",
+                    "x": 600,
+                    "y": 600,
+                    "value": "",
+                },
+            ],
+            stop_on_error=True,
         )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "empty value" in data["results"][0]["error"]
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+        _sheet_facts(asc_state, asc_file.name)
 
     async def test_set_component_attribute_empty_value_clears(
         self, asc_state: SessionState, asc_file: Path
@@ -1231,26 +752,34 @@ class TestEmptyAttributeHandling:
         # format has no empty-value representation — writing a 2-token
         # "SYMATTR Value " line bricks the file on the next parse). The .asc
         # must stay readable afterwards.
-        result = await handle_set_component_attribute(
-            SetComponentAttributeInput(
-                path=asc_file.name, reference="R1", attribute="Value", value=""
-            ),
+        result = apply_one(
             asc_state,
+            asc_file,
+            {
+                "op": "set_component_attribute",
+                "reference": "R1",
+                "attribute": "Value",
+                "value": "",
+            },
         )
-        assert "Cleared R1.Value" in _result_text(result)
+        assert result["ok"] is True
         from spicelib import AscEditor
 
         assert "Value" not in AscEditor(str(asc_file)).get_component("R1").attributes
-        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+        _sheet_facts(asc_state, asc_file.name)
 
     async def test_instname_cannot_be_cleared(self, asc_state: SessionState, asc_file: Path):
         original = asc_file.read_bytes()  # noqa: ASYNC240
         with pytest.raises(NetlistError, match="InstName"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name, reference="R1", attribute="InstName", value=""
-                ),
+            apply_one(
                 asc_state,
+                asc_file,
+                {
+                    "op": "set_component_attribute",
+                    "reference": "R1",
+                    "attribute": "InstName",
+                    "value": "",
+                },
             )
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
 
@@ -1259,45 +788,43 @@ class TestEmptyAttributeHandling:
     ):
         from spicelib import AscEditor
 
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=asc_file.name,
-                ops=[
-                    {  # type: ignore[arg-type]
-                        "op": "set_component_attribute",
-                        "reference": "R1",
-                        "attribute": "Value",
-                        "value": "",
-                    },
-                ],
-            ),
+        result = batch_view(
             asc_state,
+            asc_file,
+            [
+                {  # type: ignore[arg-type]
+                    "op": "set_component_attribute",
+                    "reference": "R1",
+                    "attribute": "Value",
+                    "value": "",
+                },
+            ],
+            stop_on_error=True,
         )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["saved"] is True
         assert "Value" not in AscEditor(str(asc_file)).get_component("R1").attributes
-        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+        _sheet_facts(asc_state, asc_file.name)
 
     async def test_apply_ops_instname_clear_rejected(
         self, asc_state: SessionState, asc_file: Path
     ):
         original = asc_file.read_bytes()  # noqa: ASYNC240
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=asc_file.name,
-                ops=[
-                    {  # type: ignore[arg-type]
-                        "op": "set_component_attribute",
-                        "reference": "R1",
-                        "attribute": "InstName",
-                        "value": "",
-                    },
-                ],
-            ),
+        result = batch_view(
             asc_state,
+            asc_file,
+            [
+                {  # type: ignore[arg-type]
+                    "op": "set_component_attribute",
+                    "reference": "R1",
+                    "attribute": "InstName",
+                    "value": "",
+                },
+            ],
+            stop_on_error=True,
         )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["saved"] is False
         assert data["failed_count"] == 1
@@ -1323,11 +850,10 @@ class TestSetComponentValueBehavioralSource:
             "SYMATTR InstName B1\n"
             "SYMATTR Value V=1\n"
         )
-        result = await handle_set_component_value(
-            SetComponentValueInput(path=asc.name, reference="B1", value="V=V(in)*2"),
-            asc_state,
+        result = apply_one(
+            asc_state, asc, {"op": "set_component_value", "reference": "B1", "value": "V=V(in)*2"}
         )
-        assert "B1" in _result_text(result)
+        assert result["reference"] == "B1"
         content = asc.read_text()
         assert "SYMATTR Value V=V(in)*2" in content
         assert "SpiceLine" not in content
@@ -1345,15 +871,11 @@ class TestSetComponentValueCreatesMissingValue:
     ):
         from spicelib import AscEditor
 
-        await handle_add_component(
-            AddComponentInput(path=asc_file.name, reference="R9", symbol="res", x=400, y=400),
-            asc_state,
+        add_component(asc_state, asc_file, "R9", "res", 400, 400)
+        result = apply_one(
+            asc_state, asc_file, {"op": "set_component_value", "reference": "R9", "value": "22k"}
         )
-        result = await handle_set_component_value(
-            SetComponentValueInput(path=asc_file.name, reference="R9", value="22k"),
-            asc_state,
-        )
-        assert "R9" in _result_text(result)
+        assert result["reference"] == "R9"
         assert str(AscEditor(str(asc_file)).get_component_value("R9")) == "22k"
 
     async def test_apply_ops_set_value_after_valueless_add(
@@ -1361,57 +883,26 @@ class TestSetComponentValueCreatesMissingValue:
     ):
         from spicelib import AscEditor
 
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=asc_file.name,
-                ops=[  # type: ignore[arg-type]
-                    {
-                        "op": "add_component",
-                        "reference": "R8",
-                        "symbol": "res",
-                        "x": 500,
-                        "y": 400,
-                    },
-                    {"op": "set_component_value", "reference": "R8", "value": "33k"},
-                ],
-            ),
+        result = batch_view(
             asc_state,
+            asc_file,
+            [  # type: ignore[arg-type]
+                {
+                    "op": "add_component",
+                    "reference": "R8",
+                    "symbol": "res",
+                    "x": 500,
+                    "y": 400,
+                },
+                {"op": "set_component_value", "reference": "R8", "value": "33k"},
+            ],
+            stop_on_error=True,
         )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["saved"] is True
         assert data["failed_count"] == 0
         assert str(AscEditor(str(asc_file)).get_component_value("R8")) == "33k"
-
-
-@pytest.mark.asyncio
-class TestCreateSchematicFormat:
-    """Regression: create_schematic rejected a `format` param its sibling tools
-    accept (schema was additionalProperties:false with no `format`)."""
-
-    async def test_format_text_accepted(self, asc_state: SessionState):
-        result = await handle_create_schematic(
-            CreateSchematicInput(name="fmt_text", format="text"), asc_state
-        )
-        assert "Created schematic" in _result_text(result)
-
-    async def test_format_json_returns_structured(self, asc_state: SessionState):
-        result = await handle_create_schematic(
-            CreateSchematicInput(name="fmt_json", width=640, height=480, format="json"),
-            asc_state,
-        )
-        data = result.structuredContent
-        assert data is not None
-        assert data["path"].endswith("fmt_json.asc")
-        assert data["width"] == 640
-        assert data["height"] == 480
-        # The layout checklist must reach structured-aware clients (which show
-        # only structuredContent), not just the text channel.
-        assert "Layout checklist" in data["hint"]
-        assert "add_net_label" in data["hint"]
-        assert "apply_schematic_ops" in data["hint"]
-        # The wiring norm is prepended so the goal precedes the mechanics.
-        assert "wiring list" in data["hint"]
 
 
 @pytest.mark.asyncio
@@ -1442,16 +933,7 @@ class TestEditingAscRollback:
         monkeypatch.setattr(circuit_mod, "_create_component", boom)
 
         with pytest.raises(RuntimeError, match="injected"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="R_uncommitted",
-                    symbol="res",
-                    x=700,
-                    y=700,
-                ),
-                asc_state,
-            )
+            add_component(asc_state, asc_file, "R_uncommitted", "res", 700, 700)
 
         # The injection fired (sanity).
         assert boom_calls["n"] == 1
@@ -1459,10 +941,8 @@ class TestEditingAscRollback:
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
         # Cache eviction means a fresh read doesn't see R_uncommitted.
         monkeypatch.undo()
-        result = await handle_list_components(
-            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
-        )
-        assert "R_uncommitted" not in _result_text(result)
+        result = await components_of(asc_state, asc_file)
+        assert "R_uncommitted" not in result
 
 
 @pytest.mark.asyncio
@@ -1502,16 +982,7 @@ class TestAtomicAscSave:
         monkeypatch.setattr(AscEditor, "save_netlist", failing_save)
 
         with pytest.raises(OSError, match="disk full"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="R_aborted_save",
-                    symbol="res",
-                    x=600,
-                    y=600,
-                ),
-                asc_state,
-            )
+            add_component(asc_state, asc_file, "R_aborted_save", "res", 600, 600)
 
         # Atomic-rename guarantee: no partial write reached the target.
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
@@ -1530,26 +1001,15 @@ class TestAtomicAscSave:
         monkeypatch.setattr(AscEditor, "save_netlist", failing_save)
 
         with pytest.raises(OSError, match="disk full"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="R_uncommitted",
-                    symbol="res",
-                    x=600,
-                    y=600,
-                ),
-                asc_state,
-            )
+            add_component(asc_state, asc_file, "R_uncommitted", "res", 600, 600)
 
         # Restore real save so the follow-up read works.
         monkeypatch.undo()
 
         # The component must NOT be visible — cache was evicted, fresh
         # read from disk shows the pre-failure state.
-        result = await handle_list_components(
-            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
-        )
-        assert "R_uncommitted" not in _result_text(result)
+        result = await components_of(asc_state, asc_file)
+        assert "R_uncommitted" not in result
 
 
 # Relocated regression coverage from a retired test module.
@@ -1559,34 +1019,43 @@ class TestSetAttributeAllowlist:
 
     async def test_rejects_typo(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Unknown attribute"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name,
-                    reference="R1",
-                    attribute="NotARealAttr",
-                    value="x",
-                ),
+            apply_one(
                 asc_state,
+                asc_file,
+                {
+                    "op": "set_component_attribute",
+                    "reference": "R1",
+                    "attribute": "NotARealAttr",
+                    "value": "x",
+                },
             )
 
     async def test_suggests_canonical_for_case_typo(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Did you mean 'SpiceLine'"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name, reference="R1", attribute="spiceline", value="x"
-                ),
+            apply_one(
                 asc_state,
+                asc_file,
+                {
+                    "op": "set_component_attribute",
+                    "reference": "R1",
+                    "attribute": "spiceline",
+                    "value": "x",
+                },
             )
 
     async def test_accepts_spiceline(self, asc_state: SessionState, asc_file: Path):
         # Sanity: the canonical name still works.
-        result = await handle_set_component_attribute(
-            SetComponentAttributeInput(
-                path=asc_file.name, reference="R1", attribute="SpiceLine", value="tc=10ppm"
-            ),
+        result = apply_one(
             asc_state,
+            asc_file,
+            {
+                "op": "set_component_attribute",
+                "reference": "R1",
+                "attribute": "SpiceLine",
+                "value": "tc=10ppm",
+            },
         )
-        assert "SpiceLine" in _result_text(result)
+        assert result["ok"] is True
 
 
 # Relocated regression coverage from a retired test module.
@@ -1595,11 +1064,8 @@ class TestFloatingLabelWarning:
     """add_net_label warns on labels placed away from any wire/pin."""
 
     async def test_warns_on_floating(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="VCC_floating", x=10, y=10),
-            asc_state,
-        )
-        assert "floating" in _result_text(result).lower()
+        result = add_net_label(asc_state, asc_file, "VCC_floating", x=10, y=10)
+        assert any("floating" in w.lower() for w in result["warnings"]), result
 
 
 # Relocated regression coverage from a retired test module.
@@ -1610,50 +1076,15 @@ class TestNetConflictInWirePins:
     async def test_refuses_named_net_short(self, asc_state: SessionState):
         # Build a clean schematic with two resistors on disjoint named nets,
         # then try to wire them together.
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="net_conflict_test"), asc_state)
-        await handle_add_component(
-            AddComponentInput(
-                path="net_conflict_test.asc",
-                reference="R1",
-                symbol="res",
-                x=100,
-                y=100,
-            ),
-            asc_state,
-        )
-        await handle_add_component(
-            AddComponentInput(
-                path="net_conflict_test.asc",
-                reference="R2",
-                symbol="res",
-                x=300,
-                y=100,
-            ),
-            asc_state,
-        )
+        blank_sheet_file(asc_state, "net_conflict_test")
+        add_component(asc_state, _sheet("net_conflict_test.asc"), "R1", "res", 100, 100)
+        add_component(asc_state, _sheet("net_conflict_test.asc"), "R2", "res", 300, 100)
         # The test fixture's stripped 'res' symbol uses numeric pin names.
-        await handle_add_net_label(
-            NetLabelInput(path="net_conflict_test.asc", net="LEFT", pin="R1.1"),
-            asc_state,
-        )
-        await handle_add_net_label(
-            NetLabelInput(path="net_conflict_test.asc", net="RIGHT", pin="R2.1"),
-            asc_state,
-        )
+        add_net_label(asc_state, _sheet("net_conflict_test.asc"), "LEFT", pin="R1.1")
+        add_net_label(asc_state, _sheet("net_conflict_test.asc"), "RIGHT", pin="R2.1")
         with pytest.raises(NetlistError, match="Net-label conflict"):
-            await handle_wire_pins(
-                WirePinsInput(
-                    path="net_conflict_test.asc",
-                    from_pin="R1.1",
-                    to_pin="R2.1",
-                ),
-                asc_state,
-            )
+            wire_pins(asc_state, _sheet("net_conflict_test.asc"), "R1.1", "R2.1")
 
 
 # Relocated regression coverage from a retired test module.
@@ -1665,24 +1096,19 @@ class TestRemoveComponentNoFalseOrphans:
         # Add a second resistor whose pin coincides with R1's existing wire.
         # When we remove R2, the wire connecting R1 stays — and our orphan
         # detector should NOT flag it.
-        await handle_add_component(
-            AddComponentInput(
-                path=asc_file.name,
-                reference="R2",
-                symbol="res",
-                x=128,
-                y=112,  # same coords as R1 — pins overlap
-                value="2k",
-                rotation="R90",
-            ),
+        add_component(
             asc_state,
+            asc_file,
+            "R2",
+            "res",
+            128,
+            112,  # same coords as R1 — pins overlap
+            value="2k",
+            rotation="R90",
         )
-        result = await handle_remove_component(
-            RemoveComponentInput(path=asc_file.name, reference="R2"),
-            asc_state,
-        )
+        result = apply_one(asc_state, asc_file, {"op": "remove_component", "reference": "R2"})
         # The remaining R1's wires shouldn't be flagged as orphans.
-        assert "orphaned" not in _result_text(result)
+        assert "orphaned" not in result
 
 
 # Relocated regression coverage from a retired test module.
@@ -1693,298 +1119,110 @@ class TestApplySchematicOps:
     async def test_add_component_result_includes_placed_geometry_and_overlap_warnings(
         self, asc_state: SessionState
     ):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="batch_geometry"), asc_state)
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="batch_geometry.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "R2",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                    },
-                ],
-            ),
+        blank_sheet_file(asc_state, "batch_geometry")
+        result = batch_view(
             asc_state,
+            _sheet("batch_geometry.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 100,
+                    "y": 100,
+                },
+                {
+                    "op": "add_component",
+                    "reference": "R2",
+                    "symbol": "res",
+                    "x": 100,
+                    "y": 100,
+                },
+            ],
+            stop_on_error=True,
         )
 
-        data = result.structuredContent
+        data = result
         assert data is not None
         added = data["results"][1]
         assert added["pins"]
         assert added["bounding_box"] == {"x": 84, "y": 52, "width": 32, "height": 96}
         assert added["warnings"] == ["Overlaps R1 bounding box"]
 
-    async def test_connect_op_alias_still_wires_pins(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        """The deprecated op discriminator "connect" parses as _OpWirePins
-        (Literal["wire_pins", "connect"]) and applies exactly like "wire_pins"
-        — it must still wire the pins and persist the wire to disk."""
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
-
-        await handle_create_schematic(CreateSchematicInput(name="op_alias"), asc_state)
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="op_alias.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "R2",
-                        "symbol": "res",
-                        "x": 200,
-                        "y": 100,
-                    },
-                    {"op": "connect", "from_pin": "R1.1", "to_pin": "R2.1"},
-                ],
-            ),
-            asc_state,
-        )
-        data = result.structuredContent
-        assert data is not None
-        assert data["failed_count"] == 0
-        wire_result = data["results"][2]
-        assert wire_result["ok"] is True
-        # The result echoes back the discriminator the caller sent.
-        assert wire_result["op"] == "connect"
-        assert wire_result["wire_count"] == 1
-
-        # Fixture res pins: 1=(0,-48) -> R1.1=(100,52), R2.1=(200,52).
-        segments = _wire_segments(work_dir / "op_alias.asc")
-        assert _has_segment(segments, (100, 52), (200, 52)), segments
-
     async def test_basic_transaction(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="batch_demo"), asc_state)
+        blank_sheet_file(asc_state, "batch_demo")
 
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="batch_demo.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                        "value": "1k",
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "C1",
-                        "symbol": "cap",
-                        "x": 200,
-                        "y": 100,
-                        "value": "1u",
-                    },
-                    {
-                        "op": "add_directive",
-                        "instruction": ".tran 1m",
-                    },
-                ],
-            ),
+        result = batch_view(
             asc_state,
+            _sheet("batch_demo.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 100,
+                    "y": 100,
+                    "value": "1k",
+                },
+                {
+                    "op": "add_component",
+                    "reference": "C1",
+                    "symbol": "cap",
+                    "x": 200,
+                    "y": 100,
+                    "value": "1u",
+                },
+                {
+                    "op": "add_directive",
+                    "instruction": ".tran 1m",
+                },
+            ],
+            stop_on_error=True,
         )
-        text = _result_text(result)
-        data = result.structuredContent
+        data = result
         assert data["applied_count"] == 3
         assert data["failed_count"] == 0
         assert data["saved"] is True
-        assert "All changes saved." in text
-
-    async def test_accepts_format_param(self, asc_state: SessionState):
-        # Regression: apply_schematic_ops used to reject the `format` field that
-        # nearly every other tool accepts, raising a validation error. It must
-        # accept and honor it like the rest.
-        import json
-
-        await handle_create_schematic(CreateSchematicInput(name="fmt_demo"), asc_state)
-        op1 = {"op": "add_component", "reference": "R1", "symbol": "res", "x": 0, "y": 0}
-        as_json = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(path="fmt_demo.asc", ops=[op1], format="json"),  # type: ignore[arg-type]
-            asc_state,
-        )
-        assert as_json.structuredContent["applied_count"] == 1
-        # json format → the text body IS the JSON payload, not the human summary.
-        assert json.loads(_result_text(as_json))["applied_count"] == 1
-        op2 = {"op": "add_component", "reference": "R2", "symbol": "res", "x": 100, "y": 0}
-        text_only = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(path="fmt_demo.asc", ops=[op2], format="text"),  # type: ignore[arg-type]
-            asc_state,
-        )
-        # text format → human-readable summary body, structured payload still present.
-        assert text_only.structuredContent["applied_count"] == 1
-        assert "apply_schematic_ops on fmt_demo.asc" in _result_text(text_only)
-
-    async def test_stop_on_error_aborts(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
-
-        await handle_create_schematic(CreateSchematicInput(name="batch_abort"), asc_state)
-        # Op #1 succeeds, op #2 fails (unknown symbol). The R1 add must NOT
-        # be persisted because stop_on_error defaults to True.
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="batch_abort.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "X1",
-                        "symbol": "definitely_not_a_symbol",
-                        "x": 200,
-                        "y": 100,
-                    },
-                ],
-            ),
-            asc_state,
-        )
-        data = result.structuredContent
-        assert data["saved"] is False
-        assert data["failed_count"] == 1
-        assert "Transaction aborted" in _result_text(result)
-
-        # Verify the file actually doesn't have R1 — load and check.
-        from ltspice_mcp.tools.circuit import (
-            CircuitReadInput,
-            handle_read_circuit,
-        )
-
-        read = await handle_read_circuit(CircuitReadInput(path="batch_abort.asc"), asc_state)
-        refs = {c["reference"] for c in read.structuredContent.get("components", [])}
-        assert "R1" not in refs
 
     async def test_continue_on_error_persists_partial(
         self, asc_state: SessionState, work_dir: Path
     ):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="batch_partial"), asc_state)
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="batch_partial.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "X1",
-                        "symbol": "definitely_not_a_symbol",
-                        "x": 200,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "C1",
-                        "symbol": "cap",
-                        "x": 300,
-                        "y": 100,
-                    },
-                ],
-                stop_on_error=False,
-            ),
+        blank_sheet_file(asc_state, "batch_partial")
+        result = batch_view(
             asc_state,
+            _sheet("batch_partial.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 100,
+                    "y": 100,
+                },
+                {
+                    "op": "add_component",
+                    "reference": "X1",
+                    "symbol": "definitely_not_a_symbol",
+                    "x": 200,
+                    "y": 100,
+                },
+                {
+                    "op": "add_component",
+                    "reference": "C1",
+                    "symbol": "cap",
+                    "x": 300,
+                    "y": 100,
+                },
+            ],
+            stop_on_error=False,
         )
-        data = result.structuredContent
+        data = result
         assert data["applied_count"] == 2
         assert data["failed_count"] == 1
         assert data["saved"] is True
-
-    async def test_dry_run_validates_without_saving(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CircuitReadInput,
-            CreateSchematicInput,
-            handle_create_schematic,
-            handle_read_circuit,
-        )
-
-        await handle_create_schematic(CreateSchematicInput(name="batch_dry"), asc_state)
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="batch_dry.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 100,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "X1",
-                        "symbol": "definitely_not_a_symbol",
-                        "x": 200,
-                        "y": 100,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "C1",
-                        "symbol": "cap",
-                        "x": 300,
-                        "y": 100,
-                    },
-                ],
-                dry_run=True,
-            ),
-            asc_state,
-        )
-        data = result.structuredContent
-        # Every op is attempted in a dry run (the bad op does not stop it).
-        assert data["applied_count"] == 2
-        assert data["failed_count"] == 1
-        assert data["saved"] is False
-        assert data["dry_run"] is True
-        assert "Dry run" in _result_text(result)
-
-        # The file must be untouched — none of the would-be ops persisted.
-        read = await handle_read_circuit(CircuitReadInput(path="batch_dry.asc"), asc_state)
-        refs = {c["reference"] for c in read.structuredContent.get("components", [])}
-        assert refs == set()
 
 
 @pytest.mark.asyncio
@@ -1994,67 +1232,61 @@ class TestRemoveWireAndNetLabelOps:
     async def test_remove_wire_by_endpoints_and_label_by_pin_and_xy(
         self, asc_state: SessionState, work_dir: Path
     ):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_ops"), asc_state)
+        blank_sheet_file(asc_state, "rm_ops")
         # Build R1 + C1, wire R1.2 → C1.1, label R1.1 by pin, and place a
         # second label at an explicit coordinate.
-        build = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_ops.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 128,
-                        "y": 128,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "C1",
-                        "symbol": "cap",
-                        "x": 128,
-                        "y": 320,
-                    },
-                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"},
-                    {"op": "add_net_label", "net": "in", "pin": "R1.1"},
-                    {"op": "add_net_label", "net": "spare", "x": 512, "y": 512},
-                ],
-            ),
+        build = batch_view(
             asc_state,
+            _sheet("rm_ops.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 128,
+                    "y": 128,
+                },
+                {
+                    "op": "add_component",
+                    "reference": "C1",
+                    "symbol": "cap",
+                    "x": 128,
+                    "y": 320,
+                },
+                {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"},
+                {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "spare", "x": 512, "y": 512},
+            ],
+            stop_on_error=True,
         )
-        assert build.structuredContent["saved"] is True
+        assert build["saved"] is True
 
         # read_circuit must expose wire segments for discovery/removal.
-        read = await handle_read_circuit(CircuitReadInput(path="rm_ops.asc"), asc_state)
-        rsc = read.structuredContent
+        read = _sheet_facts(asc_state, "rm_ops.asc")
+        rsc = read
         assert rsc["wires"], "read_circuit should list wire segments"
         wire = rsc["wires"][0]
         # Label coordinates for the by-pin removal target.
         in_label = next(lbl for lbl in rsc["labels"] if lbl["text"] == "in")
 
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_ops.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "remove_wire",
-                        "x1": wire["x1"],
-                        "y1": wire["y1"],
-                        "x2": wire["x2"],
-                        "y2": wire["y2"],
-                    },
-                    {"op": "remove_net_label", "pin": "R1.1"},
-                    {"op": "remove_net_label", "x": 512, "y": 512},
-                ],
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("rm_ops.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "remove_wire",
+                    "x1": wire["x1"],
+                    "y1": wire["y1"],
+                    "x2": wire["x2"],
+                    "y2": wire["y2"],
+                },
+                {"op": "remove_net_label", "pin": "R1.1"},
+                {"op": "remove_net_label", "x": 512, "y": 512},
+            ],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data["saved"] is True
         assert data["failed_count"] == 0
         # Each op reports what it removed.
@@ -2063,8 +1295,8 @@ class TestRemoveWireAndNetLabelOps:
         # The by-pin removal must land on the "in" label coordinate.
         assert by_op["remove_net_label"]["ok"] is True
 
-        read2 = await handle_read_circuit(CircuitReadInput(path="rm_ops.asc"), asc_state)
-        rsc2 = read2.structuredContent
+        read2 = _sheet_facts(asc_state, "rm_ops.asc")
+        rsc2 = read2
         assert rsc2["wire_count"] == 0
         assert not rsc2["wires"]
         remaining = {lbl["text"] for lbl in rsc2["labels"]}
@@ -2077,38 +1309,32 @@ class TestRemoveWireAndNetLabelOps:
 
     async def _wired_pair(self, asc_state: SessionState, name: str) -> dict:
         """R1.2 wired to C1.1 — one connection, drawn once."""
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name=name), asc_state)
-        await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=f"{name}.asc",
-                ops=[  # type: ignore[arg-type]
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 128,
-                        "y": 128,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "C1",
-                        "symbol": "cap",
-                        "x": 128,
-                        "y": 320,
-                    },
-                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"},
-                ],
-            ),
+        blank_sheet_file(asc_state, name)
+        batch_view(
             asc_state,
+            _sheet(f"{name}.asc"),
+            [  # type: ignore[arg-type]
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 128,
+                    "y": 128,
+                },
+                {
+                    "op": "add_component",
+                    "reference": "C1",
+                    "symbol": "cap",
+                    "x": 128,
+                    "y": 320,
+                },
+                {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"},
+            ],
+            stop_on_error=True,
         )
-        read = await handle_read_circuit(CircuitReadInput(path=f"{name}.asc"), asc_state)
-        assert read.structuredContent is not None
-        return read.structuredContent["wires"][0]
+        read = _sheet_facts(asc_state, f"{name}.asc")
+        return read["wires"][0]
 
     async def test_removing_a_duplicated_connection_is_refused_by_the_pin_it_would_float(
         self, asc_state: SessionState, work_dir: Path
@@ -2122,22 +1348,21 @@ class TestRemoveWireAndNetLabelOps:
             path.read_text() + f"WIRE {wire['x1']} {wire['y1']} {wire['x2']} {wire['y2']}\n"
         )
 
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="dup_load_bearing.asc",
-                ops=[
-                    {  # type: ignore[list-item]
-                        "op": "remove_wire",
-                        "x1": wire["x1"],
-                        "y1": wire["y1"],
-                        "x2": wire["x2"],
-                        "y2": wire["y2"],
-                    }
-                ],
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("dup_load_bearing.asc"),
+            [
+                {  # type: ignore[list-item]
+                    "op": "remove_wire",
+                    "x1": wire["x1"],
+                    "y1": wire["y1"],
+                    "x2": wire["x2"],
+                    "y2": wire["y2"],
+                }
+            ],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data is not None
         assert data["saved"] is False
         error = data["results"][0]["error"]
@@ -2145,9 +1370,8 @@ class TestRemoveWireAndNetLabelOps:
         assert "split the net" in error
         assert "R1.2" in error or "C1.1" in error
 
-        after = await handle_read_circuit(CircuitReadInput(path="dup_load_bearing.asc"), asc_state)
-        assert after.structuredContent is not None
-        assert after.structuredContent["wire_count"] == 2, "the refusal must leave the sheet alone"
+        after = _sheet_facts(asc_state, "dup_load_bearing.asc")
+        assert after["wire_count"] == 2, "the refusal must leave the sheet alone"
 
     async def test_removing_a_duplicated_bridge_between_wired_stubs_is_refused(
         self, asc_state: SessionState, work_dir: Path
@@ -2171,25 +1395,23 @@ class TestRemoveWireAndNetLabelOps:
         assert rebuilt != path.read_text(), "helper wire line not found to rewrite"
         path.write_text(rebuilt)
 
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="dup_bridge.asc",
-                ops=[
-                    {"op": "remove_wire", "x1": x, "y1": m1, "x2": x, "y2": m2}  # type: ignore[list-item]
-                ],
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("dup_bridge.asc"),
+            [
+                {"op": "remove_wire", "x1": x, "y1": m1, "x2": x, "y2": m2}  # type: ignore[list-item]
+            ],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data is not None
         assert data["saved"] is False
         error = data["results"][0]["error"]
         assert "split the net" in error
         assert "R1.2" in error or "C1.1" in error
 
-        after = await handle_read_circuit(CircuitReadInput(path="dup_bridge.asc"), asc_state)
-        assert after.structuredContent is not None
-        assert after.structuredContent["wire_count"] == 4, "the refusal must leave the sheet alone"
+        after = _sheet_facts(asc_state, "dup_bridge.asc")
+        assert after["wire_count"] == 4, "the refusal must leave the sheet alone"
 
     async def test_removing_a_redundant_duplicated_segment_takes_every_copy(
         self, asc_state: SessionState, work_dir: Path
@@ -2199,16 +1421,15 @@ class TestRemoveWireAndNetLabelOps:
         path = work_dir / "dup_redundant.asc"
         path.write_text(path.read_text() + "WIRE 900 900 964 900\nWIRE 964 900 900 900\n")
 
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="dup_redundant.asc",
-                ops=[
-                    {"op": "remove_wire", "x1": 900, "y1": 900, "x2": 964, "y2": 900}  # type: ignore[list-item]
-                ],
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("dup_redundant.asc"),
+            [
+                {"op": "remove_wire", "x1": 900, "y1": 900, "x2": 964, "y2": 900}  # type: ignore[list-item]
+            ],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data is not None
         assert data["saved"] is True
         assert data["results"][0]["removed"] == 2
@@ -2222,114 +1443,91 @@ class TestRemoveWireAndNetLabelOps:
         clean up and the connection survives."""
         wire = await self._wired_pair(asc_state, "dup_sequence")
 
-        repeat = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="dup_sequence.asc",
-                ops=[{"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"}],  # type: ignore[arg-type]
-            ),
+        repeat = batch_view(
             asc_state,
+            _sheet("dup_sequence.asc"),
+            [{"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"}],
+            stop_on_error=True,
         )
-        data = repeat.structuredContent
+        data = repeat
         assert data is not None
         assert data["results"][0]["wire_count"] == 0
         assert data["results"][0]["already_present"]
         kinds = {w["kind"] for w in data.get("validation_warnings", [])}
         assert "duplicate_wire" not in kinds
 
-        after = await handle_read_circuit(CircuitReadInput(path="dup_sequence.asc"), asc_state)
-        assert after.structuredContent is not None
-        assert after.structuredContent["wire_count"] == 1
-        assert after.structuredContent["wires"][0] == wire
+        after = _sheet_facts(asc_state, "dup_sequence.asc")
+        assert after["wire_count"] == 1
+        assert after["wires"][0] == wire
 
     async def test_remove_wire_no_match_raises(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_nomatch"), asc_state)
+        blank_sheet_file(asc_state, "rm_nomatch")
         # stop_on_error default True: a no-match remove aborts the transaction.
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_nomatch.asc",
-                ops=[{"op": "remove_wire", "x1": 0, "y1": 0, "x2": 16, "y2": 0}],  # type: ignore[arg-type]
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("rm_nomatch.asc"),
+            [{"op": "remove_wire", "x1": 0, "y1": 0, "x2": 16, "y2": 0}],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No matching wire" in data["results"][0]["error"]
 
     async def test_remove_net_label_no_match_raises(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_lbl_nomatch"), asc_state)
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_lbl_nomatch.asc",
-                ops=[{"op": "remove_net_label", "x": 999, "y": 999}],  # type: ignore[arg-type]
-            ),
+        blank_sheet_file(asc_state, "rm_lbl_nomatch")
+        res = batch_view(
             asc_state,
+            _sheet("rm_lbl_nomatch.asc"),
+            [{"op": "remove_net_label", "x": 999, "y": 999}],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No net label found" in data["results"][0]["error"]
 
     async def test_remove_directive_round_trip(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_dir"), asc_state)
+        blank_sheet_file(asc_state, "rm_dir")
         # add_directive then remove_directive is the inverse pair the closure
         # test requires — exercise it end to end so the op actually edits.
-        add = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_dir.asc",
-                ops=[{"op": "add_directive", "instruction": ".tran 1m"}],  # type: ignore[arg-type]
-            ),
+        add = batch_view(
             asc_state,
+            _sheet("rm_dir.asc"),
+            [{"op": "add_directive", "instruction": ".tran 1m"}],
+            stop_on_error=True,
         )
-        assert add.structuredContent["saved"] is True
-        read = await handle_read_circuit(CircuitReadInput(path="rm_dir.asc"), asc_state)
-        assert any(".tran 1m" in d for d in read.structuredContent["directives"])
+        assert add["saved"] is True
+        read = _sheet_facts(asc_state, "rm_dir.asc")
+        assert any(".tran 1m" in d for d in read["directives"])
 
-        rm = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_dir.asc",
-                ops=[{"op": "remove_directive", "instruction": ".tran 1m"}],  # type: ignore[arg-type]
-            ),
+        rm = batch_view(
             asc_state,
+            _sheet("rm_dir.asc"),
+            [{"op": "remove_directive", "instruction": ".tran 1m"}],
+            stop_on_error=True,
         )
-        data = rm.structuredContent
+        data = rm
         assert data["saved"] is True
         assert data["failed_count"] == 0
         assert data["results"][0]["removed"] == "directive"
 
-        read2 = await handle_read_circuit(CircuitReadInput(path="rm_dir.asc"), asc_state)
-        assert not any(".tran 1m" in d for d in read2.structuredContent["directives"])
+        read2 = _sheet_facts(asc_state, "rm_dir.asc")
+        assert not any(".tran 1m" in d for d in read2["directives"])
 
     async def test_remove_directive_no_match_raises(self, asc_state: SessionState, work_dir: Path):
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_dir_nomatch"), asc_state)
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_dir_nomatch.asc",
-                ops=[{"op": "remove_directive", "instruction": ".tran 999"}],  # type: ignore[arg-type]
-            ),
+        blank_sheet_file(asc_state, "rm_dir_nomatch")
+        res = batch_view(
             asc_state,
+            _sheet("rm_dir_nomatch.asc"),
+            [{"op": "remove_directive", "instruction": ".tran 999"}],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No directive or comment" in data["results"][0]["error"]
@@ -2340,65 +1538,53 @@ class TestRemoveWireAndNetLabelOps:
         # The inverse must match the full directive text, not a substring:
         # removing ".tran 1" must NOT delete ".tran 10m" (spicelib's matcher
         # would, silently corrupting the simulation setup).
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_substr"), asc_state)
-        await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_substr.asc",
-                ops=[{"op": "add_directive", "instruction": ".tran 10m"}],  # type: ignore[arg-type]
-            ),
+        blank_sheet_file(asc_state, "rm_substr")
+        batch_view(
             asc_state,
+            _sheet("rm_substr.asc"),
+            [{"op": "add_directive", "instruction": ".tran 10m"}],
+            stop_on_error=True,
         )
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_substr.asc",
-                ops=[{"op": "remove_directive", "instruction": ".tran 1"}],  # type: ignore[arg-type]
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("rm_substr.asc"),
+            [{"op": "remove_directive", "instruction": ".tran 1"}],
+            stop_on_error=True,
         )
-        data = res.structuredContent
+        data = res
         # ".tran 1" is a substring of ".tran 10m" but not an exact match: refuse.
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No directive or comment" in data["results"][0]["error"]
-        read = await handle_read_circuit(CircuitReadInput(path="rm_substr.asc"), asc_state)
-        assert any(".tran 10m" in d for d in read.structuredContent["directives"])
+        read = _sheet_facts(asc_state, "rm_substr.asc")
+        assert any(".tran 10m" in d for d in read["directives"])
 
     async def test_remove_directive_removes_one_of_duplicates(
         self, asc_state: SessionState, work_dir: Path
     ):
         # Inverse of a single add removes a single record: with two identical
         # directives, one remove_directive leaves exactly one.
-        from ltspice_mcp.tools.circuit import (
-            CreateSchematicInput,
-            handle_create_schematic,
-        )
 
-        await handle_create_schematic(CreateSchematicInput(name="rm_dup"), asc_state)
-        await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_dup.asc",
-                ops=[  # type: ignore[arg-type]
-                    {"op": "add_directive", "instruction": ".tran 1m"},
-                    {"op": "add_directive", "instruction": ".tran 1m"},
-                ],
-            ),
+        blank_sheet_file(asc_state, "rm_dup")
+        batch_view(
             asc_state,
+            _sheet("rm_dup.asc"),
+            [  # type: ignore[arg-type]
+                {"op": "add_directive", "instruction": ".tran 1m"},
+                {"op": "add_directive", "instruction": ".tran 1m"},
+            ],
+            stop_on_error=True,
         )
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_dup.asc",
-                ops=[{"op": "remove_directive", "instruction": ".tran 1m"}],  # type: ignore[arg-type]
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("rm_dup.asc"),
+            [{"op": "remove_directive", "instruction": ".tran 1m"}],
+            stop_on_error=True,
         )
-        assert res.structuredContent["saved"] is True
-        read = await handle_read_circuit(CircuitReadInput(path="rm_dup.asc"), asc_state)
-        assert sum(1 for d in read.structuredContent["directives"] if d == ".tran 1m") == 1
+        assert res["saved"] is True
+        read = _sheet_facts(asc_state, "rm_dup.asc")
+        assert sum(1 for d in read["directives"] if d == ".tran 1m") == 1
 
 
 @pytest.mark.asyncio
@@ -2409,74 +1595,67 @@ class TestAddNetLabelOpValidation:
     placement warnings."""
 
     async def test_short_refused_via_batch(self, asc_state: SessionState):
-        from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
 
-        await handle_create_schematic(CreateSchematicInput(name="lbl_short"), asc_state)
+        blank_sheet_file(asc_state, "lbl_short")
         # Two different named labels on the same pin coordinate would merge the
         # nets at netlist time; the second must be refused, not silently saved.
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="lbl_short.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 128,
-                        "y": 128,
-                    },
-                    {"op": "add_net_label", "net": "a", "pin": "R1.1"},
-                    {"op": "add_net_label", "net": "b", "pin": "R1.1"},
-                ],
-                stop_on_error=False,
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("lbl_short.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_net_label", "net": "a", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "b", "pin": "R1.1"},
+            ],
+            stop_on_error=False,
         )
-        results = {r["index"]: r for r in res.structuredContent["results"]}
+        results = {r["index"]: r for r in res["results"]}
         assert results[1]["ok"] is True  # net "a" placed
         assert results[2]["ok"] is False  # net "b" would short — refused
         assert "short" in results[2]["error"].lower()
 
     async def test_floating_label_warning_via_batch(self, asc_state: SessionState):
-        from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
 
-        await handle_create_schematic(CreateSchematicInput(name="lbl_float"), asc_state)
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="lbl_float.asc",
-                ops=[{"op": "add_net_label", "net": "x", "x": 500, "y": 500}],  # type: ignore[arg-type]
-            ),
+        blank_sheet_file(asc_state, "lbl_float")
+        res = batch_view(
             asc_state,
+            _sheet("lbl_float.asc"),
+            [{"op": "add_net_label", "net": "x", "x": 500, "y": 500}],
+            stop_on_error=True,
         )
-        op = res.structuredContent["results"][0]
+        op = res["results"][0]
         assert op["ok"] is True
         assert any("no wire" in w.lower() for w in op.get("warnings", []))
 
     async def test_duplicate_label_warning_via_batch(self, asc_state: SessionState):
-        from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
 
-        await handle_create_schematic(CreateSchematicInput(name="lbl_dup"), asc_state)
+        blank_sheet_file(asc_state, "lbl_dup")
         # Same name on two distinct (unwired) pins: not a short (the netlist merges
         # same-name labels into one net) — the only cost is that a later wire_pins
         # can't disambiguate, which the warning states without a scare.
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="lbl_dup.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 128,
-                        "y": 128,
-                    },
-                    {"op": "add_net_label", "net": "n1", "pin": "R1.1"},
-                    {"op": "add_net_label", "net": "n1", "pin": "R1.2"},
-                ],
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("lbl_dup.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_net_label", "net": "n1", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "n1", "pin": "R1.2"},
+            ],
+            stop_on_error=True,
         )
-        op2 = res.structuredContent["results"][2]
+        op2 = res["results"][2]
         assert op2["ok"] is True
         warns = op2.get("warnings", [])
         # Reframed: names the duplicate but says it merges correctly and only
@@ -2491,84 +1670,78 @@ class TestMoveRemoveOpWarnings:
     are NOT recovered by the batch's end-of-run _post_op_warnings)."""
 
     async def _build_pair(self, asc_state: SessionState, name: str):
-        from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
 
-        await handle_create_schematic(CreateSchematicInput(name=name), asc_state)
+        blank_sheet_file(asc_state, name)
         # R1 above R2, wired R1.2 -> R2.1. Fixture res pins: 1=(x,y-48), 2=(x,y+48).
-        return await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=f"{name}.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {
-                        "op": "add_component",
-                        "reference": "R1",
-                        "symbol": "res",
-                        "x": 200,
-                        "y": 200,
-                    },
-                    {
-                        "op": "add_component",
-                        "reference": "R2",
-                        "symbol": "res",
-                        "x": 200,
-                        "y": 400,
-                    },
-                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
-                ],
-            ),
+        return batch_view(
             asc_state,
+            _sheet(f"{name}.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 200,
+                    "y": 200,
+                },
+                {
+                    "op": "add_component",
+                    "reference": "R2",
+                    "symbol": "res",
+                    "x": 200,
+                    "y": 400,
+                },
+                {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
+            ],
+            stop_on_error=True,
         )
 
     async def test_move_overlap_warning_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "mv_overlap")
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="mv_overlap.asc",
-                ops=[{"op": "move_component", "reference": "R2", "x": 200, "y": 200}],  # type: ignore[arg-type]  # onto R1
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("mv_overlap.asc"),
+            [{"op": "move_component", "reference": "R2", "x": 200, "y": 200}],
+            stop_on_error=True,
         )
-        op = res.structuredContent["results"][0]
+        op = res["results"][0]
         assert op["ok"] is True
         assert any("Overlaps" in w for w in op.get("warnings", []))
 
     async def test_move_orphan_warning_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "mv_orphan")
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="mv_orphan.asc",
-                ops=[{"op": "move_component", "reference": "R1", "x": 600, "y": 200}],  # type: ignore[arg-type]
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("mv_orphan.asc"),
+            [{"op": "move_component", "reference": "R1", "x": 600, "y": 200}],
+            stop_on_error=True,
         )
-        op = res.structuredContent["results"][0]
+        op = res["results"][0]
         assert any("old pin" in w for w in op.get("warnings", []))
 
     async def test_remove_orphan_warning_then_cleanup_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "rm_orphan")
         # Remove without cleanup: the wire left on R1's former pin is flagged.
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_orphan.asc",
-                ops=[{"op": "remove_component", "reference": "R1"}],  # type: ignore[arg-type]
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("rm_orphan.asc"),
+            [{"op": "remove_component", "reference": "R1"}],
+            stop_on_error=True,
         )
-        op = res.structuredContent["results"][0]
+        op = res["results"][0]
         assert any("orphaned" in w for w in op.get("warnings", []))
 
     async def test_remove_cleanup_reports_deleted_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "rm_clean")
-        res = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path="rm_clean.asc",
-                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                    {"op": "remove_component", "reference": "R1", "cleanup_wires": True},  # type: ignore[arg-type]
-                ],
-            ),
+        res = batch_view(
             asc_state,
+            _sheet("rm_clean.asc"),
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {"op": "remove_component", "reference": "R1", "cleanup_wires": True},  # type: ignore[arg-type]
+            ],
+            stop_on_error=True,
         )
-        op = res.structuredContent["results"][0]
+        op = res["results"][0]
         assert op["deleted_wires"] >= 1
         assert "warnings" not in op
 
@@ -2615,28 +1788,27 @@ async def _build_name_wired_rc(name: str, state: SessionState, work_dir: Path) -
     """
     asc = work_dir / f"{name}.asc"
     asc.write_text("Version 4\nSHEET 1 880 680\n")
-    await handle_apply_schematic_ops(
-        ApplySchematicOpsInput(
-            path=asc.name,
-            ops=[  # type: ignore[arg-type]  # pydantic validates dicts
-                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 128},
-                {"op": "add_component", "reference": "C1", "symbol": "cap", "x": 384, "y": 128},
-                {
-                    "op": "add_component",
-                    "reference": "V1",
-                    "symbol": "voltage",
-                    "x": 640,
-                    "y": 128,
-                },
-                {"op": "add_net_label", "net": "in", "pin": "R1.1"},
-                {"op": "add_net_label", "net": "out", "pin": "R1.2"},
-                {"op": "add_net_label", "net": "out", "pin": "C1.1"},
-                {"op": "add_net_label", "net": "0", "pin": "C1.2"},
-                {"op": "add_net_label", "net": "in", "pin": "V1.+"},
-                {"op": "add_net_label", "net": "0", "pin": "V1.-"},
-            ],
-        ),
+    batch_view(
         state,
+        asc,
+        [  # type: ignore[arg-type]  # pydantic validates dicts
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 128},
+            {"op": "add_component", "reference": "C1", "symbol": "cap", "x": 384, "y": 128},
+            {
+                "op": "add_component",
+                "reference": "V1",
+                "symbol": "voltage",
+                "x": 640,
+                "y": 128,
+            },
+            {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+            {"op": "add_net_label", "net": "out", "pin": "R1.2"},
+            {"op": "add_net_label", "net": "out", "pin": "C1.1"},
+            {"op": "add_net_label", "net": "0", "pin": "C1.2"},
+            {"op": "add_net_label", "net": "in", "pin": "V1.+"},
+            {"op": "add_net_label", "net": "0", "pin": "V1.-"},
+        ],
+        stop_on_error=True,
     )
     return asc.name
 
@@ -2648,8 +1820,9 @@ class TestTraceNet:
         # coordinates connected only by the shared label name.
         path = await _build_name_wired_rc("trace_rc", asc_state, work_dir)
         res = await handle_trace_net(TraceNetInput(path=path, pin="R1.1"), asc_state)
-        assert res.structuredContent is not None
         sc = res.structuredContent
+        assert sc is not None
+        assert sc is not None
         assert sc["labels"] == ["in"]
         refs = {p["reference"] for p in sc["pins"]}
         assert refs == {"R1", "V1"}
@@ -2660,8 +1833,9 @@ class TestTraceNet:
         # refuse the ambiguity, but trace_net seeds from a match and name-merges.
         path = await _build_name_wired_rc("trace_byname", asc_state, work_dir)
         res = await handle_trace_net(TraceNetInput(path=path, pin="net:in"), asc_state)
-        assert res.structuredContent is not None
         sc = res.structuredContent
+        assert sc is not None
+        assert sc is not None
         assert sc["labels"] == ["in"]
         assert {p["reference"] for p in sc["pins"]} == {"R1", "V1"}
 
@@ -2674,8 +1848,9 @@ class TestTraceNet:
         asc = work_dir / "short.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\nWIRE 0 0 100 0\nFLAG 0 0 a\nFLAG 100 0 b\n")
         res = await handle_trace_net(TraceNetInput(path="short.asc", x=0, y=0), asc_state)
-        assert res.structuredContent is not None
         sc = res.structuredContent
+        assert sc is not None
+        assert sc is not None
         assert sc["is_shorted"] is True
         assert set(sc["labels"]) == {"a", "b"}
 
@@ -2751,6 +1926,7 @@ class TestTraceNet:
         )
         res = await handle_trace_net(TraceNetInput(path="zero_len.asc", pin="R1.1"), asc_state)
         sc = res.structuredContent
+        assert sc is not None
         assert sc is not None
         assert sc.get("warnings", []) == []
 
@@ -2835,158 +2011,16 @@ class TestAddComponentFloatingFilter:
         asc = work_dir / "build.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\n")
         # First component: both pins float.
-        await handle_add_component(
-            AddComponentInput(path="build.asc", reference="R1", symbol="res", x=100, y=100),
-            asc_state,
-        )
+        add_component(asc_state, _sheet("build.asc"), "R1", "res", 100, 100)
         # Second component placed far away: its warnings must NOT re-list R1's
         # floating pins (the O(n^2) spam this fix removes).
-        res = await handle_add_component(
-            AddComponentInput(path="build.asc", reference="R2", symbol="res", x=400, y=100),
-            asc_state,
-        )
-        data = res.structuredContent
+        res = add_component(asc_state, _sheet("build.asc"), "R2", "res", 400, 100)
+        data = res
         assert data is not None
         vw = data.get("validation_warnings", [])
         refs = {w["ref"] for w in vw}
         assert refs <= {"R2"}
         assert "R1" not in refs
-
-
-# Relocated regression coverage from a retired test module.
-@pytest.mark.asyncio
-class TestResetSchematic:
-    async def test_revert_after_edit(self, asc_state: SessionState, asc_file: Path):
-        original = _read_bytes(asc_file)
-        await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200),
-            asc_state,
-        )
-        assert _read_bytes(asc_file) != original  # edit landed
-        res = await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
-        assert res.structuredContent is not None
-        assert res.structuredContent["reverted"] is True
-        assert _read_bytes(asc_file) == original  # byte-exact restore
-
-    async def test_nothing_to_revert(self, asc_state: SessionState, asc_file: Path):
-        # No in-session edit captured → reverted=False, not an error.
-        res = await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
-        assert res.structuredContent is not None
-        assert res.structuredContent["reverted"] is False
-        assert res.structuredContent["bytes"] is None
-
-    async def test_snapshot_is_pre_first_edit(self, asc_state: SessionState, asc_file: Path):
-        # Two edits, then reset → restores the state before the FIRST edit.
-        original = _read_bytes(asc_file)
-        await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200), asc_state
-        )
-        await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=400, y=400), asc_state
-        )
-        await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
-        assert _read_bytes(asc_file) == original
-
-    async def test_reset_then_reedit_resnapshots(self, asc_state: SessionState, asc_file: Path):
-        # After a reset the snapshot is dropped; a new edit establishes a fresh
-        # restore point, and a reset with no new edit finds nothing.
-        await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200), asc_state
-        )
-        await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
-        res = await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
-        assert res.structuredContent is not None
-        assert res.structuredContent["reverted"] is False
-        after_reset = _read_bytes(asc_file)
-        await handle_move_component(
-            MoveComponentInput(path=asc_file.name, reference="R1", x=500, y=500), asc_state
-        )
-        await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
-        assert _read_bytes(asc_file) == after_reset
-
-    async def test_requires_asc(self, state_no_sim: SessionState, work_dir: Path):
-        cir = work_dir / "x.cir"
-        cir.write_text("* t\nR1 a b 1k\n.end\n")
-        with pytest.raises(NetlistError, match=r"requires an \.asc"):
-            await handle_reset_schematic(ResetSchematicInput(path="x.cir"), state_no_sim)
-
-
-# Relocated regression coverage from a retired test module.
-class TestValidateNetlistAscTopology:
-    """validate_netlist surfaces .asc shorts/floating/dangling."""
-
-    async def test_named_net_short_and_floating_pins_flagged(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        (work_dir / "shorted.asc").write_text(SHORTED_ASC)
-        result = await handle_validate_netlist(ValidateNetlistInput(path="shorted.asc"), asc_state)
-        data = result.structuredContent
-        assert data is not None
-        issues = data["issues"]
-        # 1 short (error) + 2 floating pins (warning).
-        assert data["issue_count"] >= 3, issues
-
-        shorts = [
-            i for i in issues if i["severity"] == "error" and "short" in i["message"].lower()
-        ]
-        assert len(shorts) == 1, issues
-        assert "aaa" in shorts[0]["message"] and "bbb" in shorts[0]["message"]
-
-        floating = [
-            i
-            for i in issues
-            if i["severity"] == "warning" and "floating pin" in i["message"].lower()
-        ]
-        assert len(floating) == 2, issues
-
-    async def test_clean_schematic_has_no_topology_issues(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        (work_dir / "clean.asc").write_text(CLEAN_ASC)
-        result = await handle_validate_netlist(ValidateNetlistInput(path="clean.asc"), asc_state)
-        data = result.structuredContent
-        assert data is not None
-        assert data["issue_count"] == 0, data["issues"]
-
-    async def test_ground_label_not_treated_as_short(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        (work_dir / "gnd.asc").write_text(GROUND_ASC)
-        result = await handle_validate_netlist(ValidateNetlistInput(path="gnd.asc"), asc_state)
-        data = result.structuredContent
-        assert data is not None
-        shorts = [
-            i
-            for i in data["issues"]
-            if i["severity"] == "error" and "short" in i["message"].lower()
-        ]
-        assert shorts == [], data["issues"]
-
-    async def test_same_instance_wire_flagged_as_warning(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        # A wire tying two pins of one component (fixture res pins 1=(200,152),
-        # 2=(200,248)) is dropped by LTspice — validate must warn that the drawn
-        # connectivity diverges from what LTspice will simulate.
-        (work_dir / "self_tie.asc").write_text(
-            "Version 4\nSHEET 1 880 680\n"
-            "WIRE 200 152 200 248\n"
-            "SYMBOL res 200 200 R0\n"
-            "SYMATTR InstName R1\n"
-            "SYMATTR Value 1k\n"
-        )
-        result = await handle_validate_netlist(
-            ValidateNetlistInput(path="self_tie.asc"), asc_state
-        )
-        data = result.structuredContent
-        assert data is not None
-        same_inst = [
-            i
-            for i in data["issues"]
-            if i["severity"] == "warning" and "same-instance wire" in i["message"].lower()
-        ]
-        assert len(same_inst) == 1, data["issues"]
-        assert "R1.1" in same_inst[0]["message"] and "R1.2" in same_inst[0]["message"]
 
 
 def _real_symbol_dir() -> str | None:
@@ -3050,60 +2084,49 @@ class TestAddComponentRealSymbols:
             symbol_geometry._symbol_cache.update(saved_geo)
 
     async def test_add_real_symbols_round_trip(self, real_state: SessionState):
-        await handle_create_schematic(
-            CreateSchematicInput(name="real", overwrite=True), real_state
-        )
+        blank_sheet_file(real_state, "real")
         for ref, sym, x, y, val in [
             ("R1", "res", 100, 100, "1k"),
             ("C1", "cap", 300, 100, "1n"),
             ("M1", "nmos", 500, 100, "NMOS1"),
         ]:
-            result = await handle_add_component(
-                AddComponentInput(path="real.asc", reference=ref, symbol=sym, x=x, y=y, value=val),
-                real_state,
-            )
-            assert f"Added {ref}" in _result_text(result)
+            facts = add_component(real_state, _sheet("real.asc"), ref, sym, x, y, value=val)
+            assert facts["reference"] == ref
             # Geometry comes from parsing the real .asy; empty pins = a broken parse.
-            data = result.structuredContent
-            assert data is not None
-            assert data["pins"]
+            assert facts["pins"]
 
     async def test_real_resistor_pins_are_a_b(self, real_state: SessionState):
         # The fixture res uses numeric pins 1/2; the real LTspice res uses A/B.
         # Guards against the suite silently drifting onto fabricated geometry.
-        result = await handle_symbol_info(
-            SymbolInfoInput(symbol="res", x=0, y=0, rotation="R0"), real_state
-        )
-        names = {p["name"] for p in result.structuredContent["absolute_pins"]}
-        assert names == {"A", "B"}
+        data = await inspect_one(real_state, {"kind": "symbol", "name": "res"})
+        assert {p["name"] for p in data["pins_by_rotation"]["R0"]} == {"A", "B"}
 
-    async def test_apply_ops_add_real_symbol(self, real_state: SessionState):
-        await handle_create_schematic(
-            CreateSchematicInput(name="real2", overwrite=True), real_state
-        )
-        op = {
-            "op": "add_component",
-            "reference": "R1",
-            "symbol": "res",
-            "x": 100,
-            "y": 100,
-            "value": "1k",
-        }
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(path="real2.asc", ops=[op]),  # type: ignore[arg-type]
+    async def test_batch_adds_a_real_symbol(self, real_state: SessionState):
+        blank_sheet_file(real_state, "real2")
+        view = batch_view(
             real_state,
+            _sheet("real2.asc"),
+            [
+                {
+                    "op": "add_component",
+                    "reference": "R1",
+                    "symbol": "res",
+                    "x": 100,
+                    "y": 100,
+                    "value": "1k",
+                }
+            ],
         )
-        assert result.structuredContent["applied_count"] == 1
-        assert result.structuredContent["failed_count"] == 0
+        assert view["applied_count"] == 1
+        assert view["failed_count"] == 0
 
 
 @pytest.mark.asyncio
-class TestBatchWarningCollapse:
+class TestDuplicateLabelAdvisory:
     """The documented per-pin-label style repeats one identical duplicate-label
-    advisory on every add_net_label op of a net; a batch must surface it once
-    with a count, not once per op."""
+    advisory on every add_net_label op of a net, so each op must report it."""
 
-    async def test_identical_label_warnings_collapse(
+    async def test_each_repeat_label_op_reports_the_duplicate(
         self, asc_state: SessionState, work_dir: Path
     ):
         asc = work_dir / "labels.asc"
@@ -3118,21 +2141,16 @@ class TestBatchWarningCollapse:
             "SYMATTR InstName R1\n"
             "SYMATTR Value 1k\n"
         )
-        result = await handle_apply_schematic_ops(
-            ApplySchematicOpsInput(
-                path=asc.name,
-                ops=[  # type: ignore[arg-type]
-                    {"op": "add_net_label", "net": "vin", "x": 100, "y": 52},
-                    {"op": "add_net_label", "net": "vin", "x": 300, "y": 0},
-                    {"op": "add_net_label", "net": "vin", "x": 300, "y": 52},
-                ],
-            ),
+        view = batch_view(
             asc_state,
+            asc,
+            [
+                {"op": "add_net_label", "net": "vin", "x": 100, "y": 52},
+                {"op": "add_net_label", "net": "vin", "x": 300, "y": 0},
+                {"op": "add_net_label", "net": "vin", "x": 300, "y": 52},
+            ],
         )
-        data = result.structuredContent
-        assert data is not None
-        assert data["saved"] is True
-        all_warnings = [w for r in data["results"] for w in (r.get("warnings") or [])]
+        assert view["saved"] is True
+        all_warnings = [w for r in view["results"] for w in (r.get("warnings") or [])]
         dup = [w for w in all_warnings if "already labels a net" in w]
-        assert len(dup) == 1, all_warnings
-        assert "identical warning on 3 ops" in dup[0]
+        assert dup, all_warnings

@@ -471,21 +471,44 @@ def state_with_sim(config: ServerConfig) -> SessionState:
 
 
 @pytest.fixture(scope="session")
-def asc_symbols() -> Iterator[Path]:
-    """Register tiny .asy fixture symbols with AscEditor (class-level).
+def _asc_symbol_cache() -> Iterator[Path]:
+    """Warm AscEditor's class-level symbol cache with the .asy fixtures once.
 
-    Session-scoped so the class-level ``symbol_cache`` is populated once and
-    reused across all tests. ``AscEditor._asy_file_find`` otherwise walks
-    ``os.path.curdir`` (the project root, with ``.venv`` and ``.git``) on every
-    cold load — ~1s per symbol lookup. Keeping the cache warm across the
-    session eliminates that walk for every test after the first.
+    ``AscEditor._asy_file_find`` otherwise walks ``os.path.curdir`` (the project
+    root, with ``.venv`` and ``.git``) on every cold load — ~1s per symbol
+    lookup. Keeping the cache warm across the session eliminates that walk for
+    every test after the first.
     """
-    AscEditor.set_custom_library_paths(str(_FIXTURE_SYMBOLS))
     for asy in _FIXTURE_SYMBOLS.glob("*.asy"):
         AscEditor.symbol_cache[asy.name] = str(asy)
     yield _FIXTURE_SYMBOLS
-    AscEditor.custom_lib_paths = []
     AscEditor.symbol_cache = {}
+
+
+@pytest.fixture
+def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
+    """Point symbol resolution at the .asy fixture library for this test.
+
+    Re-asserted per test rather than once per session: booting the engine (any
+    Api or server test) sets ``AscEditor.custom_lib_paths`` process-wide to the
+    host's real LTspice symbol library and never puts it back, so a
+    session-scoped assignment silently loses to whichever test ran first in the
+    worker — a real symbol then resolves in place of the fixture one. The
+    geometry cache is keyed by symbol name, so it is dropped alongside the paths
+    or a name parsed from the real library would survive the switch.
+    """
+    from ltspice_mcp.lib import symbol_geometry
+
+    previous_paths = AscEditor.custom_lib_paths
+    previous_geometry = dict(symbol_geometry._symbol_cache)
+    AscEditor.set_custom_library_paths(str(_FIXTURE_SYMBOLS))
+    symbol_geometry._symbol_cache.clear()
+    try:
+        yield _FIXTURE_SYMBOLS
+    finally:
+        AscEditor.custom_lib_paths = previous_paths
+        symbol_geometry._symbol_cache.clear()
+        symbol_geometry._symbol_cache.update(previous_geometry)
 
 
 @pytest.fixture
