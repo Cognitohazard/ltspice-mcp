@@ -52,6 +52,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     failures_schema,
     format_response,
+    page_schema,
     registry,
     resolve_response_budget,
     safe_path,
@@ -342,14 +343,10 @@ _JOBS_COMMON_REQUIRED = [
     "hint",
 ]
 
-_JOBS_PAGE_PROPERTIES: dict[str, Any] = {
-    "items": {"type": "array"},
-    "items_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
-    "total": {"type": "integer"},
-    "returned": {"type": "integer"},
-    "truncated": {"type": "boolean"},
-    "next_cursor": {"type": ["string", "null"]},
-}
+_JOBS_PAGE_PROPERTIES: dict[str, Any] = page_schema(
+    {"type": "array"},
+    items_columns=response_budget.COLUMNAR_ROWS_SCHEMA,
+)["properties"]
 
 
 _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
