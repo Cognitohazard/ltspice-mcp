@@ -1709,7 +1709,13 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
                 if number is not None:
                     out.setdefault(field, []).append((record, number))
         elif isinstance(recipe, KeyedRecipe):
+            # 'field' means one thing on every category: the single number both
+            # a reduction and a spec read. Absent, a keyed recipe covers every
+            # key.
+            wanted = recipe.field
             for name, candidate in _KEYED_EXTRACTORS[recipe.metric](value).items():
+                if wanted is not None and name != wanted:
+                    continue
                 number = _number(candidate)
                 if number is not None:
                     out.setdefault(name, []).append((record, number))
