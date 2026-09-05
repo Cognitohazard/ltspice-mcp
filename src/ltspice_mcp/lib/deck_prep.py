@@ -38,6 +38,7 @@ from ltspice_mcp.config import (
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -209,7 +210,7 @@ def _stage_deck_snapshot(net_path: Path) -> Path:
     name = f"{net_path.stem}.run-{digest}{net_path.suffix}"
     directory = net_path.parent
     if not _netlist_has_local_dependency(net_path):
-        sidecar = net_path.parent / ".ltspice-mcp" / "exports"
+        sidecar = Store.circuit_exports(net_path)
         try:
             sidecar.mkdir(parents=True, exist_ok=True)
             directory = sidecar

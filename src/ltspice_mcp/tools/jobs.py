@@ -725,7 +725,7 @@ def _collect_circuit_groups(
     observations: list[dict[str, Any]] = []
     for circuit_path, last_touched in candidates:
         legacy = job_store.summarize_circuit(circuit_path)
-        experiment_jobs, pointer_observations = experiment_store.load_pointer_jobs(
+        experiment_jobs, pointer_observations = experiment_store.load_jobs_for_circuit(
             circuit_path,
             state.working_dir,
             prefer=own_experiments,

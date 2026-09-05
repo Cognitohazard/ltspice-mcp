@@ -241,6 +241,80 @@ class JobRegistry:
             del jobs_view[jid]
             self._delete_persisted(j)
 
+    # ------------------------------------------------------------------
+    # Lookup — the one route from a job id to a job
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _on_event_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
+    def _adopt(self, job: Job) -> Job:
+        """Take a freshly-read record into the registry, if this caller may.
+
+        Registry mutations are loop-only, the same contract that governs the
+        cached editors (see ``tools/_base.py``): a worker thread swapping an
+        entry could race a loop-side transition on the same job. So an off-loop
+        caller — a resource read, a preload — gets the record it just read as a
+        read-only view and the registry is left untouched; the next on-loop
+        resolution adopts it. This is the ONLY place that decides between the
+        two, so no caller can quietly pick the other answer.
+
+        A record the store had to reconcile (its owner died mid-run) is written
+        back, because the reconciliation is a fact about the job that nothing
+        else will persist.
+        """
+        if not self._on_event_loop():
+            return job
+        self.jobs[job.job_id] = job
+        if isinstance(job, ExperimentJob) and any(
+            item.get("code") == "server_restarted" for item in job.observations
+        ):
+            self.persist_job(job)
+        return job
+
+    def _load_from_store(self, job_id: str) -> ExperimentJob | None:
+        """Blocking read of one experiment record from this session's store."""
+        if not self.persist_enabled:
+            return None
+        from ltspice_mcp.lib import experiment_store
+
+        return experiment_store.load_job(job_id, self.working_dir, own_is_alive=True)
+
+    def get_or_load(self, job_id: str) -> Job | None:
+        """A job by id: in memory, else from the store. None if there is none.
+
+        The single discovery route. Everything that resolves an id — the tools,
+        the resources, the Python door — comes through here, so "the registry
+        did not have it" and "the store did not have it either" are one answer
+        rather than a sequence of fallbacks each caller re-assembles.
+
+        Raises ``ValueError`` for an id that could never name a record.
+        """
+        job = self.jobs.get(job_id)
+        if job is not None:
+            return job
+        from ltspice_mcp.lib.store import validate_job_id
+
+        validate_job_id(job_id)
+        loaded = self._load_from_store(job_id)
+        return self._adopt(loaded) if loaded is not None else None
+
+    async def get_or_load_async(self, job_id: str) -> Job | None:
+        """Loop-safe ``get_or_load``: offload the store read, adopt on the loop."""
+        job = self.jobs.get(job_id)
+        if job is not None:
+            return job
+        from ltspice_mcp.lib.store import validate_job_id
+
+        validate_job_id(job_id)
+        loaded = await asyncio.to_thread(self._load_from_store, job_id)
+        return self._adopt(loaded) if loaded is not None else None
+
     def _load_foreign_job_sync(self, job: Job) -> Job | None:
         """Blocking store dispatch for refreshing one foreign-owned job."""
         if isinstance(job, ExperimentJob):
@@ -276,22 +350,7 @@ class JobRegistry:
             return job
         if fresh is None:
             return job
-        # Registry mutations are loop-only (the same contract as the cached
-        # editors — see tools/_base.py): resource reads run this via a worker
-        # thread (server.py offloads whole resource reads), where swapping the
-        # entry could race a loop-side transition on the same job. Off-loop
-        # callers get the fresh view without the registry update; the next
-        # on-loop resolution persists it.
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return fresh
-        self.jobs[job.job_id] = fresh
-        if isinstance(fresh, ExperimentJob) and any(
-            item.get("code") == "server_restarted" for item in fresh.observations
-        ):
-            self.persist_job(fresh)
-        return fresh
+        return self._adopt(fresh)
 
     async def refresh_foreign_job_async(self, job: Job) -> Job:
         """Loop-safe ``refresh_foreign_job``: offload the sidecar re-read.
@@ -314,13 +373,8 @@ class JobRegistry:
             return job
         if fresh is None:
             return job
-        # On the loop here (awaited from a handler) — safe to swap the entry.
-        self.jobs[job.job_id] = fresh
-        if isinstance(fresh, ExperimentJob) and any(
-            item.get("code") == "server_restarted" for item in fresh.observations
-        ):
-            self.persist_job(fresh)
-        return fresh
+        # On the loop here (awaited from a handler), so ``_adopt`` swaps it in.
+        return self._adopt(fresh)
 
     def refreshed_jobs(self) -> list[Job]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.
@@ -463,7 +517,7 @@ class JobRegistry:
             from ltspice_mcp.lib import experiment_store, job_store
 
             legacy_records = job_store.load_jobs_for_circuit(resolved)
-            experiment_jobs, observations = experiment_store.load_pointer_jobs(
+            experiment_jobs, observations = experiment_store.load_jobs_for_circuit(
                 resolved,
                 self.working_dir,
             )
