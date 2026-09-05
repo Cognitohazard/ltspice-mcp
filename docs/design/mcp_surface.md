@@ -316,17 +316,15 @@ and `remaining = expanded - terminal`.
 `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?}`. The keys
 are optional because a requested run-field projection may remove any of them.
-Its object rendering is `items: [RunRecord]`; its budgeted columnar rendering
-is `items_columns: [key]` plus `items: [[value]]`, each value position named by
-`items_columns`. Both renderings carry the same page metadata and cursor
-semantics.
+Its rendering is `items: [RunRecord]` — a row is an object with the same keys
+at every budget, however tight the response cap.
 
 Under a `budget`, receipts keep the common envelope and negotiate the shared
-trim -> answer -> columnar -> shrink ladder. The runs page and
-attached-analysis row pages may use their columnar variants; fact channels,
-completeness, progress, verdicts, coverage and recovery handles are protected.
-If the irreducible floor exceeds the budget, the floor is returned with
-`budget_not_met` rather than facts being dropped.
+trim -> answer -> shrink ladder. The runs page and attached-analysis row pages
+may be shrunk to fewer rows; fact channels, completeness, progress, verdicts,
+coverage and recovery handles are protected. If the irreducible floor exceeds
+the budget, the floor is returned with `budget_not_met` rather than facts being
+dropped.
 
 An `artifact` handle survives the lean row. The lean row flattens `value` to
 its scalar leaves, and a handle is a dict; dropped with them, the `plot` recipe
@@ -341,8 +339,7 @@ whichever case finished first, so two identical runs report the same excerpt.
 
 Output: `job_id, request_id, control_token, status, outcome, source[],
 completeness, progress, lint findings (per circuit), runs (a page of
-RunRecords or their columnar rendering), analysis?, failures[],
-observations[], artifacts[], hint`.
+RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
 
 ### 3.2 `jobs` — control plane
 
@@ -375,8 +372,7 @@ dispatch. Output shapes are discriminated on the echoed `action`:
   id; counts alone left "find the run I did earlier" answerable only by listing
   the store directory.
 - `runs` returns a page of run records, using the standalone `RunRecord`
-  fragment and admitting either its object or columnar rendering under a
-  budget.
+  fragment.
 
 `timeout_s` blocks up to 300 s per call, because one blocked call replaces a
 dozen status polls. Timing out is not a failure: the response comes back with
