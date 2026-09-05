@@ -312,8 +312,12 @@ observations[], artifacts[], hint`.
 {action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
 ```
 
-Each action accepts only its own fields and rejects the rest. Output shapes are
-discriminated on the echoed `action`:
+Each action accepts only its own fields and rejects the rest; `budget` is the
+one argument every action takes. That is the *published* shape, not a rule
+applied after the fact: the input schema declares each action as its own
+branch, keyed by `action` through a discriminator, so a client can see what an
+action takes before calling it and the branch constraints are checked before
+dispatch. Output shapes are discriminated on the echoed `action`:
 
 - `status` / `wait` return the receipt snapshot of §3.1 **without**
   `control_token`, plus `analysis_status` and (for `wait`) `timed_out`. The
