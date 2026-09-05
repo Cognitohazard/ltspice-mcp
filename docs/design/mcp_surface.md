@@ -672,7 +672,7 @@ symbol but cannot define a new block) and a whole-document validation pass.
 Output: `outcome, target, sha256, build_id, stages[], netlist?, verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
-artifacts, hint`.
+hint`.
 
 ### 3.5 `verify_circuit` — gate
 
