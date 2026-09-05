@@ -1025,3 +1025,20 @@ def test_the_mcp_door_still_resolves_against_the_process_cwd(
     from ltspice_mcp.tools._base import safe_path
 
     assert safe_path("deck.cir", state_relative_sandbox) == elsewhere / "deck.cir"
+
+
+def test_inspect_reference_answers_through_the_same_handler(
+    state_no_sim: SessionState,
+) -> None:
+    """The Python API validates ``queries`` with the tool's own model and calls
+    the tool's own handler, so a query kind added to the MCP surface has to be
+    callable here without the API being taught about it. Pinned because a
+    second validation of the kinds — anywhere on the API path — would make the
+    two doors disagree about what exists."""
+    api = SyncApi(state_no_sim)
+    data = api.inspect(queries=[{"kind": "reference", "query": "phase margin"}])
+    entry = data["results"][0]
+    assert entry["ok"] is True, entry
+    top = entry["data"]["matches"][0]
+    assert (top["tool"], top["name"]) == ("analyze_results", "stability")
+    assert {field["name"] for field in top["fields"]} >= {"key", "signal", "reduce"}
