@@ -133,7 +133,7 @@ class SessionState:
 
     # ------------------------------------------------------------------
     # Tool surface — built on FIRST ACCESS, not at session creation. The
-    # library door (Api) calls handlers directly and never reads these, so it
+    # Python API (Api) calls handlers directly and never reads these, so it
     # never pays the tools-package import (mcp + the analysis chain); the MCP
     # server touches tool_defs during its handshake and builds then. A
     # property, not a flag: no caller can ever observe an empty surface.

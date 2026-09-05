@@ -6,7 +6,7 @@ tool ALSO keeps the flat spelling it shipped with (verify's
 `reference`/`compare_mode`/`anchors`/`rtol`, edit's
 `render_format`/`render_scale`/`reference`), retained as aliases for 0.6.
 
-This file is the table of what each door accepts and what it refuses, asserted
+This file is the table of what each interface accepts and what it refuses, asserted
 on the RESOLVED value rather than on the field, so an alias that stops mapping
 fails here even while it still validates. A spelling removed from the accepted
 half is a breaking change to a caller that has already written it.

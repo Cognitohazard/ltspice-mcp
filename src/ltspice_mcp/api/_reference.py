@@ -1,6 +1,6 @@
 """Readable argument catalogue for the six operations, rendered from the models.
 
-The in-process door carries no tool schemas, so a caller arriving cold has to
+The Python API carries no tool schemas, so a caller arriving cold has to
 discover the argument vocabulary somehow. Measured, the ways they find are
 expensive: firing a deliberately bogus value to read the valid set out of a
 validation error, and importing private modules to reflect over their fields.
@@ -125,7 +125,7 @@ def _accepted_annotation(field: FieldInfo) -> Any:
 
     A ``BeforeValidator`` that takes ``True`` for a default policy declares that
     wider input for the JSON Schema; the catalogue reads the same declaration,
-    so the two doors advertise one answer.
+    so MCP and the Python API advertise one answer.
     """
     for meta in field.metadata:
         declared = getattr(meta, "json_schema_input_type", PydanticUndefined)

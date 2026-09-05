@@ -713,7 +713,7 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
 def _python_runtime_facts() -> dict[str, Any]:
     """The interpreter this engine runs in, and whether it will still exist.
 
-    An agent that wants the in-process door (``from ltspice_mcp.api import
+    An agent that wants the Python API (``from ltspice_mcp.api import
     Api``) must pick an interpreter that has the package — this one. The
     install kind is the durability fact: a uvx cache environment is rebuilt
     per invocation and may vanish, while pipx/venv/system interpreters are

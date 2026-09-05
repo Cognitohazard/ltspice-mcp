@@ -813,7 +813,7 @@ def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
     Declared here because this is the schema choke point, mirroring the
     response choke point that adds the key: per-tool declarations put the
     two in different places and let each new tool omit it silently. Both
-    schema doors pass through it: ``@registry.tool`` and
+    schema entry points pass through it: ``@registry.tool`` and
     ``declare_output_schema``.
 
     Edits the schema in place and returns it, so a module's exported
@@ -1020,7 +1020,7 @@ _AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
 
 @contextlib.contextmanager
 def automatic_door() -> Iterator[None]:
-    """Mark the handler calls inside as arriving through the API's automatic door.
+    """Mark the handler calls inside as arriving through the API's automatic mode.
 
     Entered from inside the coroutine the engine loop runs, so the flag lives in
     that one task's context: a co-resident MCP server sharing the process (and
@@ -1048,10 +1048,10 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     the default reaches exactly the surface it was designed for; ``0`` disables it
     and restores the fully undegraded default response.
 
-    The API's automatic door gets no default at all. That door promises complete
+    The API's automatic mode gets no default at all. That door promises complete
     results and refuses ``budget`` outright, so a presentation ladder there would
     both contradict the promise and leave the caller no way to lift it — the
-    ladder's own route text would send them at the field the door rejects.
+    ladder's own route text would send them at the field the interface rejects.
     """
     if explicit is not None:
         return ResponseBudget(explicit)
@@ -1185,7 +1185,7 @@ def make_include_resolver(state: SessionState) -> IncludeResolver:
     install's model library on every sheet carrying a MOSFET, so with only
     ``allowed_paths`` this resolver denies a file the run path just staged —
     and ``verify_circuit`` reports the schematic's own library as an unusable
-    include. The two doors must answer "may I read this referenced file?" the
+    include. The MCP and the Python API must answer "may I read this referenced file?" the
     same way, or the answer depends on which one you asked. The roots are
     resolved once per resolver rather than per include, and a deck still may
     not RUN from one — staging checks the authored file against

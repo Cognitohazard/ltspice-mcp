@@ -768,7 +768,7 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
 
 
 # Case count at which a terminal receipt starts pointing at the in-process
-# door. Ten is past any spot-check and squarely in sweep/corner territory —
+# interface. Ten is past any spot-check and squarely in sweep/corner territory —
 # the workload class where the per-call cost of going through the tool surface
 # is large enough to be worth avoiding.
 _API_POINTER_MIN_CASES = 10
@@ -806,10 +806,10 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
 
 
 def _api_pointer_route(snapshot: ReceiptSnapshot) -> list[str]:
-    """The second discovery surface for the in-process door (the first is the
+    """The second discovery surface for the Python API (the first is the
     initialize instructions): it lands exactly on the caller who is iterating —
     a many-case receipt is the loop shape where per-call wire overhead
-    compounds and the Python door pays for itself. Appended on EVERY terminal
+    compounds and the Python API pays for itself. Appended on EVERY terminal
     experiment route, the truncated one included: a receipt big enough to
     truncate is the biggest loop of all."""
     if snapshot.completeness.expanded < _API_POINTER_MIN_CASES:

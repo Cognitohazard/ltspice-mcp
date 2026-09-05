@@ -289,7 +289,7 @@ class JobRegistry:
         """A job by id: in memory, else from the store. None if there is none.
 
         The single discovery route. Everything that resolves an id — the tools,
-        the resources, the Python door — comes through here, so "the registry
+        the resources, the Python API — comes through here, so "the registry
         did not have it" and "the store did not have it either" are one answer
         rather than a sequence of fallbacks each caller re-assembles.
 

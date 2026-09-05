@@ -1,4 +1,4 @@
-"""The in-process door's argument catalogue: coverage, shape, and delivery."""
+"""The Python API's argument catalogue: coverage, shape, and delivery."""
 
 from __future__ import annotations
 
@@ -382,7 +382,7 @@ class TestCatalogueMatchesTheRegistry:
         tool_defs, _dispatch = get_tools()
         # The API exposes exactly the envelope six. plot_waveform is MCP-only
         # by design: it renders an interactive client-side widget (an iframe
-        # resource), which has no meaning in-process — the Python door's
+        # resource), which has no meaning in-process — the Python API's
         # plotting path is load_raw + the caller's own tooling.
         assert set(_reference.op_names()) == set(CONSOLIDATED_TOOLS)
         assert {tool.name for tool in tool_defs} - set(_reference.op_names()) == {"plot_waveform"}

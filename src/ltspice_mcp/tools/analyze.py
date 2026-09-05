@@ -3536,7 +3536,7 @@ async def evaluate_analysis_results(
 
 
 def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str, Any]:
-    """Render complete Python-door data from bounded neutral evaluator drives."""
+    """Render complete Python API data from bounded neutral evaluator drives."""
     if not drives:
         raise ValueError("At least one analysis evaluation drive is required")
 
