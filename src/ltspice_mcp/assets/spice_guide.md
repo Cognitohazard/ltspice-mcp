@@ -833,7 +833,8 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   PWL/PULSE rise instead.)
 - No native `.step`. Run parametric sweeps as `run_experiments` `variations`
   (one netlist per value); ngspice ignores a `.step` line in batch mode, so a
-  deck that carries one runs once at the base value with no error.
+  deck that carries one runs once at the base value with no error. The lint
+  warns (`step-ngspice`) rather than letting that pass silently.
 - `gnd` is auto-converted to ground (node `0`) by default; disable with
   `set no_auto_gnd` if you need `gnd` to be a distinct net.
 - Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
@@ -1011,12 +1012,13 @@ wrdata output.txt V(out)          $ save as CSV-like text
 
 **Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
 default raw output, so a script that never calls `write`/`wrdata` produces no
-rawfile even though the run completes cleanly, and `run_experiments` reports
-an empty result. Put the `write` yourself: `run_experiments` stages the deck
-with the raw path it expects, and a `write <that path>` before `.endc`
-(or `wrdata` for a text table) is what fills it. A script running multiple
-analyses, or writing per-iteration in a Monte Carlo loop, needs one write
-per result it wants kept — `write` captures the current/last plot only.
+rawfile even though the run completes cleanly. `run_experiments` fills that
+gap: when the deck has exactly one `.control` block and no `write`/`wrdata`
+of its own, it adds a `write <the run's raw path>` before `.endc` and says so
+in the receipt's `observations`. Your own `write` (or `wrdata`) anywhere in
+the deck turns the injection off — and you need one, per result you want
+kept, whenever the script runs several analyses or writes per iteration in a
+Monte Carlo loop: `write` captures the current plot only.
 
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.

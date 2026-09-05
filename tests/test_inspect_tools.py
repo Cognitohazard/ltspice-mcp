@@ -139,6 +139,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     for key in ("executable", "install_kind", "ephemeral", "package_location"):
         assert key in python_facts, f"missing python fact {key!r}"
     assert isinstance(python_facts["ephemeral"], bool)
+    assert data["diagnostics"] == []
     for lim in (
         "max_experiment_cases",
         "analysis_budget_s",
@@ -148,6 +149,24 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):
+    """A server that started degraded — a configured simulator path that does
+    not exist, a requested engine that fell back to another — says so only in
+    its own stderr log, which no client reads. The capabilities query is where
+    a client can see it, so the notes have to ride there."""
+    state = SessionState.create(
+        config,
+        available={"ltspice": FakeLT},
+        diagnostics=["Configured simulator path does not exist: /nope/LTspice.exe"],
+    )
+
+    (res,) = await _run(state, [{"kind": "capabilities"}])
+
+    assert res["data"]["diagnostics"] == [
+        "Configured simulator path does not exist: /nope/LTspice.exe"
+    ]
 
 
 async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: SessionState):
@@ -399,6 +418,28 @@ async def test_components_asc_reports_sheet_digest(asc_file: Path, asc_state: Se
 async def test_components_netlist_has_no_digest(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(netlist)}])
     assert "sha256" not in res["data"]
+
+
+async def test_components_netlist_relays_lexer_warnings(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """The lexer reports what it had to guess about — here, a .SUBCKT that
+    never closes, which means every card after it was read as subcircuit body
+    and the component list is a list of the wrong scope. Reading only the
+    cards drops that: the rows come back looking authoritative."""
+    deck = work_dir / "unclosed.cir"
+    deck.write_text("* unclosed\n.subckt AMP a b\nR1 a b 1k\nV1 a 0 1\n.end\n")
+
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(deck)}])
+
+    assert any("unclosed .SUBCKT" in note for note in res["data"]["warnings"])
+
+
+async def test_components_netlist_omits_the_warnings_key_when_clean(
+    netlist: Path, state_no_sim: SessionState
+):
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(netlist)}])
+    assert "warnings" not in res["data"]
 
 
 async def test_net_asc_reports_sheet_digest(asc_file: Path, asc_state: SessionState):

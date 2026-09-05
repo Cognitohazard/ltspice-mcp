@@ -99,8 +99,9 @@ class SessionState:
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
-    auto-detection). Logged at startup; not yet carried on the ``inspect``
-    capabilities payload, so a client cannot see the degradation today."""
+    auto-detection). Logged at startup and carried verbatim on the ``inspect``
+    capabilities payload, which is where a client can see the degradation —
+    the log itself reaches nobody but whoever started the server."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
