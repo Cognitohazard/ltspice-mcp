@@ -44,6 +44,7 @@ from ltspice_mcp.lib.experiment_runner import (
     IdempotencyConflictError,
     RequestGateBusy,
     StagedDecks,
+    SubmissionCommitted,
     canonical_fingerprint,
     verify_replay_sources,
 )
@@ -692,6 +693,18 @@ async def handle_run_experiments(
                 lint_by_circuit or None,
                 budget=budget,
             )
+    except SubmissionCommitted as exc:
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="submission",
+            retryable=True,
+            # The request index and the record are on disk under this
+            # request_id; only the rest of the call fell over.
+            commit_state="committed",
+            budget=budget,
+        )
     except RequestGateBusy as exc:
         return await _error_response(
             args.request_id,
