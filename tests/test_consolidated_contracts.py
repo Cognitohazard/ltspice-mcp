@@ -32,7 +32,7 @@ from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
 from ltspice_mcp.tools import get_tools_for_profile
 from ltspice_mcp.tools.experiments import _decode_jobs_cursor
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from ltspice_mcp.tools.schematic_edit import _validate_view_cursors, _ViewCursors
+from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
 # CONSOLIDATED_TOOLS = the six envelope ops; REGISTERED_TOOLS adds the plot
@@ -652,7 +652,7 @@ class TestCursorTamperOnEveryPaginatedInput:
 
     def test_edit_schematic_view_cursor_rejects_garbage(self):
         with pytest.raises(NetlistError):
-            _validate_view_cursors(_ViewCursors(pin_legend="tampered"))
+            _validate_view_cursors(EditViewCursors(pin_legend="tampered"))
 
 
 # ---------------------------------------------------------------------------

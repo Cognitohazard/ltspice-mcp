@@ -22,9 +22,9 @@ from pydantic import BeforeValidator, Field, SkipValidation, model_validator
 
 from ltspice_mcp.errors import LTSpiceMCPError, ResultError
 from ltspice_mcp.lib import (
-    _fsync_dir,
-    _fsync_fd,
     analysis_snapshot,
+    fsync_dir,
+    fsync_fd,
     response_budget,
     result_store,
     services,
@@ -2228,11 +2228,11 @@ def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
         # name. The digest was already taken on this same byte content.
         fd = os.open(artifact.pending, os.O_RDONLY)
         try:
-            _fsync_fd(fd)
+            fsync_fd(fd)
         finally:
             os.close(fd)
         os.replace(artifact.pending, artifact.final)
-        _fsync_dir(artifact.final.parent)
+        fsync_dir(artifact.final.parent)
 
 
 async def _publish(

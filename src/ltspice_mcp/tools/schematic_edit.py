@@ -9,7 +9,7 @@ first turns a stale ``expected_sha256`` into a ``revision_conflict`` with nothin
 written.
 
 The op models and their in-place applier are reused verbatim from
-``tools/circuit.py`` (the shipped ``apply_schematic_ops`` machinery); the only
+``lib/schematic_ops.py`` (the shipped ``apply_schematic_ops`` machinery); the only
 narrowing is that the wire op accepts ``wire_pins`` only — the deprecated
 ``connect`` alias is excluded from this surface. Post-commit, an optional
 ``reference`` stage exports the committed sheet on a COPY and compares it to a
@@ -17,10 +17,8 @@ reference netlist through the connectivity graph engine; a mismatch or an export
 failure there is reported but never un-commits the sheet.
 """
 
-# This module deliberately reuses the shipped apply_schematic_ops machinery from
-# tools/circuit.py (op models, the in-place applier, the net-partition helpers)
-# rather than duplicating it, so it imports those module-private names by design.
-# pyright: reportPrivateUsage=false
+# The op models, the in-place applier and the net-partition helpers are the
+# shared engine in lib/schematic_ops.py, imported rather than duplicated.
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +38,7 @@ from pydantic import Field
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import _fsync_dir, _fsync_fd, atomic_write_bytes
+from ltspice_mcp.lib import atomic_write_bytes, fsync_dir, fsync_fd
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.netlist_graph import IncludeResolver, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.pin_legend import (
@@ -49,6 +47,31 @@ from ltspice_mcp.lib.pin_legend import (
     decode_page_cursor,
     find_label_only_pins,
     paginate_view,
+)
+from ltspice_mcp.lib.schematic_ops import (
+    COORDINATE_DESCRIPTION,
+    OpAddComponent,
+    OpAddDirective,
+    OpAddNetLabel,
+    OpMoveComponent,
+    OpRemoveComponent,
+    OpRemoveDirective,
+    OpRemoveNetLabel,
+    OpRemoveWire,
+    OpSetComponentAttribute,
+    OpSetComponentValue,
+    OpWirePins,
+    blank_sheet,
+    build_on_wire_predicate,
+    collect_component_geometry,
+    edit_guard,
+    get_asc_editor,
+    make_editor,
+    post_op_warnings,
+    require_asc,
+    run_op_batch,
+    trace_nets,
+    wiring_profile,
 )
 from ltspice_mcp.lib.schematic_scene import build_scene
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -65,31 +88,6 @@ from ltspice_mcp.tools._base import (
     safe_path,
     symbol_resolver_for,
 )
-from ltspice_mcp.tools.circuit import (
-    _COORDINATE_DESCRIPTION,
-    _build_on_wire_predicate,
-    _collect_component_geometry,
-    _edit_guard,
-    _get_asc_editor,
-    _make_editor,
-    _OpAddComponent,
-    _OpAddDirective,
-    _OpAddNetLabel,
-    _OpMoveComponent,
-    _OpRemoveComponent,
-    _OpRemoveDirective,
-    _OpRemoveNetLabel,
-    _OpRemoveWire,
-    _OpSetComponentAttribute,
-    _OpSetComponentValue,
-    _OpWirePins,
-    _post_op_warnings,
-    _require_asc,
-    _run_op_batch,
-    _trace_nets,
-    _wiring_profile,
-    blank_sheet,
-)
 
 # The blank-sheet template — identical to what ``create_schematic`` writes.
 _BLANK_TEMPLATE = blank_sheet()
@@ -97,13 +95,13 @@ _BLANK_TEMPLATE = blank_sheet()
 _DEFAULT_VIEW_LIMIT = 100
 
 
-class _OpWirePinsStrict(_OpWirePins):
+class OpWirePinsStrict(OpWirePins):
     """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
     collision, or an overlapping wire junction rather than drawing them.
 
-    The shipped ``_OpWirePins`` still accepts the deprecated ``connect`` alias;
+    The shipped ``OpWirePins`` still accepts the deprecated ``connect`` alias;
     this consolidated surface drops it. Because the parent's applier dispatches
-    on ``isinstance(op, _OpWirePins)`` and reads ``op.op``, narrowing the literal
+    on ``isinstance(op, OpWirePins)`` and reads ``op.op``, narrowing the literal
     is all that is needed — a ``connect`` payload no longer validates and never
     reaches the applier. The payload fields (and their descriptions) are the
     parent's; only the discriminator is narrowed.
@@ -121,22 +119,22 @@ class _OpWirePinsStrict(_OpWirePins):
 # it, an unknown op is one error naming every accepted kind, and a known op with
 # a bad field reports against that kind alone.
 ConsolidatedOp = Annotated[
-    _OpAddComponent
-    | _OpSetComponentValue
-    | _OpSetComponentAttribute
-    | _OpRemoveComponent
-    | _OpMoveComponent
-    | _OpAddNetLabel
-    | _OpRemoveNetLabel
-    | _OpRemoveWire
-    | _OpWirePinsStrict
-    | _OpAddDirective
-    | _OpRemoveDirective,
+    OpAddComponent
+    | OpSetComponentValue
+    | OpSetComponentAttribute
+    | OpRemoveComponent
+    | OpMoveComponent
+    | OpAddNetLabel
+    | OpRemoveNetLabel
+    | OpRemoveWire
+    | OpWirePinsStrict
+    | OpAddDirective
+    | OpRemoveDirective,
     Field(discriminator="op"),
 ]
 
 
-class _ViewCursors(StrictModel):
+class EditViewCursors(StrictModel):
     """Resumption cursors for the paginated views, each a page's ``next_cursor``."""
 
     label_only_pins: str | None = Field(
@@ -177,7 +175,7 @@ class EditSchematicInput(ToolInput):
             "set_component_value, set_component_attribute, add_net_label, "
             "remove_net_label, wire_pins, remove_wire, add_directive, remove_directive. "
             "The whole batch commits atomically or not at all: the first op that fails "
-            "aborts the transaction and nothing is written. " + _COORDINATE_DESCRIPTION
+            "aborts the transaction and nothing is written. " + COORDINATE_DESCRIPTION
         )
     )
     reference: str | None = Field(
@@ -215,7 +213,7 @@ class EditSchematicInput(ToolInput):
             "artifact."
         ),
     )
-    view_cursors: _ViewCursors | None = Field(
+    view_cursors: EditViewCursors | None = Field(
         default=None,
         description=(
             "Resume a paginated view by echoing back that page's next_cursor "
@@ -381,7 +379,7 @@ def _stage_asc(text: str, target: Path, build_id: str, encoding: str) -> Path:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _target_mode(target))
     try:
         os.write(fd, data)
-        _fsync_fd(fd)
+        fsync_fd(fd)
     finally:
         os.close(fd)
     return tmp
@@ -391,7 +389,7 @@ def _commit_rename(tmp: Path, target: Path) -> None:
     """Atomically move the staged file onto the target — the LAST commit step."""
     os.replace(tmp, target)
     with contextlib.suppress(OSError):
-        _fsync_dir(target.parent)
+        fsync_dir(target.parent)
 
 
 class _CommitOutcome(NamedTuple):
@@ -447,18 +445,18 @@ def _wiring_and_legend(
 ) -> tuple[dict[str, int], list[dict], list[dict]]:
     """Wiring counts, pin legend, and the label-only pins for a placed editor.
 
-    Reuses circuit.py's ``_net_partition``-backed helpers (via ``_trace_nets``
-    and ``_build_on_wire_predicate``) rather than re-deriving connectivity, and
+    Reuses circuit.py's ``net_partition``-backed helpers (via ``trace_nets``
+    and ``build_on_wire_predicate``) rather than re-deriving connectivity, and
     hands the plain result to the pure ``lib/pin_legend`` builders. The wiring
     metric and label-only detection are contract output and always run; the
     per-component legend is built only when ``include_legend`` (its own view was
     requested), returned empty otherwise.
     """
-    profile = _wiring_profile(editor)
-    geometry = _collect_component_geometry(editor)
-    nets = _trace_nets(editor)
+    profile = wiring_profile(editor)
+    geometry = collect_component_geometry(editor)
+    nets = trace_nets(editor)
     segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    on_wire = _build_on_wire_predicate(segments)
+    on_wire = build_on_wire_predicate(segments)
     label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
 
     def net_name_of(coord: tuple[int, int]) -> str | None:
@@ -614,7 +612,7 @@ def _present_edit_views(
     complete: bool = False,
 ) -> tuple[dict, dict]:
     """Apply MCP paging, or build the same page shapes without omissions."""
-    cursors = args.view_cursors or _ViewCursors()
+    cursors = args.view_cursors or EditViewCursors()
     limit = max(len(neutral.pin_legend), len(neutral.label_only_pins), 1)
     label_only_page = paginate_view(
         list(neutral.label_only_pins),
@@ -724,15 +722,15 @@ async def _run_reference_stage(
 def _build_editor(target: Path, use_template: bool, state: SessionState) -> AscEditor:
     """Return the editor to mutate: a fresh blank-template one, or the cached target."""
     if not use_template:
-        return _get_asc_editor(target, state)
+        return get_asc_editor(target, state)
     # Construct an AscEditor from a throwaway blank template; it parses on init,
     # so the temp file can go away immediately and all mutation is in-memory.
     tmp_dir = Path(tempfile.mkdtemp(prefix="ltspice-blank-"))
     try:
         tmp_asc = tmp_dir / "blank.asc"
         tmp_asc.write_text(_BLANK_TEMPLATE, encoding="utf-8")
-        # The template is .asc, so _make_editor always yields an AscEditor here.
-        return cast(AscEditor, _make_editor(tmp_asc))
+        # The template is .asc, so make_editor always yields an AscEditor here.
+        return cast(AscEditor, make_editor(tmp_asc))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -742,11 +740,11 @@ def _apply_ops(
 ) -> tuple[list[dict], list[dict], str | None]:
     """Apply every op in order. Returns (results, failures, abort_reason).
 
-    Delegates the loop to the shared ``_run_op_batch`` runner (abort-on-first-
+    Delegates the loop to the shared ``run_op_batch`` runner (abort-on-first-
     failure unless ``dry_run``), then splits its unified entries into this
     surface's separate success/failure lists.
     """
-    entries, abort_reason = _run_op_batch(editor, ops, target, stop_on_error=not dry_run)
+    entries, abort_reason = run_op_batch(editor, ops, target, stop_on_error=not dry_run)
     results = [e for e in entries if e["ok"]]
     failures = [
         {"index": e["index"], "op": e["op"], "error": e["error"]} for e in entries if not e["ok"]
@@ -848,7 +846,7 @@ async def _evaluate_edit_schematic(
 ) -> EditSchematicEvaluation:
     """Implementation shared by the neutral seam and guarded MCP presentation."""
     target = safe_path(args.target, state)
-    _require_asc(target)
+    require_asc(target)
     if not args.ops:
         raise NetlistError("ops list is empty — pass at least one op.")
     _validate_view_cursors(args.view_cursors)
@@ -882,7 +880,7 @@ async def _evaluate_edit_schematic(
         stages.append(entry)
         post_commit_stage = "response"
 
-    async with _edit_guard(target):
+    async with edit_guard(target):
         # --- revision guard (inside the guard so a peer's committed write is seen)
         exists = target.exists()
         expected = args.expected_sha256.lower() if args.expected_sha256 else None
@@ -973,7 +971,7 @@ async def _evaluate_edit_schematic(
             profile, legend, label_only = _wiring_and_legend(
                 editor, include_legend=bool({"pin_legend", "touched"} & set(args.return_views))
             )
-            warnings = [w["message"] for w in _post_op_warnings(editor)]
+            warnings = [w["message"] for w in post_op_warnings(editor)]
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 
@@ -1211,7 +1209,7 @@ async def handle_edit_schematic(
     return evaluation.mcp_result
 
 
-def _validate_view_cursors(cursors: _ViewCursors | None) -> None:
+def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
     """Reject a malformed / cross-view resumption cursor before any work runs.
 
     Decoding up front (outside the edit guard) keeps a bad cursor from surfacing

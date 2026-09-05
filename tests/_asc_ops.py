@@ -131,9 +131,9 @@ def has_segment(
 
 def load_editor(state: SessionState, path: Path):
     """The cached AscEditor for ``path`` — the one an op batch mutates."""
-    from ltspice_mcp.tools.circuit import _get_asc_editor
+    from ltspice_mcp.lib.schematic_ops import get_asc_editor
 
-    return _get_asc_editor(path, state)
+    return get_asc_editor(path, state)
 
 
 def run_ops(
@@ -151,12 +151,12 @@ def run_ops(
     """
     from pydantic import TypeAdapter
 
-    from ltspice_mcp.tools.circuit import _run_op_batch
+    from ltspice_mcp.lib.schematic_ops import run_op_batch
     from ltspice_mcp.tools.schematic_edit import ConsolidatedOp
 
     editor = load_editor(state, path)
     typed = TypeAdapter(list[ConsolidatedOp]).validate_python(ops)
-    entries, abort = _run_op_batch(editor, typed, path, stop_on_error=stop_on_error)
+    entries, abort = run_op_batch(editor, typed, path, stop_on_error=stop_on_error)
     if save and abort is None:
         editor.save_netlist(path)
     return entries, abort, editor
@@ -164,9 +164,9 @@ def run_ops(
 
 def structured_warnings(editor: Any, **kw: Any) -> list[dict[str, Any]]:
     """The post-op validation pass's structured findings for ``editor``."""
-    from ltspice_mcp.tools.circuit import _post_op_warnings
+    from ltspice_mcp.lib.schematic_ops import post_op_warnings
 
-    return _post_op_warnings(editor, **kw)
+    return post_op_warnings(editor, **kw)
 
 
 def batch_view(

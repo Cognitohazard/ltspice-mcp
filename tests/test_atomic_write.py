@@ -425,7 +425,7 @@ class TestExclusiveCreate:
 
 class TestFullFsyncMacOS:
     def test_uses_f_fullfsync_when_available(self, tmp_path: Path) -> None:
-        """When _F_FULLFSYNC is set, _fsync_fd routes through fcntl and
+        """When _F_FULLFSYNC is set, fsync_fd routes through fcntl and
         does NOT call os.fsync on the file."""
         from ltspice_mcp import lib as _lib
 
@@ -460,7 +460,7 @@ class TestFullFsyncMacOS:
 
     def test_falls_back_to_fsync_on_f_fullfsync_error(self, tmp_path: Path) -> None:
         """If F_FULLFSYNC raises (e.g., filesystem doesn't support it),
-        _fsync_fd falls back to plain fsync."""
+        fsync_fd falls back to plain fsync."""
         from ltspice_mcp import lib as _lib
 
         path = tmp_path / "out.txt"

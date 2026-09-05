@@ -210,9 +210,9 @@ class TestAbortedTransaction:
         target = work_dir / "rollback.asc"
         original = target.read_bytes()
 
-        from ltspice_mcp.tools import circuit as circuit_mod
+        from ltspice_mcp.lib import schematic_ops as circuit_mod
 
-        real_apply = circuit_mod._apply_op_inplace
+        real_apply = circuit_mod.apply_op_inplace
         calls = {"n": 0}
 
         def flaky_apply(editor, op, asc_path):
@@ -221,7 +221,7 @@ class TestAbortedTransaction:
                 return real_apply(editor, op, asc_path)
             raise RuntimeError("injected mid-batch failure")
 
-        monkeypatch.setattr(circuit_mod, "_apply_op_inplace", flaky_apply)
+        monkeypatch.setattr(circuit_mod, "apply_op_inplace", flaky_apply)
 
         with pytest.raises(RuntimeError, match="injected"):
             await apply_ops(

@@ -188,50 +188,50 @@ class TestLevelLabelLint:
     at edit time; fire only on the dotted-level pattern AND a subcircuit signal."""
 
     def test_x_prefix_reference_warns(self):
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"X1": _FakeComp({})})
-        assert _level_label_lint(ed, "X1", "Level.2") is not None
+        assert level_label_lint(ed, "X1", "Level.2") is not None
 
     def test_spicemodel_attr_on_u_prefix_warns(self):
         # InstName is U1 but the .asy Prefix makes it an X device → SpiceModel
         # attribute is the tell.
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
-        assert _level_label_lint(ed, "U1", "level.1") is not None
+        assert level_label_lint(ed, "U1", "level.1") is not None
 
     def test_plain_resistor_value_not_flagged(self):
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"R1": _FakeComp({})})
-        assert _level_label_lint(ed, "R1", "10k") is None
+        assert level_label_lint(ed, "R1", "10k") is None
 
     def test_level_label_on_non_subckt_not_flagged(self):
         # The label pattern alone isn't enough — no subcircuit signal, no warning.
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"R1": _FakeComp({})})
-        assert _level_label_lint(ed, "R1", "Level.2") is None
+        assert level_label_lint(ed, "R1", "Level.2") is None
 
     def test_any_value_on_spicemodel_symbol_warns(self):
         # The general case: ANY value on a SpiceModel-selected symbol (not just
         # Level.N) becomes a stray positional token and corrupts the netlist.
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
-        assert _level_label_lint(ed, "U1", "10k") is not None
+        assert level_label_lint(ed, "U1", "10k") is not None
 
     def test_subckt_by_value_without_spicemodel_not_flagged(self):
         # A library part that carries its subckt name IN Value (no SpiceModel)
         # is the normal case — it must stay quiet.
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"X1": _FakeComp({})})
-        assert _level_label_lint(ed, "X1", "LT1013") is None
+        assert level_label_lint(ed, "X1", "LT1013") is None
 
     def test_empty_value_not_flagged(self):
-        from ltspice_mcp.tools.circuit import _level_label_lint
+        from ltspice_mcp.lib.schematic_ops import level_label_lint
 
         ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
-        assert _level_label_lint(ed, "U1", "") is None
+        assert level_label_lint(ed, "U1", "") is None
