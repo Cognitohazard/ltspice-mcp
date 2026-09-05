@@ -2,18 +2,23 @@
 
 from ltspice_mcp.tools._base import registry
 
-# Importing these modules triggers @registry.tool registrations. The
-# consolidated modules (analyze, experiments, inspect_tools, schematic_edit,
-# verify) import internals from the base modules at module scope; the sorted
-# order below already loads each dependency first — analysis precedes analyze.
+# Importing these modules triggers @registry.tool registrations, and a tool is
+# advertised in the order it registered — so this list IS the advertised order,
+# and is kept off the import sorter for that reason. Each module's dependencies
+# also load ahead of it (analysis before analyze; experiments before jobs, which
+# reads the wait cap from it).
+# isort: off
 from . import (  # noqa: F401
     analysis,
     analyze,
     experiments,
+    jobs,
     inspect_tools,
     schematic_edit,
     verify,
 )
+
+# isort: on
 
 
 def get_tools():

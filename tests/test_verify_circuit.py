@@ -728,7 +728,7 @@ def test_advertised_delivery_states_the_inline_cost():
 
     defs, _ = registry.get_tools()
     schema = next(d for d in defs if d.name == "verify_circuit").inputSchema
-    delivery = schema["$defs"]["RenderPolicy"]["properties"]["delivery"]
+    delivery = schema["$defs"]["VerifyRenderPolicy"]["properties"]["delivery"]
     text = delivery.get("description") or ""
     assert "tokens" in text and "artifact" in text, text
 

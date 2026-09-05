@@ -86,7 +86,6 @@ from ltspice_mcp.tools.experiments import (
     AttachedAnalysis,
     ExperimentCircuit,
     ExperimentExecution,
-    JobsInput,
     RunExperimentsInput,
 )
 from ltspice_mcp.tools.inspect_tools import (
@@ -99,6 +98,7 @@ from ltspice_mcp.tools.inspect_tools import (
     SymbolQuery,
     SymbolsQuery,
 )
+from ltspice_mcp.tools.jobs import JobsInput
 from ltspice_mcp.tools.schematic_edit import (
     ConsolidatedOp,
     EditSchematicInput,

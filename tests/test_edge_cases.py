@@ -653,36 +653,20 @@ class TestValueRecipeRejectsNaNInf:
 
 
 # ---------------------------------------------------------------------------
-# paginate() must floor limit — limit=0 produced a never-advancing next_offset
+# page() must floor limit — limit=0 produced a never-advancing next_cursor
 # ---------------------------------------------------------------------------
 
 
-class TestPaginateLimitFloor:
-    class _Args:
-        def __init__(self, offset=0, limit=50):
-            self.offset = offset
-            self.limit = limit
+class TestPageLimitFloor:
+    def test_the_page_cap_is_the_input_model_s_bound(self):
+        # The cap moved from the paginator to the field that takes the number:
+        # a limit out of range is refused at validation, not clamped after it.
+        from pydantic import ValidationError
 
-    def test_limit_zero_is_floored_and_advances(self):
-        from ltspice_mcp.tools._base import paginate, pagination_metadata
+        from ltspice_mcp.tools.jobs import JobsInput
 
-        page, total, offset, limit = paginate(list(range(10)), self._Args(limit=0))
-        assert limit == 1 and page == [0]
-        meta = pagination_metadata(total, offset, limit)
-        assert meta["has_more"] is True
-        assert meta["next_offset"] == 1  # advances — no livelock
-
-    def test_negative_limit_is_floored(self):
-        from ltspice_mcp.tools._base import paginate
-
-        page, _, _, limit = paginate(list(range(10)), self._Args(offset=2, limit=-5))
-        assert limit == 1 and page == [2]
-
-    def test_cap_still_applies(self):
-        from ltspice_mcp.tools._base import paginate
-
-        _, _, _, limit = paginate(list(range(100)), self._Args(limit=999))
-        assert limit == 50
+        with pytest.raises(ValidationError):
+            JobsInput.model_validate({"action": "list", "limit": 999})
 
 
 # ---------------------------------------------------------------------------
@@ -744,14 +728,14 @@ class TestSanitizePayloadNonFinite:
 class TestResolveNetlistPathSecurityError:
     def test_path_security_error_propagates(self, state_no_sim):
         from ltspice_mcp.errors import PathSecurityError
-        from ltspice_mcp.tools._base import resolve_netlist_path
+        from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 
         with pytest.raises(PathSecurityError):
             resolve_netlist_path("/etc/passwd", state_no_sim)
 
     def test_other_failures_still_wrapped(self, state_no_sim, work_dir):
         from ltspice_mcp.errors import SimulationError
-        from ltspice_mcp.tools._base import resolve_netlist_path
+        from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 
         with pytest.raises(SimulationError, match="not found"):
             resolve_netlist_path(str(work_dir / "missing.cir"), state_no_sim)

@@ -39,6 +39,13 @@ from ltspice_mcp.lib.log_parser import (
     parse_step_iterations,
 )
 from ltspice_mcp.lib.pagination import retotal_page
+from ltspice_mcp.lib.projection import (
+    ABSENT,
+    escape_field_segment,
+    keep_plan,
+    project_row,
+    split_field_path,
+)
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     KeyedRecipe,
@@ -54,19 +61,14 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState, legacy_record_message
 from ltspice_mcp.tools._base import (
-    ABSENT,
     ResponseBudget,
     StrictModel,
     ToolInput,
-    escape_field_segment,
     format_response,
-    keep_plan,
-    project_row,
     registry,
     resolve_response_budget,
     safe_path,
     sanitize_payload,
-    split_field_path,
 )
 
 _ARTIFACT_SAFETY_FACTOR = 4.0
@@ -568,14 +570,25 @@ class _ResolvedRun:
 def _page(
     items: list[Any], offset: int = 0, limit: int = MAX_PAGE_SIZE
 ) -> tuple[dict[str, Any], int]:
-    """One page of ``items`` at this tool's default cap.
+    """One page of ``items``, plus the offset the page after it starts at.
 
     ``next_cursor`` starts null: every resumable view here (per_run,
     coverage.missing_cases) needs a cursor carrying the work position too, so it
     is minted during assembly from the offset this returns. A view that cannot
     be resumed at all — spec.fail_cases — says so in a warning instead.
+
+    Slices rather than calling the guarded ``pagination.page``: the budget
+    ladder legitimately shrinks a limit to zero (that rung shows no rows at
+    all), and this tool's own cursor is what advances the caller, so the
+    never-advancing-loop guard that floors a caller-supplied limit at 1 does
+    not apply.
     """
-    return pagination.page(items, offset, limit)
+    return (
+        pagination.page_of(
+            items[offset : offset + limit], offset=offset, total=len(items), cursor=None
+        ),
+        offset + len(items[offset : offset + limit]),
+    )
 
 
 def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:

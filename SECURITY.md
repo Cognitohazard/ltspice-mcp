@@ -53,14 +53,16 @@ applies to both the server and the library. Relevant considerations:
   server produced. A result addressed by path instead (`raw_path`, `log_file`)
   goes through the normal `allowed_paths` check.
 - **Simulation artifacts can sit outside `allowed_paths`** — normally staged
-  decks and run output go under `{working_dir}/.ltspice-mcp/`. On WSL with
-  LTspice they go to a Windows temp directory instead, because LTspice cannot
-  write the SQLite file behind `.MEAS` results over the `\\wsl.localhost`
-  share. That directory is one per machine, not one per server process: the
-  artifacts of every session on the box sit there together under job-id-
-  prefixed names, readable by anything running as that user. An artifact's
-  provenance comes from the job record that names it, never from its presence
-  in that folder.
+  decks, `.raw` and `.log` files live under the working directory's
+  `.ltspice-mcp/runs/`; on WSL with LTspice they are written to a
+  Windows-native temp directory instead, because LTspice cannot write the
+  SQLite file behind `.MEAS` over a `wsl.localhost` share. That directory is
+  one per machine, not one per server process. Each job gets its own
+  `runs/{job_id}/` subdirectory under it, so a job's artifacts are enumerable
+  as a set rather than by guessing at a filename prefix — but the root is
+  shared, and everything in it is readable by anything running as that user.
+  An artifact's provenance comes from the job record that names it, never
+  from its presence in that folder.
 - **Deck staging trust roots** — before a run, the deck and every file its
   `.include`/`.lib` directives reach are copied into a staging directory and
   hashed. A reference is staged only if it resolves inside

@@ -44,6 +44,7 @@ from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     resolve_pin,
 )
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from tests._asc_ops import apply_ops, sha_of
@@ -188,7 +189,7 @@ class TestCircuitFileLock:
         # that .net holds ITS file lock, so the export guard must contend on
         # the .net lock too — not just the .asc.
         import ltspice_mcp.lib.filelock as lock_mod
-        from ltspice_mcp.tools._base import asc_export_lock
+        from ltspice_mcp.lib.deck_prep import asc_export_lock
 
         monkeypatch.setattr(lock_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
         t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
@@ -223,7 +224,7 @@ def _running_experiment(work_dir: Path, job_id: str, pid: int) -> ExperimentJob:
         fingerprint="f" * 64,
         canonicalizer_version=1,
         control_token="control-secret",
-        store_path=experiment_store.record_path(job_id, work_dir),
+        store_path=Store(work_dir).job_record(job_id),
         cases=[
             ExperimentCase(
                 case_id="case_0000",

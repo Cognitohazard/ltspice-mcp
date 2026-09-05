@@ -9,7 +9,10 @@ from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib.recipes import validate_recipe
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+from ltspice_mcp.tools.experiments import (
+    RunExperimentsInput,
+    handle_run_experiments,
+)
 from tests.conftest import _FakeServer, fake_simulator
 
 

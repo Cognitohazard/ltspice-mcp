@@ -34,7 +34,7 @@ from ltspice_mcp.lib.schematic_ops import make_editor
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
-from ltspice_mcp.tools.experiments import _jobs_error_details
+from ltspice_mcp.tools.jobs import _jobs_error_details
 from tests.conftest import FIXTURES_DIR
 
 

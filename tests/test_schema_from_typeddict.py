@@ -35,7 +35,7 @@ from ltspice_mcp.lib.signal_analysis import (
     window_and_clean,
 )
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools._base import _schema_for_type, schema_from_typeddict
+from ltspice_mcp.tools._schema import _schema_for_type, schema_from_typeddict
 
 
 class TestPrimitives:

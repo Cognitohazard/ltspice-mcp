@@ -19,7 +19,10 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
-from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+from ltspice_mcp.tools.jobs import (
+    JobsInput,
+    handle_jobs,
+)
 from tests.conftest import terminal_experiment
 
 pytestmark = [
