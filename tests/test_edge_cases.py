@@ -68,6 +68,19 @@ class TestSweepPointsEdgeCases:
 # ---------------------------------------------------------------------------
 
 
+class TestParseSpiceMicroSign:
+    """LTspice's netlist exporter spells micro as the µ sign (U+00B5), and a
+    person may type the Greek mu (U+03BC); both are the ``u`` suffix. A value
+    parser that refused them left every exported current source (``20µ``)
+    without a nominal a Monte Carlo rule could perturb."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"), [("20µ", 20e-6), ("20μ", 20e-6), ("4.7µF", 4.7e-6)]
+    )
+    def test_micro_sign_is_the_u_suffix(self, text: str, expected: float):
+        assert parse_spice_value(text) == pytest.approx(expected)
+
+
 class TestParseSpiceCaseSensitivity:
     """SPICE/LTspice scale suffixes are case-insensitive."""
 
