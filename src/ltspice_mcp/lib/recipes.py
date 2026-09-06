@@ -57,6 +57,31 @@ REDUCIBLE_FIELDS: dict[str, tuple[str, ...]] = {
     "return_loss": ("return_loss_db", "vswr", "reflection_coefficient"),
 }
 
+# The result-row key a reducible field reads, where the two names differ. A
+# caller may spell 'field' either way: the row shows one name, the reducible
+# list the other, and both must name the same number.
+MULTI_FIELD_KEYS: dict[str, dict[str, str]] = {
+    "signal_stats": {"stddev": "std"},
+    "edges": {
+        "rise_time": "transition_time",
+        "fall_time": "transition_time",
+        "edges_found": "num_edges_in_window",
+    },
+    "timing": {"from_time": "t_a", "to_time": "t_b"},
+    "periodic": {"duty_cycle": "duty_cycle_pct"},
+    "transient_response": {
+        "final_value": "steady_state_value",
+        "deviation": "max_droop",
+        "undershoot": "max_droop",
+        "overshoot": "max_overshoot",
+    },
+    "stability": {
+        "phase_margin_deg": "phase_margin_worst_deg",
+        "gain_margin_db": "gain_margin_worst_db",
+    },
+    "return_loss": {"reflection_coefficient": "gamma_mag"},
+}
+
 # Which transient_response fields each mode can reduce. A step response and a
 # disturbance response measure different quantities off the same trace, so the
 # reducible field must match the mode.
@@ -252,10 +277,16 @@ class MultiRecipe(RecipeBase):
             metric: str = getattr(self, "metric")  # noqa: B009
             fields = REDUCIBLE_FIELDS.get(metric, ())
             if self.field not in fields:
-                raise ValueError(
-                    f"{metric!r} does not produce reducible field {self.field!r}; "
-                    f"choose one of: {', '.join(fields)}"
-                )
+                keys = MULTI_FIELD_KEYS.get(metric, {})
+                by_key = [name for name in fields if keys.get(name) == self.field]
+                if len(by_key) != 1:
+                    raise ValueError(
+                        f"{metric!r} does not produce reducible field {self.field!r}; "
+                        f"choose one of: {', '.join(fields)}"
+                    )
+                # The caller spelled the row key; carry the one reducible name
+                # downstream (bypassing validate_assignment's re-run of this check).
+                object.__setattr__(self, "field", by_key[0])
         return self
 
 

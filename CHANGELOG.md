@@ -588,6 +588,22 @@ the key ignored. Serving zero tools is still a hard error.
 
 ### Fixed
 
+- A compare reference written outside the sandbox is refused with the
+  alternative named: the deck's text itself, passed as `compare.reference`.
+  A client's scratch directory is usually outside `allowed_paths`, and both
+  tools now resolve the reference the same way, so `edit_schematic` accepts
+  literal netlist text as its description always said (it used to treat the
+  text as a path).
+- A recipe's `field` accepts the result row's own key. `stability` reports
+  `phase_margin_worst_deg`, and passing that name back for a reduction or a
+  spec was refused in favour of `phase_margin_deg`; either spelling now names
+  the number (the one reducible name is carried downstream). A key two fields
+  read, such as `transition_time` under `edges`, is still refused as ambiguous.
+- `edit_schematic` accepts an empty `ops` list when `return_views` is set: the
+  batch runs as a dry run and returns the requested pin table. The whole-sheet
+  table is only reachable through this tool, and reading it used to need a
+  throwaway op.
+
 - Two `run_experiments` calls sharing a `request_id` and fired at the same
   time now stage one set of decks between them, not two. A submission claims
   its `request_id` before it stages: it takes that id's gate, looks the id up,
