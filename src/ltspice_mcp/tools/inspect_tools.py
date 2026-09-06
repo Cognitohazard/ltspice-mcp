@@ -344,6 +344,12 @@ class _View:
     coord_limit: int = field(default_factory=lambda: _COORD_PAGE_SIZE)
     #: Revoke the caller's detail opt-in (``detail='full'``) — the answer rung.
     lean: bool = False
+    #: Whether the budget's shrink rung sized the limits above. Set from the
+    #: rung rather than inferred from a limit, so a kind that names the lever a
+    #: caller should reach for cannot mistake a small page size for a budget
+    #: cut. Out of the comparison because it changes nothing a query READS, so
+    #: two rungs that ask for the same rows still share one pass.
+    shrunk: bool = field(default=False, compare=False)
 
 
 # Every rotation LTspice can place a symbol at, in a stable reported order.
@@ -1441,12 +1447,13 @@ def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
     input models once per process and searched in memory.
 
     ``view`` is how a caller's ``budget`` reaches this kind. The shrink rung
-    lowers the page size below ``REFERENCE_LIMIT_CAP``, and taking the smaller
-    of the two is what lets a tight budget return fewer branches instead of
+    lowers the page size, and taking the smaller of it and the caller's own
+    ``limit`` is what lets a tight budget return fewer branches instead of
     reporting that it could not be met. There is no cursor to leave pointing
     past rows nobody saw, because the caller's own ``limit`` is the handle —
-    and when the budget rather than that limit is what cut the page, the hint
-    says so instead of pointing at a knob the caller already set.
+    and when the budget rather than that limit is what cut the page (the view
+    says whether the budget acted, and the page says whether it cut), the hint
+    names the budget instead of a knob the caller already set.
     """
     if q.query is None:
         return {
@@ -1457,7 +1464,8 @@ def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
             }
         }
 
-    matches, total = search_branches(q.query, limit=min(q.limit, view.limit))
+    page_limit = min(q.limit, view.limit)
+    matches, total = search_branches(q.query, limit=page_limit)
     data: dict[str, Any] = {
         "query": q.query,
         "matches": [entry.as_dict() for entry in matches],
@@ -1473,9 +1481,9 @@ def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
         # Name the lever that is actually free. Under a response budget the
         # page was cut below what the caller asked for, so 'limit' is not the
         # handle; at the cap, raising 'limit' is not possible at all.
-        if view.limit < q.limit:
+        if view.shrunk and page_limit < q.limit:
             lever = (
-                f"The response 'budget' cut this page to {view.limit}; raise it, "
+                f"The response 'budget' cut this page to {page_limit}; raise it, "
                 "or narrow the query."
             )
         elif q.limit < REFERENCE_LIMIT_CAP:
@@ -1873,6 +1881,7 @@ async def _negotiate_inspect(
                 limit=measure.fit_limit(_PAGE_SIZE, rung),
                 coord_limit=measure.fit_limit(_COORD_PAGE_SIZE, rung),
                 lean=rung.answer_channel,
+                shrunk=rung.shrink,
             )
         if built_from != view:
             if view not in passes:
