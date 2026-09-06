@@ -23,7 +23,7 @@ from ltspice_mcp.api._exceptions import (
 )
 from ltspice_mcp.api._primitives import RawResult, load_measurement_results, load_raw_result
 from ltspice_mcp.errors import compact_validation_error
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.state import SessionState
 
@@ -321,11 +321,6 @@ def _note_detached_owner(
     if not isinstance(observations, list):
         observations = []
         receipt["observations"] = observations
-    observations[:] = [
-        item
-        for item in observations
-        if not (isinstance(item, Mapping) and item.get("code") == "process_owned_job")
-    ]
     if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
         detail = (
             f"This job is already terminal. Pid {owner_pid} is the process its "
@@ -344,13 +339,15 @@ def _note_detached_owner(
             "job_id, and stop it with jobs(action='cancel') and this receipt's "
             f"control_token. The owner's console output is at {log_file}."
         )
-    observations.append(
+    experiment_store.replace_code(
+        observations,
+        "process_owned_job",
         {
             "code": "detached_owner",
             "kind": "lifecycle",
             "detail": detail,
             "evidence": {"owner_pid": owner_pid, "log_file": str(log_file)},
-        }
+        },
     )
     return receipt
 
