@@ -9,18 +9,12 @@ single-sourced ``spice://guide`` resource.
 import re
 from importlib.resources import files
 from pathlib import Path
-from typing import cast
 
-import pytest
 from mcp import types
 
-from ltspice_mcp.config import VALID_PROFILES, ServerConfig, ToolProfile
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.variations import MismatchRule
-from ltspice_mcp.resources import (
-    _PROFILE_MARKER_RE,
-    _select_profile_blocks,
-    handle_read_resource,
-)
+from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.server import CONSOLIDATED_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
 
@@ -100,26 +94,22 @@ class TestMismatchExemplarMatchesTheEngineUnit:
         assert "V·µm" in guide, "the guide states the exemplar's unit nowhere"
 
 
-def _guide_for(profile: str, work_dir: Path) -> str:
-    """The guide as a client on ``profile`` receives it, through the resource route."""
-    config = ServerConfig(
-        working_dir=work_dir,
-        allowed_paths=[work_dir],
-        tool_profile=cast("ToolProfile", profile),
-    )
+def _served_guide(work_dir: Path) -> str:
+    """The guide as a client receives it, through the resource route."""
+    config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir])
     state = SessionState.create(config, available={})
     contents = handle_read_resource("spice://guide", state).contents[0]
     assert isinstance(contents, types.TextResourceContents)
     return contents.text
 
 
-class TestGuideIsProfileScoped:
-    """One document, one set of simulator facts, and per-profile tool passages:
-    no profile may be told to call a tool it cannot see."""
+class TestTheServedGuide:
+    """One document: the SPICE facts and the passages naming this server's
+    tools reach every client, and no client may be told to call a tool it
+    cannot see."""
 
-    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
-    def test_simulator_facts_are_shared_by_every_profile(self, profile: str, work_dir: Path):
-        guide = _guide_for(profile, work_dir)
+    def test_simulator_facts_are_served(self, work_dir: Path):
+        guide = _served_guide(work_dir)
         for anchor in (
             "### Value Notation — CRITICAL",
             "ngspice skips `.meas` under the server's",
@@ -127,20 +117,10 @@ class TestGuideIsProfileScoped:
             "### .asc Schematics",
             "LTspice vs ngspice",
         ):
-            assert anchor in guide, f"{profile} guide is missing shared content: {anchor}"
+            assert anchor in guide, f"the served guide is missing shared content: {anchor}"
 
-    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
-    def test_no_fence_markers_reach_the_client(self, profile: str, work_dir: Path):
-        # Matched on the marker pattern, not on the opening spelling: a stray
-        # CLOSING marker is internal markup in front of the client too, and a
-        # substring check for "<!-- profile" would walk straight past it.
-        served = _guide_for(profile, work_dir)
-        assert _PROFILE_MARKER_RE.search(served) is None
-        assert "<!-- profile" not in served
-        assert "<!-- /profile" not in served
-
-    def test_consolidated_maps_the_six_tools_and_replaces_the_asc_entry(self, work_dir: Path):
-        guide = _guide_for("consolidated", work_dir)
+    def test_it_maps_the_six_tools_and_replaces_the_asc_entry(self, work_dir: Path):
+        guide = _served_guide(work_dir)
         assert "## Tool surface on this profile" in guide
         for tool in (
             "run_experiments",
@@ -150,51 +130,6 @@ class TestGuideIsProfileScoped:
             "edit_schematic",
             "verify_circuit",
         ):
-            assert tool in guide, f"consolidated guide never names {tool}"
+            assert tool in guide, f"the guide never names {tool}"
         assert "use the server's schematic tools (`create_schematic`" not in guide
         assert '`edit_schematic(target=..., base="blank")` starts a new sheet' in guide
-
-    def test_a_fence_naming_an_unknown_profile_is_rejected(self):
-        """A misspelled fence matches nobody, so it would delete its block for
-        every profile — a typo whose only symptom is guidance silently gone."""
-        text = "before\n<!-- profile: consolidatd -->\nbody\n<!-- /profile -->\nafter\n"
-        with pytest.raises(ValueError, match="consolidatd"):
-            _select_profile_blocks(text, "consolidated")
-
-    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
-    def test_the_shipped_guide_fences_only_real_profiles(self, profile: str, work_dir: Path):
-        # The same check over the asset itself: reading it must not raise.
-        assert _guide_for(profile, work_dir)
-
-    def test_the_shipped_guide_balances_every_fence(self):
-        """Every opening has its closing, and none nests — measured on the asset
-        rather than assumed, because the failure is silent by nature."""
-        markers = _PROFILE_MARKER_RE.findall(_GUIDE_ASSET.read_text("utf-8"))
-        opens = [close for close in markers if not close]
-        closes = [close for close in markers if close]
-        assert opens and len(opens) == len(closes)
-
-    @pytest.mark.parametrize(
-        ("text", "problem"),
-        [
-            (
-                "before\n<!-- profile: full -->\nbody\nafter\n",
-                "opened but never closed",
-            ),
-            (
-                "<!-- profile: full -->\na\n<!-- profile: agentic -->\nb\n<!-- /profile -->\n",
-                "opened inside another fence",
-            ),
-            (
-                "before\n<!-- /profile -->\nafter\n",
-                "closed but never opened",
-            ),
-        ],
-        ids=["unterminated", "nested", "stray-close"],
-    )
-    def test_a_broken_fence_structure_is_rejected(self, text: str, problem: str):
-        """A fence that does not pair is not recoverable — it silently mis-scopes
-        its block for every profile — so it fails at parse, loudly, like a fence
-        naming a profile nobody has."""
-        with pytest.raises(ValueError, match=problem):
-            _select_profile_blocks(text, "full")

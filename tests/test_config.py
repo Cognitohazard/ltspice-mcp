@@ -161,27 +161,23 @@ class TestServerConfig:
 
 
 class TestToolProfile:
-    """The tool profile is fixed: there is one surface and no setting for it."""
-
-    def test_default_profile_is_consolidated(self):
-        config = ServerConfig()
-        assert config.tool_profile == "consolidated"
+    """There is one tool surface, and no setting names it."""
 
     @pytest.mark.parametrize("value", ["consolidated", "full", "agentic", "bogus"])
     def test_a_profile_key_in_toml_is_not_read(self, work_dir: Path, value: str):
         """``[tools] profile`` is no longer a key this loader knows. Whatever it
-        names, the config that comes back is the one profile the server serves,
-        and the file still loads — an unknown key is ignored like any other."""
+        names, the file still loads and the rest of the section is read — an
+        unknown key is ignored like any other."""
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text(f'[tools]\nprofile = "{value}"\nlisting = "compact"\n')
         config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "consolidated"
+        assert not hasattr(config, "tool_profile")
         assert config.tool_listing == "compact"
 
     def test_a_profile_env_var_is_not_read(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "full")
         config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "consolidated"
+        assert not hasattr(config, "tool_profile")
 
     def test_generated_config_includes_tools_section(self, work_dir: Path):
         path = work_dir / "generated.toml"
@@ -646,7 +642,6 @@ class TestLoadCoversEveryKey:
             "default_budget": 2500,
             "log_level": "DEBUG",
             "symbol_paths": [Path("/tmp/sym-a"), Path("/tmp/sym-b")],
-            "tool_profile": "consolidated",
             "tool_listing": "compact",
             "persist_jobs": False,
             "preload_recent_count": 3,
@@ -678,7 +673,6 @@ class TestLoadCoversEveryKey:
             "default_budget": 3300,
             "log_level": "ERROR",
             "symbol_paths": [Path("/tmp/env-sym-a"), Path("/tmp/env-sym-b")],
-            "tool_profile": "consolidated",
             "tool_listing": "full",
             "persist_jobs": True,
             "preload_recent_count": 7,
@@ -743,7 +737,6 @@ class TestLoadCoversEveryKey:
         assert snapshot["max_estimated_points"] == 1234567
         assert snapshot["max_raw_mb"] == 512
         assert snapshot["log_level"] == "DEBUG"
-        assert snapshot["tool_profile"] == "consolidated"
         assert snapshot["tool_listing"] == "compact"
         assert snapshot["persist_jobs"] is False
         assert snapshot["preload_recent_count"] == 3

@@ -6,10 +6,9 @@ task, with the circuit path (and optional node/signal) filled in. They are a
 human-facing discovery surface, complementary to the tool descriptions and the
 server instructions — those remain the agent's primary orientation channel.
 
-Every prompt is written against one tool profile, and both listing and content
-are profile-scoped: a starter that walks the caller through tools the connected
-client cannot see is a dead end. The consolidated profile (the only one since
-0.6.0) teaches each workflow through its six tools.
+Every prompt is written against the tool surface the client can actually see: a
+starter that walks the caller through tools it cannot call is a dead end. Since
+0.6.0 there is one surface, and each workflow is taught through its six tools.
 """
 
 from collections.abc import Callable, Mapping
@@ -18,21 +17,6 @@ from dataclasses import dataclass
 from mcp import types
 
 PromptBuilder = Callable[[Mapping[str, str]], types.GetPromptResult]
-
-# The prompt editions. A profile reads exactly one of them.
-CONSOLIDATED = "consolidated"
-
-# Total over the valid profiles, not a default with one exception: a profile
-# added to the config without a line here fails loudly instead of silently
-# inheriting an edition that names tools it cannot see. Pinned by test_prompts.
-EDITIONS: dict[str, str] = {
-    "consolidated": CONSOLIDATED,
-}
-
-
-def edition_for(profile: str) -> str:
-    """Which prompt edition a tool profile reads."""
-    return EDITIONS[profile]
 
 
 def _text_result(description: str, text: str) -> types.GetPromptResult:
@@ -115,14 +99,10 @@ def _step_response_consolidated(arguments: Mapping[str, str]) -> types.GetPrompt
 
 @dataclass(frozen=True)
 class _PromptEntry:
-    """One prompt's listing entry plus its per-edition builders.
-
-    A prompt appears in a profile's listing only if it has a builder for that
-    profile's edition, so a listed prompt always has a body to serve.
-    """
+    """One prompt's listing entry and the builder that fills it in."""
 
     prompt: types.Prompt
-    builders: dict[str, PromptBuilder]
+    build: PromptBuilder
 
 
 _PROMPTS = [
@@ -142,9 +122,7 @@ _PROMPTS = [
                 ),
             ],
         ),
-        builders={
-            CONSOLIDATED: _characterize_filter_consolidated,
-        },
+        build=_characterize_filter_consolidated,
     ),
     _PromptEntry(
         prompt=types.Prompt(
@@ -159,9 +137,7 @@ _PROMPTS = [
                 ),
             ],
         ),
-        builders={
-            CONSOLIDATED: _run_and_plot_consolidated,
-        },
+        build=_run_and_plot_consolidated,
     ),
     _PromptEntry(
         prompt=types.Prompt(
@@ -176,25 +152,21 @@ _PROMPTS = [
                 ),
             ],
         ),
-        builders={
-            CONSOLIDATED: _step_response_consolidated,
-        },
+        build=_step_response_consolidated,
     ),
 ]
 
 _BY_NAME = {entry.prompt.name: entry for entry in _PROMPTS}
 
 
-def list_prompts(profile: str) -> list[types.Prompt]:
-    """Workflow-starter prompts this tool profile has an edition for."""
-    edition = edition_for(profile)
-    return [entry.prompt for entry in _PROMPTS if edition in entry.builders]
+def list_prompts() -> list[types.Prompt]:
+    """The workflow-starter prompts this server serves."""
+    return [entry.prompt for entry in _PROMPTS]
 
 
-def get_prompt(name: str, arguments: dict[str, str] | None, profile: str) -> types.GetPromptResult:
-    """Build a prompt's messages for this tool profile, interpolating arguments."""
+def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+    """Build a prompt's messages, interpolating its arguments."""
     entry = _BY_NAME.get(name)
-    builder = entry.builders.get(edition_for(profile)) if entry is not None else None
-    if builder is None:
+    if entry is None:
         raise ValueError(f"Unknown prompt: {name}")
-    return builder(arguments or {})
+    return entry.build(arguments or {})

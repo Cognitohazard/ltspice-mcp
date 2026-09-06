@@ -11,7 +11,6 @@ import re
 
 import pytest
 
-from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
 from ltspice_mcp.tools import get_tools
 from tests.conftest import TOOLS_REMOVED_IN_0_6 as _TOOLS_REMOVED_TUPLE
@@ -65,9 +64,6 @@ class TestExposureCounts:
 
     def test_consolidated_exposes_exactly_the_declared_surface(self):
         assert _names("consolidated") == set(CONSOLIDATED_TOOLS)
-
-    def test_consolidated_is_the_only_profile(self):
-        assert set(VALID_PROFILES) == {"consolidated"}
 
     def test_the_removed_surface_is_really_gone(self):
         # If a 0.5 tool is ever re-registered, the text guards below (and the

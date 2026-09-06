@@ -49,8 +49,8 @@ Config precedence is explicit: constructor keyword arguments beat environment,
 which beats TOML, which beats defaults. `Api(working_dir=...)` resolves the
 TOML **under that directory**, not the process CWD, and the `allowed_paths`
 defaults follow it. An unknown or irrelevant constructor override raises
-`TypeError` rather than being silently ignored (`tool_profile` is irrelevant
-here and is rejected).
+`TypeError` rather than being silently ignored (a wire-only or server-only name
+such as `tool_profile` is rejected here rather than quietly accepted).
 
 Library mode never calls `logging.basicConfig`. The server's `force=True`
 logging setup stays in server startup; the library uses module loggers only.

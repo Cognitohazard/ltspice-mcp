@@ -15,9 +15,6 @@ from ltspice_mcp.lib import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-ToolProfile = Literal["consolidated"]
-VALID_PROFILES: frozenset[str] = frozenset({"consolidated"})
-
 ToolListing = Literal["full", "compact"]
 VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact"})
 
@@ -542,11 +539,6 @@ class ServerConfig:
     symbol_paths: list[Path] = field(default_factory=list)
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
     On Windows and WSL these are auto-detected; set this to override."""
-
-    tool_profile: ToolProfile = "consolidated"
-    """Tool profile: the six-tool surface plus the plot widget. There is one
-    profile and no setting for it — the guide and the prompts are written per
-    profile, so the name stays as the key they are selected by."""
 
     tool_listing: ToolListing = "full"
     """How much of each tool definition the tool list carries.
