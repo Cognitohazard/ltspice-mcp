@@ -57,7 +57,6 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     StepSelector,
     WaveformRecipe,
-    recipe_error,
     validate_recipe,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
@@ -74,6 +73,7 @@ from ltspice_mcp.tools._base import (
     safe_path,
     sanitize_payload,
 )
+from ltspice_mcp.tools.reference_index import validation_error_detail
 
 _ARTIFACT_SAFETY_FACTOR = 4.0
 _MIN_ITEM_DEADLINE_S = 0.05
@@ -3396,7 +3396,7 @@ async def _evaluate_analysis_drive(
                     code="recipe_invalid",
                     stage="validate",
                     where=f"recipes[{work_item['index']}]",
-                    message=recipe_error(exc),
+                    message=validation_error_detail("analyze_results", exc),
                 )
             )
             continue

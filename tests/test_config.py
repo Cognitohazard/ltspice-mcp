@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 import ltspice_mcp.config as config_module
-from ltspice_mcp.config import ServerConfig, generate_default_config
+from ltspice_mcp.config import (
+    ServerConfig,
+    claude_scratch_root,
+    default_allowed_paths,
+    generate_default_config,
+)
 
 
 class TestServerConfig:
@@ -37,9 +42,10 @@ class TestServerConfig:
         monkeypatch.setattr(config_module.os, "cpu_count", lambda: None)
         assert ServerConfig().max_parallel_sims == 4
 
-    def test_allowed_paths_defaults_to_working_dir(self):
+    def test_allowed_paths_defaults_to_working_dir_and_scratch_root(self):
         config = ServerConfig()
-        assert config.allowed_paths == [config.working_dir]
+        assert config.allowed_paths == default_allowed_paths(config.working_dir)
+        assert config.allowed_paths[0] == config.working_dir
 
     def test_load_from_toml(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
@@ -130,6 +136,20 @@ class TestServerConfig:
         assert "allowed_paths" in content
         assert "analysis_budget_s" in content
         assert "result_set_ttl_hours" in content
+
+    def test_default_sandbox_includes_the_claude_scratch_root(self, work_dir: Path):
+        """Claude Code tells an agent to write throwaway files to its scratch
+        directory, outside the working directory; the default sandbox admits
+        it so a deck written there runs without a copy first."""
+        root = claude_scratch_root()
+        assert root is not None
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        # The generated file documents the default without pinning a machine-
+        # specific path, so the same default reaches the file-less library boot.
+        assert "claude-<uid>" in path.read_text()
+        assert root in ServerConfig.load(path).allowed_paths
+        assert root in ServerConfig(working_dir=work_dir).allowed_paths
 
     def test_analysis_budget_and_result_ttl_load_from_toml(
         self,
@@ -794,7 +814,7 @@ class TestLoadCoversEveryKey:
         assert config.ngbehavior is None
         assert config.enabled_simulators == []
         # A scalar string must NOT be expanded character-wise into paths.
-        assert config.allowed_paths == [config.working_dir]
+        assert config.allowed_paths == default_allowed_paths(config.working_dir)
         assert config.symbol_paths == []
         assert config.max_parallel_sims == defaults.max_parallel_sims
         assert config.max_experiment_cases == defaults.max_experiment_cases

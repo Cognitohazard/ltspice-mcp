@@ -227,7 +227,7 @@ path = ""                # explicit executable path (required on WSL)
 ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
 
 [security]
-allowed_paths = ["."]    # sandbox: only these directories are accessible
+# allowed_paths = ["."]  # sandbox; unset = working dir + the Claude Code scratch dir (<tempdir>/claude-<uid>)
 
 [simulation]
 # max_parallel = 4       # default: number of CPU cores, capped at 8

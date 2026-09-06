@@ -916,6 +916,25 @@ class TestErrorHandling:
         assert _text(result).startswith("Invalid arguments for edit_schematic:")
         assert not (shared_work_dir / "bad.asc").exists()
 
+    async def test_a_bad_field_inside_a_known_op_gets_that_ops_reference(
+        self, shared_session: ClientSession
+    ):
+        op = {
+            "op": "add_component",
+            "reference": "R1",
+            "symbol": "res",
+            "x": 0,
+            "y": 0,
+            "bogus": 1,
+        }
+        result = await _call(
+            shared_session, "edit_schematic", {"target": "bad.asc", "base": "blank", "ops": [op]}
+        )
+        assert result.is_error
+        text = _text(result)
+        assert "bogus" in text
+        assert "Reference for add_component:" in text
+
     async def test_unknown_jobs_action_names_the_legal_set(self, shared_session: ClientSession):
         result = await _call(shared_session, "jobs", {"action": "frobnicate"})
         assert result.is_error

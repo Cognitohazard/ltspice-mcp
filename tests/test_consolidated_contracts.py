@@ -617,7 +617,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # pointer names the MCP reference lookup with the query that finds it, and
     # it carries the marker that keeps that one sentence on the compact
     # listing, where the branch has nothing else at all.
-    "analyze_results": 18700,
+    # The multi-field and keyed recipes each state in the schema itself that
+    # 'field' is required once 'reduce' or 'spec' is given (dependentRequired),
+    # so the rule survives the compact listing.
+    "analyze_results": 18900,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

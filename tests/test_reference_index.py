@@ -15,7 +15,12 @@ import pytest
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import reference_index
-from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
+from ltspice_mcp.tools.reference_index import (
+    build_index,
+    search_branches,
+    table_of_contents,
+    validation_error_detail,
+)
 
 
 def _entries():
@@ -319,3 +324,31 @@ class TestSearch:
             assert expected in [(hit.tool, hit.name) for hit in hits], (
                 f"{phrase!r} returned " + ", ".join(f"{h.tool}.{h.name}" for h in hits)
             )
+
+
+class TestErrorReference:
+    """A validation error that names a branch carries that branch's field table,
+    so the caller corrects the call from the error instead of looking it up."""
+
+    def test_a_branch_error_carries_that_branchs_field_table(self):
+        from pydantic import ValidationError
+
+        from ltspice_mcp.lib.recipes import validate_recipe
+
+        with pytest.raises(ValidationError) as excinfo:
+            validate_recipe(
+                {"key": "s", "metric": "stability", "signal": "V(out)", "reduce": ["min"]}
+            )
+        text = validation_error_detail("analyze_results", excinfo.value)
+        assert "set 'field'" in text
+        assert "Reference for stability:" in text
+        assert "field (" in text
+
+    def test_an_error_naming_no_branch_adds_no_reference(self):
+        from pydantic import ValidationError
+
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput
+
+        with pytest.raises(ValidationError) as excinfo:
+            EditSchematicInput.model_validate({})
+        assert "Reference for" not in validation_error_detail("edit_schematic", excinfo.value)
