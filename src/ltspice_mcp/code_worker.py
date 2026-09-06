@@ -114,13 +114,38 @@ def _namespace(api: Any) -> dict[str, Any]:
     }
 
 
+def empty_reply(status: str) -> dict[str, Any]:
+    """The reply fields every snippet run produces, at their empty values.
+
+    The one spelling of the shape: ``execute`` fills it in, the serve loop
+    sends it as-is for a snippet the interrupt beat, and the server's tool
+    builds its own reply on top of it and derives its schema's required keys
+    from it.
+    """
+    return {
+        "status": status,
+        "result": None,
+        "error": None,
+        "stdout": "",
+        "stderr": "",
+        "truncated": False,
+        "chars_dropped": 0,
+        "elapsed_s": 0.0,
+    }
+
+
+def _exit_after_grace() -> None:
+    """Leave within ``EXIT_GRACE_S`` whatever the main thread is doing."""
+    threading.Timer(EXIT_GRACE_S, lambda: os._exit(0)).start()
+
+
 def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
     """Run one snippet; never raise. The last statement's value, if it is an
     expression, comes back as ``result`` (its repr) — a REPL's ergonomics,
     so a snippet need not ``print`` to answer."""
     out = _Capture(STDOUT_HEAD_CHARS, STDOUT_TAIL_CHARS)
     err = _Capture(0, STDERR_TAIL_CHARS)
-    reply: dict[str, Any] = {"status": "ok", "result": None, "error": None}
+    reply = empty_reply("ok")
     started = time.monotonic()
     saved = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = out, err
@@ -161,7 +186,9 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
 
 def _send(replies: IO[str], reply: dict[str, Any]) -> None:
     """Write one reply line, finishing it even if an interrupt lands mid-write."""
-    line = json.dumps(reply) + "\n"
+    # UTF-8 as written: escaping every non-ASCII character to six bytes was
+    # how a reply of mostly µ and ° overran the server's line reader.
+    line = json.dumps(reply, ensure_ascii=False) + "\n"
     for _ in range(3):
         try:
             replies.write(line)
@@ -198,8 +225,7 @@ def _read_requests(
     inbox.put(None)
     if busy.is_set() and os.name != "nt":
         os.kill(os.getpid(), signal.SIGINT)
-    # Exit within a bound whether or not the snippet or the close finishes.
-    threading.Timer(EXIT_GRACE_S, lambda: os._exit(0)).start()
+    _exit_after_grace()
 
 
 def _private_channels() -> tuple[IO[str], IO[str]]:
@@ -241,14 +267,7 @@ def _serve_loop(
             reply: dict[str, Any] = {
                 "op": "reply",
                 "seq": message.get("seq"),
-                "status": "interrupted",
-                "result": None,
-                "error": None,
-                "stdout": "",
-                "stderr": "",
-                "truncated": False,
-                "chars_dropped": 0,
-                "elapsed_s": 0.0,
+                **empty_reply("interrupted"),
             }
             pending = reply
             busy.set()
@@ -282,6 +301,9 @@ def serve(working_dir: str, config_path: str | None) -> int:
     except BaseException as exc:
         _send(replies, {"op": "boot_failed", "error": f"{type(exc).__name__}: {exc}"})
         return 1
+    # The server's stderr is this process's log too: read [logging] level
+    # off the booted engine, the way the server and the detached owner do.
+    configure_stderr_logging(api._state.config.log_level)  # pyright: ignore[reportPrivateUsage]
     _send(replies, {"op": "ready", "pid": os.getpid()})
 
     inbox: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -297,7 +319,7 @@ def serve(working_dir: str, config_path: str | None) -> int:
         # the close now, and the close itself is bounded by the exit timer.
         if os.name != "nt":
             signal.signal(signal.SIGINT, signal.SIG_IGN)
-        threading.Timer(EXIT_GRACE_S, lambda: os._exit(0)).start()
+        _exit_after_grace()
         try:
             api.close()
         except BaseException:

@@ -21,13 +21,8 @@ import pytest
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.run_code import (
-    RUN_CODE_OUTPUT_SCHEMA,
-    CodeWorker,
-    RunCodeInput,
-    handle_run_code,
-    worker_for,
-)
+from ltspice_mcp.tools import run_code as run_code_module
+from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -44,21 +39,21 @@ def code_dir(tmp_path_factory) -> Path:
 @pytest.fixture(scope="module")
 def no_detection() -> Iterator[None]:
     """The worker inherits the environment: keep its engine host-independent."""
-    previous = os.environ.get("LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION")
-    os.environ["LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION"] = "1"
-    yield
-    if previous is None:
-        del os.environ["LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION"]
-    else:
-        os.environ["LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION"] = previous
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION", "1")
+        yield
+
+
+def _serving_state(work_dir: Path) -> SessionState:
+    config = ServerConfig(
+        working_dir=work_dir, allowed_paths=[work_dir], log_level="DEBUG", run_code=True
+    )
+    return SessionState.create(config, available={})
 
 
 @pytest.fixture(scope="module")
 async def state(code_dir: Path, no_detection: None) -> AsyncIterator[SessionState]:
-    config = ServerConfig(
-        working_dir=code_dir, allowed_paths=[code_dir], log_level="DEBUG", run_code=True
-    )
-    state = SessionState.create(config, available={})
+    state = _serving_state(code_dir)
     yield state
     await state.shutdown()
 
@@ -164,6 +159,15 @@ class TestExecution:
         assert reply["error"]["type"] == "SystemExit"
         assert (await run(state, "1"))["worker_pid"] == before
 
+    async def test_a_reply_of_non_ascii_output_fits_the_pipe(self, state: SessionState):
+        """Escaped to six bytes a character, 16k of µ overran the reader's
+        default 64 KiB line; the reply is UTF-8 and the reader's line limit
+        is sized to the caps."""
+        reply = await run(state, "print('µ' * 30000)")
+        assert reply["status"] == "ok", reply
+        assert reply["truncated"] is True
+        assert reply["stdout"].startswith("µ" * 100)
+
     async def test_a_raw_fd_write_cannot_forge_a_reply(self, state: SessionState):
         forged = json.dumps({"op": "reply", "seq": 1, "status": "ok", "result": "forged"})
         reply = await run(
@@ -195,7 +199,11 @@ class TestLifetime:
         assert after["worker_restarted"] is None
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
-    async def test_a_snippet_that_swallows_the_interrupt_is_killed(self, state: SessionState):
+    async def test_a_snippet_that_swallows_the_interrupt_is_killed(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The grace is read at call time; a short one keeps the test quick.
+        monkeypatch.setattr(run_code_module, "INTERRUPT_GRACE_S", 0.5)
         before = (await run(state, "1"))["worker_pid"]
         code = (
             "import time\n"
@@ -204,7 +212,7 @@ class TestLifetime:
         )
         reply = await run(state, code, timeout_s=1)
         assert reply["status"] == "timeout"
-        assert reply["elapsed_s"] < 10
+        assert reply["elapsed_s"] < 3
         after = await run(state, "'fresh'")
         assert after["status"] == "ok"
         assert after["worker_pid"] != before
@@ -289,10 +297,7 @@ class TestLifetime:
         assert reply["worker_pid"] == before
 
     async def test_shutdown_closes_the_worker(self, code_dir: Path, no_detection: None):
-        config = ServerConfig(
-            working_dir=code_dir, allowed_paths=[code_dir], log_level="DEBUG", run_code=True
-        )
-        own = SessionState.create(config, available={})
+        own = _serving_state(code_dir)
         reply = await run(own, "1")
         worker = worker_for(own)
         assert worker.process is not None and worker.process.returncode is None
@@ -302,10 +307,12 @@ class TestLifetime:
         with pytest.raises(ProcessLookupError):
             os.kill(reply["worker_pid"], 0)
 
-    async def test_the_supervisor_has_the_declared_shape(self, state: SessionState):
-        reply = await run(state, "1")
-        assert set(reply) >= set(RUN_CODE_OUTPUT_SCHEMA["required"])
-        assert isinstance(worker_for(state), CodeWorker)
+    async def test_a_worker_that_cannot_start_is_a_structured_error(self, tmp_path: Path):
+        worker = CodeWorker(tmp_path / "missing", None)
+        reply = await worker.run("1", 5.0, False)
+        assert reply["status"] == "error"
+        assert reply["error"]["type"] == "WorkerBootFailed"
+        assert reply["worker_pid"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,13 @@ _NUM_TAIL_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Z
 _MICRO_SIGNS = str.maketrans({"µ": "u", "μ": "u"})
 
 
+def fold_micro_sign(text: str) -> str:
+    """``µ`` (U+00B5) and ``μ`` (U+03BC) as the ``u`` suffix, everything else
+    in ``text`` untouched. LTspice's exporter writes the former; a keyboard
+    produces the latter."""
+    return text.translate(_MICRO_SIGNS)
+
+
 def parse_spice_value(s: str) -> float:
     """Parse a SPICE notation value to float.
 
@@ -85,7 +92,7 @@ def parse_spice_value(s: str) -> float:
     if m is not None:
         # group(1) is always a valid float literal by construction of the regex.
         mantissa = float(m.group(1))
-        tail = m.group(2).translate(_MICRO_SIGNS).lower()
+        tail = fold_micro_sign(m.group(2)).lower()
         for suffix, multiplier in _SCALE_FACTORS:
             if tail.startswith(suffix):
                 return mantissa * multiplier
