@@ -28,6 +28,7 @@ from ltspice_mcp.api import (
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.state import SessionState
+from tests.conftest import wait_until
 
 
 class _StubState:
@@ -62,14 +63,12 @@ def _patch_stub_bootstrap(
     return selected
 
 
-def _wait_for_status(api: Api, expected: str, timeout: float = 2.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def _wait_for_status(api: Api, expected: str) -> None:
+    def reached() -> bool:
         with api._lifecycle_lock:
-            if api._status == expected:
-                return
-        time.sleep(0.005)
-    pytest.fail(f"Api did not reach status {expected!r}")
+            return api._status == expected
+
+    wait_until(reached, what=f"the Api to reach status {expected!r}")
 
 
 def test_exception_hierarchy_and_python_api_method_surface() -> None:

@@ -46,7 +46,7 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import fake_simulator, staged_decks
+from tests.conftest import await_until, fake_simulator, staged_decks
 
 
 class MockSimulator:
@@ -56,6 +56,11 @@ class MockSimulator:
 # Positive so the stored record round-trips it (pid_of drops pid <= 0);
 # liveness is monkeypatched per test.
 _FOREIGN_PID = 999_999_999
+
+# The cancel paths here run a real process-table scan, whose duration scales
+# with system load (parallel workers, live simulators on the box). The bound
+# catches a hang; it does not assert a latency.
+_CANCEL_PATH_TIMEOUT_S = 15.0
 
 
 def _circuit(work_dir: Path, name: str = "deck.cir") -> Path:
@@ -454,18 +459,6 @@ def test_top_level_properties_describe_what_every_action_shares():
             if name == "action":
                 continue
             assert branch["properties"][name] == schema
-
-
-async def _wait_for(condition, *, timeout_s: float = 15.0) -> None:
-    # The bound exists to catch a hang, not to assert latency: the cancel
-    # paths under test run a real process-table scan, whose duration scales
-    # with system load (parallel test workers, live simulators on the box).
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    while not condition():
-        if loop.time() >= deadline:
-            pytest.fail("condition was not met before the test deadline")
-        await asyncio.sleep(0.005)
 
 
 @pytest.mark.asyncio
@@ -1184,7 +1177,11 @@ class TestCancellationAuthority:
         # checkpoints each re-persist the record under THIS pid, so a foreign
         # pid written before them is overwritten and the job reads as locally
         # owned with no live coordinator.
-        await _wait_for(lambda: bool(callbacks) and receipt.job.cases[0].status == "running")
+        await await_until(
+            lambda: bool(callbacks) and receipt.job.cases[0].status == "running",
+            timeout_s=_CANCEL_PATH_TIMEOUT_S,
+            what="the case to start running",
+        )
         receipt.job.owner_pid = _FOREIGN_PID
         await asyncio.to_thread(experiment_store.save_job, receipt.job)
         foreign_state = SessionState.create(state_no_sim.config, available={})
@@ -1224,7 +1221,11 @@ class TestCancellationAuthority:
         assert settled["status"] == "cancelled"
         callback = next(iter(callbacks.values()))
         callback(RunOutcome("", str(work_dir / "cancelled.fail"), 0, "killed"))
-        await _wait_for(lambda: not runner.has_active_work())
+        await await_until(
+            lambda: not runner.has_active_work(),
+            timeout_s=_CANCEL_PATH_TIMEOUT_S,
+            what="the runner to finish its work",
+        )
 
     async def test_neither_token_nor_ownership_is_rejected(
         self,
