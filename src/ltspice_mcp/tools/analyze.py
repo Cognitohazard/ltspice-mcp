@@ -2857,7 +2857,8 @@ def render_attached_analysis(
                     data,
                     "Analysis is partial because the response budget reduced the "
                     "per_run page; call analyze_results with "
-                    "continue={result_set_id, cursor} from 'next'.",
+                    "continue={result_set_id, cursor} from 'next', or read the "
+                    "complete set through the Python API (ltspice_mcp.api).",
                 )
         if row_limit is not None:
             groups = entry.get("groups")
@@ -2930,7 +2931,8 @@ def render_attached_analysis(
             response_budget.append_hint(
                 data,
                 f"Analysis is partial because {reason}; call analyze_results with "
-                "continue={result_set_id, cursor} from 'next'.",
+                "continue={result_set_id, cursor} from 'next', or read the complete "
+                "set through the Python API (ltspice_mcp.api).",
             )
         coverage = data.get("coverage")
         missing_page = coverage.get("missing_cases") if isinstance(coverage, dict) else None
