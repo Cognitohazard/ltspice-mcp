@@ -673,7 +673,7 @@ def build_simulation_summary(
     *,
     step: int = 0,
     requested: dict[str, list[str]] | None = None,
-    value_scan: str = "off",
+    value_scan: bool = False,
     source_amplitudes: dict[str, float] | None = None,
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
@@ -688,9 +688,9 @@ def build_simulation_summary(
         requested: Parsed ``.meas``/``.four`` names from the deck, for the
             requested-vs-produced reconciliation in the observation surfacer.
             None when the caller has no netlist (skips reconciliation).
-        value_scan: Whether to surface value facts — ``"scan"`` (this ``raw``
-            has its traces loaded; scan them for non-finite and extreme values)
-            or ``"off"`` (value surfacing does not apply to this caller).
+        value_scan: Whether to load this ``raw``'s traces and scan them for
+            non-finite and extreme values. False where value surfacing does
+            not apply to the caller.
         source_amplitudes: Parsed independent voltage-source amplitudes from
             the deck (``parse_source_amplitudes``); arms the source-relative
             extreme-value observation. None when the caller has no netlist.
@@ -916,7 +916,7 @@ def build_simulation_summary(
     # ``result_observations``). Always present, possibly empty. Value traces are
     # extracted here only when the caller signalled they're loaded.
     value_traces: dict | None = None
-    if value_scan == "scan":
+    if value_scan:
         # The sweep axis (time / frequency / DC source) is trace 0 and isn't a
         # signal worth scanning. Skip it only when the raw actually HAS an axis:
         # an operating-point raw has none, so ITS trace 0 is a real node, and
@@ -949,7 +949,6 @@ def build_simulation_summary(
         summary,
         requested=requested,
         value_traces=value_traces,
-        value_scan=value_scan,
         source_amplitudes=source_amplitudes,
     )
 

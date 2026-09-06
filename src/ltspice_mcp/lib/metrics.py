@@ -926,7 +926,7 @@ async def summary(
                 log_path,
                 None,
                 step=step,
-                value_scan="scan",
+                value_scan=True,
                 requested=requested,
                 source_amplitudes=source_amplitudes,
             ),
