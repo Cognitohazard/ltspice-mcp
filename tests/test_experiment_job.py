@@ -47,6 +47,7 @@ from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from tests.conftest import staged_decks
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -144,8 +145,7 @@ def _barrier_process(
         state=cast("SessionState", state),
         request_id=request_id,
         fingerprint=fingerprint,
-        cases=[_case(circuit)],
-        sources=[_source(circuit)],
+        stage=staged_decks([_case(circuit)], [_source(circuit)]),
         simulator="FakeSim",
         job_id=job_id,
     )
@@ -931,8 +931,7 @@ class TestRequestBarrier:
             state=state_no_sim,
             request_id="versioned-request",
             fingerprint="a" * 64,
-            cases=[_case(circuit)],
-            sources=[_source(circuit)],
+            stage=staged_decks([_case(circuit)], [_source(circuit)]),
             simulator="FakeSim",
             job_id="exp_new_version",
         )
@@ -958,8 +957,7 @@ class TestRequestBarrier:
             state=state_no_sim,
             request_id=request_id,
             fingerprint="a" * 64,
-            cases=[_case(circuit)],
-            sources=[_source(circuit)],
+            stage=staged_decks([_case(circuit)], [_source(circuit)]),
             simulator="FakeSim",
             job_id="exp_recreated",
         )
@@ -994,8 +992,7 @@ class TestRequestBarrier:
             state=state_no_sim,
             request_id="indexed-request",
             fingerprint=existing.fingerprint,
-            cases=[_case(circuit)],
-            sources=[_source(circuit)],
+            stage=staged_decks([_case(circuit)], [_source(circuit)]),
             simulator="FakeSim",
             job_id="exp_candidate",
         )
@@ -1190,8 +1187,7 @@ def test_persist_jobs_false_submission_fails_clearly(
             state=state_no_sim,
             request_id="no-persistence",
             fingerprint="a" * 64,
-            cases=[_case(circuit)],
-            sources=[_source(circuit)],
+            stage=staged_decks([_case(circuit)], [_source(circuit)]),
             simulator="FakeSim",
         )
         with pytest.raises(SimulationError, match=r"persist_jobs = true"):

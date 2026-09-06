@@ -45,7 +45,7 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import fake_simulator
+from tests.conftest import fake_simulator, staged_decks
 
 
 class MockSimulator:
@@ -1140,8 +1140,7 @@ class TestCancellationAuthority:
                     state=state_no_sim,
                     request_id="foreign-token-request",
                     fingerprint="a" * 64,
-                    cases=template.cases,
-                    sources=template.sources,
+                    stage=staged_decks(template.cases, template.sources),
                     simulator="MockSimulator",
                     kill_grace_s=0.01,
                 )
