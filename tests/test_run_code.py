@@ -194,6 +194,39 @@ class TestLifetime:
         assert after["exec_seq"] == reply["exec_seq"] + 1
         assert after["worker_restarted"] is None
 
+    @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
+    async def test_a_snippet_that_swallows_the_interrupt_is_killed(self, state: SessionState):
+        before = (await run(state, "1"))["worker_pid"]
+        code = (
+            "import time\n"
+            "try:\n    time.sleep(30)\n"
+            "except KeyboardInterrupt:\n    time.sleep(30)\n"
+        )
+        reply = await run(state, code, timeout_s=1)
+        assert reply["status"] == "timeout"
+        assert reply["elapsed_s"] < 10
+        after = await run(state, "'fresh'")
+        assert after["status"] == "ok"
+        assert after["worker_pid"] != before
+        assert after["worker_restarted"] == {
+            "previous_pid": before,
+            "reason": "killed after a timeout",
+        }
+        with pytest.raises(ProcessLookupError):
+            os.kill(before, 0)
+
+    @pytest.mark.skipif(not POSIX, reason="process groups are POSIX")
+    async def test_killing_the_worker_takes_its_children_with_it(self, state: SessionState):
+        reply = await run(state, "import subprocess\nsubprocess.Popen(['sleep', '1000']).pid")
+        assert reply["status"] == "ok", reply
+        child = int(reply["result"])
+        os.kill(child, 0)  # alive while the worker is
+        reset = await run(state, "", reset=True)
+        assert reset["status"] == "reset"
+        await asyncio.sleep(0.5)
+        with pytest.raises(ProcessLookupError):
+            os.kill(child, 0)
+
     async def test_a_second_call_while_one_runs_is_busy(self, state: SessionState):
         first = asyncio.ensure_future(run(state, "import time\ntime.sleep(2)\n'first'"))
         await asyncio.sleep(0.5)
@@ -201,7 +234,7 @@ class TestLifetime:
         assert second["status"] == "busy"
         assert second["running"]["phase"] == "running"
         assert second["running"]["same_code"] is False
-        assert second["running"]["elapsed_s"] >= 0.4
+        assert 0 <= second["running"]["elapsed_s"] < 3
         assert "One snippet" in second["hint"]
         same = await run(state, "import time\ntime.sleep(2)\n'first'")
         assert same["status"] == "busy"

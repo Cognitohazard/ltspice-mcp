@@ -173,6 +173,18 @@ RUN_CODE_OUTPUT_SCHEMA: dict[str, Any] = {
 _EOF: dict[str, Any] = {"op": "eof"}
 
 
+def _reap_session(pid: int) -> None:
+    """Kill what is left of the worker's session (POSIX: it was started as a
+    session leader, so its pid is the group id). A child a snippet spawned
+    would otherwise outlive the worker; a simulator LTspice launched over WSL
+    interop is a Windows process and is not reached, and its job record,
+    owned by a dead pid, reads as interrupted."""
+    if os.name == "nt":
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pid, signal.SIGKILL)
+
+
 @dataclass
 class _Running:
     seq: int
@@ -230,6 +242,10 @@ class CodeWorker:
                 self.restarted = {"previous_pid": previous, "reason": "the worker exited"}
 
     async def _kill(self) -> None:
+        """Kill the worker and, on POSIX, everything in its session: a child
+        the snippet spawned would otherwise outlive it (a simulator LTspice
+        launched over WSL interop is a Windows process and is not reached;
+        its job record, owned by a dead pid, reads as interrupted)."""
         process = self.process
         if process is None:
             return
@@ -237,6 +253,7 @@ class CodeWorker:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
             await process.wait()
+        _reap_session(process.pid)
         self.process = None
 
     def _interrupt(self) -> None:
@@ -263,11 +280,11 @@ class CodeWorker:
         if self.running is not None:
             self._interrupt()
         await self._send({"op": "close"})
-        try:
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self.process.wait(), grace_s)
-        except TimeoutError:
-            await self._kill()
-        self.process = None
+        # Exited or not, the worker and whatever its snippets spawned go
+        # together: a graceful exit leaves a child it started still running.
+        await self._kill()
         self.running = None
 
     # -- protocol ------------------------------------------------------------
