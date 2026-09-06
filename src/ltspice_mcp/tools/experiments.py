@@ -1074,40 +1074,6 @@ async def _load_matching_replay(
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
-#: The same event told to the caller it happened to. Rendered from that call's
-#: own replay flag and never from the record, so a receipt says "your
-#: submission was answered from an existing job" only on the call that was.
-REPLAY_CALL_DETAIL = (
-    "This call's request_id and canonical payload matched an existing durable "
-    "experiment; its receipt was returned and no cases were submitted."
-)
-
-
-def address_replay_note_to_this_call(data: dict[str, Any]) -> dict[str, Any]:
-    """Retell the record's replay note for the call that replayed.
-
-    ``ExperimentReceipt.replayed`` is a fact about one call and reaches the
-    wire nowhere else; the record's note is a fact about the record. Without
-    this, the only replay signal a client ever sees is the durable one, which
-    describes the original submitter's own call back to it wrongly.
-    """
-    observations = data.get("observations")
-    if not isinstance(observations, list):
-        return data
-    for item in observations:
-        if isinstance(item, dict) and item.get("code") == "idempotent_replay":
-            item["detail"] = REPLAY_CALL_DETAIL
-            return data
-    observations.append(
-        {
-            "code": "idempotent_replay",
-            "kind": "submission",
-            "detail": REPLAY_CALL_DETAIL,
-        }
-    )
-    return data
-
-
 async def _dwell_and_respond(
     receipt: ExperimentReceipt,
     wait_s: float,
@@ -1149,8 +1115,7 @@ async def _dwell_and_respond(
             analysis_answer_channel=rung is not None and rung.answer_channel,
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         )
-        if receipt.replayed:
-            address_replay_note_to_this_call(data)
+        data["replayed"] = receipt.replayed
         return finalize_receipt(data), text
 
     return await render_run_receipt(budget, build)
@@ -1397,6 +1362,7 @@ async def _post_submit_error_response(
         # the running job reachable rather than losing the handles with it.
         data = _empty_payload(job.request_id)
         data.update(handles)
+    data["replayed"] = receipt.replayed
     route = (
         f"The experiment was submitted and is running. Use jobs(status) with job_id "
         f"{job.job_id} to follow it, or jobs(cancel) with that job_id and its "
@@ -1462,4 +1428,6 @@ def _empty_payload(request_id: str) -> dict[str, Any]:
         "warnings": [],
         "artifacts": [],
         "hint": "",
+        # Nothing came back, so nothing was answered from an existing job.
+        "replayed": False,
     }

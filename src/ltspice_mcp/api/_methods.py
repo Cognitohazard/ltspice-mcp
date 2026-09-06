@@ -265,22 +265,8 @@ async def _complete_run_receipt(
     # The complete receipt is re-rendered from the record, which knows only
     # what happened to it. Whether THIS call replayed is on the handler's
     # receipt and nowhere else, so it is carried across rather than re-derived.
-    if _receipt_replayed(receipt):
-        experiments.address_replay_note_to_this_call(data)
+    data["replayed"] = bool(receipt.get("replayed"))
     return experiments.finalize_receipt(data)
-
-
-def _receipt_replayed(receipt: Mapping[str, Any]) -> bool:
-    """Whether the handler already told this caller its submission replayed."""
-    observations = receipt.get("observations")
-    if not isinstance(observations, list):
-        return False
-    return any(
-        isinstance(item, Mapping)
-        and item.get("code") == "idempotent_replay"
-        and item.get("detail") == experiments.REPLAY_CALL_DETAIL
-        for item in observations
-    )
 
 
 def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
