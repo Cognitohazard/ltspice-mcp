@@ -65,10 +65,17 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeAlias, get_args
+from typing import Annotated, Any, Literal, TypeAlias
 
 from mcp import types
-from pydantic import Field, SkipValidation, TypeAdapter, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SkipValidation,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from ltspice_mcp.errors import (
     LTSpiceMCPError,
@@ -83,6 +90,7 @@ from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
 from ltspice_mcp.lib.lint_rules import linter_version
+from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
@@ -549,9 +557,9 @@ Query: TypeAlias = Annotated[
 ]
 
 _QUERY_ADAPTER = TypeAdapter(Query)
-QUERY_MODELS: tuple[type[StrictModel], ...] = get_args(get_args(Query)[0])
+QUERY_MODELS: tuple[type[BaseModel], ...] = model_union(Query)
 SUPPORTED_KINDS: tuple[str, ...] = tuple(
-    get_args(model.model_fields["kind"].annotation)[0] for model in QUERY_MODELS
+    values[0] for model in QUERY_MODELS if (values := literal_values(model, "kind"))
 )
 _SUPPORTED_KIND_SET = frozenset(SUPPORTED_KINDS)
 
