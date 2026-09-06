@@ -181,15 +181,8 @@ defaults, `required` and `$defs` are untouched, so a client can still build a
 valid call, and the models are not filtered, so the server accepts exactly what
 it did. It is an explicit transform (`strip_argument_descriptions` in
 `tools/_schema.py`, applied in `get_tools()`), never a wording rule, and on the
-current surface it takes roughly 45% off what a session loads.
-
-The transform has one exemption, and the schema declares it rather than the
-filter recognizing it: a branch that carries the `KEEP_DESCRIPTION` marker
-keeps its description. That marker sits on the dormant recipe branches, which
-are advertised as their discriminant and nothing else — the rule above holds
-because a stripped branch still has structure to build a call from, and these
-have none, so the description is the whole branch. Stripping it would publish
-a metric name a client could send and the server would then reject. Which of the two a session got is reported as `tool_listing` by
+current surface it takes roughly 45% off what a session loads. Which of the
+two a session got is reported as `tool_listing` by
 `inspect(kind: "capabilities")` — the guide tells a caller to change what it
 does on compact, so the mode has to be readable rather than inferred from
 prose that is missing. Both modes are
@@ -197,6 +190,15 @@ prose that is missing. Both modes are
 called on one, which is what the 2026-07-28 specification requires of
 `tools/list`. Nothing keys on the mode below the listing — dispatch,
 validation and every response are identical either way.
+
+The transform has one exemption, and the schema declares it rather than the
+filter recognizing it: a branch that carries the `KEEP_DESCRIPTION` marker
+keeps its description. That marker sits on the dormant recipe branches, which
+are advertised as their discriminant and nothing else — "a client can still
+build a valid call" holds because a stripped branch still has structure to
+build one from, and these have none, so the description is the whole branch.
+Stripping it would publish a metric name a client could send and the server
+would then reject.
 
 **How long a listing stays fresh.** Because they are static, the server tells
 the client so rather than making it re-list every turn: `tools/list`,
