@@ -1225,10 +1225,10 @@ class TestOwnerLivenessUnknownOnLoad:
     ):
         job = self._persisted(work_dir)
 
-        def boom(pid: int) -> bool:
+        def boom(pid: int) -> object:
             raise OSError("process table unavailable")
 
-        monkeypatch.setattr(store.psutil, "pid_exists", boom)
+        monkeypatch.setattr(store.psutil, "Process", boom)
         loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         assert loaded.status == "running"
@@ -1238,9 +1238,10 @@ class TestOwnerLivenessUnknownOnLoad:
         # the failed probe cannot support.
         assert "server_restarted" not in codes
 
-    def test_a_dead_owner_still_reconciles(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_dead_owner_still_reconciles(self, work_dir: Path):
+        # The record names a pid no process holds, which is the positive
+        # "the owner is gone" the probe reports without any stubbing.
         job = self._persisted(work_dir)
-        monkeypatch.setattr(store.psutil, "pid_exists", lambda pid: False)
         loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         codes = {item.get("code") for item in loaded.observations}

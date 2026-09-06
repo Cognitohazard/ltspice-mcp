@@ -254,10 +254,10 @@ class TestOwnerLivenessUnknown:
 
     @staticmethod
     def _break_the_probe(monkeypatch: Any) -> None:
-        def boom(pid: int) -> bool:
+        def boom(pid: int) -> Any:
             raise OSError("process table unavailable")
 
-        monkeypatch.setattr(store_module.psutil, "pid_exists", boom)
+        monkeypatch.setattr(store_module.psutil, "Process", boom)
 
     def test_probe_reports_unknown_rather_than_dead(self, monkeypatch: Any) -> None:
         self._break_the_probe(monkeypatch)
@@ -265,14 +265,13 @@ class TestOwnerLivenessUnknown:
         assert liveness is store_module.OwnerLiveness.UNKNOWN
         assert liveness.is_dead is False
 
-    def test_probe_still_answers_dead_and_alive(self, monkeypatch: Any) -> None:
+    def test_probe_still_answers_dead_and_alive(self) -> None:
         """The two real answers must survive the third one being added."""
-        monkeypatch.setattr(store_module.psutil, "pid_exists", lambda pid: False)
+        # A pid no process holds: the real probe raises NoSuchProcess for it.
         assert store_module.owner_liveness(_FOREIGN_PID) is store_module.OwnerLiveness.DEAD
-        monkeypatch.undo()
-        # A real live process for the ALIVE answer: the probe now also asks
-        # what the process is doing, and a pid that exists only in a stub has
-        # nothing to answer with.
+        # A real live process for the ALIVE answer: the probe asks what the
+        # process is doing, and a pid that exists only in a stub has nothing
+        # to answer with.
         assert store_module.owner_liveness(os.getppid()) is store_module.OwnerLiveness.ALIVE
         # A record with no pid predates pid tracking; recovering those jobs is
         # the behaviour this probe was added to, not something it takes away.

@@ -291,17 +291,17 @@ def owner_liveness(pid: int | None, *, own_is_alive: bool = False) -> OwnerLiven
     if pid == os.getpid():
         return OwnerLiveness.ALIVE if own_is_alive else OwnerLiveness.DEAD
     try:
-        if not psutil.pid_exists(pid):
+        # One lookup answers both questions: constructing the Process raises
+        # for a pid that is not in the table at all, and its status tells a
+        # zombie from a running process.
+        if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
             return OwnerLiveness.DEAD
-        try:
-            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
-                return OwnerLiveness.DEAD
-        except psutil.NoSuchProcess:
-            return OwnerLiveness.DEAD
-        except psutil.Error:
-            # The process exists but would not say what it is doing. Existing
-            # is the answer this probe has always given on that evidence.
-            pass
+        return OwnerLiveness.ALIVE
+    except psutil.NoSuchProcess:
+        return OwnerLiveness.DEAD
+    except psutil.Error:
+        # The process exists but would not say what it is doing. Existing is
+        # the answer this probe has always given on that evidence.
         return OwnerLiveness.ALIVE
     except Exception:
         # Deliberately broad, and deliberately NOT an answer: whatever went
