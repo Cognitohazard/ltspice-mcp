@@ -1436,7 +1436,9 @@ def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
     lowers the page size below ``REFERENCE_LIMIT_CAP``, and taking the smaller
     of the two is what lets a tight budget return fewer branches instead of
     reporting that it could not be met. There is no cursor to leave pointing
-    past rows nobody saw, because the caller's own ``limit`` is the handle.
+    past rows nobody saw, because the caller's own ``limit`` is the handle —
+    and when the budget rather than that limit is what cut the page, the hint
+    says so instead of pointing at a knob the caller already set.
     """
     if q.query is None:
         return {
@@ -1460,10 +1462,19 @@ def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
             "query for the whole vocabulary, or read spice://guide."
         )
     elif total > len(matches):
-        data["hint"] = (
-            f"{total} branches matched; the {len(matches)} closest are shown. Raise "
-            f"'limit' (up to {REFERENCE_LIMIT_CAP}) or narrow the query."
-        )
+        # Name the lever that is actually free. Under a response budget the
+        # page was cut below what the caller asked for, so 'limit' is not the
+        # handle; at the cap, raising 'limit' is not possible at all.
+        if view.limit < q.limit:
+            lever = (
+                f"The response 'budget' cut this page to {view.limit}; raise it, "
+                "or narrow the query."
+            )
+        elif q.limit < REFERENCE_LIMIT_CAP:
+            lever = f"Raise 'limit' (up to {REFERENCE_LIMIT_CAP}) or narrow the query."
+        else:
+            lever = f"'limit' is already at its cap of {REFERENCE_LIMIT_CAP}; narrow the query."
+        data["hint"] = f"{total} branches matched; the {len(matches)} closest are shown. {lever}"
     return {"data": data}
 
 

@@ -1113,3 +1113,8 @@ async def test_a_budget_shrinks_a_reference_lookup_instead_of_giving_up(
     assert [m["name"] for m in cut_matches] == [
         m["name"] for m in full_matches[: len(cut_matches)]
     ]
+    # And the hint names the lever that moved. The caller asked for the cap, so
+    # telling it to raise 'limit' would send it back to a knob it already
+    # maxed out over a page the budget cut.
+    hint = tight["results"][0]["data"]["hint"]
+    assert "budget" in hint and "Raise 'limit'" not in hint
