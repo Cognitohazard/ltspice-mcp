@@ -24,7 +24,7 @@ from tests.conftest import (
     FIXTURES_DIR,
 )
 
-# R1 of sweep runs 0 / 1 / 2 (one LTSPICE_SWEEP_RUN_LOGS entry per run).
+# R1 of sweep runs 0 / 1 / 2 (one ltspice_sweep_meas_run<n>.log per run).
 RUN_PARAMS = [1000.0, 2200.0, 4700.0]
 
 # Values printed by LTspice in each per-run log (vfinal: FIND V(out) AT=0.9m).

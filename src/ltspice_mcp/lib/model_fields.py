@@ -33,7 +33,6 @@ __all__ = [
     "literal_values",
     "model_of",
     "non_null",
-    "scalar_name",
     "strip_annotated",
     "type_label",
     "union_members",
