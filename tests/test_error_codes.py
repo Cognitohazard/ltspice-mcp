@@ -14,8 +14,6 @@ from typing import Any
 import pytest
 
 import ltspice_mcp
-import ltspice_mcp.lib.metrics
-from ltspice_mcp import tools
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     LTSpiceMCPError,
@@ -309,12 +307,17 @@ def _classifier_returns(tree: ast.AST) -> set[ast.Return]:
     return out
 
 
-def _codes_in_tool_sources() -> dict[str, set[str]]:
-    """Read the emitted codes out of ``tools/*.py`` rather than listing them."""
+def _codes_in_sources() -> dict[str, set[str]]:
+    """Read the emitted codes out of the whole package rather than listing them.
+
+    Every module, not a hand-kept list of directories: a code's membership in
+    the frozen vocabulary has to follow where it is EMITTED, not which file it
+    happened to be typed in. Scanning only ``tools/`` let seven client-visible
+    codes land in ``api/`` and ``lib/`` with no gate at all.
+    """
     found: dict[str, set[str]] = {}
-    tools_dir = Path(tools.__file__).parent
-    metrics_path = Path(ltspice_mcp.lib.metrics.__file__)
-    for path in [*sorted(tools_dir.glob("*.py")), metrics_path]:
+    package_dir = Path(ltspice_mcp.__file__).parent
+    for path in sorted(package_dir.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         classifier_returns = _classifier_returns(tree)
         for node in ast.walk(tree):
@@ -344,7 +347,7 @@ def _codes_in_tool_sources() -> dict[str, set[str]]:
             ):
                 values |= _string_literals(node.value.elts[0])
             for value in values:
-                found.setdefault(value, set()).add(path.name)
+                found.setdefault(value, set()).add(str(path.relative_to(package_dir)))
     return found
 
 
@@ -364,63 +367,122 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 
 
 # Every error code the server can emit: the `code` on each error class, plus the
-# codes built into the failure and observation records in `tools/*.py` and in
-# `lib/metrics.py`, which is where a metric value's own observations are built.
-# Other codes constructed inside `lib/*.py` (variation, staging and mismatch
-# codes) reach the wire through those routes or through `exc.code`, and are not
-# scanned here; naming another module in `_codes_in_tool_sources` is the change
-# that would bring them in.
+# codes built into the failure and observation records anywhere in the package.
+# The scan follows the whole tree rather than a list of directories, so a code's
+# membership follows where it is emitted — the tools, the analysis metrics, the
+# experiment coordinator, the variation and staging engines, and the Python
+# API's detached hand-off all reach a client through one of these.
 #
 # ADDING a code is fine — add it here in the same commit and the test passes.
 # RENAMING or REMOVING one is a public, client-visible change: a caller that
 # branches on `error.code` or reads an observation code has no way to notice,
 # so it needs a CHANGELOG entry saying which code changed and what replaced it.
 FROZEN_ERROR_CODES = (
+    "ambiguous_inner_device",
+    "ambiguous_instance_ref",
+    "ambiguous_scale",
+    "ambiguous_subckt",
+    "ambiguous_target",
     "analysis_deadline",
+    "analysis_failed",
     "artifact_publish_failed",
     "artifact_too_large",
     "asc_export_unavailable",
+    "asymptotic_reading",
     "batch_job_error",
+    "budget_not_met",
+    "budget_truncated",
     "cancel_failed",
     "cancel_not_authorized",
     "cancel_unavailable",
+    "cancelled",
+    "case_cap",
+    "case_cap_exceeded",
     "case_not_found",
+    "circuits_empty",
+    "clone_include_unsupported",
     "commit_failed",
     "completeness_mismatch",
     "constant_window",
+    "control_write_injected",
+    "dangling_request_index_replaced",
+    "detached_owner",
     "device_op_points_absent",
     "downsampled",
+    "duplicate_assignment_target",
+    "duplicate_circuit_id",
     "error",
+    "execution_failed",
     "expected_sha256_required",
+    "experiment_index_invalid",
+    "experiment_index_write_failed",
+    "external_cancellation_requested",
+    "extreme_value",
     "failures_truncated",
+    "geometry_not_literal",
     "idempotency_conflict",
     "idempotent_replay",
+    "include_unstaged",
+    "inner_device_not_found",
+    "inner_model_unresolved",
+    "instance_not_found",
     "internal_error",
+    "invalid_assignment_value",
     "invalid_at",
+    "invalid_circuit_id",
     "invalid_cursor",
+    "invalid_instance_param_target",
+    "invalid_instance_target",
     "invalid_prefix",
     "invalid_query",
+    "job_deadline",
     "job_not_found",
     "job_not_terminal",
     "jobs_failed",
+    "kill_attempt_failed",
+    "kill_unconfirmed",
+    "kill_unconfirmed_capacity",
+    "late_simulator_exit",
+    "lf_integrator",
     "library_error",
     "lint_blocked",
+    "live_include",
+    "log_error",
     "log_unread",
     "max_points_not_applied",
+    "meas_batch_abort",
+    "meas_parse_error",
+    "merged_corners",
+    "missing_circuit_id",
+    "missing_completion",
+    "missing_required_raw",
+    "model_missing",
     "multiple_random_variations",
+    "nested_fet_unsupported",
     "netlist_invalid",
+    "ngspice_lib_section",
     "no_axis",
+    "non_bsim_inner_device",
     "non_finite",
+    "non_minimum_phase",
     "not_found",
     "op_failed",
     "open_failed",
     "open_skipped",
+    "order_disagreement",
+    "overlapping_mismatch_rules",
+    "owner_liveness_unknown",
+    "param_namespace_collision",
     "parse_error",
     "path_denied",
     "phase_unwrapped",
     "plot_written",
     "post_commit_failed",
+    "preexisting_mismatch_param",
+    "process_owned_job",
+    "random_nominal_unavailable",
     "raster_unavailable",
+    "rational_fit",
     "raw_not_produced",
     "raw_path_without_deck_provenance",
     "read_error",
@@ -429,26 +491,39 @@ FROZEN_ERROR_CODES = (
     "recipe_invalid",
     "request_gate_busy",
     "result_unreadable",
+    "review_against_plot",
     "revision_conflict",
     "run_not_found",
     "search_error",
+    "server_restarted",
+    "server_shutdown",
     "simulation_failed",
     "solve_failure",
     "source_drift",
+    "source_modified_after_staging",
     "source_not_found",
     "source_unavailable",
+    "source_unavailable_after_staging",
     "sparse_sweep",
     "step_axis_unioned",
     "step_value_unavailable",
+    "subckt_unresolved",
     "submission_committed",
     "submission_failed",
     "symbol_not_found",
     "symbol_unresolved",
+    "transport_delay",
+    "unencodable_device_ref",
+    "unmet_request",
+    "unpersisted_runs_recovered",
+    "unplanned_instance",
     "unsupported_file",
     "unsupported_variant",
+    "unwrap_warning",
     "widget_delivered",
     "widget_unavailable",
     "window_empty_steps",
+    "windows_native_storage_unavailable",
 )
 
 
@@ -469,7 +544,7 @@ class TestErrorCodeVocabulary:
         assert not collisions, f"One code, two meanings: {collisions}"
 
     def test_vocabulary_matches_the_frozen_list(self):
-        emitted = set(_codes_in_tool_sources()) | {vars(cls)["code"] for cls in _error_classes()}
+        emitted = set(_codes_in_sources()) | {vars(cls)["code"] for cls in _error_classes()}
         frozen = set(FROZEN_ERROR_CODES)
         added = sorted(emitted - frozen)
         gone = sorted(frozen - emitted)
