@@ -703,6 +703,45 @@ class TestIdempotency:
         await _wait_for(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
+    async def test_only_the_call_that_replayed_is_told_it_replayed(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Replaying is a fact about a call; the note on the record is not.
+
+        The record's observation is read by everyone who looks at the job
+        afterwards, the original submitter included — and that caller did
+        submit. Telling it its receipt was returned without resubmitting cases
+        is a false account of its own call.
+        """
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "replay-voice.cir")
+        args = _args(deck, "replay-voice")
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        assert _observation_code(first, "idempotent_replay") is None
+
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        told = _observation_code(replay, "idempotent_replay")
+        assert told is not None, replay["observations"]
+        assert "This call's" in told["detail"], told
+
+        # And the record, which is what every later reader gets, states what
+        # happened to it rather than making a claim about the reader's call.
+        status = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
+            state_with_sim,
+        )
+        recorded = status.structured_content
+        assert recorded is not None
+        note = next(
+            item for item in recorded["observations"] if item["code"] == "idempotent_replay"
+        )
+        assert "This call's" not in note["detail"], note
+        assert "A later call carrying this request_id" in note["detail"], note
+
     async def test_different_payload_replay_conflicts(
         self,
         state_with_sim: SessionState,

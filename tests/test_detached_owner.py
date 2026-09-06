@@ -266,7 +266,12 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
         # the job, so nothing is staged or submitted again.
         replayed = api.run_experiments(wait=False, request_id=request_id, circuits=circuits)
         assert replayed["job_id"] == job_id
-        assert "idempotent_replay" in {item["code"] for item in replayed["observations"]}
+        told = next(
+            item for item in replayed["observations"] if item["code"] == "idempotent_replay"
+        )
+        # The complete receipt is re-rendered from the record, which knows only
+        # what happened to it; this caller's own call is what replayed.
+        assert "This call's" in told["detail"], told
 
         # And detached again: a second owner is spawned, takes the same replay
         # path, and hands back the same job rather than submitting a new one.
