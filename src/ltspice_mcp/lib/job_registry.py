@@ -186,7 +186,7 @@ class JobRegistry:
         if not self._on_event_loop():
             return job
         self.jobs[job.job_id] = job
-        if any(item.get("code") == "server_restarted" for item in job.observations):
+        if job.restart_reconciled:
             self.persist_job(job)
         return job
 
@@ -480,9 +480,7 @@ class JobRegistry:
             if experiment.job_id in self.jobs:
                 continue
             self.jobs[experiment.job_id] = experiment
-            restarted = any(
-                item.get("code") == "server_restarted" for item in experiment.observations
-            )
+            restarted = experiment.restart_reconciled
             if experiment.status == "interrupted" or restarted:
                 emit_job_event(
                     "interrupted_recovered",
