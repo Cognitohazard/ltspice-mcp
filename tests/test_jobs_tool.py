@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.lib import analysis_snapshot, experiment_store, now, recent, store
-from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest
+from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest, cancel_receipt_row
 from ltspice_mcp.lib.experiment_types import (
     AnalysisStage,
     Completeness,
@@ -26,6 +26,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
     RunExperimentsInput,
@@ -1066,13 +1067,7 @@ class TestCancellationAuthority:
             candidate.status = "cancelled"
             candidate.runs_done_event.set()
             candidate.done_event.set()
-            return [
-                {
-                    "case_id": candidate.cases[0].case_id,
-                    "prior_status": "running",
-                    "status": "cancelled",
-                }
-            ]
+            return [cancel_receipt_row(candidate.cases[0], "running", "cancelled")]
 
         runner = SimpleNamespace(cancel=AsyncMock(side_effect=cancel))
         monkeypatch.setattr(
@@ -1108,6 +1103,45 @@ class TestCancellationAuthority:
             )
         )
         assert token["status"] == "cancelled"
+
+    async def test_a_second_foreign_cancel_reports_no_transition(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """One transition, one acknowledgement — on the foreign route too.
+
+        A cancel of a job this coordinator owns reports a case once, because
+        the coordinator remembers which cases a cancel has already claimed. A
+        job owned by another live process has no such coordinator here, so the
+        durable cancellation marker is what says a cancel already claimed
+        them. Without that, two foreign cancels each report the same case
+        stopping, and a caller reading the second one sees a run it stopped
+        twice.
+        """
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, status="running")
+        job.cases[0].status = "running"
+        job.owner_pid = _FOREIGN_PID
+        _persist_experiment(job, work_dir)
+        state_no_sim.all_jobs[job.job_id] = job
+        monkeypatch.setattr(
+            experiment_store,
+            "owner_liveness",
+            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
+        )
+        # The owner is a fiction, so it never acknowledges. Cut the
+        # best-effort wait rather than sitting it out.
+        monkeypatch.setattr(jobs_module, "_FOREIGN_CANCEL_ACK_WAIT_S", 0.0)
+
+        args = _args("cancel", job_id=job.job_id, control_token=job.control_token)
+        first = _assert_jobs_schema(await handle_jobs(args, state_no_sim))
+        assert [row["case_id"] for row in first["items"]] == [job.cases[0].case_id]
+        assert first["items"][0]["prior_status"] == "running"
+
+        second = _assert_jobs_schema(await handle_jobs(args, state_no_sim))
+        assert second["items"] == [], second["items"]
 
     async def test_foreign_token_sets_durable_submission_barrier(
         self,
