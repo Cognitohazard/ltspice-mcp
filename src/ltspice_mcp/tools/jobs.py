@@ -66,7 +66,6 @@ from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
     RUNS_PAGE_SCHEMA,
-    Job,
     ReceiptBuild,
     ReceiptBuilt,
     ReceiptSnapshot,
@@ -594,7 +593,7 @@ def _without_control_tokens(value: Any) -> Any:
     return value
 
 
-async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -> Job:
+async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -> ExperimentJob:
     job_id = args.job_id
     if job_id is None:
         assert args.request_id is not None
@@ -616,7 +615,7 @@ async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -
     return await services.resolve_job_async(job_id, state)
 
 
-def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
+def _runs_finished(job: ExperimentJob, wait_for: Literal["all", "runs"]) -> bool:
     if wait_for == "runs":
         # Three ways to know, in cost order: the event this session set, the
         # status the lifecycle guarantees it for, then the cases themselves —
@@ -630,12 +629,12 @@ def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
 
 
 async def _wait_for_jobs_target(
-    job: Job,
+    job: ExperimentJob,
     state: SessionState,
     *,
     timeout_s: float,
     wait_for: Literal["all", "runs"],
-) -> tuple[Job, bool]:
+) -> tuple[ExperimentJob, bool]:
     if _runs_finished(job, wait_for):
         return job, False
 
@@ -803,19 +802,12 @@ async def _await_foreign_experiment_cancellation(
         if asyncio.get_running_loop().time() >= deadline:
             break
         await asyncio.sleep(0.5)
-        refreshed = await state.job_registry.refresh_foreign_job_async(current)
-        if not isinstance(refreshed, ExperimentJob):
-            raise _JobsActionError(
-                "cancel_failed",
-                f"Experiment job {job.job_id} changed kind while cancellation was pending",
-                stage="cancellation",
-            )
-        current = refreshed
+        current = await state.job_registry.refresh_foreign_job_async(current)
     return current
 
 
 async def _cancel_jobs_target(
-    job: Job,
+    job: ExperimentJob,
     args: JobsCancelInput,
     state: SessionState,
 ) -> list[dict[str, Any]]:

@@ -7,7 +7,6 @@ a cluster of import cycles — see ``lib/job_types.py`` for the full story.
 
 import asyncio
 import logging
-from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -192,11 +191,6 @@ class SessionState:
     # ------------------------------------------------------------------
     # Job-registry delegation (API preserved for all callers)
     # ------------------------------------------------------------------
-
-    @property
-    def experiment_jobs(self) -> MutableMapping[str, ExperimentJob]:
-        """The registry's experiment jobs, keyed by job id."""
-        return self.job_registry.experiment_jobs
 
     @property
     def all_jobs(self) -> dict[str, ExperimentJob]:

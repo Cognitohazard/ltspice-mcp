@@ -498,7 +498,7 @@ class ExperimentRunner(RunnerBase):
         # therefore never observe a durable job that this process has not
         # either registered or recognized as already registered.
         registered = request.state.all_jobs.get(barrier.job.job_id)
-        if isinstance(registered, ExperimentJob):
+        if registered is not None:
             job = registered
         else:
             job = barrier.job

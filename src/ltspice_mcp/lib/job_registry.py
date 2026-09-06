@@ -28,10 +28,6 @@ from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
 
-# Every job this server runs is an experiment; the name stays for the call
-# sites that read "a job" rather than "an experiment".
-Job = ExperimentJob
-
 # Maximum finished jobs to retain.
 _MAX_FINISHED_JOBS = 200
 
@@ -113,7 +109,7 @@ class JobRegistry:
 
     persist_enabled: bool
     working_dir: Path = field(default_factory=Path.cwd)
-    jobs: dict[str, Job] = field(default_factory=dict)
+    jobs: dict[str, ExperimentJob] = field(default_factory=dict)
     observations: list[dict] = field(default_factory=list)
     _loaded_circuits: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
@@ -126,11 +122,6 @@ class JobRegistry:
     deletion have completed. Removing it inside a write would let a new writer
     allocate a second lock while the old one is still held.
     """
-
-    @property
-    def experiment_jobs(self) -> dict[str, ExperimentJob]:
-        """The job store itself, under the name callers scoped to experiments use."""
-        return self.jobs
 
     # ------------------------------------------------------------------
     # Registration
@@ -177,7 +168,7 @@ class JobRegistry:
             return False
         return True
 
-    def _adopt(self, job: Job) -> Job:
+    def _adopt(self, job: ExperimentJob) -> ExperimentJob:
         """Take a freshly-read record into the registry, if this caller may.
 
         Registry mutations are loop-only, the same contract that governs the
@@ -207,7 +198,7 @@ class JobRegistry:
 
         return experiment_store.load_job(job_id, self.working_dir, own_is_alive=True)
 
-    def get_or_load(self, job_id: str) -> Job | None:
+    def get_or_load(self, job_id: str) -> ExperimentJob | None:
         """A job by id: in memory, else from the store. None if there is none.
 
         The single discovery route. Everything that resolves an id — the tools,
@@ -226,7 +217,7 @@ class JobRegistry:
         loaded = self._load_from_store(job_id)
         return self._adopt(loaded) if loaded is not None else None
 
-    async def get_or_load_async(self, job_id: str) -> Job | None:
+    async def get_or_load_async(self, job_id: str) -> ExperimentJob | None:
         """Loop-safe ``get_or_load``: offload the store read, adopt on the loop."""
         job = self.jobs.get(job_id)
         if job is not None:
@@ -237,13 +228,13 @@ class JobRegistry:
         loaded = await asyncio.to_thread(self._load_from_store, job_id)
         return self._adopt(loaded) if loaded is not None else None
 
-    def _load_foreign_job_sync(self, job: Job) -> Job | None:
+    def _load_foreign_job_sync(self, job: ExperimentJob) -> ExperimentJob | None:
         """Blocking store read for refreshing one foreign-owned job."""
         from ltspice_mcp.lib import experiment_store
 
         return experiment_store.load_job_from_path(job.store_path, self.working_dir)
 
-    def refresh_foreign_job(self, job: Job) -> Job:
+    def refresh_foreign_job(self, job: ExperimentJob) -> ExperimentJob:
         """Re-read a parallel session's live job from its sidecar.
 
         A job loaded while its owning process was alive sits in this
@@ -269,7 +260,7 @@ class JobRegistry:
             return job
         return self._adopt(fresh)
 
-    async def refresh_foreign_job_async(self, job: Job) -> Job:
+    async def refresh_foreign_job_async(self, job: ExperimentJob) -> ExperimentJob:
         """Loop-safe ``refresh_foreign_job``: offload the sidecar re-read.
 
         Same contract as the sync version, but the single-file ``load_job``
@@ -293,7 +284,7 @@ class JobRegistry:
         # On the loop here (awaited from a handler), so ``_adopt`` swaps it in.
         return self._adopt(fresh)
 
-    def refreshed_jobs(self) -> list[Job]:
+    def refreshed_jobs(self) -> list[ExperimentJob]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.
 
         The listing surfaces (``check_job`` with no id, the results resource)
@@ -306,7 +297,7 @@ class JobRegistry:
     # Persistence
     # ------------------------------------------------------------------
 
-    def persist_job(self, job: Job) -> None:
+    def persist_job(self, job: ExperimentJob) -> None:
         """Write a job's current state to its per-circuit sidecar file.
 
         When called from an asyncio event loop, the file IO is scheduled on
@@ -328,7 +319,7 @@ class JobRegistry:
         self._pending_persist.add(task)
         task.add_done_callback(self._pending_persist.discard)
 
-    async def _persist_async(self, job: Job) -> None:
+    async def _persist_async(self, job: ExperimentJob) -> None:
         """Serialise writes for a single job id; swallow and log failures."""
         lock = self._persist_locks.get(job.job_id)
         if lock is None:
@@ -336,7 +327,9 @@ class JobRegistry:
         async with lock:
             await self._offload_persistence(self._persist_sync, job)
 
-    async def _offload_persistence(self, fn: Callable[[Job], None], job: Job) -> None:
+    async def _offload_persistence(
+        self, fn: Callable[[ExperimentJob], None], job: ExperimentJob
+    ) -> None:
         """Run one blocking persistence step off-loop, surviving teardown.
 
         During interpreter teardown the default executor is gone and
@@ -353,7 +346,7 @@ class JobRegistry:
         except RuntimeError:
             fn(job)
 
-    def _persist_sync(self, job: Job) -> None:
+    def _persist_sync(self, job: ExperimentJob) -> None:
         try:
             from ltspice_mcp.lib import experiment_store
 
@@ -362,7 +355,7 @@ class JobRegistry:
             # Persistence failures must never break simulation flow.
             logger.warning("Failed to persist job %s: %s", job.job_id, e)
 
-    def _delete_persisted(self, job: Job) -> None:
+    def _delete_persisted(self, job: ExperimentJob) -> None:
         """Remove a job's on-disk record (used on eviction)."""
         try:
             loop = asyncio.get_running_loop()
@@ -374,7 +367,7 @@ class JobRegistry:
         self._pending_persist.add(task)
         task.add_done_callback(self._pending_persist.discard)
 
-    async def _delete_persisted_async(self, job: Job) -> None:
+    async def _delete_persisted_async(self, job: ExperimentJob) -> None:
         """Delete only after earlier writes for the same job have drained."""
         lock = self._persist_locks.get(job.job_id)
         if lock is None:
@@ -385,10 +378,10 @@ class JobRegistry:
         finally:
             self._persist_locks.pop(job.job_id, None)
 
-    def _delete_persisted_sync(self, job: Job) -> None:
+    def _delete_persisted_sync(self, job: ExperimentJob) -> None:
         """Blocking deletion half, including dependent immutable result sets."""
         try:
-            if self.persist_enabled and isinstance(job, ExperimentJob):
+            if self.persist_enabled:
                 from ltspice_mcp.lib import experiment_store
 
                 experiment_store.delete_job(job, self.working_dir)
@@ -561,7 +554,7 @@ class JobRegistry:
         # live job also sits in the registry as running (loaded from its
         # record with the owner still alive) and must not be killed or
         # relabeled by our shutdown.
-        experiments = list(self.experiment_jobs.values())
+        experiments = list(self.jobs.values())
         await _issue_cancels(
             [
                 runner.cancel(experiment)

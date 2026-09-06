@@ -767,7 +767,7 @@ class TestExperimentDiscovery:
             job.started_at = started + timedelta(seconds=index)
             registry.add_experiment_job(job)
 
-        assert len(registry.experiment_jobs) == 200
+        assert len(registry.jobs) == 200
         assert all(f"exp_cap_{index:03d}" not in registry.jobs for index in range(5))
 
     def test_preload_recent_discovers_pointer_only_experiment(
@@ -789,7 +789,7 @@ class TestExperimentDiscovery:
 
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
         assert registry.preload_recent() == 1
-        assert registry.experiment_jobs[job.job_id].store_path == job.store_path
+        assert registry.jobs[job.job_id].store_path == job.store_path
 
     def test_an_unreadable_index_entry_is_skipped_with_an_observation(
         self,
@@ -807,7 +807,7 @@ class TestExperimentDiscovery:
 
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
         registry.ensure_loaded_for(circuit)
-        assert job.job_id not in registry.experiment_jobs
+        assert job.job_id not in registry.jobs
         assert any(item["code"] == "experiment_index_invalid" for item in registry.observations)
 
     def test_a_skipped_index_entry_does_not_narrate_itself_at_startup(
@@ -854,7 +854,7 @@ class TestExperimentDiscovery:
 
         loaded = await services.resolve_job_async(job.job_id, state_no_sim)
         assert isinstance(loaded, ExperimentJob)
-        assert loaded.job_id in state_no_sim.experiment_jobs
+        assert loaded.job_id in state_no_sim.all_jobs
 
     @pytest.mark.asyncio
     async def test_foreign_refresh_uses_coordinator_store_path(
@@ -1150,7 +1150,7 @@ class TestCancelledExperimentReads:
         job = _job(work_dir, circuit, status="cancelled")
         job.cases[0].status = "cancelled"
         job.completeness.cancelled = 1
-        state_no_sim.experiment_jobs[job.job_id] = job
+        state_no_sim.all_jobs[job.job_id] = job
         with pytest.raises(ResultError, match="did not produce a raw"):
             services.resolve_experiment_run(job.job_id, state_no_sim)
 
@@ -1167,7 +1167,7 @@ class TestCancelledExperimentReads:
         job.cases[0].status = "failed"
         job.cases[0].raw_file = raw
         job.completeness.failed = 1
-        state_no_sim.experiment_jobs[job.job_id] = job
+        state_no_sim.all_jobs[job.job_id] = job
         with pytest.raises(ResultError, match="did not produce a raw"):
             services.resolve_experiment_run(job.job_id, state_no_sim)
 
