@@ -37,6 +37,7 @@ from ltspice_mcp.lib.model_fields import (
     item_model,
     literal_values,
     model_of,
+    model_union,
     non_null,
     strip_annotated,
     type_label,
@@ -64,15 +65,20 @@ class _Operation:
 
 
 def _model_union(annotation: Any) -> tuple[type[BaseModel], ...] | None:
-    """The model branches of a union, when every branch is a model."""
-    annotation = strip_annotated(annotation)
-    members = union_members(annotation)
+    """The model branches of a union, when every branch is a model.
+
+    The branch reading itself is shared with the MCP-side index; the policy is
+    this catalogue's own. A union that mixes models with plain types renders
+    as a type label instead, and a single-model "union" is just that model.
+    """
+    members = union_members(strip_annotated(annotation))
     if members is None:
         return None
-    models = [model_of(member) for member in members if member is not type(None)]
-    if len(models) < 2 or any(model is None for model in models):
+    branches = model_union(annotation)
+    named = [member for member in members if member is not type(None)]
+    if len(branches) < 2 or len(branches) != len(named):
         return None
-    return tuple(model for model in models if model is not None)
+    return branches
 
 
 def _lines_for_field(

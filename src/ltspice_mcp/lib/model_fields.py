@@ -14,6 +14,7 @@ decisions, no line wrapping, no I/O.
 
 from __future__ import annotations
 
+import json
 import types as pytypes
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
@@ -26,12 +27,14 @@ __all__ = [
     "accepted_annotation",
     "constraint_label",
     "default_label",
+    "default_spelling",
     "describe_field",
     "field_name",
     "first_sentence",
     "item_model",
     "literal_values",
     "model_of",
+    "model_union",
     "non_null",
     "strip_annotated",
     "type_label",
@@ -57,6 +60,21 @@ def model_of(annotation: Any) -> type[BaseModel] | None:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation
     return None
+
+
+def model_union(annotation: Any) -> tuple[type[BaseModel], ...]:
+    """The model branches of a union — annotated, bare, or already a tuple.
+
+    Some unions on the surface publish their members as a tuple, read off the
+    union itself at import; others are the union type. Both are the same set,
+    so both are accepted rather than made to agree first. Non-model members
+    (a ``None`` branch, a plain type) are dropped; a caller that needs "every
+    branch is a model" compares the count against the union's own members.
+    """
+    if isinstance(annotation, tuple):
+        return annotation
+    members = union_members(strip_annotated(annotation)) or ()
+    return tuple(model for model in (model_of(member) for member in members) if model is not None)
 
 
 def scalar_name(annotation: Any) -> str:
@@ -130,6 +148,25 @@ def default_label(field: FieldInfo) -> str:
     if field.default is PydanticUndefined:
         return "REQUIRED"
     return repr(field.default)
+
+
+def default_spelling(field: FieldInfo) -> str:
+    """The default written the way a CALLER writes it, in JSON.
+
+    ``default_label`` is the Python spelling, which is what the Python API's
+    catalogue shows. A tool call is JSON, so ``null``/``true``/``false`` is
+    what a caller types there, and Python's ``None``/``True`` is the one thing
+    on a reference card that must not be copied verbatim. Anything a factory
+    produces keeps its descriptive label ("empty"). The two spellings live
+    beside each other so the difference is a stated choice rather than a
+    divergence nobody meant.
+    """
+    if field.default_factory is not None:
+        return default_label(field)
+    default = field.default
+    if default is None or isinstance(default, (str, int, float, bool)):
+        return json.dumps(default)
+    return default_label(field)
 
 
 #: Numeric and length bounds a caller has to respect, and the comparison each

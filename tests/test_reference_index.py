@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from ltspice_mcp.lib.model_fields import literal_values
+from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import reference_index
 from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
@@ -46,7 +46,7 @@ class TestIndexCompleteness:
 
         declared = {
             values[0]
-            for model in reference_index._members(SchematicOp)
+            for model in model_union(SchematicOp)
             if (values := literal_values(model, "op"))
         }
         assert declared <= _names("edit_schematic")
@@ -67,7 +67,7 @@ class TestIndexCompleteness:
         declared = {
             values[0]
             for union, tag in ((Variation, "kind"), (RandomRule, "rule"))
-            for model in reference_index._members(union)
+            for model in model_union(union)
             if (values := literal_values(model, tag))
         }
         assert declared <= _names("run_experiments")
@@ -132,13 +132,13 @@ class TestIndexCompleteness:
             | {("verify_circuit", check) for check in CHECK_ORDER}
             | {
                 ("edit_schematic", values[0])
-                for model in reference_index._members(SchematicOp)
+                for model in model_union(SchematicOp)
                 if (values := literal_values(model, "op"))
             }
             | {
                 ("run_experiments", values[0])
                 for union, tag in ((Variation, "kind"), (RandomRule, "rule"))
-                for model in reference_index._members(union)
+                for model in model_union(union)
                 if (values := literal_values(model, tag))
             }
         )
@@ -199,9 +199,11 @@ class TestEntryShape:
         assert "compare.reference" in names
         assert not _named("verify_circuit", "syntax").fields
 
-    def test_serialization_omits_fields_for_the_contents_listing(self):
-        entry = _named("jobs", "wait").as_dict(with_fields=False)
-        assert set(entry) == {"tool", "family", "name", "summary"}
+    def test_serialization_carries_the_whole_entry(self):
+        """What one match on the wire holds. The contents listing builds its own
+        two-key rows instead, so there is no half-serialized form."""
+        entry = _named("jobs", "wait").as_dict()
+        assert set(entry) == {"tool", "family", "name", "summary", "call", "fields"}
 
 
 class TestTableOfContents:
