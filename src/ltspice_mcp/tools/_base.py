@@ -1071,6 +1071,21 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     return resolve_safe_path(user_path, state.config.allowed_paths)
 
 
+def resolve_reference(reference: str, state: SessionState) -> str | Path:
+    """A ``CompareSpec.reference`` is literal netlist text when it spans lines,
+    else a path inside the sandbox. A path outside it is refused with the text
+    alternative named, since a caller's scratch directory is usually outside."""
+    if "\n" in reference:
+        return reference
+    try:
+        return safe_path(reference, state)
+    except PathSecurityError as exc:
+        raise PathSecurityError(
+            f"{exc} A reference may also be the netlist text itself: pass the "
+            "deck's lines (with newlines) as compare.reference instead of a path."
+        ) from None
+
+
 # ---------------------------------------------------------------------------
 # Concurrency contract
 #

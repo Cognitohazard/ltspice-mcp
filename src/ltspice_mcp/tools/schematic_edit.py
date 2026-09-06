@@ -86,6 +86,7 @@ from ltspice_mcp.tools._base import (
     outcome_of,
     page_schema,
     registry,
+    resolve_reference,
     safe_path,
 )
 
@@ -534,10 +535,10 @@ def _write_export_copy(
 
 
 def _compare_reference(
-    ref_path: Path, netlist_text: str, resolver: IncludeResolver, spec: CompareSpec
+    ref: str | Path, netlist_text: str, resolver: IncludeResolver, spec: CompareSpec
 ):
     """Parse both sides and compare their connectivity graphs (blocking CPU/IO)."""
-    ref_graph = parse_netlist_graph(ref_path, include_resolver=resolver)
+    ref_graph = parse_netlist_graph(ref, include_resolver=resolver)
     cand_graph = parse_netlist_graph(netlist_text, include_resolver=resolver)
     return compare_graphs(ref_graph, cand_graph, anchors=spec.anchors, rtol=spec.rtol)
 
@@ -545,12 +546,12 @@ def _compare_reference(
 async def _run_reference_stage(
     committed_text: str,
     encoding: str,
-    ref_path: Path,
+    ref: str | Path,
     spec: CompareSpec,
     build_id: str,
     state: SessionState,
 ) -> dict:
-    """Export a copy of the committed sheet and compare it to ``ref_path``.
+    """Export a copy of the committed sheet and compare it to ``ref`` (a path or netlist text).
 
     Runs entirely on a COPY under a managed temp dir, so the exporter's own
     asc_export_lock keys on the copy's path (no reentrancy with the guard-held
@@ -560,7 +561,9 @@ async def _run_reference_stage(
     the handler, which reports it on a committed envelope. Either way the sheet
     is already committed and stays so.
     """
-    verification: dict[str, Any] = {"reference": str(ref_path)}
+    verification: dict[str, Any] = {
+        "reference": str(ref) if isinstance(ref, Path) else "inline netlist"
+    }
     export_root = state.store.edit_export(build_id)
     copy_asc = export_root / "committed.asc"
     try:
@@ -574,9 +577,7 @@ async def _run_reference_stage(
             verification["equivalent"] = None
             return verification
         resolver = make_include_resolver(state)
-        comparison = await asyncio.to_thread(
-            _compare_reference, ref_path, netlist_text, resolver, spec
-        )
+        comparison = await asyncio.to_thread(_compare_reference, ref, netlist_text, resolver, spec)
         verification["equivalent"] = comparison.equivalent
         verification["structurally_equivalent"] = comparison.structurally_equivalent
         verification["comparison"] = comparison.as_dict()
@@ -746,15 +747,20 @@ async def _evaluate_edit_schematic(
     """Implementation shared by the neutral seam and guarded MCP presentation."""
     target = safe_path(args.target, state)
     require_asc(target)
-    if not args.ops:
-        raise NetlistError("ops list is empty — pass at least one op.")
+    if not args.ops and not args.return_views:
+        raise NetlistError(
+            "ops list is empty — pass at least one op, or name return_views to "
+            "read the sheet's pin table without changing it."
+        )
+    # An op-less batch is a read: nothing to commit, so it runs as a dry run.
+    dry_run = args.dry_run or not args.ops
     _validate_view_cursors(args.view_cursors)
     # Resolve the optional reference here, with the rest of the argument checks:
     # a path outside allowed_paths is an argument fault the caller fixes by
     # resending, not a property of the sheet. Resolving it in the post-commit
     # stage instead would reject the call after the target was already written.
     compare = args.compare
-    reference_path = safe_path(compare.reference, state) if compare is not None else None
+    reference_path = resolve_reference(compare.reference, state) if compare is not None else None
 
     build_id = generate_id("build")
     stages: list[dict] = []
@@ -869,7 +875,7 @@ async def _evaluate_edit_schematic(
         committed_sha: str | None = None
         post_commit_stage = "response"
         try:
-            results, failures, abort_reason = _apply_ops(editor, args.ops, target, args.dry_run)
+            results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run)
 
             # --- op failure → transactional abort (nothing written)
             if abort_reason is not None:
@@ -911,7 +917,7 @@ async def _evaluate_edit_schematic(
             committed_text = _render_editor_text(editor)
 
             # --- dry run: validate-only, nothing written, target dir untouched
-            if args.dry_run:
+            if dry_run:
                 state.editors.invalidate(target)
                 neutral_views = _build_edit_views(
                     profile,

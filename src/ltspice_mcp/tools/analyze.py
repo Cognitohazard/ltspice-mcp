@@ -47,6 +47,7 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
+    MULTI_FIELD_KEYS,
     KeyedRecipe,
     MultiRecipe,
     OperatingPointRecipe,
@@ -1555,28 +1556,6 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-_MULTI_FIELDS: dict[str, dict[str, str]] = {
-    "signal_stats": {"stddev": "std"},
-    "edges": {
-        "rise_time": "transition_time",
-        "fall_time": "transition_time",
-        "edges_found": "num_edges_in_window",
-    },
-    "timing": {"from_time": "t_a", "to_time": "t_b"},
-    "periodic": {"duty_cycle": "duty_cycle_pct"},
-    "transient_response": {
-        "final_value": "steady_state_value",
-        "deviation": "max_droop",
-        "undershoot": "max_droop",
-        "overshoot": "max_overshoot",
-    },
-    "stability": {
-        "phase_margin_deg": "phase_margin_worst_deg",
-        "gain_margin_db": "gain_margin_worst_db",
-    },
-    "return_loss": {"reflection_coefficient": "gamma_mag"},
-}
-
 _SCALAR_FIELDS = {
     "value": ("value", "magnitude_db"),
     "thd": ("thd_pct",),
@@ -1704,7 +1683,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
         elif isinstance(recipe, MultiRecipe):
             field = recipe.field
             if field:
-                actual = _MULTI_FIELDS.get(recipe.metric, {}).get(field, field)
+                actual = MULTI_FIELD_KEYS.get(recipe.metric, {}).get(field, field)
                 number = _number(value.get(actual))
                 if number is not None:
                     out.setdefault(field, []).append((record, number))

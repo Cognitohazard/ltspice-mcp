@@ -511,6 +511,44 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
     assert not (work_dir / ".ltspice-mcp" / "renders").exists()
 
 
+async def test_empty_ops_with_views_reads_the_sheet(asc_state, work_dir):
+    """The whole-sheet pin table is only reachable through this tool, so a batch
+    with no ops and a requested view is a read: nothing written, views returned."""
+    first = await _build_blank(asc_state, "readonly", _DIVIDER_OPS)
+    sha0 = first["sha256"]
+    before = _fingerprint(work_dir)
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="readonly.asc",
+                expected_sha256=sha0,
+                ops=[],
+                return_views=["pin_legend"],
+            ),
+            asc_state,
+        )
+    )
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "not_committed"
+    assert {row["ref"] for row in data["views"]["pin_legend"]["items"]} >= {"R1", "R2"}
+    assert _fingerprint(work_dir) == before
+    assert _sha(work_dir / "readonly.asc") == sha0
+
+
+async def test_empty_ops_without_views_is_rejected(asc_state):
+    await _build_blank(asc_state, "noop", _DIVIDER_OPS)
+    with pytest.raises(NetlistError, match="return_views"):
+        await handle_edit_schematic(
+            _edit_input(
+                target="noop.asc",
+                expected_sha256=_sha(Path(asc_state.working_dir) / "noop.asc"),
+                ops=[],
+                return_views=[],
+            ),
+            asc_state,
+        )
+
+
 async def test_dry_run_surfaces_all_op_failures(asc_state):
     await _build_blank(asc_state, "dryfail", _DIVIDER_OPS)
     data = _assert_schema(
@@ -832,6 +870,29 @@ async def test_reference_success(asc_state, work_dir, monkeypatch):
     assert data["verification"]["equivalent"] is True
     assert data["netlist"] == _REF_DECK
     assert data["stages"][-1] == {"stage": "reference", "ok": True}
+
+
+async def test_reference_may_be_netlist_text(asc_state, monkeypatch):
+    """The shared compare spec reads a multi-line reference as netlist text;
+    this tool honours that the same way verify_circuit does."""
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(asc_state, "reftext", _DIVIDER_OPS, compare={"reference": _REF_DECK})
+    assert data["commit_state"] == "committed"
+    assert data["verification"]["equivalent"] is True
+    assert data["verification"]["reference"] == "inline netlist"
+
+
+async def test_reference_outside_sandbox_names_the_text_alternative(asc_state):
+    """A reference written outside allowed paths is rejected before anything is
+    written, and the rejection says the deck's text can be passed instead."""
+    with pytest.raises(PathSecurityError, match="netlist text itself"):
+        await _build_blank(
+            asc_state, "refout", _DIVIDER_OPS, compare={"reference": "/outside/ref.cir"}
+        )
 
 
 async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypatch):

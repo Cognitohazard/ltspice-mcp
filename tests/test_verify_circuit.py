@@ -278,6 +278,15 @@ async def test_equivalence_identical_text_reference(state_no_sim, work_dir):
     assert data["outcome"] == "complete"
 
 
+async def test_reference_outside_sandbox_names_the_text_alternative(state_no_sim, work_dir):
+    """A reference outside the sandbox is a path_denied finding, and the finding
+    names the alternative a caller can act on without widening the sandbox."""
+    deck = _write(work_dir, "cand.cir", _BASE)
+    data = await _run(state_no_sim, path=str(deck), reference="/outside/ref.cir")
+    finding = next(f for f in data["findings"] if f["rule_id"] == "path_denied")
+    assert "netlist text itself" in finding["evidence"]["detail"]
+
+
 async def test_equivalence_reordered(state_no_sim, work_dir):
     deck = _write(work_dir, "cand.cir", _BASE)
     ref = _write(work_dir, "ref.cir", _REORDERED)

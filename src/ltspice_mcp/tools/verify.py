@@ -119,6 +119,7 @@ from ltspice_mcp.tools._base import (
     outcome_schema,
     registry,
     render_scene_artifact,
+    resolve_reference,
     safe_path,
     symbol_resolver_for,
 )
@@ -820,13 +821,6 @@ def _analyze_scene(
     scene = build_scene(asc_path, resolver=symbol_resolver_for(asc_path, state))
     issues = layout_issues(scene) if compute_issues else []
     return scene, issues
-
-
-def _resolve_reference(reference: str, state: SessionState) -> str | Path:
-    """A reference is literal netlist text when it spans lines, else a safe path."""
-    if "\n" in reference:
-        return reference
-    return safe_path(reference, state)
 
 
 def _reference_to_path(reference: str | Path, state: SessionState) -> Path:
@@ -1793,7 +1787,7 @@ async def evaluate_verify_circuit(
 
     try:
         path = safe_path(args.path, state)
-        reference = _resolve_reference(compare.reference, state) if compare else None
+        reference = resolve_reference(compare.reference, state) if compare else None
     except PathSecurityError as exc:
         data["findings"] = [
             _finding(
