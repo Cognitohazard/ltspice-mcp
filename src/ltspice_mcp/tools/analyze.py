@@ -382,8 +382,9 @@ class AnalyzeInclude(StrictModel):
         max_length=32,
         description=(
             "Keep only these dotted row paths on per_run/values rows. Roots: "
-            f"{', '.join(_ROW_KEYS)}. Escape a dot inside a key's own name as "
-            r"'\.', as in 'value.voltages.v(x1\.out)'."
+            f"{', '.join(_ROW_KEYS)}; a bare name reads under 'value' "
+            "('phase_margin_worst_deg' is 'value.phase_margin_worst_deg'). Escape a "
+            r"dot inside a key's own name as '\.', as in 'value.voltages.v(x1\.out)'."
         ),
     )
 
@@ -396,16 +397,23 @@ class AnalyzeInclude(StrictModel):
             return self
         if len(set(self.fields)) != len(self.fields):
             raise ValueError("include.fields paths must be unique")
+        resolved: list[str] = []
         for path in self.fields:
             segments = split_field_path(path)
             if any(not segment for segment in segments):
                 raise ValueError(f"include.fields path {path!r} has an empty segment")
             root = segments[0]
             if root not in _ROW_KEYS:
-                raise ValueError(
-                    f"include.fields path {path!r} starts at unknown row key {root!r}; "
-                    f"choose one of: {', '.join(_ROW_KEYS)}"
-                )
+                if len(segments) != 1:
+                    raise ValueError(
+                        f"include.fields path {path!r} starts at unknown row key {root!r}; "
+                        f"choose one of: {', '.join(_ROW_KEYS)}"
+                    )
+                # A bare name is the number's own name, which lives under 'value'.
+                path = f"value.{path}"
+            resolved.append(path)
+        if resolved != self.fields:
+            object.__setattr__(self, "fields", resolved)  # not re-validated
         return self
 
 

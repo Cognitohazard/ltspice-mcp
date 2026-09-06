@@ -1531,7 +1531,7 @@ def test_unknown_projection_path_names_the_valid_row_keys(work_dir: Path):
         _args(
             work_dir / "unread.raw",
             [_LOOP_RECIPE],
-            include={"fields": ["passband_gain_db"]},
+            include={"fields": ["bogus.passband_gain_db"]},
         )
     message = str(excinfo.value)
     assert "passband_gain_db" in message
@@ -2490,3 +2490,18 @@ class TestIncludeFlagList:
         assert args.analyze.include.outliers is True
         assert args.analyze.include.per_run is not None
         assert args.analyze.include.per_run.limit == 50
+
+
+def test_include_field_bare_name_reads_under_value():
+    """A caller names the number it wants ('phase_margin_worst_deg'); the row
+    path it lives at is 'value.<name>', so a bare name resolves there. A dotted
+    path with an unknown root is still refused."""
+    import pytest
+    from pydantic import ValidationError
+
+    from ltspice_mcp.tools.analyze import AnalyzeInclude
+
+    include = AnalyzeInclude.model_validate({"fields": ["phase_margin_worst_deg", "case_id"]})
+    assert include.fields == ["value.phase_margin_worst_deg", "case_id"]
+    with pytest.raises(ValidationError, match="unknown row key"):
+        AnalyzeInclude.model_validate({"fields": ["node.x"]})

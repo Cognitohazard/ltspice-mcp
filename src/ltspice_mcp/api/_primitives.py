@@ -148,7 +148,7 @@ async def load_raw_result(
     """Resolve and bounded-parse one raw result on the API event loop."""
     dialect: str | None
     if raw_path is not None:
-        resolved = resolve_safe_path(str(raw_path), state.config.allowed_paths)
+        resolved = resolve_safe_path(str(raw_path), state.allowed_paths())
         dialect = services.raw_dialect_for(resolved, state)
     else:
         assert job_id is not None

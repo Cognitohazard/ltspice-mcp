@@ -70,7 +70,11 @@ class TestFullListingIsUnchanged:
     def test_default_argument_is_the_registry_output(self):
         """Every other test in the suite calls get_tools() with no argument; the
         listing parameter must not have moved what that returns."""
+        from ltspice_mcp.tools import ADVERTISED_ORDER
+
         registry_defs, registry_dispatch = registry.get_tools()
+        # The declared advertised order is the one thing the listing adds.
+        registry_defs.sort(key=lambda d: ADVERTISED_ORDER.index(d.name))
         defs, dispatch = get_tools()
         assert [d.model_dump_json(by_alias=True) for d in defs] == [
             d.model_dump_json(by_alias=True) for d in registry_defs

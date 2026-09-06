@@ -528,7 +528,7 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
 # One flat object over both compare modes rather than a nested oneOf: strict MCP
 # clients handle a plain properties map everywhere, and 'mode' says which subset
 # is populated. Only 'mode' and 'equivalent' are emitted by both modes.
-_COMPARISON_SCHEMA: dict[str, Any] = {
+COMPARISON_SCHEMA: dict[str, Any] = {
     "type": ["object", "null"],
     "description": (
         "The reference comparison, null when no reference was supplied or compare "
@@ -624,7 +624,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "checks_run": {"type": "array", "items": {"type": "string"}},
         "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
         "findings": {"type": "array", "items": FINDING_SCHEMA},
-        "comparison": _COMPARISON_SCHEMA,
+        "comparison": COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
         "scene": _SCENE_SCHEMA,
@@ -823,7 +823,7 @@ def _analyze_scene(
     return scene, issues
 
 
-def _reference_to_path(reference: str | Path, state: SessionState) -> Path:
+def reference_to_path(reference: str | Path, state: SessionState) -> Path:
     """A filesystem path for the reference — text references are staged to scratch.
 
     ``structural_diff`` reuses the editor-based diff internals, which read a file,
@@ -1409,7 +1409,7 @@ CompareResult = tuple[
 ]
 
 
-def _compare_equivalence(
+def compare_equivalence(
     reference: str | Path,
     candidate: str | Path,
     ref_source: Path,
@@ -1490,7 +1490,7 @@ def _structural_diff(ref_path: Path, cand_path: Path) -> tuple[dict[str, Any], l
     return delta, warnings, err_a is None and err_b is None
 
 
-def _compare_structural(ref_path: Path, candidate: Path) -> CompareResult:
+def compare_structural(ref_path: Path, candidate: Path) -> CompareResult:
     """structural_diff mode: reuse the shipped diff internals."""
     try:
         diff, warnings, both_parsed = _structural_diff(ref_path, candidate)
@@ -1975,7 +1975,7 @@ async def evaluate_verify_circuit(
                         text if kind == "netlist" and text is not None else candidate
                     )
                     compared = await asyncio.to_thread(
-                        _compare_equivalence,
+                        compare_equivalence,
                         reference,
                         cand_input,
                         ref_source,
@@ -1985,8 +1985,8 @@ async def evaluate_verify_circuit(
                         make_include_resolver(state),
                     )
                 else:
-                    ref_path = _reference_to_path(reference, state)
-                    compared = await asyncio.to_thread(_compare_structural, ref_path, candidate)
+                    ref_path = reference_to_path(reference, state)
+                    compared = await asyncio.to_thread(compare_structural, ref_path, candidate)
                 comparison, cmp_findings, cmp_failure, cmp_warnings = compared
                 findings.extend(cmp_findings)
                 warnings.extend(cmp_warnings)

@@ -25,6 +25,21 @@ from . import (  # noqa: F401
 # isort: on
 
 
+#: The order tools/list advertises. Declared, not inherited from the import
+#: graph: clients cache the list and prompt caching keys on its exact bytes, so
+#: a tool module importing a sibling must not be able to reorder it. A
+#: registered tool missing from this list is a startup error.
+ADVERTISED_ORDER: tuple[str, ...] = (
+    "plot_waveform",
+    "analyze_results",
+    "run_experiments",
+    "jobs",
+    "inspect",
+    "edit_schematic",
+    "verify_circuit",
+)
+
+
 def get_tools(
     listing: ToolListing = "full",
 ) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
@@ -40,6 +55,10 @@ def get_tools(
       untouched, so each tool still accepts exactly what it did.
     """
     tool_defs, tool_dispatch = registry.get_tools()
+    unlisted = sorted(set(tool_dispatch) - set(ADVERTISED_ORDER))
+    if unlisted:
+        raise RuntimeError(f"registered tools missing from ADVERTISED_ORDER: {unlisted}")
+    tool_defs.sort(key=lambda definition: ADVERTISED_ORDER.index(definition.name))
     if listing == "compact":
         tool_defs = [
             definition.model_copy(

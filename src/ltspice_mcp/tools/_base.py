@@ -1068,7 +1068,7 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     Raises:
         PathSecurityError: If path violates security constraints
     """
-    return resolve_safe_path(user_path, state.config.allowed_paths)
+    return resolve_safe_path(user_path, state.allowed_paths())
 
 
 def resolve_reference(reference: str, state: SessionState) -> str | Path:
