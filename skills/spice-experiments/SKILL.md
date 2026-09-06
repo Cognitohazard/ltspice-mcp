@@ -20,6 +20,10 @@ Values come back parsed, with SI units; if a case produced no result,
 `completeness` reports it and `outcome` is `"partial"`.
 Charts: `plot_waveform` (interactive, where the client supports it); the
 `plot` recipe is the static fallback.
+Loops over many runs, numpy on the samples, or a script you will keep:
+`from ltspice_mcp.api import Api` runs the same six ops in-process and returns
+complete results (no paging, no budget); `api.reference("<op>")` gives an
+op's arguments before you guess them.
 Pass a `request_id`: the same id and args returns the original receipt
 instead of re-running (decks are content-addressed, so a later edit does not
 change what ran); different args return `idempotency_conflict`.
