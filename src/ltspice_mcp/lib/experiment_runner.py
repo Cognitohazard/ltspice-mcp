@@ -340,6 +340,11 @@ class _Execution:
     deadline_task: asyncio.Task[None] | None = None
     external_cancel_task: asyncio.Task[None] | None = None
     case_event_count: int = 0
+    # Which cases a cancel has already reported stopping, and what they were
+    # doing when it claimed them. A launched case stays non-terminal until its
+    # kill lands, so two cancels arriving in that window would each take their
+    # own snapshot and each report the same transition.
+    claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
 
 
 class ExperimentRunner(RunnerBase):
@@ -1382,7 +1387,18 @@ class ExperimentRunner(RunnerBase):
                     return_exceptions=True,
                 )
             return []
-        before = {case.case_id: case.status for case in job.cases}
+        # Claim the transitions before anything can suspend this coroutine.
+        # Cancels of one job run on the one loop that owns its coordinator, so
+        # the read and the claim below are indivisible with respect to every
+        # other cancel of it — which is what makes "one transition, one
+        # acknowledgement" hold for a case that is still running.
+        before = {
+            case.case_id: case.status
+            for case in job.cases
+            if case.status not in TERMINAL_CASE_STATUSES
+            and case.case_id not in execution.claimed_cancel_priors
+        }
+        execution.claimed_cancel_priors.update(before)
         self._request_stop(execution, "cancelled")
         await job.done_event.wait()
         return [
@@ -1392,7 +1408,7 @@ class ExperimentRunner(RunnerBase):
                 "status": case.status,
             }
             for case in job.cases
-            if before[case.case_id] not in TERMINAL_CASE_STATUSES
+            if case.case_id in before
         ]
 
     async def _kill_case(self, token: str) -> None:
