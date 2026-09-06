@@ -193,6 +193,60 @@ class TestMethodDocstrings:
         assert "run_experiments" in ApiMethodsMixin.reference()
 
 
+class TestMethodSignatures:
+    """``inspect.signature`` and ``help`` on an op show its arguments: an agent's
+    first move on an unfamiliar API is exactly that, and ``**arguments`` told it
+    nothing. The signature is generated from the model the call validates
+    against, so it cannot drift from what the call accepts."""
+
+    @pytest.mark.parametrize("name", _reference.op_names())
+    def test_signature_names_every_top_level_field(self, name: str):
+        from ltspice_mcp.lib.model_fields import field_name
+
+        method = getattr(ApiMethodsMixin, name)
+        parameters = inspect_mod.signature(method).parameters
+        operation = _reference._find(name)
+        import keyword
+
+        unnameable = False
+        for raw, field in operation.model.model_fields.items():
+            caller_name = field_name(operation.model, raw, field)
+            if keyword.iskeyword(caller_name):  # 'continue': passed by dict unpacking
+                unnameable = True
+                continue
+            assert caller_name in parameters, (name, raw)
+        # The catch-all stays only where a field cannot be a named parameter.
+        assert any(p.kind is p.VAR_KEYWORD for p in parameters.values()) is unnameable, name
+        assert "raw_page" in parameters
+
+    def test_a_cold_process_gets_the_signature_on_first_read(self, tmp_path):
+        """The first thing a caller tries on an unfamiliar API is
+        inspect.signature or help(): both install the catalogue on that read,
+        so a cold process answers with the arguments, not ``**arguments``."""
+        probe = (
+            "import inspect\n"
+            "from ltspice_mcp.api import Api\n"
+            "sig = inspect.signature(Api.run_experiments)\n"
+            "print('SIG', 'circuits' in sig.parameters, 'wait' in sig.parameters)\n"
+            "print('DOC', 'recipes' in (inspect.getdoc(Api.analyze_results) or ''))\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert "SIG True True" in proc.stdout, proc.stdout + proc.stderr
+        assert "DOC True" in proc.stdout, proc.stdout + proc.stderr
+
+    def test_run_experiments_keeps_its_own_keywords_and_takes_the_call(self):
+        parameters = inspect_mod.signature(ApiMethodsMixin.run_experiments).parameters
+        assert {"wait", "detach", "raw_page", "circuits", "request_id"} <= set(parameters)
+        assert parameters["circuits"].default is inspect_mod.Parameter.empty
+        assert parameters["wait"].default is True
+
+
 class TestCatalogueDelivery:
     """`python -m ltspice_mcp.api reference` is the same renderer behind a print,
     and reading it must stay a documentation read: no engine, no heavy imports."""
@@ -300,9 +354,8 @@ class TestCatalogueDelivery:
         probe = (
             "import inspect\n"
             "from ltspice_mcp.api import _methods\n"
-            "cold = inspect.getdoc(_methods.ApiMethodsMixin.run_experiments)\n"
-            "print('COLD-BARE', not cold or 'wait=False' not in cold)\n"
             "_methods.experiments.RunExperimentsInput\n"
+            "print('INSTALLED', _methods._method_docs_installed)\n"
             "doc = inspect.getdoc(_methods.ApiMethodsMixin.run_experiments)\n"
             "print('WARM-FULL', bool(doc) and 'wait=False' in doc)\n"
         )
@@ -313,7 +366,7 @@ class TestCatalogueDelivery:
             timeout=120,
             cwd=tmp_path,
         )
-        assert "COLD-BARE True" in proc.stdout, proc.stdout + proc.stderr
+        assert "INSTALLED True" in proc.stdout, proc.stdout + proc.stderr
         assert "WARM-FULL True" in proc.stdout, proc.stdout + proc.stderr
 
     def test_analysis_modules_keep_scipy_out_of_their_import(self, tmp_path):

@@ -22,11 +22,14 @@ demand, and the six methods' ``__doc__``, set at class-definition time, so
 from __future__ import annotations
 
 import functools
+import inspect
+import keyword
 import textwrap
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 
 from ltspice_mcp.lib.model_fields import (
     accepted_annotation,
@@ -472,9 +475,56 @@ def method_doc(name: str) -> str:
 
 
 def install_method_docs(namespace: type) -> None:
-    """Give each operation's method the catalogue entry as its docstring."""
+    """Give each operation's method the catalogue entry as its docstring and a
+    signature that names its arguments.
+
+    The methods take ``**arguments`` and validate them against the op's input
+    model, which leaves ``inspect.signature`` and ``help`` saying nothing — and
+    those are the first things a caller tries on an unfamiliar API. The
+    signature is generated from the same model, so it names exactly what the
+    call accepts: the method's own keywords first, then one keyword-only
+    parameter per top-level field under its caller-facing name.
+    """
     for name in op_names():
         method = getattr(namespace, name, None)
         function = getattr(method, "__func__", method)
         if function is not None:
             function.__doc__ = method_doc(name)
+            function.__signature__ = _method_signature(function, _find(name).model)
+
+
+def _method_signature(function: Any, model: type[BaseModel]) -> inspect.Signature:
+    declared = [
+        parameter
+        for parameter in inspect.signature(function).parameters.values()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ]
+    taken = {parameter.name for parameter in declared}
+    generated: list[inspect.Parameter] = []
+    unnameable = False
+    for raw, field in model.model_fields.items():
+        name = field_name(model, raw, field)
+        if name in taken:
+            continue
+        if not name.isidentifier() or keyword.iskeyword(name):
+            # ``continue`` on analyze_results: a caller passes it by unpacking a
+            # dict, so the catch-all stays on the signature to say so.
+            unnameable = True
+            continue
+        if field.is_required():
+            default: Any = inspect.Parameter.empty
+        elif field.default is PydanticUndefined:
+            default = ...  # a default_factory: there is a default, not a literal one
+        else:
+            default = field.default
+        generated.append(
+            inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=type_label(accepted_annotation(field)),
+            )
+        )
+    if unnameable:
+        generated.append(inspect.Parameter("arguments", inspect.Parameter.VAR_KEYWORD))
+    return inspect.Signature(declared + generated, return_annotation=dict[str, Any])
