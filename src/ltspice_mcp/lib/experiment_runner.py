@@ -61,6 +61,15 @@ StageDecks = Callable[[], Awaitable["StagedDecks"]]
 # matrix takes longer to stage than an index write.
 REQUEST_GATE_TIMEOUT_S = 300.0
 
+#: The durable replay note, written on the job record once and read by
+#: everyone who looks at the job afterwards — the original submitter included,
+#: which is why it states what happened to the record rather than making a
+#: claim about the reader's own call.
+REPLAY_RECORD_DETAIL = (
+    "A later call carrying this request_id was answered from this record; "
+    "no cases were resubmitted for it."
+)
+
 # How each staging-time drift observation reads when it blocks a replay
 # instead of annotating a fresh stage.
 _DRIFT_REASONS = {
@@ -505,11 +514,7 @@ class ExperimentRunner(RunnerBase):
                 {
                     "code": "idempotent_replay",
                     "kind": "submission",
-                    "detail": (
-                        "The request_id and canonical payload matched an existing "
-                        "durable experiment; its receipt was returned without "
-                        "resubmitting cases."
-                    ),
+                    "detail": REPLAY_RECORD_DETAIL,
                 }
             )
         receipt = ExperimentReceipt(
