@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import pytest
@@ -1089,3 +1090,51 @@ async def test_archetype_scale_blank_build(asc_state, work_dir):
     text = (work_dir / "arch.asc").read_text()
     for ref in ("M1", "D1", "E1", "G1", "R1", "R2", "C1"):
         assert ref in text
+
+
+class TestRenderAndCompareArguments:
+    """What this tool accepts for `compare`, and that it accepts no render.
+
+    Rendering belongs to verify_circuit alone: its policy has a pixel cap, a
+    delivery channel and a render-only mode, so an edit that also wants a
+    picture is one call away from the better tool. Asserted on the RESOLVED
+    value, not on the raw payload.
+    """
+
+    @staticmethod
+    def _edit(**kwargs: Any) -> EditSchematicInput:
+        return EditSchematicInput.model_validate({"target": "sheet.asc", "ops": [], **kwargs})
+
+    @pytest.mark.parametrize(
+        "payload",
+        [{"render": True}, {"render": {"format": "svg"}}, {"return_views": ["render"]}],
+        ids=["bool", "policy", "view-name"],
+    )
+    def test_no_render_spelling_is_accepted(self, payload: dict[str, Any]):
+        with pytest.raises(ValidationError):
+            self._edit(**payload)
+
+    def test_no_compare_argument_means_no_comparison(self):
+        assert self._edit().compare is None
+
+    def test_the_object_names_the_reference(self):
+        spec = self._edit(compare={"reference": "golden.cir"}).compare
+        assert spec is not None
+        assert spec.reference == "golden.cir"
+        # The tolerance and anchors keep the graph engine's own defaults.
+        assert spec.rtol == 1e-6
+        assert spec.anchors is None
+
+    def test_the_object_carries_the_comparison_controls(self):
+        spec = self._edit(compare={"reference": "g.cir", "rtol": 1e-3, "anchors": ["out"]}).compare
+        assert spec is not None
+        assert (spec.rtol, spec.anchors) == (1e-3, ["out"])
+
+    @pytest.mark.parametrize(
+        "payload",
+        [{"compare": {"rtol": 1e-3}}, {"compare": {"reference": "g.cir", "mode": "x"}}],
+        ids=["no-reference", "verify-only-mode"],
+    )
+    def test_refused_compare_spellings(self, payload: dict[str, Any]):
+        with pytest.raises(ValidationError):
+            self._edit(**payload)

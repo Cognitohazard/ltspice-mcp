@@ -597,13 +597,16 @@ def page_schema(
 # ---------------------------------------------------------------------------
 # Shared argument models
 #
-# "Draw this sheet" and "compare it against that netlist" are the same two
-# requests wherever they are asked, so both tools that ask them take the same
-# two models. A tool that can do more than the shared model describes
-# SUBCLASSES it (verify's render also chooses a delivery and whether to skip
-# the checks) rather than growing a parallel spelling — so every field on the
-# base means the same thing on every tool, and a field a tool cannot honour is
-# not advertised there at all.
+# "Compare this against that netlist" is the same request wherever it is asked,
+# so both tools that ask it take the same model. A tool that can do more than
+# the shared model describes SUBCLASSES it (verify's compare also chooses
+# between the two comparison modes) rather than growing a parallel spelling, so
+# every field on the base means the same thing on every tool and a field a tool
+# cannot honour is not advertised there at all.
+#
+# ``RenderPolicy`` is the base for the same reason even though verify_circuit is
+# the only tool that draws today: it is the half of a render policy any renderer
+# here can honour, and ``api/types.py`` exports it under that name.
 # ---------------------------------------------------------------------------
 
 
@@ -678,12 +681,14 @@ def render_spellings(policy: type[RenderPolicy]) -> str:
     )
 
 
-def coerce_render_policy(value: Any, *, policy: type[RenderPolicy] = RenderPolicy) -> Any:
+def coerce_render_policy(value: Any, *, policy: type[RenderPolicy]) -> Any:
     """Accept the bare-boolean spellings of "just draw it" / "do not draw".
 
     Bind it into a tool's ``render`` field with ``BeforeValidator`` and a
     ``json_schema_input_type`` naming that tool's policy class; see the
-    ``RenderArgument`` alias in verify.py and schematic_edit.py.
+    ``RenderArgument`` alias in verify.py. ``policy`` is required because the
+    refusal text is read off it, and a default would let a tool advertise the
+    base model's spellings while validating against its own.
 
     ``render=True`` is what a caller reaches for first, and rejecting it used to
     name the policy class — a type the message gave no way to reach — instead of
