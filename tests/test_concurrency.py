@@ -8,15 +8,18 @@ directly with real processes/threads.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import multiprocessing as mp
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib import recent
+from ltspice_mcp.lib import filelock, recent
 from ltspice_mcp.lib.filelock import file_lock
 
 # ---------------------------------------------------------------------------
@@ -113,3 +116,66 @@ class TestFileLock:
         finally:
             release.set()
             holder.join(timeout=5)
+
+
+class TestAsyncFileLock:
+    """The coroutine-side lock: it must not strand a flock when cancelled."""
+
+    async def test_a_cancelled_waiter_leaves_no_lock_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cancel can land while a worker thread's attempt is still in flight.
+
+        The thread goes on to take the lock, and by then the coroutine that
+        asked for it is gone — so the lock has to be handed back rather than
+        held until the process exits. Stretching one attempt makes that window
+        wide enough to aim at instead of racing.
+        """
+        real_file_lock = filelock.file_lock
+
+        @contextlib.contextmanager
+        def slow_lock(target: Path, **kwargs: object):
+            with real_file_lock(target, **kwargs):  # type: ignore[arg-type]
+                time.sleep(0.3)
+                yield
+
+        monkeypatch.setattr(filelock, "file_lock", slow_lock)
+        target = tmp_path / "gate.txt"
+        target.touch()
+
+        async def waiter() -> None:
+            async with filelock.async_file_lock(target):
+                pass
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)  # the attempt is in flight, mid-acquire
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.5)  # let the worker finish and hand the lock back
+
+        monkeypatch.undo()
+        with file_lock(target, timeout=1.0):
+            pass
+
+    def test_a_lock_published_after_the_waiter_gave_up_is_released(self, tmp_path: Path) -> None:
+        """The two halves of the hand-off, run the wrong way round on purpose.
+
+        A worker thread can finish taking the lock only after the coroutine
+        that asked for it has already abandoned the wait. Releasing it then has
+        to be the code's doing: a flock left for the collector to notice is one
+        another process waits on for as long as that takes. The ``held`` stack
+        below stays referenced here precisely so nothing can be blamed on the
+        collector.
+        """
+        target = tmp_path / "gate.txt"
+        target.touch()
+        handoff = filelock._LockHandoff()
+        held = contextlib.ExitStack()
+        held.enter_context(file_lock(target, timeout=0))
+
+        handoff.abandon()  # the waiting coroutine was cancelled
+        handoff.publish(held)  # and only then did the worker win the lock
+
+        with file_lock(target, timeout=0.5):
+            pass
