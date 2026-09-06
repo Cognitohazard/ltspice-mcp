@@ -43,7 +43,11 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
 # Numeric prefix + optional alpha tail. The tail covers both the scale suffix
 # ('k', 'meg', ...) and any unit annotation that follows it ('1ms' -> tail
 # 'ms', '1uF' -> tail 'uf'). Anchored so '1k1' or 'foo' don't slip through.
-_NUM_TAIL_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Z]+)$")
+# The micro sign (µ, U+00B5) is how LTspice's exporter spells 'u' in a
+# netlist, and the Greek mu (μ, U+03BC) is what a keyboard produces; both are
+# admitted to the tail and folded to 'u' before the suffix table is read.
+_NUM_TAIL_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Zµμ]+)$")
+_MICRO_SIGNS = str.maketrans({"µ": "u", "μ": "u"})
 
 
 def parse_spice_value(s: str) -> float:
@@ -81,7 +85,7 @@ def parse_spice_value(s: str) -> float:
     if m is not None:
         # group(1) is always a valid float literal by construction of the regex.
         mantissa = float(m.group(1))
-        tail = m.group(2).lower()
+        tail = m.group(2).translate(_MICRO_SIGNS).lower()
         for suffix, multiplier in _SCALE_FACTORS:
             if tail.startswith(suffix):
                 return mantissa * multiplier

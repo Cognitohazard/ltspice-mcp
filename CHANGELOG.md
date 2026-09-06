@@ -623,6 +623,11 @@ the key ignored. Serving zero tools is still a hard error.
 
 ### Fixed
 
+- A value spelled with the micro sign (`20µ`, `4.7µF`) parses as micro. That
+  is how LTspice's netlist exporter writes `u`, so an exported current source
+  had no nominal a Monte Carlo `component` rule could perturb: every case
+  failed before submission with `random_nominal_unavailable`. The Greek mu is
+  accepted too.
 - A compare reference written outside the sandbox is refused with the
   alternative named: the deck's text itself, passed as `compare.reference`.
   A client's scratch directory is usually outside `allowed_paths`, and both
