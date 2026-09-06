@@ -2,6 +2,7 @@
 
 from mcp import types
 
+from ltspice_mcp.config import ToolListing
 from ltspice_mcp.tools._base import RegisteredTool, registry
 from ltspice_mcp.tools._schema import strip_argument_descriptions
 
@@ -25,7 +26,7 @@ from . import (  # noqa: F401
 
 
 def get_tools(
-    listing: str = "full",
+    listing: ToolListing = "full",
 ) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
     """Return the advertised tool definitions and their dispatch metadata.
 
