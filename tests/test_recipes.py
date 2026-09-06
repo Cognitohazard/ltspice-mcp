@@ -243,3 +243,18 @@ class TestBodeCrossingLevel:
         message = str(excinfo.value)
         assert "level_db" in message
         assert "level_deg" in message
+
+
+def test_field_accepts_the_result_rows_own_key():
+    """A stability row reports ``phase_margin_worst_deg``; passing that key back as
+    'field' names the same number as the reducible spelling, so it is accepted
+    and canonicalized rather than rejected as a second spelling."""
+    base = {"key": "s", "metric": "stability", **VALID_RECIPES["stability"], "reduce": ["min"]}
+    recipe = validate_recipe({**base, "field": "phase_margin_worst_deg"})
+    assert isinstance(recipe, MultiRecipe) and recipe.field == "phase_margin_deg"
+    with pytest.raises(ValidationError, match="does not produce reducible field"):
+        validate_recipe({**base, "field": "phase_margin"})
+    # Two reducible fields read the same row key: the key alone cannot choose.
+    edges = {"key": "e", "metric": "edges", **VALID_RECIPES["edges"], "reduce": ["min"]}
+    with pytest.raises(ValidationError, match="does not produce reducible field"):
+        validate_recipe({**edges, "field": "transition_time"})
