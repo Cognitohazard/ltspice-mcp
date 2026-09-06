@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import os
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -23,6 +22,7 @@ from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
+from ltspice_mcp.lib.observability import configure_stderr_logging
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.resources import (
@@ -146,12 +146,7 @@ def _path_reject_guidance(state: SessionState) -> str:
 
 def _configure_server_logging(config: ServerConfig) -> None:
     """Install the server process's stderr logging configuration."""
-    logging.basicConfig(
-        level=getattr(logging, config.log_level.upper()),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr)],
-        force=True,
-    )
+    configure_stderr_logging(config.log_level)
 
 
 @asynccontextmanager
