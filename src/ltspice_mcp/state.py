@@ -78,6 +78,8 @@ class SessionState:
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
+    sandbox_stamp: tuple[int, int] | None = None
+    """(mtime_ns, size) of the config file as last read for the sandbox."""
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
     auto-detection). Logged at startup and carried verbatim on the ``inspect``
@@ -147,6 +149,25 @@ class SessionState:
     def field_owners(self) -> "dict[str, tuple[str, ...]]":
         """Advertised top-level wire fields -> owning tool names."""
         return self._surface[2]
+
+    def __post_init__(self) -> None:
+        self.sandbox_stamp = _file_stamp(self.config.config_path)
+
+    def allowed_paths(self) -> list[Path]:
+        """The sandbox, re-read from the config file whenever that file changed.
+
+        The refusal an agent gets names the config line that widens the sandbox;
+        picking the edit up on the next call is what makes that line the agent's
+        own to act on. Only ``[security] allowed_paths`` follows the file: the
+        rest of it is startup state (detected simulators, runners, caches).
+        """
+        stamp = _file_stamp(self.config.config_path)
+        if stamp != self.sandbox_stamp:
+            self.sandbox_stamp = stamp
+            self.config.allowed_paths = ServerConfig.load(
+                self.config.config_path, overrides={"working_dir": self.config.working_dir}
+            ).allowed_paths
+        return self.config.allowed_paths
 
     @classmethod
     def create(
@@ -256,3 +277,11 @@ class SessionState:
         self.results.clear()
         await self.job_registry.cancel_running(self.runners, self)
         await self.job_registry.drain_pending()
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)

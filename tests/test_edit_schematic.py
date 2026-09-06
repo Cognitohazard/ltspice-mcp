@@ -895,6 +895,43 @@ async def test_reference_outside_sandbox_names_the_text_alternative(asc_state):
         )
 
 
+async def test_reference_structural_diff_reports_the_delta(asc_state, monkeypatch):
+    """The compare argument is verify_circuit's: 'structural_diff' returns the
+    added/removed/changed delta with the verdict derived from it."""
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK_DIFFERENT
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(
+        asc_state,
+        "refdiff",
+        _DIVIDER_OPS,
+        compare={"reference": _REF_DECK, "mode": "structural_diff"},
+    )
+    assert data["commit_state"] == "committed"
+    comparison = data["verification"]["comparison"]
+    assert comparison["mode"] == "structural_diff"
+    assert comparison["components_added"] == ["R3"]
+    # A node rewire is not a value change: structural_diff lists it under neither
+    # 'changed' nor 'removed'; equivalence mode is the one that catches it.
+    assert comparison["components_removed"] == []
+    assert data["verification"]["equivalent"] is False
+    assert data["outcome"] == "partial"
+
+
+async def test_reference_anchors_are_honoured(asc_state, monkeypatch):
+    async def fake_export(_copy, _state):
+        return _REF_DECK
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(
+        asc_state, "refanchor", _DIVIDER_OPS, compare={"reference": _REF_DECK, "anchors": ["out"]}
+    )
+    assert data["verification"]["comparison"]["mode"] == "equivalence"
+    assert data["verification"]["equivalent"] is True
+
+
 async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypatch):
     (work_dir / "ref.cir").write_text(_REF_DECK)
 

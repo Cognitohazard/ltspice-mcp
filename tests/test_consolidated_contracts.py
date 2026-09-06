@@ -620,7 +620,8 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # The multi-field and keyed recipes each state in the schema itself that
     # 'field' is required once 'reduce' or 'spec' is given (dependentRequired),
     # so the rule survives the compact listing.
-    "analyze_results": 18900,
+    # include.fields says a bare name reads under value.
+    "analyze_results": 19000,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -628,7 +629,8 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
-    "edit_schematic": 11400,
+    # compare is verify_circuit's spec: the mode field rides along.
+    "edit_schematic": 11800,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
