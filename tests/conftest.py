@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 import typing
-from collections.abc import Coroutine, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from pathlib import Path
 
 import pytest
@@ -17,7 +17,7 @@ from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner, StagedDecks
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
@@ -384,6 +384,23 @@ def patch_stub_bootstrap(monkeypatch: pytest.MonkeyPatch, state: object) -> None
         )
 
     monkeypatch.setattr(_api_session, "bootstrap_library_engine", bootstrap)
+
+
+def staged_decks(
+    cases: list[ExperimentCase],
+    sources: list[SourceRecord],
+) -> Callable[[], Awaitable[StagedDecks]]:
+    """A staging pass for decks a test has already built.
+
+    ``ExperimentRunRequest`` takes a callable because real staging copies files
+    inside the request gate; a test that has its cases in hand hands them back
+    from one.
+    """
+
+    async def stage() -> StagedDecks:
+        return StagedDecks(cases=cases, sources=sources)
+
+    return stage
 
 
 def make_experiment_job(
