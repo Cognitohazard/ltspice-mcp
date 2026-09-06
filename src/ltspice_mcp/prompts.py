@@ -38,7 +38,7 @@ def _require(arguments: Mapping[str, str], name: str) -> str:
     return value
 
 
-def _characterize_filter_consolidated(arguments: Mapping[str, str]) -> types.GetPromptResult:
+def _build_characterize_filter(arguments: Mapping[str, str]) -> types.GetPromptResult:
     path = _require(arguments, "path")
     signal = f"V({(arguments.get('node') or 'out').strip()})"
     text = (
@@ -58,7 +58,7 @@ def _characterize_filter_consolidated(arguments: Mapping[str, str]) -> types.Get
     return _text_result("Characterize a filter's AC response", text)
 
 
-def _run_and_plot_consolidated(arguments: Mapping[str, str]) -> types.GetPromptResult:
+def _build_run_and_plot(arguments: Mapping[str, str]) -> types.GetPromptResult:
     path = _require(arguments, "path")
     signal = (arguments.get("signal") or "V(out)").strip()
     text = (
@@ -78,7 +78,7 @@ def _run_and_plot_consolidated(arguments: Mapping[str, str]) -> types.GetPromptR
     return _text_result("Run a transient and plot a signal", text)
 
 
-def _step_response_consolidated(arguments: Mapping[str, str]) -> types.GetPromptResult:
+def _build_step_response(arguments: Mapping[str, str]) -> types.GetPromptResult:
     path = _require(arguments, "path")
     signal = f"V({(arguments.get('node') or 'out').strip()})"
     text = (
@@ -122,7 +122,7 @@ _PROMPTS = [
                 ),
             ],
         ),
-        build=_characterize_filter_consolidated,
+        build=_build_characterize_filter,
     ),
     _PromptEntry(
         prompt=types.Prompt(
@@ -137,7 +137,7 @@ _PROMPTS = [
                 ),
             ],
         ),
-        build=_run_and_plot_consolidated,
+        build=_build_run_and_plot,
     ),
     _PromptEntry(
         prompt=types.Prompt(
@@ -152,7 +152,7 @@ _PROMPTS = [
                 ),
             ],
         ),
-        build=_step_response_consolidated,
+        build=_build_step_response,
     ),
 ]
 
