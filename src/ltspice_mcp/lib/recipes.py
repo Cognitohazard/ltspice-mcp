@@ -11,7 +11,6 @@ from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
     AliasChoices,
-    BaseModel,
     ConfigDict,
     Field,
     TypeAdapter,
@@ -19,6 +18,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import compact_validation_error
+from ltspice_mcp.lib.models import StrictModel
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -81,16 +81,6 @@ TRANSIENT_FIELDS_BY_MODE: dict[str, frozenset[str]] = {
 }
 
 
-class StrictModel(BaseModel):
-    """Tool-independent strict model base for recipe schemas."""
-
-    model_config = ConfigDict(
-        extra="forbid",
-        str_strip_whitespace=True,
-        validate_assignment=True,
-    )
-
-
 # Appended to every dormant-branch summary so each stub names all three
 # discovery channels, nearest first: the MCP lookup, which every client on this
 # surface can call and which reads these same models; the Python API's
@@ -147,6 +137,40 @@ class StepSelector(StrictModel):
 
     axis: str
     value: float | str
+
+
+class StepSelectionFields(StrictModel):
+    """Which ``.step`` iteration(s) one whole request reads.
+
+    A run's step axis belongs to the run, not to the measurement taken on it,
+    so the choice is made once per request and applies to every recipe in it.
+    Declared here rather than on each surface: ``analyze_results`` and the
+    analysis block ``run_experiments`` carries are the same request asked in
+    two places, and two copies of one field pair drift in wording first and in
+    rules second.
+    """
+
+    step: StepSelector | None = Field(
+        default=None,
+        description=(
+            "For a deck carrying a .step directive: read the one step whose "
+            "axis value this names, e.g. {axis:'temp', value:27}. Applies to "
+            "every recipe in the request. Default is the first step."
+        ),
+    )
+    all_steps: bool = Field(
+        default=False,
+        description=(
+            "For a deck carrying a .step directive: evaluate every recipe at "
+            "every step instead of only the first. Not combinable with 'step'."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _one_step_selection(self) -> StepSelectionFields:
+        if self.step is not None and self.all_steps:
+            raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
+        return self
 
 
 class SpecLimits(StrictModel):
