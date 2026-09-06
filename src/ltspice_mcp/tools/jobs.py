@@ -674,6 +674,12 @@ def _collect_circuit_groups(
     ``own_experiments`` is a registry snapshot taken on the event loop —
     this process's live jobs are counted from it, not from possibly-lagging
     disk records.
+
+    The counters come from ``services.summarize_circuit_jobs``, shared with
+    ``spice://recent``; :class:`~ltspice_mcp.lib.services.CircuitJobSummary`
+    records where this listing and that resource deliberately differ — this
+    one does not prune the index, resolves paths before matching, and prefers
+    the live registry.
     """
     recent_entries = recent.load(prune_missing=False)
     recent_by_path: dict[str, str | None] = {}
@@ -730,22 +736,17 @@ def _collect_circuit_groups(
             )
         ]
         observations.extend(pointer_observations)
-        counts: dict[str, int] = {}
-        interrupted: list[str] = []
+        summary = services.summarize_circuit_jobs(circuit_path, experiment_jobs)
         activities = [last_touched] if last_touched is not None else []
-        for experiment in experiment_jobs:
-            counts[experiment.status] = counts.get(experiment.status, 0) + 1
-            if experiment.status == "interrupted":
-                interrupted.append(experiment.job_id)
-            activities.append(_activity_timestamp(experiment))
+        activities.extend(_activity_timestamp(experiment) for experiment in experiment_jobs)
         newest_first = sorted(experiment_jobs, key=_activity_timestamp, reverse=True)
         groups.append(
             {
                 "path": str(circuit_path),
-                "exists": circuit_path.exists(),
+                "exists": summary.exists,
                 "last_activity": max(activities) if activities else None,
-                "status_counts": counts,
-                "interrupted_job_ids": sorted(set(interrupted)),
+                "status_counts": summary.status_counts,
+                "interrupted_job_ids": summary.interrupted_job_ids,
                 "recent_jobs": [
                     {
                         "job_id": experiment.job_id,
@@ -759,7 +760,7 @@ def _collect_circuit_groups(
                     }
                     for experiment in newest_first[:_RECENT_JOBS_CAP]
                 ],
-                "recent_jobs_total": len(experiment_jobs),
+                "recent_jobs_total": summary.total_jobs,
             }
         )
     return _CircuitGroupsRead(groups=groups, observations=observations)

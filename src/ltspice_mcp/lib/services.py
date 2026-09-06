@@ -13,7 +13,7 @@ import contextlib
 import contextvars
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -682,6 +682,60 @@ def validate_step(raw: RawRead, step: int) -> None:
         raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
+@dataclass(frozen=True)
+class CircuitJobSummary:
+    """What one circuit's records add up to, for either circuit listing.
+
+    ``spice://recent`` and ``jobs(action="list")`` are two views of the same
+    join — the recent-circuits index against this store's experiment records —
+    and everything below is derived from the job list alone, so the two cannot
+    come to different numbers for the same records. What they do differ on is
+    which jobs they hand in and how they name the circuit, and each of those
+    three differences is deliberate:
+
+    * **Pruning.** The resource asks ``recent.load(prune_missing=True)``: it
+      is the index's own view and takes the chance to drop entries whose file
+      is gone. ``jobs(list)`` does not prune, because listing must not rewrite
+      a user-global index as a side effect, and a deleted circuit's recorded
+      jobs are still addressable — ``exists`` is the fact it reports instead.
+    * **Path identity.** ``jobs(list)`` resolves and de-duplicates paths,
+      because it has to match a caller's ``circuit`` argument and two index
+      entries can spell one file. The resource reports the entry as the index
+      holds it, because that is what the index holds.
+    * **Live jobs.** ``jobs(list)`` passes ``prefer=`` a registry snapshot
+      taken on the event loop, so this process's running jobs are counted from
+      memory rather than from a record whose last transitions may still be in
+      flight. The resource read runs on a worker thread, where the registry
+      may not be touched, so it reports what is on disk.
+    """
+
+    exists: bool
+    status_counts: dict[str, int]
+    interrupted_job_ids: list[str]
+    total_jobs: int
+    total_runs: int
+
+
+def summarize_circuit_jobs(
+    circuit_path: Path,
+    jobs: Sequence[ExperimentJob],
+) -> CircuitJobSummary:
+    """Count one circuit's job records. See :class:`CircuitJobSummary`."""
+    counts: dict[str, int] = {}
+    interrupted: list[str] = []
+    for job in jobs:
+        counts[job.status] = counts.get(job.status, 0) + 1
+        if job.status == "interrupted":
+            interrupted.append(job.job_id)
+    return CircuitJobSummary(
+        exists=circuit_path.exists(),
+        status_counts=counts,
+        interrupted_job_ids=sorted(set(interrupted)),
+        total_jobs=len(jobs),
+        total_runs=sum(job.completeness.expanded for job in jobs),
+    )
+
+
 def collect_recent_circuits(working_dir: Path) -> list[dict[str, Any]]:
     """List recently-touched circuits with their persisted-job summaries.
 
@@ -690,10 +744,9 @@ def collect_recent_circuits(working_dir: Path) -> list[dict[str, Any]]:
     directory still reports its jobs here — and one last run from a different
     working directory reports none.
 
-    ``jobs(list)`` reads that same index but prefers this process's live
-    registry over the records on disk. This runs on a worker thread and cannot
-    snapshot the registry, so a job this session is running can read as fresher
-    there than it does here.
+    The counters are :func:`summarize_circuit_jobs`, shared with
+    ``jobs(action="list")``; that class documents where the two views
+    deliberately differ.
 
     Blocking — ``recent.load`` polls a cross-process file lock (up to 10 s)
     and each summary reads the store's JSON records; all reads (the prune
@@ -709,19 +762,16 @@ def collect_recent_circuits(working_dir: Path) -> list[dict[str, Any]]:
         raw_path = entry.get("path")
         if not isinstance(raw_path, str):
             continue
-        circuit_path = Path(raw_path)
-        jobs, _ = experiment_store.load_jobs_for_circuit(circuit_path, working_dir)
-        counts: dict[str, int] = {}
-        for job in jobs:
-            counts[job.status] = counts.get(job.status, 0) + 1
+        jobs, _ = experiment_store.load_jobs_for_circuit(Path(raw_path), working_dir)
+        summary = summarize_circuit_jobs(Path(raw_path), jobs)
         circuits.append(
             {
                 "path": raw_path,
-                "exists": circuit_path.exists(),
-                "total_jobs": len(jobs),
-                "total_runs": sum(job.completeness.expanded for job in jobs),
-                "status_counts": counts,
-                "interrupted_job_ids": [job.job_id for job in jobs if job.status == "interrupted"],
+                "exists": summary.exists,
+                "total_jobs": summary.total_jobs,
+                "total_runs": summary.total_runs,
+                "status_counts": summary.status_counts,
+                "interrupted_job_ids": summary.interrupted_job_ids,
                 "last_touched": entry.get("last_touched"),
             }
         )
