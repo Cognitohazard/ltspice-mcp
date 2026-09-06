@@ -33,7 +33,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
-from ltspice_mcp.lib.experiment_runner import ExperimentCancellationError
+from ltspice_mcp.lib.experiment_runner import ExperimentCancellationError, cancel_receipt_row
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     Completeness,
@@ -835,11 +835,22 @@ async def _cancel_jobs_target(
                 stage="cancellation",
                 retryable=True,
             )
-        prior = {
-            case.case_id: (case.run_index, case.status)
-            for case in job.cases
-            if case.status not in TERMINAL_CASE_STATUSES
-        }
+        # One transition, one acknowledgement — the rule the coordinator keeps
+        # for a job it owns, through the ledger of cases a cancel has already
+        # claimed. There is no coordinator here, so the durable marker is what
+        # says an earlier cancel already reported these cases stopping.
+        already_claimed = await asyncio.to_thread(
+            experiment_store.cancellation_requested, job.job_id, state.working_dir
+        )
+        prior = (
+            {}
+            if already_claimed
+            else {
+                case.case_id: (case, case.status)
+                for case in job.cases
+                if case.status not in TERMINAL_CASE_STATUSES
+            }
+        )
         token = args.control_token
         if token is None:
             raise _JobsActionError(
@@ -859,23 +870,10 @@ async def _cancel_jobs_target(
         finished = await _await_foreign_experiment_cancellation(job, state)
         final_by_case = {case.case_id: case.status for case in finished.cases}
         return [
-            {
-                "case_id": case_id,
-                "run_index": run_index,
-                "prior_status": prior_status,
-                "status": final_by_case.get(case_id, "cancelled"),
-            }
-            for case_id, (run_index, prior_status) in prior.items()
+            cancel_receipt_row(case, prior_status, final_by_case.get(case_id, "cancelled"))
+            for case_id, (case, prior_status) in prior.items()
         ]
-    receipts = await runner.cancel(job, control_token=args.control_token)
-    run_indices = {case.case_id: case.run_index for case in job.cases}
-    return [
-        {
-            **receipt,
-            "run_index": run_indices[receipt["case_id"]],
-        }
-        for receipt in receipts
-    ]
+    return await runner.cancel(job, control_token=args.control_token)
 
 
 def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:

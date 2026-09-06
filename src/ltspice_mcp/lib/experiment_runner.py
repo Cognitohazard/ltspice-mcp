@@ -78,6 +78,26 @@ _DRIFT_REASONS = {
 }
 
 
+def cancel_receipt_row(
+    case: ExperimentCase,
+    prior_status: str,
+    final_status: str,
+) -> dict[str, Any]:
+    """One row of a cancel receipt: which case, what it was doing, where it ended.
+
+    Both cancel routes report the same four keys — this coordinator when it
+    owns the job, and ``jobs(cancel)`` when the owner is another live process
+    and the durable marker is all this one can write. One shape is what the
+    receipt schema in ``tools/jobs.py`` describes.
+    """
+    return {
+        "case_id": case.case_id,
+        "run_index": case.run_index,
+        "prior_status": prior_status,
+        "status": final_status,
+    }
+
+
 class IdempotencyConflictError(SimulationError):
     """A request id was reused for a different canonical payload."""
 
@@ -1409,11 +1429,7 @@ class ExperimentRunner(RunnerBase):
         self._request_stop(execution, "cancelled")
         await job.done_event.wait()
         return [
-            {
-                "case_id": case.case_id,
-                "prior_status": before[case.case_id],
-                "status": case.status,
-            }
+            cancel_receipt_row(case, before[case.case_id], case.status)
             for case in job.cases
             if case.case_id in before
         ]
