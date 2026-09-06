@@ -399,15 +399,17 @@ Key `lib/` modules:
 
 ### The tool surface
 
-There is one tool profile, and no setting selects it: `config.tool_profile`
-is a fixed name the guide and the prompts are written against. What `[tools]`
-does still select is `listing` — `full` or `compact`, the two amounts of each
-definition the same seven tools can be advertised with (see
+There is one tool surface and nothing selects it: the guide is one document,
+the prompts have one edition, and no config key names a profile.
+`inspect(kind="capabilities")` reports `tool_profile: "consolidated"` so a
+client can read which surface it is talking to. What `[tools]` does select is
+`listing` — `full` or `compact`, the two amounts of each definition the same
+seven tools can be advertised with (see
 [docs/design/mcp_surface.md](design/mcp_surface.md), "Two listing modes").
 
-|profile|tool count|use case|
+|surface|tool count|use case|
 |-|-|-|
-|`consolidated` (the only profile)|7 tools|Any MCP client: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author), plus the `plot_waveform` widget|
+|`consolidated` (the only one)|7 tools|Any MCP client: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author), plus the `plot_waveform` widget|
 
 Each of the six tools takes a declarative payload rather than a fixed
 argument list, so the number of capabilities did not shrink with the number
