@@ -427,7 +427,7 @@ class TestSummarySurfacesParserFaults:
             return real_get_wave(trace, step)
 
         monkeypatch.setattr(raw, "get_wave", refuse_one)
-        summary = raw_parser.build_simulation_summary(raw, log, value_scan="scan")
+        summary = raw_parser.build_simulation_summary(raw, log, value_scan=True)
         joined = " ".join(summary["warnings"])
         assert "value scan" in joined
         assert "V(out)" in joined

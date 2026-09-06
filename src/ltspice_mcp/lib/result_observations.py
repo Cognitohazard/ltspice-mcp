@@ -594,14 +594,12 @@ def surface_observations(
     *,
     requested: dict[str, list[str]] | None = None,
     value_traces: dict[str, np.ndarray] | None = None,
-    value_scan: str = "off",
     source_amplitudes: dict[str, float] | None = None,
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
 
-    ``value_scan`` is the caller's explicit decision about value surfacing:
-    - ``"scan"`` — ``value_traces`` were loaded; scan them.
-    - ``"off"``  — value surfacing not applicable for this caller.
+    Passing ``value_traces`` is the decision to surface value facts: a caller
+    that loaded them wants them scanned, and one that did not passes None.
 
     ``source_amplitudes`` (from ``parse_source_amplitudes``) arms the
     source-relative ``extreme_value`` trigger for real-valued analyses.
@@ -613,7 +611,7 @@ def surface_observations(
         abort = meas_batch_abort_observation(obs)
         if abort is not None:
             obs.append(abort)
-    if value_scan == "scan" and value_traces is not None:
+    if value_traces is not None:
         source_reference: tuple[str, float] | None = None
         if source_amplitudes:
             # Only where "node voltage vs. drive level" is meaningful: transient

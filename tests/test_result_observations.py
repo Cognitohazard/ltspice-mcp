@@ -376,9 +376,8 @@ class TestSourceRelativeTrigger:
 
 
 class TestSurfaceObservations:
-    def test_value_scan_off_no_value_or_coverage(self):
-        obs = surface_observations({"errors": []}, value_scan="off")
-        assert obs == []
+    def test_no_value_traces_means_no_value_or_coverage_observations(self):
+        assert surface_observations({"errors": []}) == []
 
     def test_combines_all_kinds(self):
         summary = {"errors": ["singular matrix"], "measurements": {}}
@@ -386,7 +385,6 @@ class TestSurfaceObservations:
             summary,
             requested={"meas": ["vpp"], "four": []},
             value_traces={"V(n2)": np.array([1e30])},
-            value_scan="scan",
         )
         kinds = {o["kind"] for o in obs}
         assert kinds == {"relay", "reconciliation", "value"}
@@ -399,7 +397,6 @@ class TestSurfaceObservations:
             return surface_observations(
                 {"sim_type": sim_type},
                 value_traces={"V(n2)": wave},
-                value_scan="scan",
                 source_amplitudes=amps,
             )
 
@@ -417,7 +414,6 @@ class TestSurfaceObservations:
             surface_observations(
                 {},  # no sim_type key at all
                 value_traces={"V(n2)": wave},
-                value_scan="scan",
                 source_amplitudes=amps,
             )
             == []
@@ -429,7 +425,6 @@ class TestSurfaceObservations:
         obs = surface_observations(
             {"sim_type": "Transient Analysis"},
             value_traces={"V(out)": np.array([0.0, 1.0])},
-            value_scan="scan",
             source_amplitudes={"Vsig": 0.01, "Vdd": 12.0},
         )
         assert obs == []
@@ -519,7 +514,7 @@ class TestBuildSummaryWiring:
             {"V(n2)": np.array([1e30])},
             plotname="Operating Point",
         )
-        summary = build_simulation_summary(raw, None, value_scan="scan")
+        summary = build_simulation_summary(raw, None, value_scan=True)
         codes = {o["code"] for o in summary["observations"]}
         assert "extreme_value" in codes
 
@@ -551,7 +546,7 @@ class TestBuildSummaryWiring:
             {"V(n2)": np.array([0.0, 850.0])},
         )
         summary = build_simulation_summary(
-            raw, None, value_scan="scan", source_amplitudes={"V1": 0.1}
+            raw, None, value_scan=True, source_amplitudes={"V1": 0.1}
         )
         ev = next(o for o in summary["observations"] if o["code"] == "extreme_value")
         assert ev["evidence"]["source_name"] == "V1"
@@ -603,7 +598,7 @@ class TestOperatingPointValueScan:
         raw = RawRead(str(FIXTURES / "op_extreme_node.raw"))
         # Sanity: the extreme node really is the first trace (a non-axis signal).
         assert raw.get_trace_names()[0].lower() == "v(hot)"
-        summary = build_simulation_summary(raw, None, value_scan="scan")
+        summary = build_simulation_summary(raw, None, value_scan=True)
         codes = {o["code"] for o in summary["observations"]}
         assert "extreme_value" in codes
 
@@ -638,7 +633,7 @@ class TestBuildSummaryRealLogPairs:
 
         raw = RawRead(str(FIXTURES / f"{name}.raw"))
         return build_simulation_summary(
-            raw, FIXTURES / f"{name}.log", requested=requested, value_scan="scan"
+            raw, FIXTURES / f"{name}.log", requested=requested, value_scan=True
         )
 
     def test_tran_meas_parsed_from_real_log_and_reconciled_clean(self):
