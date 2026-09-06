@@ -25,6 +25,7 @@ windows/text) while still reusing ``PinInfo`` and the rotation transform.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import math
 import os
 from collections.abc import Sequence
@@ -32,7 +33,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ltspice_mcp.lib.cache import file_stamp
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     PinInfo,
@@ -504,6 +505,11 @@ class Directive:
 @dataclass
 class Scene:
     source: Path
+    #: SHA-256 of the bytes this scene was parsed from, so anything reporting
+    #: what it drew reports the revision it actually read rather than whatever
+    #: a later re-read of the path would find. ``None`` when the scene was not
+    #: built from a file.
+    source_sha256: str | None = None
     symbols: list[PlacedSymbol] = field(default_factory=list)
     wires: list[Wire] = field(default_factory=list)
     flags: list[NetFlag] = field(default_factory=list)
@@ -838,9 +844,8 @@ class _AscDoc:
 _ROTATIONS = frozenset({"R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"})
 
 
-def _parse_asc(path: Path) -> _AscDoc:
+def _parse_asc(text: str) -> _AscDoc:
     doc = _AscDoc()
-    text = read_spice_text(path)
     current: _RawSymbol | None = None
 
     for raw in text.splitlines():
@@ -1202,8 +1207,12 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
     if resolver is None:
         resolver = SymbolResolver(local_dir=asc_path.parent, stock_paths=default_stock_paths())
 
-    doc = _parse_asc(asc_path)
-    scene = Scene(source=asc_path)
+    # One read: the digest and the parse describe the same bytes, so a peer
+    # that commits between them cannot make the reported provenance a hash of
+    # something that was never drawn.
+    data = asc_path.read_bytes()
+    doc = _parse_asc(decode_spice_bytes(data))
+    scene = Scene(source=asc_path, source_sha256=hashlib.sha256(data).hexdigest())
 
     for raw in doc.symbols:
         proto = resolver.load(raw.symbol)

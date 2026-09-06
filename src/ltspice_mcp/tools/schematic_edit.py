@@ -197,11 +197,6 @@ class EditSchematicInput(ToolInput):
         ),
     )
 
-    @property
-    def compare_spec(self) -> CompareSpec | None:
-        """The comparison to run, or None when none was asked for."""
-        return self.compare
-
 
 # ---------------------------------------------------------------------------
 # Output schema
@@ -758,7 +753,7 @@ async def _evaluate_edit_schematic(
     # a path outside allowed_paths is an argument fault the caller fixes by
     # resending, not a property of the sheet. Resolving it in the post-commit
     # stage instead would reject the call after the target was already written.
-    compare = args.compare_spec
+    compare = args.compare
     reference_path = safe_path(compare.reference, state) if compare is not None else None
 
     build_id = generate_id("build")

@@ -690,9 +690,9 @@ def _failure(
 
 
 # ``mode`` and ``delivery`` are here rather than on ``RenderPolicy`` because
-# only this tool has checks to skip and an image channel to deliver into; an
-# edit's render has neither, and advertising them there would name choices that
-# tool cannot honour.
+# they are decisions only this tool has to make: which checks to skip, and
+# which channel the image goes out on. The base stays what any renderer could
+# honour, so a second one would not inherit choices it cannot make.
 class VerifyRenderPolicy(RenderPolicy):
     """The shared render policy, plus what only this tool can decide."""
 
@@ -774,16 +774,6 @@ class VerifyCircuitInput(ToolInput):
             "defaults below; omitted or false draws nothing."
         ),
     )
-
-    @property
-    def render_policy(self) -> VerifyRenderPolicy | None:
-        """The resolved render policy, or None when nothing is to be drawn."""
-        return self.render
-
-    @property
-    def compare_spec(self) -> VerifyCompareSpec | None:
-        """The comparison to run, or None when none was asked for."""
-        return self.compare
 
     export_to: Literal["managed", "sidecar"] = Field(
         default="managed",
@@ -1552,13 +1542,20 @@ def _render_scene(
     )
 
 
+#: What the render check produces: ``(payload, inline image, failures,
+#: observations)``.
+_RenderResult = tuple[
+    dict[str, Any] | None, "RenderedImage | None", list[dict[str, Any]], list[str]
+]
+
+
 async def _do_render(
     scene: Scene | None,
     kind: str,
     policy: VerifyRenderPolicy,
     path: Path,
     state: SessionState,
-) -> tuple[dict[str, Any] | None, RenderedImage | None, list[dict[str, Any]], list[str]]:
+) -> _RenderResult:
     """The render check, factored like the other checks.
 
     Returns ``(render_payload, inline_image, failures, observations)``. Only .asc
@@ -1602,7 +1599,7 @@ async def _do_render(
         downscaled=downscaled,
         delivery=policy.delivery,
         returned_inline=want_inline,
-        source_sha256=_file_digest(path),
+        source_sha256=scene.source_sha256,
     )
     return payload, (image if want_inline else None), failures, []
 
@@ -1620,10 +1617,12 @@ def _render_payload(
         "path": str(path),
         "sha256": hashlib.sha256(image.data).hexdigest(),
         # The digest of the SHEET this drew, not of the image and not of any
-        # exported netlist. Rendering reads the file on disk, so a peer that
-        # committed since the caller's own edit would otherwise be invisible:
-        # comparing this with the sha256 edit_schematic returned is how a
-        # caller knows the picture is of the revision it wrote.
+        # exported netlist — read off the scene, so it is the hash of the bytes
+        # that were actually parsed rather than of whatever a later re-read
+        # would find. Comparing it with the sha256 edit_schematic returned is
+        # how a caller knows the picture is of the revision it wrote, and a
+        # peer committing mid-call shows up as a mismatch instead of hiding
+        # behind a fresh hash of the new file.
         "source_sha256": source_sha256,
         "width": image.width,
         "height": image.height,
@@ -1789,8 +1788,8 @@ async def evaluate_verify_circuit(
 ) -> VerifyCircuitEvaluation:
     """Evaluate every requested check without applying MCP finding caps."""
     data = _base_data(args.path)
-    compare = args.compare_spec
-    render = args.render_policy
+    compare = args.compare
+    render = args.render
 
     try:
         path = safe_path(args.path, state)
@@ -1933,72 +1932,87 @@ async def evaluate_verify_circuit(
             observation_events.append(_FindingCapSummary(totals))
             checks_run.append("quality")
 
-    # --- export -------------------------------------------------------------
-    candidate: Path | None = path if kind == "netlist" else None
-    if wanted.get("export"):
-        simulator_cls = state.available_simulators.get("ltspice")
-        if simulator_cls is None:
-            skip("export", "LTspice not detected")
-        else:
-            export_payload, export_failure, export_obs, export_warnings = await _run_export(
-                path, state, args.export_to, simulator_cls
-            )
-            observation_events.extend(export_obs)
-            warnings.extend(export_warnings)
-            if scene is not None:
-                dropped = _dropped_wire_findings(scene, path)
-                findings.extend(dropped)
-                if dropped:
-                    capped_rules.add("dropped_wire")
-            data["export"] = export_payload
-            checks_run.append("export")
-            if export_failure is not None:
-                failures.append(export_failure)
-            elif export_payload.get("netlist"):
-                candidate = Path(export_payload["netlist"])
+    # --- render (started here, collected below) -----------------------------
+    # It reads the scene that is already parsed, so nothing it needs comes from
+    # the export — and the export shells out to LTspice for seconds. Only
+    # `compare` consumes the export's output, so the picture is drawn in
+    # parallel and costs no wall time of its own.
+    render_task: asyncio.Task[_RenderResult] | None = None
+    if render is not None:
+        render_task = asyncio.create_task(_do_render(scene, kind, render, path, state))
 
-    # --- compare ------------------------------------------------------------
-    if wanted.get("compare") and reference is not None:
-        if candidate is None:
-            skip("compare", "the exported netlist is required and the export did not run")
-        else:
-            ref_source = reference if isinstance(reference, Path) else path
-            compared: CompareResult
-            assert compare is not None  # guarded by `reference is not None`
-            if compare.mode == "equivalence":
-                # Reuse the netlist text already read for syntax, so the candidate
-                # is not read+lexed a second time; the export path has no such text.
-                cand_input: str | Path = (
-                    text if kind == "netlist" and text is not None else candidate
-                )
-                compared = await asyncio.to_thread(
-                    _compare_equivalence,
-                    reference,
-                    cand_input,
-                    ref_source,
-                    candidate,
-                    compare.anchors,
-                    compare.rtol,
-                    make_include_resolver(state),
-                )
+    try:
+        # --- export ---------------------------------------------------------
+        candidate: Path | None = path if kind == "netlist" else None
+        if wanted.get("export"):
+            simulator_cls = state.available_simulators.get("ltspice")
+            if simulator_cls is None:
+                skip("export", "LTspice not detected")
             else:
-                ref_path = _reference_to_path(reference, state)
-                compared = await asyncio.to_thread(_compare_structural, ref_path, candidate)
-            comparison, cmp_findings, cmp_failure, cmp_warnings = compared
-            findings.extend(cmp_findings)
-            warnings.extend(cmp_warnings)
-            if cmp_failure is not None:
-                failures.append(cmp_failure)
+                export_payload, export_failure, export_obs, export_warnings = await _run_export(
+                    path, state, args.export_to, simulator_cls
+                )
+                observation_events.extend(export_obs)
+                warnings.extend(export_warnings)
+                if scene is not None:
+                    dropped = _dropped_wire_findings(scene, path)
+                    findings.extend(dropped)
+                    if dropped:
+                        capped_rules.add("dropped_wire")
+                data["export"] = export_payload
+                checks_run.append("export")
+                if export_failure is not None:
+                    failures.append(export_failure)
+                elif export_payload.get("netlist"):
+                    candidate = Path(export_payload["netlist"])
+
+        # --- compare ------------------------------------------------------------
+        if wanted.get("compare") and reference is not None:
+            if candidate is None:
+                skip("compare", "the exported netlist is required and the export did not run")
             else:
-                data["comparison"] = comparison
-                checks_run.append("compare")
+                ref_source = reference if isinstance(reference, Path) else path
+                compared: CompareResult
+                assert compare is not None  # guarded by `reference is not None`
+                if compare.mode == "equivalence":
+                    # Reuse the netlist text already read for syntax, so the candidate
+                    # is not read+lexed a second time; the export path has no such text.
+                    cand_input: str | Path = (
+                        text if kind == "netlist" and text is not None else candidate
+                    )
+                    compared = await asyncio.to_thread(
+                        _compare_equivalence,
+                        reference,
+                        cand_input,
+                        ref_source,
+                        candidate,
+                        compare.anchors,
+                        compare.rtol,
+                        make_include_resolver(state),
+                    )
+                else:
+                    ref_path = _reference_to_path(reference, state)
+                    compared = await asyncio.to_thread(_compare_structural, ref_path, candidate)
+                comparison, cmp_findings, cmp_failure, cmp_warnings = compared
+                findings.extend(cmp_findings)
+                warnings.extend(cmp_warnings)
+                if cmp_failure is not None:
+                    failures.append(cmp_failure)
+                else:
+                    data["comparison"] = comparison
+                    checks_run.append("compare")
+
+    except BaseException:
+        # The picture is worthless once the call is failing, and an abandoned
+        # task would report its own failure to nobody.
+        if render_task is not None:
+            render_task.cancel()
+        raise
 
     # --- render -------------------------------------------------------------
     inline_image: RenderedImage | None = None
-    if render is not None:
-        render_payload, inline_image, render_failures, render_obs = await _do_render(
-            scene, kind, render, path, state
-        )
+    if render_task is not None:
+        render_payload, inline_image, render_failures, render_obs = await render_task
         if render_payload is not None:
             data["render"] = render_payload
         failures.extend(render_failures)

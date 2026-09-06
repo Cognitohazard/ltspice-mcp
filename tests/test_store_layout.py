@@ -37,7 +37,6 @@ DECLARED_ROOTS: dict[str, str] = {
     "runs": "one directory per job: its staged decks and its raw/log artifacts",
     "results": "immutable analyze_results sets and the files they point at",
     "detached": "hand-off files and console logs for per-job detached owners",
-    "renders": "schematic images",
     "verify": "verify_circuit exports and scratch",
     "edit-exports": "edit_schematic exports",
     "locks": "cross-process store locks",
@@ -169,7 +168,6 @@ _PATH_MEMBERS: dict[str, Any] = {
     "results_dir": (),
     "result_set": ("rs_" + "0" * 32,),
     "result_artifacts": ("rs_" + "0" * 32,),
-    "renders_dir": (),
     "verify_artifact": ("export",),
     "edit_export": ("build_1",),
 }
