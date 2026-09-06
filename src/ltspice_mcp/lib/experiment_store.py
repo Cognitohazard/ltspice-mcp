@@ -412,6 +412,10 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
         "detail": "The owning server stopped before the experiment reached terminality.",
     }
     job.observations.append(observation)
+    # Say so on the job itself. Whoever loaded this record has to write the
+    # reconciliation back, and that decision is this function's answer to give
+    # rather than something each caller re-derives from the report channel.
+    job.restart_reconciled = True
     runs_were_terminal = all(case.status in TERMINAL_CASE_STATUSES for case in job.cases)
     analysis_interrupted = job.analysis.status in {"pending", "running"}
     if analysis_interrupted:
