@@ -256,7 +256,8 @@ class TestSessionStateHonoursTheListing:
     def test_state_serves_the_configured_listing(self, work_dir, listing: ToolListing):
         state = _state(work_dir, listing)
         names = [d.name for d in state.tool_defs]
-        assert names == [d.name for d in get_tools(listing)[0]]
+        # run_code is registered but off unless the operator turned it on.
+        assert names == [d.name for d in get_tools(listing, exclude=("run_code",))[0]]
 
     @pytest.mark.parametrize("listing", ["full", "compact"])
     def test_capabilities_reports_which_listing_the_session_got(

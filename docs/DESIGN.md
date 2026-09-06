@@ -404,12 +404,12 @@ the prompts have one edition, and no config key names a profile.
 `inspect(kind="capabilities")` reports `tool_profile: "consolidated"` so a
 client can read which surface it is talking to. What `[tools]` does select is
 `listing` — `full` or `compact`, the two amounts of each definition the same
-seven tools can be advertised with (see
+tools can be advertised with (see
 [docs/design/mcp_surface.md](design/mcp_surface.md), "Two listing modes").
 
 |surface|tool count|use case|
 |-|-|-|
-|`consolidated` (the only one)|7 tools|Any MCP client: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author), plus the `plot_waveform` widget|
+|`consolidated` (the only one)|8 tools|Any MCP client: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author), plus the `plot_waveform` widget, plus `run_code` (a Python snippet in a warm worker holding the engine; served only when `[tools] run_code = true`)|
 
 Each of the six tools takes a declarative payload rather than a fixed
 argument list, so the number of capabilities did not shrink with the number

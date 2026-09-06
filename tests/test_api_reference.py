@@ -435,6 +435,11 @@ class TestCatalogueMatchesTheRegistry:
         # The API exposes exactly the envelope six. plot_waveform is MCP-only
         # by design: it renders an interactive client-side widget (an iframe
         # resource), which has no meaning in-process — the Python API's
-        # plotting path is load_raw + the caller's own tooling.
+        # plotting path is load_raw + the caller's own tooling. run_code is
+        # MCP-only too: it hands a tool caller the engine as code, which is
+        # what a Python caller already holds.
         assert set(_reference.op_names()) == set(CONSOLIDATED_TOOLS)
-        assert {tool.name for tool in tool_defs} - set(_reference.op_names()) == {"plot_waveform"}
+        assert {tool.name for tool in tool_defs} - set(_reference.op_names()) == {
+            "plot_waveform",
+            "run_code",
+        }
