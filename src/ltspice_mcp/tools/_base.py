@@ -1082,8 +1082,10 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 # Concurrency contract
 #
 # The MCP SDK dispatches EVERY incoming request as its own asyncio task on
-# one shared event loop (mcp.server.lowlevel.Server.run start_soons a task
-# per message), so tool handlers run concurrently. Anything that blocks the
+# one shared event loop (mcp.shared.jsonrpc_dispatcher.JSONRPCDispatcher.run
+# start_soons a task per message; only `initialize` is served inline, so that
+# a client pipelining it with the next request still sees an initialized
+# connection), so tool handlers run concurrently. Anything that blocks the
 # loop stalls every in-flight request — including cancel_job — and the
 # transport's receive loop itself. Where work runs:
 #
