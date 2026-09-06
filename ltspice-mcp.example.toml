@@ -22,9 +22,11 @@ path = ""
 # ngbehavior = "hsa"
 
 [security]
-# Paths accessible to the server (sandbox)
-# Default: ["."] (current working directory)
-allowed_paths = ["."]
+# Paths accessible to the server (sandbox). Left unset, the default is the
+# working directory plus the Claude Code scratch directory
+# (<tempdir>/claude-<uid>), where an agent writes its throwaway decks.
+# Set your own list to replace that default:
+# allowed_paths = ["."]
 
 [simulation]
 # Maximum number of concurrent simulations.

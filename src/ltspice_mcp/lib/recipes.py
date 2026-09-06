@@ -18,7 +18,6 @@ from pydantic import (
     model_validator,
 )
 
-from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib.models import StrictModel
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
@@ -253,6 +252,11 @@ class ScalarRecipe(RecipeBase):
 
 
 class MultiRecipe(RecipeBase):
+    # The rule the validator below enforces, stated in the schema itself so a
+    # listing that strips descriptions still carries it.
+    model_config = ConfigDict(
+        json_schema_extra={"dependentRequired": {"reduce": ["field"], "spec": ["field"]}}
+    )
     reduce: list[ReduceStat] = Field(default_factory=list)
     field: str | None = Field(
         default=None,
@@ -291,6 +295,7 @@ class MultiRecipe(RecipeBase):
 
 
 class KeyedRecipe(RecipeBase):
+    model_config = ConfigDict(json_schema_extra={"dependentRequired": {"spec": ["field"]}})
     reduce: list[ReduceStat] = Field(default_factory=list)
     field: str | None = Field(
         default=None,
@@ -584,8 +589,3 @@ def validate_recipe(data: Any) -> Recipe:
                 f"{', '.join(DISCRIMINANTS)}"
             )
     return RECIPE_ADAPTER.validate_python(data)
-
-
-def recipe_error(exc: ValueError | TypeError) -> str:
-    """Compact one-item validation error suitable for the failures channel."""
-    return compact_validation_error(exc)

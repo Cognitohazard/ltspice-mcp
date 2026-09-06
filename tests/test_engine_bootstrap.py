@@ -13,7 +13,7 @@ import pytest
 from spicelib import AscEditor
 
 import ltspice_mcp.engine as engine
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import ServerConfig, default_allowed_paths
 from ltspice_mcp.lib import now, recent, result_store
 from ltspice_mcp.server import server, server_lifespan
 from ltspice_mcp.state import SessionState
@@ -115,7 +115,7 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
         == library_snapshot
         == {
             "symbol_paths": [str(symbol_dir)],
-            "allowed_paths": [working_dir],
+            "allowed_paths": default_allowed_paths(working_dir),
             "expired_result_removed": True,
             "jobs": ["exp_bootstrap_preload"],
             "diagnostics": ["detector diagnostic"],
@@ -156,7 +156,7 @@ async def test_library_working_dir_selects_its_toml_and_default_sandbox(
         assert boot.state.config.default_timeout == 17.0
         assert boot.state.config.config_path == working_dir / "ltspice-mcp.toml"
         assert boot.state.working_dir == working_dir
-        assert boot.state.config.allowed_paths == [working_dir]
+        assert boot.state.config.allowed_paths == default_allowed_paths(working_dir)
     finally:
         await boot.state.shutdown()
 

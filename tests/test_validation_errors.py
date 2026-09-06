@@ -48,8 +48,11 @@ async def test_malformed_attached_recipe_error_is_compact(
     assert result.is_error
     assert result.structured_content is not None
     message = result.structured_content["error"]["message"]
-    assert len(message) < 400
-    assert "Field required" in message
+    compact, _, reference = message.partition(" Reference for ")
+    assert len(compact) < 400
+    assert "Field required" in compact
+    # The branch the error names rides along, so the caller fixes the call from it.
+    assert reference.startswith("waveform:")
     assert "https://" not in message
     assert "DO_NOT_ECHO_" not in message
     assert submissions == []

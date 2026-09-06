@@ -25,11 +25,11 @@ from ltspice_mcp.api import (
 from ltspice_mcp.api import _methods as methods_module
 from ltspice_mcp.api._methods import _unwrap
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import recent, services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
 from ltspice_mcp.tools import jobs as jobs_mod
+from ltspice_mcp.tools.reference_index import validation_error_detail
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
 
@@ -132,7 +132,8 @@ def test_validation_uses_the_server_renderer_and_field_owners(
     raw = {"action": "status"}
     with pytest.raises(ValidationError) as model_error:
         jobs_mod.JobsInput.model_validate(raw)
-    expected = compact_validation_error(
+    expected = validation_error_detail(
+        "jobs",
         model_error.value,
         field_owners=state_no_sim.field_owners,
     )

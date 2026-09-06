@@ -22,7 +22,6 @@ from ltspice_mcp.api._exceptions import (
     ApiValidationError,
 )
 from ltspice_mcp.api._primitives import RawResult, load_measurement_results, load_raw_result
-from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.state import SessionState
@@ -81,7 +80,9 @@ def _validation_error(
     exc: ValidationError,
     state: SessionState,
 ) -> ApiValidationError:
-    detail = compact_validation_error(exc, field_owners=state.field_owners)
+    from ltspice_mcp.tools.reference_index import validation_error_detail
+
+    detail = validation_error_detail(operation, exc, field_owners=state.field_owners)
     return ApiValidationError(f"Invalid arguments for {operation}: {detail}")
 
 

@@ -121,6 +121,13 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- The default sandbox is the working directory plus the Claude Code scratch
+  directory (`<tempdir>/claude-<uid>`). Claude Code tells an agent to write
+  throwaway files there, outside the working directory, so a deck authored
+  there used to be refused and copied in first. The generated config documents
+  the default in a comment and leaves `allowed_paths` unset; setting it
+  replaces the default. Applies to the server and the Python API alike.
+
 - `analyze_results` takes `step` and `all_steps` as call-level arguments instead
   of per-recipe ones, and `run_experiments`' attached `analyze` block takes the
   same two, so an attached measurement and a standalone one read the same
@@ -222,6 +229,15 @@ profile` config key is gone with it — a config that still sets it loads with
 the key ignored. Serving zero tools is still a hard error.
 
 ### Added
+
+- A validation error that names a branch (a recipe, an op, a check, a query
+  kind, a job action) now ends with that branch's field table, so a caller
+  corrects the call from the error instead of looking the branch up first.
+  Served on every path: the tool call, the Python API, and the attached
+  analysis of `run_experiments`.
+- The rule "`field` is required once `reduce` or `spec` is given" is stated in
+  the recipe schemas themselves (`dependentRequired`), so a client on the
+  compact listing, which carries no descriptions, still sees it.
 
 - Every tool carries a display title, the short label a client shows a person
   in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,

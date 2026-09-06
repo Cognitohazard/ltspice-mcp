@@ -258,3 +258,20 @@ def test_field_accepts_the_result_rows_own_key():
     edges = {"key": "e", "metric": "edges", **VALID_RECIPES["edges"], "reduce": ["min"]}
     with pytest.raises(ValidationError, match="does not produce reducible field"):
         validate_recipe({**edges, "field": "transition_time"})
+
+
+def test_field_dependency_rides_the_advertised_schema():
+    """'field' is required once 'reduce' or 'spec' is given. The rule is stated
+    in the schema itself (dependentRequired), so a listing that strips every
+    description still carries it and a caller need not learn it from an error."""
+    import json
+
+    from ltspice_mcp.tools._schema import build_input_schema, strip_argument_descriptions
+    from ltspice_mcp.tools.analyze import AnalyzeResultsInput
+
+    schema = build_input_schema(AnalyzeResultsInput)
+    multi = '"dependentRequired": {"reduce": ["field"], "spec": ["field"]}'
+    keyed = '"dependentRequired": {"spec": ["field"]}'
+    for text in (json.dumps(schema), json.dumps(strip_argument_descriptions(schema))):
+        assert multi in text
+        assert keyed in text

@@ -43,11 +43,13 @@ from __future__ import annotations
 
 import functools
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
+from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib.model_fields import (
     accepted_annotation,
     constraint_label,
@@ -786,3 +788,47 @@ def table_of_contents() -> list[dict[str, Any]]:
         {"tool": tool, "family": family, "branches": rows}
         for (tool, family), rows in groups.items()
     ]
+
+
+_REFERENCE_DESCRIPTION_CHARS = 160
+
+
+def validation_error_detail(
+    tool: str,
+    exc: ValidationError | ValueError | TypeError,
+    *,
+    field_owners: Mapping[str, Sequence[str]] | None = None,
+    limit: int = 2,
+) -> str:
+    """The compact rendering of a validation error, followed by the field table
+    of each branch the error names, so a caller corrects the call from the
+    error instead of looking the branch up first. A tagged-union error's
+    location carries the tag, which is the branch's name in the index."""
+    detail = compact_validation_error(exc, field_owners=field_owners)
+    if not isinstance(exc, ValidationError):
+        return detail
+    branches = {
+        entry.name: entry
+        for entry in build_index()
+        if entry.tool == tool and entry.family != "argument"
+    }
+    named: list[BranchEntry] = []
+    for error in exc.errors(include_url=False, include_input=False):
+        for part in error["loc"]:
+            entry = branches.get(part) if isinstance(part, str) else None
+            if entry is not None and entry not in named:
+                named.append(entry)
+    for entry in named[:limit]:
+        detail += (
+            f" Reference for {entry.name}: "
+            + "; ".join(_field_line(field) for field in entry.fields)
+            + "."
+        )
+    return detail
+
+
+def _field_line(field: FieldEntry) -> str:
+    line = f"{field.name} ({field.type}{', required' if field.required else ''})"
+    if field.description:
+        line += f": {field.description[:_REFERENCE_DESCRIPTION_CHARS]}"
+    return line
