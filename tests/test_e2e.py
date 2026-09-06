@@ -27,6 +27,7 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
+from pydantic import BaseModel, ConfigDict
 
 from tests.conftest import FIXTURES_DIR
 
@@ -48,6 +49,17 @@ CONSOLIDATED_TOOLS = {
     "verify_circuit",
     "plot_waveform",
 }
+
+
+class _WireResult(BaseModel):
+    """A result parsed with nothing dropped.
+
+    The typed result models ignore fields their protocol revision does not
+    declare, so they cannot tell a key the server left out from one the client
+    discarded. This keeps whatever arrived, under ``model_extra``.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
 
 def _server_params(work_dir: Path) -> StdioServerParameters:
@@ -311,14 +323,31 @@ class TestServerLifecycle:
                 # Every listing is shaped by this server's own sandbox and
                 # configuration, so it must not be served from a shared cache.
                 assert result.cache_scope == "private"
+            # One of them off the raw result as well. This is what makes the
+            # handshake-era test below discriminating: the same unparsed read
+            # finds the key here and must not find it there.
+            wire = await session.send_request(mcp_types.ListToolsRequest(params=None), _WireResult)
+            assert (wire.model_extra or {}).get("ttlMs")
 
     async def test_the_freshness_hint_stays_off_a_handshake_connection(self, tmp_path):
         """A client on an older revision has no field to read it from, so the
-        hint must not reach the wire there — it comes back at the model's
-        default, which is what an absent field parses as."""
+        hint must not reach the wire there.
+
+        Read off the raw result rather than the parsed one: ``ttl_ms`` defaults
+        to 0 client-side and ``ListToolsResult`` ignores fields it does not
+        know, so a parsed 0 says nothing about whether the server sent the key
+        or the client dropped it.
+        """
         async with mcp_session(tmp_path) as session:
             assert session.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS
-            assert (await session.list_tools()).ttl_ms == 0
+            wire = await session.send_request(
+                mcp_types.ListToolsRequest(params=None),
+                _WireResult,
+            )
+            sent = wire.model_extra or {}
+            assert sent.get("tools"), "the raw result did not carry the tool list"
+            assert "ttlMs" not in sent
+            assert "cacheScope" not in sent
 
     async def test_reading_a_resource_is_not_advertised_as_cacheable(self, tmp_path):
         """A resource's content changes under the client — a netlist is edited,

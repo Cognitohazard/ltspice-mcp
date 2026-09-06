@@ -56,15 +56,26 @@ class TestGetErrorHint:
 
 class TestServerInstructions:
     def test_instructions_forwarded_to_init_options(self):
-        # The block must reach the client at the MCP initialize handshake.
-        # The options are built per request off the server's live instructions,
-        # which the lifespan rewrites to name the detected simulators — so
-        # compare against that attribute, not against the static default a
-        # process that never booted still carries.
-        opts = server.create_initialization_options()
-        assert opts.instructions == server.instructions
-        assert opts.instructions
-        assert CONSOLIDATED_INSTRUCTIONS in opts.instructions
+        """The block must reach the client at the MCP initialize handshake.
+
+        The lifespan rewrites ``server.instructions`` after the Server was
+        constructed, to name the simulators it detected. So the options have to
+        be built off the live attribute every time; a snapshot taken at
+        construction would hand every client the pre-boot default. Rewrite the
+        attribute the way the lifespan does and check the change comes through
+        — comparing the options against the attribute as it stands proves
+        nothing, because before a boot the two agree either way.
+        """
+        original = server.instructions
+        rewritten = f"{original}\n\nDetected simulators: none."
+        try:
+            server.instructions = rewritten
+            opts = server.create_initialization_options()
+        finally:
+            server.instructions = original
+        assert opts.instructions == rewritten
+        assert CONSOLIDATED_INSTRUCTIONS in (opts.instructions or "")
+        assert server.create_initialization_options().instructions == original
 
     def test_instructions_cover_key_workflow_guidance(self):
         text = CONSOLIDATED_INSTRUCTIONS
