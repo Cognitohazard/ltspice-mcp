@@ -945,8 +945,8 @@ class ApiMethodsMixin(ABC):
 
     def load_raw(
         self,
-        *,
         raw_path: str | os.PathLike[str] | None = None,
+        *,
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,

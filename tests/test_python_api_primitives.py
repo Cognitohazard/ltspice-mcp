@@ -111,6 +111,8 @@ def test_raw_result_xor_step_slicing_and_mutation_isolation(
         api.load_raw(raw_path="one.raw", job_id="job-one")
 
     raw_path = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    # The receipt hands a caller the raw path; it is the one natural positional.
+    assert api.load_raw(raw_path).source == api.load_raw(raw_path=raw_path).source
     result = api.load_raw(raw_path=raw_path)
     assert isinstance(result, RawResult)
     assert result.source == raw_path.resolve()
