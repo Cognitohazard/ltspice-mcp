@@ -240,14 +240,16 @@ the key ignored. Serving zero tools is still a hard error.
   and `$defs` are intact, so a client can still build a valid call, and the
   server validates and answers exactly as before. It takes roughly 40% off
   what a session loads before it can call anything. Both listings are static.
-- `inspect(kind="reference")`: a searchable lookup over the tools' own branch
-  vocabulary (analysis recipes, schematic ops, variation kinds, query kinds,
-  checks and job actions). A plain-words `query` ("phase margin", "connect two
-  pins") returns the closest branches with their fields, types, defaults,
-  bounds and units; with no `query` it returns the table of contents. `limit`
-  defaults to 5 and caps at 20. The index is built from the same input models
-  the wire validates against, so a branch cannot be missing from it. It is the
-  route to a branch's arguments on the `compact` tool listing, where
+- `inspect(kind="reference")`: a searchable lookup over the tools' own
+  vocabulary — each tool's top-level arguments, plus the branches (analysis
+  recipes, schematic ops, variation kinds, query kinds, checks and job
+  actions). A plain-words `query` ("phase margin", "connect two pins") returns
+  the closest entries with their fields, types, defaults, bounds and units, and
+  an argument name ("all_steps", "expected_sha256") reaches its tool's own
+  table; with no `query` it returns the table of contents. `limit` defaults to
+  5 and caps at 20. The index is built from the same input models the wire
+  validates against, so nothing callable can be missing from it. It is the
+  route to any argument's meaning on the `compact` tool listing, where
   per-argument descriptions are not published.
 - `Api.run_experiments(wait=False, detach=True)` hands the job to a small
   owner process that outlives the caller: the caller validates the request,
@@ -257,6 +259,12 @@ the key ignored. Serving zero tools is still a hard error.
   running server sees it as another session's live job. The receipt names
   the owner's pid and log file. Requires `[state] persist_jobs`.
 
+- `verify_circuit`'s render block carries `source_sha256`, the digest of the
+  sheet it drew. Rendering reads the file on disk, so a peer that committed
+  between `edit_schematic` returning and this call running was invisible:
+  the block's `sha256` is the image's and the export block's is the netlist's.
+  Compare `source_sha256` with the `sha256` `edit_schematic` returned to know
+  the picture is of the revision you wrote.
 - `verify_circuit`'s `quality` check runs on a `.cir`/`.net`/`.sp` netlist,
   not only on a schematic. Three connectivity rules that had been written but
   never called report as findings: a node wired to a single element terminal
