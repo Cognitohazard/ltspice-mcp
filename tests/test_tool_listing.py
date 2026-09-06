@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib.models import KEEP_DESCRIPTION
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools._base import registry
@@ -37,7 +36,7 @@ def _descriptions(node: Any, path: str = "") -> dict[str, str]:
 
 
 def _without_prose(node: Any, in_name_map: bool = False) -> Any:
-    """A schema with every description and keep-marker removed.
+    """A schema with every description removed.
 
     Written here rather than reused from the server so a comparison of the two
     listings has an oracle of its own.
@@ -48,22 +47,31 @@ def _without_prose(node: Any, in_name_map: bool = False) -> Any:
         return {
             key: _without_prose(value, key in {"properties", "$defs"})
             for key, value in node.items()
-            if key not in {"description", KEEP_DESCRIPTION}
+            if key != "description"
         }
     if isinstance(node, list):
         return [_without_prose(item) for item in node]
     return node
 
 
-def _exempt_descriptions(node: Any, path: str = "") -> dict[str, str]:
-    """The descriptions the compact listing must keep, keyed the same way.
+def _argument_free(node: Any) -> bool:
+    """True for a branch whose published properties are all fixed values.
 
-    A node marked with ``KEEP_DESCRIPTION`` is a branch published as its
-    discriminant alone, so its description is everything the branch says.
+    The rule the compact listing exempts, spelled here independently of the
+    server's copy: with every property a ``const`` there is no argument left
+    to describe, so the node's description is everything the branch says.
     """
+    properties = node.get("properties") if isinstance(node, dict) else None
+    if not isinstance(properties, dict) or not properties:
+        return False
+    return all(isinstance(value, dict) and "const" in value for value in properties.values())
+
+
+def _exempt_descriptions(node: Any, path: str = "") -> dict[str, str]:
+    """The descriptions the compact listing must keep, keyed the same way."""
     found: dict[str, str] = {}
     if isinstance(node, dict):
-        if node.get(KEEP_DESCRIPTION) and isinstance(node.get("description"), str):
+        if _argument_free(node) and isinstance(node.get("description"), str):
             found[path or "<root>"] = node["description"]
         for key, value in node.items():
             found |= _exempt_descriptions(value, f"{path}.{key}" if path else key)
@@ -121,7 +129,7 @@ class TestEveryToolCarriesADisplayTitle:
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_every_argument_description_is_gone(self, name: str):
-        """Except the marked ones — see TestDormantBranchesKeepTheirDescription."""
+        """Except the argument-free branches — see the class below."""
         full = {d.name: d for d in get_tools("full")[0]}[name]
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
         assert _descriptions(full.input_schema), f"{name} advertises no descriptions to strip"
@@ -202,50 +210,45 @@ class TestDormantBranchesKeepTheirDescription:
     where to read the arguments. Compact strips prose on the bet that the
     published structure still lets a client build a valid call; on these three
     there is no structure to fall back on, so a stripped branch would be a
-    metric name a client could send and the server would then reject.
+    metric name a client could send and the server would then reject. Nothing
+    declares the exemption: the branch's own shape is what earns it.
     """
 
     @staticmethod
     def _analyze(listing: str) -> dict[str, Any]:
         return {d.name: d for d in get_tools(listing)[0]}["analyze_results"].input_schema
 
-    def _marked(self, listing: str) -> dict[str, Any]:
-        marked = {
+    def _exempt(self, listing: str) -> dict[str, Any]:
+        exempt = {
             name: body
             for name, body in self._analyze(listing)["$defs"].items()
-            if body.get(KEEP_DESCRIPTION)
+            if _argument_free(body)
         }
-        assert marked, "no branch declares the keep-description marker"
-        return marked
+        assert exempt, "no recipe branch publishes its discriminant alone"
+        return exempt
 
-    def test_the_marked_branches_are_the_discriminant_only_ones(self):
-        for name, body in self._marked("full").items():
+    def test_the_exempt_branches_are_the_discriminant_only_ones(self):
+        for name, body in self._exempt("full").items():
             assert set(body["properties"]) == {"metric"}, (
                 f"{name} publishes arguments, so its description is not its whole content"
             )
             assert body["description"]
 
-    def test_each_marked_description_survives_compaction_verbatim(self):
+    def test_each_exempt_description_survives_compaction_verbatim(self):
         full = self._analyze("full")["$defs"]
         compact = self._analyze("compact")["$defs"]
-        marked = self._marked("full")
-        for name in marked:
+        for name in self._exempt("full"):
             assert compact[name]["description"] == full[name]["description"]
 
     def test_the_description_names_the_mcp_lookup_first(self):
         """The route a client on this listing can actually take: the other two
         pointers are a Python import and a resource read."""
-        for name, body in self._marked("full").items():
+        for name, body in self._exempt("full").items():
             metric = body["properties"]["metric"]["const"]
             pointer = f"inspect(kind='reference', query='{metric}')"
             assert pointer in body["description"], name
             assert body["description"].index(pointer) < body["description"].index("api.reference(")
             assert "spice://guide" in body["description"]
-
-    def test_the_marker_itself_stays_off_the_compact_listing(self):
-        """It is a note to the schema publisher, not something a client reads."""
-        for name, body in self._analyze("compact")["$defs"].items():
-            assert KEEP_DESCRIPTION not in body, name
 
 
 def _state(work_dir, listing: str) -> SessionState:

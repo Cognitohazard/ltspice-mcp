@@ -12,8 +12,12 @@ tool *does*:
   returns instead of being hand-written twice.
 * ``strip_argument_descriptions`` — the one deliberate prose filter, applied
   only when the ``compact`` tool listing is configured. Its single exemption
-  is declared in the schema, by the ``KEEP_DESCRIPTION`` marker a
-  discriminant-only branch carries.
+  is read off a node's own shape: a branch whose properties are all fixed
+  values has no arguments left to describe.
+
+Every pass here is one ``edit`` callable driven by ``_rewrite``, the single
+structural descent — so the rule that keeps an argument named ``title`` a
+field is stated once instead of once per pass.
 
 Every other pass here is structural: it changes how a schema is spelled, never
 what it says. On the default listing the prose is not filtered — every
@@ -32,10 +36,11 @@ import json
 import re
 import types as _stdlib_types
 import typing
+from collections.abc import Callable
 from functools import cache
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from ltspice_mcp.lib.models import KEEP_DESCRIPTION, StrictModel
+from ltspice_mcp.lib.models import StrictModel
 
 
 class ToolInput(StrictModel):
@@ -61,94 +66,53 @@ _SCHEMA_NAME_MAPS = frozenset(
 )
 
 
-def _strip_titles(node: Any, *, in_name_map: bool = False) -> Any:
-    """Remove pydantic's ``title`` annotations, keeping a field named ``title``.
+def _rewrite(
+    node: Any,
+    edit: Callable[[dict[str, Any]], dict[str, Any]],
+    *,
+    in_name_map: bool = False,
+) -> Any:
+    """Rebuild a schema with ``edit`` applied to every node that is a schema.
 
-    Filtering the key at every level also deleted the entry for a *property*
-    called ``title`` — which the plot recipe has and the handler reads — so a
-    real, accepted argument was absent from every published schema and no client
-    could discover it. Descend structurally instead: inside a ``properties`` or
-    ``$defs`` map the keys are argument names, not schema keywords.
+    ``edit`` sees one schema object and returns the object to publish in its
+    place. It is never handed a ``properties`` or ``$defs`` map, because the
+    keys there are argument NAMES rather than schema keywords: a pass that
+    filtered keys at every level once deleted the entry for a property called
+    ``title`` — which the plot recipe has and the handler reads — so a real,
+    accepted argument was absent from every published schema and no client
+    could discover it. Descending structurally is what keeps an argument named
+    ``title``, ``default``, ``description`` or ``discriminator`` a field.
     """
     if isinstance(node, dict):
         if in_name_map:
-            return {key: _strip_titles(value) for key, value in node.items()}
+            return {key: _rewrite(value, edit) for key, value in node.items()}
         return {
-            key: _strip_titles(value, in_name_map=key in _SCHEMA_NAME_MAPS)
-            for key, value in node.items()
-            if key != "title"
+            key: _rewrite(value, edit, in_name_map=key in _SCHEMA_NAME_MAPS)
+            for key, value in edit(node).items()
         }
     if isinstance(node, list):
-        return [_strip_titles(item) for item in node]
+        return [_rewrite(item, edit) for item in node]
     return node
 
 
-def strip_argument_descriptions(node: Any, *, in_name_map: bool = False) -> Any:
-    """Return the schema with every ``description`` annotation removed.
-
-    The transform behind the ``compact`` tool listing: structure, enums,
-    defaults, ``required`` and ``$defs`` come through untouched, so a client
-    can still build a valid call — it just is not told in prose what each
-    argument means. It is a filter over the published copy only; the Pydantic
-    models keep their descriptions and accept exactly what they did.
-
-    One exemption, and it is declared by the schema rather than recognized from
-    its wording: a node carrying ``KEEP_DESCRIPTION`` keeps its description.
-    That marks a branch advertised as its discriminant and nothing else, where
-    the description is the whole of what the branch says — the produced fields
-    and where to read the arguments — so stripping it would leave a client a
-    name with no meaning and no structure to fall back on. The marker itself is
-    consumed here and never reaches a compact listing.
-
-    Descends structurally for the same reason ``_strip_titles`` does: inside a
-    ``properties`` or ``$defs`` map the keys are argument names, so an argument
-    that happens to be called ``description`` is a real, accepted field and
-    must survive.
-    """
-    if isinstance(node, dict):
-        if in_name_map:
-            return {key: strip_argument_descriptions(value) for key, value in node.items()}
-        dropped = (
-            {KEEP_DESCRIPTION} if node.get(KEEP_DESCRIPTION) else {KEEP_DESCRIPTION, "description"}
-        )
-        return {
-            key: strip_argument_descriptions(value, in_name_map=key in _SCHEMA_NAME_MAPS)
-            for key, value in node.items()
-            if key not in dropped
-        }
-    if isinstance(node, list):
-        return [strip_argument_descriptions(item) for item in node]
-    return node
+def _without_title(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop pydantic's ``title`` annotation, which repeats the field name."""
+    return {key: value for key, value in node.items() if key != "title"}
 
 
-def _drop_null_defaults(node: Any, *, in_name_map: bool = False) -> Any:
-    """Remove every ``"default": null`` annotation.
+def _without_null_default(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop the ``"default": null`` pydantic writes for every optional field.
 
-    Pydantic writes one for each optional field whose default is ``None``, and
-    it says nothing a reader could act on: ``required`` already lists the
+    It says nothing a reader could act on: ``required`` already lists the
     fields that must be sent, and a JSON Schema ``default`` is an annotation
     with no effect on validation. A non-null default is kept — that one carries
     the value the server uses when the field is omitted.
-
-    Descends structurally for the same reason ``_strip_titles`` does: inside a
-    ``properties`` or ``$defs`` map the keys are argument names, so a field
-    genuinely called ``default`` must survive.
     """
-    if isinstance(node, dict):
-        if in_name_map:
-            return {key: _drop_null_defaults(value) for key, value in node.items()}
-        return {
-            key: _drop_null_defaults(value, in_name_map=key in _SCHEMA_NAME_MAPS)
-            for key, value in node.items()
-            if not (key == "default" and value is None)
-        }
-    if isinstance(node, list):
-        return [_drop_null_defaults(item) for item in node]
-    return node
+    return {key: value for key, value in node.items() if not (key == "default" and value is None)}
 
 
-def _drop_discriminator_mappings(node: Any, *, in_name_map: bool = False) -> Any:
-    """Remove the ``mapping`` half of every ``discriminator`` block.
+def _without_discriminator_mapping(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop the ``mapping`` half of a ``discriminator`` block.
 
     ``discriminator`` is an OpenAPI extension to JSON Schema. Its
     ``propertyName`` is the useful half — it names the field that picks the
@@ -157,19 +121,54 @@ def _drop_discriminator_mappings(node: Any, *, in_name_map: bool = False) -> Any
     from the ``oneOf`` list anyway. A validator ignores the whole keyword; a
     reader loses nothing.
     """
-    if isinstance(node, dict):
-        if in_name_map:
-            return {key: _drop_discriminator_mappings(value) for key, value in node.items()}
-        out: dict[str, Any] = {}
-        for key, value in node.items():
-            if key == "discriminator" and isinstance(value, dict):
-                out[key] = {name: sub for name, sub in value.items() if name != "mapping"}
-                continue
-            out[key] = _drop_discriminator_mappings(value, in_name_map=key in _SCHEMA_NAME_MAPS)
-        return out
-    if isinstance(node, list):
-        return [_drop_discriminator_mappings(item) for item in node]
-    return node
+    block = node.get("discriminator")
+    if not isinstance(block, dict) or "mapping" not in block:
+        return node
+    kept = {name: value for name, value in block.items() if name != "mapping"}
+    return {**node, "discriminator": kept}
+
+
+def _publish_edits(node: dict[str, Any]) -> dict[str, Any]:
+    """Every structural drop the advertised schema makes, in one descent."""
+    return _without_discriminator_mapping(_without_null_default(_without_title(node)))
+
+
+def _is_argument_free_branch(node: dict[str, Any]) -> bool:
+    """True for a branch published as its discriminant and nothing else.
+
+    Its ``properties`` are all fixed values, so there is no argument left to
+    describe and the node's own description is the whole of what it says.
+    """
+    properties = node.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return False
+    return all(isinstance(value, dict) and "const" in value for value in properties.values())
+
+
+def _without_description(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop a ``description`` annotation, except on an argument-free branch.
+
+    The exemption is read off the node's own shape rather than declared by a
+    marker: where every property is a fixed value there is no structure a
+    client could build a call from, so stripping the prose would publish a
+    branch name that says nothing at all.
+    """
+    if _is_argument_free_branch(node):
+        return node
+    return {key: value for key, value in node.items() if key != "description"}
+
+
+def strip_argument_descriptions(node: Any) -> Any:
+    """Return the schema with every ``description`` annotation removed.
+
+    The transform behind the ``compact`` tool listing: structure, enums,
+    defaults, ``required`` and ``$defs`` come through untouched, so a client
+    can still build a valid call — it just is not told in prose what each
+    argument means. It is a filter over the published copy only; the Pydantic
+    models keep their descriptions and accept exactly what they did. The one
+    exemption is the argument-free branch described above.
+    """
+    return _rewrite(node, _without_description)
 
 
 # Keywords that make a schema branch more than a plain type constraint, so it
@@ -433,11 +432,11 @@ def build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     on the consolidated surface. Every ref is internal to
     the one schema document, so any conformant client resolves it locally.
 
-    Four further passes shrink the *advertised* shape only — the Pydantic model
+    Further passes shrink the *advertised* shape only — the Pydantic model
     stays the validator and accepts exactly what it did before.
-    ``_drop_null_defaults`` removes the ``"default": null`` annotation pydantic
-    writes for every optional field, which ``required`` already says;
-    ``_drop_discriminator_mappings`` removes the branch table each
+    ``_publish_edits`` walks the document once, dropping pydantic's ``title``
+    annotations, the ``"default": null`` it writes for every optional field
+    (which ``required`` already says), and the branch table each
     ``discriminator`` repeats from the branches' own ``const`` values;
     ``_compact_type_keywords`` drops the type keywords a schema already implies
     (a nullable branch becomes a multi-type ``type`` array; the ``type`` beside
@@ -448,8 +447,7 @@ def build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     seven shared fields. ``tests/test_consolidated_contracts.py`` pins the
     resulting size per tool.
     """
-    schema = _strip_titles(input_model.wire_input_schema())
-    schema = _drop_discriminator_mappings(_drop_null_defaults(schema))
+    schema = _rewrite(input_model.wire_input_schema(), _publish_edits)
     return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 

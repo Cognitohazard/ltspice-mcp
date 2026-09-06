@@ -305,54 +305,55 @@ def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:
             _assert_no_key_at_depth(item, key, tool_name, f"{path}[{i}]")
 
 
-def _assert_no_title_annotation(node, tool_name: str, path: str, *, in_name_map=False) -> None:
-    """Assert no 'title' SCHEMA KEYWORD survives, at any depth.
+def _walk_schema(node, check, path: str = "root", *, in_name_map: bool = False) -> None:
+    """Run ``check(node, path)`` on every node of a schema that IS a schema.
 
-    A key named 'title' inside a properties/$defs map is an argument name and
-    is left alone — that distinction is the whole point of the walk.
+    Inside a properties/$defs map the keys are argument names, not schema
+    keywords, so those levels are descended through without being checked —
+    the same distinction the publisher's own walk makes, and the whole point
+    of both walks below.
     """
     if isinstance(node, dict):
         if in_name_map:
             for name, value in node.items():
-                _assert_no_title_annotation(value, tool_name, f"{path}.{name}")
+                _walk_schema(value, check, f"{path}.{name}")
             return
-        assert "title" not in node, f"{tool_name}: title annotation at {path}"
+        check(node, path)
         for key, value in node.items():
-            _assert_no_title_annotation(
-                value,
-                tool_name,
-                f"{path}.{key}",
-                in_name_map=key in _schema._SCHEMA_NAME_MAPS,
+            _walk_schema(
+                value, check, f"{path}.{key}", in_name_map=key in _schema._SCHEMA_NAME_MAPS
             )
     elif isinstance(node, list):
         for index, item in enumerate(node):
-            _assert_no_title_annotation(item, tool_name, f"{path}[{index}]")
+            _walk_schema(item, check, f"{path}[{index}]")
 
 
-def _assert_no_null_default(node, tool_name: str, path: str, *, in_name_map=False) -> None:
+def _assert_no_title_annotation(node, tool_name: str, path: str) -> None:
+    """Assert no 'title' SCHEMA KEYWORD survives, at any depth.
+
+    A key named 'title' inside a properties/$defs map is an argument name and
+    is left alone.
+    """
+
+    def check(schema, at: str) -> None:
+        assert "title" not in schema, f"{tool_name}: title annotation at {at}"
+
+    _walk_schema(node, check, path)
+
+
+def _assert_no_null_default(node, tool_name: str, path: str) -> None:
     """Assert no ``"default": null`` SCHEMA KEYWORD survives, at any depth.
 
     A key named 'default' inside a properties/$defs map is an argument name and
     is left alone, exactly as the title walk leaves a property called 'title'.
     """
-    if isinstance(node, dict):
-        if in_name_map:
-            for name, value in node.items():
-                _assert_no_null_default(value, tool_name, f"{path}.{name}")
-            return
-        assert node.get("default", "absent") is not None, (
-            f"{tool_name}: null default annotation at {path}"
+
+    def check(schema, at: str) -> None:
+        assert schema.get("default", "absent") is not None, (
+            f"{tool_name}: null default annotation at {at}"
         )
-        for key, value in node.items():
-            _assert_no_null_default(
-                value,
-                tool_name,
-                f"{path}.{key}",
-                in_name_map=key in _schema._SCHEMA_NAME_MAPS,
-            )
-    elif isinstance(node, list):
-        for index, item in enumerate(node):
-            _assert_no_null_default(item, tool_name, f"{path}[{index}]")
+
+    _walk_schema(node, check, path)
 
 
 class TestSchemaPostProcessing:
@@ -499,11 +500,11 @@ class TestSchemaPostProcessing:
         assert branches > seen, "a tagged union with no branches is not a union"
 
     def test_a_property_actually_named_default_would_survive(self):
-        """Both new passes descend structurally, like the title stripper.
+        """The publishing pass descends structurally.
 
         Filtering by key name at every level would delete an argument called
         ``default`` (or a ``discriminator`` object a caller sends), which is
-        exactly the bug the title stripper already had once."""
+        exactly the bug the title strip already caused once."""
         schema = {
             "properties": {
                 "default": {"type": "string", "default": None},
@@ -511,7 +512,7 @@ class TestSchemaPostProcessing:
             },
             "default": None,
         }
-        cleaned = _schema._drop_discriminator_mappings(_schema._drop_null_defaults(schema))
+        cleaned = _schema._rewrite(schema, _schema._publish_edits)
         assert set(cleaned["properties"]) == {"default", "discriminator"}
         assert cleaned["properties"]["default"] == {"type": "string"}
         assert cleaned["properties"]["discriminator"] == {"type": "object"}

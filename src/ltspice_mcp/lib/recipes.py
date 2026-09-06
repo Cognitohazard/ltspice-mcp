@@ -19,7 +19,6 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import compact_validation_error
-from ltspice_mcp.lib.models import KEEP_DESCRIPTION
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -114,10 +113,11 @@ def _dormant_wire_stub(summary: str) -> ConfigDict:
     stub deliberately drops ``additionalProperties: false`` so a client
     pre-validating a full call against the wire shape still sends it.
 
-    The stub also carries ``KEEP_DESCRIPTION``, so the compact tool listing
-    keeps that one sentence. Compact strips prose on the bet that the published
-    structure still tells a client how to build a call; here there is no
-    structure left to read, so the sentence is all the branch has.
+    The compact tool listing keeps that one sentence, because it keeps the
+    description of any branch whose properties are all fixed values. Compact
+    strips prose on the bet that the published structure still tells a client
+    how to build a call; here there is no structure left to read, so the
+    sentence is all the branch has.
     """
 
     def _stub(schema: dict[str, Any]) -> None:
@@ -127,7 +127,6 @@ def _dormant_wire_stub(summary: str) -> ConfigDict:
             {
                 "type": "object",
                 "description": summary + _DORMANT_POINTER.format(metric=metric["const"]),
-                KEEP_DESCRIPTION: True,
                 "properties": {"metric": metric},
                 "required": ["metric"],
             }
