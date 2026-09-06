@@ -105,6 +105,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FINDING_SCHEMA,
     HINT_SCHEMA,
+    REPEATABLE_CHANGE_ANNOTATIONS,
     WARNINGS_SCHEMA,
     CompareSpec,
     RenderPolicy,
@@ -2066,12 +2067,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     # Not read-only: export writes a file on every path (managed scratch by
     # default), and export_to:sidecar overwrites the deck's .net. The annotation
     # states the worst case; the description carries the conditional nuance.
-    annotations=types.ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=True,
-        idempotent_hint=True,
-        open_world_hint=False,
-    ),
+    annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=_OUTPUT_SCHEMA,
 )
 async def handle_verify_circuit(

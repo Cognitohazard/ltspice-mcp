@@ -47,6 +47,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
     OUTCOME_SCHEMA,
+    REPEATABLE_CHANGE_ANNOTATIONS,
     ResponseBudget,
     ToolInput,
     failures_schema,
@@ -1192,12 +1193,7 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         "work from an earlier session."
     ),
     input_model=JobsInput,
-    annotations=types.ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=True,
-        idempotent_hint=True,
-        open_world_hint=False,
-    ),
+    annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=JOBS_OUTPUT_SCHEMA,
 )
 async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:
