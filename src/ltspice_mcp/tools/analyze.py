@@ -53,6 +53,7 @@ from ltspice_mcp.lib.recipes import (
     PlotRecipe,
     Recipe,
     ScalarRecipe,
+    StepSelectionFields,
     StepSelector,
     WaveformRecipe,
     recipe_error,
@@ -454,7 +455,7 @@ class ContinueInput(StrictModel):
     )
 
 
-class AnalyzeResultsInput(ToolInput):
+class AnalyzeResultsInput(StepSelectionFields, ToolInput):
     sources: list[AnalyzeSourceInput] | None = Field(
         default=None,
         max_length=64,
@@ -481,22 +482,6 @@ class AnalyzeResultsInput(ToolInput):
             "Split each recipe's reductions along these dimensions: a variation "
             "assignment parameter name, 'circuit', or a .step axis name. Empty "
             "gives one reduction over every row."
-        ),
-    )
-    step: StepSelector | None = Field(
-        default=None,
-        description=(
-            "For a run whose deck carries a .step directive: read the one step "
-            "whose axis value this names, e.g. {axis:'temp', value:27}. Every "
-            "recipe in the call reads it. Default is the first step."
-        ),
-    )
-    all_steps: bool = Field(
-        default=False,
-        description=(
-            "For a run whose deck carries a .step directive: evaluate every "
-            "recipe at every step instead of only the first. Not combinable "
-            "with 'step'."
         ),
     )
     include: Annotated[
@@ -529,8 +514,6 @@ class AnalyzeResultsInput(ToolInput):
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
-        if self.step is not None and self.all_steps:
-            raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
         if self.continuation is not None:
             # A continuation replays the execution request stored in the result
             # set and takes its presentation view from the cursor, never these
@@ -1215,19 +1198,19 @@ def _window_fields(window: Any) -> tuple[str | None, str | None]:
 
 
 class StepSelection(NamedTuple):
-    """Which ``.step`` iteration(s) one whole call reads.
+    """The step choice a request declared, as the evaluator reads it.
 
-    A run's step axis belongs to the run, not to the measurement taken on it,
-    so the choice is made once per ``analyze_results`` call and applies to
-    every recipe in it. It is stored in the result set's inputs beside
-    ``group_by``, so a continuation replays the same steps.
+    ``StepSelectionFields`` is where the two fields and their rule are
+    declared; this is the resolved pair the evaluation loop carries. It is
+    stored in the result set's inputs beside ``group_by``, so a continuation
+    replays the same steps.
     """
 
     step: StepSelector | None = None
     all_steps: bool = False
 
     @classmethod
-    def of(cls, args: AnalyzeResultsInput) -> StepSelection:
+    def of(cls, args: StepSelectionFields) -> StepSelection:
         return cls(args.step, args.all_steps)
 
     @classmethod

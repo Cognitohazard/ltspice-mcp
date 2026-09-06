@@ -18,7 +18,6 @@ from pydantic import (
     ValidatorFunctionWrapHandler,
     field_serializer,
     field_validator,
-    model_validator,
 )
 
 from ltspice_mcp.errors import (
@@ -56,7 +55,12 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
-from ltspice_mcp.lib.recipes import DISCRIMINANTS, Recipe, StepSelector, validate_recipe
+from ltspice_mcp.lib.recipes import (
+    DISCRIMINANTS,
+    Recipe,
+    StepSelectionFields,
+    validate_recipe,
+)
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
@@ -260,7 +264,7 @@ class AnalysisInclude(StrictModel):
 coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
-class AttachedAnalysis(StrictModel):
+class AttachedAnalysis(StepSelectionFields):
     # The same typed union analyze_results advertises, not a free-form object:
     # this block IS an analyze_results request, and a schema that said
     # "any object" left a caller to discover the recipe grammar by having a
@@ -281,21 +285,6 @@ class AttachedAnalysis(StrictModel):
             "parameter name, 'circuit', or a .step axis name."
         ),
     )
-    step: StepSelector | None = Field(
-        default=None,
-        description=(
-            "For a deck carrying a .step directive: read the one step whose "
-            "axis value this names, e.g. {axis:'temp', value:27}. Applies to "
-            "every recipe here. Default is the first step."
-        ),
-    )
-    all_steps: bool = Field(
-        default=False,
-        description=(
-            "For a deck carrying a .step directive: evaluate every recipe at "
-            "every step instead of only the first. Not combinable with 'step'."
-        ),
-    )
     include: Annotated[
         AnalysisInclude | None,
         BeforeValidator(
@@ -309,15 +298,6 @@ class AttachedAnalysis(StrictModel):
             "a bare list of flag names switches them on."
         ),
     )
-
-    @model_validator(mode="after")
-    def _one_step_selection(self) -> AttachedAnalysis:
-        # The same rule analyze_results states, enforced by the model that
-        # advertises it rather than only by the pre-flight that re-validates
-        # the expanded payload one call site away.
-        if self.step is not None and self.all_steps:
-            raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
-        return self
 
     @field_serializer("recipes")
     def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
@@ -968,10 +948,10 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
         ],
         "recipes": request.get("recipes") or [],
         "group_by": request.get("group_by") or [],
-        "all_steps": bool(request.get("all_steps")),
+        # The one serializer for a step selection, so the two keys are spelled
+        # here exactly as analyze_results stores them.
+        **analyze.StepSelection.from_inputs(request).as_inputs(),
     }
-    if request.get("step") is not None:
-        payload["step"] = request["step"]
     include = request.get("include")
     if include is not None:
         payload["include"] = include
