@@ -770,6 +770,7 @@ class TestInspectCapabilities:
             assert caps["python"]["executable"]
             assert caps["default_simulator"] is None
             assert caps["tool_profile"] == "consolidated"
+            assert caps["python_api"]["open"] == f"Api(working_dir={str(tmp_path)!r})"
             assert caps["allowed_paths"] == [str(tmp_path)]
             assert caps["limits"]["max_parallel_sims"] == 1
             assert caps["limits"]["default_timeout_s"] == 10.0

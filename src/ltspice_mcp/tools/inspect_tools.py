@@ -838,6 +838,18 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         # One surface, and no setting selects it; the key stays because a
         # client reads it to know which one it is talking to.
         "tool_profile": "consolidated",
+        # The same six ops as a library, for loops over runs and numpy on
+        # samples. The interpreter that has the package is "python" above;
+        # this names the import, the session on this working directory, and
+        # where an op's arguments are read before they are guessed.
+        "python_api": {
+            "import": "from ltspice_mcp.api import Api",
+            "open": f"Api(working_dir={str(state.working_dir)!r})",
+            "reference": (
+                "api.reference('run_experiments') lists an op's arguments; "
+                "help(Api.<op>) and inspect.signature(Api.<op>) answer too"
+            ),
+        },
         # Which of the two tool listings this session was served. The guide
         # tells a caller to reach for inspect(kind="reference") whenever the
         # listing is compact, because the per-argument descriptions are then
