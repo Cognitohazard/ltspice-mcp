@@ -11,7 +11,7 @@ import secrets
 import shutil
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -76,31 +76,6 @@ _DRIFT_REASONS = {
     "source_modified_after_staging": "content changed",
     "source_unavailable_after_staging": "no longer readable",
 }
-
-
-def _discard_unclaimed_run_dir(job_id: str, run_dir: Path, working_dir: Path) -> None:
-    """Remove the run tree of a submission that staged and then failed.
-
-    Called only from inside the request gate, only for a job id this
-    submission minted, and only while no record claims it. Provenance comes
-    from the record that claims an artifact, so a tree nothing claims in the
-    box-wide runs root is what a later inventory of that folder mistakes for
-    its own work.
-
-    The record check is the refusal: a claimed tree belongs to its job, even
-    when this submission failed under the same id. The name check keeps a
-    malformed run directory from turning this into a delete of the shared runs
-    root. A failure here is logged, not raised — leaving a directory behind
-    must not replace the error the caller came for.
-    """
-    if run_dir.name != job_id or Store(working_dir).job_record(job_id).exists():
-        return
-    try:
-        shutil.rmtree(run_dir)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        logger.warning("could not discard the unclaimed run directory %s: %s", run_dir, exc)
 
 
 class IdempotencyConflictError(SimulationError):
@@ -271,24 +246,33 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
             )
 
 
-@dataclass
+def _already_staged() -> StagedDecks:
+    """Stand-in for a staging pass that has run.
+
+    An execution keeps its request for the life of the job, and a real staging
+    closure captures the whole submission — the validated arguments, the
+    resolved circuits, the lint findings. Swapping it out once the barrier has
+    called it lets that scope go.
+    """
+    raise RuntimeError("This request's decks were staged already")
+
+
+@dataclass(frozen=True)
 class ExperimentRunRequest:
     """One submission's input to the experiment coordinator.
 
-    ``cases`` and ``sources`` are the staged decks the job runs. A caller that
-    stages inside the request gate — which is every caller that copies files —
-    leaves them empty and passes ``stage`` instead; the coordinator fills them
-    in from what it returns, only once it knows this submission is not a replay
-    of one already recorded.
+    ``stage`` produces the staged decks the job runs. It is a callable rather
+    than the decks themselves because staging copies files and must happen
+    inside the request gate, after the coordinator knows this submission is not
+    a replay of one already recorded — a caller holding decks already passes
+    ``lambda: StagedDecks(cases, sources)``.
     """
 
     state: SessionState
     request_id: str
     fingerprint: str
     simulator: str
-    cases: list[ExperimentCase] = field(default_factory=list)
-    sources: list[SourceRecord] = field(default_factory=list)
-    stage: StageDecks | None = None
+    stage: StageDecks
     job_id: str | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
@@ -405,29 +389,31 @@ class ExperimentRunner(RunnerBase):
         if self._case_capacity(request) < 1:
             raise SimulationError("max_parallel must be at least 1")
 
-    def _materialize_job(self, request: ExperimentRunRequest) -> ExperimentJob:
+    def _materialize_job(
+        self, request: ExperimentRunRequest, staged: StagedDecks
+    ) -> ExperimentJob:
         job_id = request.job_id or generate_id("exp")
         validate_job_id(job_id)
         control_token = secrets.token_urlsafe(32)
         store_path = Store(request.state.working_dir).job_record(job_id)
-        case_ids = [case.case_id for case in request.cases]
-        run_indices = [case.run_index for case in request.cases]
+        case_ids = [case.case_id for case in staged.cases]
+        run_indices = [case.run_index for case in staged.cases]
         if any(not case_id for case_id in case_ids) or len(set(case_ids)) != len(case_ids):
             raise SimulationError("Experiment case_id values must be non-empty and unique")
         if any(run_index < 0 for run_index in run_indices) or len(set(run_indices)) != len(
             run_indices
         ):
             raise SimulationError("Experiment run_index values must be non-negative and unique")
-        for case in request.cases:
+        for case in staged.cases:
             case.run_token = f"{job_id}_case_{case.run_index}"
         completeness = Completeness(
-            declared=request.declared if request.declared is not None else len(request.cases),
-            expanded=len(request.cases),
+            declared=request.declared if request.declared is not None else len(staged.cases),
+            expanded=len(staged.cases),
         )
-        completeness.recount(request.cases)
+        completeness.recount(staged.cases)
         failures = [
             failure_row(case)
-            for case in request.cases
+            for case in staged.cases
             if case.status in {"failed", "cancelled", "skipped"}
         ]
         analysis = AnalysisStage(
@@ -445,8 +431,8 @@ class ExperimentRunner(RunnerBase):
             canonicalizer_version=request.canonicalizer_version,
             control_token=control_token,
             store_path=store_path,
-            cases=request.cases,
-            sources=request.sources,
+            cases=staged.cases,
+            sources=staged.sources,
             simulator=request.simulator,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
@@ -549,11 +535,8 @@ class ExperimentRunner(RunnerBase):
             if lookup.existing is not None:
                 return _BarrierResult(lookup.existing, replayed=True)
             try:
-                if request.stage is not None:
-                    staged = await request.stage()
-                    request.cases = staged.cases
-                    request.sources = staged.sources
-                candidate = self._materialize_job(request)
+                staged = await request.stage()
+                candidate = self._materialize_job(request, staged)
                 if lookup.dangling:
                     candidate.observations.append(
                         {
@@ -581,11 +564,29 @@ class ExperimentRunner(RunnerBase):
         return _BarrierResult(candidate, replayed=False)
 
     def _discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
-        """This submission's own run directory, if the claim never recorded it."""
+        """Remove the run tree of a submission that staged and then failed.
+
+        Called only from inside the request gate, only for a job id this
+        submission minted, and only while no record claims it. Provenance comes
+        from the record that claims an artifact, so a tree nothing claims in
+        the box-wide runs root is what a later inventory of that folder
+        mistakes for its own work.
+
+        The record check is the refusal: a claimed tree belongs to its job,
+        even when this submission failed under the same id. A failure here is
+        logged, not raised — leaving a directory behind must not replace the
+        error the caller came for.
+        """
         job_id = request.job_id
-        if not job_id:
+        if not job_id or Store(working_dir).job_record(job_id).exists():
             return
-        _discard_unclaimed_run_dir(job_id, run_dir_in(self.output_folder, job_id), working_dir)
+        run_dir = run_dir_in(self.output_folder, job_id)
+        try:
+            shutil.rmtree(run_dir)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning("could not discard the unclaimed run directory %s: %s", run_dir, exc)
 
     @staticmethod
     def _read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
@@ -698,7 +699,9 @@ class ExperimentRunner(RunnerBase):
     ) -> _Execution:
         capacity = self._case_capacity(request)
         return _Execution(
-            request=request,
+            # Without the staging closure: this execution outlives the
+            # submission call, and the closure holds that whole scope.
+            request=replace(request, stage=_already_staged),
             job=job,
             semaphore=asyncio.Semaphore(capacity),
             capacity=capacity,

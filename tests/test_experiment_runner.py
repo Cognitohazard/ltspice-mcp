@@ -26,6 +26,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
+from tests.conftest import staged_decks
 
 
 class MockSimulator:
@@ -91,13 +92,45 @@ def _request(
     kill_grace_s: float = 0.05,
     analysis_callback=None,
 ) -> ExperimentRunRequest:
+    return _request_and_cases(
+        state,
+        work_dir,
+        request_id=request_id,
+        count=count,
+        fingerprint=fingerprint,
+        max_parallel=max_parallel,
+        run_timeout_s=run_timeout_s,
+        job_deadline_s=job_deadline_s,
+        kill_grace_s=kill_grace_s,
+        analysis_callback=analysis_callback,
+    )[0]
+
+
+def _request_and_cases(
+    state: SessionState,
+    work_dir: Path,
+    *,
+    request_id: str,
+    count: int = 1,
+    fingerprint: str = "a" * 64,
+    max_parallel: int = 1,
+    run_timeout_s: float | None = None,
+    job_deadline_s: float | None = None,
+    kill_grace_s: float = 0.05,
+    analysis_callback=None,
+) -> tuple[ExperimentRunRequest, list[ExperimentCase]]:
+    """The request and the cases it will stage, for a test that needs both.
+
+    The request carries a staging pass rather than the decks themselves, so a
+    test that wants to look at (or edit) a case before submitting takes it from
+    here instead of off the request.
+    """
     cases, sources = _cases(work_dir, count)
-    return ExperimentRunRequest(
+    request = ExperimentRunRequest(
         state=state,
         request_id=request_id,
         fingerprint=fingerprint,
-        cases=cases,
-        sources=sources,
+        stage=staged_decks(cases, sources),
         simulator="MockSimulator",
         max_parallel=max_parallel,
         run_timeout_s=run_timeout_s,
@@ -106,6 +139,7 @@ def _request(
         analysis_request={"recipes": []} if analysis_callback is not None else None,
         analysis_callback=analysis_callback,
     )
+    return request, cases
 
 
 def _controlled_submit(
@@ -343,8 +377,8 @@ class TestLogopinfoInjection:
             max_parallel=1,
         )
         callbacks, submitted = _capturing_submit(monkeypatch, runner)
-        request = _request(state_no_sim, work_dir, request_id="logopinfo-op")
-        case = request.cases[0]
+        request, cases = _request_and_cases(state_no_sim, work_dir, request_id="logopinfo-op")
+        case = cases[0]
         staged = case.staged_deck
         staged_bytes = staged.read_bytes()
         case.deck_sha256 = sha256_file(staged)
@@ -382,8 +416,8 @@ class TestLogopinfoInjection:
             max_parallel=1,
         )
         callbacks, submitted = _capturing_submit(monkeypatch, runner)
-        request = _request(state_no_sim, work_dir, request_id="logopinfo-ngspice")
-        staged = request.cases[0].staged_deck
+        request, cases = _request_and_cases(state_no_sim, work_dir, request_id="logopinfo-ngspice")
+        staged = cases[0].staged_deck
 
         receipt = await asyncio.shield(runner.submit(request))
         await _wait_for(lambda: len(submitted) == 1)

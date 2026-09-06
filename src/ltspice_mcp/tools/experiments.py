@@ -1026,6 +1026,15 @@ async def _load_matching_replay(
     state: SessionState,
     fingerprint: str,
 ) -> ExperimentReceipt | None:
+    """A recorded submission this call replays, before a runner is involved.
+
+    Only for a request_id the caller passed. An id this server minted a moment
+    ago cannot name a recorded submission, so looking one up is a thread hop
+    and a failed open on the majority of calls. Nothing is missed: the request
+    gate does the authoritative lookup either way.
+    """
+    if "request_id" not in args.model_fields_set:
+        return None
     index = await asyncio.to_thread(
         experiment_store.load_request_index,
         args.request_id,
