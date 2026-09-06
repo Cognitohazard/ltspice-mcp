@@ -39,7 +39,6 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_bytes, fsync_dir, fsync_fd
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import sha256_file
-from ltspice_mcp.lib.netlist_graph import IncludeResolver, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -77,7 +76,6 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     OUTCOME_SCHEMA,
-    CompareSpec,
     StrictModel,
     ToolInput,
     comparison_mismatch,
@@ -88,6 +86,14 @@ from ltspice_mcp.tools._base import (
     registry,
     resolve_reference,
     safe_path,
+)
+from ltspice_mcp.tools.verify import (
+    COMPARISON_SCHEMA,
+    CompareResult,
+    VerifyCompareSpec,
+    compare_equivalence,
+    compare_structural,
+    reference_to_path,
 )
 
 # The blank-sheet template — identical to what ``create_schematic`` writes.
@@ -159,12 +165,13 @@ class EditSchematicInput(ToolInput):
             "nothing is written. " + COORDINATE_DESCRIPTION
         )
     )
-    compare: CompareSpec | None = Field(
+    compare: VerifyCompareSpec | None = Field(
         default=None,
         description=(
             "Verify the committed sheet against a reference netlist (.cir/.net) "
-            "by exporting a copy and comparing connectivity. It runs after the "
-            "commit, so a mismatch is reported but not undone."
+            "by exporting a copy and comparing it the way verify_circuit does "
+            "(same modes, anchors and tolerance). It runs after the commit, so "
+            "a mismatch is reported but not undone."
         ),
     )
     dry_run: bool = Field(
@@ -263,7 +270,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "equivalent": {"type": ["boolean", "null"]},
                 "structurally_equivalent": {"type": ["boolean", "null"]},
                 "export_error": {"type": ["string", "null"]},
-                "comparison": {"type": "object"},
+                "compare_error": {"type": ["string", "null"]},
+                "comparison": COMPARISON_SCHEMA,
             },
         },
         "wiring": {
@@ -534,22 +542,36 @@ def _write_export_copy(
     atomic_write_bytes(copy_asc, committed_text.encode(encoding), durable=False)
 
 
-def _compare_reference(
-    ref: str | Path, netlist_text: str, resolver: IncludeResolver, spec: CompareSpec
-):
-    """Parse both sides and compare their connectivity graphs (blocking CPU/IO)."""
-    ref_graph = parse_netlist_graph(ref, include_resolver=resolver)
-    cand_graph = parse_netlist_graph(netlist_text, include_resolver=resolver)
-    return compare_graphs(ref_graph, cand_graph, anchors=spec.anchors, rtol=spec.rtol)
+def _compare_committed(
+    ref: str | Path,
+    netlist_text: str,
+    netlist_path: Path,
+    ref_source: Path,
+    spec: VerifyCompareSpec,
+    state: SessionState,
+) -> CompareResult:
+    """verify_circuit's comparison over the exported copy (blocking CPU/IO)."""
+    if spec.mode == "equivalence":
+        return compare_equivalence(
+            ref,
+            netlist_text,
+            ref_source,
+            netlist_path,
+            spec.anchors,
+            spec.rtol,
+            make_include_resolver(state),
+        )
+    return compare_structural(reference_to_path(ref, state), netlist_path)
 
 
 async def _run_reference_stage(
     committed_text: str,
     encoding: str,
     ref: str | Path,
-    spec: CompareSpec,
+    spec: VerifyCompareSpec,
     build_id: str,
     state: SessionState,
+    target: Path,
 ) -> dict:
     """Export a copy of the committed sheet and compare it to ``ref`` (a path or netlist text).
 
@@ -576,12 +598,26 @@ async def _run_reference_stage(
             verification["export_error"] = str(exc)
             verification["equivalent"] = None
             return verification
-        resolver = make_include_resolver(state)
-        comparison = await asyncio.to_thread(_compare_reference, ref, netlist_text, resolver, spec)
-        verification["equivalent"] = comparison.equivalent
-        verification["structurally_equivalent"] = comparison.structurally_equivalent
-        verification["comparison"] = comparison.as_dict()
+        netlist_path = copy_asc.with_suffix(".net")
+        if not netlist_path.exists():  # a seam-provided export leaves no file behind
+            netlist_path.write_text(netlist_text, encoding="utf-8")
+        ref_source = ref if isinstance(ref, Path) else target
+        payload, findings, failure, cmp_warnings = await asyncio.to_thread(
+            _compare_committed, ref, netlist_text, netlist_path, ref_source, spec, state
+        )
         verification["_netlist"] = netlist_text
+        verification["_warnings"] = cmp_warnings + [
+            f"{f.get('rule_id')}: {(f.get('evidence') or {}).get('detail') or f.get('subject')}"
+            for f in findings
+        ]
+        if failure is not None:
+            verification["compare_error"] = failure["error"]
+            verification["equivalent"] = None
+            return verification
+        assert payload is not None  # a compare without a failure carries its payload
+        verification["equivalent"] = payload.get("equivalent")
+        verification["structurally_equivalent"] = payload.get("structurally_equivalent")
+        verification["comparison"] = payload
         return verification
     finally:
         await asyncio.to_thread(shutil.rmtree, export_root, ignore_errors=True)
@@ -1009,9 +1045,10 @@ async def _evaluate_edit_schematic(
                 post_commit_stage = "reference"
                 assert compare is not None  # reference_path implies it
                 verification = await _run_reference_stage(
-                    committed_text, encoding, reference_path, compare, build_id, state
+                    committed_text, encoding, reference_path, compare, build_id, state, target
                 )
                 netlist = verification.pop("_netlist", None)
+                warnings.extend(verification.pop("_warnings", []))
                 ok = verification.get("export_error") is None and verification.get("equivalent")
                 _stage("reference", bool(ok))
 
@@ -1265,6 +1302,8 @@ def _commit_hint(profile: dict[str, int], verification: dict | None) -> str:
     if verification is not None:
         if verification.get("export_error"):
             parts.append(f"Reference check could not export: {verification['export_error']}.")
+        elif verification.get("compare_error"):
+            parts.append(f"Reference check could not compare: {verification['compare_error']}.")
         elif verification.get("equivalent"):
             parts.append("Reference netlist verified: equivalent.")
         else:

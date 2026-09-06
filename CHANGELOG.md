@@ -121,6 +121,22 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- The sandbox follows the config file while the server runs: `[security]
+  allowed_paths` is re-read whenever `ltspice-mcp.toml` changes, so a refused
+  path names the exact line to add and says it takes effect on the next call.
+  Before, the only self-serve route the refusal offered was copying the file,
+  because widening the sandbox needed a restart the agent cannot perform.
+  The server instructions state the sandbox rule in one sentence.
+- `edit_schematic`'s `compare` is `verify_circuit`'s: `mode`
+  (`equivalence` or `structural_diff`), `anchors` and `rtol`, run by the same
+  comparison engine, and `verification.comparison` carries the same payload
+  (a `structural_diff` delta with the verdict derived from it). A compare that
+  could not run reports `verification.compare_error` instead of raising.
+- `include.fields` accepts a bare name as the number it names: a path without a
+  dot that is not a row key reads under `value`, so `phase_margin_worst_deg`
+  means `value.phase_margin_worst_deg`. A dotted path with an unknown root is
+  still refused.
+
 - The default sandbox is the working directory plus the Claude Code scratch
   directory (`<tempdir>/claude-<uid>`). Claude Code tells an agent to write
   throwaway files there, outside the working directory, so a deck authored

@@ -319,10 +319,11 @@ class TestServerDispatch:
         assert result.is_error
         msg = tool_text(result)
         assert "Allowed paths" in msg
-        # The agent can't self-widen the sandbox, so the message must name the
-        # knob AND the human-escalation / move-the-file fallback.
+        # The message names the config line that widens the sandbox and says the
+        # file is re-read on the next call, so the agent can act on it itself.
+        assert "[security] allowed_paths" in msg
+        assert "next call" in msg
         assert "LTSPICE_MCP_ALLOWED_PATHS" in msg
-        assert "ask the user" in msg
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         result = await call_tool(
@@ -354,7 +355,8 @@ class TestServerDispatch:
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         assert "outside allowed directories" in msg
         assert "LTSPICE_MCP_ALLOWED_PATHS" in msg
-        assert "ask the user" in msg
+        assert "[security] allowed_paths" in msg
+        assert "next call" in msg
 
     async def test_read_resource_invalid_uri(self, state_no_sim: SessionState):
         # 2026-07-28 dropped the resource-not-found code; an unserved URI is an

@@ -87,7 +87,7 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     if not raw:
         return
     try:
-        resolved = resolve_safe_path(raw, state.config.allowed_paths)
+        resolved = resolve_safe_path(raw, state.allowed_paths())
     except (PathSecurityError, OSError):
         return
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
@@ -134,12 +134,14 @@ def _path_reject_guidance(state: SessionState) -> str:
     boundary — tool calls AND resource reads. The agent can't widen the sandbox
     itself, so name the knob and the human-escalation/move-the-file fallback or
     it dead-ends. One builder so the two boundaries can't drift."""
-    allowed = ", ".join(str(p) for p in state.config.allowed_paths)
+    allowed = ", ".join(str(p) for p in state.allowed_paths())
     return (
         f"Allowed paths: {allowed}\n"
-        "To work on this file, move or copy it into one of those directories, "
-        "or ask the user to widen the sandbox: [security] allowed_paths in "
-        f"{state.config.config_path} or LTSPICE_MCP_ALLOWED_PATHS (restart "
+        "To work on this file: pass its content inline where the argument takes "
+        "text (a compare reference), copy it into one of those directories, or "
+        "add its directory to [security] allowed_paths in "
+        f"{state.config.config_path} — that file is re-read on the next call, no "
+        "restart. LTSPICE_MCP_ALLOWED_PATHS sets the same list (restart "
         "required). An inspect capabilities query shows the full sandbox "
         "configuration."
     )
@@ -262,15 +264,17 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 CONSOLIDATED_INSTRUCTIONS = """\
 For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Write .cir/.net/.sp decks with your own file tools; the six tools below run them, analyze results, check circuits, and edit .asc geometry; plot_waveform draws plots. Routing: run quick one-off ngspice jobs yourself and bring the .raw; analyze_results raw_path parses runs this server never executed. Use run_experiments for LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
-Runs are cheap. Simulate to check instead of reasoning it out.
+Runs are cheap: simulate instead of reasoning it out.
 
 EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api, the same ops in-process.
 
-UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check and its fields by plain words ('phase margin').
+UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check by plain words ('phase margin').
 
 AUTHOR — edit_schematic: typed op batch on one .asc sheet; transactional, revision-guarded (expected_sha256); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare, optional render.
 
 A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings, and per-item failures. Match the recipe to the run type (.AC vs .tran) or analyze_results errors.
+
+Paths must lie in the sandbox; a refused path names the config line that widens it.
 """
 
 # Claude Code's client truncates MCP server instructions at 2048 characters;

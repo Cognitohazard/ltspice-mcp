@@ -369,7 +369,7 @@ _MULTI_BASE = "* divider\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\nC1 out 0 1n\n.en
 
 
 def _declared_comparison_keys() -> set[str]:
-    return set(vc._COMPARISON_SCHEMA["properties"])
+    return set(vc.COMPARISON_SCHEMA["properties"])
 
 
 async def test_equivalence_comparison_declares_every_key_it_emits(state_no_sim, work_dir):
@@ -454,14 +454,14 @@ def test_two_unparseable_decks_are_not_equivalent(work_dir):
     combination reported equivalent/complete for a comparison that compared
     nothing.
 
-    Driven at ``_compare_structural`` because the handler cannot currently reach
+    Driven at ``compare_structural`` because the handler cannot currently reach
     the pairing: it gates on ``path.is_file()``, and ``extract_netlist_info``
     raises only on a missing file (malformed content surfaces as lexer warnings
     and ``<unparseable>`` values, never an exception), so the candidate side of a
     netlist comparison always parses. The rule is pinned here anyway — it should
     hold by construction, not by whichever inputs happen to be reachable today.
     """
-    comparison, _findings, failure, warnings = vc._compare_structural(
+    comparison, _findings, failure, warnings = vc.compare_structural(
         work_dir / "no_such_reference.cir", work_dir / "no_such_candidate.cir"
     )
     assert failure is None
@@ -916,7 +916,8 @@ def test_api_types_exports_the_models_errors_name():
     # matter which class had been re-exported there.
     assert api_types.VerifyRenderPolicy is _model_of(VerifyCircuitInput, "render")
     assert api_types.VerifyCompareSpec is _model_of(VerifyCircuitInput, "compare")
-    assert api_types.CompareSpec is _model_of(EditSchematicInput, "compare")
+    # Both tools take the same compare spec: one comparison engine, one shape.
+    assert api_types.VerifyCompareSpec is _model_of(EditSchematicInput, "compare")
     # RenderPolicy is exported as the base VerifyRenderPolicy subclasses; only
     # verify_circuit takes a render, so no tool field validates against it.
     assert issubclass(api_types.VerifyRenderPolicy, api_types.RenderPolicy)
@@ -947,7 +948,7 @@ def test_the_exported_policy_models_are_accepted_by_their_tool():
         {
             "target": "divider.asc",
             "ops": [{"op": "add_net_label", "net": "vout", "pin": "R1.2"}],
-            "compare": api_types.CompareSpec(reference="ref.cir"),
+            "compare": api_types.VerifyCompareSpec(reference="ref.cir"),
         }
     )
     assert edit.compare is not None and edit.compare.reference == "ref.cir"
