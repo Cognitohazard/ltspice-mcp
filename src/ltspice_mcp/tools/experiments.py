@@ -77,6 +77,7 @@ from ltspice_mcp.lib.variations import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    NEW_WORK_ANNOTATIONS,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -537,12 +538,7 @@ class RunExperimentsInput(ToolInput):
         "instead of running a new one."
     ),
     input_model=RunExperimentsInput,
-    annotations=types.ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=False,
-        idempotent_hint=False,
-        open_world_hint=True,
-    ),
+    annotations=NEW_WORK_ANNOTATIONS,
     output_schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
 )
 async def handle_run_experiments(

@@ -737,9 +737,34 @@ def coerce_render_policy(value: Any, *, policy: type[RenderPolicy] = RenderPolic
     raise ValueError(render_spellings(policy))
 
 
+# The behaviour hints a client shows a person before it approves a call. Each
+# constant names what the four flags MEAN together, so a tool declares the
+# claim it is making rather than four booleans a reader has to re-derive.
+
+#: Reads and reports; changes nothing, and the same call answers the same way.
 RO_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+
+#: Starts new work, leaving new artifacts beside whatever was already there.
+#: Calling it again does the work again rather than returning the first answer,
+#: and it reaches a simulator and a filesystem outside the server's own state.
+NEW_WORK_ANNOTATIONS = types.ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=True,
+)
+
+#: Changes something that is already there — a running job, an exported file —
+#: within the paths and records this server owns. Repeating the call settles on
+#: the same state instead of changing more.
+REPEATABLE_CHANGE_ANNOTATIONS = types.ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
     idempotent_hint=True,
     open_world_hint=False,
 )
