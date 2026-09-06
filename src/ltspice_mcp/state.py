@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
@@ -89,6 +89,10 @@ class SessionState:
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
     """Whether the lazy default-config write has been tried this session (once)."""
+    code_worker: Any = field(default=None, repr=False)
+    """The ``run_code`` worker supervisor (``tools/run_code.py:CodeWorker``),
+    created on the first call and closed at shutdown. Untyped here because
+    ``state`` may not import ``tools``."""
     raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
     """Raw dialect per job-resolved raw path, recorded when the path is
     resolved (``services._resolve_result_file``) and read by ``load_raw`` —
@@ -131,9 +135,15 @@ class SessionState:
         from ltspice_mcp.tools import get_tools
         from ltspice_mcp.tools._base import registry as tool_registry
 
-        defs, dispatch = get_tools(self.config.tool_listing)
-        owners = tool_registry.field_owners()
-        return (defs, dispatch, owners)
+        # The exec tool is registered always (its contract is gated with the
+        # rest) and served only when the operator turned it on.
+        exclude = () if self.config.run_code else ("run_code",)
+        defs, dispatch = get_tools(self.config.tool_listing, exclude=exclude)
+        owners = {
+            name: tuple(owner for owner in tools if owner in dispatch)
+            for name, tools in tool_registry.field_owners().items()
+        }
+        return (defs, dispatch, {name: tools for name, tools in owners.items() if tools})
 
     @property
     def tool_defs(self) -> "list[types.Tool]":
@@ -275,6 +285,8 @@ class SessionState:
         """Clean up session resources at server shutdown."""
         self.editors.clear()
         self.results.clear()
+        if self.code_worker is not None:
+            await self.code_worker.close()
         await self.job_registry.cancel_running(self.runners, self)
         await self.job_registry.drain_pending()
 

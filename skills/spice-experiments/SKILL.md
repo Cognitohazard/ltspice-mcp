@@ -23,7 +23,8 @@ Charts: `plot_waveform` (interactive, where the client supports it); the
 Loops over many runs, numpy on the samples, or a script you will keep:
 `from ltspice_mcp.api import Api` runs the same six ops in-process and returns
 complete results (no paging, no budget); `api.reference("<op>")` gives an
-op's arguments before you guess them.
+op's arguments before you guess them. If the server lists a `run_code` tool,
+the same snippet runs there with `api` already in scope and the engine warm.
 Pass a `request_id`: the same id and args returns the original receipt
 instead of re-running (decks are content-addressed, so a later edit does not
 change what ran); different args return `idempotency_conflict`.

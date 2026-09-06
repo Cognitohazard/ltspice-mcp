@@ -352,3 +352,18 @@ class TestErrorReference:
         with pytest.raises(ValidationError) as excinfo:
             EditSchematicInput.model_validate({})
         assert "Reference for" not in validation_error_detail("edit_schematic", excinfo.value)
+
+
+class TestRandomRuleFieldsSayWhatTheyMean:
+    """A random rule's ``tolerance`` is a 3-sigma bound for a normal draw. The
+    only statement of that used to be a design document: an agent asked for
+    a Monte Carlo at 'tolerance = 3 sigma' read the installed package's source
+    to find out. The convention belongs on the field every listing carries."""
+
+    def test_tolerance_scale_and_distribution_carry_the_convention(self):
+        from ltspice_mcp.lib.variations import RandomRuleBase
+
+        fields = RandomRuleBase.model_fields
+        assert "3-sigma" in (fields["tolerance"].description or "")
+        assert "fraction of the nominal" in (fields["scale"].description or "")
+        assert "3 sigma" in (fields["distribution"].description or "")

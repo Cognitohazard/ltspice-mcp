@@ -756,17 +756,24 @@ def _score(stacks: _Haystacks, phrase: str, tokens: list[str]) -> int:
     return total
 
 
-def search_branches(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
+def search_branches(
+    query: str, *, limit: int, tools: frozenset[str] | None = None
+) -> tuple[list[BranchEntry], int]:
     """The best ``limit`` branches for ``query``, and how many matched at all.
 
     Ranking is by where the query's words land — branch name, then the plain
     words a person types for it, then a field name, then prose — and ties break
     on advertised order, so the same query always returns the same list.
+    ``tools`` restricts the search to the tools a session serves: the index is
+    built from the whole registry, and a tool the operator did not turn on
+    must not be findable on a session that would refuse the call.
     """
     phrase = _normalize(query)
     tokens = _tokens(query)
     scored: list[tuple[int, int, BranchEntry]] = []
     for position, (entry, stacks) in enumerate(zip(build_index(), _haystacks(), strict=True)):
+        if tools is not None and entry.tool not in tools:
+            continue
         score = _score(stacks, phrase, tokens)
         if score:
             scored.append((-score, position, entry))
@@ -774,14 +781,17 @@ def search_branches(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
     return [entry for _, _, entry in scored[:limit]], len(scored)
 
 
-def table_of_contents() -> list[dict[str, Any]]:
+def table_of_contents(tools: frozenset[str] | None = None) -> list[dict[str, Any]]:
     """Every entry name and its one line, grouped by tool and family.
 
     One pass over the index: entries come out in advertised order, so grouping
     preserves it without re-scanning the whole index once per family.
+    ``tools`` restricts it to the tools a session serves.
     """
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for entry in build_index():
+        if tools is not None and entry.tool not in tools:
+            continue
         rows = groups.setdefault((entry.tool, entry.family), [])
         rows.append({"name": entry.name, "summary": entry.summary})
     return [

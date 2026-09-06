@@ -191,7 +191,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         # `initialize` handshake through the initialization options the runner
         # builds when it answers — so setting it here, before the first request
         # is served, is what a client of either era reads.
-        server.instructions = build_instructions(available, state.default_simulator)
+        server.instructions = build_instructions(
+            available, state.default_simulator, run_code=config.run_code
+        )
 
         logger.info("=== LTSpice MCP Server Starting ===")
         logger.info(f"Server name: {server.name}")
@@ -286,14 +288,29 @@ _INSTRUCTIONS_BUDGET = 2048
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
-def build_instructions(available: dict[str, type], default: type | None) -> str:
+#: The code-loop clause, in its two editions: the library alone, or the tool
+#: in front of it when the operator turned run_code on.
+_CODE_LOOPS_LIBRARY = "Code loops: from ltspice_mcp.api import Api, the same ops in-process."
+_CODE_LOOPS_TOOL = (
+    "Code loops: run_code runs Python with api in scope, the same ops, complete "
+    "results (or from ltspice_mcp.api import Api)."
+)
+
+
+def build_instructions(
+    available: dict[str, type], default: type | None, *, run_code: bool = False
+) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
     degradation. Stating the active engine up front removes that ambiguity.
+    ``run_code`` swaps the code-loop clause for the one naming the tool.
     """
     instructions = CONSOLIDATED_INSTRUCTIONS
+    if run_code:
+        assert _CODE_LOOPS_LIBRARY in instructions
+        instructions = instructions.replace(_CODE_LOOPS_LIBRARY, _CODE_LOOPS_TOOL)
     if not available:
         # The short no-simulator form: the long one plus the guide would
         # overflow the client's 2 KB instruction truncation.

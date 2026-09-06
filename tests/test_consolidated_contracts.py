@@ -591,6 +591,9 @@ class TestOutputSchemaCoverage:
 # title, which every revision since 2025-06-18 carries: 24 to 26 characters
 # apiece, added to every number below when titles were introduced.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
+    # Three arguments and a flat reply; the description carries the namespace,
+    # the caps and the authority statement, which is most of it.
+    "run_code": 2600,
     # Variations, attached analysis, and the receipt row shape. The attached
     # recipes advertise their metric names and a pointer, not a second copy of
     # the recipe branches: a client cannot resolve a $ref into another tool's
@@ -604,7 +607,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # 'combine' had none at all, so 'zip' was an enum member no channel
     # defined, and 'rules' claimed a one-entry-per-kind rule that does not
     # exist.
-    "run_experiments": 13580,
+    # Raised by about 430 characters to say what a random rule's tolerance,
+    # scale and distribution mean: the 3-sigma convention was stated nowhere
+    # an agent reads, and one grepped the installed package to find it.
+    "run_experiments": 14020,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.

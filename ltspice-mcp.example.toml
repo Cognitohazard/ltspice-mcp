@@ -61,6 +61,11 @@ result_set_ttl_hours = 24.0
 # advertises the same seven with the per-argument descriptions
 # removed. No tool gains or loses a capability either way.
 listing = "full"
+# run_code = true adds a tool that runs a Python snippet with the engine in
+# scope (for loops over runs and numpy on samples). The snippet has the
+# server's own file and process authority, not the sandbox above, so
+# permission it in your client the way you would a shell.
+run_code = false
 
 [schematic]
 # Custom paths to LTspice symbol (.asy) files for .asc schematic support

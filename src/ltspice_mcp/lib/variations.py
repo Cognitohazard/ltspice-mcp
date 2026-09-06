@@ -155,9 +155,23 @@ class AssignVariation(VariationModel):
 
 class RandomRuleBase(VariationModel):
     target: str
-    tolerance: float = Field(gt=0.0)
-    scale: Scale = "relative"
-    distribution: Distribution = "normal"
+    tolerance: float = Field(
+        gt=0.0,
+        description=(
+            "Spread of the draw: with scale 'relative' a fraction of the nominal "
+            "(0.1 = 10%), with 'absolute' in the value's own units. For a normal "
+            "draw it is the 3-sigma bound (sigma = tolerance/3, draws clipped at "
+            "the bound); for a uniform draw, the half-range."
+        ),
+    )
+    scale: Scale = Field(
+        default="relative",
+        description="'relative' reads tolerance as a fraction of the nominal, 'absolute' in its units.",
+    )
+    distribution: Distribution = Field(
+        default="normal",
+        description="'normal' (or 'gaussian'): truncated at 3 sigma = tolerance; 'uniform': flat over the bound.",
+    )
 
     @field_validator("target")
     @classmethod

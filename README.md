@@ -234,13 +234,16 @@ ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" 
 timeout = 300.0          # seconds
 
 [tools]
-listing = "full"         # "compact" serves the same seven tools without their per-argument descriptions
+listing = "full"         # "compact" serves the same tools without their per-argument descriptions
+run_code = false         # true adds run_code; the snippet has the server's own authority, not the sandbox
 
 [state]
 persist_jobs = true
 ```
 
-`listing = "compact"` cuts about 45% off what a session loads before it can call anything; the same seven tools accept exactly the same calls, and `inspect(kind="reference", query="...")` looks up a branch's arguments when you need them.
+`listing = "compact"` cuts about 45% off what a session loads before it can call anything; the same tools accept exactly the same calls, and `inspect(kind="reference", query="...")` looks up a branch's arguments when you need them.
+
+`run_code = true` adds a tool that runs a Python snippet in a worker process holding the engine as `api` (the same six ops as methods, complete results), for loops over runs and numpy on samples. The snippet runs with the server process's own file and process authority, not inside `allowed_paths`: permission `mcp__ltspice__run_code` in your client the way you permission a shell, and never blanket-allow it as part of `mcp__ltspice__*`. It is off by default and takes effect at the next start; `inspect(kind="capabilities")` reports whether it is on.
 
 See [`src/ltspice_mcp/config.py`](src/ltspice_mcp/config.py) for the full option list (`[analysis]`, `[schematic]`, `[logging]`, ...).
 
@@ -262,7 +265,7 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 
 ### The tool surface
 
-The server exposes **7 tools**, six of them arranged over three planes, plus the waveform widget:
+The server exposes **8 tools**: six arranged over three planes, the waveform widget, and `run_code`, which is registered always and served only when the operator turns it on:
 
 | Plane | Tool | What it does |
 |-|-|-|
@@ -273,6 +276,7 @@ The server exposes **7 tools**, six of them arranged over three planes, plus the
 | Author | `edit_schematic` | Create and mutate `.asc` transactionally: place, move, wire, label, set attributes |
 | Author | `verify_circuit` | Syntax, symbol, layout, and quality checks, schematic-vs-netlist equivalence, and rendering |
 | — | `plot_waveform` | Interactive chart of a run's waveforms, in-chat where the client renders widgets, otherwise opened on your desktop |
+| — | `run_code` | Run a Python snippet in a warm worker that holds the engine as `api`: loops over runs, numpy on samples. Off by default; see `[tools] run_code` under Configuration |
 
 Netlists are written and edited with the agent's own file tools; the server does not wrap text edits. The same six operations are importable as `ltspice_mcp.api` (`Api(working_dir=...)`), so a Python script can drive the same engine without an MCP client.
 

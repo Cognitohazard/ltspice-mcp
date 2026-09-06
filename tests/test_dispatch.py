@@ -267,6 +267,10 @@ _TOOL_REVERSAL: dict[str, str] = {
     "analyze_results": "derived artifacts; sources untouched, output regenerable",
     "edit_schematic": "compensating op batch, or restore the file natively (file-access agent)",
     "verify_circuit": "export_to:sidecar overwrites the .net, regenerable from the source; source untouched",
+    # Runs the caller's own code: what it changes is the code's to undo (files
+    # with the caller's file tools, jobs with cancel); the worker itself is
+    # replaced with reset. Served only when the operator turned it on.
+    "run_code": "the snippet's own effects; worker replaced by reset:true",
 }
 
 
@@ -635,6 +639,7 @@ class TestAdvertisedOrderIsStable:
             "inspect",
             "edit_schematic",
             "verify_circuit",
+            "run_code",
         ]
 
 

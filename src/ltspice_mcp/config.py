@@ -177,11 +177,16 @@ def _toml_tool_listing(value: Any) -> Any:
     return _validated_listing(value, "config") or _SKIP
 
 
-def _toml_persist_jobs(value: Any) -> Any:
-    if isinstance(value, bool):
-        return value
-    logger.warning("config: state.persist_jobs must be boolean; ignoring %r", value)
-    return _SKIP
+def _toml_bool(name: str) -> Callable[[Any], Any]:
+    """A TOML reader for one boolean key, refusing anything but a real boolean."""
+
+    def read(value: Any) -> Any:
+        if isinstance(value, bool):
+            return value
+        logger.warning("config: %s must be boolean; ignoring %r", name, value)
+        return _SKIP
+
+    return read
 
 
 def _toml_preload_recent_count(value: Any) -> Any:
@@ -227,14 +232,19 @@ def _env_tool_listing(value: str) -> Any:
     return _validated_listing(value.strip(), "LTSPICE_MCP_TOOL_LISTING") or _SKIP
 
 
-def _env_persist_jobs(value: str) -> Any:
-    normalized = value.strip().lower()
-    if normalized in ("1", "true", "yes", "on"):
-        return True
-    if normalized in ("0", "false", "no", "off"):
-        return False
-    logger.warning("LTSPICE_MCP_PERSIST_JOBS: invalid boolean %r; ignoring", value)
-    return _SKIP
+def _env_bool(name: str) -> Callable[[str], Any]:
+    """An environment reader for one boolean variable (1/true/yes/on, 0/false/no/off)."""
+
+    def read(value: str) -> Any:
+        normalized = value.strip().lower()
+        if normalized in ("1", "true", "yes", "on"):
+            return True
+        if normalized in ("0", "false", "no", "off"):
+            return False
+        logger.warning("%s: invalid boolean %r; ignoring", name, value)
+        return _SKIP
+
+    return read
 
 
 def _env_preload_recent_count(value: str) -> Any:
@@ -415,12 +425,20 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_tool_listing,
     ),
     _Setting(
+        field="run_code",
+        section="tools",
+        key="run_code",
+        from_toml=_toml_bool("tools.run_code"),
+        env="LTSPICE_MCP_RUN_CODE",
+        from_env=_env_bool("LTSPICE_MCP_RUN_CODE"),
+    ),
+    _Setting(
         field="persist_jobs",
         section="state",
         key="persist_jobs",
-        from_toml=_toml_persist_jobs,
+        from_toml=_toml_bool("state.persist_jobs"),
         env="LTSPICE_MCP_PERSIST_JOBS",
-        from_env=_env_persist_jobs,
+        from_env=_env_bool("LTSPICE_MCP_PERSIST_JOBS"),
         env_accepts_empty=True,
     ),
     _Setting(
@@ -550,6 +568,13 @@ class ServerConfig:
     and ``$defs`` are untouched, and the tools accept exactly what they did.
     Both listings are static — the same for every connection, and unchanged by
     anything called on it — so a client may cache either one."""
+
+    run_code: bool = False
+    """Advertise the ``run_code`` tool: a Python snippet run in a warm worker
+    process that holds this server's engine as ``api``. Off by default because
+    the snippet runs with the server process's own file and process authority,
+    not inside ``allowed_paths``; turning it on is the operator's decision, and
+    it takes effect at the next start."""
 
     persist_jobs: bool = True
     """Persist experiment job records to the working directory's
@@ -758,6 +783,13 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(comment("advertises the same seven with the per-argument descriptions"))
     tools_tbl.add(comment("removed. No tool gains or loses a capability either way."))
     tools_tbl.add("listing", "full")
+    tools_tbl.add(
+        comment("run_code = true adds a tool that runs a Python snippet with the engine in")
+    )
+    tools_tbl.add(comment("scope (for loops over runs and numpy on samples). The snippet has the"))
+    tools_tbl.add(comment("server's own file and process authority, not the sandbox above, so"))
+    tools_tbl.add(comment("permission it in your client the way you would a shell."))
+    tools_tbl.add("run_code", False)
     doc.add("tools", tools_tbl)
     doc.add(nl())
 
