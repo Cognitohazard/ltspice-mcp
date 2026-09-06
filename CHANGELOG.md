@@ -254,6 +254,9 @@ the key ignored. Serving zero tools is still a hard error.
 - The rule "`field` is required once `reduce` or `spec` is given" is stated in
   the recipe schemas themselves (`dependentRequired`), so a client on the
   compact listing, which carries no descriptions, still sees it.
+- `inspect(kind: "capabilities")` reports the Python API under `python_api`:
+  the import line, the session call on this working directory, and where an
+  op's arguments are read (`api.reference`, `help`, `inspect.signature`).
 
 - Every tool carries a display title, the short label a client shows a person
   in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,

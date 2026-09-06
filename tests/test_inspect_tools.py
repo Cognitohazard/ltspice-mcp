@@ -130,8 +130,15 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "linter_version",
         "config_path",
         "python",
+        "python_api",
     ):
         assert key in data, f"missing capabilities key {key!r}"
+    # The library door, named where an agent already looks for what the
+    # server can do: the import, a session on this working directory, and
+    # the reference lookup that replaces guessing an op's arguments.
+    assert data["python_api"]["import"] == "from ltspice_mcp.api import Api"
+    assert str(cap_state.working_dir) in data["python_api"]["open"]
+    assert "reference(" in data["python_api"]["reference"]
     assert "ltspice" in data["simulators"]
     assert data["simulators"]["ltspice"]["available"] is True
     assert data["exporter_available"] is True
