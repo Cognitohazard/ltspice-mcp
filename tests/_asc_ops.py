@@ -81,46 +81,6 @@ async def apply_ops(
     )
 
 
-def pins_of(data: dict[str, Any], ref: str, view: str = "touched") -> dict[str, tuple[int, int]]:
-    """``{pin_name: (x, y)}`` for ``ref`` from a returned geometry view."""
-    for row in data["views"][view]["items"]:
-        if row["ref"] == ref:
-            return {p["name"]: (p["x"], p["y"]) for p in row["pins"]}
-    raise AssertionError(f"{ref} not in views.{view}: {data['views'][view]['items']}")
-
-
-def nets_of(data: dict[str, Any], ref: str, view: str = "touched") -> dict[str, str | None]:
-    """``{pin_name: net}`` for ``ref`` from a returned geometry view."""
-    for row in data["views"][view]["items"]:
-        if row["ref"] == ref:
-            return {p["name"]: p["net"] for p in row["pins"]}
-    raise AssertionError(f"{ref} not in views.{view}: {data['views'][view]['items']}")
-
-
-def failure_messages(data: dict[str, Any]) -> list[str]:
-    """Every per-op failure message in the batch, in op order."""
-    return [f["error"] for f in data["failures"]]
-
-
-def wire_segments(path: Path) -> list[tuple[int, int, int, int]]:
-    """Every WIRE record in an .asc as ``(x1, y1, x2, y2)``."""
-    out: list[tuple[int, int, int, int]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        parts = line.split()
-        if parts and parts[0] == "WIRE" and len(parts) >= 5:
-            out.append((int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])))
-    return out
-
-
-def has_segment(
-    segments: list[tuple[int, int, int, int]],
-    a: tuple[int, int],
-    b: tuple[int, int],
-) -> bool:
-    """Whether ``segments`` contains the run between ``a`` and ``b``, either way round."""
-    return (a[0], a[1], b[0], b[1]) in segments or (b[0], b[1], a[0], a[1]) in segments
-
-
 # --- direct seams -----------------------------------------------------------
 #
 # The envelope folds per-op geometry into paginated views and flattens the

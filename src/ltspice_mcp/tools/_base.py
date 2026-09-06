@@ -49,31 +49,11 @@ logger = logging.getLogger(__name__)
 # Response helpers — standardize tool output format
 #
 # All helpers return types.CallToolResult, the MCP protocol's canonical
-# response type.  text_response() returns text-only (for confirmations).
-# format_response() returns both human-readable text content AND structured
-# data via structuredContent (for data-returning tools).
+# response type. format_response() returns both human-readable text content AND
+# structured data via structuredContent, which is what every tool here does:
+# a structured-aware client renders only structuredContent, so the text channel
+# is presentation and the data dict has to carry everything a caller acts on.
 # ---------------------------------------------------------------------------
-
-
-def text_response(text: str) -> types.CallToolResult:
-    """Return a text-only CallToolResult (confirmations, simple messages)."""
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=text)],
-    )
-
-
-def result_text(result: types.CallToolResult, *, joined: bool = False) -> str:
-    """The text channel of a ``CallToolResult``, for relaying a sub-handler's
-    message out of a dispatcher.
-
-    Returns the first text block verbatim. ``joined`` merges every text block
-    onto one stripped line instead, for callers that fold the text into a
-    message of their own rather than re-rendering it.
-    """
-    blocks = [block.text for block in result.content if isinstance(block, types.TextContent)]
-    if joined:
-        return " ".join(blocks).strip()
-    return blocks[0] if blocks else ""
 
 
 # Most named key paths one scrub warning lists — a fully-NaN trace array
@@ -408,23 +388,6 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
         "required": ["values"],
     },
 }
-
-
-def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
-    """Render structured .MEAS errors for the text-format response.
-
-    Returns the lines (no trailing blank); callers append to their own
-    line list. Empty input returns an empty list so callers don't need
-    to guard.
-    """
-    if not meas_errors:
-        return []
-    lines = [f".MEAS errors ({len(meas_errors)}):"]
-    for me in meas_errors:
-        lines.append(f"  Directive: {me['directive']}")
-        if me.get("suggestion"):
-            lines.append(f"    Suggestion: {me['suggestion']}")
-    return lines
 
 
 def format_observations(observations: list[dict[str, Any]]) -> list[str]:

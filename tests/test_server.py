@@ -30,11 +30,6 @@ from ltspice_mcp.state import SessionState
 from tests.conftest import call_tool_params, fake_request_context, tool_text
 
 
-def _ctx(state: SessionState):
-    """The per-request context a server handler reads its session state from."""
-    return fake_request_context(state)
-
-
 def _read_params(uri: str) -> mcp_types.ReadResourceRequestParams:
     """The ``resources/read`` params a dispatch-level test hands to the handler."""
     return mcp_types.ReadResourceRequestParams(uri=uri)
@@ -278,7 +273,7 @@ class TestServerDispatch:
     """Test list_tools / call_tool / list_resources / read_resource via patched server."""
 
     async def test_list_tools(self, state_no_sim: SessionState):
-        result = await list_tools(_ctx(state_no_sim), None)
+        result = await list_tools(fake_request_context(state_no_sim), None)
         assert len(result.tools) > 0
 
     async def test_call_unknown_tool(self, state_no_sim: SessionState):
@@ -287,7 +282,9 @@ class TestServerDispatch:
         failure answers invalid-params the way an unknown resource URI does.
         The message lists the names that do exist."""
         with pytest.raises(MCPError) as excinfo:
-            await call_tool(_ctx(state_no_sim), call_tool_params("ltspice_nonexistent", {}))
+            await call_tool(
+                fake_request_context(state_no_sim), call_tool_params("ltspice_nonexistent", {})
+            )
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         message = excinfo.value.message
         assert "ltspice_nonexistent" in message
@@ -300,21 +297,24 @@ class TestServerDispatch:
         (migration guidance lives in the config warning and the docs)."""
         with pytest.raises(MCPError) as excinfo:
             await call_tool(
-                _ctx(state_no_sim), call_tool_params("run_simulation", {"netlist": "x.cir"})
+                fake_request_context(state_no_sim),
+                call_tool_params("run_simulation", {"netlist": "x.cir"}),
             )
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         assert "run_simulation" in excinfo.value.message
 
     async def test_call_validation_error(self, state_no_sim: SessionState):
         result = await call_tool(
-            _ctx(state_no_sim), call_tool_params("run_experiments", {"missing": "field"})
+            fake_request_context(state_no_sim),
+            call_tool_params("run_experiments", {"missing": "field"}),
         )
         assert result.is_error
         assert "Invalid arguments" in tool_text(result)
 
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         result = await call_tool(
-            _ctx(state_no_sim), call_tool_params("plot_waveform", {"raw_file": "/etc/passwd"})
+            fake_request_context(state_no_sim),
+            call_tool_params("plot_waveform", {"raw_file": "/etc/passwd"}),
         )
         assert result.is_error
         msg = tool_text(result)
@@ -326,7 +326,8 @@ class TestServerDispatch:
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         result = await call_tool(
-            _ctx(state_no_sim), call_tool_params("plot_waveform", {"raw_file": "missing.raw"})
+            fake_request_context(state_no_sim),
+            call_tool_params("plot_waveform", {"raw_file": "missing.raw"}),
         )
         assert result.is_error
         msg = tool_text(result)
@@ -334,7 +335,7 @@ class TestServerDispatch:
         assert "jobs" in msg or "analyze_results" in msg
 
     async def test_list_resources(self, state_no_sim: SessionState):
-        result = await list_resources(_ctx(state_no_sim), None)
+        result = await list_resources(fake_request_context(state_no_sim), None)
         assert len(result.resources) > 0
 
     async def test_read_resource_path_security_enriched(self, state_no_sim: SessionState):
@@ -346,7 +347,9 @@ class TestServerDispatch:
             patch("ltspice_mcp.server.handle_read_resource", side_effect=boom),
             pytest.raises(MCPError) as excinfo,
         ):
-            await read_resource(_ctx(state_no_sim), _read_params("spice://netlists/x.cir"))
+            await read_resource(
+                fake_request_context(state_no_sim), _read_params("spice://netlists/x.cir")
+            )
         msg = excinfo.value.message
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         assert "outside allowed directories" in msg
@@ -357,7 +360,9 @@ class TestServerDispatch:
         # 2026-07-28 dropped the resource-not-found code; an unserved URI is an
         # invalid parameter, which is what a client keys its recovery on.
         with pytest.raises(MCPError) as excinfo:
-            await read_resource(_ctx(state_no_sim), _read_params("spice://nonexistent"))
+            await read_resource(
+                fake_request_context(state_no_sim), _read_params("spice://nonexistent")
+            )
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         assert "Unknown" in excinfo.value.message
 
@@ -374,12 +379,14 @@ class TestServerDispatch:
             patch("ltspice_mcp.server.handle_read_resource", side_effect=TypeError("boom")),
             pytest.raises(MCPError) as excinfo,
         ):
-            await read_resource(_ctx(state_no_sim), _read_params("spice://config"))
+            await read_resource(fake_request_context(state_no_sim), _read_params("spice://config"))
         assert excinfo.value.code == mcp_types.INTERNAL_ERROR
         assert "TypeError" in excinfo.value.message
 
     async def test_read_resource_valid(self, state_no_sim: SessionState):
-        result = await read_resource(_ctx(state_no_sim), _read_params("spice://config"))
+        result = await read_resource(
+            fake_request_context(state_no_sim), _read_params("spice://config")
+        )
         assert len(result.contents) > 0
 
     async def test_error_with_suggestions_returns_structured_result(
@@ -395,7 +402,7 @@ class TestServerDispatch:
         state_no_sim.libraries.load_library(lib)
 
         result = await call_tool(
-            _ctx(state_no_sim),
+            fake_request_context(state_no_sim),
             call_tool_params(
                 "inspect",
                 {"queries": [{"kind": "model", "mode": "search", "query": "2N2223"}]},

@@ -33,14 +33,36 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 _FIXTURE_SYMBOLS = FIXTURES_DIR / "symbols"
 _FIXTURE_DRAFT = FIXTURES_DIR / "Draft1.asc"
 
-# Recorded real-LTspice fixture values shared across test modules.
-# Single transient run of an RC low-pass (R=1k, C=100n, 1 V step input); its
-# log holds the one .MEAS line ``vfinal: V(out)=0.999876166042 at 0.0009``.
-LTSPICE_TRAN_RC_LOG = FIXTURES_DIR / "ltspice_tran_rc.log"
+# Recorded real-LTspice fixture value shared across test modules: a single
+# transient run of an RC low-pass (R=1k, C=100n, 1 V step input), whose log
+# (``fixtures/ltspice_tran_rc.log``) holds the one .MEAS line
+# ``vfinal: V(out)=0.999876166042 at 0.0009``.
 LTSPICE_TRAN_RC_VFINAL = 0.999876166042
-# 3-run LTspice parameter sweep of the same RC low-pass (R1 = 1k / 2.2k /
-# 4.7k), one .MEAS log per run as the sweep/MC runners record them.
-LTSPICE_SWEEP_RUN_LOGS = [FIXTURES_DIR / f"ltspice_sweep_meas_run{i}.log" for i in range(3)]
+
+
+# ---------------------------------------------------------------------------
+# Reading a published schema
+# ---------------------------------------------------------------------------
+
+
+def schema_descriptions(node: typing.Any, path: str = "") -> dict[str, str]:
+    """Every description in a schema, keyed by where it sits.
+
+    Shared so the two modules that compare listings against each other and
+    against the source key the same locations; two copies of the path
+    convention would silently stop comparing the same places.
+    """
+    found: dict[str, str] = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str):
+                found[path or "<root>"] = value
+            else:
+                found |= schema_descriptions(value, f"{path}.{key}" if path else key)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            found |= schema_descriptions(item, f"{path}[{index}]")
+    return found
 
 
 # ---------------------------------------------------------------------------
