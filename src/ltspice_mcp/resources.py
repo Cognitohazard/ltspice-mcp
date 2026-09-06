@@ -370,6 +370,9 @@ def _per_run_read_pointer(job_id: str, state: SessionState) -> str:
     an experiment, and an experiment's runs are case-addressed, so the read
     goes to the tool that takes a case.
     """
+    # Resolved and discarded: it raises JobNotFoundError for an id that names
+    # nothing, so an unknown job never gets the authoritative-sounding answer
+    # below.
     services.resolve_job(job_id, state)
     return (
         f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
