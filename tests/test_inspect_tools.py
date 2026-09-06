@@ -798,6 +798,21 @@ async def test_reference_limit_bounds_the_matches_and_reports_the_rest(
     assert "limit" in data["hint"]
 
 
+async def test_reference_at_the_limit_cap_stops_pointing_at_limit(cap_state: SessionState):
+    """A hint naming a lever already at its ceiling is noise. At the cap the
+    only move left is a narrower query, so that is all the hint offers."""
+    (res,) = await _run(
+        cap_state,
+        [{"kind": "reference", "query": "signal name", "limit": insp.REFERENCE_LIMIT_CAP}],
+    )
+    data = res["data"]
+    assert data["total_matches"] > data["returned"], (
+        "this query no longer overflows the cap, so it cannot exercise the hint"
+    )
+    assert "Raise 'limit'" not in data["hint"]
+    assert "narrow the query" in data["hint"]
+
+
 async def test_reference_without_a_query_returns_the_table_of_contents(
     cap_state: SessionState,
 ):
