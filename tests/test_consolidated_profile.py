@@ -13,6 +13,7 @@ import pytest
 
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
 from ltspice_mcp.tools import get_tools
+from tests.conftest import REGISTERED_TOOLS
 from tests.conftest import TOOLS_REMOVED_IN_0_6 as _TOOLS_REMOVED_TUPLE
 
 # Single-homed in conftest; frozen view under the name this file always used.
@@ -63,7 +64,9 @@ class TestExposureCounts:
     """Exact membership — a tool registered by accident trips one of these."""
 
     def test_consolidated_exposes_exactly_the_declared_surface(self):
-        assert _names("consolidated") == set(CONSOLIDATED_TOOLS)
+        # The registry: the envelope six, the plot widget, and run_code (served
+        # only when the operator turned it on, but registered always).
+        assert _names("consolidated") == set(REGISTERED_TOOLS)
 
     def test_the_removed_surface_is_really_gone(self):
         # If a 0.5 tool is ever re-registered, the text guards below (and the
@@ -98,7 +101,8 @@ class TestAnnotationsTable:
         assert read_only == {"inspect"}
 
     def test_only_the_tools_that_leave_the_process_are_open_world(self):
-        """run_experiments launches a simulator; plot_waveform opens a browser.
+        """run_experiments launches a simulator; plot_waveform opens a browser;
+        run_code runs whatever the snippet does, in a process of its own.
         Nothing else reaches outside, and a tool that claims to is telling the
         client to gate a call that never leaves the box."""
         defs, _ = get_tools()
@@ -107,7 +111,7 @@ class TestAnnotationsTable:
             for tool_def in defs
             if tool_def.annotations and tool_def.annotations.open_world_hint
         }
-        assert open_world == {"run_experiments", "plot_waveform"}
+        assert open_world == {"run_experiments", "plot_waveform", "run_code"}
 
 
 class TestErrorHints:

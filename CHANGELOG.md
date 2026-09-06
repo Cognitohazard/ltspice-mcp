@@ -254,9 +254,26 @@ the key ignored. Serving zero tools is still a hard error.
 - The rule "`field` is required once `reduce` or `spec` is given" is stated in
   the recipe schemas themselves (`dependentRequired`), so a client on the
   compact listing, which carries no descriptions, still sees it.
+- A random rule's `tolerance`, `scale` and `distribution` say what they mean
+  on the field itself: the tolerance is a fraction of the nominal (or in the
+  value's units), and for a normal draw it is the 3-sigma bound. The
+  convention was stated only in a design document; an agent asked for a
+  Monte Carlo at a stated sigma read the package source to find it.
 - `inspect(kind: "capabilities")` reports the Python API under `python_api`:
   the import line, the session call on this working directory, and where an
   op's arguments are read (`api.reference`, `help`, `inspect.signature`).
+- A `run_code` tool, served only when `[tools] run_code = true`
+  (`LTSPICE_MCP_RUN_CODE`): it runs a Python snippet in a warm worker process
+  that holds the engine as `api` (the same six ops as methods, complete
+  results, plus `np`, `load_raw`, `measurements`, `reference`), for loops over
+  runs and numpy on samples. Each call is a fresh namespace around the same
+  live engine; `timeout_s` (default 60, max 600) interrupts the snippet and
+  cancels a run it waits on; a second call during one is answered `busy`;
+  `reset` replaces the worker. Output is capped and says what it dropped. The
+  snippet runs with the server's own authority, not the sandbox, so the tool is
+  off by default; the capabilities report names the key
+  (`python_api.run_code`) and the reference table lists the tool only on a
+  session that serves it.
 
 - Every tool carries a display title, the short label a client shows a person
   in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,

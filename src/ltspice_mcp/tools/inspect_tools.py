@@ -849,6 +849,13 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
                 "api.reference('run_experiments') lists an op's arguments; "
                 "help(Api.<op>) and inspect.signature(Api.<op>) answer too"
             ),
+            # The same engine behind a tool call, when the operator turned it
+            # on; the key and the restart are what an agent relays to them.
+            "run_code": {
+                "enabled": state.config.run_code,
+                "config_key": "tools.run_code",
+                "restart_required": True,
+            },
         },
         # Which of the two tool listings this session was served. The guide
         # tells a caller to reach for inspect(kind="reference") whenever the
@@ -1453,12 +1460,14 @@ _REFERENCE_CONTENTS_HINT = (
 )
 
 
-def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
+def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dict[str, Any]:
     """Search the tools' branch vocabulary, or list it when no query is given.
 
-    Nothing here reads a file or the session, so there is no path to resolve,
-    no cursor to bind and nothing to offload: the index is derived from the
-    input models once per process and searched in memory.
+    Nothing here reads a file, so there is no path to resolve, no cursor to
+    bind and nothing to offload: the index is derived from the input models
+    once per process and searched in memory. ``served`` is the one thing read
+    off the session — the tools it dispatches — so a tool the operator did not
+    turn on is not in the table a session that would refuse it hands out.
 
     ``view`` is how a caller's ``budget`` reaches this kind. The shrink rung
     lowers the page size, and taking the smaller of it and the caller's own
@@ -1472,14 +1481,14 @@ def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
     if q.query is None:
         return {
             "data": {
-                "contents": table_of_contents(),
-                "total_branches": len(build_index()),
+                "contents": table_of_contents(served),
+                "total_branches": sum(1 for entry in build_index() if entry.tool in served),
                 "hint": _REFERENCE_CONTENTS_HINT,
             }
         }
 
     page_limit = min(q.limit, view.limit)
-    matches, total = search_branches(q.query, limit=page_limit)
+    matches, total = search_branches(q.query, limit=page_limit, tools=served)
     data: dict[str, Any] = {
         "query": q.query,
         "matches": [entry.as_dict() for entry in matches],
@@ -1533,7 +1542,7 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
     if isinstance(query, ComponentsQuery):
         return await _do_components(query, state, view)
     if isinstance(query, ReferenceQuery):
-        return _do_reference(query, view)
+        return _do_reference(query, view, frozenset(state.tool_dispatch))
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 

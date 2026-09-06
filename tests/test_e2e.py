@@ -64,12 +64,12 @@ class _WireResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-def _server_params(work_dir: Path) -> StdioServerParameters:
+def _server_params(work_dir: Path, *, run_code: bool = False) -> StdioServerParameters:
     """Build StdioServerParameters that launch ltspice-mcp in *work_dir*
     with no real simulator."""
     config = work_dir / "ltspice-mcp.toml"
     config.write_text(
-        textwrap.dedent("""\
+        textwrap.dedent(f"""\
         [simulator]
         default = "ltspice"
         path = ""
@@ -80,6 +80,9 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
         [simulation]
         max_parallel = 1
         timeout = 10.0
+
+        [tools]
+        run_code = {"true" if run_code else "false"}
 
         [logging]
         level = "DEBUG"
@@ -112,9 +115,9 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
 
 
 @asynccontextmanager
-async def mcp_session(work_dir: Path) -> AsyncIterator[ClientSession]:
+async def mcp_session(work_dir: Path, *, run_code: bool = False) -> AsyncIterator[ClientSession]:
     """Open a live MCP client session connected to the server."""
-    params = _server_params(work_dir)
+    params = _server_params(work_dir, run_code=run_code)
     async with (
         stdio_client(params) as (read_stream, write_stream),
         ClientSession(read_stream, write_stream) as session,
@@ -774,6 +777,72 @@ class TestInspectCapabilities:
             assert caps["allowed_paths"] == [str(tmp_path)]
             assert caps["limits"]["max_parallel_sims"] == 1
             assert caps["limits"]["default_timeout_s"] == 10.0
+
+
+# ---------------------------------------------------------------------------
+# 6b. run_code — the exec tool, served only when the operator turned it on
+# ---------------------------------------------------------------------------
+
+
+class TestRunCode:
+    async def test_off_by_default_the_name_is_unknown(self, shared_session: ClientSession):
+        # Not a tool result flagged as an error: a name the session does not
+        # serve is a lookup failure, answered as an invalid-params error.
+        with pytest.raises(MCPError, match="Unknown tool: run_code"):
+            await _call(shared_session, "run_code", {"code": "1"})
+
+    async def test_on_the_tool_is_advertised_last_and_runs_with_the_engine(self, tmp_path):
+        async with mcp_session(tmp_path, run_code=True) as session:
+            names = [t.name for t in (await session.list_tools()).tools]
+            assert set(names) == CONSOLIDATED_TOOLS | {"run_code"}
+            assert names[-1] == "run_code"
+            caps = _data(await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]}))[
+                "results"
+            ][0]["data"]
+            assert caps["python_api"]["run_code"]["enabled"] is True
+            result = await session.call_tool(
+                "run_code",
+                {
+                    "code": "print(api.inspect(queries=[{'kind': 'capabilities'}])['ok_count'])\n6 * 7"
+                },
+                read_timeout_seconds=60,
+            )
+            assert not result.is_error, _text(result)
+            reply = _data(result)
+            assert reply["status"] == "ok"
+            assert reply["stdout"] == "1\n"
+            assert reply["result"] == "42"
+
+    @pytest.mark.skipif(os.name == "nt", reason="the graceful interrupt is POSIX-only")
+    async def test_a_cancelled_call_leaves_the_worker_usable(self, tmp_path):
+        async with mcp_session(tmp_path, run_code=True) as session:
+            warm = await session.call_tool("run_code", {"code": "1"}, read_timeout_seconds=60)
+            assert _data(warm)["status"] == "ok"
+            pid = _data(warm)["worker_pid"]
+            task = asyncio.ensure_future(
+                session.call_tool(
+                    "run_code", {"code": "import time\ntime.sleep(30)"}, read_timeout_seconds=60
+                )
+            )
+            await asyncio.sleep(1.0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # Abandoning the request sent notifications/cancelled; the server
+            # interrupted the snippet. A call inside that window is busy.
+            reply = _data(
+                await session.call_tool("run_code", {"code": "2 + 2"}, read_timeout_seconds=60)
+            )
+            for _ in range(20):
+                if reply["status"] != "busy":
+                    break
+                await asyncio.sleep(0.25)
+                reply = _data(
+                    await session.call_tool("run_code", {"code": "2 + 2"}, read_timeout_seconds=60)
+                )
+            assert reply["status"] == "ok"
+            assert reply["result"] == "4"
+            assert reply["worker_pid"] == pid
 
 
 # ---------------------------------------------------------------------------

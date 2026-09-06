@@ -141,6 +141,11 @@ class TestBuildInstructions:
             # one combination the three cases above never form, and the branch
             # that shipped truncated in v0.5.0.
             build_instructions({"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG),
+            # The run_code edition swaps the code-loop clause for a longer one.
+            build_instructions({"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG, run_code=True),
+            build_instructions(
+                {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG}, _LT, run_code=True
+            ),
         ]
         for text in worst_cases:
             assert len(text) <= _INSTRUCTIONS_BUDGET, (
@@ -153,6 +158,14 @@ class TestBuildInstructions:
             assert "from ltspice_mcp.api import Api" in text, (
                 "an instruction shape lost the Python API discovery line"
             )
+
+    def test_run_code_is_named_only_when_it_is_served(self):
+        default = build_instructions({"ltspice": _LT}, _LT)
+        enabled = build_instructions({"ltspice": _LT}, _LT, run_code=True)
+        assert "run_code" not in default
+        assert "run_code runs Python with api in scope" in enabled
+        # Neither edition loses the library door.
+        assert "from ltspice_mcp.api import Api" in enabled
 
 
 class TestInstructionHints:
@@ -495,6 +508,8 @@ class TestToolAnnotationHonesty:
             "analyze_results": True,
             "verify_circuit": True,
             "inspect": True,
+            # Runs whatever the snippet does; a retry would run it again.
+            "run_code": False,
         }
         assert set(expected) == set(dispatch)
         for tool_name, idempotent in expected.items():

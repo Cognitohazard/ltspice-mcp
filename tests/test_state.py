@@ -93,8 +93,9 @@ class TestSessionStateCreate:
         # Every advertised tool dispatches, and nothing else does.
         def_names = {t.name for t in state.tool_defs}
         assert def_names == set(state.tool_dispatch)
-        # The consolidated profile is the only one; state mirrors it exactly.
-        consolidated_defs, _ = get_tools()
+        # The consolidated profile is the only one; state mirrors it exactly,
+        # minus run_code, which a default config does not turn on.
+        consolidated_defs, _ = get_tools(exclude=("run_code",))
         assert def_names == {tool_def.name for tool_def in consolidated_defs}
 
 

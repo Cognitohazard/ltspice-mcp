@@ -37,7 +37,7 @@ SKILL_BUDGETS = (
     # +230 for the routing sentence to the Python API: in thirteen sessions with
     # both doors available no agent ever mentioned the API, because nothing they
     # read named it as a route.
-    pytest.param(SKILL_PATH, 4100, id="spice-experiments"),
+    pytest.param(SKILL_PATH, 4300, id="spice-experiments"),
     pytest.param(BENCH_SKILL_PATH, 8300, id="spice-bench-craft"),
 )
 
