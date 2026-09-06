@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import ServerConfig, ToolListing
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools._base import registry
@@ -117,7 +117,7 @@ class TestEveryToolCarriesADisplayTitle:
 
     @pytest.mark.parametrize("listing", ["full", "compact"])
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
-    def test_title_is_present_and_readable(self, listing: str, name: str):
+    def test_title_is_present_and_readable(self, listing: ToolListing, name: str):
         definition = {d.name: d for d in get_tools(listing)[0]}[name]
         assert definition.title, f"{name} advertises no display title"
         assert definition.title != name, (
@@ -157,7 +157,7 @@ class TestEveryToolCarriesADisplayTitle:
         so that losing a large part of the saving fails here rather than
         quietly halving what the mode is worth."""
 
-        def total(listing: str) -> int:
+        def total(listing: ToolListing) -> int:
             return sum(
                 len(d.model_dump_json(by_alias=True, exclude_none=True))
                 for d in get_tools(listing)[0]
@@ -215,10 +215,10 @@ class TestDormantBranchesKeepTheirDescription:
     """
 
     @staticmethod
-    def _analyze(listing: str) -> dict[str, Any]:
+    def _analyze(listing: ToolListing) -> dict[str, Any]:
         return {d.name: d for d in get_tools(listing)[0]}["analyze_results"].input_schema
 
-    def _exempt(self, listing: str) -> dict[str, Any]:
+    def _exempt(self, listing: ToolListing) -> dict[str, Any]:
         exempt = {
             name: body
             for name, body in self._analyze(listing)["$defs"].items()
@@ -251,22 +251,24 @@ class TestDormantBranchesKeepTheirDescription:
             assert "spice://guide" in body["description"]
 
 
-def _state(work_dir, listing: str) -> SessionState:
+def _state(work_dir, listing: ToolListing) -> SessionState:
     return SessionState.create(
-        ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], tool_listing=listing),  # type: ignore[arg-type]
+        ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], tool_listing=listing),
         available={},
     )
 
 
 class TestSessionStateHonoursTheListing:
     @pytest.mark.parametrize("listing", ["full", "compact"])
-    def test_state_serves_the_configured_listing(self, work_dir, listing: str):
+    def test_state_serves_the_configured_listing(self, work_dir, listing: ToolListing):
         state = _state(work_dir, listing)
         names = [d.name for d in state.tool_defs]
         assert names == [d.name for d in get_tools(listing)[0]]
 
     @pytest.mark.parametrize("listing", ["full", "compact"])
-    def test_capabilities_reports_which_listing_the_session_got(self, work_dir, listing: str):
+    def test_capabilities_reports_which_listing_the_session_got(
+        self, work_dir, listing: ToolListing
+    ):
         """spice://guide tells a caller to reach for the reference lookup when
         the listing is compact. Nothing else on the wire says which one it is:
         both modes advertise the same seven tools and the same schemas, so a
