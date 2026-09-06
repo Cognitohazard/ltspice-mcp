@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import os
 import subprocess
 import time
@@ -10,7 +11,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from types import MethodType
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -601,6 +603,46 @@ def _resolve_cancel(policy: _CancelPolicy, request: BaseModel) -> bool:
     return policy(request) if callable(policy) else policy
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+class _CataloguedMethod:
+    # A method whose docstring and signature come from the catalogue on first
+    # read. Rendering them needs the tool models (0.7 s and the mcp import the
+    # cold boot must not pay), so ``help()`` and ``inspect.signature`` pay it on
+    # demand — they are the first things a caller tries on an unfamiliar API —
+    # and an operation call pays it anyway. No class docstring: ``__doc__`` is
+    # the property below.
+
+    def __init__(self, function: Callable[..., Any]) -> None:
+        self.__func__ = function
+        self.__name__ = function.__name__
+        self.__qualname__ = function.__qualname__
+        self.__module__ = function.__module__
+
+    def __get__(self, instance: object, owner: type | None = None) -> Any:
+        return self if instance is None else MethodType(self, instance)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self.__func__(*args, **kwargs)
+
+    @property
+    def __signature__(self) -> inspect.Signature:  # type: ignore[override]
+        ensure_method_docs()
+        return inspect.signature(self.__func__)
+
+    @property
+    def __doc__(self) -> str | None:  # type: ignore[override]
+        ensure_method_docs()
+        return self.__func__.__doc__
+
+
+def catalogued(function: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Mark an operation method: its help and signature come from the catalogue."""
+    return cast(Callable[_P, _R], _CataloguedMethod(function))
+
+
 class ApiMethodsMixin(ABC):
     """Public consolidated methods mixed into :class:`ltspice_mcp.api.Api`."""
 
@@ -698,6 +740,7 @@ class ApiMethodsMixin(ABC):
             cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
         )
 
+    @catalogued
     def run_experiments(
         self,
         *,
@@ -814,6 +857,7 @@ class ApiMethodsMixin(ABC):
             log_file=handoff.log_file,
         )
 
+    @catalogued
     def jobs(self, *, raw_page: bool = False, **arguments: Any) -> dict[str, Any]:
         """Control jobs, collecting list and receipt pages in automatic mode."""
         return self._dispatch(
@@ -876,6 +920,7 @@ class ApiMethodsMixin(ABC):
             except KeyboardInterrupt as exc:
                 raise ApiInterrupted(job_id=job_id) from exc
 
+    @catalogued
     def analyze_results(
         self,
         *,
@@ -894,6 +939,7 @@ class ApiMethodsMixin(ABC):
             cancel_on_interrupt=True,
         )
 
+    @catalogued
     def inspect(self, *, raw_page: bool = False, **arguments: Any) -> dict[str, Any]:
         """Run batched read queries, collecting every per-query cursor."""
         return self._dispatch(
@@ -907,6 +953,7 @@ class ApiMethodsMixin(ABC):
             cancel_on_interrupt=True,
         )
 
+    @catalogued
     def edit_schematic(
         self,
         *,
@@ -925,6 +972,7 @@ class ApiMethodsMixin(ABC):
             arguments=arguments,
         )
 
+    @catalogued
     def verify_circuit(
         self,
         *,
@@ -996,7 +1044,8 @@ class ApiMethodsMixin(ABC):
 # exactly what the engine boot defers, so installation rides the first event
 # that pays that import anyway — the first deferred tool-module resolution
 # (any operation call) or the first catalogue read (reference()). Until one
-# of those happens, help() on a method shows only its signature.
+# of those happens — or a read of an operation's help() or signature, which
+# the @catalogued descriptor turns into the same trigger.
 _method_docs_installed = False
 
 
