@@ -144,7 +144,7 @@ class TestCircuitFileLock:
 
         # Shrink the acquisition window so the test doesn't sit out the
         # full default timeout.
-        monkeypatch.setattr(lock_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
+        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
         t, release = _hold_lock_until_released(asc_file)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
@@ -191,7 +191,7 @@ class TestCircuitFileLock:
         import ltspice_mcp.lib.filelock as lock_mod
         from ltspice_mcp.lib.deck_prep import asc_export_lock
 
-        monkeypatch.setattr(lock_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
+        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
         t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
