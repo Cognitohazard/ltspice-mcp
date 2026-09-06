@@ -156,9 +156,9 @@ class TestPerTypeEvictionCap:
             job.started_at = base + timedelta(seconds=i)
             registry.add_experiment_job(job, already_persisted=True)
 
-        assert len(registry.experiment_jobs) == 200
+        assert len(registry.jobs) == 200
         assert len(registry.jobs) == 200
         for i in range(5):
             assert f"exp{i:03d}" not in registry.jobs
-        assert "exp005" in registry.experiment_jobs
-        assert "exp204" in registry.experiment_jobs
+        assert "exp005" in registry.jobs
+        assert "exp204" in registry.jobs

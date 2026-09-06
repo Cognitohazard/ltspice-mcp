@@ -128,10 +128,7 @@ def attach_suggestions_to_failure(
     return f"{error_msg}{block}"
 
 
-Job = ExperimentJob
-
-
-def resolve_job(job_id: str, state: SessionState) -> Job:
+def resolve_job(job_id: str, state: SessionState) -> ExperimentJob:
     """Look up a job by id.
 
     Discovery belongs to the registry, which asks the store when it does not
@@ -150,7 +147,7 @@ def resolve_job(job_id: str, state: SessionState) -> Job:
     return state.job_registry.refresh_foreign_job(job)
 
 
-async def resolve_job_async(job_id: str, state: SessionState) -> Job:
+async def resolve_job_async(job_id: str, state: SessionState) -> ExperimentJob:
     """Loop-safe ``resolve_job``: offload the store read and the foreign re-read.
 
     Use from async handlers so neither disk read (either can stall the loop on
@@ -384,26 +381,15 @@ def resolve_analysis_source(
     *,
     raw_file: str | None = None,
     log_file: str | None = None,
-    job_id: str | None = None,
 ) -> AnalysisSource:
-    """Resolve the source a direct ``raw_file``/``log_file``/``job_id`` call reads.
+    """Resolve the source a direct ``raw_file``/``log_file`` call reads.
 
     The caller-path route: every path here is untrusted input and goes through
     ``safe_path``. A caller that already resolved a run uses ``source_for_run``
-    instead — this one deliberately cannot reach a job's artifacts. Whether
-    naming both a raw and a job is an error is the caller's rule, not this
-    one's: a read that offers only a log has no such pair to refuse.
+    instead — this one deliberately cannot reach a job's artifacts. There is no
+    job-addressed form: every job is an experiment and an experiment's runs are
+    case-addressed, so a caller naming a job resolves the case first.
     """
-    if job_id:
-        # Every job is an experiment, and an experiment's runs are
-        # case-addressed — the callers inject a resolved source above rather
-        # than arriving here. Reaching this point means a job id was offered
-        # where a single run was expected, so say which read takes it.
-        resolve_job(job_id, state)
-        raise ResultError(
-            f"Job {job_id!r} is an experiment; its runs are case-addressed. "
-            "Read them with analyze_results (job_id plus run_index or case_id)."
-        )
     if raw_file:
         return source_for_raw_path(
             resolve_safe_path(str(raw_file), state.config.allowed_paths), state
@@ -421,7 +407,7 @@ def resolve_analysis_source(
     raise ResultError("Provide one analysis source: raw_file, log_file, or job_id")
 
 
-def dialect_for_job(job: Job, state: SessionState) -> str | None:
+def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     """Raw dialect for the simulator ``job`` actually ran on.
 
     A per-run simulator override can differ from the session default (and a

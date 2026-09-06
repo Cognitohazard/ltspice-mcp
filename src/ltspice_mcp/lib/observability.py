@@ -45,8 +45,6 @@ JobEvent = Literal[
     "interrupted_recovered",
 ]
 
-JobKind = Literal["experiment"]
-
 
 def _duration_seconds(started_at: datetime | None) -> float | None:
     """Wall-clock seconds since ``started_at`` in UTC, or None."""
@@ -63,21 +61,17 @@ def _duration_seconds(started_at: datetime | None) -> float | None:
 def emit_job_event(
     event: JobEvent,
     job: ExperimentJob,
-    *,
-    kind: JobKind | None = None,
     **extra: Any,
 ) -> None:
     """Emit a structured lifecycle event for ``job``.
 
-    ``kind`` is inferred from the job class when omitted. Any additional
-    keyword args are merged into the event payload.
+    Any additional keyword args are merged into the event payload.
     """
-    inferred_kind = kind or _infer_kind(job)
-
     payload: dict[str, Any] = {
         "ts": datetime.now(UTC).isoformat(),
         "event": event,
-        "kind": inferred_kind,
+        # Every job this server runs is an experiment.
+        "kind": "experiment",
         "job_id": job.job_id,
         "duration_s": _duration_seconds(getattr(job, "started_at", None)),
     }
@@ -94,17 +88,9 @@ def emit_job_event(
     ):
         suffix = f" after {payload['duration_s']:.2f}s"
     logger.info(
-        "%s.%s job=%s%s",
-        inferred_kind,
+        "experiment.%s job=%s%s",
         event,
         job.job_id,
         suffix,
         extra={"ltspice_event": payload},
     )
-
-
-def _infer_kind(job: ExperimentJob) -> JobKind:
-    """Map a job instance to its lifecycle ``kind`` string."""
-    if isinstance(job, ExperimentJob):
-        return "experiment"
-    raise TypeError(f"Cannot infer lifecycle kind for {type(job).__name__}")

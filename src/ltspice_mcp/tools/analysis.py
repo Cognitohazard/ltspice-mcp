@@ -65,7 +65,7 @@ from ltspice_mcp.lib.signal_analysis import (
     downsample_minmax,
 )
 from ltspice_mcp.lib.store import Store
-from ltspice_mcp.state import ExperimentJob, SessionState
+from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     NEW_WORK_ANNOTATIONS,
@@ -102,7 +102,9 @@ def _direct_source(
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
-    return services.resolve_analysis_source(state, raw_file=raw_file, job_id=job_id)
+    # Only ``raw_file`` is forwarded: an experiment's runs are case-addressed,
+    # so ``_experiment_case`` has already answered every call that named a job.
+    return services.resolve_analysis_source(state, raw_file=raw_file)
 
 
 async def _experiment_case(
@@ -120,7 +122,7 @@ async def _experiment_case(
     ``_direct_source``'s exclusivity error.
     """
     job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
-    if isinstance(job, ExperimentJob):
+    if job is not None:
         return services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
     if case_id is not None:
         raise ResultError(

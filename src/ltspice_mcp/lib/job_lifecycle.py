@@ -100,17 +100,6 @@ class InvalidTransitionError(ValueError):
     """Raised when code attempts a status change not in the transition table."""
 
 
-def _transitions_for(job: ExperimentJob) -> dict[str, frozenset[str]]:
-    """Pick the transition table for a job's class.
-
-    Only experiments transition, so anything else reaching here is a bug rather
-    than an unmapped status.
-    """
-    if isinstance(job, ExperimentJob):
-        return VALID_EXPERIMENT_TRANSITIONS
-    raise TypeError(f"Unknown job type: {type(job).__name__}")
-
-
 def _apply(
     job: ExperimentJob,
     new_status: str,
@@ -156,7 +145,7 @@ def transition(
     Raises ``InvalidTransitionError`` for same-status or out-of-table
     transitions.
     """
-    valid = _transitions_for(job)
+    valid = VALID_EXPERIMENT_TRANSITIONS
     event = STATUS_TO_EVENT.get(new_status)
     if event is None and new_status in valid.get(job.status, frozenset()):
         raise InvalidTransitionError(

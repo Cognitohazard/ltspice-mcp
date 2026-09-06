@@ -447,7 +447,7 @@ class TestExperimentSubmission:
         request = _request(state_no_sim, work_dir, request_id="durable-receipt")
 
         receipt = await asyncio.shield(runner.submit(request))
-        assert receipt.job.job_id in state_no_sim.experiment_jobs
+        assert receipt.job.job_id in state_no_sim.all_jobs
         assert receipt.job.store_path.is_file()
         assert submissions == []
         index = experiment_store.load_request_index(request.request_id, work_dir)
@@ -573,7 +573,7 @@ class TestExperimentSubmission:
         assert persisted is not None
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        local_job = state_no_sim.experiment_jobs[str(index["job_id"])]
+        local_job = state_no_sim.all_jobs[str(index["job_id"])]
         assert await runner.wait(local_job, 1)
 
 

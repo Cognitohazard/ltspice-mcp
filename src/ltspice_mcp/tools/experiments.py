@@ -1043,7 +1043,7 @@ async def _load_matching_replay(
         )
     job_id = str(index.get("job_id", ""))
     job = state.all_jobs.get(job_id)
-    if not isinstance(job, ExperimentJob):
+    if job is None:
         job = await asyncio.to_thread(
             experiment_store.load_job,
             job_id,

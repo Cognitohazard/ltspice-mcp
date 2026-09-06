@@ -228,7 +228,7 @@ async def test_identical_request_id_submits_one_job(
         if any(o["code"] == "idempotent_replay" for o in d["observations"])
     ]
     assert replayed, "neither response reported the duplicate as a replay"
-    record = state_with_sim.experiment_jobs[first["job_id"]]
+    record = state_with_sim.all_jobs[first["job_id"]]
     notes = [o for o in record.observations if o.get("code") == "idempotent_replay"]
     assert len(notes) == 1, f"the replay was noted {len(notes)} times on one record"
     assert len(submissions) == 1, f"the loser also reached the simulator: {submissions}"
@@ -566,7 +566,7 @@ async def test_simultaneous_cancels_of_one_job_report_one_outcome(
         assert data["outcome"] != "error", data
         assert data["status"] == "cancelled", data
         assert data["failures"] == []
-    job = state_with_sim.experiment_jobs[job_id]
+    job = state_with_sim.all_jobs[job_id]
     assert job.status == "cancelled"
     assert all(case.status == "cancelled" for case in job.cases)
     # A case is cancelled once. One call carries the transitions it made; the

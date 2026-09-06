@@ -347,7 +347,7 @@ class TestReceiptThenDwell:
         data = _assert_schema(result)
 
         assert data["outcome"] == "in_progress"
-        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["job_id"] in state_with_sim.all_jobs
         assert data["progress"]["expanded"] == 1
         assert data["progress"]["terminal"] == 0
         assert data["progress"]["remaining"] == 1
@@ -363,7 +363,7 @@ class TestReceiptThenDwell:
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-        job = state_with_sim.experiment_jobs[data["job_id"]]
+        job = state_with_sim.all_jobs[data["job_id"]]
         await asyncio.wait_for(job.done_event.wait(), 1)
 
     async def test_failure_after_submit_reports_committed_with_handles(
@@ -400,7 +400,7 @@ class TestReceiptThenDwell:
 
         assert data["error"]["commit_state"] == "committed"
         assert data["error"]["message"] == "dwell exploded"
-        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["job_id"] in state_with_sim.all_jobs
         assert data["control_token"]
         assert data["outcome"] == "in_progress"
         assert data["job_id"] in data["hint"]
@@ -413,7 +413,7 @@ class TestReceiptThenDwell:
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-        job = state_with_sim.experiment_jobs[data["job_id"]]
+        job = state_with_sim.all_jobs[data["job_id"]]
         await asyncio.wait_for(job.done_event.wait(), 1)
 
     async def test_receipt_builder_failure_still_returns_handles(
@@ -440,7 +440,7 @@ class TestReceiptThenDwell:
 
         assert data["error"]["commit_state"] == "committed"
         assert data["error"]["message"] == "payload exploded"
-        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["job_id"] in state_with_sim.all_jobs
         assert data["control_token"]
 
     async def test_budget_renderer_failure_after_submit_keeps_minimal_handles(
@@ -466,7 +466,7 @@ class TestReceiptThenDwell:
         assert result.is_error
         assert data["error"]["commit_state"] == "committed"
         assert "budget renderer exploded" in data["error"]["message"]
-        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["job_id"] in state_with_sim.all_jobs
         assert data["control_token"]
 
 
@@ -639,7 +639,7 @@ class TestPostClaimFailures:
         data = _assert_schema(result)
 
         assert not result.is_error, data
-        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["job_id"] in state_with_sim.all_jobs
         assert data["status"] == "completed", data
         assert fallback_failed == [data["job_id"]]
         assert _observation_code(data, "experiment_index_write_failed") is not None
@@ -1343,7 +1343,7 @@ class TestReplayRejectsChangedSources:
             source["sha256"] = ""
             source["manifest"] = []
         record.write_text(json.dumps(stored))
-        del state_with_sim.experiment_jobs[first["job_id"]]
+        del state_with_sim.all_jobs[first["job_id"]]
 
         data = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
@@ -2127,7 +2127,7 @@ class TestAttachedAnalysis:
         assert "value.not_recorded" in warning
         assert "absent from every row" in warning
         assert "keys present" in warning
-        job = state_with_sim.experiment_jobs[lean["job_id"]]
+        job = state_with_sim.all_jobs[lean["job_id"]]
         assert job.analysis.result is not None
         assert job.analysis.result["kind"] == store.KIND_ANALYSIS_SNAPSHOT
         assert job.analysis.request is not None
@@ -2247,7 +2247,7 @@ class TestAttachedAnalysis:
         replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
         assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
         await state_with_sim.job_registry.drain_pending()
-        job = state_with_sim.experiment_jobs[full["job_id"]]
+        job = state_with_sim.all_jobs[full["job_id"]]
         assert job.analysis.result is not None
         assert "answer_top" not in job.analysis.result
         assert all(

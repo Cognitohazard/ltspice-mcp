@@ -60,8 +60,6 @@ TERMINAL_EXPERIMENT_STATUSES = frozenset(
     }
 )
 
-Job = ExperimentJob
-
 _MANIFEST_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -474,10 +472,6 @@ class ReceiptSnapshot:
 
     job_id: str
     request_id: str | None
-    #: What kind of job the receipt describes. Every job is an experiment, so
-    #: this is one value today; it stays on the wire because a client reads it
-    #: to tell a receipt apart from the error envelope, which says "unknown".
-    job_type: str
     status: str
     dialect: str | None
     control_token: str | None
@@ -845,7 +839,7 @@ def _jobs_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
 
 
 def snapshot_receipt(
-    job: Job,
+    job: ExperimentJob,
     state: SessionState | None,
     *,
     control_token: str | None = None,
@@ -884,7 +878,6 @@ def snapshot_receipt(
     return ReceiptSnapshot(
         job_id=job.job_id,
         request_id=job.request_id,
-        job_type="experiment",
         status=job.status,
         dialect=services.dialect_for_job(job, state) if state is not None else None,
         control_token=control_token,
@@ -929,7 +922,10 @@ def render_jobs_receipt_snapshot(
     )
     data.update(
         {
-            "job_type": snapshot.job_type,
+            # Every job this server runs is an experiment. The key stays on the
+            # wire because a client reads it to tell a receipt apart from the
+            # error envelope, which says "unknown".
+            "job_type": "experiment",
             "dialect": snapshot.dialect,
             "action": action,
             "analysis_status": snapshot.analysis_status,
