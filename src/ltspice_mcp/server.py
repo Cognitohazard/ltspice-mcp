@@ -263,12 +263,12 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # turn. Kept under _INSTRUCTIONS_BUDGET including the runtime simulator
 # prefix: Claude Code silently truncates server instructions at 2048 chars,
 # and the tail (the result-trust paragraph) is the part that must survive.
-CONSOLIDATED_INSTRUCTIONS = """\
+_INSTRUCTIONS_TEMPLATE = """\
 For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Write .cir/.net/.sp decks with your own file tools; the six tools below run them, analyze results, check circuits, and edit .asc geometry; plot_waveform draws plots. Routing: run quick one-off ngspice jobs yourself and bring the .raw; analyze_results raw_path parses runs this server never executed. Use run_experiments for LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
 Runs are cheap: simulate instead of reasoning it out.
 
-EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api, the same ops in-process.
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. {code_loops}
 
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check by plain words ('phase margin').
 
@@ -296,6 +296,10 @@ _CODE_LOOPS_TOOL = (
     "results (or from ltspice_mcp.api import Api)."
 )
 
+#: The guide as a server with run_code off serves it — the static default the
+#: Server is constructed with, and what the tests pin.
+CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(code_loops=_CODE_LOOPS_LIBRARY)
+
 
 def build_instructions(
     available: dict[str, type], default: type | None, *, run_code: bool = False
@@ -307,10 +311,9 @@ def build_instructions(
     degradation. Stating the active engine up front removes that ambiguity.
     ``run_code`` swaps the code-loop clause for the one naming the tool.
     """
-    instructions = CONSOLIDATED_INSTRUCTIONS
-    if run_code:
-        assert _CODE_LOOPS_LIBRARY in instructions
-        instructions = instructions.replace(_CODE_LOOPS_LIBRARY, _CODE_LOOPS_TOOL)
+    instructions = _INSTRUCTIONS_TEMPLATE.format(
+        code_loops=_CODE_LOOPS_TOOL if run_code else _CODE_LOOPS_LIBRARY
+    )
     if not available:
         # The short no-simulator form: the long one plus the guide would
         # overflow the client's 2 KB instruction truncation.

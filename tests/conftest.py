@@ -86,11 +86,9 @@ CONSOLIDATED_TOOLS = (
 # contract matrix. Membership is pinned BY NAME, never derived from schema
 # shape: a tool that lost its envelope marker must fail a contract test, not
 # silently reclassify.
+# run_code is registered (so its contract is gated with the rest) and served
+# only when [tools] run_code = true.
 REGISTERED_TOOLS = (*CONSOLIDATED_TOOLS, "plot_waveform", "run_code")
-
-# What a session serves by default: run_code is registered (so its contract is
-# gated with the rest) and served only when [tools] run_code = true.
-DEFAULT_SURFACE = tuple(name for name in REGISTERED_TOOLS if name != "run_code")
 
 # Every tool name removed in 0.6.0 when the consolidated profile became the
 # product (frozen history; test_doc_drift composes its dead-name gate from it).

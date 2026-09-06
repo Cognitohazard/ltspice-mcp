@@ -64,7 +64,7 @@ instead.
 
 **A tool name the server does not have** is answered before any tool runs, as
 a JSON-RPC invalid-params error (`-32602`) whose message names what was asked
-for and lists the seven tools that do exist. That is the same shape an unknown
+for and lists the tools that do exist. That is the same shape an unknown
 resource URI gets, and for the same reason: `isError` marks a tool that ran and
 failed, and a name that does not exist has no tool to attribute a result to.
 
@@ -184,7 +184,7 @@ has an upper size bound.
 
 **Two listing modes.** `[tools] listing` (or `LTSPICE_MCP_TOOL_LISTING`)
 chooses how much of each definition goes on the wire. `full`, the default, is
-the paragraph above. `compact` publishes the same seven tools and the same
+the paragraph above. `compact` publishes the same tools and the same
 schemas with every per-argument description removed — structure, enums,
 defaults, `required` and `$defs` are untouched, so a client can still build a
 valid call, and the models are not filtered, so the server accepts exactly what

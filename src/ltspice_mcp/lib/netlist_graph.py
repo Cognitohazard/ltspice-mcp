@@ -76,7 +76,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ltspice_mcp.lib.deck_staging import resolve_reference
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
     SpiceCard,
@@ -105,11 +105,6 @@ _GROUND = "0"
 # a b) is still recognized as the same connection. Everything else keeps pin
 # order: a MOSFET's D/G/S/B, a source's +/-, a diode's anode/cathode all matter.
 _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
-
-# Micro sign variants LTspice emits (U+00B5 MICRO SIGN) and Greek mu (U+03BC),
-# neither of which the value parser's ASCII-suffix regex accepts. Normalized to
-# ``u`` before parsing so ``2.2µ`` compares equal to ``2.2u`` / ``2.2e-6``.
-_MICRO_CHARS = ("µ", "μ")
 
 # LTspice prefixes schematic-derived subcircuit instance names with a private
 # section sign (``X§RB``). Stripped so an export compares equal to a
@@ -465,11 +460,9 @@ def _strip_marker(ref: str) -> str:
 
 
 def _normalize_value_text(text: str) -> str:
-    """Replace micro-sign variants with ``u`` (for parsing and string compare)."""
-    out = text
-    for ch in _MICRO_CHARS:
-        out = out.replace(ch, "u")
-    return out
+    """Micro-sign variants as ``u``, so ``2.2µ`` compares equal to ``2.2u`` as
+    text as well as as a value."""
+    return fold_micro_sign(text)
 
 
 def values_equal(a: str | None, b: str | None, rtol: float) -> bool:

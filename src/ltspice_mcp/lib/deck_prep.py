@@ -105,10 +105,11 @@ def _sanitize_export_for_ngspice(net_path: Path) -> Path:
     """
     from ltspice_mcp.lib import atomic_write_text
     from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.format import fold_micro_sign
 
     text = read_spice_text(net_path)
     lines = [ln for ln in text.splitlines() if ln.strip().lower() != ".backanno"]
-    cleaned = "\n".join(lines).replace("§", "").replace("µ", "u").replace("μ", "u")
+    cleaned = fold_micro_sign("\n".join(lines).replace("§", ""))
     out_path = net_path.with_name(net_path.stem + ".ngspice.net")
     atomic_write_text(out_path, cleaned + "\n", durable=False)
     return out_path

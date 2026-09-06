@@ -34,12 +34,11 @@ from ltspice_mcp.code_worker import (
     STDERR_TAIL_CHARS,
     STDOUT_HEAD_CHARS,
     STDOUT_TAIL_CHARS,
+    empty_reply,
 )
+from ltspice_mcp.lib.proc_kill import kill_process_group
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import ToolInput, format_response, registry
-
-TOOL_NAME = "run_code"
-CONFIG_KEY = "tools.run_code"
 
 #: How long a worker gets to boot its engine before the call fails.
 BOOT_TIMEOUT_S = 60.0
@@ -47,6 +46,10 @@ BOOT_TIMEOUT_S = 60.0
 INTERRUPT_GRACE_S = 5.0
 #: After a close, how long the worker gets to exit before it is killed.
 CLOSE_GRACE_S = 5.0
+#: The longest reply line the pipe reader accepts. A reply is bounded by the
+#: output caps (about 28k characters, UTF-8 encoded), so this is far above
+#: any real line; the default 64 KiB was not.
+_PIPE_LINE_LIMIT = 1 << 20
 
 
 class RunCodeInput(ToolInput):
@@ -155,13 +158,7 @@ RUN_CODE_OUTPUT_SCHEMA: dict[str, Any] = {
         "status",
         "exec_seq",
         "worker_pid",
-        "stdout",
-        "stderr",
-        "result",
-        "truncated",
-        "chars_dropped",
-        "elapsed_s",
-        "error",
+        *empty_reply("ok"),
         "running",
         "worker_restarted",
         "hint",
@@ -172,17 +169,13 @@ RUN_CODE_OUTPUT_SCHEMA: dict[str, Any] = {
 #: What a read returns once the worker's reply pipe has closed.
 _EOF: dict[str, Any] = {"op": "eof"}
 
-
-def _reap_session(pid: int) -> None:
-    """Kill what is left of the worker's session (POSIX: it was started as a
-    session leader, so its pid is the group id). A child a snippet spawned
-    would otherwise outlive the worker; a simulator LTspice launched over WSL
-    interop is a Windows process and is not reached, and its job record,
-    owned by a dead pid, reads as interrupted."""
-    if os.name == "nt":
-        return
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(pid, signal.SIGKILL)
+_TIMEOUT_HINT = (
+    "Interrupted at timeout_s (max 600). A simulation longer than that: "
+    "api.run_experiments(wait=False) then jobs(wait) or api.wait(job_id)."
+)
+_RESTART_HINT = (
+    "The worker was restarted; jobs the previous one owned read as interrupted in jobs(list)."
+)
 
 
 @dataclass
@@ -202,6 +195,7 @@ class CodeWorker:
         self.process: asyncio.subprocess.Process | None = None
         self.exec_seq = 0
         self.running: _Running | None = None
+        #: Why the previous worker went, reported once on the next reply.
         self.restarted: dict[str, Any] | None = None
         self._drain: asyncio.Task[None] | None = None
 
@@ -211,8 +205,9 @@ class CodeWorker:
     def pid(self) -> int | None:
         return self.process.pid if self.process is not None else None
 
-    def _alive(self) -> bool:
-        return self.process is not None and self.process.returncode is None
+    def _live(self) -> asyncio.subprocess.Process | None:
+        process = self.process
+        return process if process is not None and process.returncode is None else None
 
     async def _spawn(self) -> None:
         self.process = await asyncio.create_subprocess_exec(
@@ -226,6 +221,7 @@ class CodeWorker:
             stderr=None,
             cwd=self.working_dir,
             start_new_session=os.name != "nt",
+            limit=_PIPE_LINE_LIMIT,
         )
         ready = await self._read_message(BOOT_TIMEOUT_S)
         if ready is None or ready.get("op") != "ready":
@@ -234,57 +230,60 @@ class CodeWorker:
             raise RuntimeError(f"run_code worker failed to start: {error}")
 
     async def _ensure(self) -> None:
-        if not self._alive():
-            previous = self.pid
-            self.process = None
+        if self._live() is None:
+            await self._kill("the worker exited")
             await self._spawn()
-            if previous is not None and self.restarted is None:
-                self.restarted = {"previous_pid": previous, "reason": "the worker exited"}
 
-    async def _kill(self) -> None:
-        """Kill the worker and, on POSIX, everything in its session: a child
-        the snippet spawned would otherwise outlive it (a simulator LTspice
-        launched over WSL interop is a Windows process and is not reached;
-        its job record, owned by a dead pid, reads as interrupted)."""
+    async def _kill(self, reason: str | None = None) -> None:
+        """Kill the worker and reap its session; ``reason`` is what the next
+        reply says about the worker that went."""
         process = self.process
         if process is None:
             return
+        if reason is not None:
+            self.restarted = {"previous_pid": process.pid, "reason": reason}
         if process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
             await process.wait()
-        _reap_session(process.pid)
+        # A child a snippet spawned would otherwise outlive the worker, which
+        # was started as a session leader. A simulator LTspice launched over
+        # WSL interop is a Windows process and is not reached; its job record,
+        # owned by a dead pid, reads as interrupted.
+        kill_process_group(process.pid, signal.SIGKILL)
         self.process = None
 
     def _interrupt(self) -> None:
         """Ask the worker to stop the running snippet (POSIX: SIGINT to it alone)."""
-        if not self._alive() or self.process is None:
+        process = self._live()
+        if process is None:
             return
+        if self.running is not None:
+            self.running.phase = "interrupting"
         if os.name == "nt":
-            # ponytail: no wake-capable interrupt exists for a blocked lock
-            # wait on Windows, so a Windows worker is killed on timeout and
-            # respawned; the graceful path is POSIX-only.
-            self.process.kill()
+            # No wake-capable interrupt exists for a blocked lock wait on
+            # Windows, so a Windows worker is killed on timeout and respawned;
+            # the graceful path is POSIX-only.
+            process.kill()
             return
         with contextlib.suppress(ProcessLookupError):
-            os.kill(self.process.pid, signal.SIGINT)
+            os.kill(process.pid, signal.SIGINT)
 
-    async def close(self, grace_s: float = CLOSE_GRACE_S) -> None:
+    async def close(self, reason: str | None = None, grace_s: float = CLOSE_GRACE_S) -> None:
         """Stop the worker: interrupt what runs, ask it to close, then kill."""
         if self._drain is not None:
             self._drain.cancel()
             self._drain = None
-        if not self._alive() or self.process is None:
-            self.process = None
-            return
-        if self.running is not None:
-            self._interrupt()
-        await self._send({"op": "close"})
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self.process.wait(), grace_s)
+        process = self._live()
+        if process is not None:
+            if self.running is not None:
+                self._interrupt()
+            await self._send({"op": "close"})
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(process.wait(), grace_s)
         # Exited or not, the worker and whatever its snippets spawned go
         # together: a graceful exit leaves a child it started still running.
-        await self._kill()
+        await self._kill(reason)
         self.running = None
 
     # -- protocol ------------------------------------------------------------
@@ -352,112 +351,109 @@ class CodeWorker:
         try:
             reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
             if reply is None or reply is _EOF:
-                previous = self.pid
-                await self._kill()
-                self.restarted = {
-                    "previous_pid": previous,
-                    "reason": "the worker exited"
-                    if reply is _EOF
-                    else "killed after a cancellation",
-                }
+                await self._kill(
+                    "the worker exited" if reply is _EOF else "killed after a cancellation"
+                )
         finally:
             self.running = None
             self._drain = None
 
+    async def _exchange(self, seq: int, code: str, timeout_s: float) -> dict[str, Any] | None:
+        """Send one snippet and await its reply: one respawn if the worker died
+        between calls, an interrupt at the timeout. None or ``_EOF`` when the
+        worker never answered."""
+        request = {"op": "run", "seq": seq, "code": code}
+        if not await self._send(request):
+            await self._ensure()
+            if not await self._send(request):
+                raise RuntimeError("run_code worker is not accepting requests")
+        reply = await self._await_reply(seq, timeout_s)
+        if reply is None:
+            self._interrupt()
+            reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
+            if reply is not None and reply is not _EOF:
+                reply["status"] = "timeout"
+        return reply
+
     # -- the call ------------------------------------------------------------
 
     def _reply(self, status: str, **fields: Any) -> dict[str, Any]:
+        restarted, self.restarted = self.restarted, None
         base: dict[str, Any] = {
-            "status": status,
+            **empty_reply(status),
             "exec_seq": self.exec_seq,
             "worker_pid": self.pid,
-            "stdout": "",
-            "stderr": "",
-            "result": None,
-            "truncated": False,
-            "chars_dropped": 0,
-            "elapsed_s": 0.0,
-            "error": None,
             "running": None,
-            "worker_restarted": None,
+            "worker_restarted": restarted,
             "hint": None,
         }
         base.update(fields)
         return base
 
+    def _busy(self, code: str) -> dict[str, Any]:
+        current = self.running
+        assert current is not None
+        same = current.code == code
+        return self._reply(
+            "busy",
+            running={
+                "exec_seq": current.seq,
+                "elapsed_s": round(time.monotonic() - current.started, 3),
+                "same_code": same,
+                "phase": current.phase,
+            },
+            hint=(
+                "One snippet runs at a time. Wait for it and send again, or send "
+                "reset: true to kill it."
+                + (" This code is the one already running." if same else "")
+            ),
+        )
+
+    async def _lost(self, died: bool, timeout_s: float) -> dict[str, Any]:
+        """No answer: the worker exited, or it ignored the interrupt. The
+        reply is built first, so the restart it causes is reported where the
+        contract puts it: on the next call."""
+        if died:
+            reply = self._reply(
+                "error",
+                error={
+                    "type": "WorkerDied",
+                    "message": "the worker exited while running this snippet",
+                    "traceback_tail": "",
+                },
+                hint=_RESTART_HINT,
+            )
+        else:
+            reply = self._reply(
+                "timeout",
+                elapsed_s=round(timeout_s + INTERRUPT_GRACE_S, 3),
+                hint=f"{_TIMEOUT_HINT} {_RESTART_HINT}",
+            )
+        await self._kill("the worker exited" if died else "killed after a timeout")
+        return reply
+
     async def run(self, code: str, timeout_s: float, reset: bool) -> dict[str, Any]:
         if reset:
-            previous = self.pid
-            await self.close()
-            self.restarted = {"previous_pid": previous, "reason": "reset requested"}
+            await self.close("reset requested")
             if not code.strip():
-                restarted, self.restarted = self.restarted, None
-                return self._reply(
-                    "reset",
-                    worker_restarted=restarted,
-                    hint="The next call starts a fresh worker; jobs the old one owned read as interrupted in jobs(list).",
-                )
+                return self._reply("reset", hint=_RESTART_HINT)
         if self.running is not None:
-            current = self.running
+            return self._busy(code)
+        try:
+            await self._ensure()
+        except (OSError, RuntimeError) as exc:
             return self._reply(
-                "busy",
-                running={
-                    "exec_seq": current.seq,
-                    "elapsed_s": round(time.monotonic() - current.started, 3),
-                    "same_code": current.code == code,
-                    "phase": current.phase,
-                },
-                hint=(
-                    "One snippet runs at a time. Wait for it and send again, or send "
-                    "reset: true to kill it."
-                    + (" This code is the one already running." if current.code == code else "")
-                ),
+                "error",
+                error={"type": "WorkerBootFailed", "message": str(exc), "traceback_tail": ""},
+                hint="The worker could not start; the server's log has the details.",
             )
-        await self._ensure()
         self.exec_seq += 1
         seq = self.exec_seq
         self.running = _Running(seq, code, time.monotonic())
         try:
-            if not await self._send({"op": "run", "seq": seq, "code": code}):
-                # Died between calls: one respawn, one retry.
-                await self._kill()
-                await self._ensure()
-                if not await self._send({"op": "run", "seq": seq, "code": code}):
-                    raise RuntimeError("run_code worker is not accepting requests")
-            reply = await self._await_reply(seq, timeout_s)
-            if reply is None:
-                self.running.phase = "interrupting"
-                self._interrupt()
-                reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
-                if reply is not None and reply is not _EOF:
-                    reply["status"] = "timeout"
-            if reply is None or reply is _EOF:
-                # No answer: the worker exited, or it ignored the interrupt.
-                died = reply is _EOF
-                previous = self.pid
-                await self._kill()
-                self.restarted = {
-                    "previous_pid": previous,
-                    "reason": "the worker exited" if died else "killed after a timeout",
-                }
-                if died:
-                    return self._reply(
-                        "error",
-                        error={
-                            "type": "WorkerDied",
-                            "message": "the worker exited while running this snippet",
-                            "traceback_tail": "",
-                        },
-                        hint="The next call starts a fresh worker.",
-                    )
-                return self._reply(
-                    "timeout",
-                    elapsed_s=round(timeout_s + INTERRUPT_GRACE_S, 3),
-                    hint=_TIMEOUT_HINT,
-                )
+            reply = await self._exchange(seq, code, timeout_s)
         except asyncio.CancelledError:
-            if self._alive():
-                self.running.phase = "interrupting"
+            if self._live() is not None:
                 self._interrupt()
                 self._drain = asyncio.ensure_future(self._finish_interrupt(seq))
             else:
@@ -466,30 +462,17 @@ class CodeWorker:
         finally:
             if self._drain is None:
                 self.running = None
+        if reply is None or reply is _EOF:
+            return await self._lost(reply is _EOF, timeout_s)
         if reply["status"] == "interrupted":
             reply["status"] = "timeout"
-        restarted, self.restarted = self.restarted, None
-        return self._reply(
-            reply["status"],
-            stdout=reply["stdout"],
-            stderr=reply["stderr"],
-            result=reply["result"],
-            truncated=reply["truncated"],
-            chars_dropped=reply["chars_dropped"],
-            elapsed_s=reply["elapsed_s"],
-            error=reply["error"],
-            worker_restarted=restarted,
-            hint=_hint(reply, restarted),
-        )
+        fields = {key: reply[key] for key in empty_reply("ok") if key != "status"}
+        result = self._reply(reply["status"], **fields)
+        result["hint"] = _hint(result)
+        return result
 
 
-_TIMEOUT_HINT = (
-    "Interrupted at timeout_s (max 600). A simulation longer than that: "
-    "api.run_experiments(wait=False) then jobs(wait) or api.wait(job_id)."
-)
-
-
-def _hint(reply: dict[str, Any], restarted: dict[str, Any] | None) -> str | None:
+def _hint(reply: dict[str, Any]) -> str | None:
     parts: list[str] = []
     if reply["status"] == "timeout":
         parts.append(_TIMEOUT_HINT)
@@ -500,8 +483,8 @@ def _hint(reply: dict[str, Any], restarted: dict[str, Any] | None) -> str | None
             f"Output is capped at {STDOUT_HEAD_CHARS + STDOUT_TAIL_CHARS} characters; "
             "print less, or write to a file and read it."
         )
-    if restarted is not None:
-        parts.append("The worker was restarted; jobs it owned read as interrupted in jobs(list).")
+    if reply["worker_restarted"] is not None:
+        parts.append(_RESTART_HINT)
     return " ".join(parts) or None
 
 
@@ -525,7 +508,7 @@ def worker_for(state: SessionState) -> CodeWorker:
 
 
 @registry.tool(
-    name=TOOL_NAME,
+    name="run_code",
     title="Run Python with the engine",
     description=(
         "Run a Python snippet in a warm worker that holds this server's engine as "
