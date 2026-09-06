@@ -48,6 +48,44 @@ from ltspice_mcp.lib.store import (
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# The record's observations list
+# ---------------------------------------------------------------------------
+#
+# ``observations`` is a plain ``list[dict]`` with no schema, so every scan of it
+# has to decide the same two things: how an entry's code is spelled, and what to
+# do with an entry that is not a mapping at all (a record written by an older
+# build can carry anything JSON allows). These two answer both once, beside
+# ``owner_unknown_observation`` and the other named observation constructors.
+
+
+def note_once(observations: list[Any], observation: dict[str, Any]) -> bool:
+    """Append ``observation`` unless the list already carries its code.
+
+    Returns whether it was appended, so a caller can persist only when the
+    record actually changed.
+    """
+    code = observation.get("code")
+    if any(isinstance(item, Mapping) and item.get("code") == code for item in observations):
+        return False
+    observations.append(observation)
+    return True
+
+
+def replace_code(observations: list[Any], code: str, observation: dict[str, Any]) -> None:
+    """Drop every entry carrying ``code`` and append ``observation`` instead.
+
+    For a fact that supersedes another rather than sitting beside it.
+    """
+    observations[:] = [
+        item
+        for item in observations
+        if not (isinstance(item, Mapping) and item.get("code") == code)
+    ]
+    observations.append(observation)
+
+
 CANONICALIZER_VERSION = 4
 # How a request's identity was computed — NOT a storage schema version. It says
 # which fields the canonical fingerprint covers, so a reused ``request_id``

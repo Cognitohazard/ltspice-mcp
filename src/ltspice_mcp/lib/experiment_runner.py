@@ -507,15 +507,14 @@ class ExperimentRunner(RunnerBase):
         if not barrier.replayed and job.task is None:
             execution = self._new_execution(request, job)
             self._executions[job.job_id] = execution
-        if barrier.replayed and not any(
-            item.get("code") == "idempotent_replay" for item in job.observations
-        ):
-            job.observations.append(
+        if barrier.replayed:
+            experiment_store.note_once(
+                job.observations,
                 {
                     "code": "idempotent_replay",
                     "kind": "submission",
                     "detail": REPLAY_RECORD_DETAIL,
-                }
+                },
             )
         receipt = ExperimentReceipt(
             job=job,

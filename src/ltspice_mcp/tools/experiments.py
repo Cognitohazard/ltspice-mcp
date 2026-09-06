@@ -1062,14 +1062,14 @@ async def _load_matching_replay(
             f"request_id {args.request_id!r} points to an inconsistent coordinator record"
         )
     await asyncio.to_thread(verify_replay_sources, job, args.request_id)
-    if not any(item.get("code") == "idempotent_replay" for item in job.observations):
-        job.observations.append(
-            {
-                "code": "idempotent_replay",
-                "kind": "submission",
-                "detail": REPLAY_RECORD_DETAIL,
-            }
-        )
+    if experiment_store.note_once(
+        job.observations,
+        {
+            "code": "idempotent_replay",
+            "kind": "submission",
+            "detail": REPLAY_RECORD_DETAIL,
+        },
+    ):
         state.persist_job(job)
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
