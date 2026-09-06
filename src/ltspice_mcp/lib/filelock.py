@@ -15,6 +15,10 @@ Acquisition BLOCKS the calling thread: the poll loop below waits with
 lock-and-write operation in ``asyncio.to_thread`` so a contended lock
 parks a worker thread instead of freezing every in-flight request.
 ``TimeoutError`` still surfaces to the caller; don't retry around it.
+
+A coroutine that has to *hold* the lock across its own awaits takes
+``async_file_lock`` instead, which polls on the event loop and parks
+nothing at all.
 """
 
 from __future__ import annotations
@@ -162,35 +166,89 @@ def circuit_lock_target(path: Path) -> Path:
     return path.parent / SIDECAR_DIRNAME / "locks" / path.name
 
 
+class _LockHandoff:
+    """One flock, passed from the worker that took it to the coroutine that asked.
+
+    A worker cannot just return the lock. The coroutine awaiting it can be
+    cancelled while an attempt is in flight, and a result nobody receives is a
+    flock held until the process exits. So the worker publishes what it took
+    and then asks whether the coroutine still wants it, while the coroutine
+    withdraws its interest and then looks for a lock. The two orders are
+    opposite, so whichever runs second sees the other's mark and releases —
+    and a double release is a no-op, because closing an exhausted
+    ``ExitStack`` unwinds nothing.
+    """
+
+    def __init__(self) -> None:
+        self._held: contextlib.ExitStack | None = None
+        self._abandoned = False
+
+    def publish(self, held: contextlib.ExitStack) -> None:
+        self._held = held
+        if self._abandoned:
+            self.release()
+
+    def abandon(self) -> None:
+        self._abandoned = True
+        self.release()
+
+    def release(self) -> None:
+        held, self._held = self._held, None
+        if held is not None:
+            held.close()
+
+
+def _try_acquire(target: Path, handoff: _LockHandoff, exclusive: bool) -> bool:
+    """One non-blocking attempt, in a worker thread. True if the lock is ours.
+
+    ``timeout=0`` makes ``file_lock`` try once and raise rather than poll, so
+    this returns in the time of two syscalls whether or not it succeeded.
+    """
+    held = contextlib.ExitStack()
+    try:
+        held.enter_context(file_lock(target, exclusive=exclusive, timeout=0))
+    except TimeoutError:
+        return False
+    handoff.publish(held)
+    return True
+
+
 @contextlib.asynccontextmanager
 async def async_file_lock(
     target: Path,
     *,
+    exclusive: bool = True,
     acquire_timeout: float = DEFAULT_TIMEOUT,
 ) -> AsyncIterator[None]:
     """``file_lock`` for a coroutine that has to hold it across its own awaits.
 
-    Acquisition polls in a worker thread, per this module's contract, so a
-    contended lock parks that thread instead of the event loop; the flock
-    itself belongs to the process, so releasing it from another thread is
-    fine. ``TimeoutError`` surfaces to the caller, which decides what a
-    timeout means for its operation.
+    One non-blocking attempt per hop: the attempt itself runs in a worker
+    thread, per this module's contract, but the *waiting* happens here on
+    ``asyncio.sleep`` and the deadline is enforced here too. So a contended
+    lock — the request gate waits minutes for one — parks neither the event
+    loop nor a thread from the pool every other offloaded read shares.
 
-    Acquire INSIDE the try so ``stack.close()`` always runs: a cancel landing
-    at the await boundary right after the worker thread took the flock would
-    otherwise leak it until process exit. (Residual: if the cancel lands while
-    the worker is still blocked acquiring, the thread can register the lock
-    after close() already ran — inherent to to_thread, not fixable without a
-    cancel-aware lock; the narrow window is cancel-only.)
+    That also removes the leak a single long blocking acquisition had: there
+    is no worker sitting inside a poll loop that can take the lock after the
+    coroutine has given up on it. A cancel arriving mid-attempt is handed to
+    ``_LockHandoff``, which releases whatever that attempt won.
+
+    ``TimeoutError`` surfaces to the caller, which decides what a timeout
+    means for its operation.
     """
-    stack = contextlib.ExitStack()
+    handoff = _LockHandoff()
     try:
-        await asyncio.to_thread(stack.enter_context, file_lock(target, timeout=acquire_timeout))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + acquire_timeout
+        while not await asyncio.to_thread(_try_acquire, target, handoff, exclusive):
+            if loop.time() >= deadline:
+                raise TimeoutError(f"Lock not acquired within {acquire_timeout:.1f}s")
+            await asyncio.sleep(_LOCK_POLL_INTERVAL)
         yield
     finally:
         # Release is two fast syscalls and must not await: a cancel arriving
         # here would abandon the lock at the first suspension point.
-        stack.close()
+        handoff.abandon()
 
 
 @contextlib.asynccontextmanager
@@ -199,9 +257,11 @@ async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
 
     Parallel MCP server processes editing the same circuit serialize here —
     without it, the whole-file read-modify-write saves are last-writer-wins
-    and a concurrent session's edit is silently lost. Acquisition polls in a
-    worker thread (per this module's contract, so a contended lock never
-    stalls the event loop); release is two fast syscalls, done inline.
+    and a concurrent session's edit is silently lost. This is
+    ``async_file_lock`` on the circuit's lock anchor, plus the one thing that
+    is specific to a circuit: a wait that runs out says so in the caller's own
+    terms. The translation is scoped to the acquire, so a ``TimeoutError`` the
+    guarded work raises for its own reasons still reads as itself.
 
     Acquire this BEFORE fetching a cached editor: the editor cache re-stats
     the file on every fetch, so taking the lock first guarantees the stat
@@ -209,23 +269,19 @@ async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
     (Residual: on coarse-mtime filesystems like WSL's /mnt/c a same-size
     rewrite within one mtime tick can still go undetected — see FileCache.)
     """
-    # Acquire INSIDE the try so stack.close() always runs: a cancel landing at
-    # the await boundary right after the worker thread took the flock would
-    # otherwise leak it until process exit. (Residual: if the cancel lands
-    # while the worker is still blocked acquiring, the thread can register the
-    # lock after close() already ran — inherent to to_thread, not fixable
-    # without a cancel-aware lock; the narrow window is cancel-only.)
     from ltspice_mcp.errors import NetlistError
 
-    stack = contextlib.ExitStack()
-    try:
+    # Read at call time rather than through a default argument, so the wait
+    # this states and the wait it takes cannot disagree.
+    timeout = DEFAULT_TIMEOUT
+    async with contextlib.AsyncExitStack() as stack:
         try:
-            await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
+            await stack.enter_async_context(
+                async_file_lock(circuit_lock_target(path), acquire_timeout=timeout)
+            )
         except TimeoutError as e:
             raise NetlistError(
                 f"{path.name} is locked by another ltspice-mcp process "
-                f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
+                f"(waited {timeout:.0f}s). Retry once its edit finishes."
             ) from e
         yield
-    finally:
-        stack.close()
