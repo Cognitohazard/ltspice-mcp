@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
     AliasChoices,
+    BaseModel,
     ConfigDict,
     Field,
     TypeAdapter,
@@ -92,16 +93,21 @@ _DORMANT_POINTER = (
 )
 
 
-def _dormant_wire_stub(summary: str) -> ConfigDict:
+def _dormant_wire_stub() -> ConfigDict:
     """Advertise a recipe branch as its discriminant plus a one-line pointer.
 
     For branches no recorded workload has ever called: the advertised schema
-    shrinks to ``{"metric": <const>}`` and ``summary`` (which must name the
-    produced fields; the full-argument pointer is appended here), while the
-    model itself — validation, execution, and the ``api.reference`` catalogue,
-    which walks model fields rather than this schema — keeps every field. The
-    stub deliberately drops ``additionalProperties: false`` so a client
-    pre-validating a full call against the wire shape still sends it.
+    shrinks to ``{"metric": <const>}`` and the model's own docstring (which
+    must name the produced fields; the full-argument pointer is appended
+    here), while the model itself — validation, execution, and the
+    ``api.reference`` catalogue, which walks model fields rather than this
+    schema — keeps every field. The stub deliberately drops
+    ``additionalProperties: false`` so a client pre-validating a full call
+    against the wire shape still sends it.
+
+    The sentence comes from the docstring rather than from an argument so the
+    branch has one prose home: the reference lookup reads the same docstring,
+    and a reworded branch cannot ship two descriptions of itself.
 
     The compact tool listing keeps that one sentence, because it keeps the
     description of any branch whose properties are all fixed values. Compact
@@ -110,8 +116,9 @@ def _dormant_wire_stub(summary: str) -> ConfigDict:
     sentence is all the branch has.
     """
 
-    def _stub(schema: dict[str, Any]) -> None:
+    def _stub(schema: dict[str, Any], model: type[BaseModel]) -> None:
         metric = schema["properties"]["metric"]
+        summary = " ".join((model.__doc__ or "").split())
         schema.clear()
         schema.update(
             {
@@ -340,13 +347,13 @@ class TimingRecipe(MultiRecipe):
 
 
 class PeriodicRecipe(MultiRecipe):
+    """Period, frequency, and duty_cycle of a repetitive .tran signal."""
+
     metric: Literal["periodic"]
     signal: str
     window: Window | None = None
 
-    model_config = _dormant_wire_stub(
-        "Period, frequency, and duty_cycle of a repetitive .tran signal."
-    )
+    model_config = _dormant_wire_stub()
 
 
 class TransientResponseRecipe(MultiRecipe):
@@ -441,25 +448,26 @@ class ResonanceRecipe(VariableRecipe):
 
 
 class ReturnLossRecipe(MultiRecipe):
+    """return_loss_db, vswr, and reflection_coefficient vs frequency from an
+    .AC impedance trace (z0 default 50)."""
+
     metric: Literal["return_loss"]
     signal: str
     z0: float = Field(default=50.0, gt=0)
 
-    model_config = _dormant_wire_stub(
-        "return_loss_db, vswr, and reflection_coefficient vs frequency from an "
-        ".AC impedance trace (z0 default 50)."
-    )
+    model_config = _dormant_wire_stub()
 
 
 class NoiseIntegralRecipe(ScalarRecipe):
+    """Integrated RMS noise from a .noise run, optionally windowed to
+    [from_hz, to_hz]."""
+
     metric: Literal["noise_integral"]
     signal: str | None = None
     from_hz: float | str | None = None
     to_hz: float | str | None = None
 
-    model_config = _dormant_wire_stub(
-        "Integrated RMS noise from a .noise run, optionally windowed to [from_hz, to_hz]."
-    )
+    model_config = _dormant_wire_stub()
 
 
 class OperatingPointRecipe(KeyedRecipe):

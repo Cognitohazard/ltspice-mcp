@@ -153,9 +153,6 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ("analyze_results", "timing"): (
         "Propagation delay between an edge on one signal and an edge on another."
     ),
-    ("analyze_results", "periodic"): (
-        "Period, frequency and duty cycle of a repetitive transient signal."
-    ),
     ("analyze_results", "transient_response"): (
         "Step response (overshoot, settling time, final value) or load-disturbance "
         "response (deviation, recovery time) of a transient signal."
@@ -186,13 +183,6 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("analyze_results", "resonance"): (
         "Resonant peaks in an .AC sweep: peak frequency, peak gain and Q."
-    ),
-    ("analyze_results", "return_loss"): (
-        "Return loss in dB, VSWR and reflection coefficient against a reference "
-        "impedance, from an .AC impedance trace."
-    ),
-    ("analyze_results", "noise_integral"): (
-        "Integrated RMS noise over a frequency band from a .noise run."
     ),
     ("analyze_results", "operating_point"): (
         "The DC bias point: node voltages, branch currents, and per-device "
