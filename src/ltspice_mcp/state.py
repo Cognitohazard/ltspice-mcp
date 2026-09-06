@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from mcp import types
 
     from ltspice_mcp.tools._base import RegisteredTool
+    from ltspice_mcp.tools.run_code import CodeWorker
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +90,9 @@ class SessionState:
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
     """Whether the lazy default-config write has been tried this session (once)."""
-    code_worker: Any = field(default=None, repr=False)
-    """The ``run_code`` worker supervisor (``tools/run_code.py:CodeWorker``),
-    created on the first call and closed at shutdown. Untyped here because
-    ``state`` may not import ``tools``."""
+    code_worker: "CodeWorker | None" = field(default=None, repr=False)
+    """The ``run_code`` worker supervisor, created on the first call and
+    closed at shutdown."""
     raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
     """Raw dialect per job-resolved raw path, recorded when the path is
     resolved (``services._resolve_result_file``) and read by ``load_raw`` —
@@ -140,10 +140,11 @@ class SessionState:
         exclude = () if self.config.run_code else ("run_code",)
         defs, dispatch = get_tools(self.config.tool_listing, exclude=exclude)
         owners = {
-            name: tuple(owner for owner in tools if owner in dispatch)
+            name: kept
             for name, tools in tool_registry.field_owners().items()
+            if (kept := tuple(owner for owner in tools if owner in dispatch))
         }
-        return (defs, dispatch, {name: tools for name, tools in owners.items() if tools})
+        return (defs, dispatch, owners)
 
     @property
     def tool_defs(self) -> "list[types.Tool]":

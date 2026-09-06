@@ -587,7 +587,7 @@ class TestOutputSchemaCoverage:
 # The bounds below were re-pinned when the prose filter was removed. About half
 # of what a client now loads is structure the discriminated unions cannot say
 # in fewer characters; the rest is the 210 descriptions inside those schemas
-# plus the seven tool descriptions. Each bound also covers the tool's display
+# plus the tool descriptions. Each bound also covers the tool's display
 # title, which every revision since 2025-06-18 carries: 24 to 26 characters
 # apiece, added to every number below when titles were introduced.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {

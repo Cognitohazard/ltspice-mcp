@@ -28,6 +28,7 @@ from typing import Any
 from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError
 from ltspice_mcp.lib import atomic_write_json
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
+from ltspice_mcp.lib.proc_kill import kill_process_group
 from ltspice_mcp.lib.store import (
     KIND_DETACHED_RECEIPT,
     KIND_DETACHED_REQUEST,
@@ -296,14 +297,10 @@ def _stop_owner(process: subprocess.Popen[bytes]) -> None:
     then be true only of the supervisor. Windows has no process group to
     signal, so there the single terminate is all there is.
     """
-    if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            return
-        except OSError:
-            # Already gone, or never a group leader. Fall through: a plain
-            # terminate is still the right thing to try.
-            pass
+    if kill_process_group(process.pid, signal.SIGTERM):
+        return
+    # Windows, or the group is already gone: a plain terminate is still the
+    # right thing to try.
     process.terminate()
 
 

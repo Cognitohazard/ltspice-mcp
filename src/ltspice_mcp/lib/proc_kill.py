@@ -23,6 +23,7 @@ attempted by the runners; on any given platform at most one finds a match.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Collection
 from pathlib import PurePath
@@ -115,3 +116,19 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
     return killed
+
+
+def kill_process_group(pid: int, sig: int) -> bool:
+    """Signal the whole process group of a child spawned as a session leader
+    (its pid is the group id): the child and everything it started. True when
+    the group was signalled; False on Windows, which has no group to signal,
+    and when the group is already gone — the caller then signals the one
+    process it holds, if it still needs to.
+    """
+    if os.name != "posix":
+        return False
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
