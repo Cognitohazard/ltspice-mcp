@@ -1592,8 +1592,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         # succeeded, partial when any query failed. The shared envelope's other
         # values are absent because inspect cannot reach them: per-item
         # isolation turns every query fault into that item's error, and a
-        # call-level fault raises — the SDK then answers with isError and no
-        # structuredContent, so it is never carried by this envelope.
+        # call-level fault raises — server.call_tool's catch-all then answers
+        # with isError and no structuredContent, so it is never carried by
+        # this envelope.
         "outcome": outcome_schema("complete", "partial"),
         "results": {
             "type": "array",

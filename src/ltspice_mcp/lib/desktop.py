@@ -49,9 +49,10 @@ def client_supports_ui(caps: Any | None) -> bool:
     """Whether the client advertised MCP Apps (``ui://`` widget) support.
 
     The capability lives at ``capabilities.extensions["io.modelcontextprotocol/ui"]``.
-    The mcp SDK's ``ClientCapabilities`` has no typed ``extensions`` field, so it
-    arrives as an extra attribute (the model is ``extra="allow"``) — read it
-    defensively and default to unsupported.
+    ``ClientCapabilities`` declares ``extensions`` as of the 2026-07-28
+    revision, and it is ``None`` on a client that sent none; the argument is
+    typed loosely because a handshake-era session can hand this anything, so
+    read the attribute defensively and default to unsupported.
     """
     if caps is None:
         return False
