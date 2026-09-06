@@ -630,7 +630,7 @@ class ExperimentRunner(RunnerBase):
         # a record written after it looked, so the same drift is re-checked
         # here, under the gate.
         verify_replay_sources(existing, request.request_id)
-        if any(item.get("code") == "server_restarted" for item in existing.observations):
+        if existing.restart_reconciled:
             experiment_store.save_job(existing)
         return _IndexLookup(existing=existing, dangling=False)
 

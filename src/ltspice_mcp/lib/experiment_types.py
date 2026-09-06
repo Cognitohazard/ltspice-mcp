@@ -239,6 +239,12 @@ class ExperimentJob:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     analysis: AnalysisStage = field(default_factory=AnalysisStage)
     owner_pid: int = field(default_factory=os.getpid)
+    #: Set when the store reconciled this record as it loaded it — the owning
+    #: process had died mid-run, so the object in memory now differs from the
+    #: bytes on disk and whoever loaded it owes the record a write-back. A fact
+    #: about this load, not about the job, so it is never serialized: a record
+    #: read again later reconciles nothing and reports False.
+    restart_reconciled: bool = field(default=False, repr=False)
     runs_done_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     done_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     task: asyncio.Task[None] | None = field(default=None, repr=False)
