@@ -23,7 +23,8 @@ from __future__ import annotations
 import hashlib
 import typing
 from pathlib import Path
-from typing import Any
+from types import NoneType
+from typing import Any, get_args
 
 import jsonschema
 import pytest
@@ -35,6 +36,7 @@ from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
+from ltspice_mcp.tools._base import CompareSpec, RenderPolicy
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from ltspice_mcp.tools.verify import (
     STRUCTURAL_DELTA_PROPS,
@@ -43,15 +45,19 @@ from ltspice_mcp.tools.verify import (
     handle_verify_circuit,
 )
 
-# The same reader the render/compare spelling tests use: the model class behind
-# an ``X | None`` field annotation.
-from tests.test_render_compare_spellings import _model_of
-
 
 class FakeSim:
     """Stub LTspice class; the real exporter is monkeypatched per test."""
 
     spice_exe: typing.ClassVar[list[str]] = ["/fake/LTspice.exe"]
+
+
+def _model_of(input_model: type[Any], field: str) -> type:
+    """The model class behind an ``X | None`` field annotation."""
+    annotation = input_model.model_fields[field].annotation
+    return next(
+        arg for arg in get_args(annotation) if isinstance(arg, type) and arg is not NoneType
+    )
 
 
 def _closed(node: Any) -> Any:
@@ -81,9 +87,9 @@ def _assert_schema(result) -> dict:
 
 
 #: Comparison controls this file writes as loose keywords, packed into the one
-#: ``compare`` object the tool takes. The spellings the tool accepts are the
-#: subject of tests/test_render_compare_spellings.py; here the comparison
-#: BEHAVIOUR is, so the call sites stay readable.
+#: ``compare`` object the tool takes. What the argument models accept is
+#: TestRenderAndCompareArguments below; here the comparison BEHAVIOUR is, so
+#: the call sites stay readable.
 _COMPARE_KEYS = {"reference": "reference", "compare_mode": "mode", "anchors": "anchors"}
 
 
@@ -721,6 +727,28 @@ async def test_render_reports_the_digest_of_the_sheet_it_drew(state_no_sim, work
     assert again["render"]["source_sha256"] != on_disk
 
 
+async def test_the_digest_names_the_bytes_that_were_drawn(state_no_sim, work_dir, asc_symbols):
+    """The provenance rides with the scene, not with a second read of the path.
+
+    A peer committing between the parse and the render is the race the field
+    exists to expose. Hashing the file again afterwards reported a revision
+    that was never drawn, and reported it as if nothing had happened.
+    """
+    asc = _write(work_dir, "drawn.asc", _RES_ASC)
+    drawn = hashlib.sha256(asc.read_bytes()).hexdigest()
+    scene, _ = vc._analyze_scene(asc, state_no_sim, compute_issues=False)
+
+    asc.write_text(_RES_ASC.replace("1k", "2k"), encoding="utf-8")
+    assert hashlib.sha256(asc.read_bytes()).hexdigest() != drawn
+
+    payload, _, failures, _ = await vc._do_render(
+        scene, "asc", vc.VerifyRenderPolicy(format="svg"), asc, state_no_sim
+    )
+    assert not failures
+    assert payload is not None
+    assert payload["source_sha256"] == drawn
+
+
 @pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
 async def test_render_png_present(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "rp.asc", _RES_ASC)
@@ -914,3 +942,88 @@ def test_the_exported_policy_models_are_accepted_by_their_tool():
         }
     )
     assert edit.compare is not None and edit.compare.reference == "ref.cir"
+
+
+class TestRenderAndCompareArguments:
+    """What this tool accepts for `render` and `compare`, on the resolved value.
+
+    Both tools that compare take the same model — literally the same class, so
+    they cannot drift — and a tool that needs more subclasses it, which is why
+    only this one advertises the two comparison modes and the render policy's
+    delivery and mode.
+    """
+
+    @staticmethod
+    def _verify(**kwargs: Any) -> VerifyCircuitInput:
+        return VerifyCircuitInput.model_validate({"path": "deck.cir", **kwargs})
+
+    def test_no_arguments_render_nothing_and_compare_nothing(self):
+        args = self._verify()
+        assert args.render is None
+        assert args.compare is None
+
+    @pytest.mark.parametrize(
+        ("payload", "field", "expected"),
+        [
+            ({"render": True}, "format", "png"),
+            ({"render": {"format": "svg"}}, "format", "svg"),
+            ({"render": {"scale": 2.0}}, "scale", 2.0),
+            ({"render": {"max_pixels": 100_000}}, "max_pixels", 100_000),
+            ({"render": {"mode": "only"}}, "mode", "only"),
+            ({"render": {"delivery": "inline"}}, "delivery", "inline"),
+        ],
+    )
+    def test_render_policy_spellings(self, payload: dict[str, Any], field: str, expected: Any):
+        policy = self._verify(**payload).render
+        assert policy is not None
+        assert getattr(policy, field) == expected
+
+    def test_false_and_omitted_both_draw_nothing(self):
+        assert self._verify(render=False).render is None
+        assert self._verify().render is None
+
+    def test_the_compare_object_carries_every_control(self):
+        spec = self._verify(
+            compare={
+                "reference": "golden.cir",
+                "mode": "structural_diff",
+                "anchors": ["out", "vdd"],
+                "rtol": 1e-3,
+            }
+        ).compare
+        assert spec is not None
+        assert spec.reference == "golden.cir"
+        assert spec.mode == "structural_diff"
+        assert spec.anchors == ["out", "vdd"]
+        assert spec.rtol == 1e-3
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"render": "yes"},
+            {"render": {"mode": "sideways"}},
+            {"compare": {"rtol": 1e-3}},
+        ],
+        ids=["not-a-policy", "unknown-mode", "no-reference"],
+    )
+    def test_refused_spellings(self, payload: dict[str, Any]):
+        with pytest.raises(ValidationError):
+            self._verify(**payload)
+
+    @pytest.mark.parametrize(
+        ("tool", "field", "shared"),
+        [
+            (EditSchematicInput, "compare", CompareSpec),
+            (VerifyCircuitInput, "compare", CompareSpec),
+            (VerifyCircuitInput, "render", RenderPolicy),
+        ],
+    )
+    def test_the_two_tools_share_one_argument_model(
+        self, tool: type[Any], field: str, shared: type
+    ):
+        """Not "the same fields" — literally the same class, so they cannot drift.
+
+        A tool that needs more subclasses the shared model, so the shared half
+        stays one declaration and the extra half is visibly that tool's own.
+        """
+        assert issubclass(_model_of(tool, field), shared)

@@ -24,7 +24,6 @@ The layout, rooted at the working directory::
     |   |-- {digest}.request.json           the request one owner was spawned for
     |   |-- {digest}.receipt.json           the receipt that owner reported back
     |   `-- {digest}.log                    that owner's stdout and stderr
-    |-- renders/                            schematic images
     |-- verify/                             verify_circuit exports
     |-- edit-exports/{build_id}/            edit_schematic exports
     `-- locks/                              cross-process store locks
@@ -584,11 +583,6 @@ class Store:
         return self.results_dir / "artifacts" / _validate_name(result_set_id, "result_set_id")
 
     # -- authoring outputs --------------------------------------------------
-
-    @property
-    def renders_dir(self) -> Path:
-        """Schematic images an edit or a verify rendered."""
-        return self.root / "renders"
 
     def verify_artifact(self, name: str) -> Path:
         """One ``verify_circuit`` export."""
