@@ -335,16 +335,24 @@ def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
         owner.wait(timeout=30)
 
 
-def test_finished_hand_off_logs_are_capped(work_dir: Path) -> None:
-    """One log per call needs a bound, or a loop leaves one file per run."""
-    detached_dir = Store(work_dir).detached_dir
+def _write_handoff_logs(detached_dir: Path, count: int) -> list[Path]:
     detached_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for index in range(_detach._KEPT_HANDOFF_LOGS + 12):
+    for index in range(count):
         log = detached_dir / f"digest.{index:04d}.log"
         log.write_text(f"owner {index}\n")
         os.utime(log, (index, index))
         written.append(log)
+    return written
+
+
+def test_finished_hand_off_logs_are_capped(work_dir: Path) -> None:
+    """One log per call needs a bound, or a loop leaves one file per run."""
+    detached_dir = Store(work_dir).detached_dir
+    written = _write_handoff_logs(
+        detached_dir,
+        _detach._KEPT_HANDOFF_LOGS + _detach._HANDOFF_LOG_SLACK + 12,
+    )
 
     _detach._prune_handoff_logs(detached_dir)
 
@@ -352,6 +360,28 @@ def test_finished_hand_off_logs_are_capped(work_dir: Path) -> None:
     assert len(kept) == _detach._KEPT_HANDOFF_LOGS
     # The newest survive, so a live owner's log is never the one dropped.
     assert kept == sorted(path.name for path in written[-_detach._KEPT_HANDOFF_LOGS :])
+
+
+def test_hand_off_logs_are_left_alone_until_the_directory_is_past_its_slack(
+    work_dir: Path,
+) -> None:
+    """The prune reads the whole directory, so it waits until there is work.
+
+    Pruning at exactly the cap stats every file on every detached submit to
+    delete about one; the slack is what turns that into once every so many
+    calls, and the cap is still what a pruned directory settles at.
+    """
+    detached_dir = Store(work_dir).detached_dir
+    written = _write_handoff_logs(
+        detached_dir,
+        _detach._KEPT_HANDOFF_LOGS + _detach._HANDOFF_LOG_SLACK,
+    )
+
+    _detach._prune_handoff_logs(detached_dir)
+
+    assert sorted(path.name for path in detached_dir.glob("*.log")) == sorted(
+        path.name for path in written
+    )
 
 
 def test_two_callers_detaching_one_request_id_do_not_trade_reports(

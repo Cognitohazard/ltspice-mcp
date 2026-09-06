@@ -63,6 +63,11 @@ _LOG_TAIL_BYTES = 2000
 #: so a live owner's log — always among the newest — is not the one dropped.
 _KEPT_HANDOFF_LOGS = 50
 
+#: How far past the cap the directory is allowed to run before a prune. The
+#: prune globs and stats the whole directory, so pruning at exactly the cap
+#: pays for that on every detached submit to delete, on average, one file.
+_HANDOFF_LOG_SLACK = 25
+
 
 @dataclass(frozen=True)
 class DetachedBoot:
@@ -101,28 +106,31 @@ def boot_spec(
         # cannot serialize must fail the detached call, not the constructor of
         # every session that never detaches anything.
         overrides=dict(overrides),
-        cwd=os.getcwd(),
     )
+
+
+def _owner_default(value: Any) -> Any:
+    """What may cross into the owner process, for anything JSON refuses itself.
+
+    One answer for both halves of the hand-off — the call's arguments and the
+    engine's configuration overrides — because a type that is legal in one and
+    refused in the other is a difference nothing explains. Deliberately narrow:
+    paths become strings and models their JSON form, and anything else is
+    refused by name. A silently dropped or stringified value would give the
+    owner a different call, or a different engine, than the caller has.
+    """
+    from pydantic import BaseModel
+
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    raise TypeError(f"A detached owner cannot be given a {type(value).__name__}")
 
 
 def _jsonable(value: Any) -> Any:
-    """One configuration value in a form JSON can carry.
-
-    Deliberately narrow: paths become strings and containers are walked, and
-    anything else is refused by name. A silently dropped or stringified
-    override would give the owner a different engine than the caller has.
-    """
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    if isinstance(value, os.PathLike):
-        return os.fspath(value)
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    raise TypeError(
-        f"A detached owner cannot be given a {type(value).__name__} configuration value"
-    )
+    """One value in the form the owner's request file carries it."""
+    return json.loads(json.dumps(value, default=_owner_default))
 
 
 def request_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
@@ -133,17 +141,7 @@ def request_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
     behind idempotent replay is computed from it, and a value that only
     survives in this process would fork the two.
     """
-    return json.loads(json.dumps(arguments, default=_argument_default))
-
-
-def _argument_default(value: Any) -> Any:
-    from pydantic import BaseModel
-
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if isinstance(value, os.PathLike):
-        return os.fspath(value)
-    raise TypeError(f"A detached owner cannot be given a {type(value).__name__} argument")
+    return _jsonable(dict(arguments))
 
 
 def _log_tail(path: Path) -> str:
@@ -310,17 +308,19 @@ def _stop_owner(process: subprocess.Popen[bytes]) -> None:
 
 
 def _prune_handoff_logs(detached_dir: Path) -> None:
-    """Keep the newest hand-off logs and drop the rest.
+    """Keep the newest hand-off logs and drop the rest, once there are enough.
 
-    Best-effort housekeeping, never a reason to fail a call: a directory that
-    cannot be listed or a file another process removed first is ignored.
+    Nothing is stat'ed until the directory is past the cap by ``_HANDOFF_LOG_SLACK``,
+    so a submit pays for a prune roughly once every slack calls rather than
+    every time. Best-effort housekeeping, never a reason to fail a call: a
+    directory that cannot be listed or a file another process removed first is
+    ignored.
     """
     try:
-        logs = sorted(
-            detached_dir.glob("*.log"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        paths = list(detached_dir.glob("*.log"))
+        if len(paths) <= _KEPT_HANDOFF_LOGS + _HANDOFF_LOG_SLACK:
+            return
+        logs = sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
     except OSError:
         return
     for stale in logs[_KEPT_HANDOFF_LOGS:]:
