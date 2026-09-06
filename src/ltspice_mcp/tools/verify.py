@@ -729,6 +729,14 @@ class VerifyCompareSpec(CompareSpec):
     )
 
 
+#: The checks that are asked for by filling in an argument object of their own,
+#: and the object each one's arguments live on. A check is otherwise a name in
+#: the ``CHECK_ORDER`` list and has no fields, so the reference index reads this
+#: instead of special-casing one name — a new check with its own object is
+#: declared here, in the module that owns checks.
+CHECK_ARGUMENT_MODELS: dict[str, type[CompareSpec]] = {"compare": VerifyCompareSpec}
+
+
 RenderArgument: TypeAlias = Annotated[
     VerifyRenderPolicy | None,
     BeforeValidator(

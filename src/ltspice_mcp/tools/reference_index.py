@@ -42,7 +42,6 @@ that is layer-neutral, and that part is in ``lib/model_fields.py``.
 from __future__ import annotations
 
 import functools
-import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -53,16 +52,16 @@ from ltspice_mcp.lib.model_fields import (
     accepted_annotation,
     constraint_label,
     default_label,
+    default_spelling,
     describe_field,
     field_name,
     first_sentence,
     item_model,
     literal_values,
     model_of,
+    model_union,
     non_null,
-    strip_annotated,
     type_label,
-    union_members,
 )
 
 #: How deep a branch's nested argument objects are flattened onto dotted names.
@@ -73,6 +72,11 @@ _MAX_FIELD_DEPTH = 2
 #: Upper bound on the fields one entry lists. No branch is near it; it is what
 #: keeps a future recursive model from rendering forever.
 _MAX_FIELDS = 60
+
+#: Where the walk stops descending into nested objects. Separate from the cap
+#: on what an entry publishes, because they answer different questions: this
+#: one bounds the work, ``_MAX_FIELDS`` bounds the answer.
+_MAX_NESTED_FIELDS = _MAX_FIELDS
 
 
 @dataclass(frozen=True)
@@ -108,17 +112,15 @@ class BranchEntry:
     synonyms: tuple[str, ...]
     fields: tuple[FieldEntry, ...]
 
-    def as_dict(self, *, with_fields: bool = True) -> dict[str, Any]:
-        entry: dict[str, Any] = {
+    def as_dict(self) -> dict[str, Any]:
+        return {
             "tool": self.tool,
             "family": self.family,
             "name": self.name,
             "summary": self.summary,
+            "call": self.call,
+            "fields": [field.as_dict() for field in self.fields],
         }
-        if with_fields:
-            entry["call"] = self.call
-            entry["fields"] = [field.as_dict() for field in self.fields]
-        return entry
 
 
 # ---------------------------------------------------------------------------
@@ -410,20 +412,6 @@ class _Source:
     summaries: tuple[tuple[str, str], ...] = ()
 
 
-def _members(union: Any) -> tuple[type[BaseModel], ...]:
-    """The model branches of a union — annotated, bare, or already a tuple.
-
-    Some unions on the surface already publish their members as a tuple, read
-    off the union itself at import (``RECIPE_MODELS``, ``QUERY_MODELS``,
-    ``JobsInput.VARIANTS``); others are the union type. Both are the same set,
-    so both are accepted rather than made to agree first.
-    """
-    if isinstance(union, tuple):
-        return union
-    members = union_members(strip_annotated(union)) or ()
-    return tuple(model for model in (model_of(member) for member in members) if model is not None)
-
-
 def _union_branches(union: Any, discriminator: str) -> tuple[Any, ...]:
     """``(discriminant, model, "")`` for every member of a discriminated union.
 
@@ -431,7 +419,7 @@ def _union_branches(union: Any, discriminator: str) -> tuple[Any, ...]:
     spelling the surface advertises.
     """
     branches = []
-    for model in _members(union):
+    for model in model_union(union):
         values = literal_values(model, discriminator)
         if not values:  # pragma: no cover - a union member always tags itself
             continue
@@ -500,13 +488,13 @@ def _sources() -> tuple[_Source, ...]:
             family="check",
             call='verify_circuit(path="circuit.asc", checks=["{name}"])',
             # A check is a name in a list, not a model, so it has no fields of
-            # its own — except `compare`, which is asked for by filling in the
-            # `compare` object, so that object's fields are the check's.
+            # its own — except where the tool declares an argument object for
+            # one, whose fields are then the check's, under that object's name.
             branches=tuple(
-                (name, verify.VerifyCompareSpec, "compare.")
-                if name == "compare"
-                else (name, None, "")
-                for name in verify.CHECK_ORDER
+                (name, model, f"{name}." if model is not None else "")
+                for name, model in (
+                    (name, verify.CHECK_ARGUMENT_MODELS.get(name)) for name in verify.CHECK_ORDER
+                )
             ),
             discriminator=None,
         ),
@@ -552,22 +540,6 @@ def _argument_sources() -> tuple[_Source, ...]:
     )
 
 
-def _default_spelling(field: Any) -> str:
-    """The default written the way a caller writes it in a call.
-
-    A tool call is JSON, so ``null``/``true``/``false`` is what a caller types;
-    ``repr`` would hand them Python's spelling of the same three values, which
-    is the one thing on a reference card that must not be copied verbatim.
-    Anything a factory produces keeps its descriptive label ("empty").
-    """
-    if field.default_factory is not None:
-        return default_label(field)
-    default = field.default
-    if default is None or isinstance(default, (str, int, float, bool)):
-        return json.dumps(default)
-    return default_label(field)
-
-
 def _field_entries(
     model: type[BaseModel],
     *,
@@ -590,7 +562,7 @@ def _field_entries(
                 name=spelled,
                 type=f"{label} ({bounds})" if bounds else label,
                 required=default_label(field) == "REQUIRED",
-                default=_default_spelling(field),
+                default=default_spelling(field),
                 # The whole description, not its first sentence: on the compact
                 # listing this lookup is the only channel an argument's prose
                 # has, so a cut here leaves the rest reaching nobody. The
@@ -598,7 +570,7 @@ def _field_entries(
                 description=" ".join(describe_field(field).split()),
             )
         )
-        if depth + 1 >= _MAX_FIELD_DEPTH or len(entries) >= _MAX_FIELDS:
+        if depth + 1 >= _MAX_FIELD_DEPTH or len(entries) >= _MAX_NESTED_FIELDS:
             continue
         nested = model_of(non_null(field.annotation))
         suffix = "."
@@ -733,6 +705,10 @@ class _Haystacks:
     synonyms: str
     fields: str
     prose: str
+    #: The normalized spellings an exact-name query has to equal. Held here
+    #: with the rest of the searchable text rather than re-normalized on every
+    #: entry on every query.
+    exact: frozenset[str]
 
 
 @functools.cache
@@ -748,12 +724,15 @@ def _haystacks() -> tuple[_Haystacks, ...]:
                 prose=_normalize(
                     " ".join([entry.summary, *(field.description for field in entry.fields)])
                 ),
+                exact=frozenset(
+                    {_normalize(entry.name), _normalize(f"{entry.name} {entry.family}")}
+                ),
             )
         )
     return tuple(stacks)
 
 
-def _score(entry: BranchEntry, stacks: _Haystacks, phrase: str, tokens: list[str]) -> int:
+def _score(stacks: _Haystacks, phrase: str, tokens: list[str]) -> int:
     total = 0
     for token in tokens:
         if token in stacks.name:
@@ -766,7 +745,7 @@ def _score(entry: BranchEntry, stacks: _Haystacks, phrase: str, tokens: list[str
             total += _PROSE_WEIGHT
     if not total:
         return 0
-    if phrase in (_normalize(entry.name), _normalize(f"{entry.name} {entry.family}")):
+    if phrase in stacks.exact:
         total += _EXACT_NAME_BONUS
     elif phrase and phrase in stacks.name:
         total += _NAME_PHRASE_BONUS
@@ -786,7 +765,7 @@ def search_branches(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
     tokens = _tokens(query)
     scored: list[tuple[int, int, BranchEntry]] = []
     for position, (entry, stacks) in enumerate(zip(build_index(), _haystacks(), strict=True)):
-        score = _score(entry, stacks, phrase, tokens)
+        score = _score(stacks, phrase, tokens)
         if score:
             scored.append((-score, position, entry))
     scored.sort(key=lambda row: (row[0], row[1]))
@@ -794,21 +773,16 @@ def search_branches(query: str, *, limit: int) -> tuple[list[BranchEntry], int]:
 
 
 def table_of_contents() -> list[dict[str, Any]]:
-    """Every entry name and its one line, grouped by tool and family."""
-    groups: list[dict[str, Any]] = []
-    for source in _sources():
-        branches = [
-            entry.as_dict(with_fields=False)
-            for entry in build_index()
-            if entry.tool == source.tool and entry.family == source.family
-        ]
-        groups.append(
-            {
-                "tool": source.tool,
-                "family": source.family,
-                "branches": [
-                    {"name": branch["name"], "summary": branch["summary"]} for branch in branches
-                ],
-            }
-        )
-    return groups
+    """Every entry name and its one line, grouped by tool and family.
+
+    One pass over the index: entries come out in advertised order, so grouping
+    preserves it without re-scanning the whole index once per family.
+    """
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for entry in build_index():
+        rows = groups.setdefault((entry.tool, entry.family), [])
+        rows.append({"name": entry.name, "summary": entry.summary})
+    return [
+        {"tool": tool, "family": family, "branches": rows}
+        for (tool, family), rows in groups.items()
+    ]
