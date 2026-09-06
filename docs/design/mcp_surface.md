@@ -242,9 +242,10 @@ an explicit id, through one uniform code path.
 Passed explicitly, `request_id` is the durability key. At submission the
 server persists `{request_id -> job_id, fingerprint}`, where the fingerprint is
 the sha256 of the canonical (sorted-key) input payload. Same id with the same
-fingerprint returns the existing receipt (an idempotent recovery, surfaced as
-an observation); same id with a different fingerprint is an
-`idempotency_conflict`. Scope is the server working directory's job store;
+fingerprint returns the existing receipt, with `replayed: true` on it — that
+field is the fact about *this* call, while the record's `idempotent_replay`
+observation is the durable note and reads the same to every later reader. Same
+id with a different fingerprint is an `idempotency_conflict`. Scope is the server working directory's job store;
 retention matches job retention. Transport cancellation ends only the dwell,
 never the durable job.
 

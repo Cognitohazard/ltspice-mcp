@@ -211,6 +211,12 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "job_id": {"type": ["string", "null"]},
         "request_id": {"type": "string"},
         "control_token": {"type": "string"},
+        # A fact about THIS call, not about the job: true when the request_id
+        # and canonical payload matched an existing durable experiment, so its
+        # receipt came back and no cases were submitted. The record's own
+        # 'idempotent_replay' observation is the durable, record-scoped note,
+        # and reads the same to every later reader.
+        "replayed": {"type": "boolean"},
         "status": {"type": "string"},
         "outcome": OUTCOME_SCHEMA,
         "source": {
@@ -300,6 +306,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     "required": [
         "job_id",
         "request_id",
+        "replayed",
         "status",
         "outcome",
         "source",

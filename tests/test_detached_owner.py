@@ -260,18 +260,17 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
             wait=False, detach=True, request_id=request_id, circuits=circuits
         )
         job_id = first["job_id"]
+        assert first["replayed"] is False
         api.wait(job_id, timeout=HANDOFF_TIMEOUT_S)
 
         # In this process, the ordinary route: the request index already names
         # the job, so nothing is staged or submitted again.
         replayed = api.run_experiments(wait=False, request_id=request_id, circuits=circuits)
         assert replayed["job_id"] == job_id
-        told = next(
-            item for item in replayed["observations"] if item["code"] == "idempotent_replay"
-        )
         # The complete receipt is re-rendered from the record, which knows only
-        # what happened to it; this caller's own call is what replayed.
-        assert "This call's" in told["detail"], told
+        # what happened to it; that this call replayed is carried across.
+        assert replayed["replayed"] is True
+        assert any(item["code"] == "idempotent_replay" for item in replayed["observations"])
 
         # And detached again: a second owner is spawned, takes the same replay
         # path, and hands back the same job rather than submitting a new one.
