@@ -24,7 +24,6 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     ResultError,
     SimulationError,
-    compact_validation_error,
     raise_site_code,
 )
 from ltspice_mcp.lib import experiment_store, response_budget
@@ -108,6 +107,7 @@ from ltspice_mcp.tools.receipts import (
     runs_page,
     snapshot_receipt,
 )
+from ltspice_mcp.tools.reference_index import validation_error_detail
 
 SUBMISSION_DWELL_CAP_S = 120.0
 # The jobs tool's own wait cap. It lives here rather than in tools/jobs so the
@@ -981,7 +981,7 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
     except (ValidationError, ValueError) as exc:
         raise SimulationError(
             "The attached analyze block is not a valid analyze_results request: "
-            f"{compact_validation_error(exc)}"
+            f"{validation_error_detail('analyze_results', exc)}"
         ) from exc
 
 
@@ -999,7 +999,7 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
         except ValidationError as exc:
             raise SimulationError(
                 "The attached analyze block is not a valid analyze_results request: "
-                f"{compact_validation_error(exc)}"
+                f"{validation_error_detail('analyze_results', exc)}"
             ) from exc
         # Resolved on the module, not bound at import: the analysis stage is
         # patched through ``tools.analyze`` in tests, and the attribute lookup

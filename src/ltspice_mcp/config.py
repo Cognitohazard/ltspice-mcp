@@ -2,6 +2,7 @@
 
 import logging
 import os
+import tempfile
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -564,9 +565,9 @@ class ServerConfig:
     """Path that was resolved for the config file (set by load())."""
 
     def __post_init__(self) -> None:
-        """Ensure allowed_paths defaults to [working_dir] if not set."""
+        """A config without allowed_paths gets the default sandbox."""
         if not self.allowed_paths:
-            self.allowed_paths = [self.working_dir]
+            self.allowed_paths = default_allowed_paths(self.working_dir)
 
     @classmethod
     def load(
@@ -650,6 +651,23 @@ class ServerConfig:
         return cls(**config_dict)
 
 
+def claude_scratch_root() -> Path | None:
+    """Where Claude Code keeps a session's scratch files. Its system prompt tells
+    an agent to write throwaway files there rather than in the working
+    directory, so a deck an agent authors lands outside a sandbox of ["."] and
+    every run of it costs a copy first. POSIX layout only; on Windows the
+    location is not known, so nothing is added."""
+    if os.name != "posix":
+        return None
+    return Path(tempfile.gettempdir()) / f"claude-{os.getuid()}"
+
+
+def default_allowed_paths(working_dir: Path) -> list[Path]:
+    """The sandbox a config without ``allowed_paths`` gets."""
+    scratch = claude_scratch_root()
+    return [working_dir] + ([scratch] if scratch else [])
+
+
 def generate_default_config(path: Path) -> None:
     """Generate a self-documenting default configuration file.
 
@@ -692,9 +710,11 @@ def generate_default_config(path: Path) -> None:
 
     # Security section
     sec = table()
-    sec.add(comment("Paths accessible to the server (sandbox)"))
-    sec.add(comment('Default: ["."] (current working directory)'))
-    sec.add("allowed_paths", ["."])
+    sec.add(comment("Paths accessible to the server (sandbox). Left unset, the default is the"))
+    sec.add(comment("working directory plus the Claude Code scratch directory"))
+    sec.add(comment("(<tempdir>/claude-<uid>), where an agent writes its throwaway decks."))
+    sec.add(comment("Set your own list to replace that default:"))
+    sec.add(comment('allowed_paths = ["."]'))
     doc.add("security", sec)
     doc.add(nl())
 

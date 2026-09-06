@@ -20,7 +20,7 @@ from ltspice_mcp import errors as _err
 from ltspice_mcp.api._session import acquire_session_lease, release_session_lease
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
-from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.observability import configure_stderr_logging
 from ltspice_mcp.lib.pathutil import resolve_safe_path
@@ -31,6 +31,7 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
 _CIRCUIT_PATH_KEYS: tuple[str, ...] = ("path", "netlist")
@@ -407,10 +408,7 @@ async def call_tool(
     try:
         return await registered.handler(arguments or {}, state)
     except ValidationError as e:
-        detail = compact_validation_error(
-            e,
-            field_owners=state.field_owners,
-        )
+        detail = validation_error_detail(name, e, field_owners=state.field_owners)
         return _tool_error(f"Invalid arguments for {name}: {detail}")
     except PathSecurityError as e:
         # The caller reads the refusal in the result; the operator reads it on
