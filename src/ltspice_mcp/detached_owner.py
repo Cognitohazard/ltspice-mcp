@@ -91,12 +91,23 @@ def _read_request(path: Path) -> dict[str, Any]:
 def run(request: dict[str, Any], handshake: _Handshake) -> int:
     """Submit the request, report the receipt, then supervise to terminality."""
     from ltspice_mcp.api import Api
+    from ltspice_mcp.lib.observability import configure_stderr_logging
 
     api = Api(
         working_dir=request.get("working_dir"),
         config_path=request.get("config_path"),
         **request.get("overrides", {}),
     )
+    # Now that a config is loaded, the owner reads [logging] level like every
+    # other process here — off the engine rather than loaded again, so a
+    # constructor override the caller passed applies to the log too. With one
+    # floor: never quieter than INFO. This process's log is the ONLY
+    # diagnostic channel a detached submission has, a failure hands the caller
+    # its tail, and the project-wide default of WARNING would leave that file
+    # with nothing in it. So a config asking for more detail is obeyed and one
+    # asking for silence is not.
+    configured = api._state.config.log_level.upper()  # pyright: ignore[reportPrivateUsage]
+    configure_stderr_logging("DEBUG" if configured == "DEBUG" else "INFO")
     try:
         try:
             receipt = api.run_experiments(wait=False, **request["arguments"])
@@ -126,20 +137,13 @@ def run(request: dict[str, Any], handshake: _Handshake) -> int:
             logger.exception("the detached owner's engine did not close cleanly")
 
 
-def _configure_logging() -> None:
-    """Log to the stderr the parent pointed at the owner's log file."""
-    level = os.getenv("LTSPICE_MCP_LOG_LEVEL", "INFO").upper()
-    if level not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}:
-        level = "INFO"
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
-    )
-
-
 def main(argv: list[str]) -> int:
-    _configure_logging()
+    from ltspice_mcp.lib.observability import configure_stderr_logging
+
+    # What the environment says, until the request names a config to load —
+    # the owner's log is the only diagnostic channel a detached submission
+    # has, and it must be open before anything can fail into it.
+    configure_stderr_logging(os.getenv("LTSPICE_MCP_LOG_LEVEL", "INFO"))
     if len(argv) != 1:
         print("usage: python -m ltspice_mcp.detached_owner <request-file>", file=sys.stderr)
         return 2

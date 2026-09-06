@@ -21,11 +21,17 @@ Each event carries:
 Payloads are attached to log records via the ``extra`` dict so a
 structured-log shipper (python-json-logger etc.) can pick them up
 without parsing the message string.
+
+Stderr is the one channel these records travel on, so installing it lives
+here too: :func:`configure_stderr_logging` is what the server's lifespan and
+the detached owner both call, and it is the only place that decides the
+format an operator reads.
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -33,6 +39,33 @@ from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 
 logger = logging.getLogger("ltspice_mcp.events")
+
+#: The stderr format every ltspice-mcp process writes.
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+
+def configure_stderr_logging(level: str) -> None:
+    """Install this process's stderr logging at ``level``.
+
+    An unrecognized level falls back to INFO rather than raising: this runs at
+    startup, before there is anywhere to report a bad value, and refusing to
+    boot over a log level would be worse than logging more than asked.
+
+    ``force=True``, so a process may call this again once it knows more —
+    which is what the detached owner does after its config is loaded.
+    """
+    from ltspice_mcp.config import VALID_LOG_LEVELS
+
+    named = level.upper()
+    if named not in VALID_LOG_LEVELS:
+        named = "INFO"
+    logging.basicConfig(
+        level=getattr(logging, named),
+        format=_LOG_FORMAT,
+        handlers=[logging.StreamHandler(sys.stderr)],
+        force=True,
+    )
+
 
 JobEvent = Literal[
     "submitted",
