@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
@@ -69,6 +68,7 @@ from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import ExperimentJob, SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
+    NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
     ToolInput,
     format_observations,
@@ -868,12 +868,7 @@ class PlotWaveformInput(ToolInput):
         "scalars."
     ),
     input_model=PlotWaveformInput,
-    annotations=types.ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=False,
-        idempotent_hint=False,
-        open_world_hint=True,
-    ),
+    annotations=NEW_WORK_ANNOTATIONS,
     # MCP Apps (SEP-1865): declare the in-chat renderer so an apps-capable host
     # fetches it via resources/read and pipes the chart spec into it.
     meta={"ui": {"resourceUri": WIDGET_RESOURCE_URI}},
