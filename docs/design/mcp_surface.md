@@ -191,14 +191,14 @@ called on one, which is what the 2026-07-28 specification requires of
 `tools/list`. Nothing keys on the mode below the listing — dispatch,
 validation and every response are identical either way.
 
-The transform has one exemption, and the schema declares it rather than the
-filter recognizing it: a branch that carries the `KEEP_DESCRIPTION` marker
-keeps its description. That marker sits on the dormant recipe branches, which
-are advertised as their discriminant and nothing else — "a client can still
-build a valid call" holds because a stripped branch still has structure to
-build one from, and these have none, so the description is the whole branch.
-Stripping it would publish a metric name a client could send and the server
-would then reject.
+The transform has one exemption, and it is read off the node's own shape
+rather than declared: a branch whose published properties are all fixed values
+keeps its description. That covers the dormant recipe branches and
+`inspect(kind: "capabilities")`, which are advertised as their discriminant and
+nothing else — "a client can still build a valid call" holds because a stripped
+branch still has structure to build one from, and these have none, so the
+description is the whole branch. Stripping it would publish a name a client
+could send with no way to learn what it does.
 
 **How long a listing stays fresh.** Because they are static, the server tells
 the client so rather than making it re-list every turn: `tools/list`,
