@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from pathlib import Path
@@ -384,6 +385,55 @@ def patch_stub_bootstrap(monkeypatch: pytest.MonkeyPatch, state: object) -> None
         )
 
     monkeypatch.setattr(_api_session, "bootstrap_library_engine", bootstrap)
+
+
+#: How often a waiting test looks again. Short enough that a test that is
+#: about to pass does not pay for the poll, long enough not to spin.
+_POLL_INTERVAL_S = 0.01
+
+
+def wait_until(
+    predicate: Callable[[], _T | None],
+    *,
+    timeout_s: float = 5.0,
+    what: str = "the condition",
+    interval_s: float = _POLL_INTERVAL_S,
+) -> _T:
+    """Block until ``predicate`` is truthy, failing the test at the deadline.
+
+    Returns what the predicate returned, so a test can wait for a thing and
+    take it in one step. The bound is there to catch a hang, never to assert a
+    latency: what these tests wait on — a case admitted through a concurrency
+    gate, a process leaving the process table — takes as long as the box is
+    busy, so a fixed sleep before the assertion is what this replaces.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        value = predicate()
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out after {timeout_s:g}s waiting for {what}")
+        time.sleep(interval_s)
+
+
+async def await_until(
+    predicate: Callable[[], _T | None],
+    *,
+    timeout_s: float = 5.0,
+    what: str = "the condition",
+    interval_s: float = _POLL_INTERVAL_S,
+) -> _T:
+    """:func:`wait_until` for a coroutine — the same bound, without blocking the loop."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while True:
+        value = predicate()
+        if value:
+            return value
+        if loop.time() >= deadline:
+            pytest.fail(f"timed out after {timeout_s:g}s waiting for {what}")
+        await asyncio.sleep(interval_s)
 
 
 def staged_decks(

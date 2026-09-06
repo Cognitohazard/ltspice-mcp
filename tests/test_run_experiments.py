@@ -46,6 +46,7 @@ from ltspice_mcp.tools.jobs import (
 )
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests.conftest import (
+    await_until,
     fake_artifact_paths,
     fake_simulator,
     recorded_fixture_simulator,
@@ -256,15 +257,6 @@ def _assert_schema(result) -> dict:
     return data
 
 
-async def _wait_for(condition, timeout_s: float = 1.0) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    while not condition():
-        if loop.time() >= deadline:
-            pytest.fail("condition was not met before the test deadline")
-        await asyncio.sleep(0.005)
-
-
 # One assign variation plus one real recipe grouped by the assigned target, so
 # a group_by that never matched would collapse to a single group and be seen.
 _VARIED_ANALYSIS: dict[str, Any] = {
@@ -367,7 +359,7 @@ class TestReceiptThenDwell:
         assert f"{counts['terminal']}/{counts['expanded']}" in data["hint"]
         assert f"{counts['remaining']} remaining" in data["hint"]
 
-        await _wait_for(lambda: bool(callbacks))
+        await await_until(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
             raw = work_dir / f"{Path(run_filename).stem}.raw"
             log = work_dir / f"{Path(run_filename).stem}.log"
@@ -417,7 +409,7 @@ class TestReceiptThenDwell:
         assert data["job_id"] in data["hint"]
 
         # Let the still-live job finish so teardown is not racing it.
-        await _wait_for(lambda: bool(callbacks))
+        await await_until(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
             raw = work_dir / f"{Path(run_filename).stem}.raw"
             log = work_dir / f"{Path(run_filename).stem}.log"
@@ -711,7 +703,7 @@ class TestIdempotency:
         assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
         # A zero dwell returns before the coordinator has necessarily reached the
         # simulator, so wait for the one submission rather than racing it.
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
     async def test_only_the_call_that_replayed_is_told_it_replayed(

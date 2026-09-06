@@ -26,20 +26,11 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
-from tests.conftest import staged_decks
+from tests.conftest import await_until, staged_decks
 
 
 class MockSimulator:
     """Simulator identity used only for runner construction and scoped kills."""
-
-
-async def _wait_for(condition, *, timeout_s: float = 5.0) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    while not condition():
-        if loop.time() >= deadline:
-            pytest.fail(f"condition not met within {timeout_s}s")
-        await asyncio.sleep(0.005)
 
 
 def _cases(work_dir: Path, count: int) -> tuple[list[ExperimentCase], list[SourceRecord]]:
@@ -210,7 +201,7 @@ async def _cancel_during_launch(
     receipt = await asyncio.shield(
         runner.submit(_request(state, work_dir, request_id="cancel-mid-launch", kill_grace_s=0.2))
     )
-    await _wait_for(launching.is_set)
+    await await_until(launching.is_set)
     cancel_task = asyncio.create_task(
         runner.cancel(receipt.job, control_token=receipt.control_token)
     )
@@ -218,10 +209,10 @@ async def _cancel_during_launch(
     # a public symptom of it: the point of the test is what the coordinator
     # does with a cancel that arrives DURING the launch.
     execution = runner._executions[receipt.job.job_id]
-    await _wait_for(execution.cancel_event.is_set)
+    await await_until(execution.cancel_event.is_set)
     release.set()
-    await _wait_for(lambda: bool(submissions))
-    await _wait_for(lambda: bool(killed) or cancel_task.done())
+    await await_until(lambda: bool(submissions))
+    await await_until(lambda: bool(killed) or cancel_task.done())
     token = submissions[0]
     # The launched process reports exit either way; a coordinator that disowned
     # it simply has nowhere to put the news.
@@ -321,13 +312,13 @@ class TestSubmitPrimitive:
             base.submit_netlist(netlist, token, lambda _outcome: None)
 
         await asyncio.to_thread(submit_and_discard, "kept.cir")
-        await _wait_for(simulating.is_set)
+        await await_until(simulating.is_set)
         assert not destroyed.is_set()
 
         # Released once its thread is done, so a long session does not hoard
         # one runner per run.
         finish.set()
-        await _wait_for(lambda: not threads[0].is_alive())
+        await await_until(lambda: not threads[0].is_alive())
         await asyncio.to_thread(submit_and_discard, "next.cir")
         assert destroyed.is_set()
 
@@ -384,7 +375,7 @@ class TestLogopinfoInjection:
         case.deck_sha256 = sha256_file(staged)
 
         receipt = await asyncio.shield(runner.submit(request))
-        await _wait_for(lambda: len(submitted) == 1)
+        await await_until(lambda: len(submitted) == 1)
         run_deck, run_bytes = submitted[0]
 
         assert run_deck != staged
@@ -420,7 +411,7 @@ class TestLogopinfoInjection:
         staged = cases[0].staged_deck
 
         receipt = await asyncio.shield(runner.submit(request))
-        await _wait_for(lambda: len(submitted) == 1)
+        await await_until(lambda: len(submitted) == 1)
         run_deck, run_bytes = submitted[0]
 
         assert run_deck == staged
@@ -487,7 +478,7 @@ class TestExperimentSubmission:
         index = experiment_store.load_request_index(request.request_id, work_dir)
         assert index is not None
         assert index["job_id"] == receipt.job.job_id
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
         assert await runner.wait(receipt.job, 1)
@@ -509,7 +500,7 @@ class TestExperimentSubmission:
         callbacks, submissions = _controlled_submit(monkeypatch, runner)
         first_request = _request(state_no_sim, work_dir, request_id="replay-request")
         first = await asyncio.shield(runner.submit(first_request))
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
 
         replay_request = _request(state_no_sim, work_dir, request_id="replay-request")
         replay = await asyncio.shield(runner.submit(replay_request))
@@ -539,7 +530,7 @@ class TestExperimentSubmission:
         first = await asyncio.shield(
             runner.submit(_request(state_no_sim, work_dir, request_id="conflict"))
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         with pytest.raises(IdempotencyConflictError, match="different request payload"):
             await asyncio.shield(
                 runner.submit(
@@ -593,12 +584,12 @@ class TestExperimentSubmission:
         with pytest.raises(asyncio.CancelledError):
             await handler
 
-        await _wait_for(
+        await await_until(
             lambda: experiment_store.load_request_index(request.request_id, work_dir) is not None
         )
         index = experiment_store.load_request_index(request.request_id, work_dir)
         assert index is not None
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         persisted = experiment_store.load_job(
             str(index["job_id"]),
             work_dir,
@@ -644,7 +635,7 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 40)
+        await await_until(lambda: len(submissions) == 40)
         for token in submissions:
             callbacks[token](_success(work_dir, token))
 
@@ -687,13 +678,13 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         # The second job's case is queued on the runner's permit, not launched.
         await asyncio.sleep(0.05)
         assert len(submissions) == 1
 
         callbacks[submissions[0]](_success(work_dir, submissions[0]))
-        await _wait_for(lambda: len(submissions) == 2)
+        await await_until(lambda: len(submissions) == 2)
         callbacks[submissions[1]](_success(work_dir, submissions[1]))
 
         assert await runner.wait(first.job, 1)
@@ -726,13 +717,13 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         await asyncio.sleep(0.05)
         assert len(submissions) == 1
         assert runner._executions[receipt.job.job_id].capacity == 1
 
         for index in range(3):
-            await _wait_for(lambda wanted=index + 1: len(submissions) == wanted)
+            await await_until(lambda wanted=index + 1: len(submissions) == wanted)
             token = submissions[index]
             callbacks[token](_success(work_dir, token))
         assert await runner.wait(receipt.job, 1)
@@ -762,7 +753,7 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         execution = runner._executions[receipt.job.job_id]
         assert execution.semaphore._value == 0
         assert len(execution.slots_held) == 1
@@ -770,7 +761,7 @@ class TestCaseConcurrencyAndTimeouts:
 
         first = submissions[0]
         callbacks[first](_success(work_dir, first))
-        await _wait_for(lambda: len(submissions) == 2)
+        await await_until(lambda: len(submissions) == 2)
         assert receipt.job.completeness.submitted == 2
         second = submissions[1]
         callbacks[second](_success(work_dir, second))
@@ -824,8 +815,8 @@ class TestCaseConcurrencyAndTimeouts:
         raw = work_dir / f"{token}.raw"
         raw.write_bytes(b"partial")
         callbacks[token](RunOutcome(str(raw), str(work_dir / f"{token}.fail"), 0, "killed"))
-        await _wait_for(lambda: case.case_id not in execution.retained_slots)
-        await _wait_for(lambda: not raw.exists())
+        await await_until(lambda: case.case_id not in execution.retained_slots)
+        await await_until(lambda: not raw.exists())
         assert execution.semaphore._value == 1
         assert any(item["code"] == "late_simulator_exit" for item in case.observations)
         assert receipt.job.completeness.failed == 1
@@ -878,7 +869,7 @@ class TestCaseConcurrencyAndTimeouts:
         assert receipt.job.cases[0].raw_file is None
         # Execution cleanup runs after done_event, past the watcher-task
         # cancellation awaits — poll instead of asserting synchronously.
-        await _wait_for(lambda: runner._executions.get(receipt.job.job_id) is None)
+        await await_until(lambda: runner._executions.get(receipt.job.job_id) is None)
         assert not await asyncio.to_thread(raw.exists)
 
     async def test_all_zombie_capacity_fails_queued_cases_without_overlaunch(
@@ -1007,11 +998,11 @@ class TestCancellationAndAnalysis:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         cancel_task = asyncio.create_task(
             runner.cancel(receipt.job, control_token=receipt.control_token)
         )
-        await _wait_for(lambda: bool(killed))
+        await await_until(lambda: bool(killed))
         token = submissions[0]
         callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
         cancel_receipts = await asyncio.wait_for(cancel_task, 1)
@@ -1062,14 +1053,14 @@ class TestCancellationAndAnalysis:
         )
         # The case is launched, so it is provably non-terminal when both
         # cancels arrive — the state in which each call has work to claim.
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         assert receipt.job.cases[0].submitted_at is not None
 
         cancels = [
             asyncio.create_task(runner.cancel(receipt.job, control_token=receipt.control_token))
             for _ in range(2)
         ]
-        await _wait_for(lambda: bool(killed))
+        await await_until(lambda: bool(killed))
         token = submissions[0]
         callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
         reports = await asyncio.wait_for(asyncio.gather(*cancels), 2)
@@ -1118,7 +1109,7 @@ class TestCancellationAndAnalysis:
         receipt = await asyncio.shield(
             runner.submit(_request(state_no_sim, work_dir, request_id="token-auth"))
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         receipt.job.owner_pid = -1
         with pytest.raises(ExperimentCancellationError, match="not authorized"):
             await runner.cancel(receipt.job, control_token="wrong-token")
@@ -1148,7 +1139,7 @@ class TestCancellationAndAnalysis:
         receipt = await asyncio.shield(
             runner.submit(_request(state_no_sim, work_dir, request_id="token-owner"))
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         receipt.job.owner_pid = -1
         cancel_task = asyncio.create_task(
             runner.cancel(receipt.job, control_token=receipt.control_token)
@@ -1190,7 +1181,7 @@ class TestCancellationAndAnalysis:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
         await asyncio.wait_for(analysis_started.wait(), 1)
@@ -1232,7 +1223,7 @@ class TestCancellationAndAnalysis:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
         assert await runner.wait(receipt.job, 1)
@@ -1274,7 +1265,7 @@ class TestCancellationAndAnalysis:
                 )
             )
         )
-        await _wait_for(lambda: len(submissions) == 1)
+        await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         outcome = _success(work_dir, token)
         callbacks[token](outcome)

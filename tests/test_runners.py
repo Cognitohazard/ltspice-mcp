@@ -16,23 +16,6 @@ from ltspice_mcp.lib.runner_base import discard_generated_netlist
 from ltspice_mcp.lib.spice_lex import lex
 
 
-async def _wait_for(cond, *, timeout_s: float = 5.0, interval: float = 0.01) -> None:
-    """Poll ``cond`` until it holds, failing at ``timeout_s``.
-
-    Deadline-based stand-in for a fixed ``asyncio.sleep`` before an assertion:
-    the awaited effect (a job admitted through the concurrency gate, a bridged
-    completion callback draining onto the loop) can take longer than any single
-    fixed sleep on a saturated runner, yet a real result still lands well within
-    the deadline. Modeled on ``_poll_batch_done`` in test_ngspice_e2e.py.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    while not cond():
-        if loop.time() > deadline:
-            pytest.fail(f"condition not met within {timeout_s}s")
-        await asyncio.sleep(interval)
-
-
 class FakeSim:
     """Minimal simulator stub."""
 
