@@ -1228,27 +1228,44 @@ class StepSelection(NamedTuple):
         }
 
 
+#: A resolved step plan: ``(step index, that step's axis values)`` per step.
+StepPlan = list[tuple[int, dict[str, Any]]]
+
+
 async def _step_plan(
     steps: StepSelection,
     source: services.AnalysisSource,
     state: SessionState,
-    step_cache: dict[str, list[dict[str, Any]]],
-) -> list[tuple[int, dict[str, Any]]]:
+    plan_cache: dict[tuple[str, str], StepPlan],
+) -> StepPlan:
+    """The steps one source contributes, built once per source per call.
+
+    The step choice belongs to the call rather than to a recipe, so every
+    recipe over the same run resolves to the same plan — the whole plan is
+    cached, not just the log parse behind it, and the read is shared rather
+    than repeated per (recipe, run). Treat the result as read-only.
+    """
+    key = (str(source.raw), str(source.log))
+    cached = plan_cache.get(key)
+    if cached is not None:
+        return cached
+    plan_cache[key] = plan = await _build_step_plan(steps, source, state)
+    return plan
+
+
+async def _build_step_plan(
+    steps: StepSelection,
+    source: services.AnalysisSource,
+    state: SessionState,
+) -> StepPlan:
     raw = await services.load_raw(source.raw, state)
     count = get_step_count(raw)
     step_values: list[dict[str, Any]] = []
     if source.log is not None and count > 1:
-        # One step-table parse per log path per call: many recipes over the same
-        # stepped run share it instead of re-parsing the log each time.
-        log_key = str(source.log)
-        if log_key in step_cache:
-            step_values = step_cache[log_key]
-        else:
-            step_values = await services.bounded_parse(
-                source.log,
-                lambda: parse_step_iterations(source.log),
-            )
-            step_cache[log_key] = step_values
+        step_values = await services.bounded_parse(
+            source.log,
+            lambda: parse_step_iterations(source.log),
+        )
     if steps.all_steps:
         return [
             (index, step_values[index] if index < len(step_values) else {})
@@ -1850,7 +1867,7 @@ async def _evaluate_item(
     state: SessionState,
     item: result_store.ResultSet,
     item_deadline: float,
-    step_cache: dict[str, list[dict[str, Any]]],
+    step_plans: dict[tuple[str, str], StepPlan],
     steps: StepSelection,
 ) -> tuple[list[Record], list[Failure], list[_PendingArtifact]]:
     selected = set(recipe.sources or [run.label for run in runs])
@@ -1872,7 +1889,7 @@ async def _evaluate_item(
             continue
         try:
             with services.analysis_deadline(item_deadline):
-                step_plan = await _step_plan(steps, run.source, state, step_cache)
+                step_plan = await _step_plan(steps, run.source, state, step_plans)
                 if isinstance(recipe, PlotRecipe):
                     value, artifacts = await _plot(
                         recipe,
@@ -3072,7 +3089,7 @@ async def _evaluate_unit(
     state: SessionState,
     item: result_store.ResultSet,
     item_deadline: float,
-    step_cache: dict[str, list[dict[str, Any]]],
+    step_plans: dict[tuple[str, str], StepPlan],
     steps: StepSelection,
     *,
     per_run_offset: int,
@@ -3126,7 +3143,7 @@ async def _evaluate_unit(
         state,
         item,
         item_deadline,
-        step_cache,
+        step_plans,
         steps,
     )
     failures.extend(item_failures)
@@ -3332,10 +3349,10 @@ async def _evaluate_analysis_drive(
     """Implementation shared by the neutral seam and MCP's paged presentation."""
     loop = asyncio.get_running_loop()
     call_deadline = loop.time() + state.config.analysis_budget_s
-    # Per-call caches: one file hash per (path, mtime, size); one step-table
-    # parse per log path. Shared across manifest build, verification and steps.
+    # Per-call caches: one file hash per (path, mtime, size), shared across
+    # manifest build and verification; one resolved step plan per source.
     digest_cache: _DigestCache = {}
-    step_cache: dict[str, list[dict[str, Any]]] = {}
+    step_plans: dict[tuple[str, str], StepPlan] = {}
 
     start = await _resolve_drive_start(
         args, state, continuation, loaded, call_deadline, digest_cache
@@ -3459,7 +3476,7 @@ async def _evaluate_analysis_drive(
             state,
             item,
             item_deadline,
-            step_cache,
+            step_plans,
             steps,
             per_run_offset=intra_item,
             position=position,
