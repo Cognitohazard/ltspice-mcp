@@ -990,6 +990,63 @@ class TestCancellationAndAnalysis:
             "case_0001",
         }
 
+    async def test_two_cancels_of_an_active_case_claim_the_transition_once(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A launched case stays non-terminal until its kill lands.
+
+        Both calls would otherwise take their own snapshot of the case
+        statuses, both see the same case still running, and both report having
+        stopped it — two acknowledgements for one transition, with no way for
+        either caller to tell which one actually did anything.
+        """
+        runner = ExperimentRunner(
+            asyncio.get_running_loop(),
+            MockSimulator,
+            work_dir,
+            max_parallel=1,
+        )
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        killed: list[str] = []
+
+        async def record_kill(token: str) -> None:
+            killed.append(token)
+
+        monkeypatch.setattr(runner, "_kill_case", record_kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="cancel-an-active-case-twice",
+                    kill_grace_s=0.2,
+                )
+            )
+        )
+        # The case is launched, so it is provably non-terminal when both
+        # cancels arrive — the state in which each call has work to claim.
+        await _wait_for(lambda: len(submissions) == 1)
+        assert receipt.job.cases[0].submitted_at is not None
+
+        cancels = [
+            asyncio.create_task(runner.cancel(receipt.job, control_token=receipt.control_token))
+            for _ in range(2)
+        ]
+        await _wait_for(lambda: bool(killed))
+        token = submissions[0]
+        callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
+        reports = await asyncio.wait_for(asyncio.gather(*cancels), 2)
+
+        reporting = [rows for rows in reports if rows]
+        assert len(reporting) == 1, reports
+        assert [row["case_id"] for row in reporting[0]] == ["case_0000"]
+        # The launched, still-running state both calls would otherwise claim.
+        assert reporting[0][0]["prior_status"] == "running"
+        assert reporting[0][0]["status"] == "cancelled"
+
     async def test_cancel_mid_launch_counts_the_case_as_submitted(
         self,
         state_no_sim: SessionState,
