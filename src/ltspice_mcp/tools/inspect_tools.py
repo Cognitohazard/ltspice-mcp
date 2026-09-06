@@ -835,7 +835,9 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
         "allowed_paths": [str(p) for p in state.config.allowed_paths],
-        "tool_profile": state.config.tool_profile,
+        # One surface, and no setting selects it; the key stays because a
+        # client reads it to know which one it is talking to.
+        "tool_profile": "consolidated",
         # Which of the two tool listings this session was served. The guide
         # tells a caller to reach for inspect(kind="reference") whenever the
         # listing is compact, because the per-argument descriptions are then

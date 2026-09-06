@@ -201,10 +201,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         logger.info(f"Working directory: {state.working_dir}")
         # The listing belongs on this line because it is the operator's answer
         # to "why did my argument descriptions vanish".
-        logger.info(
-            f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools), "
-            f"listing: {config.tool_listing}"
-        )
+        logger.info(f"Tools: {len(state.tool_defs)}, listing: {config.tool_listing}")
         logger.info(f"Log level: {config.log_level}")
 
         logger.info("Detected simulators:")
@@ -529,16 +526,16 @@ async def list_prompts(
     ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
 ) -> types.ListPromptsResult:
     """Return the workflow-starter prompts (registering this advertises the capability)."""
-    return types.ListPromptsResult(
-        prompts=prompts.list_prompts(_get_state(ctx).config.tool_profile)
-    )
+    del ctx, params
+    return types.ListPromptsResult(prompts=prompts.list_prompts())
 
 
 async def get_prompt(
     ctx: ServerRequestContext, params: types.GetPromptRequestParams
 ) -> types.GetPromptResult:
     """Return a prompt's messages with its arguments interpolated."""
-    return prompts.get_prompt(params.name, params.arguments, _get_state(ctx).config.tool_profile)
+    del ctx
+    return prompts.get_prompt(params.name, params.arguments)
 
 
 # The tool, resource and prompt listings are all built once, during lifespan

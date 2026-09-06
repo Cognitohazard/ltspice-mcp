@@ -67,7 +67,6 @@ def test_distinct_missing_fields_are_not_deduplicated():
 
 
 def _consolidated_state(config) -> SessionState:
-    config.tool_profile = "consolidated"
     return SessionState.create(config, available={})
 
 

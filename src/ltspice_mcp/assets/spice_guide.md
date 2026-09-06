@@ -7,7 +7,6 @@ Covers both engines. **SPICE Fundamentals** applies to both; then read
 character, behavioral-source conditionals, MOSFET bulk handling, parameter
 sweeps, and Monte Carlo — see the differences table at the end.
 
-<!-- profile: consolidated -->
 ## Tool surface on this profile
 
 Six tools: `run_experiments`, `jobs`, `analyze_results`, `inspect`,
@@ -122,7 +121,6 @@ response loses empty blocks and the identity echo, nothing else. Detail you
 asked for is never removed by the default. Set the config value to `0` to
 turn that off.
 
-<!-- /profile -->
 ## SPICE Fundamentals
 
 ### Netlist Structure
@@ -653,7 +651,6 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 
 `mc(nominal, tolerance)` — uniform between `nom*(1-tol)` and `nom*(1+tol)`.
 
-<!-- profile: consolidated -->
 A `random` variation on `run_experiments` does the same without touching the
 deck, and its `rules` list carries four kinds — pick the one that matches what
 actually varies in the part you are modelling:
@@ -723,7 +720,6 @@ needs the qualified form `X1.M0:delvto`. These instance targets are assign
 targets only — they are not valid inside `random` rules, whose mismatch path
 is the Pelgrom rule above.
 
-<!-- /profile -->
 
 ### Convergence
 
@@ -790,10 +786,8 @@ C1 out 0 {C}
 
 ### .asc Schematics
 
-<!-- profile: consolidated -->
 `.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use `edit_schematic` or LTspice's GUI. It gives geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. `edit_schematic(target=..., base="blank")` starts a new sheet; every mutation below is an entry in its `ops` list, applied as one guarded transaction, so batch a whole build into one call. Place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings — `inspect(kind="symbol")` previews the same geometry before you place anything.
 
-<!-- /profile -->
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to individual nets).
