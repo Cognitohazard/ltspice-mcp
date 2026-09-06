@@ -16,7 +16,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import cast
 
@@ -28,7 +27,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import SyncApi
+from tests.conftest import SyncApi, wait_until
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ngspice") is None,
@@ -96,17 +95,6 @@ def _gone(pid: int) -> bool:
         return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
         return True
-
-
-def _until(predicate, timeout: float, what: str):
-    deadline = time.monotonic() + timeout
-    while True:
-        value = predicate()
-        if value:
-            return value
-        if time.monotonic() >= deadline:
-            pytest.fail(f"timed out after {timeout:.0f}s waiting for {what}")
-        time.sleep(0.05)
 
 
 def _submit_slow(api: Api, work_dir: Path, request_id: str) -> dict:
@@ -249,7 +237,9 @@ def test_a_detached_job_outlives_the_session_that_submitted_it(work_dir: Path) -
         measured = analysis["results"]["vout"]["values"][0]["value"]
         assert measured["value"] == pytest.approx(5.0, rel=1e-6), measured
 
-    _until(lambda: _gone(owner_pid), HANDOFF_TIMEOUT_S, "the detached owner to exit")
+    wait_until(
+        lambda: _gone(owner_pid), timeout_s=HANDOFF_TIMEOUT_S, what="the detached owner to exit"
+    )
 
 
 def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> None:
@@ -317,7 +307,7 @@ def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
     )
     owner = subprocess.Popen([sys.executable, "-c", program], start_new_session=True)
     try:
-        _until(child_pid_file.is_file, 30.0, "the owner to start a child")
+        wait_until(child_pid_file.is_file, timeout_s=30.0, what="the owner to start a child")
         child_pid = int(child_pid_file.read_text())
 
         with pytest.raises(ApiCallError, match="did not report a submission"):
@@ -328,7 +318,9 @@ def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
                 work_dir / "owner.log",
             )
 
-        _until(lambda: _gone(child_pid), 30.0, "the owner's child to be stopped too")
+        wait_until(
+            lambda: _gone(child_pid), timeout_s=30.0, what="the owner's child to be stopped too"
+        )
     finally:
         with contextlib.suppress(OSError):
             os.killpg(os.getpgid(owner.pid), signal.SIGKILL)
@@ -453,14 +445,16 @@ def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
         cancelled = fresh.jobs(action="cancel", job_id=job_id, control_token=control_token)
         assert cancelled["outcome"] != "failed", cancelled
 
-        final = _until(
+        final = wait_until(
             lambda: fresh.jobs(action="status", job_id=job_id),
-            HANDOFF_TIMEOUT_S,
-            "the cancelled job to report",
+            timeout_s=HANDOFF_TIMEOUT_S,
+            what="the cancelled job to report",
         )
         assert final["status"] == "cancelled", final
 
-    _until(lambda: _gone(owner_pid), HANDOFF_TIMEOUT_S, "the cancelled owner to exit")
+    wait_until(
+        lambda: _gone(owner_pid), timeout_s=HANDOFF_TIMEOUT_S, what="the cancelled owner to exit"
+    )
 
 
 def test_killing_a_detached_owner_leaves_an_interrupted_job(work_dir: Path) -> None:
@@ -476,14 +470,14 @@ def test_killing_a_detached_owner_leaves_an_interrupted_job(work_dir: Path) -> N
     # Read it back from the session that spawned the owner and has not
     # collected it. Its pid is still in the process table, and a job whose
     # owner is gone must not read as one that is still running.
-    interrupted = _until(
+    interrupted = wait_until(
         lambda: (
             status
             if (status := api.jobs(action="status", job_id=job_id))["status"] != "running"
             else None
         ),
-        RECLASSIFY_TIMEOUT_S,
-        "the killed owner's job to stop reporting as running",
+        timeout_s=RECLASSIFY_TIMEOUT_S,
+        what="the killed owner's job to stop reporting as running",
     )
     assert interrupted["status"] == "interrupted", interrupted
     api.close()
