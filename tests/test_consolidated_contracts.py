@@ -47,7 +47,7 @@ from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 # envelope — it joins the surface completeness and size pins (every client
 # pays its schema), not the envelope contract matrix. Shared in conftest so
 # every file naming the surface reads one constant.
-from tests.conftest import CONSOLIDATED_TOOLS, REGISTERED_TOOLS
+from tests.conftest import CONSOLIDATED_TOOLS, REGISTERED_TOOLS, schema_descriptions
 
 # The single ratified outcome vocabulary (design section 2). No per-tool dialect
 # is allowed: every outcome enum any of the six declares must be a subset.
@@ -748,30 +748,13 @@ class TestAdvertisedProseIsTheSource:
     fail here.
     """
 
-    @staticmethod
-    def _descriptions(node: Any, path: str = "") -> dict[str, str]:
-        """Every description in a schema, keyed by where it sits."""
-        found: dict[str, str] = {}
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key == "description" and isinstance(value, str):
-                    found[path or "<root>"] = value
-                else:
-                    found |= TestAdvertisedProseIsTheSource._descriptions(
-                        value, f"{path}.{key}" if path else key
-                    )
-        elif isinstance(node, list):
-            for index, item in enumerate(node):
-                found |= TestAdvertisedProseIsTheSource._descriptions(item, f"{path}[{index}]")
-        return found
-
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_advertised_descriptions_equal_the_source(self, name: str):
         source = _source_definitions()[name]
         advertised = _registered()[name]
         assert advertised.description == source.description
-        source_fields = self._descriptions(source.input_schema)
-        advertised_fields = self._descriptions(advertised.input_schema)
+        source_fields = schema_descriptions(source.input_schema)
+        advertised_fields = schema_descriptions(advertised.input_schema)
         assert set(advertised_fields) == set(source_fields), (
             f"{name}: the advertised schema documents different places than the "
             "source does — the two definitions must carry the same descriptions"

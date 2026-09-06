@@ -17,22 +17,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools._base import registry
 from ltspice_mcp.tools._schema import strip_argument_descriptions
-from tests.conftest import REGISTERED_TOOLS
-
-
-def _descriptions(node: Any, path: str = "") -> dict[str, str]:
-    """Every description in a schema, keyed by where it sits."""
-    found: dict[str, str] = {}
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "description" and isinstance(value, str):
-                found[path or "<root>"] = value
-            else:
-                found |= _descriptions(value, f"{path}.{key}" if path else key)
-    elif isinstance(node, list):
-        for index, item in enumerate(node):
-            found |= _descriptions(item, f"{path}[{index}]")
-    return found
+from tests.conftest import REGISTERED_TOOLS, schema_descriptions
 
 
 def _without_prose(node: Any, in_name_map: bool = False) -> Any:
@@ -67,17 +52,17 @@ def _argument_free(node: Any) -> bool:
     return all(isinstance(value, dict) and "const" in value for value in properties.values())
 
 
-def _exempt_descriptions(node: Any, path: str = "") -> dict[str, str]:
+def _exemptschema_descriptions(node: Any, path: str = "") -> dict[str, str]:
     """The descriptions the compact listing must keep, keyed the same way."""
     found: dict[str, str] = {}
     if isinstance(node, dict):
         if _argument_free(node) and isinstance(node.get("description"), str):
             found[path or "<root>"] = node["description"]
         for key, value in node.items():
-            found |= _exempt_descriptions(value, f"{path}.{key}" if path else key)
+            found |= _exemptschema_descriptions(value, f"{path}.{key}" if path else key)
     elif isinstance(node, list):
         for index, item in enumerate(node):
-            found |= _exempt_descriptions(item, f"{path}[{index}]")
+            found |= _exemptschema_descriptions(item, f"{path}[{index}]")
     return found
 
 
@@ -99,7 +84,7 @@ class TestFullListingIsUnchanged:
 
 
 class TestCompactListing:
-    def test_same_tools_and_same_tool_level_descriptions(self):
+    def test_same_tools_and_same_tool_levelschema_descriptions(self):
         full = {d.name: d for d in get_tools("full")[0]}
         compact = {d.name: d for d in get_tools("compact")[0]}
         assert set(compact) == set(REGISTERED_TOOLS)
@@ -132,8 +117,12 @@ class TestEveryToolCarriesADisplayTitle:
         """Except the argument-free branches — see the class below."""
         full = {d.name: d for d in get_tools("full")[0]}[name]
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
-        assert _descriptions(full.input_schema), f"{name} advertises no descriptions to strip"
-        assert _descriptions(compact.input_schema) == _exempt_descriptions(full.input_schema)
+        assert schema_descriptions(full.input_schema), (
+            f"{name} advertises no descriptions to strip"
+        )
+        assert schema_descriptions(compact.input_schema) == _exemptschema_descriptions(
+            full.input_schema
+        )
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_nothing_but_the_descriptions_changes(self, name: str):
@@ -176,7 +165,7 @@ class TestEveryToolCarriesADisplayTitle:
 
     def test_the_registry_schema_is_not_mutated_by_compaction(self):
         get_tools("compact")
-        assert _descriptions(get_tools("full")[0][0].input_schema)
+        assert schema_descriptions(get_tools("full")[0][0].input_schema)
 
     def test_an_argument_literally_named_description_survives(self):
         """The filter descends structurally: inside ``properties`` the keys are
@@ -281,6 +270,6 @@ class TestSessionStateHonoursTheListing:
         state = _state(work_dir, "compact")
         full = {d.name: d for d in get_tools("full")[0]}
         for definition in state.tool_defs:
-            assert _descriptions(definition.input_schema) == _exempt_descriptions(
+            assert schema_descriptions(definition.input_schema) == _exemptschema_descriptions(
                 full[definition.name].input_schema
             )
