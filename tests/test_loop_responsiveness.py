@@ -12,18 +12,19 @@ request is served while the heavy one is still in flight.
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from pydantic import AnyUrl
+from mcp import types
 from spicelib.raw.raw_read import RawRead
 
+from ltspice_mcp import resources
 from ltspice_mcp.lib import recent, services
+from ltspice_mcp.lib.metrics import signal_stats
+from ltspice_mcp.lib.recipes import SignalStatsRecipe
 from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
-from ltspice_mcp.tools.status import ServerStatusInput, handle_server_status
-from tests.conftest import _FakeServer, make_sim_job, stage_recorded_fixture
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from tests.conftest import fake_request_context, stage_recorded_fixture
 
 # Stands in for a multi-hundred-MB parse over /mnt/c. The only deliberate
 # slow-op in this module; every timing assertion keeps >=4x margin to it.
@@ -37,10 +38,13 @@ def slow_rawread(*args, **kwargs):
 
 
 async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) -> None:
-    """Serve ``server_status`` while ``heavy`` is in flight; assert it
-    returns promptly and before the heavy task completes."""
+    """Serve an ``inspect`` capabilities query (a registered consolidated
+    tool with no file I/O) while ``heavy`` is in flight; assert it returns
+    promptly and before the heavy task completes."""
     t0 = time.monotonic()
-    light = await handle_server_status(ServerStatusInput(), state)
+    light = await handle_inspect(
+        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
+    )
     light_elapsed = time.monotonic() - t0
 
     assert not heavy.done(), (
@@ -63,14 +67,17 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
 
     Drives ``signal_stats`` (heavy: parses a recorded LTspice AC raw through
     services.load_raw, with the parse patched to take SLOW_OP_SECONDS) and
-    ``server_status`` (light: no file I/O) concurrently on one event loop.
+    an ``inspect`` capabilities query (light: no file I/O) concurrently on
+    one event loop.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
     monkeypatch.setattr(services, "RawRead", slow_rawread)
 
     heavy = asyncio.create_task(
-        handle_signal_stats(
-            SignalStatsInput(raw_file=str(raw_path), signal="V(out)"),
+        signal_stats(
+            services.AnalysisSource.for_raw(raw_path),
+            SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)"),
+            0,
             state_no_sim,
         )
     )
@@ -80,9 +87,7 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
     await assert_light_request_served(heavy, state_no_sim)
 
     # The offloaded parse must still produce the correct result afterward.
-    result = await heavy
-    sc = result.structuredContent
-    assert sc is not None
+    sc = await heavy
     assert sc["analysis_type"] == "ac"
     assert sc["point_count"] == 81  # dec 20 over 4 decades, recorded fixture
 
@@ -131,32 +136,34 @@ async def test_resource_read_served_off_loop(
     concurrent light request.
 
     Drives the real router seam — ``server.read_resource`` over the
-    ``spice://results/{job}/signals`` route, with the parse patched to
-    take SLOW_OP_SECONDS — concurrently with ``server_status``.
+    ``spice://netlists/{filename}`` route, with the decode patched to take
+    SLOW_OP_SECONDS — concurrently with a light ``inspect`` query.
     """
-    raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    job = make_sim_job("resjob", raw_file=raw_path)
-    state_no_sim.jobs[job.job_id] = job
+    deck = work_dir / "slow.cir"
+    deck.write_text("* slow read\nR1 in 0 1k\n.end\n", encoding="utf-8")
 
-    monkeypatch.setattr(services, "RawRead", slow_rawread)
+    real_read = resources.read_spice_text
 
-    with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
-        # Keep this wrapper: create_task needs a true coroutine, and the
-        # SDK's read_resource is typed as returning a plain Awaitable.
-        async def _read_signals_resource():
-            return await read_resource(AnyUrl("spice://results/resjob/signals"))
+    def slow_read(path):
+        time.sleep(SLOW_OP_SECONDS)
+        return real_read(path)
 
-        heavy = asyncio.create_task(_read_signals_resource())
-        # One loop tick: the read task starts and hands the router to a worker.
-        await asyncio.sleep(0)
+    monkeypatch.setattr(resources, "read_spice_text", slow_read)
 
-        await assert_light_request_served(heavy, state_no_sim)
+    heavy = asyncio.create_task(
+        read_resource(
+            fake_request_context(state_no_sim),
+            types.ReadResourceRequestParams(uri="spice://netlists/slow.cir"),
+        )
+    )
+    # One loop tick: the read task starts and hands the router to a worker.
+    await asyncio.sleep(0)
 
-        # The offloaded read must still produce the correct result afterward.
-        result = await heavy
-        assert not isinstance(result, str | bytes)
-        contents = list(result)
-        assert len(contents) == 1
-        body = contents[0].content
-        assert isinstance(body, str)
-        assert "V(out)" in body
+    await assert_light_request_served(heavy, state_no_sim)
+
+    # The offloaded read must still produce the correct result afterward.
+    result = await heavy
+    assert len(result.contents) == 1
+    entry = result.contents[0]
+    assert isinstance(entry, types.TextResourceContents)
+    assert "R1 in 0 1k" in entry.text

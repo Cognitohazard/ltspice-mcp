@@ -8,17 +8,19 @@ directly with real processes/threads.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import multiprocessing as mp
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib import job_store, now, recent
+from ltspice_mcp.lib import filelock, recent
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.state import SimulationJob
 
 # ---------------------------------------------------------------------------
 # Cross-process: recent.json
@@ -70,81 +72,6 @@ class TestRecentConcurrentProcesses:
 
 
 # ---------------------------------------------------------------------------
-# Cross-thread: job_store atomic writes
-# ---------------------------------------------------------------------------
-
-
-class TestJobStoreConcurrentThreads:
-    def test_many_threads_saving_different_jobs(self, tmp_path: Path) -> None:
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-
-        def save(job_id: str) -> None:
-            job = SimulationJob(
-                job_id=job_id,
-                netlist=circuit,
-                simulator="LTspice",
-                status="completed",
-                started_at=now(),
-                completed_at=now(),
-            )
-            job_store.save_job(job)
-
-        threads = [threading.Thread(target=save, args=(f"sim_thread_{i}",)) for i in range(32)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-            assert not t.is_alive()
-
-        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
-        assert {j.job_id for j in sim_jobs} == {f"sim_thread_{i}" for i in range(32)}
-
-    def test_same_job_rewritten_from_many_threads_stays_valid(self, tmp_path: Path) -> None:
-        """Concurrent writes to the same file must never leave a torn JSON."""
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job_id = "sim_same"
-        # Initial save so the file exists.
-        base = SimulationJob(
-            job_id=job_id,
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-        )
-        job_store.save_job(base)
-        path = job_store.sidecar_dir(circuit) / f"{job_id}.json"
-
-        def rewrite(status: str) -> None:
-            job = SimulationJob(
-                job_id=job_id,
-                netlist=circuit,
-                simulator="LTspice",
-                status=status,  # type: ignore[arg-type]
-                started_at=now(),
-                completed_at=now() if status != "running" else None,
-            )
-            for _ in range(10):
-                job_store.save_job(job)
-
-        threads = [
-            threading.Thread(target=rewrite, args=(s,))
-            for s in ("running", "completed", "failed", "cancelled")
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        # File must always be parseable; last-writer-wins semantics mean the
-        # exact status is non-deterministic but the file never corrupts.
-        data = json.loads(path.read_text())
-        assert data["job_id"] == job_id
-        assert data["status"] in {"running", "completed", "failed", "cancelled"}
-
-
-# ---------------------------------------------------------------------------
 # file_lock semantics
 # ---------------------------------------------------------------------------
 
@@ -189,3 +116,66 @@ class TestFileLock:
         finally:
             release.set()
             holder.join(timeout=5)
+
+
+class TestAsyncFileLock:
+    """The coroutine-side lock: it must not strand a flock when cancelled."""
+
+    async def test_a_cancelled_waiter_leaves_no_lock_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cancel can land while a worker thread's attempt is still in flight.
+
+        The thread goes on to take the lock, and by then the coroutine that
+        asked for it is gone — so the lock has to be handed back rather than
+        held until the process exits. Stretching one attempt makes that window
+        wide enough to aim at instead of racing.
+        """
+        real_file_lock = filelock.file_lock
+
+        @contextlib.contextmanager
+        def slow_lock(target: Path, **kwargs: object):
+            with real_file_lock(target, **kwargs):  # type: ignore[arg-type]
+                time.sleep(0.3)
+                yield
+
+        monkeypatch.setattr(filelock, "file_lock", slow_lock)
+        target = tmp_path / "gate.txt"
+        target.touch()
+
+        async def waiter() -> None:
+            async with filelock.async_file_lock(target):
+                pass
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)  # the attempt is in flight, mid-acquire
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.5)  # let the worker finish and hand the lock back
+
+        monkeypatch.undo()
+        with file_lock(target, timeout=1.0):
+            pass
+
+    def test_a_lock_published_after_the_waiter_gave_up_is_released(self, tmp_path: Path) -> None:
+        """The two halves of the hand-off, run the wrong way round on purpose.
+
+        A worker thread can finish taking the lock only after the coroutine
+        that asked for it has already abandoned the wait. Releasing it then has
+        to be the code's doing: a flock left for the collector to notice is one
+        another process waits on for as long as that takes. The ``held`` stack
+        below stays referenced here precisely so nothing can be blamed on the
+        collector.
+        """
+        target = tmp_path / "gate.txt"
+        target.touch()
+        handoff = filelock._LockHandoff()
+        held = contextlib.ExitStack()
+        held.enter_context(file_lock(target, timeout=0))
+
+        handoff.abandon()  # the waiting coroutine was cancelled
+        handoff.publish(held)  # and only then did the worker win the lock
+
+        with file_lock(target, timeout=0.5):
+            pass

@@ -25,7 +25,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     Token,
     TokenKind,
-    _strip_matching_quotes,
+    strip_matching_quotes,
     tokenize_body,
 )
 
@@ -79,8 +79,8 @@ class ModelCard:
         if len(tokens) < 3:
             raise _malformed(card, "malformed .MODEL card")
         # tokens[0] is ".MODEL" (BARE), tokens[1] is name, tokens[2] is type.
-        name = _strip_matching_quotes(tokens[1].text)
-        type_ = _strip_matching_quotes(tokens[2].text)
+        name = strip_matching_quotes(tokens[1].text)
+        type_ = strip_matching_quotes(tokens[2].text)
         params: dict[str, str] = {}
         param_tokens: dict[str, Token] = {}
         # Params can come as a single PARENED group or as a sequence of

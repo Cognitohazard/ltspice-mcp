@@ -9,39 +9,32 @@ logic. All functions raise domain exceptions rather than returning error text.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
-from ltspice_mcp.lib import job_store, recent
-from ltspice_mcp.lib.batch_results import (
-    compute_batch_stats,
-    filter_runs_by_params,
-    get_progress_snapshot,
-)
-from ltspice_mcp.lib.format import cap_list
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
+from ltspice_mcp.lib import recent
+from ltspice_mcp.lib.experiment_types import ExperimentJob
+from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.log_parser import (
+    LogDiagnostics,
     extract_missing_refs,
     missing_refs_from_text,
-    parse_measurements,
-    read_log_text,
 )
+from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
-from ltspice_mcp.state import (
-    TERMINAL_STATUSES,
-    BatchJob,
-    RunRef,
-    SessionState,
-    SimulationJob,
-)
+from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +100,9 @@ def attach_suggestions_to_failure(
 
     Two complementary layers, both keyed off the unresolved model/subcircuit
     refs in the log: fuzzy matches against loaded user libraries (when any),
-    and a library-independent recovery hint pointing at find_model's built-in
-    search — which fires even with no library loaded, the common case stock
-    parts fail in. Returns the (possibly-unchanged) error message. Called on
+    and a recovery hint pointing at ``inspect``'s model search — which fires
+    even with no library loaded, the common case stock parts fail in.
+    Returns the (possibly-unchanged) error message. Called on
     simulation failure paths where the log already has the error context
     inline, so callers don't re-implement read-log / extract / format / attach.
     """
@@ -127,318 +120,294 @@ def attach_suggestions_to_failure(
     block += (
         f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
         "auto-included in the run. For each, call "
-        'find_model(name="<ref>", include_builtin=true), add the returned '
-        ".include directive to the netlist, and rerun."
+        'inspect(kind="model", mode="search", query="<ref>") to locate its '
+        'definition in the loaded libraries — or mode="enumerate" with "libs" '
+        "to read a specific stock library file — then add the returned .include "
+        "directive to the netlist and rerun."
     )
     return f"{error_msg}{block}"
 
 
-def _deck_has_sectioned_lib(netlist: Path) -> bool:
-    """True when the deck has a ``.lib <file> <section>`` directive (2+ args).
+def resolve_job(job_id: str, state: SessionState) -> ExperimentJob:
+    """Look up a job by id.
 
-    The section-selecting form of ``.lib`` — the standard PDK corner idiom — as
-    opposed to LTspice's section-less ``.lib <file>``. Lexes so an inline comment
-    or a quoted path containing spaces doesn't inflate the token count into a
-    spurious "section" (``card.body`` is comment-stripped; ``tokenize_body`` keeps
-    a quoted path as one token).
+    Discovery belongs to the registry, which asks the store when it does not
+    already hold the job; this function only turns the two ways of not having
+    one into the exceptions callers up the stack expect, so they don't re-wrap
+    them. Then a parallel session's live job is re-read from disk — only its
+    owner updates it, so a status check here would otherwise stay frozen at
+    "running" forever. No-op for this session's own jobs.
     """
     try:
-        from ltspice_mcp.lib.spice_lex import cards_from_path, iter_by_kind, tokenize_body
-
-        cards = cards_from_path(netlist).cards
-    except (OSError, ValueError):
-        return False
-    for card in iter_by_kind(cards, "directive"):
-        tokens = tokenize_body(card.body)
-        if len(tokens) >= 3 and tokens[0].text.lower() == ".lib":
-            return True
-    return False
-
-
-def ngbehavior_lib_hint(
-    netlist: Path,
-    log_text: str,
-    *,
-    is_ngspice: bool,
-    current_mode: str | None,
-) -> str | None:
-    """Actionable hint when ngspice's compat mode broke a sectioned ``.lib``.
-
-    Fires only when ALL of: the run used ngspice, the active ``ngbehavior`` still
-    contains ``lt`` or ``ps`` (a mode with neither parses the section fine), the
-    log reports a missing include, and the deck actually uses a sectioned ``.lib``.
-    See the ``ngbehavior`` config field for the mechanism. The deck read is last,
-    so the three cheap string checks gate it.
-    """
-    if not is_ngspice:
-        return None
-    # Both the LTspice (lt) and PSPICE (ps) compat tokens split a sectioned .lib;
-    # a mode with neither (e.g. hsa, kia) parses it correctly, so don't fire there.
-    mode = (current_mode or "").lower()
-    if "lt" not in mode and "ps" not in mode:
-        return None
-    if "could not find include file" not in log_text.lower():
-        return None
-    if not _deck_has_sectioned_lib(netlist):
-        return None
-    return (
-        "This looks like a sectioned '.lib <file> <section>' that ngspice split into "
-        "two plain includes: ngspice is running in an LTspice/PSPICE-compatibility mode "
-        f"(ngbehavior='{current_mode}'), so the corner section was read as a missing "
-        'include file. Set [simulator] ngbehavior = "hsa" in ltspice-mcp.toml (or '
-        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add 'set ngbehavior=hsa' "
-        "to a .spiceinit in the run directory."
-    )
-
-
-def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
-    """Look up any job by id in the union job store.
-
-    Raises ``JobNotFoundError`` for an unknown id — the one place that
-    translation happens, so callers up the stack don't re-wrap it.
-    """
-    job = state.all_jobs.get(job_id)
+        job = state.job_registry.get_or_load(job_id)
+    except ValueError as exc:
+        raise ResultError(str(exc)) from None
     if job is None:
         raise JobNotFoundError(f"Job not found: {job_id}")
-    # A parallel session's live job is only ever updated by its owner; pull
-    # the owner's latest persisted state so status checks and result reads
-    # here don't stay frozen at "running". No-op for this session's own jobs.
     return state.job_registry.refresh_foreign_job(job)
 
 
-async def resolve_job_async(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
-    """Loop-safe ``resolve_job``: offload the foreign-job sidecar re-read.
+async def resolve_job_async(job_id: str, state: SessionState) -> ExperimentJob:
+    """Loop-safe ``resolve_job``: offload the store read and the foreign re-read.
 
-    Use from async handlers so the parallel-session refresh (a sidecar read
-    that stalls the loop on a wedged filesystem) runs in a worker thread. Same
-    semantics otherwise — raises ``JobNotFoundError`` for an unknown id.
+    Use from async handlers so neither disk read (either can stall the loop on
+    a wedged filesystem) runs on it. Same semantics otherwise.
     """
-    job = state.all_jobs.get(job_id)
+    try:
+        job = await state.job_registry.get_or_load_async(job_id)
+    except ValueError as exc:
+        raise ResultError(str(exc)) from None
     if job is None:
         raise JobNotFoundError(f"Job not found: {job_id}")
     return await state.job_registry.refresh_foreign_job_async(job)
 
 
-async def resolve_batch_job_async(job_id: str, state: SessionState) -> BatchJob:
-    """Loop-safe ``resolve_batch_job`` (offloaded foreign refresh)."""
-    try:
-        job = await resolve_job_async(job_id, state)
-    except JobNotFoundError:
-        # Re-raise as JobNotFoundError (not BatchJobError): the dispatch
-        # layer's recovery hint (list jobs via check_job; the id may be
-        # stale/evicted) is keyed on the exception type, and a stale batch id
-        # is exactly the case that needs it.
-        raise JobNotFoundError(f"Batch job not found: {job_id}") from None
-    if isinstance(job, SimulationJob):
-        raise BatchJobError(
-            f"Job '{job_id}' is a single simulation job — read its results with "
-            "check_job (status + completion summary) or query_value (job_id + "
-            "run_index) for a signal value."
-        )
-    return job
+# TERMINAL SPICE solve-failure phrases. When the log carries one, the solve
+# genuinely failed — it taints every value read, not one trace — so a read tool
+# relays it regardless of which signal was asked for. Deliberately terminal-only:
+# a bare "singular matrix" is NOT listed, because a transient can recover from it
+# via gmin/source stepping and still write a valid raw (log_parser classifies it
+# as non-terminal for exactly this reason). Flagging it would be a false
+# accusation on a recovered run; a genuine non-recovery still trips one of the
+# terminal phrases below (e.g. "gmin stepping failed"). ("no convergence", not
+# bare "convergence", so a benign "convergence achieved" line doesn't match.)
+#
+# They live here rather than in either tool module because both profiles must
+# classify a failed solve the same way: the full profile relays into its
+# ``warnings`` channel and the consolidated one into ``observations``, and a
+# rule kept in one of them is a rule the other can forget.
+SOLVE_FAILURE_PHRASES = (
+    "no convergence",
+    "time step too small",
+    "timestep too small",
+    "gmin stepping failed",
+    "source stepping failed",
+    "iteration limit reached",
+)
 
 
-def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
-    """Look up a single-simulation job by id.
+def solve_failure_lines(diagnostics: LogDiagnostics) -> list[str]:
+    """The run-level solve-failure lines in an ``extract_log_diagnostics`` result.
 
-    An unknown id propagates ``JobNotFoundError`` from ``resolve_job``. A
-    batch (sweep/MC) id gets an honest redirect instead of "not found" —
-    the job exists, it just isn't readable through the single-sim surface.
+    Reads both channels: LTspice prints these as errors, ngspice prints the
+    same failures under a ``Warning:`` prefix.
     """
-    job = resolve_job(job_id, state)
-    if isinstance(job, BatchJob):
-        raise SimulationError(
-            f"Job '{job_id}' is a {job.job_type} batch job — "
-            "use batch_results for its per-run results."
-        )
-    return job
-
-
-def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
-    """Look up a batch (sweep/MC) job by id.
-
-    A single-simulation id gets an honest redirect instead of "not found" —
-    the job exists, it just has no per-run batch surface.
-    """
-    try:
-        job = resolve_job(job_id, state)
-    except JobNotFoundError:
-        # Keep the historical "Batch job not found" surface text but keep the
-        # TYPE JobNotFoundError: the dispatch layer's list-known-jobs recovery
-        # hint is keyed on the exception type, and BatchJobError has no hint —
-        # the translation used to dead-end the most common batch failure mode
-        # (an id from a previous session) while the single-sim path recovered.
-        raise JobNotFoundError(f"Batch job not found: {job_id}") from None
-    if isinstance(job, SimulationJob):
-        # Point only at tools that accept a job id: check_job (status +
-        # completion results) and query_value (job_id + run_index for a
-        # signal). simulation_summary takes a raw_file, not a job id, so it
-        # is reached only after check_job hands back that path.
-        raise BatchJobError(
-            f"Job '{job_id}' is a single simulation job — read its results with "
-            "check_job (status + completion summary) or query_value (job_id + "
-            "run_index) for a signal value."
-        )
-    return job
-
-
-def _as_path(p: object) -> Path | None:
-    """Coerce a stored raw/log path to a real Path, treating ""/"." as absent.
-
-    An empty Path coerces to "." which would silently point at the current
-    directory, so those sentinels become None.
-    """
-    if p is None or str(p) in ("", "."):
-        return None
-    return p if isinstance(p, Path) else Path(str(p))
-
-
-def runs_of(job: SimulationJob | BatchJob) -> list[RunRef]:
-    """Project any job into a uniform list of result runs (the read-model seam).
-
-    A single-run job is the degenerate batch-of-one: one ``RunRef`` at index 0.
-    A batch job yields one ``RunRef`` per ``run_results`` entry, ordered by run
-    index. This is the ONLY place that knows the two physical result layouts;
-    extraction routines consume ``RunRef`` and stay job-agnostic.
-    """
-    if isinstance(job, SimulationJob):
-        return [RunRef(0, _as_path(job.raw_file), _as_path(job.log_file), {})]
     return [
-        RunRef(
-            index=idx,
-            raw_file=_as_path(run.get("raw_file")),
-            log_file=_as_path(run.get("log_file")),
-            params=dict(run.get("params") or {}),
-        )
-        for idx, run in sorted(job.run_results.items())
+        line
+        for line in (*diagnostics["warnings"], *diagnostics["errors"])
+        if any(phrase in line.lower() for phrase in SOLVE_FAILURE_PHRASES)
     ]
 
 
-def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
-    """Resolve one run of a COMPLETED job by id + run index (default 0).
+@dataclass(frozen=True)
+class RunContext:
+    """Trusted, case-addressed experiment result and its provenance identity."""
 
-    Gates on completion so every job_id-addressed read (resolve_raw_file,
-    query_value/bode_metrics via the read-model) behaves identically — you can't
-    read partial data from a running/failed job through one path while a sibling
-    tool rejects it. A single-run job has exactly one run (index 0). Raises
-    ``ResultError`` for an out-of-range index, listing the indices actually
-    present (batch run indices can be non-contiguous after a mid-batch failure).
-    """
-    job = resolve_job(job_id, state)
-    if job.status != "completed":
-        raise ResultError(f"Job {job_id!r} is not completed (status={job.status!r})")
-    runs = {r.index: r for r in runs_of(job)}
-    if not runs:
-        raise ResultError(f"Job {job_id!r} has no run results")
-    if run_index not in runs:
-        raise ResultError(
-            f"Run index {run_index} out of range for job {job_id!r}; valid indices: {sorted(runs)}"
+    raw: Path
+    log: Path | None
+    netlist: Path
+    #: The source schematic/deck the case was staged from — where per-circuit
+    #: sidecars (plots, pointers) belong. ``netlist`` is the staged copy.
+    circuit_path: Path
+    dialect: str | None
+    identity: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AnalysisSource:
+    """Resolved source injected into analysis adapters by the consolidated path."""
+
+    raw: Path
+    log: Path | None
+    netlist: Path | None
+    dialect: str | None
+    identity: dict[str, Any] | None
+    trusted_job_artifact: bool
+
+    @classmethod
+    def for_raw(cls, raw_path: Path) -> AnalysisSource:
+        """The companions of a bare ``.raw`` path: its sibling ``.log``, nothing else.
+
+        For a read that has only a path to go on. ``log`` is always a concrete
+        path (existence not guaranteed); ``netlist``, ``dialect`` and
+        ``identity`` are null because a bare path names no producing run. A read
+        that DOES know the run gets its source from ``source_for_run`` or
+        ``resolve_analysis_source`` instead — those carry the deck and identity
+        this cannot.
+        """
+        return cls(
+            raw=raw_path,
+            log=raw_path.with_suffix(".log"),
+            netlist=None,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=False,
         )
-    return runs[run_index]
 
 
-def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> list[str]:
-    """Pre-flight check for ngspice-incompatible directives in a base netlist.
+def source_for_raw_path(raw: Path, state: SessionState) -> AnalysisSource:
+    """The source an already-validated caller-supplied ``.raw`` path resolves to.
 
-    Returns warnings to surface in the response; raises ``SimulationError`` for
-    the hard ``.step`` blocker. No-op for non-ngspice simulators. Shared by the
-    single-run path (run_simulation) and the batch paths (configure_sweep /
-    configure_montecarlo) so all three surface the same ".meas skipped in batch
-    mode" warning instead of silently dropping measurements.
+    Unlike :meth:`AnalysisSource.for_raw` this consults the session: the log is
+    reported only when it exists, and the dialect is the one recorded for the
+    run that produced this raw. The path must already have passed
+    ``safe_path`` — this is the shared tail of the caller-path branch, not a
+    way around it.
     """
-    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+    sibling = raw.with_suffix(".log")
+    return AnalysisSource(
+        raw=raw,
+        log=sibling if sibling.is_file() else None,
+        netlist=None,
+        dialect=raw_dialect_for(raw, state),
+        identity=None,
+        trusted_job_artifact=False,
+    )
 
-    if not issubclass(simulator_class, NGspiceSimulator):
-        return []
-    from ltspice_mcp.lib.spice_lex import MEAS_ANALYSIS_TOKENS
 
+def source_for_run(run: RunContext) -> AnalysisSource:
+    """A resolved experiment case as the source its readers take.
+
+    Trusted: the raw, log and staged deck are this server's own artifacts, so
+    they are read where the record says they are rather than re-validated
+    against ``allowed_paths`` — a reloaded job's raw legitimately lives outside
+    it.
+    """
+    return AnalysisSource(
+        raw=run.raw,
+        log=run.log,
+        netlist=run.netlist,
+        dialect=run.dialect,
+        identity=run.identity,
+        trusted_job_artifact=True,
+    )
+
+
+_analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "ltspice-mcp.analysis-deadline",
+    default=None,
+)
+
+
+@contextlib.contextmanager
+def analysis_deadline(deadline: float | None):
+    """Bound every result parse under this block to one monotonic deadline.
+
+    Ambient on purpose, and the only thing about a read that is: a deadline is
+    a property of the CALL, and every parse below it — the raw, the log, a
+    digest — has to answer to the same one. Nothing takes a deadline argument
+    that this could contradict. What a read is reading, by contrast, travels as
+    an argument: an ambient source would let a call name one file and read
+    another.
+    """
+    token = _analysis_deadline.set(deadline)
     try:
-        content = netlist_path.read_text(errors="replace")
-    except OSError:
-        return []
-    warnings: list[str] = []
-    meas_names: list[str] = []
-    for line in content.splitlines():
-        stripped = line.strip().lower()
-        if stripped.startswith(".step"):
-            raise SimulationError(
-                "ngspice batch mode does not support .step directives. "
-                "Use configure_sweep + run_sweep for parametric sweeps, "
-                "or remove the .step line and set the parameter to a fixed value."
-            )
-        if stripped.startswith(".meas"):
-            # .meas[ure] [analysis-type] <name> <FIND|PARAM|TRIG|WHEN|...> ...
-            # The analysis-type token is OPTIONAL; when it is omitted the name is
-            # parts[1], not parts[2] (e.g. ".meas vfoo FIND V(a)" — parts[2] would
-            # wrongly grab "find"). ``stripped`` is already lowercased. Mirrors
-            # MeasCard.from_card's optional-token skip.
-            parts = stripped.split()
-            idx = 1
-            if len(parts) > idx and parts[idx] in MEAS_ANALYSIS_TOKENS:
-                idx += 1
-            if len(parts) > idx:
-                meas_names.append(parts[idx])
-    if meas_names:
-        names = ", ".join(meas_names)
-        warnings.append(
-            "ngspice does not evaluate .meas in batch mode when a rawfile is set "
-            "(-b -r, this server's invocation). "
-            f"The following measurements will be skipped: {names}. "
-            "Compute them from the raw with signal_stats / query_value, or move the "
-            "measurement into a '.control ... run ... .endc' block written as the "
-            "dot-less 'meas' command (a dotted '.meas' inside .control is not valid "
-            "ngspice and computes nothing)."
+        yield
+    finally:
+        _analysis_deadline.reset(token)
+
+
+def resolve_experiment_run(
+    job_id: str,
+    state: SessionState,
+    *,
+    run_index: int | None = None,
+    case_id: str | None = None,
+) -> RunContext:
+    """Resolve a produced case from any experiment job whose runs are terminal."""
+    job = resolve_job(job_id, state)
+    return experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+
+
+def experiment_run_context(
+    job: ExperimentJob,
+    state: SessionState,
+    *,
+    run_index: int | None = None,
+    case_id: str | None = None,
+) -> RunContext:
+    """``resolve_experiment_run`` for a caller already holding the job.
+
+    Records the case raw's dialect hint here, as the path-addressed resolvers do for
+    their runs: resolution always precedes the load, so every reader parses a
+    per-run simulator override with the right dialect without remembering to.
+    """
+    job_id = job.job_id
+    # Per-case readiness is still gated case by case below.
+    if not runs_terminal(job.status):
+        raise ResultError(
+            f"Experiment job {job_id!r} has no readable runs yet (status={job.status!r})"
         )
-    return warnings
+    if case_id is None and run_index is None:
+        run_index = 0
+    matches = [
+        case
+        for case in job.cases
+        if (case_id is not None and case.case_id == case_id)
+        or (case_id is None and case.run_index == run_index)
+    ]
+    if not matches:
+        selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
+        raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
+    case = matches[0]
+    if case.status != "produced" or case.raw_file is None:
+        raise ResultError(
+            f"Experiment case {case.case_id!r} did not produce a raw result "
+            f"(status={case.status!r})"
+        )
+    identity: dict[str, Any] = {
+        "case_id": case.case_id,
+        "run_index": case.run_index,
+        "assignments": dict(case.assignments),
+        "circuit": case.circuit,
+        "deck_sha256": case.deck_sha256,
+        "step_index": case.step_index,
+        "step_values": dict(case.step_values),
+    }
+    dialect = dialect_for_job(job, state)
+    state.raw_dialect_hints[case.raw_file] = dialect
+    return RunContext(
+        raw=case.raw_file,
+        log=case.log_file,
+        netlist=case.staged_deck,
+        circuit_path=case.circuit_path,
+        dialect=dialect,
+        identity=identity,
+    )
 
 
-def _resolve_result_file(
-    job_id: str, state: SessionState, field: str, label: str, *, run_index: int = 0
-) -> Path:
-    """Resolve a result file (raw or log) from a completed job's run.
+def resolve_analysis_source(
+    state: SessionState,
+    *,
+    raw_file: str | None = None,
+    log_file: str | None = None,
+) -> AnalysisSource:
+    """Resolve the source a direct ``raw_file``/``log_file`` call reads.
 
-    ``run_index`` selects which run (default 0 — the only run for single-run
-    jobs, the first run for a batch). Shares ``resolve_run``'s completion + bounds
-    gate so single and batch jobs behave identically.
+    The caller-path route: every path here is untrusted input and goes through
+    ``safe_path``. A caller that already resolved a run uses ``source_for_run``
+    instead — this one deliberately cannot reach a job's artifacts. There is no
+    job-addressed form: every job is an experiment and an experiment's runs are
+    case-addressed, so a caller naming a job resolves the case first.
     """
-    run = resolve_run(job_id, state, run_index)
-    file_path = run.raw_file if field == "raw_file" else run.log_file
-    if file_path is None:
-        raise ResultError(f"Job {job_id!r} run {run_index} has no {label} file")
-    if field == "raw_file":
-        # Record which simulator produced this raw (resolution always precedes
-        # the load) so load_raw parses it with the job's dialect — a per-run
-        # simulator override can differ from the session default.
-        state.raw_dialect_hints[file_path] = dialect_for_job(resolve_job(job_id, state), state)
-    return file_path
+    if raw_file:
+        return source_for_raw_path(
+            resolve_safe_path(str(raw_file), state.config.allowed_paths), state
+        )
+    if log_file:
+        log = resolve_safe_path(str(log_file), state.config.allowed_paths)
+        return AnalysisSource(
+            raw=log.with_suffix(".raw"),
+            log=log,
+            netlist=None,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=False,
+        )
+    raise ResultError("Provide one analysis source: raw_file, log_file, or job_id")
 
 
-def resolve_raw_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
-    """Get the raw result file for a completed simulation or batch job run."""
-    return _resolve_result_file(job_id, state, "raw_file", "raw", run_index=run_index)
-
-
-def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
-    """Get the log file for a completed simulation or batch job run."""
-    return _resolve_result_file(job_id, state, "log_file", "log", run_index=run_index)
-
-
-def simulator_class_for_job(job: SimulationJob | BatchJob, state: SessionState) -> type | None:
-    """The configured simulator class matching ``job.simulator``, or None.
-
-    Jobs record the class ``__name__`` (e.g. ``"LTspiceWSL"``); with per-run
-    simulator selection this may differ from the session default. A recovered
-    job may name a simulator that is no longer configured — callers fall back
-    to their own default then.
-    """
-    if job.simulator:
-        for cls in state.available_simulators.values():
-            if cls.__name__ == job.simulator:
-                return cls
-    return None
-
-
-def dialect_for_job(job: SimulationJob | BatchJob, state: SessionState) -> str | None:
+def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     """Raw dialect for the simulator ``job`` actually ran on.
 
     A per-run simulator override can differ from the session default (and a
@@ -449,8 +418,9 @@ def dialect_for_job(job: SimulationJob | BatchJob, state: SessionState) -> str |
     configured. Falls back to the session default only when the job records no
     simulator at all.
     """
-    if job.simulator:
-        return dialect_for_simulator_name(job.simulator)
+    simulator = getattr(job, "simulator", None)
+    if simulator:
+        return dialect_for_simulator_name(simulator)
     return state.raw_dialect
 
 
@@ -497,28 +467,42 @@ async def bounded_parse(
     whose abandoned worker may still be running cannot consume another worker
     through a different result-reading path until the cooldown expires.
     """
-    now_mono = asyncio.get_running_loop().time()
+    loop = asyncio.get_running_loop()
+    now_mono = loop.time()
+    cooldown_s = timeout_s
+    call_deadline = _analysis_deadline.get()
+    if call_deadline is not None:
+        timeout_s = min(timeout_s, max(0.0, call_deadline - now_mono))
+    if timeout_s <= 0:
+        raise AnalysisDeadlineExceeded(f"Parsing {path.name} exceeded the analysis item deadline")
     wedged_until = _wedged_raw_paths.get(path)
     if wedged_until is not None:
         if now_mono < wedged_until:
-            raise ResultError(
-                f"Parsing {path.name} recently exceeded the "
-                f"{timeout_s:.0f}s deadline and its worker is still "
-                "abandoned; retries are paused for "
+            raise AnalysisDeadlineExceeded(
+                f"Parsing {path.name} recently exceeded its deadline and "
+                "its worker is still abandoned; retries are paused for "
                 f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
                 "drain the worker pool. Check the file (size, mtime, source "
                 "simulator) before retrying."
             )
         del _wedged_raw_paths[path]
     try:
-        return await asyncio.wait_for(asyncio.to_thread(thunk), timeout_s)
+        task = asyncio.create_task(asyncio.to_thread(thunk))
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout_s)
+        except TimeoutError:
+            # The worker cannot be killed.  Shielding keeps its completion
+            # independent of the timeout and this callback consumes a late
+            # exception so it cannot become an unhandled task warning.
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            raise
     except TimeoutError:
-        _wedged_raw_paths[path] = asyncio.get_running_loop().time() + timeout_s
-        raise ResultError(
-            f"Parsing {path.name} exceeded {timeout_s:.0f}s and was "
+        _wedged_raw_paths[path] = loop.time() + cooldown_s
+        raise AnalysisDeadlineExceeded(
+            f"Parsing {path.name} exceeded {timeout_s:.3g}s and was "
             "abandoned — the file may be corrupt in a way that wedges the parser, "
             "or on a stalled mount. The file was not modified; retries are "
-            f"paused for {timeout_s:.0f}s, then one fresh attempt is "
+            f"paused for {cooldown_s:.0f}s, then one fresh attempt is "
             "allowed."
         ) from None
 
@@ -584,6 +568,31 @@ def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
     return raw
 
 
+# A ``dev.param`` operating-point shorthand: everything before the LAST dot is
+# the device, so a flattened subcircuit path ('m.x1.mn.gm') parses too.
+DEV_PARAM_RE = re.compile(r"([a-z][\w.]*)\.([a-z]\w*)")
+
+
+def device_param_forms(signal: str) -> list[str]:
+    """The result names a ``dev.param`` operating-point shorthand can address.
+
+    ngspice writes a device parameter bare (``@m1[gm]``), v-wrapped
+    (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``) depending on the quantity,
+    and LTspice's ``.log`` block is folded into ``device_op_points`` under the
+    bare form. Empty when the name is not a shorthand.
+
+    Public because two readers resolve the shorthand the docs promise —
+    ``validate_signal`` against a raw's trace list, ``analyze_results``
+    against an operating-point result — and a second copy of the rule is how
+    one of them ends up rejecting a name the other accepts.
+    """
+    match = DEV_PARAM_RE.fullmatch(signal.lower())
+    if match is None:
+        return []
+    dev, param = match.group(1), match.group(2)
+    return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+
+
 def validate_signal(raw: RawRead, signal: str) -> str:
     """Validate that a signal exists in a raw result and return the canonical trace name.
 
@@ -619,17 +628,8 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
 
-    # Device operating-point small-signal / model parameters. ngspice writes these as
-    # @dev[param] depending on the quantity: bare (@m1[gm]), v-wrapped
-    # (v(@m1[vth])), or i-wrapped (i(@m1[id])). Accept a uniform 'dev.param'
-    # shorthand (e.g. 'm1.gm') and resolve to whichever form the raw contains.
-    # 'dev.param' shorthand (e.g. 'm1.gm'), including a flattened subcircuit-
-    # hierarchical device path ('m.x1.mn.gm'): everything before the LAST dot is
-    # the device, the last segment is the parameter.
-    dev_param = re.fullmatch(r"([a-z][\w.]*)\.([a-z]\w*)", sig_lower)
-    if dev_param:
-        dev, param = dev_param.group(1), dev_param.group(2)
-        candidates += [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+    dev_param = DEV_PARAM_RE.fullmatch(sig_lower)
+    candidates += device_param_forms(signal)
 
     for cand in candidates:
         if cand in by_lower:
@@ -682,98 +682,100 @@ def validate_step(raw: RawRead, step: int) -> None:
         raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
-def load_signal_names(job_id: str, state: SessionState) -> list[str]:
-    """Load signal names from a completed job.
+@dataclass(frozen=True)
+class CircuitJobSummary:
+    """What one circuit's records add up to, for either circuit listing.
 
-    Stays synchronous (via ``load_raw_sync``) because its only caller is the
-    synchronous MCP resource router.
+    ``spice://recent`` and ``jobs(action="list")`` are two views of the same
+    join — the recent-circuits index against this store's experiment records —
+    and everything below is derived from the job list alone, so the two cannot
+    come to different numbers for the same records. What they do differ on is
+    which jobs they hand in and how they name the circuit, and each of those
+    three differences is deliberate:
+
+    * **Pruning.** The resource asks ``recent.load(prune_missing=True)``: it
+      is the index's own view and takes the chance to drop entries whose file
+      is gone. ``jobs(list)`` does not prune, because listing must not rewrite
+      a user-global index as a side effect, and a deleted circuit's recorded
+      jobs are still addressable — ``exists`` is the fact it reports instead.
+    * **Path identity.** ``jobs(list)`` resolves and de-duplicates paths,
+      because it has to match a caller's ``circuit`` argument and two index
+      entries can spell one file. The resource reports the entry as the index
+      holds it, because that is what the index holds.
+    * **Live jobs.** ``jobs(list)`` passes ``prefer=`` a registry snapshot
+      taken on the event loop, so this process's running jobs are counted from
+      memory rather than from a record whose last transitions may still be in
+      flight. The resource read runs on a worker thread, where the registry
+      may not be touched, so it reports what is on disk.
     """
-    raw_path = resolve_raw_file(job_id, state)
-    raw = load_raw_sync(raw_path, state)
-    return raw.get_trace_names()
+
+    exists: bool
+    status_counts: dict[str, int]
+    interrupted_job_ids: list[str]
+    total_jobs: int
+    total_runs: int
 
 
-def load_measurements(
-    job_id: str, state: SessionState, *, include_log_text: bool = False
-) -> dict[str, Any]:
-    """Load measurements from a completed job.
+def summarize_circuit_jobs(
+    circuit_path: Path,
+    jobs: Sequence[ExperimentJob],
+) -> CircuitJobSummary:
+    """Count one circuit's job records. See :class:`CircuitJobSummary`."""
+    counts: dict[str, int] = {}
+    interrupted: list[str] = []
+    for job in jobs:
+        counts[job.status] = counts.get(job.status, 0) + 1
+        if job.status == "interrupted":
+            interrupted.append(job.job_id)
+    return CircuitJobSummary(
+        exists=circuit_path.exists(),
+        status_counts=counts,
+        interrupted_job_ids=sorted(set(interrupted)),
+        total_jobs=len(jobs),
+        total_runs=sum(job.completeness.expanded for job in jobs),
+    )
 
-    Return type is ``dict[str, Any]`` (not ``MeasurementsOutput``) because
-    this helper may add a ``log_text`` field beyond the parser's shape.
-    """
-    log_path = resolve_log_file(job_id, state)
-    data: dict[str, Any] = dict(parse_measurements(log_path))
-    if include_log_text and log_path.exists():
-        data["log_text"] = log_path.read_text(encoding="utf-8", errors="replace")
-    return data
 
-
-def collect_recent_circuits() -> list[dict[str, Any]]:
+def collect_recent_circuits(working_dir: Path) -> list[dict[str, Any]]:
     """List recently-touched circuits with their persisted-job summaries.
 
+    A circuit's jobs come from this working directory's store, through the
+    per-circuit index, so a circuit last run by another session in the same
+    directory still reports its jobs here — and one last run from a different
+    working directory reports none.
+
+    The counters are :func:`summarize_circuit_jobs`, shared with
+    ``jobs(action="list")``; that class documents where the two views
+    deliberately differ.
+
     Blocking — ``recent.load`` polls a cross-process file lock (up to 10 s)
-    and each summary reads a circuit's job-sidecar JSON files; all reads
-    (the prune rewrite is atomic), so safe under cancellation. Coroutine
-    callers must run this via ``asyncio.to_thread``; the synchronous MCP
-    resource router calls it directly (already off the loop).
+    and each summary reads the store's JSON records; all reads (the prune
+    rewrite is atomic), so safe under cancellation. Coroutine callers must
+    run this via ``asyncio.to_thread``; the synchronous MCP resource router
+    calls it directly (already off the loop).
     """
+    from ltspice_mcp.lib import experiment_store
+
     entries = recent.load(prune_missing=True)
     circuits: list[dict[str, Any]] = []
     for entry in entries:
         raw_path = entry.get("path")
         if not isinstance(raw_path, str):
             continue
-        summary = job_store.summarize_circuit(Path(raw_path))
-        summary["last_touched"] = entry.get("last_touched")
-        circuits.append(summary)
+        jobs, _ = experiment_store.load_jobs_for_circuit(Path(raw_path), working_dir)
+        summary = summarize_circuit_jobs(Path(raw_path), jobs)
+        circuits.append(
+            {
+                "path": raw_path,
+                "exists": summary.exists,
+                "total_jobs": summary.total_jobs,
+                "total_runs": summary.total_runs,
+                "status_counts": summary.status_counts,
+                "interrupted_job_ids": summary.interrupted_job_ids,
+                "last_touched": entry.get("last_touched"),
+            }
+        )
     return circuits
-
-
-async def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
-    """Build structured status/progress data for a batch job.
-
-    Owns its offload: the convergence scan walks every per-run log once
-    the job is terminal, so it runs via ``asyncio.to_thread``; the status
-    fields themselves are assembled inline.
-    """
-    base = {
-        "job_id": batch_job.job_id,
-        "job_type": batch_job.job_type,
-        "status": batch_job.status,
-        "netlist": batch_job.netlist.name,
-        "total_runs": batch_job.total_runs,
-        "completed_runs": batch_job.completed_runs,
-        "failed_runs": batch_job.failed_runs,
-    }
-
-    if batch_job.status == "running":
-        snap = get_progress_snapshot(batch_job, batch_job.started_at.timestamp())
-        return {
-            **base,
-            "completed": snap["completed"],
-            "total": snap["total"],
-            "failed": snap["failed"],
-            "elapsed_s": snap["elapsed_s"],
-            "eta_s": snap["eta_s"],
-        }
-
-    duration = job_duration_seconds(
-        batch_job.started_at, batch_job.completed_at, label=f"batch job {batch_job.job_id}"
-    )
-
-    out: dict[str, Any] = {
-        **base,
-        "duration": duration,
-        "successful": batch_job.completed_runs - batch_job.failed_runs,
-    }
-    # Omit-when-empty: "error": null breaks clients that validate against
-    # an output schema typing error as string (same class as check_job's
-    # batch branch).
-    if batch_job.error is not None:
-        out["error"] = batch_job.error
-    convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
-    attach_convergence(out, convergence)
-    return out
 
 
 # Substrings that indicate the per-run OP convergence didn't take the
@@ -798,193 +800,6 @@ _CONVERGENCE_FLAG_SUBSTRINGS: tuple[str, ...] = (
 _CONVERGENCE_STRUCTURED_CAP = 25
 
 
-def attach_convergence(out: dict[str, Any], convergence: list[dict[str, Any]]) -> None:
-    """Attach convergence warnings to a structured payload, bounded.
-
-    Thin domain wrapper over ``cap_list`` (the one truncation convention):
-    an empty scan attaches nothing — absence of the key IS the all-clear.
-    """
-    if convergence:
-        cap_list(out, "convergence_warnings", convergence, _CONVERGENCE_STRUCTURED_CAP)
-
-
-def scan_batch_convergence(batch_job: BatchJob) -> list[dict[str, Any]]:
-    """Walk every per-run log and surface convergence-fallback markers.
-
-    Returns an empty list while the job is still running — the per-run
-    logs are still being written and re-reading every poll loop is a
-    waste. Once the job is terminal the result is cached on the
-    ``BatchJob`` so the (status, signal-data) round-trip a typical poll
-    issues doesn't pay for two full walks.
-    """
-    # Scan once the job is terminal (incl. ``interrupted`` — its completed
-    # sub-runs are real results worth surfacing). A hardcoded tuple here used to
-    # omit ``interrupted``, silently skipping the convergence scan for recovered
-    # batches; use the canonical terminal set so the class can't recur.
-    if batch_job.status not in TERMINAL_STATUSES:
-        return []
-    cached = batch_job.convergence_warnings
-    if cached is not None:
-        return cached
-    flagged: list[dict[str, Any]] = []
-    for run_index in sorted(batch_job.run_results.keys()):
-        log_str = batch_job.run_results[run_index].get("log_file")
-        if not log_str:
-            continue
-        text = read_log_text(Path(log_str)).lower()
-        if not text:
-            continue
-        markers = [s for s in _CONVERGENCE_FLAG_SUBSTRINGS if s in text]
-        if markers:
-            flagged.append({"run_index": run_index, "markers": markers})
-    batch_job.convergence_warnings = flagged
-    return flagged
-
-
-def job_duration_seconds(
-    started_at: Any | None,
-    completed_at: Any | None,
-    *,
-    label: str = "job",
-) -> float | None:
-    """Compute ``completed_at - started_at`` in seconds, clamped at 0.
-
-    Guard: clock skew, persistence round-trips, or out-of-order
-    timestamps occasionally produce negative durations. Clamping with a
-    warning surfaces the anomaly without leaking garbage to clients.
-    """
-    if not started_at or not completed_at:
-        return None
-    delta = (completed_at - started_at).total_seconds()
-    if delta < 0:
-        logger.warning(
-            "%s reports negative duration (%.3fs); started_at=%s completed_at=%s — clamping to 0.",
-            label,
-            delta,
-            started_at.isoformat(),
-            completed_at.isoformat(),
-        )
-        return 0.0
-    return delta
-
-
-def _copy_present(out: dict, src: dict, *keys: str) -> None:
-    """Copy each key from src to out when it holds a truthy value (skip empty)."""
-    for k in keys:
-        if src.get(k):
-            out[k] = src[k]
-
-
-async def get_batch_signal_data(
-    batch_job: BatchJob,
-    signal: str,
-    *,
-    filters: dict[str, str] | None = None,
-    raw: bool = False,
-    offset: int = 0,
-    limit: int = 50,
-    at: float | None = None,
-    dialect: str | None = None,
-) -> dict[str, Any]:
-    """Extract structured batch signal data for aggregated or raw mode.
-
-    The ``run_results`` snapshot is taken on the event loop before the
-    first await (a batch runner may still be appending runs); the per-run
-    ``RawRead`` loop — one header+trace parse per matching run — and the
-    per-run log walk behind the convergence scan are offloaded to worker
-    threads, since each can take seconds for a large Monte Carlo batch.
-    """
-    if batch_job.completed_runs == 0:
-        raise BatchJobError(f"No completed runs yet for job {batch_job.job_id}")
-
-    if raw and (offset < 0 or limit < 1):
-        raise BatchJobError(
-            f"Invalid pagination for job {batch_job.job_id}: "
-            f"offset must be >= 0 and limit must be >= 1 (got offset={offset}, limit={limit})"
-        )
-
-    if filters:
-        matching_indices = filter_runs_by_params(batch_job.run_results, filters)
-    else:
-        matching_indices = sorted(batch_job.run_results.keys())
-
-    total_matching = len(matching_indices)
-    if total_matching == 0:
-        raise BatchJobError(
-            f"No runs match the specified filters for job {batch_job.job_id}: {filters}"
-        )
-
-    # Single pre-await snapshot — both modes draw their rows from it below.
-    # Re-reading batch_job.run_results after an await could see rows a
-    # still-appending batch runner added meanwhile, breaking the contract above.
-    matching_run_results = {idx: batch_job.run_results[idx] for idx in matching_indices}
-    total_available = len(batch_job.run_results)
-
-    convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
-
-    if raw:
-        paginated_indices = matching_indices[offset : offset + limit]
-        if not paginated_indices:
-            raise BatchJobError(
-                f"No runs in requested page range for job {batch_job.job_id}: "
-                f"offset={offset}, limit={limit}"
-            )
-        paginated_run_results = {idx: matching_run_results[idx] for idx in paginated_indices}
-        page_stats = await asyncio.to_thread(
-            compute_batch_stats, paginated_run_results, signal, at=at, dialect=dialect
-        )
-        # Mirror the aggregate path's guard: if the signal could not be read
-        # from ANY run in the page, raise instead of silently returning
-        # runs:[] (which reads as "no data produced"). A typo, a .MEAS name,
-        # or a derived expression all land here.
-        if page_stats["run_count"] == 0 and paginated_indices:
-            raise ResultError(
-                f"Signal '{signal}' could not be read from any run of job "
-                f"{batch_job.job_id}. If it is a .MEAS name use measurement_stats; "
-                f"otherwise check the trace name against a run's raw signals.",
-                show_hint=False,
-            )
-        out_raw: dict[str, Any] = {
-            "mode": "raw",
-            "job_id": batch_job.job_id,
-            "job_type": batch_job.job_type,
-            "signal": signal,
-            "runs": page_stats["runs"],
-            "filtered": filters is not None,
-            "total_matching": total_matching,
-            "total_available": total_available,
-            "offset": offset,
-            "limit": limit,
-        }
-        _copy_present(out_raw, page_stats, "step_collapsed_runs", "step_unknown_runs")
-        attach_convergence(out_raw, convergence)
-        return out_raw
-
-    batch_stats = await asyncio.to_thread(
-        compute_batch_stats, matching_run_results, signal, at=at, dialect=dialect
-    )
-    if batch_stats["run_count"] == 0:
-        raise ResultError(f"Signal '{signal}' not found in any completed run")
-
-    out: dict[str, Any] = {
-        "mode": "aggregate",
-        "job_id": batch_job.job_id,
-        "job_type": batch_job.job_type,
-        "signal": signal,
-        "at": at,
-        "run_count": batch_stats["run_count"],
-        "filtered": filters is not None,
-        "total_matching": total_matching,
-        "total_available": total_available,
-        "stats": batch_stats["stats"],
-        "max_case_run": batch_stats["max_case_run"],
-        "min_case_run": batch_stats["min_case_run"],
-    }
-    _copy_present(out, batch_stats, "step_collapsed_runs", "step_unknown_runs")
-    attach_convergence(out, convergence)
-    return out
-
-
 def asc_component_value(editor: AscEditor, ref: str) -> str:
     """Return a component's primary value from its ``Value`` SYMATTR only.
 
@@ -997,7 +812,7 @@ def asc_component_value(editor: AscEditor, ref: str) -> str:
     comp = editor.components.get(ref)
     if comp is None:
         # Fall back to spicelib's lookup so the "component not found"
-        # error path is identical to the legacy code.
+        # error path is spicelib's own.
         return editor.get_component_value(ref)
     val = (comp.attributes or {}).get("Value", "")
     return str(val) if val is not None else ""
@@ -1040,7 +855,7 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
     directive_data = [directive.text for directive in editor.directives]
 
     # Surface each wire segment's endpoints so callers can target a specific
-    # wire for removal (apply_schematic_ops remove_wire) without re-deriving it.
+    # wire for removal (the edit_schematic remove_wire op) without re-deriving it.
     wire_data = [
         {
             "x1": int(w.V1.X),

@@ -6,8 +6,8 @@ codebase should build on. See ``docs/spice_lex.md``.
 
 Layer split:
 - **Layer 1** (``lex``): walks lines, classifies cards, merges
-  ``+``-continuations, tracks ``.SUBCKT`` scope, preserves raw lines for
-  byte-faithful round-trip.
+  ``+``-continuations, tracks ``.SUBCKT`` scope, holds ``.control``
+  regions opaque, preserves raw lines for byte-faithful round-trip.
 - **Layer 3** (``tokenize_body``): walks a merged card body once and
   emits classified tokens (BARE / QUOTED / BRACED / PARENED / KEY_VALUE
   / COMMENT_TRAIL). Layer 2 typed views (in ``spice_lex_views``) read
@@ -40,6 +40,7 @@ CardKind = Literal[
     "end",
     "comment",
     "blank",
+    "control",
 ]
 
 
@@ -417,8 +418,9 @@ class SpiceCard:
 
     ``raw_lines`` preserves the original source lines verbatim — emit
     copies them when the card is clean. ``body`` is the merged,
-    comment-stripped string for parsers; for ``kind="comment"`` and
-    ``kind="blank"``, ``body`` is the empty string.
+    comment-stripped string for parsers; for ``kind="comment"``,
+    ``kind="blank"``, and ``kind="control"`` (the opaque ngspice
+    ``.control`` region), ``body`` is the empty string.
 
     ``name`` is a kind-dependent fast-lookup field, set at lex time so
     iteration helpers (``find_model``, ``iter_by_kind``) don't have to
@@ -646,10 +648,21 @@ def _classify_directive(head: str) -> CardKind:
     return "directive"
 
 
-def _is_continuation(line: str) -> bool:
-    """Continuation lines start with ``+`` (after optional whitespace)."""
-    s = line.lstrip()
-    return s.startswith("+")
+def _is_continuation(stripped: str) -> bool:
+    """Continuation lines start with ``+`` (after optional whitespace).
+
+    ``stripped`` is a raw line with its leading whitespace already removed —
+    ``lex`` strips each line once and hands the result to every per-line
+    predicate.
+    """
+    return stripped.startswith("+")
+
+
+def _line_directive_head(stripped: str) -> str:
+    """Lowercased leading ``.token`` of a leading-stripped line, or ``""``."""
+    if not stripped.startswith("."):
+        return ""
+    return stripped.split(None, 1)[0].lower()
 
 
 def _build_body_with_layout(
@@ -754,25 +767,56 @@ def _strip_inline_comment(merged: str) -> str:
     return merged
 
 
-def _classify_line(line: str) -> CardKind:
-    """Classify a single non-continuation line by its leading character.
+def _classify_line(stripped: str) -> CardKind:
+    """Classify a single leading-stripped, non-continuation line by its leading
+    character.
 
     Continuation lines must be merged before classification.
     """
-    s = line.lstrip()
-    if not s:
+    if not stripped:
         return "blank"
-    c = s[0]
+    c = stripped[0]
     if c == "*":
         return "comment"
     if c == ".":
-        # Take the first whitespace-delimited token, lowercased.
-        head = s.split(None, 1)[0]
-        return _classify_directive(head)
+        return _classify_directive(_line_directive_head(stripped))
     # Element instance: any letter prefix is an element. Digits or
     # punctuation (other than ``.`` and ``*`` already handled) are
     # malformed but we treat them as raw instance for round-trip.
     return "instance"
+
+
+# Directive pairs whose contents are NOT netlist cards, as opener → closer.
+# Only ``.control`` qualifies in these dialects: an ``.if``/``.endif`` body IS
+# made of netlist cards and must stay classified. Named so the next dialect that
+# brings an opaque region has somewhere obvious to declare it.
+_OPAQUE_REGIONS: dict[str, str] = {".control": ".endc"}
+
+
+def _control_card(
+    raw_line: str,
+    line_start: int,
+    scope: list[str],
+    trailing: bool,
+) -> SpiceCard:
+    """One line of an ngspice ``.control`` ... ``.endc`` region.
+
+    The region is opaque: it holds simulator script, not netlist cards,
+    and every control command collides with the SPICE element prefix
+    sharing its first letter (``let`` → L, ``dc`` → D, ``meas`` → M,
+    ``foreach`` → F, ``alter`` → A, ``set`` → S). Cards carry an empty
+    ``body`` like comments do, so a rule that forgets to filter on
+    ``kind`` still finds nothing to inspect. ``raw_lines`` keeps the
+    source verbatim for round-trip.
+    """
+    return SpiceCard(
+        kind="control",
+        raw_lines=[raw_line],
+        body="",
+        line_start=line_start,
+        scope=tuple(scope),
+        trailing=trailing,
+    )
 
 
 def _extract_subckt_name(body: str) -> str | None:
@@ -859,7 +903,7 @@ def extract_meas_name(body: str) -> str | None:
     return parts[1]
 
 
-def _strip_matching_quotes(text: str) -> str:
+def strip_matching_quotes(text: str) -> str:
     """Strip one matching quote pair from ``text`` if present."""
     if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
         return text[1:-1]
@@ -878,7 +922,7 @@ def _extract_token_text(body: str, index: int) -> str | None:
         return None
     if len(tokens) <= index:
         return None
-    return _strip_matching_quotes(tokens[index].text)
+    return strip_matching_quotes(tokens[index].text)
 
 
 _NAME_EXTRACTORS = {
@@ -905,16 +949,40 @@ def lex(netlist_text: str) -> LexResult:
 
     scope: list[str] = []
     seen_top_end = False
+    open_region: str | None = None
+    region_opener: int | None = None
 
     i = 0
     n = len(lines)
     while i < n:
         raw_line = lines[i]
         line_start = i + 1  # 1-based
+        # Every per-line predicate below works on the leading-stripped line;
+        # strip once here rather than inside each of them.
+        stripped = raw_line.lstrip()
+
+        # An opaque region is script, not netlist cards — see ``_control_card``.
+        # Checked before continuation and classification so a ``+`` line
+        # inside the region is neither merged into a script line nor
+        # reported as an orphan continuation.
+        head = _line_directive_head(stripped)
+        if open_region is not None:
+            cards.append(_control_card(raw_line, line_start, scope, seen_top_end))
+            if head == _OPAQUE_REGIONS[open_region]:
+                open_region = None
+                region_opener = None
+            i += 1
+            continue
+        if head in _OPAQUE_REGIONS:
+            open_region = head
+            region_opener = line_start
+            cards.append(_control_card(raw_line, line_start, scope, seen_top_end))
+            i += 1
+            continue
 
         # Continuation lines without a preceding card become a "raw"
         # comment-style card so they round-trip without dropping.
-        if _is_continuation(raw_line):
+        if _is_continuation(stripped):
             warnings.append(
                 f"line {line_start}: continuation '+' with no preceding card; "
                 "preserving as comment"
@@ -932,7 +1000,7 @@ def lex(netlist_text: str) -> LexResult:
             i += 1
             continue
 
-        kind = _classify_line(raw_line)
+        kind = _classify_line(stripped)
 
         # Comment / blank cards never have continuations; emit and move on.
         if kind in ("comment", "blank"):
@@ -952,7 +1020,7 @@ def lex(netlist_text: str) -> LexResult:
         # Collect this line plus any following continuation lines.
         raw_group = [raw_line]
         i += 1
-        while i < n and _is_continuation(lines[i]):
+        while i < n and _is_continuation(lines[i].lstrip()):
             raw_group.append(lines[i])
             i += 1
 
@@ -1017,6 +1085,12 @@ def lex(netlist_text: str) -> LexResult:
 
     if scope:
         warnings.append(f"EOF with unclosed .SUBCKT scope(s): {scope}")
+    if open_region is not None:
+        warnings.append(
+            f"line {region_opener}: {open_region} with no matching "
+            f"{_OPAQUE_REGIONS[open_region]}; "
+            "the rest of the deck is treated as control script"
+        )
 
     return LexResult(cards=cards, warnings=warnings)
 

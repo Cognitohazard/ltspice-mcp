@@ -25,7 +25,7 @@ from ltspice_mcp.tools.analysis import (
     _union_panel,
     handle_plot_waveform,
 )
-from tests.conftest import make_sim_job, stage_recorded_fixture
+from tests.conftest import make_experiment_job, stage_recorded_fixture
 
 
 def _read(path: Path) -> str:
@@ -43,8 +43,8 @@ def _data_blob(html: str) -> dict:
 async def _plot(state: SessionState, **kwargs) -> dict:
     kwargs.setdefault("open", False)
     result = await handle_plot_waveform(PlotWaveformInput(**kwargs), state)
-    assert result.structuredContent is not None
-    return result.structuredContent
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 # --- pure helpers ----------------------------------------------------------
@@ -523,19 +523,36 @@ class TestDeliveryAndSecurity:
                 state_no_sim,
             )
 
-    async def test_job_id_plots_next_to_circuit(self, state_no_sim: SessionState, work_dir: Path):
+    async def test_experiment_job_id_plots_a_case(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A run_experiments job_id plots like any other job: by run_index or case_id.
+
+        Before this, the only job kind run_experiments produces was refused with
+        an error naming an internal type, and the plot landed nowhere.
+        """
         raw_dir = work_dir / "elsewhere"
         raw_dir.mkdir()
         raw = stage_recorded_fixture(raw_dir, "ltspice_tran_rc")
-        netlist = work_dir / "circuit.cir"
-        job = make_sim_job(
-            "jp", status="completed", netlist=netlist, raw_file=raw, simulator="ltspice"
-        )
-        state_no_sim.add_job(job)
-        data = await _plot(state_no_sim, job_id="jp", run_index=0, signals=["V(out)"])
-        out = Path(data["path"])
-        assert (work_dir / ".ltspice-mcp" / "plots") in out.parents
-        assert raw_dir not in out.parents
+        make_experiment_job(state_no_sim, job_id="ex1", count=2, raw=raw)
+        by_index = await _plot(state_no_sim, job_id="ex1", run_index=1, signals=["V(out)"])
+        by_case = await _plot(state_no_sim, job_id="ex1", case_id="case-0001", signals=["V(out)"])
+        for data in (by_index, by_case):
+            out = Path(data["path"])
+            assert out.is_file()  # noqa: ASYNC240
+            # Next to the circuit (the experiment's source deck), not the raw.
+            assert (work_dir / ".ltspice-mcp" / "plots") in out.parents
+            assert raw_dir not in out.parents
+        assert "run1" in Path(by_case["path"]).name
+
+    async def test_case_id_needs_a_job_that_has_cases(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        # Never silently dropped beside a raw_file: a case id names a run of a
+        # job, and a bare raw path is not one.
+        with pytest.raises(ResultError, match="case_id"):
+            await _plot(state_no_sim, raw_file=str(raw), case_id="case-0000", signals=["V(out)"])
 
 
 def _widget_spec(result) -> dict | None:
@@ -588,9 +605,9 @@ class TestWidgetDelivery:
         assert spec is not None and spec["bode"] is False
         assert not any(isinstance(c, types.EmbeddedResource) for c in result.content)
         # The full-fidelity HTML file is still written.
-        assert "uPlot" in _read(Path(result.structuredContent["path"]))
+        assert "uPlot" in _read(Path(result.structured_content["path"]))
 
-        sc = result.structuredContent
+        sc = result.structured_content
         assert sc["delivery"] == "ui"
         assert sc["opened"] is False
         assert any(o["code"] == "widget_delivered" for o in sc["observations"])
@@ -646,10 +663,10 @@ class TestWidgetDelivery:
             PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
         )
         assert _widget_spec(result) is None  # no widget
-        assert result.structuredContent["delivery"] == "terminal"  # fell back
+        assert result.structured_content["delivery"] == "terminal"  # fell back
         assert opens  # opened locally instead
         assert any(
-            o["code"] == "widget_unavailable" for o in result.structuredContent["observations"]
+            o["code"] == "widget_unavailable" for o in result.structured_content["observations"]
         )
 
     async def test_terminal_host_no_widget(
@@ -663,7 +680,7 @@ class TestWidgetDelivery:
         assert _widget_spec(result) is None
         assert result.meta is None
         assert not any(isinstance(c, types.EmbeddedResource) for c in result.content)
-        assert result.structuredContent["delivery"] == "terminal"
+        assert result.structured_content["delivery"] == "terminal"
 
 
 class TestWidgetTemplateAndResource:
@@ -696,7 +713,7 @@ class TestWidgetTemplateAndResource:
 
         result = handle_read_resource(WIDGET_RESOURCE_URI, state_no_sim)
         entry = result.contents[0]
-        assert entry.mimeType == "text/html;profile=mcp-app"
+        assert entry.mime_type == "text/html;profile=mcp-app"
         assert "globalThis.ExtApps" in getattr(entry, "text", "")
 
     def test_widget_resource_is_listed(self):
@@ -710,6 +727,6 @@ class TestWidgetTemplateAndResource:
         from ltspice_mcp.lib.plot_html import WIDGET_RESOURCE_URI
         from ltspice_mcp.tools._base import registry
 
-        defs, _ = registry.get_for_profile("full")
+        defs, _ = registry.get_tools()
         plot = next(d for d in defs if d.name == "plot_waveform")
         assert plot.meta == {"ui": {"resourceUri": WIDGET_RESOURCE_URI}}

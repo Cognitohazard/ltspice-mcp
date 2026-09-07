@@ -9,6 +9,23 @@ from typing import Generic, TypeVar
 T = TypeVar("T")
 
 
+def file_stamp(path: Path) -> tuple[int, int]:
+    """Cheap change token for a file: ``(mtime_ns, size)``. Any rewrite bumps it.
+
+    The one spelling of the stamp, so every cache key, freshness check and
+    cursor binding compares the same two numbers in the same order. A second
+    spelling with the fields swapped would still be internally consistent at
+    each site, which is exactly why the disagreement would never surface on
+    its own.
+
+    Raises ``OSError`` when the file cannot be stat'd — what a missing file
+    means is the caller's decision (see ``get``/``peek``/``set`` below, which
+    each answer it differently).
+    """
+    st = path.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
 class FileCache(Generic[T]):
     """Generic cache for file-derived data with mtime-based invalidation.
 
@@ -81,8 +98,7 @@ class FileCache(Generic[T]):
 
         with key_lock:
             try:
-                st = path.stat()
-                stamp = (st.st_mtime_ns, st.st_size)
+                stamp = file_stamp(path)
             except OSError:
                 return factory(path)
 
@@ -109,8 +125,7 @@ class FileCache(Generic[T]):
         the ``asyncio.to_thread`` hop on a guaranteed cache hit.
         """
         try:
-            st = path.stat()
-            stamp = (st.st_mtime_ns, st.st_size)
+            stamp = file_stamp(path)
         except OSError:
             return None
         with self._lock:
@@ -128,8 +143,7 @@ class FileCache(Generic[T]):
             value: The value to cache
         """
         try:
-            st = path.stat()
-            stamp = (st.st_mtime_ns, st.st_size)
+            stamp = file_stamp(path)
         except OSError:
             stamp = (0, -1)
         with self._lock:

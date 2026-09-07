@@ -1,9 +1,10 @@
 # `lib/spice_lex` — SPICE netlist parser
 
-The shared tokenizer + typed-card library underneath every netlist-touching
-helper in the codebase. Replaces hand-rolled regex passes with a single
-parser that handles SPICE corner cases (quoted tokens, balanced
-brace expressions, scoped `.SUBCKT` blocks, inline `;`/`$` comments) once.
+`lib/spice_lex` provides the shared tokenizer and typed-card API used by
+every netlist-processing helper in the codebase. It replaces multiple regex
+passes with one parser that handles SPICE corner cases (quoted tokens,
+balanced brace expressions, scoped `.SUBCKT` blocks, inline `;`/`$`
+comments) once.
 
 This document describes the architecture as built. For the migration
 history that produced it, see git tags around 2026-05-03.
@@ -18,15 +19,13 @@ corner-case behaviour:
 |-|-|-|
 | `lib/montecarlo.py` | `.MODEL` / instance / `.PARAM` rewriting (MC) | balanced expressions, quoted tokens, scope, comments |
 | `lib/library_parser.py` | `.MODEL` / `.SUBCKT` indexing for `find_model` | continuation merge, comments, nested subcircuits |
-| `tools/circuit.py:_apply_component_value` | Splits `"NMOS1 W=10u L=1u"` into model + params | quoted strings, multi-token values, `=` inside braces |
-| `lib/spice_validator.py` | Layer-A `.MEAS` expression checks | substring matching of function calls, no AST |
+| `lib/schematic_ops.py:_apply_component_value` | Splits `"NMOS1 W=10u L=1u"` into model + params | quoted strings, multi-token values, `=` inside braces |
+| `lib/spice_validator.py` | `.MEAS` expression checks (blocklist of known-bad patterns) | substring matching of function calls, no AST |
 
-Every caller failed differently on the same input class. The fix wasn't
-"write better regex"; it was "have one parser that handles SPICE
-properly, and let everyone use it." Same architectural shift compilers
-made when they replaced hand-rolled per-pass regexes with a shared lexer
-+ AST. Every adversarial fixture filed against one consumer now hardens
-the parser for all consumers.
+Every caller failed differently on the same input class. The fix was one
+parser that handles SPICE properly and is used by every caller, rather
+than better regexes at each site. A test fixture added for one consumer
+now covers every consumer.
 
 ## Terminology
 
@@ -73,10 +72,10 @@ Out:
 
 Coexistence with spicelib's `REPLACE_REGEXS`: spicelib's `SpiceEditor`
 still owns on-disk `.cir` writes for the simulation pipeline. spice_lex
-shadows the *lookup* and *edit* paths — every internal caller goes
-through `lex` + typed views and emits via spicelib only when the file
-needs to land for the simulator. spicelib's element-line regex stays in
-its own lane.
+handles the lookup and edit paths: every internal caller goes through
+`lex` plus the typed views, and writes through spicelib only when the
+file must be written for the simulator. spicelib's element-line regex is
+not used on those paths.
 
 ## Architecture
 
@@ -95,7 +94,8 @@ keeps:
 ```python
 class SpiceCard:
     kind: Literal["model", "param", "instance", "subckt", "ends",
-                  "meas", "directive", "end", "comment", "blank"]
+                  "meas", "directive", "end", "comment", "blank",
+                  "control"]
     raw_lines: list[str]      # original source lines (preserved for emit)
     body: str                 # merged & comment-stripped (for parser)
     line_start: int           # 1-based line in the source
@@ -166,8 +166,8 @@ class MeasCard:            # .MEAS — read/validated, rarely rewritten
 `MeasCard` exists so `spice_validator` can ask "does this body contain a
 `vdb()` call" or "does it reference a signal not present in the .raw"
 without substring matching. Layer 3's classified tokens give it that:
-walk `body_tokens`, find `BARE` immediately followed by `PARENED`, that's
-a function call.
+walk `body_tokens`; a `BARE` token immediately followed by a `PARENED`
+token is a function call.
 
 `ELEMENT_SPECS` registry covers M/Q/J/X/F/H/R/C/L/V/I/B/E/G/K with
 context-aware classification (E/G/F/H positional-gain vs `VALUE=` form).
@@ -249,8 +249,8 @@ This handles every adversarial case the old heuristic missed:
 - `R1 n1 n2 1k TC=0.001` — `1k` is BARE (numeric literal), correctly
   picked as the value.
 
-Per-prefix arity collapses to a node-count *minimum* (sanity check),
-not the model-position lookup:
+Per-prefix arity is only a minimum node count used as a sanity check; it
+is not used to find the model position:
 
 ```python
 MIN_NODES = {
@@ -266,8 +266,8 @@ MIN_NODES = {
 ```
 
 `Bxxx` / `Exxx` / `Gxxx` carry their value as a `KEY_VALUE` token like
-`V={expression}` or `I={...}`; the expression body is one `BRACED`
-token by construction. There is no "model" position — `InstanceLine`
+`V={expression}` or `I={...}`; the tokenizer always emits the expression
+body as one `BRACED` token. There is no "model" position — `InstanceLine`
 exposes the relevant `KEY_VALUE` (`V=` or `I=`) as `value`.
 
 `Fxxx` / `Hxxx` reference a controlling source by name (a `BARE` token),
@@ -312,6 +312,18 @@ contract holds even when input is broken:
 - Cards after a top-level `.END`: keep their position and scope but
   carry `trailing=True`. LTspice ignores them; we preserve them rather
   than dropping.
+- `.control` without a matching `.endc`: the region runs to EOF, plus a
+  warning. Every remaining line stays an opaque `kind="control"` card.
+
+Opaque regions: `.control` ... `.endc` (ngspice) is simulator script,
+not netlist. Each of its lines becomes one `kind="control"` card with an
+empty `body` — one card per source line, no `+`-continuation merging —
+so device, arity, and model rules find nothing to inspect. Without this
+every control command would lex as the element sharing its first letter
+(`let` → L, `dc` → D, `meas` → M, `foreach` → F, `alter` → A, `set` → S)
+and a valid ngspice deck would produce many spurious arity errors. Both
+delimiters are part of the region; a stray `.endc` with no opener stays
+an ordinary directive.
 
 Mutation safety: typed views are short-lived. Holding two views over the
 same card and mutating both is undefined — re-derive after each
@@ -413,9 +425,9 @@ def read_spice_text(path: Path) -> str: ...
 
 ## Future work
 
-Not implemented; bring online when a real consumer needs them. No stubs
-in tree — importable `NotImplementedError` placeholders are a lying API
-surface.
+Not implemented; add them when a real consumer needs them. No stubs in
+tree: an importable `NotImplementedError` placeholder misrepresents what
+the API supports.
 
 - **`rename_component(cards, old_ref, new_ref)`** — atomic rename of an
   instance ref across the instance card *and* every `.PARAM` expression
@@ -433,8 +445,9 @@ surface.
   single `Xxxx` invocation in place of the original span.
 - **`netlist_diff(a, b)`** — structural diff that ignores formatting.
   Compare card-by-card by `(kind, name, body)` after canonical
-  normalization; report added / removed / modified cards. Useful as a
-  regression-pinning primitive for tests.
+  normalization; report added / removed / modified cards. Useful for
+  regression tests that compare netlist structure while ignoring
+  formatting.
 - **`ChangeSet`** — atomic-commit primitive. Stage cross-card mutations
   as a list of `(card, replacement_raw_lines)` pairs; commit in one pass
   after validation; roll back via the captured original `raw_lines` if
@@ -460,5 +473,5 @@ Design notes for when the deferred items land:
   decision keeps this mechanical: detach a slice, rewrite scopes, splice
   into target position.
 - **Atomicity guarantees**: today's `rename_subckt` is "validate then
-  commit, no rollback". Phase 6 with `ChangeSet` should default to true
-  atomicity. Document the contract change in the migration commit.
+  commit, no rollback". Once `ChangeSet` exists, it should default to true
+  atomicity. Document the contract change in the commit that makes it.

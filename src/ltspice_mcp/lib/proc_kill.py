@@ -23,6 +23,7 @@ attempted by the runners; on any given platform at most one finds a match.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Collection
 from pathlib import PurePath
@@ -55,10 +56,19 @@ def _token_in_arg(token: str, arg: str) -> bool:
 
     Staged run files are ``{job_id}.{ext}`` (single runs) or
     ``{job_id}_{n}.{ext}`` (batch sub-runs), so the id is always followed by
-    ``.`` or ``_`` — or ends the argument. Requiring that boundary keeps a
-    job id from matching a longer id it happens to prefix. (Generated ids
-    are fixed-length per class, so a proper prefix can't occur today; the
-    anchor makes the match safe rather than reliant on that invariant.)
+    ``.`` or ``_`` — or ends the argument.
+
+    That trailing anchor is what makes the match safe, and nothing else here
+    substitutes for it: without it a token would also match every longer id it
+    happens to prefix (``{id}_case_1`` against ``{id}_case_10``), killing a
+    sibling job's simulator. Do not drop it. In particular, ids are NOT all the
+    same shape — ``sweep_utils.generate_id`` emits ``{prefix}_{stem}_{ts}_{hex}``
+    and, when no stem survives sanitization, ``{prefix}_{ts}_{hex}`` — so no
+    safety argument is available from "every id has its separators in the same
+    places". What the id format does contribute is a supporting invariant:
+    ``sanitize_stem`` strips ``_`` out of the stem, so an id can never grow an
+    extra ``_``-delimited field, which is what would let one whole id extend
+    another at exactly this boundary.
     """
     return re.search(re.escape(token) + r"(?:[._]|$)", arg) is not None
 
@@ -106,3 +116,19 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
     return killed
+
+
+def kill_process_group(pid: int, sig: int) -> bool:
+    """Signal the whole process group of a child spawned as a session leader
+    (its pid is the group id): the child and everything it started. True when
+    the group was signalled; False on Windows, which has no group to signal,
+    and when the group is already gone — the caller then signals the one
+    process it holds, if it still needs to.
+    """
+    if os.name != "posix":
+        return False
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True

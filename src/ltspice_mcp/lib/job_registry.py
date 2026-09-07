@@ -1,15 +1,12 @@
-"""In-memory registry for simulation and batch jobs.
+"""In-memory registry for experiment jobs.
 
-Owns the single union ``jobs`` dict (job_id -> SimulationJob | BatchJob)
-plus all disk-persistence coordination (sidecar writes, eviction,
-interrupted-job recovery). Split out of ``SessionState`` so the
-per-session container stays focused on simulator catalog, caches, and
-configuration.
+Owns the ``jobs`` dict plus all disk-persistence coordination (record
+writes, eviction, interrupted-job recovery). Split out of ``SessionState``
+so the per-session container stays focused on simulator catalog, caches,
+and configuration.
 
 ``SessionState`` delegates its job-facing API to this class; call sites
-continue to use ``state.jobs``, ``state.add_job``, etc. The ``sim_jobs``
-and ``batch_jobs`` attributes are type-filtered writable views over the
-union store, so per-type call sites keep their old dict semantics.
+continue to use ``state.all_jobs``, ``state.add_experiment_job``, etc.
 """
 
 from __future__ import annotations
@@ -18,120 +15,102 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Iterator, MutableMapping
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TypeVar
+from typing import Any
 
-from ltspice_mcp.lib.job_lifecycle import recover, transition
-from ltspice_mcp.lib.job_types import (
-    NON_TERMINAL_LIVE_STATUSES,
-    TERMINAL_STATUSES,
-    BatchJob,
-    SimulationJob,
-)
+from ltspice_mcp.lib import now
+from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
+from ltspice_mcp.lib.job_lifecycle import transition
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
 
-# Bound to the union job type so the typed views and per-type eviction stay
-# scoped to one job class at a time.
-J = TypeVar("J", bound=SimulationJob | BatchJob)
-
-# Maximum finished jobs to retain per job type (single-sim, batch).
+# Maximum finished jobs to retain.
 _MAX_FINISHED_JOBS = 200
 
-# LTspice .raw header magic. Classic files start with ASCII ``Title:``;
-# newer LTspice writes a UTF-16 LE BOM followed by the same ``Title:``.
-_RAW_HEADER_ASCII = b"Title:"
-_RAW_HEADER_UTF16 = b"\xff\xfeT\x00i\x00t\x00l\x00e\x00:\x00"
+# How long shutdown waits on one stage of cancels (see ``_issue_cancels``).
+# Every such wait is on live work that may never end — a simulator process
+# wedged past its kill, a task that swallows its cancellation — so an unbounded
+# await would hold shutdown open indefinitely, and with it the job-persistence
+# flush that follows.
+_SHUTDOWN_CANCEL_TIMEOUT_S = 10.0
 
 
-def _has_valid_raw(path: Path | None) -> bool:
-    """True if ``path`` looks like a real LTspice ``.raw`` file.
+def _discard_outcome(task: asyncio.Future[Any]) -> None:
+    """Retrieve a finished cancel's result so asyncio does not log it unhandled."""
+    with contextlib.suppress(BaseException):
+        task.exception()
 
-    Checks the header magic so a truncated or unrelated file at the same
-    path doesn't mis-promote an ``interrupted`` job to ``completed``.
+
+async def _issue_cancels(cancels: list[Awaitable[Any]]) -> None:
+    """Run one shutdown stage's cancels: together, bounded, and isolated.
+
+    Every cancel here waits on live work — a runner's kill of a simulator
+    process, or a job's own task winding down — so any of them can hang or
+    raise outright (a runner refuses when it no longer owns the job).
+    Awaited one by one, the first such failure ends the whole shutdown: the
+    stages after it are never reconciled, and neither is the persistence flush
+    that would have recorded them. So every outcome is discarded rather than
+    raised; what a failed cancel leaves behind is a job still in a live status,
+    which the caller's own bookkeeping then finishes.
+
+    Issued together so the timeout bounds the stage rather than each job: a
+    per-job wait would multiply a client's shutdown grace by the number of live
+    jobs, spending on cancels the time the flush needs.
+
+    ``asyncio.wait`` and not ``wait_for``, because ``wait_for`` bounds only the
+    cooperative case: on timeout it cancels its awaitable and then *awaits that
+    cancellation*, so anything that declines to stop — the very case this bound
+    exists for — hangs it as surely as a bare await. ``wait`` returns on the
+    deadline regardless; the stragglers are asked to stop and left to it,
+    because this process is exiting anyway and the flush is waiting.
     """
-    if path is None:
-        return False
-    try:
-        with path.open("rb") as f:
-            header = f.read(len(_RAW_HEADER_UTF16))
-    except OSError:
-        return False
-    return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
+    if not cancels:
+        return
+    tasks = [asyncio.ensure_future(cancel) for cancel in cancels]
+    for task in tasks:
+        task.add_done_callback(_discard_outcome)
+    _, pending = await asyncio.wait(tasks, timeout=_SHUTDOWN_CANCEL_TIMEOUT_S)
+    for task in pending:
+        task.cancel()
 
 
-class _TypedJobView(MutableMapping[str, J]):
-    """Permanent typed access layer over the union job store.
+def _cancel_tasks(jobs: list[ExperimentJob]) -> list[Awaitable[Any]]:
+    """Cancel each job's still-live task; return the awaits for the bound above.
 
-    This is the type-scoped surface of the registry: per-type eviction caps,
-    type-scoped iteration for resources and status reporting, and
-    write-through with a runtime type guard. Lookups (``[]``, ``get``,
-    ``in``), iteration, and ``len`` surface only entries of the view's job
-    type — a batch id accessed through the sim view behaves as absent, and
-    vice versa. Writes (``view[key] = job``) go straight through to the
-    union dict but reject values of the wrong job type, and ``del`` removes
-    only entries of the view's type.
-
-    Rule for new code: use the typed view (``registry.sim_jobs`` /
-    ``registry.batch_jobs``) when the code is scoped to one job type; use
-    ``registry.jobs`` / ``state.all_jobs`` plus ``isinstance`` when handling
-    either type.
+    Requesting cancellation is not the same as being stopped: a task that
+    swallows ``CancelledError``, or is blocked inside a shielded section, keeps
+    its await open for as long as it likes. Unbounded, that stalls shutdown
+    exactly as a wedged runner cancel does — and the persistence flush is still
+    behind it.
     """
-
-    def __init__(self, store: dict[str, SimulationJob | BatchJob], job_type: type[J]) -> None:
-        self._store = store
-        self._job_type = job_type
-
-    def __getitem__(self, key: str) -> J:
-        job = self._store[key]
-        if not isinstance(job, self._job_type):
-            raise KeyError(key)
-        return job
-
-    def __setitem__(self, key: str, value: J) -> None:
-        # Guard at runtime: a wrong-type job written through this view would
-        # land in the union store but be invisible through the view that
-        # stored it — a silent misroute that static typing alone can't stop.
-        # Widen to ``object`` so the type checker keeps the failure branch
-        # live: with the parameter typed ``J`` it narrows the negative
-        # isinstance branch to Never, but untyped callers reach it at runtime.
-        candidate: object = value
-        if not isinstance(candidate, self._job_type):
-            raise TypeError(
-                f"{self._job_type.__name__} view cannot store {type(value).__name__} (key {key!r})"
-            )
-        self._store[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        if not isinstance(self._store[key], self._job_type):
-            raise KeyError(key)
-        del self._store[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return (k for k, v in self._store.items() if isinstance(v, self._job_type))
-
-    def __len__(self) -> int:
-        return sum(1 for v in self._store.values() if isinstance(v, self._job_type))
+    pending: list[Awaitable[Any]] = []
+    for job in jobs:
+        task = job.task
+        if task is not None and not task.done():
+            task.cancel()
+            pending.append(task)
+    return pending
 
 
 @dataclass
 class JobRegistry:
-    """Tracks simulation and batch jobs with optional disk persistence.
+    """Tracks all job kinds with optional disk persistence.
 
     Attributes:
         persist_enabled: When True, sidecar files are written alongside
             circuits and evictions delete them. When False, the registry
             behaves as a pure in-memory store.
-        jobs: job_id -> SimulationJob | BatchJob — the single source of
-            truth for every job regardless of run type. ``sim_jobs`` /
-            ``batch_jobs`` are type-filtered views over it.
+        jobs: The single source of truth for every job this session knows.
     """
 
     persist_enabled: bool
-    jobs: dict[str, SimulationJob | BatchJob] = field(default_factory=dict)
+    working_dir: Path = field(default_factory=Path.cwd)
+    jobs: dict[str, ExperimentJob] = field(default_factory=dict)
+    observations: list[dict] = field(default_factory=list)
     _loaded_circuits: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
     _pending_persist: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
@@ -139,65 +118,123 @@ class JobRegistry:
     _persist_locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
     """Per-job-id locks serialising successive writes.
 
-    Cleared in ``_evict_from`` when a job is removed from memory — removing
-    them inside the write path would open a window where a new writer
-    allocates a fresh Lock while an existing holder still owns the old
-    one, defeating serialisation.
+    Eviction removes a lock only after earlier writes and the persisted-record
+    deletion have completed. Removing it inside a write would let a new writer
+    allocate a second lock while the old one is still held.
     """
-
-    # ------------------------------------------------------------------
-    # Typed views
-    # ------------------------------------------------------------------
-
-    @property
-    def sim_jobs(self) -> _TypedJobView[SimulationJob]:
-        """Writable view of the single-simulation jobs in the union store."""
-        return _TypedJobView(self.jobs, SimulationJob)
-
-    @property
-    def batch_jobs(self) -> _TypedJobView[BatchJob]:
-        """Writable view of the batch (sweep/MC) jobs in the union store."""
-        return _TypedJobView(self.jobs, BatchJob)
 
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
-    def add_sim_job(self, job: SimulationJob) -> None:
-        """Register a simulation job; evict old finished jobs if needed."""
+    def add_experiment_job(
+        self,
+        job: ExperimentJob,
+        *,
+        already_persisted: bool = False,
+    ) -> None:
+        """Register an experiment after its durable receipt barrier."""
         self.jobs[job.job_id] = job
-        self._evict_from(self.sim_jobs)
-        self.persist_job(job)
-        emit_job_event("submitted", job, simulator=job.simulator)
+        self._evict_finished()
+        if not already_persisted:
+            self.persist_job(job)
+        emit_job_event("submitted", job, total_cases=job.completeness.expanded)
 
-    def add_batch_job(self, job: BatchJob) -> None:
-        """Register a batch job; evict old finished batch jobs if needed."""
-        self.jobs[job.job_id] = job
-        self._evict_from(self.batch_jobs)
-        self.persist_job(job)
-        emit_job_event("submitted", job, total_runs=job.total_runs)
+    def _evict_finished(self) -> None:
+        """Evict the oldest terminal jobs once the registry is over the limit.
 
-    def _evict_from(self, jobs_view: MutableMapping[str, J]) -> None:
-        """Evict oldest terminal jobs of one job type when over the limit.
-
-        ``jobs_view`` is a typed view over the union store, so the cap is
-        enforced per job type (200 finished single-sim jobs AND 200 finished
-        batch jobs). When persistence is enabled, the on-disk record is
-        deleted alongside the in-memory entry so the two never drift. Any
-        per-job persistence lock is dropped here — safe once the job is out
-        of the store because no new ``persist_job`` calls can target it.
+        When persistence is enabled, the on-disk record is deleted alongside
+        the in-memory entry so the two never drift. Async deletion drains
+        earlier writes before it drops the per-job lock.
         """
-        finished = [(jid, j) for jid, j in jobs_view.items() if j.status in TERMINAL_STATUSES]
+        finished = [(jid, j) for jid, j in self.jobs.items() if j.status in TERMINAL_STATUSES]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
-        finished.sort(key=lambda pair: pair[1].started_at)
+        finished.sort(key=lambda pair: getattr(pair[1], "started_at", None) or 0)
         for jid, j in finished[:overflow]:
-            del jobs_view[jid]
+            del self.jobs[jid]
             self._delete_persisted(j)
-            self._persist_locks.pop(jid, None)
 
-    def refresh_foreign_job(self, job: SimulationJob | BatchJob) -> SimulationJob | BatchJob:
+    # ------------------------------------------------------------------
+    # Lookup — the one route from a job id to a job
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _on_event_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
+    def _adopt(self, job: ExperimentJob) -> ExperimentJob:
+        """Take a freshly-read record into the registry, if this caller may.
+
+        Registry mutations are loop-only, the same contract that governs the
+        cached editors (see ``tools/_base.py``): a worker thread swapping an
+        entry could race a loop-side transition on the same job. So an off-loop
+        caller — a resource read, a preload — gets the record it just read as a
+        read-only view and the registry is left untouched; the next on-loop
+        resolution adopts it. This is the ONLY place that decides between the
+        two, so no caller can quietly pick the other answer.
+
+        A record the store had to reconcile (its owner died mid-run) is written
+        back, because the reconciliation is a fact about the job that nothing
+        else will persist.
+        """
+        if not self._on_event_loop():
+            return job
+        self.jobs[job.job_id] = job
+        if job.restart_reconciled:
+            self.persist_job(job)
+        return job
+
+    def _load_from_store(self, job_id: str) -> ExperimentJob | None:
+        """Blocking read of one experiment record from this session's store."""
+        if not self.persist_enabled:
+            return None
+        from ltspice_mcp.lib import experiment_store
+
+        return experiment_store.load_job(job_id, self.working_dir, own_is_alive=True)
+
+    def get_or_load(self, job_id: str) -> ExperimentJob | None:
+        """A job by id: in memory, else from the store. None if there is none.
+
+        The single discovery route. Everything that resolves an id — the tools,
+        the resources, the Python API — comes through here, so "the registry
+        did not have it" and "the store did not have it either" are one answer
+        rather than a sequence of fallbacks each caller re-assembles.
+
+        Raises ``ValueError`` for an id that could never name a record.
+        """
+        job = self.jobs.get(job_id)
+        if job is not None:
+            return job
+        from ltspice_mcp.lib.store import validate_job_id
+
+        validate_job_id(job_id)
+        loaded = self._load_from_store(job_id)
+        return self._adopt(loaded) if loaded is not None else None
+
+    async def get_or_load_async(self, job_id: str) -> ExperimentJob | None:
+        """Loop-safe ``get_or_load``: offload the store read, adopt on the loop."""
+        job = self.jobs.get(job_id)
+        if job is not None:
+            return job
+        from ltspice_mcp.lib.store import validate_job_id
+
+        validate_job_id(job_id)
+        loaded = await asyncio.to_thread(self._load_from_store, job_id)
+        return self._adopt(loaded) if loaded is not None else None
+
+    def _load_foreign_job_sync(self, job: ExperimentJob) -> ExperimentJob | None:
+        """Blocking store read for refreshing one foreign-owned job."""
+        from ltspice_mcp.lib import experiment_store
+
+        return experiment_store.load_job_from_path(job.store_path, self.working_dir)
+
+    def refresh_foreign_job(self, job: ExperimentJob) -> ExperimentJob:
         """Re-read a parallel session's live job from its sidecar.
 
         A job loaded while its owning process was alive sits in this
@@ -210,35 +247,20 @@ class JobRegistry:
         """
         if (
             not self.persist_enabled
-            or job.owner_pid in (0, os.getpid())
+            or getattr(job, "owner_pid", 0) in (0, os.getpid())
             or job.status not in NON_TERMINAL_LIVE_STATUSES
         ):
             return job
         try:
-            from ltspice_mcp.lib import job_store
-
-            fresh = job_store.load_job(job.job_id, job.netlist)
+            fresh = self._load_foreign_job_sync(job)
         except Exception as e:
             logger.debug("refresh_foreign_job %s: %s", job.job_id, e)
             return job
         if fresh is None:
             return job
-        # Registry mutations are loop-only (the same contract as the cached
-        # editors — see tools/_base.py): resource reads run this via a worker
-        # thread (server.py offloads whole resource reads), where swapping the
-        # entry could race a loop-side transition on the same job. Off-loop
-        # callers get the fresh view without the registry update; the next
-        # on-loop resolution persists it.
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return fresh
-        self.jobs[job.job_id] = fresh
-        return fresh
+        return self._adopt(fresh)
 
-    async def refresh_foreign_job_async(
-        self, job: SimulationJob | BatchJob
-    ) -> SimulationJob | BatchJob:
+    async def refresh_foreign_job_async(self, job: ExperimentJob) -> ExperimentJob:
         """Loop-safe ``refresh_foreign_job``: offload the sidecar re-read.
 
         Same contract as the sync version, but the single-file ``load_job``
@@ -248,24 +270,21 @@ class JobRegistry:
         """
         if (
             not self.persist_enabled
-            or job.owner_pid in (0, os.getpid())
+            or getattr(job, "owner_pid", 0) in (0, os.getpid())
             or job.status not in NON_TERMINAL_LIVE_STATUSES
         ):
             return job
         try:
-            from ltspice_mcp.lib import job_store
-
-            fresh = await asyncio.to_thread(job_store.load_job, job.job_id, job.netlist)
+            fresh = await asyncio.to_thread(self._load_foreign_job_sync, job)
         except Exception as e:
             logger.debug("refresh_foreign_job %s: %s", job.job_id, e)
             return job
         if fresh is None:
             return job
-        # On the loop here (awaited from a handler) — safe to swap the entry.
-        self.jobs[job.job_id] = fresh
-        return fresh
+        # On the loop here (awaited from a handler), so ``_adopt`` swaps it in.
+        return self._adopt(fresh)
 
-    def refreshed_jobs(self) -> list[SimulationJob | BatchJob]:
+    def refreshed_jobs(self) -> list[ExperimentJob]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.
 
         The listing surfaces (``check_job`` with no id, the results resource)
@@ -278,7 +297,7 @@ class JobRegistry:
     # Persistence
     # ------------------------------------------------------------------
 
-    def persist_job(self, job: SimulationJob | BatchJob) -> None:
+    def persist_job(self, job: ExperimentJob) -> None:
         """Write a job's current state to its per-circuit sidecar file.
 
         When called from an asyncio event loop, the file IO is scheduled on
@@ -300,48 +319,75 @@ class JobRegistry:
         self._pending_persist.add(task)
         task.add_done_callback(self._pending_persist.discard)
 
-    async def _persist_async(self, job: SimulationJob | BatchJob) -> None:
+    async def _persist_async(self, job: ExperimentJob) -> None:
         """Serialise writes for a single job id; swallow and log failures."""
         lock = self._persist_locks.get(job.job_id)
         if lock is None:
             lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
         async with lock:
-            await asyncio.to_thread(self._persist_sync, job)
+            await self._offload_persistence(self._persist_sync, job)
 
-    def _persist_sync(self, job: SimulationJob | BatchJob) -> None:
+    async def _offload_persistence(
+        self, fn: Callable[[ExperimentJob], None], job: ExperimentJob
+    ) -> None:
+        """Run one blocking persistence step off-loop, surviving teardown.
+
+        During interpreter teardown the default executor is gone and
+        ``asyncio.to_thread`` raises "cannot schedule new futures after
+        shutdown" — as an unretrieved task exception it printed a scary
+        irrelevant traceback while the write it carried was silently lost
+        (observed live: a ``wait=False`` script exiting while its job
+        settled). Blocking is fine during teardown; run synchronously.
+        Shared by the write and delete halves — a lost delete resurrects a
+        stale sidecar as a job on the next preload.
+        """
         try:
-            from ltspice_mcp.lib import job_store
+            await asyncio.to_thread(fn, job)
+        except RuntimeError:
+            fn(job)
 
-            job_store.save_job(job)
+    def _persist_sync(self, job: ExperimentJob) -> None:
+        try:
+            from ltspice_mcp.lib import experiment_store
+
+            experiment_store.save_job(job)
         except Exception as e:
             # Persistence failures must never break simulation flow.
             logger.warning("Failed to persist job %s: %s", job.job_id, e)
 
-    def persist_batch_progress(self, batch_job: BatchJob) -> None:
-        """Persist a batch job's in-progress state, throttled by run count.
-
-        Per-run callbacks for sweeps and Monte Carlo can fire thousands of
-        times per job; serialising the full ``run_results`` dict on each
-        call is O(N²). Write only on a sparse schedule so crash-recovery
-        sees near-current state without paying the quadratic IO cost.
-        """
-        if not self.persist_enabled:
-            return
-        total = batch_job.total_runs
-        done = batch_job.completed_runs
-        # Checkpoint ~20 times per batch plus always on the final run.
-        step = max(1, total // 20) if total else 1
-        if done == total or done % step == 0:
-            self.persist_job(batch_job)
-
-    def _delete_persisted(self, job: SimulationJob | BatchJob) -> None:
+    def _delete_persisted(self, job: ExperimentJob) -> None:
         """Remove a job's on-disk record (used on eviction)."""
-        if not self.persist_enabled:
-            return
         try:
-            from ltspice_mcp.lib import job_store
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._delete_persisted_sync(job)
+            self._persist_locks.pop(job.job_id, None)
+            return
+        task = loop.create_task(self._delete_persisted_async(job))
+        self._pending_persist.add(task)
+        task.add_done_callback(self._pending_persist.discard)
 
-            job_store.delete_job(job)
+    async def _delete_persisted_async(self, job: ExperimentJob) -> None:
+        """Delete only after earlier writes for the same job have drained."""
+        lock = self._persist_locks.get(job.job_id)
+        if lock is None:
+            lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
+        try:
+            async with lock:
+                await self._offload_persistence(self._delete_persisted_sync, job)
+        finally:
+            self._persist_locks.pop(job.job_id, None)
+
+    def _delete_persisted_sync(self, job: ExperimentJob) -> None:
+        """Blocking deletion half, including dependent immutable result sets."""
+        try:
+            if self.persist_enabled:
+                from ltspice_mcp.lib import experiment_store
+
+                experiment_store.delete_job(job, self.working_dir)
+            from ltspice_mcp.lib import result_store
+
+            result_store.invalidate_for_job(self.working_dir, job.job_id)
         except Exception as e:
             logger.debug("Failed to delete persisted job %s: %s", job.job_id, e)
 
@@ -367,13 +413,15 @@ class JobRegistry:
         self._loaded_circuits.add(resolved)
         return resolved
 
-    @staticmethod
-    def _read_persisted_jobs(resolved: Path) -> tuple[list, list] | None:
+    def _read_persisted_jobs(
+        self,
+        resolved: Path,
+    ) -> tuple[list, list] | None:
         """File-read half of the load — offloadable (touches no registry state)."""
         try:
-            from ltspice_mcp.lib import job_store
+            from ltspice_mcp.lib import experiment_store
 
-            return job_store.load_jobs_for_circuit(resolved)
+            return experiment_store.load_jobs_for_circuit(resolved, self.working_dir)
         except Exception as e:
             logger.warning("Failed to load persisted jobs for %s: %s", resolved, e)
             return None
@@ -382,11 +430,11 @@ class JobRegistry:
         """Load any persisted jobs for this circuit into memory, once per session.
 
         No-op when persistence is disabled, the path is not a circuit file,
-        or the sidecar directory doesn't exist. Jobs in non-terminal states
+        or the store holds no record naming it. Jobs in non-terminal states
         at load time are marked ``interrupted`` (their owning server is gone).
 
         Synchronous — for off-loop callers (startup ``preload_recent``). On the
-        event loop use ``ensure_loaded_for_async`` so the sidecar read (a glob +
+        event loop use ``ensure_loaded_for_async`` so the store read (a glob +
         JSON reads that stalls the whole loop on a wedged ``/mnt/c``) is offloaded.
         """
         resolved = self._claim_circuit_load(circuit_path)
@@ -399,7 +447,7 @@ class JobRegistry:
     async def ensure_loaded_for_async(self, circuit_path: Path) -> None:
         """Loop-safe ``ensure_loaded_for``: offload the read, apply on the loop.
 
-        The sidecar read runs in a worker thread (an unresponsive filesystem
+        The store read runs in a worker thread (an unresponsive filesystem
         must not freeze the shared event loop — this runs on the common tool-
         dispatch path). The registry mutation stays on the loop, per the
         loop-only contract that also governs the cached editors.
@@ -424,31 +472,24 @@ class JobRegistry:
 
     def _apply_loaded_jobs(
         self,
-        sim_jobs: list[SimulationJob],
-        batch_jobs: list[BatchJob],
+        experiment_jobs: list[ExperimentJob],
+        observations: list[dict],
     ) -> None:
         """Registry-mutation half of the load — loop-only (mutates ``self.jobs``)."""
-        for sj in sim_jobs:
-            if sj.job_id in self.jobs:
+        for experiment in experiment_jobs:
+            if experiment.job_id in self.jobs:
                 continue
-            self.jobs[sj.job_id] = sj
-            # If the sim outputs exist on disk, the job may have finished
-            # just before the crash — promote interrupted → completed via
-            # the recovery path so the emitted event is
-            # 'interrupted_recovered', not 'completed'.
-            if sj.status == "interrupted" and _has_valid_raw(sj.raw_file):
-                sj.error = None
-                # No state arg — the registry owns persistence below.
-                recover(sj, "completed")
-                self.persist_job(sj)
-            elif sj.status == "interrupted":
-                emit_job_event("interrupted_recovered", sj, recovered_as="interrupted")
-        for bj in batch_jobs:
-            if bj.job_id in self.jobs:
-                continue
-            self.jobs[bj.job_id] = bj
-            if bj.status == "interrupted":
-                emit_job_event("interrupted_recovered", bj, recovered_as="interrupted")
+            self.jobs[experiment.job_id] = experiment
+            restarted = experiment.restart_reconciled
+            if experiment.status == "interrupted" or restarted:
+                emit_job_event(
+                    "interrupted_recovered",
+                    experiment,
+                    recovered_as=experiment.status,
+                )
+            if restarted:
+                self.persist_job(experiment)
+        self.observations.extend(observations)
 
     def preload_recent(self, max_circuits: int = 10) -> int:
         """Eager-load persisted jobs for the ``max_circuits`` most recently
@@ -503,39 +544,72 @@ class JobRegistry:
         for a circular reference.
         """
         own_pid = os.getpid()
-        # Snapshot both views before iterating: the typed views iterate the
-        # live union dict lazily, and the awaits below suspend this coroutine
-        # — a concurrent job registration during a cancel would otherwise
-        # raise "dictionary changed size during iteration".
+        # Snapshot before iterating: the awaits below suspend this coroutine,
+        # and a concurrent registration would change the dict under us —
+        # "dictionary changed size during iteration".
         #
         # Only THIS process's jobs are cancelled: a parallel server session's
         # live job also sits in the registry as running (loaded from its
-        # sidecar with the owner still alive) and must not be killed or
+        # record with the owner still alive) and must not be killed or
         # relabeled by our shutdown.
-        for job in list(self.sim_jobs.values()):
-            if job.status in NON_TERMINAL_LIVE_STATUSES and job.owner_pid == own_pid:
-                # Match the runner to the job's own simulator: runners are
-                # cached per simulator class, and the kill scopes by that
-                # class's executable names.
-                sim_runner = runners.get_existing_sim_runner(job.simulator)
-                if sim_runner is not None:
-                    await sim_runner.cancel(job, session_state)
-                else:
-                    transition(job, "cancelled")
-                    self.persist_job(job)
+        experiments = list(self.jobs.values())
+        await _issue_cancels(
+            [
+                runner.cancel(experiment)
+                for experiment in experiments
+                if experiment.owner_pid == own_pid
+                and (runner := runners.get_experiment_runner_for(experiment)) is not None
+            ]
+        )
+        # No record is kept of which cancels succeeded, because a cancel that
+        # RETURNED already left its job terminal — every return path of the
+        # coordinator's cancel is behind the job's done event, and only a
+        # terminal transition sets that. So the status guard below is the whole
+        # test: a job still non-terminal here is one whose cancel timed out,
+        # raised, or never existed, and this pass is the last thing that can
+        # write it a terminal status before the process exits. Skipping it would
+        # persist a sidecar reading "running" under a pid that no longer exists.
+        for experiment in experiments:
+            if experiment.status in NON_TERMINAL_LIVE_STATUSES and experiment.owner_pid == own_pid:
+                cancelled_at = now()
+                newly_cancelled = [
+                    case for case in experiment.cases if case.status not in TERMINAL_CASE_STATUSES
+                ]
+                experiment.cases = [
+                    (
+                        case
+                        if case.status in TERMINAL_CASE_STATUSES
+                        else replace(
+                            case,
+                            status="cancelled",
+                            failure_code="server_shutdown",
+                            error="Server shut down before this case completed",
+                            completed_at=cancelled_at,
+                        )
+                    )
+                    for case in experiment.cases
+                ]
+                experiment.completeness = replace(
+                    experiment.completeness,
+                    cancelled=(experiment.completeness.cancelled + len(newly_cancelled)),
+                )
+                experiment.failures.extend(
+                    {
+                        "case_id": case.case_id,
+                        "code": "server_shutdown",
+                        "message": "Server shut down before this case completed",
+                    }
+                    for case in newly_cancelled
+                )
+                if experiment.analysis.status in {"pending", "running"}:
+                    experiment.analysis = replace(
+                        experiment.analysis,
+                        status="cancelled",
+                        error="Server shut down before attached analysis completed",
+                        completed_at=cancelled_at,
+                    )
+                experiment.runs_done_event.set()
+                transition(experiment, "cancelled")
+                self.persist_job(experiment)
 
-        for batch_job in list(self.batch_jobs.values()):
-            if batch_job.status == "running" and batch_job.owner_pid == own_pid:
-                # Route to the runner instance that launched the batch — with
-                # several runners of one kind cached, most-recent isn't
-                # necessarily the owner of this job's cancel event.
-                batch_runner = runners.get_batch_runner_for(batch_job)
-                if batch_runner is not None:
-                    await batch_runner.cancel(batch_job, session_state)
-                else:
-                    transition(batch_job, "cancelled")
-                    self.persist_job(batch_job)
-            if batch_job.task is not None and not batch_job.task.done():
-                batch_job.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await batch_job.task
+        await _issue_cancels(_cancel_tasks(experiments))

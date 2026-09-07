@@ -3,37 +3,73 @@ as a client would.
 
 These tests launch the server as a subprocess via the MCP SDK's stdio_client,
 then use ClientSession to send real MCP protocol messages.  Simulator
-detection is disabled, so no simulator is needed — circuit editing, status,
-resources, and error-path tests all exercise the degraded-mode behaviour.
+detection is disabled, so no simulator is needed — the consolidated tool
+surface (schematic authoring, verification, inspection, job control, analysis)
+is exercised in its degraded mode, which is where the error quality that an
+agent depends on actually shows.
+
+Symbol libraries come from the repo's ``.asy`` fixtures via
+``LTSPICE_MCP_SYMBOL_PATHS`` so .asc authoring behaves the same on every host,
+with or without LTspice installed.
 """
 
+import asyncio
 import json
 import os
-import re
 import sys
 import textwrap
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from datetime import timedelta
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 
+import pytest
+import pytest_asyncio
+from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from pydantic import AnyUrl
+from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
+from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
+from pydantic import BaseModel, ConfigDict
+
+from tests.conftest import FIXTURES_DIR
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-TOOL_TIMEOUT = timedelta(seconds=10)
+TOOL_TIMEOUT = 20.0
+
+SYMBOL_FIXTURES = FIXTURES_DIR / "symbols"
+
+# The seven tools the consolidated profile puts on the wire.
+CONSOLIDATED_TOOLS = {
+    "run_experiments",
+    "jobs",
+    "analyze_results",
+    "inspect",
+    "edit_schematic",
+    "verify_circuit",
+    "plot_waveform",
+}
 
 
-def _server_params(work_dir: Path) -> StdioServerParameters:
+class _WireResult(BaseModel):
+    """A result parsed with nothing dropped.
+
+    The typed result models ignore fields their protocol revision does not
+    declare, so they cannot tell a key the server left out from one the client
+    discarded. This keeps whatever arrived, under ``model_extra``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+def _server_params(work_dir: Path, *, run_code: bool = False) -> StdioServerParameters:
     """Build StdioServerParameters that launch ltspice-mcp in *work_dir*
     with no real simulator."""
     config = work_dir / "ltspice-mcp.toml"
     config.write_text(
-        textwrap.dedent("""\
+        textwrap.dedent(f"""\
         [simulator]
         default = "ltspice"
         path = ""
@@ -44,6 +80,9 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
         [simulation]
         max_parallel = 1
         timeout = 10.0
+
+        [tools]
+        run_code = {"true" if run_code else "false"}
 
         [logging]
         level = "DEBUG"
@@ -63,6 +102,9 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
         # suite covers the degraded-mode behaviour, and a CI host with
         # ngspice on ``PATH`` would otherwise satisfy auto-detection.
         "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1",
+        # .asc authoring needs symbols, not a simulator: point the server at
+        # the fixture symbol set so schematic behaviour is host-independent.
+        "LTSPICE_MCP_SYMBOL_PATHS": str(SYMBOL_FIXTURES),
     }
     return StdioServerParameters(
         command=sys.executable,
@@ -73,15 +115,92 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
 
 
 @asynccontextmanager
-async def mcp_session(work_dir: Path) -> AsyncIterator[ClientSession]:
+async def mcp_session(work_dir: Path, *, run_code: bool = False) -> AsyncIterator[ClientSession]:
     """Open a live MCP client session connected to the server."""
-    params = _server_params(work_dir)
+    params = _server_params(work_dir, run_code=run_code)
     async with (
         stdio_client(params) as (read_stream, write_stream),
         ClientSession(read_stream, write_stream) as session,
     ):
         init = await session.initialize()
-        assert init.serverInfo.name == "ltspice-mcp"
+        assert init.server_info.name == "ltspice-mcp"
+        yield session
+
+
+# Every test in this module runs on one module-scoped event loop, because a
+# module-scoped async fixture may not outlive the loop its consumers run on.
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
+
+@pytest.fixture(scope="module")
+def shared_work_dir(tmp_path_factory) -> Path:
+    """One working directory behind the shared sessions below.
+
+    Booting ``python -m ltspice_mcp`` over stdio is essentially the whole cost
+    of this module, so the tests that only read the protocol — listings,
+    resource reads, refusals — share a server instead of paying for one each.
+    A test that writes into its working directory, or that asserts exactly what
+    is in it, keeps its own ``tmp_path`` and its own session.
+    """
+    return tmp_path_factory.mktemp("e2e-shared")
+
+
+@asynccontextmanager
+async def _held_open(
+    open_session: Callable[[], AbstractAsyncContextManager[ClientSession]],
+) -> AsyncIterator[ClientSession]:
+    """Hold one client session open for a whole module.
+
+    The connection's cancel scope has to be entered and left in the SAME task,
+    and a module-scoped fixture is resumed in whichever test's task happens to
+    finalize it. So the connection is owned by a task of its own that lives
+    exactly as long as the fixture; the fixture only hands out the session and
+    then asks that task to finish.
+    """
+    ready: asyncio.Future[ClientSession] = asyncio.get_running_loop().create_future()
+    finish = asyncio.Event()
+
+    async def own() -> None:
+        try:
+            async with open_session() as session:
+                ready.set_result(session)
+                await finish.wait()
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            raise
+
+    task = asyncio.create_task(own())
+    try:
+        yield await ready
+    finally:
+        finish.set()
+        await task
+
+
+@asynccontextmanager
+async def _modern_session(work_dir: Path) -> AsyncIterator[ClientSession]:
+    """A 2026-07-28 connection: ``server/discover``, no handshake."""
+    params = _server_params(work_dir)
+    async with (
+        stdio_client(params) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.discover()
+        yield session
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def shared_session(shared_work_dir: Path) -> AsyncIterator[ClientSession]:
+    """One handshake connection for the read-only protocol assertions."""
+    async with _held_open(lambda: mcp_session(shared_work_dir)) as session:
+        yield session
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def shared_modern_session(shared_work_dir: Path) -> AsyncIterator[ClientSession]:
+    """The same, on a 2026-07-28 connection."""
+    async with _held_open(lambda: _modern_session(shared_work_dir)) as session:
         yield session
 
 
@@ -90,18 +209,25 @@ def _text(result) -> str:
     return result.content[0].text
 
 
+def _data(result) -> dict:
+    """Extract structuredContent, asserting the tool actually emitted one."""
+    assert result.structured_content is not None, f"no structuredContent: {_text(result)[:200]}"
+    return result.structured_content
+
+
 def _call(session, name, args=None):
     """Shorthand for call_tool with standard timeout."""
     return session.call_tool(name, args or {}, read_timeout_seconds=TOOL_TIMEOUT)
 
 
 def _assert_tool_error(result, expected_substring: str):
-    """Assert the tool returned an error with isError=True containing expected_substring.
+    """Assert the tool returned an error with is_error=True containing expected_substring.
 
-    All tool errors (LTSpiceMCPError, ValueError) propagate to the MCP SDK,
-    which wraps them in CallToolResult(isError=True).
+    Every tool failure — a rejected argument, a sandbox violation, an
+    unexpected exception — comes back in the result with is_error set, not as
+    a JSON-RPC error, so the calling model can read it and correct itself.
     """
-    assert result.isError, f"Expected isError=True but got success: {_text(result)[:200]}"
+    assert result.is_error, f"Expected is_error=True but got success: {_text(result)[:200]}"
     text = _text(result)
     assert expected_substring.lower() in text.lower(), (
         f"Expected '{expected_substring}' in error text: {text[:200]}"
@@ -113,7 +239,19 @@ RC_NETLIST = (
     "* RC Low-Pass Filter\nR1 in out 1k\nC1 out 0 100n\nV1 in 0 AC 1\n.ac dec 100 1 1Meg\n"
 )
 
-MINIMAL_NETLIST = "* Test\nR1 a b 1k\nR2 b 0 2.2k\nC1 b 0 10n\n.END\n"
+# Two resistors in series, wired at the top, the lower R2 pin grounded — the
+# smallest batch that exercises placement, routing and labelling in one call.
+DIVIDER_OPS = [
+    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
+    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
+    {
+        "op": "wire_pins",
+        "from_pin": "R1.1",
+        "to_pin": "R2.1",
+        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
+    },
+    {"op": "add_net_label", "net": "0", "pin": "R2.2"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -122,13 +260,22 @@ MINIMAL_NETLIST = "* Test\nR1 a b 1k\nR2 b 0 2.2k\nC1 b 0 10n\n.END\n"
 
 
 class TestServerLifecycle:
-    async def test_initialize_reports_capabilities(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            caps = session.get_server_capabilities()
-            assert caps is not None
-            assert caps.tools is not None
-            assert caps.resources is not None
-            assert caps.prompts is not None  # workflow-starter prompts
+    async def test_initialize_reports_capabilities(self, shared_session: ClientSession):
+        caps = shared_session.server_capabilities
+        assert caps is not None
+        assert caps.tools is not None
+        assert caps.resources is not None
+        assert caps.prompts is not None  # workflow-starter prompts
+        # The logging capability is deprecated as of 2026-07-28 and this
+        # server does not serve it, so it must not be advertised either.
+        assert caps.logging is None
+
+    async def test_set_logging_level_is_not_served(self, shared_session: ClientSession):
+        # Dropping the capability means dropping the request that went with
+        # it: a client that asks anyway gets method-not-found, not silence.
+        with pytest.warns(MCPDeprecationWarning), pytest.raises(MCPError) as excinfo:
+            await shared_session.set_logging_level("info")
+        assert excinfo.value.code == mcp_types.METHOD_NOT_FOUND
 
     async def test_initialize_reports_package_version_and_active_simulator(self, tmp_path):
         # A real handshake must carry the ltspice-mcp package version (not the
@@ -141,10 +288,27 @@ class TestServerLifecycle:
             ClientSession(read_stream, write_stream) as session,
         ):
             init = await session.initialize()
-            assert init.serverInfo.version == pkg_version("ltspice-mcp")
+            assert init.server_info.version == pkg_version("ltspice-mcp")
             # Detection is disabled in this harness -> the no-simulator line.
             assert init.instructions is not None
             assert "No SPICE simulator detected" in init.instructions
+
+    async def test_discover_reports_capabilities_and_active_simulator(
+        self, shared_modern_session: ClientSession
+    ):
+        # The 2026-07-28 revision has no initialize handshake: a client asks
+        # server/discover instead, and the instructions must be built from the
+        # same live state the handshake reads — not from a snapshot taken
+        # before the server detected its simulators.
+        result = await shared_modern_session.discover()
+        assert LATEST_MODERN_VERSION in result.supported_versions
+        assert result.capabilities.tools is not None
+        assert result.capabilities.resources is not None
+        assert result.capabilities.prompts is not None
+        assert result.capabilities.logging is None
+        assert result.instructions is not None
+        # Detection is disabled in this harness -> the no-simulator line.
+        assert "No SPICE simulator detected" in result.instructions
 
     async def test_server_name_override_via_env(self, tmp_path):
         # The alias packages (circuit-mcp/ngspice-mcp) set LTSPICE_MCP_SERVER_NAME
@@ -157,7 +321,7 @@ class TestServerLifecycle:
             ClientSession(read_stream, write_stream) as session,
         ):
             init = await session.initialize()
-            assert init.serverInfo.name == "circuit-mcp"
+            assert init.server_info.name == "circuit-mcp"
 
     async def test_config_written_lazily_on_first_tool_call(self, tmp_path):
         # The server boots in whatever directory the MCP client launched it
@@ -186,224 +350,249 @@ class TestServerLifecycle:
         ):
             await session.initialize()
             assert not config_file.exists(), "startup must not write a config file"
-            await _call(session, "server_status")
+            await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]})
             assert config_file.exists(), "first tool call should write the default config"
 
-    async def test_prompts_list_and_get(self, tmp_path):
+    async def test_prompts_list_and_get(self, shared_session: ClientSession):
         from mcp import types as mcp_types
 
-        async with mcp_session(tmp_path) as session:
-            listed = await session.list_prompts()
-            names = {p.name for p in listed.prompts}
-            assert {"characterize_filter", "run_and_plot", "step_response"} <= names
-            got = await session.get_prompt("characterize_filter", {"path": "rc.cir"})
-            assert got.messages
-            content = got.messages[0].content
-            assert isinstance(content, mcp_types.TextContent)
-            assert "rc.cir" in content.text
+        listed = await shared_session.list_prompts()
+        names = {p.name for p in listed.prompts}
+        assert {"characterize_filter", "run_and_plot", "step_response"} <= names
+        got = await shared_session.get_prompt("characterize_filter", {"path": "rc.cir"})
+        assert got.messages
+        content = got.messages[0].content
+        assert isinstance(content, mcp_types.TextContent)
+        assert "rc.cir" in content.text
 
-    async def test_list_tools_contains_all_modules(self, tmp_path):
-        """Every module's tools appear in the dispatch table."""
-        async with mcp_session(tmp_path) as session:
-            result = await session.list_tools()
-            names = {t.name for t in result.tools}
-            expected = {
-                "create_netlist",
-                "read_circuit",
-                "list_components",
-                "set_component_value",
-                "parameter",
-                "edit_directive",
-                "run_simulation",
-                "check_job",
-                "cancel_job",
-                "signal_stats",
-                "query_value",
-                "operating_point",
-                "simulation_summary",
-                "configure_sweep",
-                "run_sweep",
-                "configure_montecarlo",
-                "run_montecarlo",
-                "batch_results",
-                "find_model",
-                "load_library",
-                "unload_library",
-                "list_libraries",
-                "server_status",
-            }
-            missing = expected - names
-            assert not missing, f"Missing tools: {missing}"
+    async def test_list_tools_is_exactly_the_consolidated_surface(
+        self, shared_session: ClientSession
+    ):
+        """The wire answers the seven consolidated tools and nothing else."""
+        result = await shared_session.list_tools()
+        names = {t.name for t in result.tools}
+        assert names == CONSOLIDATED_TOOLS
+        # Each carries a display title, and none of them is the wire name.
+        for tool in result.tools:
+            assert tool.title and tool.title != tool.name
 
-    async def test_plot_waveform_declares_ui_resource_over_protocol(self, tmp_path):
+    async def test_listings_advertise_how_long_they_stay_fresh(
+        self, shared_modern_session: ClientSession
+    ):
+        """The tool, resource and prompt listings are built once at startup and
+        never change while the process runs, so the server tells the client how
+        long it may hold onto one instead of re-listing every turn.
+
+        Sent on a 2026-07-28 connection, where the freshness fields exist. The
+        older handshake has nowhere to carry them, so it is unaffected.
+        """
+        for result in (
+            await shared_modern_session.list_tools(),
+            await shared_modern_session.list_resources(),
+            await shared_modern_session.list_resource_templates(),
+            await shared_modern_session.list_prompts(),
+        ):
+            assert result.ttl_ms > 0, f"{type(result).__name__} is advertised as never fresh"
+            # Every listing is shaped by this server's own sandbox and
+            # configuration, so it must not be served from a shared cache.
+            assert result.cache_scope == "private"
+        # One of them off the raw result as well. This is what makes the
+        # handshake-era test below discriminating: the same unparsed read
+        # finds the key here and must not find it there.
+        wire = await shared_modern_session.send_request(
+            mcp_types.ListToolsRequest(params=None), _WireResult
+        )
+        assert (wire.model_extra or {}).get("ttlMs")
+
+    async def test_the_freshness_hint_stays_off_a_handshake_connection(self, tmp_path):
+        """A client on an older revision has no field to read it from, so the
+        hint must not reach the wire there.
+
+        Read off the raw result rather than the parsed one: ``ttl_ms`` defaults
+        to 0 client-side and ``ListToolsResult`` ignores fields it does not
+        know, so a parsed 0 says nothing about whether the server sent the key
+        or the client dropped it.
+        """
+        async with mcp_session(tmp_path) as session:
+            assert session.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS
+            wire = await session.send_request(
+                mcp_types.ListToolsRequest(params=None),
+                _WireResult,
+            )
+            sent = wire.model_extra or {}
+            assert sent.get("tools"), "the raw result did not carry the tool list"
+            assert "ttlMs" not in sent
+            assert "cacheScope" not in sent
+
+    async def test_reading_a_resource_is_not_advertised_as_cacheable(
+        self, shared_modern_session: ClientSession, shared_work_dir: Path
+    ):
+        """A resource's content changes under the client — a netlist is edited,
+        a job finishes — so a read is stale the moment it is answered."""
+        (shared_work_dir / "circuit.cir").write_text("* Test\nR1 a b 1k\n.END\n")
+        result = await shared_modern_session.read_resource("spice://netlists/circuit.cir")
+        assert result.ttl_ms == 0
+
+    async def test_plot_waveform_declares_ui_resource_over_protocol(
+        self, shared_session: ClientSession
+    ):
         # The MCP Apps UI link must survive the wire as _meta on the tool
         # declaration (serialized by alias), or an apps host never fetches the
         # renderer. Verify the round-tripped tool carries it.
-        async with mcp_session(tmp_path) as session:
-            result = await session.list_tools()
-            plot = next(t for t in result.tools if t.name == "plot_waveform")
-            assert plot.meta == {"ui": {"resourceUri": "ui://ltspice-mcp/plot"}}
+        result = await shared_session.list_tools()
+        plot = next(t for t in result.tools if t.name == "plot_waveform")
+        assert plot.meta == {"ui": {"resourceUri": "ui://ltspice-mcp/plot"}}
 
-    async def test_ping(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.send_ping()
-            assert result is not None
+    async def test_ping(self, shared_session: ClientSession):
+        result = await shared_session.send_ping()
+        assert result is not None
 
 
 # ---------------------------------------------------------------------------
-# 2. Circuit tools — round-trip verification
+# 2. Schematic authoring — edit_schematic / verify_circuit round trip
 # ---------------------------------------------------------------------------
 
 
-class TestCircuitTools:
-    async def test_create_netlist_auto_appends_end(self, tmp_path):
-        """create_netlist appends .END if missing from content."""
+class TestSchematicTools:
+    async def test_blank_build_commits_and_reports_geometry(self, tmp_path):
+        """A base:"blank" op batch writes the sheet and returns the geometry
+        the model acts on: stages, sha, wiring metric, touched pins."""
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "create_netlist",
-                {"name": "noend", "content": "* No end\nR1 a b 1k\n"},
+                "edit_schematic",
+                {"target": "divider.asc", "base": "blank", "ops": DIVIDER_OPS},
             )
-            assert not result.isError
-            file_content = (tmp_path / "noend.cir").read_text()
-            assert file_content.strip().upper().endswith(".END")
+            assert not result.is_error, _text(result)
+            data = _data(result)
+            assert data["outcome"] == "complete"
+            assert data["commit_state"] == "committed"
+            assert (tmp_path / "divider.asc").exists()
+            assert [stage["stage"] for stage in data["stages"]][-1] == "rename"
+            assert all(stage["ok"] for stage in data["stages"])
 
-    async def test_create_and_read_roundtrip(self, tmp_path):
-        """Create a netlist, then read it back — verify components appear."""
+            wiring = data["wiring"]
+            assert wiring["pins_total"] == 4
+            assert wiring["pins_wired"] == 2
+            assert wiring["pins_label_only"] == 1
+            assert wiring["label_only_pins"]["items"][0]["net"] == "0"
+
+            touched = {item["ref"] for item in data["views"]["touched"]["items"]}
+            assert touched == {"R1", "R2"}
+
+    async def test_edit_requires_the_revision_it_was_written_against(self, tmp_path):
+        """An existing sheet needs expected_sha256; a stale one is refused and
+        nothing is written."""
         async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session, "create_netlist", {"name": "rc_filter", "content": RC_NETLIST}
+            first = _data(
+                await _call(
+                    session,
+                    "edit_schematic",
+                    {"target": "guarded.asc", "base": "blank", "ops": DIVIDER_OPS},
+                )
             )
-            assert not result.isError
-            text = _text(result)
-            assert "Components: 3" in text  # R1, C1, V1
+            committed = (tmp_path / "guarded.asc").read_bytes()
 
-            result = await _call(session, "read_circuit", {"path": "rc_filter.cir"})
-            assert not result.isError
-            text = _text(result)
-            assert "R1 in out 1k" in text
-            assert "C1 out 0 100n" in text
-
-    async def test_list_components_returns_all_with_values(self, tmp_path):
-        (tmp_path / "comps.cir").write_text(MINIMAL_NETLIST)
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "list_components", {"path": "comps.cir"})
-            assert not result.isError
-            text = _text(result)
-            assert "R1" in text and "1k" in text
-            assert "R2" in text and "2.2k" in text
-            assert "C1" in text and "10n" in text
-
-    async def test_list_components_prefix_excludes_others(self, tmp_path):
-        (tmp_path / "prefix.cir").write_text(MINIMAL_NETLIST)
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "list_components", {"path": "prefix.cir", "prefix": "R"})
-            assert not result.isError
-            text = _text(result)
-            assert "R1" in text
-            assert "R2" in text
-            # C1 must NOT appear
-            for line in text.strip().split("\n"):
-                assert not line.startswith("C"), f"Unexpected component in filtered output: {line}"
-
-    async def test_single_reference_returns_value(self, tmp_path):
-        (tmp_path / "ref.cir").write_text("* Test\nR1 a b 4.7k\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session, "list_components", {"path": "ref.cir", "reference": "R1"}
+            stale = await _call(
+                session,
+                "edit_schematic",
+                {
+                    "target": "guarded.asc",
+                    "ops": [
+                        {
+                            "op": "add_component",
+                            "reference": "C1",
+                            "symbol": "cap",
+                            "x": 900,
+                            "y": 300,
+                        }
+                    ],
+                    "expected_sha256": "0" * 64,
+                },
             )
-            assert not result.isError
-            text = _text(result)
-            assert text.startswith("R1")
-            assert "4.7k" in text
+            assert _data(stale)["error"]["code"] == "revision_conflict"
+            assert (tmp_path / "guarded.asc").read_bytes() == committed
 
-    async def test_set_component_value_roundtrip(self, tmp_path):
-        """Set a value, then read it back via list_components."""
-        (tmp_path / "setval.cir").write_text("* Test\nR1 a b 1k\n.END\n")
+            fresh = await _call(
+                session,
+                "edit_schematic",
+                {
+                    "target": "guarded.asc",
+                    "ops": [
+                        {
+                            "op": "add_component",
+                            "reference": "C1",
+                            "symbol": "cap",
+                            "x": 900,
+                            "y": 300,
+                        }
+                    ],
+                    "expected_sha256": first["sha256"],
+                },
+            )
+            assert _data(fresh)["commit_state"] == "committed"
+
+    async def test_unresolvable_symbol_aborts_the_transaction_structurally(self, tmp_path):
+        """A symbol the library cannot supply fails as structured op output —
+        named op, named symbol, nothing written — not as a bare exception."""
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "set_component_value",
-                {"path": "setval.cir", "reference": "R1", "value": "2.2k"},
+                "edit_schematic",
+                {
+                    "target": "nosym.asc",
+                    "base": "blank",
+                    "ops": [
+                        {
+                            "op": "add_component",
+                            "reference": "U1",
+                            "symbol": "definitely_not_a_symbol",
+                            "x": 400,
+                            "y": 300,
+                        }
+                    ],
+                },
             )
-            assert not result.isError
-            assert "1k" in _text(result) and "2.2k" in _text(result)
+            data = _data(result)
+            assert data["outcome"] == "failed"
+            assert data["commit_state"] == "not_committed"
+            assert data["error"]["code"] == "op_failed"
+            assert data["failures"][0]["op"] == "add_component"
+            assert "definitely_not_a_symbol" in data["failures"][0]["error"]
+            assert not (tmp_path / "nosym.asc").exists()
 
-            # Round-trip
-            result = await _call(
-                session, "list_components", {"path": "setval.cir", "reference": "R1"}
-            )
-            assert "2.2k" in _text(result)
-
-    async def test_batch_set_component_values(self, tmp_path):
-        (tmp_path / "batch.cir").write_text(MINIMAL_NETLIST)
+    async def test_verify_circuit_reports_schematic_findings_and_scene(self, tmp_path):
+        """verify_circuit over the wire names the layout facts of the sheet it
+        was given, and says which checks it could not run."""
         async with mcp_session(tmp_path) as session:
-            result = await _call(
+            await _call(
                 session,
-                "set_component_value",
-                {"path": "batch.cir", "values": {"R1": "10k", "R2": "47k"}},
+                "edit_schematic",
+                {"target": "checked.asc", "base": "blank", "ops": DIVIDER_OPS},
             )
-            assert not result.isError
-            assert "Updated 2 component(s)" in _text(result)
+            result = await _call(session, "verify_circuit", {"path": "checked.asc"})
+            assert not result.is_error, _text(result)
+            data = _data(result)
+            assert data["kind"] == "asc"
+            assert "symbols" in data["checks_run"]
+            # R1.2 is deliberately left dangling by DIVIDER_OPS.
+            assert [f["rule_id"] for f in data["findings"]] == ["floating_pin"]
+            assert data["findings"][0]["subject"] == "R1"
+            assert data["scene"]["symbols"] == 2
+            # No LTspice in this harness -> the exporter-backed check is skipped
+            # with a reason rather than silently passing.
+            skipped = {item["check"]: item["reason"] for item in data["checks_skipped"]}
+            assert "export" in skipped
 
-            r1 = await _call(session, "list_components", {"path": "batch.cir", "reference": "R1"})
-            assert "10k" in _text(r1)
-            r2 = await _call(session, "list_components", {"path": "batch.cir", "reference": "R2"})
-            assert "47k" in _text(r2)
-
-    async def test_parameter_get_then_set_then_verify(self, tmp_path):
-        (tmp_path / "params.cir").write_text("* Test\nR1 a b {Rval}\n.param Rval=1k\n.END\n")
+    async def test_verify_circuit_lints_a_netlist(self, tmp_path):
+        (tmp_path / "rc.cir").write_text(RC_NETLIST)
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "parameter", {"path": "params.cir"})
-            assert not result.isError
-            assert ".PARAM" in _text(result).upper()
-
-            result = await _call(
-                session,
-                "parameter",
-                {"path": "params.cir", "name": "Rval", "value": "4.7k"},
-            )
-            assert not result.isError
-            assert "4.7k" in _text(result)
-
-            # Verify
-            result = await _call(session, "parameter", {"path": "params.cir"})
-            assert "4.7k" in _text(result).lower() or "4700" in _text(result)
-
-    async def test_edit_directive_roundtrip(self, tmp_path):
-        (tmp_path / "dir.cir").write_text("* Test\nR1 a b 1k\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session,
-                "edit_directive",
-                {"path": "dir.cir", "action": "add", "instruction": ".tran 1m"},
-            )
-            assert not result.isError
-            assert ".tran 1m" in (tmp_path / "dir.cir").read_text()
-
-            result = await _call(
-                session,
-                "edit_directive",
-                {"path": "dir.cir", "action": "remove", "instruction": ".tran 1m"},
-            )
-            assert not result.isError
-            assert ".tran 1m" not in (tmp_path / "dir.cir").read_text()
-
-    async def test_create_netlist_rejects_duplicate(self, tmp_path):
-        (tmp_path / "dup.cir").write_text("* Existing\nR1 a b 1k\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session, "create_netlist", {"name": "dup", "content": "* New\nR1 a b 2k"}
-            )
-            _assert_tool_error(result, "already exists")
-
-    async def test_nonexistent_reference_errors(self, tmp_path):
-        (tmp_path / "noref.cir").write_text("* Test\nR1 a b 1k\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session, "list_components", {"path": "noref.cir", "reference": "C99"}
-            )
-            _assert_tool_error(result, "not found")
+            result = await _call(session, "verify_circuit", {"path": "rc.cir"})
+            assert not result.is_error, _text(result)
+            data = _data(result)
+            assert data["kind"] == "netlist"
+            assert data["checks_run"] == ["syntax", "quality"]
+            assert data["outcome"] == "complete"
 
 
 # ---------------------------------------------------------------------------
@@ -412,273 +601,304 @@ class TestCircuitTools:
 
 
 class TestSecurity:
-    async def test_path_traversal_blocked(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "read_circuit", {"path": "../../../etc/passwd"})
-            _assert_tool_error(result, "not allowed")
+    async def test_path_traversal_blocked(self, shared_session: ClientSession):
+        result = await _call(shared_session, "verify_circuit", {"path": "../../../etc/passwd"})
+        _assert_tool_error(result, "not allowed")
+        finding = _data(result)["findings"][0]
+        assert finding["rule_id"] == "path_denied"
 
-    async def test_absolute_path_outside_sandbox_blocked(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session,
-                "create_netlist",
-                {"name": "/tmp/evil", "content": "* Bad\nR1 a b 1k"},
-            )
-            _assert_tool_error(result, "outside")
+    async def test_absolute_path_outside_sandbox_blocked(
+        self, shared_session: ClientSession, shared_work_dir: Path
+    ):
+        result = await _call(shared_session, "verify_circuit", {"path": "/etc/passwd"})
+        _assert_tool_error(result, "outside allowed directories")
+        # The guidance must name the roots that ARE allowed, or the caller
+        # cannot tell where to put the file instead.
+        assert str(shared_work_dir) in _text(result)
 
-    async def test_read_nonexistent_file_errors(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "read_circuit", {"path": "does_not_exist.cir"})
-            _assert_tool_error(result, "not found")
+    async def test_analyze_results_source_outside_sandbox_blocked(
+        self, shared_session: ClientSession, shared_work_dir: Path
+    ):
+        """A raw path is a path: the batched read plane enforces the sandbox and
+        reports the refusal per source rather than reading the file."""
+        result = await _call(
+            shared_session,
+            "analyze_results",
+            {
+                "sources": [{"raw_path": "/etc/passwd", "label": "outside"}],
+                "recipes": [{"key": "s", "metric": "summary"}],
+            },
+        )
+        data = _data(result)
+        assert data["coverage"]["runs_analyzed"] == 0
+        missing = data["coverage"]["missing_cases"]["items"][0]
+        assert missing["label"] == "outside"
+        assert missing["code"] == "source_unavailable"
+        assert "outside allowed directories" in missing["detail"]
+        assert str(shared_work_dir) in missing["detail"]
+
+    async def test_verify_nonexistent_file_errors(self, shared_session: ClientSession):
+        result = await _call(shared_session, "verify_circuit", {"path": "does_not_exist.cir"})
+        _assert_tool_error(result, "does not exist")
 
 
 # ---------------------------------------------------------------------------
-# 4. Simulation tools (degraded mode — no simulator)
+# 4. Execute plane (degraded mode — no simulator)
 # ---------------------------------------------------------------------------
 
 
 class TestSimulationDegraded:
-    async def test_run_simulation_reports_no_simulator(self, tmp_path):
-        (tmp_path / "sim.cir").write_text("* Test\nR1 a b 1k\n.tran 1m\n.END\n")
+    async def test_run_experiments_reports_no_simulator_with_recovery(self, tmp_path):
+        (tmp_path / "sim.cir").write_text("* Test\nV1 a 0 1\nR1 a 0 1k\n.op\n.end\n")
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "run_simulation", {"netlist": "sim.cir"})
-            _assert_tool_error(result, "simulator")
+            result = await _call(
+                session,
+                "run_experiments",
+                {
+                    "request_id": "e2e-no-sim",
+                    "circuits": [{"path": "sim.cir", "id": "dut"}],
+                    "execution": {"wait_s": 1},
+                },
+            )
+            _assert_tool_error(result, "No SPICE simulator detected")
+            # Naming the knob is the whole value of the degraded-mode error: an
+            # agent that only learns "it failed" installs nothing and retries.
+            text = _text(result)
+            assert "LTSPICE_MCP_SIMULATOR_EXE" in text
+            assert "restart" in text.lower()
+            data = _data(result)
+            assert data["outcome"] == "failed"
+            assert data["error"]["code"] == "submission_failed"
+            assert data["error"]["commit_state"] == "not_started"
+            assert data["completeness"]["submitted"] == 0
 
-    async def test_check_job_nonexistent_returns_error(self, tmp_path):
+    async def test_jobs_list_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "check_job", {"job_id": "nonexistent-123"})
+            result = await _call(session, "jobs", {"action": "list"})
+            assert not result.is_error
+            data = _data(result)
+            assert data["action"] == "list"
+            assert data["outcome"] == "complete"
+            assert data["items"] == []
+            assert data["total"] == 0
+
+    async def test_jobs_status_nonexistent_returns_job_not_found(self, tmp_path):
+        async with mcp_session(tmp_path) as session:
+            result = await _call(
+                session, "jobs", {"action": "status", "job_id": "nonexistent-123"}
+            )
             _assert_tool_error(result, "Job not found: nonexistent-123")
+            data = _data(result)
+            assert data["action"] == "status"
+            assert data["error"]["code"] == "job_not_found"
+            assert data["error"]["retryable"] is False
+            assert "nonexistent-123" in data["hint"]
 
-    async def test_cancel_job_nonexistent_returns_error(self, tmp_path):
+    async def test_jobs_cancel_nonexistent_returns_job_not_found(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "cancel_job", {"job_id": "nonexistent-456"})
+            result = await _call(
+                session, "jobs", {"action": "cancel", "job_id": "nonexistent-456"}
+            )
             _assert_tool_error(result, "Job not found: nonexistent-456")
-
-    async def test_check_job_list_empty(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "check_job", {})
-            assert not result.isError
-            assert "No active jobs" in _text(result)
+            assert _data(result)["error"]["code"] == "job_not_found"
 
 
 # ---------------------------------------------------------------------------
-# 5. Analysis tools — verify specific error messages
+# 5. Analysis plane — verify specific error messages
 # ---------------------------------------------------------------------------
 
 
 class TestAnalysisDegraded:
-    async def test_signal_stats_missing_file(self, tmp_path):
+    async def test_missing_raw_file_fails_that_source(self, tmp_path):
+        """An unreadable source is a per-call failure item naming the file, not
+        a silent empty result."""
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "signal_stats",
-                {"raw_file": "missing.raw", "signal": "V(out)"},
+                "analyze_results",
+                {
+                    "sources": [{"raw_path": "missing.raw", "label": "dut"}],
+                    "recipes": [{"key": "s", "metric": "summary"}],
+                },
             )
-            _assert_tool_error(result, "not found")
+            assert not result.is_error
+            data = _data(result)
+            assert data["outcome"] == "failed"
+            assert data["coverage"]["runs_analyzed"] == 0
+            failure = data["failures"][0]
+            assert failure["code"] == "source_unavailable"
+            assert "missing.raw" in failure["message"]
 
-    async def test_get_simulation_summary_missing_file(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "simulation_summary", {"raw_file": "missing.raw"})
-            _assert_tool_error(result, "not found")
-
-
-# ---------------------------------------------------------------------------
-# 6. Advanced tools — verify config IDs and two-phase workflow
-# ---------------------------------------------------------------------------
-
-
-class TestAdvancedTools:
-    async def test_configure_sweep_returns_config_id(self, tmp_path):
-        (tmp_path / "sweep.cir").write_text(
-            "* Test\nR1 a b {Rval}\n.param Rval=1k\n.tran 1m\n.END\n"
-        )
+    async def test_missing_job_source_is_reported_as_missing_coverage(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "configure_sweep",
+                "analyze_results",
                 {
-                    "netlist": "sweep.cir",
-                    "parameters": [
-                        {
-                            "name": "Rval",
-                            "type": "parameter",
-                            "start": 100,
-                            "stop": 10000,
-                            "points": 5,
-                        }
-                    ],
+                    "sources": [{"job_id": "no-such-job", "label": "j"}],
+                    "recipes": [{"key": "s", "metric": "summary"}],
                 },
             )
-            assert not result.isError
-            text = _text(result)
-            assert "Sweep configured" in text
-            # Config ID format: sweep_<timestamp>_<hash>
-            assert re.search(r"Config ID: sweep_\d+_[0-9a-f]+", text)
-            assert "Total simulations: 5" in text
-            assert "run_sweep(" in text
+            data = _data(result)
+            missing = data["coverage"]["missing_cases"]["items"][0]
+            assert missing["label"] == "j"
+            # The id it could not resolve is the fact; the sentence is not.
+            assert "no-such-job" in missing["detail"]
+            assert "not found" in missing["detail"]
 
-    async def test_configure_montecarlo_returns_config_id(self, tmp_path):
-        (tmp_path / "mc.cir").write_text("* Test\nR1 a b 1k\nC1 b 0 100n\n.tran 1m\n.END\n")
+
+# ---------------------------------------------------------------------------
+# 6. Inspect — capabilities report (the degraded-mode status surface)
+# ---------------------------------------------------------------------------
+
+
+class TestInspectCapabilities:
+    async def test_capabilities_reports_degraded_simulator_state(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session,
-                "configure_montecarlo",
+            result = await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]})
+            assert not result.is_error, _text(result)
+            data = _data(result)
+            assert data["ok_count"] == 1
+            caps = data["results"][0]["data"]
+            # Degraded mode is no longer an empty map: every known simulator
+            # appears as unavailable WITH the remediation naming the exact
+            # config key that would turn it on — the self-diagnosis surface
+            # this state exists for.
+            assert caps["simulators"], "degraded state must still list known simulators"
+            for name, info in caps["simulators"].items():
+                assert info["available"] is False, name
+                assert info["remediation"]["config_key"] == "simulator.path"
+                assert "restart" in info["remediation"]["action"]
+            assert caps["config_path"].endswith("ltspice-mcp.toml")
+            assert caps["python"]["executable"]
+            assert caps["default_simulator"] is None
+            assert caps["tool_profile"] == "consolidated"
+            assert caps["python_api"]["open"] == f"Api(working_dir={str(tmp_path)!r})"
+            assert caps["allowed_paths"] == [str(tmp_path)]
+            assert caps["limits"]["max_parallel_sims"] == 1
+            assert caps["limits"]["default_timeout_s"] == 10.0
+
+
+# ---------------------------------------------------------------------------
+# 6b. run_code — the exec tool, served only when the operator turned it on
+# ---------------------------------------------------------------------------
+
+
+class TestRunCode:
+    async def test_off_by_default_the_name_is_unknown(self, shared_session: ClientSession):
+        # Not a tool result flagged as an error: a name the session does not
+        # serve is a lookup failure, answered as an invalid-params error.
+        with pytest.raises(MCPError, match="Unknown tool: run_code"):
+            await _call(shared_session, "run_code", {"code": "1"})
+
+    async def test_on_the_tool_is_advertised_last_and_runs_with_the_engine(self, tmp_path):
+        async with mcp_session(tmp_path, run_code=True) as session:
+            names = [t.name for t in (await session.list_tools()).tools]
+            assert set(names) == CONSOLIDATED_TOOLS | {"run_code"}
+            assert names[-1] == "run_code"
+            caps = _data(await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]}))[
+                "results"
+            ][0]["data"]
+            assert caps["python_api"]["run_code"]["enabled"] is True
+            result = await session.call_tool(
+                "run_code",
                 {
-                    "netlist": "mc.cir",
-                    "tolerances": [{"ref": "R1", "tolerance": 0.05}],
-                    "num_runs": 10,
+                    "code": "print(api.inspect(queries=[{'kind': 'capabilities'}])['ok_count'])\n6 * 7"
                 },
+                read_timeout_seconds=60,
             )
-            assert not result.isError
-            text = _text(result)
-            assert "Monte Carlo configured" in text
-            assert re.search(r"Config ID: mc_\d+_[0-9a-f]+", text)
-            assert "Runs: 10" in text
-            assert "5.0%" in text  # tolerance formatted as percentage
-            assert "run_montecarlo(" in text
+            assert not result.is_error, _text(result)
+            reply = _data(result)
+            assert reply["status"] == "ok"
+            assert reply["stdout"] == "1\n"
+            assert reply["result"] == "42"
 
-    async def test_run_sweep_without_simulator_errors(self, tmp_path):
-        """configure_sweep succeeds, but run_sweep needs a simulator."""
-        (tmp_path / "sw2.cir").write_text("* Test\nR1 a b {X}\n.param X=1k\n.tran 1m\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            cfg = await _call(
-                session,
-                "configure_sweep",
-                {
-                    "netlist": "sw2.cir",
-                    "parameters": [
-                        {"name": "X", "type": "parameter", "start": 1, "stop": 10, "points": 3}
-                    ],
-                },
+    @pytest.mark.skipif(os.name == "nt", reason="the graceful interrupt is POSIX-only")
+    async def test_a_cancelled_call_leaves_the_worker_usable(self, tmp_path):
+        async with mcp_session(tmp_path, run_code=True) as session:
+            warm = await session.call_tool("run_code", {"code": "1"}, read_timeout_seconds=60)
+            assert _data(warm)["status"] == "ok"
+            pid = _data(warm)["worker_pid"]
+            task = asyncio.ensure_future(
+                session.call_tool(
+                    "run_code", {"code": "import time\ntime.sleep(30)"}, read_timeout_seconds=60
+                )
             )
-            match = re.search(r"Config ID: (sweep_\S+)", _text(cfg))
-            assert match, f"No config ID in: {_text(cfg)}"
-            config_id = match.group(1)
-
-            result = await _call(session, "run_sweep", {"config_id": config_id})
-            _assert_tool_error(result, "simulator")
-
-    async def test_run_sweep_invalid_config_id_errors(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "run_sweep", {"config_id": "sweep_bogus"})
-            _assert_tool_error(result, "not found")
-
-    async def test_get_batch_results_invalid_job_returns_error(self, tmp_path):
-        """get_batch_results returns error for missing jobs."""
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "batch_results", {"job_id": "batch_bogus"})
-            _assert_tool_error(result, "Batch job not found: batch_bogus")
-
-
-# ---------------------------------------------------------------------------
-# 7. Library tools
-# ---------------------------------------------------------------------------
-
-
-class TestLibraryTools:
-    async def test_list_libraries_empty_says_no_libraries(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "list_libraries", {})
-            assert not result.isError
-            assert "No libraries loaded" in _text(result)
-
-    async def test_find_model_no_results(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "find_model", {"name": "LM358"})
-            assert not result.isError
-            assert "No fuzzy matches" in _text(result)
-
-    async def test_load_nonexistent_library_errors(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "load_library", {"path": "nonexistent.lib"})
-            _assert_tool_error(result, "does not exist")
-
-    async def test_unload_not_loaded_library_errors(self, tmp_path):
-        lib_file = tmp_path / "empty.lib"
-        lib_file.write_text("")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "unload_library", {"path": "empty.lib"})
-            _assert_tool_error(result, "not loaded")
+            await asyncio.sleep(1.0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # Abandoning the request sent notifications/cancelled; the server
+            # interrupted the snippet. A call inside that window is busy.
+            reply = _data(
+                await session.call_tool("run_code", {"code": "2 + 2"}, read_timeout_seconds=60)
+            )
+            for _ in range(20):
+                if reply["status"] != "busy":
+                    break
+                await asyncio.sleep(0.25)
+                reply = _data(
+                    await session.call_tool("run_code", {"code": "2 + 2"}, read_timeout_seconds=60)
+                )
+            assert reply["status"] == "ok"
+            assert reply["result"] == "4"
+            assert reply["worker_pid"] == pid
 
 
 # ---------------------------------------------------------------------------
-# 8. Status tool — verify structured output
-# ---------------------------------------------------------------------------
-
-
-class TestStatusTool:
-    async def test_get_server_status_content(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "server_status", {})
-            assert not result.isError
-            text = _text(result)
-            assert "=== LTSpice MCP Server Status ===" in text
-            assert "Simulators:" in text
-            assert "degraded mode" in text
-            assert "Default simulator: None" in text
-            assert "Configuration:" in text
-            assert f"Working directory: {tmp_path}" in text
-            assert "Security (Sandbox):" in text
-            assert "Runtime State:" in text
-            assert "Active jobs: 0" in text
-
-
-# ---------------------------------------------------------------------------
-# 9. Resources — verify data content
+# 7. Resources — verify data content
 # ---------------------------------------------------------------------------
 
 
 class TestResources:
-    async def test_list_resources_returns_static_set(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.list_resources()
-            resources = {r.name: r for r in result.resources}
-            assert len(resources) == 7
-            assert set(resources.keys()) == {
-                "netlists",
-                "results",
-                "models",
-                "config",
-                "recent",
-                "plot_widget",
-                "guide",
-            }
-            assert str(resources["config"].uri) == "spice://config"
-            assert str(resources["recent"].uri) == "spice://recent"
-            assert str(resources["guide"].uri) == "spice://guide"
+    async def test_list_resources_returns_static_set(self, shared_session: ClientSession):
+        result = await shared_session.list_resources()
+        resources = {r.name: r for r in result.resources}
+        assert len(resources) == 7
+        assert set(resources.keys()) == {
+            "netlists",
+            "results",
+            "models",
+            "config",
+            "recent",
+            "plot_widget",
+            "guide",
+        }
+        assert str(resources["config"].uri) == "spice://config"
+        assert str(resources["recent"].uri) == "spice://recent"
+        assert str(resources["guide"].uri) == "spice://guide"
 
-    async def test_list_resource_templates_returns_three(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.list_resource_templates()
-            templates = {t.name for t in result.resourceTemplates}
-            assert templates == {"netlist_content", "job_signals", "job_measurements"}
+    async def test_list_resource_templates_returns_three(self, shared_session: ClientSession):
+        result = await shared_session.list_resource_templates()
+        templates = {t.name for t in result.resource_templates}
+        assert templates == {"netlist_content", "job_signals", "job_measurements"}
 
-    async def test_read_ui_widget_resource_over_protocol(self, tmp_path):
+    async def test_read_ui_widget_resource_over_protocol(self, shared_session: ClientSession):
         # The MCP Apps renderer is served under the ui:// scheme — exercise the
-        # full SDK read path (AnyUrl parsing of a non-ltspice scheme) end to end.
-        async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ui://ltspice-mcp/plot"))
-            entry = result.contents[0]
-            assert entry.mimeType == "text/html;profile=mcp-app"
-            assert "globalThis.ExtApps" in entry.text  # type: ignore[union-attr]
+        # full SDK read path for a non-ltspice scheme end to end.
+        result = await shared_session.read_resource("ui://ltspice-mcp/plot")
+        entry = result.contents[0]
+        assert entry.mime_type == "text/html;profile=mcp-app"
+        assert "globalThis.ExtApps" in entry.text  # type: ignore[union-attr]
 
-    async def test_read_config_resource_has_correct_fields(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://config"))
-            data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
-            assert data["working_dir"] == str(tmp_path)
-            assert isinstance(data["allowed_paths"], list)
-            assert data["detected_simulators"] == []
-            assert data["default_simulator"] is None
-            assert data["max_parallel_sims"] == 1
-            assert data["default_timeout"] == 10.0
-            assert data["log_level"] == "DEBUG"
+    async def test_read_config_resource_has_correct_fields(
+        self, shared_session: ClientSession, shared_work_dir: Path
+    ):
+        result = await shared_session.read_resource("spice://config")
+        data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
+        assert data["working_dir"] == str(shared_work_dir)
+        assert isinstance(data["allowed_paths"], list)
+        assert data["detected_simulators"] == []
+        assert data["default_simulator"] is None
+        assert data["max_parallel_sims"] == 1
+        assert data["default_timeout"] == 10.0
+        assert data["log_level"] == "DEBUG"
 
     async def test_read_netlists_lists_cir_files_only(self, tmp_path):
         (tmp_path / "circuit.cir").write_text("* Test\nR1 a b 1k\n.END\n")
         (tmp_path / "notes.txt").write_text("not a netlist")
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://netlists/"))
+            result = await session.read_resource("spice://netlists/")
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             names = [n["name"] for n in data["netlists"]]
             assert "circuit.cir" in names
@@ -690,53 +910,109 @@ class TestResources:
         netlist_text = "* My Circuit\nR1 a b 1k\nC1 b 0 10n\n.END\n"
         (tmp_path / "mycirc.cir").write_text(netlist_text)
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://netlists/mycirc.cir"))
+            result = await session.read_resource("spice://netlists/mycirc.cir")
             content = result.contents[0].text  # type: ignore[union-attr]
             assert content == netlist_text
 
-    async def test_read_results_empty(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://results/"))
-            data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
-            assert data == {"count": 0, "jobs": []}
+    async def test_read_results_empty(self, shared_session: ClientSession):
+        result = await shared_session.read_resource("spice://results/")
+        data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
+        assert data == {"count": 0, "jobs": []}
 
-    async def test_read_models_empty(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://models/"))
-            data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
-            assert data["libraries"] == []
+    async def test_read_models_empty(self, shared_session: ClientSession):
+        result = await shared_session.read_resource("spice://models/")
+        data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
+        assert data["libraries"] == []
+
+    async def test_unknown_resource_uri_is_an_invalid_parameter(
+        self, shared_session: ClientSession
+    ):
+        # A URI naming no resource this server serves is a protocol error, not
+        # empty contents. 2026-07-28 dropped the separate resource-not-found
+        # code that earlier revisions used, so it is an invalid parameter.
+        with pytest.raises(MCPError) as excinfo:
+            await shared_session.read_resource("spice://no-such-resource")
+        assert excinfo.value.code == mcp_types.INVALID_PARAMS
+        assert "Unknown resource URI" in excinfo.value.message
+
+    async def test_reading_a_netlist_outside_the_sandbox_is_refused(
+        self, shared_session: ClientSession
+    ):
+        # The sandbox wall applies to resource reads too, and the refusal must
+        # carry the same recovery guidance the tool path gives.
+        with pytest.raises(MCPError) as excinfo:
+            await shared_session.read_resource("spice://netlists/..%2F..%2Fetc%2Fpasswd")
+        assert excinfo.value.code == mcp_types.INVALID_PARAMS
+        assert "LTSPICE_MCP_ALLOWED_PATHS" in excinfo.value.message
 
 
 # ---------------------------------------------------------------------------
-# 11. Error handling — precise error classification
+# 8. Error handling — precise error classification
 # ---------------------------------------------------------------------------
 
 
 class TestErrorHandling:
-    async def test_unknown_tool_returns_error(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "totally_fake_tool", {})
-            assert result.isError
-            assert "Unknown tool: totally_fake_tool" in _text(result)
+    async def test_unknown_tool_raises_invalid_params(self, shared_session: ClientSession):
+        """Calling a name the server does not have is a lookup failure, so it
+        comes back as a JSON-RPC invalid-params error naming the available
+        tools — not as an error-flagged result from a tool that does not
+        exist."""
+        with pytest.raises(MCPError) as excinfo:
+            await _call(shared_session, "totally_fake_tool", {})
+        assert excinfo.value.code == mcp_types.INVALID_PARAMS
+        message = excinfo.value.message
+        assert "totally_fake_tool" in message
+        for name in CONSOLIDATED_TOOLS:
+            assert name in message
 
-    async def test_missing_required_arg_returns_validation_error(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "read_circuit", {})
-            assert result.isError  # SDK-level validation
-            assert "path" in _text(result).lower()
+    async def test_missing_required_arg_returns_validation_error(
+        self, shared_session: ClientSession
+    ):
+        result = await _call(shared_session, "run_experiments", {"request_id": "e2e-no-circuits"})
+        assert result.is_error
+        text = _text(result)
+        assert text.startswith("Invalid arguments for run_experiments:")
+        assert "circuits" in text
 
-    async def test_edit_directive_rejects_non_dot_instruction(self, tmp_path):
-        (tmp_path / "nondot.cir").write_text("* Test\nR1 a b 1k\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session,
-                "edit_directive",
-                {"path": "nondot.cir", "action": "add", "instruction": "not-a-directive"},
-            )
-            _assert_tool_error(result, "must start with '.'")
+    async def test_unknown_op_kind_rejected_by_schema(
+        self, shared_session: ClientSession, shared_work_dir: Path
+    ):
+        result = await _call(
+            shared_session,
+            "edit_schematic",
+            {"target": "bad.asc", "base": "blank", "ops": [{"op": "not_an_op"}]},
+        )
+        assert result.is_error
+        assert _text(result).startswith("Invalid arguments for edit_schematic:")
+        assert not (shared_work_dir / "bad.asc").exists()
 
-    async def test_set_component_missing_both_modes_errors(self, tmp_path):
-        (tmp_path / "badset.cir").write_text("* Test\nR1 a b 1k\n.END\n")
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "set_component_value", {"path": "badset.cir"})
-            _assert_tool_error(result, "reference")
+    async def test_a_bad_field_inside_a_known_op_gets_that_ops_reference(
+        self, shared_session: ClientSession
+    ):
+        op = {
+            "op": "add_component",
+            "reference": "R1",
+            "symbol": "res",
+            "x": 0,
+            "y": 0,
+            "bogus": 1,
+        }
+        result = await _call(
+            shared_session, "edit_schematic", {"target": "bad.asc", "base": "blank", "ops": [op]}
+        )
+        assert result.is_error
+        text = _text(result)
+        assert "bogus" in text
+        assert "Reference for add_component:" in text
+
+    async def test_unknown_jobs_action_names_the_legal_set(self, shared_session: ClientSession):
+        result = await _call(shared_session, "jobs", {"action": "frobnicate"})
+        assert result.is_error
+        text = _text(result)
+        assert text.startswith("Invalid arguments for jobs:")
+        for action in ("status", "wait", "cancel", "list", "runs"):
+            assert action in text
+
+    async def test_jobs_status_without_an_identifier_errors(self, shared_session: ClientSession):
+        result = await _call(shared_session, "jobs", {"action": "status"})
+        _assert_tool_error(result, "requires exactly one of job_id or request_id")

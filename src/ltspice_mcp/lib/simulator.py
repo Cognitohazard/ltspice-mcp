@@ -10,7 +10,13 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 from spicelib.simulators.qspice_simulator import Qspice
 from spicelib.simulators.xyce_simulator import XyceSimulator
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import (
+    SIM_ENABLED_KEY,
+    SIM_PATH_ENV,
+    SIM_PATH_KEY,
+    SIM_SECTION,
+    ServerConfig,
+)
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
@@ -171,6 +177,57 @@ def current_ngbehavior() -> str | None:
     return getattr(NGspiceSimulator, "_compatibility_mode", None)
 
 
+def simulator_library_roots(simulator_class: type | None) -> list[Path]:
+    """Directories holding the detected simulator's own shipped model library.
+
+    Same trust class as the ``.asy`` symbol paths resolved from the same
+    install (see ``engine.configure_asc_editor``): both are read out of the
+    simulator the server already runs, so a deck referencing a file inside one
+    is naming the simulator, not the user's filesystem. Staging therefore
+    accepts and snapshots them without the sandbox being widened — LTspice's
+    ``.asc`` netlister appends ``.lib <install>/lib/cmp/standard.mos`` to every
+    schematic carrying a MOSFET symbol, so under a default ``allowed_paths``
+    no transistor schematic could otherwise be staged at all.
+
+    Resolution mirrors the symbol path's: on WSL the install lives behind
+    ``%LOCALAPPDATA%`` and only the interop probe finds it, because spicelib's
+    own derivation expands ``~`` against the Linux home. Nonexistent
+    directories and any root already contained in an earlier one are dropped,
+    so the result is a minimal list of real directories.
+    """
+    if simulator_class is None:
+        return []
+    candidates: list[Path] = []
+    if issubclass(simulator_class, LTspice):
+        from ltspice_mcp.lib.wsl import get_ltspice_lib_paths
+
+        candidates += [Path(p) for p in get_ltspice_lib_paths()]
+    try:
+        candidates += [Path(p) for p in simulator_class.get_default_library_paths()]
+    except Exception as exc:
+        # spicelib derives these from spice_exe and the platform; a simulator
+        # class without one, or an install shape it does not know, must cost
+        # the caller nothing beyond the roots already found.
+        logger.debug(f"No default library paths for {simulator_class.__name__}: {exc}")
+
+    found: list[Path] = []
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.is_dir() and resolved not in found:
+            found.append(resolved)
+    # Drop any root a broader one already covers, whichever order they arrived
+    # in: the probe reports both ``lib`` and ``lib/sym``, and the nested one
+    # adds no reach while giving the same files a second staging destination.
+    return [
+        root
+        for root in found
+        if not any(other != root and root.is_relative_to(other) for other in found)
+    ]
+
+
 def is_ngspice(simulator_class: type | None) -> bool:
     """True when the simulator is ngspice — whose compat-mode / sectioned-.lib
     quirks the ngbehavior diagnostic keys off. Checks class identity, not the
@@ -321,8 +378,9 @@ def install_hint() -> str:
     """
     if is_wsl():
         return (
-            "install ngspice in this WSL distro (`sudo apt-get install -y ngspice`), "
-            "or set LTSPICE_MCP_SIMULATOR_EXE to a Windows LTspice.exe path"
+            "install ngspice (`sudo apt-get install -y ngspice`), "
+            f"or set {SIM_PATH_ENV} ({SIM_SECTION}.{SIM_PATH_KEY} in ltspice-mcp.toml) "
+            "to a Windows LTspice.exe path"
         )
     system = platform.system()
     if system == "Darwin":
@@ -332,13 +390,94 @@ def install_hint() -> str:
     return "install ngspice (`sudo apt-get install -y ngspice`, or your distro's package manager)"
 
 
-def no_simulator_message() -> str:
+def _platform_key() -> str:
+    if is_wsl():
+        return "wsl"
+    return {"Windows": "windows", "Darwin": "darwin"}.get(platform.system(), "linux")
+
+
+# Realistic executable locations per simulator and platform, shown as the
+# example value beside the config key that takes them. WSL reaches Windows
+# binaries through /mnt/c — the LTspice example is the path this project's
+# own development box uses.
+_SIMULATOR_EXE_EXAMPLES: dict[str, dict[str, str]] = {
+    "ltspice": {
+        "wsl": "/mnt/c/Program Files/ADI/LTspice/LTspice.exe",
+        "windows": "C:\\Program Files\\ADI\\LTspice\\LTspice.exe",
+        "darwin": "/Applications/LTspice.app/Contents/MacOS/LTspice",
+        "linux": "~/.wine/drive_c/Program Files/ADI/LTspice/LTspice.exe",
+    },
+    "ngspice": {
+        "wsl": "/usr/bin/ngspice",
+        "linux": "/usr/bin/ngspice",
+        "darwin": "/opt/homebrew/bin/ngspice",
+        "windows": "C:\\Spice64\\bin\\ngspice_con.exe",
+    },
+    "qspice": {
+        "wsl": "/mnt/c/Program Files/QSPICE/QSPICE64.exe",
+        "windows": "C:\\Program Files\\QSPICE\\QSPICE64.exe",
+    },
+    "xyce": {
+        "linux": "/usr/local/bin/Xyce",
+        "wsl": "/usr/local/bin/Xyce",
+        "darwin": "/usr/local/bin/Xyce",
+    },
+}
+
+
+def simulator_remediation(name: str, config: ServerConfig) -> dict[str, object]:
+    """How to make one undetected simulator available, as facts.
+
+    Composed from the SAME constants the config loader reads
+    (``SIM_SECTION``/``SIM_PATH_KEY``/``SIM_PATH_ENV`` — see config.py), so the
+    key this tells a caller to set is the key the loader honors. When a
+    non-empty allowlist is the reason the simulator is off, that is the first
+    fact — pointing at an install would send the caller past the actual cause.
+    """
+    enabled = _resolve_enabled_names(config)
+    excluded = name not in enabled
+    key = f"{SIM_SECTION}.{SIM_PATH_KEY}"
+    restart = "then restart this MCP server — detection runs at startup."
+    if excluded:
+        action = (
+            f"'{name}' is excluded by {SIM_SECTION}.{SIM_ENABLED_KEY} = "
+            f"{config.enabled_simulators} in {config.config_path}; add it there "
+            f"(or clear the list), {restart}"
+        )
+    else:
+        action = (
+            f"Install {name}, or set {key} in {config.config_path} "
+            f"(env {SIM_PATH_ENV}) to its executable; {restart}"
+        )
+    remediation: dict[str, object] = {
+        "config_file": str(config.config_path),
+        "config_key": key,
+        "env_var": SIM_PATH_ENV,
+        "excluded_by_allowlist": excluded,
+        "action": action,
+    }
+    example = _SIMULATOR_EXE_EXAMPLES.get(name, {}).get(_platform_key())
+    if example is not None:
+        remediation["example_value"] = example
+    return remediation
+
+
+def no_simulator_message(short: bool = False) -> str:
     """Actionable 'no simulator detected' text shared by instructions and errors.
 
     Detection runs once at startup, so a simulator installed into a running
     sandbox is not picked up until the server is restarted — say so, or the
     agent installs ngspice and then loops on the same error.
+
+    ``short`` is the compact form for the consolidated profile's instructions,
+    which must fit a client-side truncation budget with the guide body intact.
     """
+    if short:
+        return (
+            f"No SPICE simulator detected — {install_hint()}, then restart this "
+            "MCP server (it detects at startup). Authoring and .asc editing "
+            "still work."
+        )
     return (
         f"No SPICE simulator detected. To run simulations, {install_hint()}, then "
         "restart (reconnect) this MCP server so it re-detects — detection happens "
@@ -371,7 +510,7 @@ def _resolve_enabled_names(
                 names.append(name)
         else:
             msg = (
-                f"Unknown simulator '{raw}' in [simulator] enabled "
+                f"Unknown simulator '{raw}' in [{SIM_SECTION}] {SIM_ENABLED_KEY} "
                 f"(valid: {list(SIMULATORS)}); ignoring."
             )
             logger.warning(msg)

@@ -7,6 +7,7 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
     _FAMILY_EXAMPLE_CAP,
+    classify_failure_code,
     count_op_iterations,
     extract_error_context,
     extract_log_diagnostics,
@@ -14,7 +15,6 @@ from ltspice_mcp.lib.log_parser import (
     parse_fourier_data,
     parse_measurements,
     parse_step_iterations,
-    parse_success_summary,
     parse_temperatures,
     read_log_text,
 )
@@ -271,6 +271,53 @@ class TestExtractLogDiagnostics:
         result = extract_log_diagnostics(log)
         assert len(result["errors"]) == 2
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            # Both are LTspice verbatim, and neither carries the "singular
+            # matrix" word order or starts with the phrase, so the anchored
+            # bare-phrase rule cannot reach either one.
+            "Voltage source and/or inductor loop found, matrix is singular.",
+            "Voltage source VP2 and voltage source VP1 are paralleled making "
+            "an over-defined circuit matrix. You will need to correct the "
+            "circuit or add some series resistance.",
+        ],
+    )
+    def test_unsolvable_topology_wordings_are_errors(self, tmp_path: Path, line: str):
+        log = tmp_path / "topology.log"
+        log.write_text(f"Circuit: * test\n{line}\n")
+        result = extract_log_diagnostics(log)
+        assert result["errors"] == [line]
+        assert classify_failure_code(result["errors"])[0] == "singular_matrix"
+
+    def test_singular_matrix_narration_still_classifies_generically(self, tmp_path: Path):
+        """The anchor's whole point: a success sentence is not a solver failure.
+
+        Through the extractor, which is where classification gets its
+        anchoring from — the phrase alone is not the failure.
+        """
+        log = tmp_path / "narration.log"
+        log.write_text("the singular matrix decomposition succeeded\n")
+        errors = extract_log_diagnostics(log)["errors"]
+        assert errors == []
+        assert classify_failure_code(errors)[0] == "execution_failed"
+
+    def test_missing_include_classifies_ahead_of_the_models_it_hides(self, tmp_path: Path):
+        """An include the simulator never opened is why its models are missing.
+
+        Reporting the model would name the symptom: the deck is fine, the file
+        is not there. The include check therefore runs before the model check.
+        """
+        log = tmp_path / "include.log"
+        log.write_text(
+            "Error: Could not find include file corners.lib\n"
+            'Error on line 3 : m1 d g s b nch Unable to find definition of model "nch"\n'
+        )
+        errors = extract_log_diagnostics(log)["errors"]
+        code, evidence = classify_failure_code(errors)
+        assert code == "missing_include"
+        assert evidence == {"missing_includes": ["corners.lib"]}
+
     def test_meas_error_with_vdb_suggestion(self, tmp_path: Path):
         """vdb() in .MEAS should produce a structured meas_error with a
         suggestion pointing at mag()/filter_metrics."""
@@ -398,61 +445,6 @@ class TestExtractErrorContext:
         log.write_text("\n".join(lines))
         result = extract_error_context(log, max_lines=20)
         assert "Timestep too small" in result
-
-
-class TestParseSuccessSummary:
-    def test_missing_raw_graceful(self, tmp_path: Path):
-        # Both files missing — should still return the dict structure
-        result = parse_success_summary(
-            tmp_path / "missing.raw", tmp_path / "missing.log", duration=1.5
-        )
-        assert result["duration"] == 1.5
-        assert result["sim_type"] == "Unknown"
-        assert result["signals"] == []
-        assert result["step_count"] == 1
-
-    def test_missing_log_with_invalid_raw(self, tmp_path: Path):
-        raw = tmp_path / "x.raw"
-        raw.write_bytes(b"not a real raw file")
-        log = tmp_path / "x.log"
-        log.write_text("Warning: heads up\n")
-        result = parse_success_summary(raw, log, duration=2.0)
-        assert result["duration"] == 2.0
-        # log warnings should be collected
-        assert any("heads up" in w for w in result["warnings"])
-
-    # A header that promises binary data and then truncates makes spicelib
-    # raise (plain ASCII garbage parses "successfully" as a zero-trace raw —
-    # that sibling case is covered by the corrupt-raw diagnosis tests).
-    _TRUNCATED_RAW = (
-        b"Title: t\nDate: d\nPlotname: Transient Analysis\nFlags: real\n"
-        b"No. Variables: 3\nNo. Points: 100\nVariables:\n\t0\ttime\ttime\n"
-        b"\t1\tV(a)\tvoltage\n\t2\tV(b)\tvoltage\nBinary:\n"
-    ) + b"\x01\x02"
-
-    def test_unparseable_raw_is_surfaced_not_hidden(self, tmp_path: Path):
-        # A raw that exists but can't be parsed must reach the response as a
-        # fact (errors + a coverage observation) — a degraded summary with
-        # zero signals rendering as clean success is data loss dressed up.
-        raw = tmp_path / "x.raw"
-        raw.write_bytes(self._TRUNCATED_RAW)
-        log = tmp_path / "x.log"
-        log.write_text("Total elapsed time: 0.1 seconds.\n")
-        result = parse_success_summary(raw, log, duration=1.0)
-        assert any("could not be parsed" in e for e in result.get("errors", []))
-        obs = result.get("observations", [])
-        assert any(o.get("code") == "raw_parse_failed" for o in obs)
-        assert all(o.get("kind") == "coverage" for o in obs if o.get("code") == "raw_parse_failed")
-
-    def test_unparseable_raw_keeps_log_errors_alongside(self, tmp_path: Path):
-        raw = tmp_path / "x.raw"
-        raw.write_bytes(self._TRUNCATED_RAW)
-        log = tmp_path / "x.log"
-        log.write_text("Fatal Error: something exploded\n")
-        result = parse_success_summary(raw, log, duration=1.0)
-        errors = result.get("errors", [])
-        assert any("could not be parsed" in e for e in errors)
-        assert any("something exploded" in e for e in errors)
 
 
 class TestParseMeasurements:

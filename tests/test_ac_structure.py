@@ -1,10 +1,10 @@
-"""Tests for the AC structural reader (lib + tool handler).
+"""Tests for the AC structural reader (the pure analysis and the recipe).
 
 The LIB tests call ``analyze_ac_structure`` directly on synthesized complex
-``H(jw)`` over a log-spaced sweep; the TOOL tests drive the real
-``handle_ac_structure`` handler with an AC raw mock injected into the result
-cache (reusing the mock helpers from ``test_analysis_tools``); the REJECTION
-test confirms a transient raw is refused.
+``H(jw)`` over a log-spaced sweep; the RECIPE tests drive the ac_structure
+metric with an AC raw mock injected into the result cache (reusing the mock
+helpers from ``test_analysis_tools``); the REJECTION test confirms a transient
+raw is refused.
 """
 
 import json
@@ -15,17 +15,16 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
+from ltspice_mcp.lib.recipes import AcStructureRecipe
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import schema_from_typeddict
-from ltspice_mcp.tools.analysis import (
-    AcStructureInput,
-    AcStructureResponse,
-    handle_ac_structure,
-)
-from tests.test_analysis_tools import _inject_raw_mock, _make_raw_mock
+from tests.test_analysis_tools import _inject_raw_mock, _make_raw_mock, _metric
 
 # Shared log-spaced sweep: 1 Hz .. 10 MHz, dense enough to read corners.
 FREQS = np.logspace(0, 7, 351)
+
+
+def _recipe(signal: str = "V(out)") -> AcStructureRecipe:
+    return AcStructureRecipe(key="a", metric="ac_structure", signal=signal)
 
 
 # ---- Analytic transfer functions ------------------------------------------
@@ -181,62 +180,41 @@ class TestAcStructureTool:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         name = _inject_ac(state_no_sim, work_dir, "ac.raw", rlc(1e4, 5.0))
-        result = await handle_ac_structure(
-            AcStructureInput(raw_file=name, signal="V(out)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
+        data = await _metric(state_no_sim, name, _recipe())
         for key in ("net_order", "corners", "non_minimum_phase", "method", "observations"):
-            assert key in sc
-        assert sc["signal"] == "V(out)"
-        assert "AC structure" in result.content[0].text
+            assert key in data
+        assert data["signal"] == "V(out)"
 
     async def test_handler_flags_non_minimum_phase(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         name = _inject_ac(state_no_sim, work_dir, "rhp.raw", rhp_zero(5e3, 500.0))
-        result = await handle_ac_structure(
-            AcStructureInput(raw_file=name, signal="V(out)"),
-            state_no_sim,
-        )
-        assert result.structuredContent["non_minimum_phase"] is True
-        assert "Out-of-phase zero / delay" in result.content[0].text
+        data = await _metric(state_no_sim, name, _recipe())
+        assert data["non_minimum_phase"] is True
+        assert data["phase_residual_deg"] is not None
 
 
-# ---- B2. OBSERVATION SHAPE: doctrine fields declared + relayed ------------
+# ---- B2. OBSERVATION SHAPE: canonical fields declared + relayed -----------
 
 
 class TestAcStructureObservationShape:
     """The observations list mixes the reader's own facts (code/detail) with
-    facts relayed from the simulator (code/kind/detail/severity/evidence). The
-    declared schema must document that full doctrine shape."""
-
-    def test_schema_declares_doctrine_observation_fields(self):
-        schema = schema_from_typeddict(AcStructureResponse)
-        item = schema["properties"]["observations"]["items"]
-        assert {"code", "kind", "detail", "severity", "evidence"} <= set(item["properties"])
-        # total=False Observation → no field required, so the reader's own
-        # code/detail-only facts validate alongside the relayed ones.
-        assert not item.get("required")
+    facts relayed from the simulator (code/kind/detail/severity/evidence), and
+    a reader has to be able to tell them apart."""
 
     @pytest.mark.asyncio
     async def test_relayed_solve_failure_has_full_shape(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        import ltspice_mcp.tools.analysis as analysis_mod
+        import ltspice_mcp.lib.metrics as metrics_mod
 
-        async def _fake_solve_failures(raw_path):
+        async def _fake_solve_failures(source):
             return ["singular matrix: node V(x) has no DC path"]
 
-        monkeypatch.setattr(analysis_mod, "_solve_failures", _fake_solve_failures)
+        monkeypatch.setattr(metrics_mod, "solve_failures", _fake_solve_failures)
         name = _inject_ac(state_no_sim, work_dir, "relay.raw", one_pole(1e3))
-        # format="json" routes through json_response, so the autouse conformance
-        # hook validates this mixed-shape observations list against the schema.
-        result = await handle_ac_structure(
-            AcStructureInput(raw_file=name, signal="V(out)", format="json"),
-            state_no_sim,
-        )
-        relayed = [o for o in result.structuredContent["observations"] if o.get("kind") == "relay"]
+        data = await _metric(state_no_sim, name, _recipe())
+        relayed = [o for o in data["observations"] if o.get("kind") == "relay"]
         assert relayed, "expected a relayed solve-failure observation"
         r = relayed[0]
         assert r["severity"] == "error"
@@ -260,10 +238,7 @@ class TestAcStructureRejection:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="AC analysis"):
-            await handle_ac_structure(
-                AcStructureInput(raw_file=raw_file.name, signal="V(out)"),
-                state_no_sim,
-            )
+            await _metric(state_no_sim, raw_file.name, _recipe())
 
 
 # ---- D. DEGENERATE: zero-magnitude inputs stay finite / JSON-valid ---------

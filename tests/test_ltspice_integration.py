@@ -5,8 +5,6 @@ LTspice is available on the system.
 They exercise the full simulation pipeline: create netlist → run sim → parse results.
 """
 
-import asyncio
-import json
 import os
 import shutil
 from pathlib import Path
@@ -15,9 +13,9 @@ import pytest
 from mcp.types import TextContent, TextResourceContents
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
+from tests.conftest import terminal_experiment
 
 # Path to the test fixture .asc schematic
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -58,9 +56,9 @@ def _make_ltspice_state(work_dir: Path) -> SessionState | None:
         return None
 
     # Configure AscEditor library paths (same as server_lifespan does)
-    from ltspice_mcp.server import _configure_asc_editor
+    from ltspice_mcp.engine import configure_asc_editor
 
-    _configure_asc_editor(config, available)
+    configure_asc_editor(config, available)
 
     return SessionState.create(config, available)
 
@@ -125,176 +123,171 @@ def tran_netlist(work_dir: Path) -> Path:
     return p
 
 
+async def _run_deck(state: SessionState, request_id: str, netlist: str) -> dict:
+    """Run one deck on the real LTspice binary and return its terminal receipt."""
+    receipt = await terminal_experiment(
+        state,
+        {
+            "request_id": request_id,
+            "circuits": [{"path": netlist, "id": "dut"}],
+            "execution": {"wait_s": 120, "simulator": "ltspice"},
+        },
+        wait_timeout_s=240,
+    )
+    assert receipt["status"] == "completed", receipt.get("failures")
+    # The point of this tier: a real LTspice binary produced this run.
+    assert receipt["source"][0]["simulator"].startswith("LTspice")
+    return receipt
+
+
+async def _recipe(state: SessionState, job_id: str, recipe: dict, **kw) -> dict:
+    """One recipe over a completed job's runs."""
+    from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": job_id, "runs": "all", "label": "dut"}],
+                "recipes": [recipe],
+                **kw,
+            }
+        ),
+        state,
+    )
+    data = result.structured_content
+    assert data is not None, result.content[0].text
+    return data
+
+
 @pytest.mark.asyncio
 class TestEndToEndSimulation:
-    """Full pipeline: create → simulate → check results."""
+    """Full pipeline: deck -> real LTspice -> artifacts on disk."""
 
     async def test_ac_simulation_completes(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        result = await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 60, "wait": True},
-            ltspice_state,
-        )
-        text = _result_text(result)
-        assert "completed successfully" in text, f"Sim failed: {text[:300]}"
+        receipt = await _run_deck(ltspice_state, "lt-ac-completes", rc_netlist.name)
+        assert receipt["completeness"]["produced"] == 1
 
     async def test_raw_and_log_files_produced(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        result = await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 60, "wait": True},
+        receipt = await _run_deck(ltspice_state, "lt-artifacts", rc_netlist.name)
+        data = await _recipe(
             ltspice_state,
+            receipt["job_id"],
+            {"key": "sum", "metric": "summary"},
+            include={"provenance": True},
         )
-        text = _result_text(result)
-        assert "completed successfully" in text, f"Sim did not complete: {text[:200]}"
-
-        # Check job state for raw/log files
-        assert ltspice_state.jobs, "No jobs recorded"
-        job = next(iter(ltspice_state.jobs.values()))
-        assert job.raw_file is not None, "No raw file in job state"
-        assert job.raw_file.exists(), f"Raw file does not exist: {job.raw_file}"
-        assert job.log_file is not None, "No log file in job state"
-        assert job.log_file.exists(), f"Log file does not exist: {job.log_file}"
+        (hashes,) = data["source_hashes"]
+        assert Path(hashes["raw_path"]).exists()  # noqa: ASYNC240
+        assert Path(hashes["log_path"]).exists()  # noqa: ASYNC240
 
 
 @pytest.mark.asyncio
 class TestJobTracking:
-    """Async job tracking: start, poll, complete."""
+    """The job control plane over a real run."""
 
-    async def test_async_job_returns_id(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        result = await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 120},
-            ltspice_state,
-        )
-        text = _result_text(result)
-        # Either completed inline (fast) or returned a job ID
-        assert "Job ID" in text
-
-    async def test_check_job_status(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.simulation import handle_check_job, handle_run_simulation
-
-        # Run with wait=True to ensure completion
-        await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 60, "wait": True},
-            ltspice_state,
+    async def test_status_reports_a_completed_job(
+        self, ltspice_state: SessionState, rc_netlist: Path
+    ):
+        from ltspice_mcp.tools.jobs import (
+            JobsInput,
+            handle_jobs,
         )
 
-        # Check that jobs dict has entries
-        assert len(ltspice_state.jobs) > 0
-        job_id = next(iter(ltspice_state.jobs))
+        receipt = await _run_deck(ltspice_state, "lt-job-status", rc_netlist.name)
+        result = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": receipt["job_id"]}),
+            ltspice_state,
+        )
+        data = result.structured_content
+        assert data is not None
+        assert data["job_id"] == receipt["job_id"]
+        assert data["status"] == "completed"
 
-        # Ran with wait=True, so the job must be terminal-completed. Pin that
-        # exact status via the structured channel rather than accepting any text
-        # that merely contains the word "status".
-        result = await handle_check_job({"job_id": job_id}, ltspice_state)
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["status"] == "completed"
+    async def test_request_id_resolves_the_same_job(
+        self, ltspice_state: SessionState, rc_netlist: Path
+    ):
+        # A durable request_id is the client's re-entry point after a dropped
+        # connection: it must resolve to the job the first call created.
+        from ltspice_mcp.tools.jobs import (
+            JobsInput,
+            handle_jobs,
+        )
+
+        receipt = await _run_deck(ltspice_state, "lt-request-id", rc_netlist.name)
+        result = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "request_id": "lt-request-id"}),
+            ltspice_state,
+        )
+        data = result.structured_content
+        assert data is not None
+        assert data["job_id"] == receipt["job_id"]
 
 
 @pytest.mark.asyncio
 class TestMeasExtraction:
-    """.MEAS result extraction from simulation log."""
+    """.MEAS results — the reason a WSL run is routed to a Windows-native
+    output dir: LTspice cannot write the SQLite .db behind .MEAS over UNC."""
 
-    async def _run_and_get_job(self, state, netlist_name):
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        result = await handle_run_simulation(
-            {"netlist": netlist_name, "timeout": 60, "wait": True}, state
+    async def test_ac_measurement_extracted(self, ltspice_state: SessionState, rc_netlist: Path):
+        receipt = await _run_deck(ltspice_state, "lt-meas-ac", rc_netlist.name)
+        data = await _recipe(
+            ltspice_state, receipt["job_id"], {"key": "meas", "metric": "measurements"}
         )
-        assert "completed successfully" in _result_text(result), _result_text(result)[:200]
-        job = next(iter(state.jobs.values()))
-        return job
+        stats = data["results"]["meas"]["stats"]
+        assert any(name.lower() == "fc" for name in stats), stats
 
-    async def test_get_measurements(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_simulation_summary
-
-        job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
-        assert job.raw_file and job.log_file and job.log_file.exists()
-
-        result = await handle_simulation_summary(
-            {"raw_file": str(job.raw_file), "log_file": str(job.log_file)}, ltspice_state
+    async def test_transient_measurement_extracted(
+        self, ltspice_state: SessionState, tran_netlist: Path
+    ):
+        receipt = await _run_deck(ltspice_state, "lt-meas-tran", tran_netlist.name)
+        data = await _recipe(
+            ltspice_state, receipt["job_id"], {"key": "meas", "metric": "measurements"}
         )
-        text = _result_text(result)
-        # With Windows-native output dir, .MEAS should work and the summary
-        # surfaces the result alongside other metadata.
-        assert "fc" in text.lower(), f"Expected 'fc' measurement, got: {text[:300]}"
-
-    async def test_transient_measurements(self, ltspice_state: SessionState, tran_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_simulation_summary
-
-        job = await self._run_and_get_job(ltspice_state, tran_netlist.name)
-        assert job.raw_file and job.log_file and job.log_file.exists()
-
-        result = await handle_simulation_summary(
-            {"raw_file": str(job.raw_file), "log_file": str(job.log_file)}, ltspice_state
-        )
-        text = _result_text(result)
-        assert "vout_max" in text.lower(), f"Expected 'vout_max' measurement, got: {text[:300]}"
+        stats = data["results"]["meas"]["stats"]
+        assert any(name.lower() == "vout_max" for name in stats), stats
 
 
 @pytest.mark.asyncio
 class TestACAnalysis:
-    """AC analysis signal listing and summary."""
+    """AC signal listing and summary off a real LTspice raw."""
 
-    async def _run_and_get_job(self, state, netlist_name):
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        result = await handle_run_simulation(
-            {"netlist": netlist_name, "timeout": 60, "wait": True}, state
+    async def test_signals_listed(self, ltspice_state: SessionState, rc_netlist: Path):
+        receipt = await _run_deck(ltspice_state, "lt-ac-signals", rc_netlist.name)
+        data = await _recipe(
+            ltspice_state,
+            receipt["job_id"],
+            {"key": "sum", "metric": "summary"},
+            include={"signals_available": True},
         )
-        assert "completed successfully" in _result_text(result), _result_text(result)[:200]
-        job = next(iter(state.jobs.values()))
-        return job
+        names = [n.lower() for names in data["signals_available"].values() for n in names]
+        assert any(n == "v(out)" for n in names), names
 
-    async def test_list_signals(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_simulation_summary
-
-        job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
-        assert job.raw_file and job.raw_file.exists()
-
-        result = await handle_simulation_summary({"raw_file": str(job.raw_file)}, ltspice_state)
-        text = _result_text(result)
-        assert "V(out)" in text or "v(out)" in text.lower()
-
-    async def test_simulation_summary(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_simulation_summary
-
-        job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
-        assert job.raw_file and job.raw_file.exists()
-
-        result = await handle_simulation_summary({"raw_file": str(job.raw_file)}, ltspice_state)
-        text = _result_text(result)
-        assert "frequency" in text.lower() or "ac" in text.lower()
+    async def test_summary_reports_the_ac_sim_type(
+        self, ltspice_state: SessionState, rc_netlist: Path
+    ):
+        receipt = await _run_deck(ltspice_state, "lt-ac-summary", rc_netlist.name)
+        data = await _recipe(ltspice_state, receipt["job_id"], {"key": "sum", "metric": "summary"})
+        summary = data["results"]["sum"]["values"][0]["value"]
+        assert "ac" in summary["sim_type"].lower()
 
 
 @pytest.mark.asyncio
 class TestWSLPathConversion:
-    """Verify WSL path conversion works in actual simulation."""
+    """On WSL the deck path crosses into a Windows process; a completed run is
+    the proof the conversion worked."""
 
     async def test_wsl_path_in_simulation(self, ltspice_state: SessionState, rc_netlist: Path):
-        """If we're on WSL and simulation completes, path conversion worked."""
         from ltspice_mcp.lib.wsl import is_wsl
-        from ltspice_mcp.tools.simulation import handle_run_simulation
 
         if not is_wsl():
             pytest.skip("Not running in WSL")
 
-        result = await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 60, "wait": True},
-            ltspice_state,
-        )
-        text = _result_text(result)
-        # If simulation completed, WSL path conversion worked
-        assert "completed successfully" in text, f"WSL sim failed: {text[:300]}"
+        receipt = await _run_deck(ltspice_state, "lt-wsl-path", rc_netlist.name)
+        assert receipt["completeness"]["produced"] == 1
 
 
 @pytest.mark.asyncio
 class TestResourcesWithResults:
-    """Resource browsing after simulation produces results."""
+    """Resource browsing after a real simulation produced results."""
 
     async def test_netlists_resource_lists_files(
         self, ltspice_state: SessionState, rc_netlist: Path
@@ -302,391 +295,171 @@ class TestResourcesWithResults:
         from ltspice_mcp.resources import handle_read_resource
 
         result = handle_read_resource("spice://netlists/", ltspice_state)
-        text = _text(result.contents[0])
-        assert "rc_filter.cir" in text
-
-    async def test_results_resource_after_sim(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.resources import handle_read_resource
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 60, "wait": True},
-            ltspice_state,
-        )
-
-        result = handle_read_resource("spice://results/", ltspice_state)
-        text = _text(result.contents[0])
-        # The one simulation just run must be the only listed result.
-        data = json.loads(text)
-        assert data["count"] == 1
-
-    async def test_signals_resource_for_job(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.resources import handle_read_resource
-        from ltspice_mcp.tools.simulation import handle_run_simulation
-
-        await handle_run_simulation(
-            {"netlist": rc_netlist.name, "timeout": 60, "wait": True},
-            ltspice_state,
-        )
-
-        assert ltspice_state.jobs, "No jobs after simulation"
-        job_id = next(iter(ltspice_state.jobs))
-        job = ltspice_state.jobs[job_id]
-
-        # Ran with wait=True, so the job must have completed with a raw file — a
-        # skip here would silently mask a real simulation failure.
-        assert job.status == "completed", f"Job not completed: status={job.status}"
-        assert job.raw_file is not None
-
-        result = handle_read_resource(f"spice://results/{job_id}/signals", ltspice_state)
-        text = _text(result.contents[0])
-        assert "signals" in text.lower()
+        assert "rc_filter.cir" in _text(result.contents[0])
 
 
 @pytest.mark.asyncio
-class TestExportNetlist:
-    """Integration test for export_netlist with a real .asc file."""
+class TestManagedExport:
+    """The real LTspice exporter turning a .asc into a netlist."""
 
     @pytest.fixture
     def asc_in_workdir(self, work_dir: Path) -> Path:
-        """Copy the fixture .asc into the test work_dir."""
         src = _FIXTURE_DIR / "Draft1.asc"
         dst = work_dir / "Draft1.asc"
         shutil.copy2(src, dst)
         return dst
 
-    async def test_export_asc_to_net(self, ltspice_state: SessionState, asc_in_workdir: Path):
-        from ltspice_mcp.tools.circuit import handle_export_netlist
+    async def _export(self, state: SessionState, path: Path, **kw) -> dict:
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
-        result = await handle_export_netlist({"path": asc_in_workdir.name}, ltspice_state)
-        text = _result_text(result)
-        assert "Draft1" in text
-        # Should contain SPICE netlist content
-        assert ".net" in text or "R1" in text
+        result = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": path.name, "checks": ["export"], **kw}),
+            state,
+        )
+        data = result.structured_content
+        assert data is not None, result.content[0].text
+        return data
 
-    async def test_exported_net_file_exists(
+    async def test_export_produces_a_netlist(
         self, ltspice_state: SessionState, asc_in_workdir: Path
     ):
-        from ltspice_mcp.tools.circuit import handle_export_netlist
+        data = await self._export(ltspice_state, asc_in_workdir)
+        export = data["checks"]["export"]
+        assert export["ok"] is True, export
+        assert "R1" in export["netlist"]
 
-        await handle_export_netlist({"path": asc_in_workdir.name}, ltspice_state)
-        # .net file should exist alongside the .asc
+    async def test_sidecar_export_writes_the_net_file(
+        self, ltspice_state: SessionState, asc_in_workdir: Path
+    ):
+        await self._export(ltspice_state, asc_in_workdir, export_to="sidecar")
         net_file = asc_in_workdir.with_suffix(".net")
         assert net_file.exists(), f"Expected {net_file} to exist after export"
 
 
-@pytest.mark.asyncio
-class TestUnifiedCircuitTools:
-    """Test unified circuit tools work on both .cir and .asc files."""
-
-    @pytest.fixture
-    def asc_in_workdir(self, work_dir: Path) -> Path:
-        src = _FIXTURE_DIR / "Draft1.asc"
-        dst = work_dir / "Draft1.asc"
-        shutil.copy2(src, dst)
-        return dst
-
-    async def test_list_components_on_asc(self, ltspice_state: SessionState, asc_in_workdir: Path):
-        from ltspice_mcp.tools.circuit import handle_list_components
-
-        result = await handle_list_components({"path": asc_in_workdir.name}, ltspice_state)
-        text = _result_text(result)
-        assert "R1" in text
-        assert "C1" in text
-        assert "V1" in text
-
-    async def test_get_component_value_on_asc(
-        self, ltspice_state: SessionState, asc_in_workdir: Path
-    ):
-        from ltspice_mcp.tools.circuit import handle_list_components
-
-        result = await handle_list_components(
-            {"path": asc_in_workdir.name, "reference": "R1"}, ltspice_state
-        )
-        assert "1k" in _result_text(result)
-
-    async def test_set_component_value_on_asc(
-        self, ltspice_state: SessionState, asc_in_workdir: Path
-    ):
-        from ltspice_mcp.tools.circuit import (
-            handle_list_components,
-            handle_set_component_value,
-        )
-
-        await handle_set_component_value(
-            {"path": asc_in_workdir.name, "reference": "R1", "value": "4.7k"},
-            ltspice_state,
-        )
-
-        result = await handle_list_components(
-            {"path": asc_in_workdir.name, "reference": "R1"}, ltspice_state
-        )
-        assert "4.7k" in _result_text(result)
-
-
-@pytest.mark.asyncio
-class TestSchematicOnlyTools:
-    """Tests for schematic-only operations (position, rotation, attributes, export)."""
-
-    @pytest.fixture
-    def asc_in_workdir(self, work_dir: Path) -> Path:
-        src = _FIXTURE_DIR / "Draft1.asc"
-        dst = work_dir / "Draft1.asc"
-        shutil.copy2(src, dst)
-        return dst
-
-    async def test_get_schematic_info(self, ltspice_state: SessionState, asc_in_workdir: Path):
-        from ltspice_mcp.tools.circuit import handle_read_circuit
-
-        result = await handle_read_circuit({"path": asc_in_workdir.name}, ltspice_state)
-        text = _result_text(result)
-        assert "R1" in text
-        assert "C1" in text
-        assert "V1" in text
-        assert "pos=" in text  # positions included
-        assert "Wires:" in text
-
-    async def test_get_schematic_info_shows_labels(
-        self, ltspice_state: SessionState, asc_in_workdir: Path
-    ):
-        from ltspice_mcp.tools.circuit import handle_read_circuit
-
-        result = await handle_read_circuit({"path": asc_in_workdir.name}, ltspice_state)
-        text = _result_text(result)
-        # Draft1.asc has FLAG "filtered" label
-        assert "filtered" in text
-
-    async def test_move_component(self, ltspice_state: SessionState, asc_in_workdir: Path):
-        from ltspice_mcp.tools.circuit import MoveComponentInput, handle_move_component
-
-        result = await handle_move_component(
-            MoveComponentInput(path=asc_in_workdir.name, reference="R1", x=200, y=200),
-            ltspice_state,
-        )
-        text = _result_text(result)
-        assert "Moved R1" in text
-        assert "(200,200)" in text
-
-    async def test_move_component_with_rotation(
-        self, ltspice_state: SessionState, asc_in_workdir: Path
-    ):
-        from ltspice_mcp.tools.circuit import MoveComponentInput, handle_move_component
-
-        result = await handle_move_component(
-            MoveComponentInput(
-                path=asc_in_workdir.name, reference="R1", x=300, y=100, rotation="R0"
-            ),
-            ltspice_state,
-        )
-        assert "R0" in _result_text(result)
-
-    async def test_set_component_attribute(
-        self, ltspice_state: SessionState, asc_in_workdir: Path
-    ):
-        from ltspice_mcp.tools.circuit import (
-            SetComponentAttributeInput,
-            handle_set_component_attribute,
-        )
-
-        result = await handle_set_component_attribute(
-            SetComponentAttributeInput(
-                path=asc_in_workdir.name, reference="R1", attribute="Value", value="4.7k"
-            ),
-            ltspice_state,
-        )
-        assert "4.7k" in _result_text(result)
-
-    async def test_remove_component(self, ltspice_state: SessionState, asc_in_workdir: Path):
-        from ltspice_mcp.tools.circuit import RemoveComponentInput, handle_remove_component
-
-        result = await handle_remove_component(
-            RemoveComponentInput(path=asc_in_workdir.name, reference="C1"),
-            ltspice_state,
-        )
-        assert "Removed C1" in _result_text(result)
-
-        # Verify C1 is gone
-        from ltspice_mcp.tools.circuit import handle_read_circuit
-
-        info = await handle_read_circuit({"path": asc_in_workdir.name}, ltspice_state)
-        assert "C1" not in _result_text(info)
-
-    async def test_remove_nonexistent_component_raises(
-        self, ltspice_state: SessionState, asc_in_workdir: Path
-    ):
-        from ltspice_mcp.tools.circuit import RemoveComponentInput, handle_remove_component
-
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_remove_component(
-                RemoveComponentInput(path=asc_in_workdir.name, reference="R99"),
-                ltspice_state,
-            )
-
-    async def test_export_netlist(self, ltspice_state: SessionState, asc_in_workdir: Path):
-        from ltspice_mcp.tools.circuit import handle_export_netlist
-
-        result = await handle_export_netlist({"path": asc_in_workdir.name}, ltspice_state)
-        text = _result_text(result)
-        # Should contain SPICE netlist content
-        assert ".net" in text or "R1" in text
-
-    async def test_rejects_cir_file(self, ltspice_state: SessionState, work_dir: Path):
-        """Schematic-only tools reject .cir files with a helpful message."""
-        from ltspice_mcp.tools.circuit import MoveComponentInput, handle_move_component
-
-        cir = work_dir / "test.cir"
-        cir.write_text("* test\nR1 1 0 1k\n.END\n")
-
-        with pytest.raises(NetlistError, match=r"requires an \.asc"):
-            await handle_move_component(
-                MoveComponentInput(path="test.cir", reference="R1", x=0, y=0),
-                ltspice_state,
-            )
+# The live-LTspice wait: WSL interop and .asc export make these runs slower
+# than the ngspice tier, so the shared helper gets a longer jobs(wait).
+async def _run_experiment(state: SessionState, payload: dict) -> dict:
+    return await terminal_experiment(state, payload, wait_timeout_s=240)
 
 
 @pytest.mark.asyncio
 class TestSweepIntegration:
-    """Full pipeline: configure sweep → run → check → get results."""
+    """Full pipeline: run_experiments fan-out → attached analysis → results."""
 
-    async def test_configure_and_run_sweep(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.advanced import (
-            handle_batch_results,
-            handle_configure_sweep,
-            handle_run_sweep,
-        )
-
-        # Configure a small 3-point sweep on R1
-        config_result = await handle_configure_sweep(
-            {
-                "netlist": rc_netlist.name,
-                "parameters": [
-                    {
-                        "name": "R1",
-                        "type": "component",
-                        "start": 500,
-                        "stop": 1500,
-                        "points": 3,
-                    }
-                ],
-            },
+    async def test_sweep_runs_every_case(self, ltspice_state: SessionState, rc_netlist: Path):
+        receipt = await _run_experiment(
             ltspice_state,
-        )
-        config_text = _result_text(config_result)
-        assert "Config ID" in config_text
-        assert "Total simulations: 3" in config_text
-
-        # Extract config_id
-        config_id = None
-        for line in config_text.splitlines():
-            if line.startswith("Config ID:"):
-                config_id = line.split(":", 1)[1].strip()
-                break
-        assert config_id is not None
-
-        # Run the sweep
-        run_result = await handle_run_sweep({"config_id": config_id}, ltspice_state)
-        run_text = _result_text(run_result)
-        assert "Job ID" in run_text
-
-        # Extract job_id
-        job_id = None
-        for line in run_text.splitlines():
-            if line.startswith("Job ID:"):
-                job_id = line.split(":", 1)[1].strip()
-                break
-        assert job_id is not None
-
-        # Wait for completion (poll with timeout)
-        batch_job = ltspice_state.batch_jobs[job_id]
-        try:
-            await asyncio.wait_for(batch_job.done_event.wait(), timeout=120)
-        except TimeoutError:
-            pytest.fail(f"Sweep job {job_id} timed out")
-
-        # Check status
-        status_result = await handle_batch_results({"job_id": job_id}, ltspice_state)
-        status_text = _result_text(status_result)
-        assert "completed" in status_text.lower(), f"Sweep not completed: {status_text[:300]}"
-
-    async def test_sweep_results_queryable(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.advanced import (
-            handle_batch_results,
-            handle_configure_sweep,
-            handle_run_sweep,
-        )
-
-        config_result = await handle_configure_sweep(
             {
-                "netlist": rc_netlist.name,
-                "parameters": [
-                    {
-                        "name": "R1",
-                        "type": "component",
-                        "start": 800,
-                        "stop": 1200,
-                        "points": 3,
-                    }
-                ],
+                "request_id": "lt-sweep-cases",
+                "circuits": [{"path": rc_netlist.name, "id": "rc"}],
+                "variations": [{"kind": "assign", "assign": {"R1": ["500", "1k", "1.5k"]}}],
+                "execution": {"wait_s": 120, "simulator": "ltspice"},
             },
-            ltspice_state,
         )
-        config_id = _result_text(config_result).split("Config ID:")[1].split("\n")[0].strip()
+        assert receipt["status"] == "completed", receipt.get("failures")
+        # The point of this tier: a real LTspice binary produced these runs.
+        assert receipt["source"][0]["simulator"].startswith("LTspice")
+        counts = receipt["completeness"]
+        assert counts["expanded"] == counts["produced"] == 3
+        assert counts["failed"] == counts["cancelled"] == counts["skipped"] == 0
+        assert {run["assignments"]["R1"] for run in receipt["runs"]["items"]} == {
+            "500",
+            "1k",
+            "1.5k",
+        }
 
-        run_result = await handle_run_sweep({"config_id": config_id}, ltspice_state)
-        job_id = _result_text(run_result).split("Job ID:")[1].split("\n")[0].strip()
+    async def test_sweep_results_carry_the_moving_corner(
+        self, ltspice_state: SessionState, rc_netlist: Path
+    ):
+        """The attached analysis reads every run's real corner frequency, and
+        the extremes are attributed to the case that produced them: a bigger R1
+        gives a lower fc for a fixed C."""
+        receipt = await _run_experiment(
+            ltspice_state,
+            {
+                "request_id": "lt-sweep-corner",
+                "circuits": [{"path": rc_netlist.name, "id": "rc"}],
+                "variations": [{"kind": "assign", "assign": {"R1": ["800", "1.2k"]}}],
+                "execution": {"wait_s": 120, "simulator": "ltspice"},
+                "analyze": {
+                    "recipes": [
+                        {
+                            "key": "corner",
+                            "metric": "bode_filter",
+                            "signal": "V(out)",
+                            "reduce": ["min", "max"],
+                            "field": "cutoff_high_hz",
+                        }
+                    ],
+                    "include": {"per_run": {"limit": 10}},
+                },
+            },
+        )
+        assert receipt["status"] == "completed", receipt.get("failures")
+        stage = receipt["analysis"]
+        assert stage["error"] is None, stage["error"]
+        entry = stage["result"]["results"]["corner"]
 
-        batch_job = ltspice_state.batch_jobs[job_id]
-        await asyncio.wait_for(batch_job.done_event.wait(), timeout=120)
-
-        # Query results for V(out)
-        results = await handle_batch_results({"job_id": job_id, "signal": "V(out)"}, ltspice_state)
-        text = _result_text(results)
-        assert "Batch Results" in text
-        assert "V(out)" in text
+        reduced = {item["stat"]: item for item in entry["reduced"]}
+        # 1/(2*pi*R*100n): 800 ohm -> ~1990 Hz, 1.2k -> ~1326 Hz.
+        assert reduced["max"]["assignments"]["R1"] == "800"
+        assert reduced["min"]["assignments"]["R1"] == "1.2k"
+        assert reduced["max"]["value"] == pytest.approx(1990, rel=0.1)
+        assert reduced["min"]["value"] == pytest.approx(1326, rel=0.1)
+        assert len(entry["per_run"]["items"]) == 2
 
 
 @pytest.mark.asyncio
 class TestMonteCarloIntegration:
-    """Full pipeline: configure MC → run → check → get results."""
+    """Full pipeline: random variation → runs → aggregated analysis."""
 
-    async def test_configure_and_run_montecarlo(
+    async def test_montecarlo_runs_stay_inside_the_tolerance_band(
         self, ltspice_state: SessionState, rc_netlist: Path
     ):
-        from ltspice_mcp.tools.advanced import (
-            handle_batch_results,
-            handle_configure_montecarlo,
-            handle_run_montecarlo,
-        )
-
-        config_result = await handle_configure_montecarlo(
-            {
-                "netlist": rc_netlist.name,
-                "tolerances": [
-                    {"ref": "resistors", "tolerance": 0.05, "distribution": "uniform"},
-                    {"ref": "capacitors", "tolerance": 0.1, "distribution": "gaussian"},
-                ],
-                "num_runs": 5,
-            },
+        receipt = await _run_experiment(
             ltspice_state,
+            {
+                "request_id": "lt-mc-rc",
+                "circuits": [{"path": rc_netlist.name, "id": "rc"}],
+                "variations": [
+                    {
+                        "kind": "random",
+                        "runs": 3,
+                        "seed": 7,
+                        "rules": [
+                            {
+                                "rule": "component",
+                                "target": "R1",
+                                "tolerance": 0.05,
+                                "distribution": "uniform",
+                            }
+                        ],
+                    }
+                ],
+                "execution": {"wait_s": 120, "simulator": "ltspice"},
+                "analyze": {
+                    "recipes": [
+                        {
+                            "key": "corner",
+                            "metric": "bode_filter",
+                            "signal": "V(out)",
+                            "reduce": ["min", "max"],
+                            "field": "cutoff_high_hz",
+                        }
+                    ]
+                },
+            },
         )
-        config_text = _result_text(config_result)
-        assert "Config ID" in config_text
-        assert "Runs: 5" in config_text
+        assert receipt["status"] == "completed", receipt.get("failures")
+        counts = receipt["completeness"]
+        assert counts["expanded"] == counts["produced"] == 3
+        assert counts["failed"] == 0
 
-        config_id = config_text.split("Config ID:")[1].split("\n")[0].strip()
-
-        run_result = await handle_run_montecarlo({"config_id": config_id}, ltspice_state)
-        run_text = _result_text(run_result)
-        assert "Job ID" in run_text
-
-        job_id = run_text.split("Job ID:")[1].split("\n")[0].strip()
-
-        batch_job = ltspice_state.batch_jobs[job_id]
-        try:
-            await asyncio.wait_for(batch_job.done_event.wait(), timeout=180)
-        except TimeoutError:
-            pytest.fail(f"Monte Carlo job {job_id} timed out")
-
-        status_result = await handle_batch_results({"job_id": job_id}, ltspice_state)
-        status_text = _result_text(status_result)
-        assert "completed" in status_text.lower(), f"MC not completed: {status_text[:300]}"
+        stage = receipt["analysis"]
+        assert stage["error"] is None, stage["error"]
+        reduced = {item["stat"]: item for item in stage["result"]["results"]["corner"]["reduced"]}
+        # R1 perturbed uniformly by +/-5% around 1k, C1 fixed at 100n: every
+        # sampled resistance and every corner frequency stays in its band.
+        for item in reduced.values():
+            assert 950.0 <= item["assignments"]["random:component:R1"] <= 1050.0
+            assert 1516 <= item["value"] <= 1676  # 1/(2*pi*R*100n) over that band
