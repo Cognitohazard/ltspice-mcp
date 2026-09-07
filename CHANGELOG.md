@@ -121,6 +121,12 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- The `compact` tool listing is the default: about 45% less to load per
+  session, the same calls accepted, descriptions read on demand through
+  `inspect(kind: "reference")` and carried on every validation error.
+  Measured on the same day against the full listing: the same answers at the
+  same design quality, one listing-caused mismatch in 22 requests. `[tools]
+  listing = "full"` restores every description on the wire.
 - The AC crossing recipe's phase level is spelled `level_deg` only; the
   earlier `phase_deg` spelling, kept as an alias for callers of an earlier
   build, is gone.
