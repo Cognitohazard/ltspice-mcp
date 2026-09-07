@@ -564,6 +564,11 @@ every sample to a file and returns its path.
 
 ### Fixed
 
+- The no-simulator message names the setting that points at a simulator
+  executable (`LTSPICE_MCP_SIMULATOR_EXE`, `simulator.path`) on every
+  platform. Only the WSL wording did, so on a native Linux, macOS or Windows
+  host an agent read "install ngspice" with no route for the simulator it
+  already had.
 - A host with the `raster` extra installed but no native cairo library now
   degrades a PNG render to SVG with a note, the way a host without the extra
   does. cairocffi reports the missing library as an OSError from the import,
