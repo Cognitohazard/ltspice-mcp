@@ -502,9 +502,10 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput):
     ] = Field(
         default_factory=AnalyzeInclude,
         description=(
-            "Named opt-in response blocks — per_run rows, outliers, "
-            "signals_available, provenance, and the 'fields' row projection; a "
-            "bare list of names switches them on. Each one grows the payload."
+            "Opt-in response blocks. A bare list of names switches on per_run "
+            "rows, outliers, signals_available and provenance. The row projection "
+            "takes paths, so it is the object form only: include={'fields': "
+            "['value.<name>', ...]}. Each block grows the payload."
         ),
     )
     budget: int | None = Field(
