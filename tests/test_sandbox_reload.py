@@ -3,6 +3,7 @@ server runs, so the refusal an agent gets can name a line the agent edits itself
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -15,7 +16,9 @@ from ltspice_mcp.tools._base import safe_path
 
 
 def _write(toml: Path, roots: list[str], when: float) -> None:
-    toml.write_text("[security]\nallowed_paths = [" + ", ".join(f'"{r}"' for r in roots) + "]\n")
+    toml.write_text(
+        "[security]\nallowed_paths = [" + ", ".join(json.dumps(r) for r in roots) + "]\n"
+    )
     os.utime(toml, (when, when))  # a same-second rewrite must still register
 
 

@@ -4,6 +4,10 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 Start with `docs/DESIGN.md` (architecture and rationale). This file is the working map of the source: what lives where, and which patterns are load-bearing. Setup is `uv sync` on Python 3.11 or newer; a simulator is optional for most of the suite (recorded `.raw`/`.log` fixtures cover the parse paths offline), `ngspice` on PATH enables the live end-to-end tests, and the LTspice integration tests are opt-in behind an environment flag.
 
+## Windows is the primary platform
+
+Most users run this server natively on Windows, where LTspice lives. Development happens on WSL2 and the gate on Linux CI, so a change that works here can still be broken for the people the project is for. Every path, file write, signal, process, newline and encoding decision has to hold on Windows: `os.open` without `O_BINARY` is text mode there, `signal.SIGKILL` and `os.killpg` do not exist, symlinks need a privilege, `\r\n` is the platform newline, cp1252 is the platform codec, and a drive letter does not map to `/mnt`. The `/mnt` mapping, `wslpath` and the Windows-side temp directory are WSL interop, taken only when `is_wsl()` is true, never on Windows itself. A review of a change touching any of those asks "does this hold on Windows"; the release gate includes a native Windows run of the suite (`docs/TESTING.md`, "Platforms"); and a test that cannot hold on a platform skips there with the reason, never fails.
+
 ## Project Overview
 
 MCP server exposing SPICE circuit simulation to LLMs. LTspice is the primary simulator; ngspice/qspice/xyce are supported but secondary. Built on the low-level `mcp.server.lowlevel.Server` API (not FastMCP) with spicelib as the simulation backend. The same engine is also importable in-process as `ltspice_mcp.api`.

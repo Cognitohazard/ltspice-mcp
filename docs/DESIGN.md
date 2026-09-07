@@ -25,6 +25,16 @@ project invests in:
   the geometry tools do not apply to it. QSPICE and Xyce are best-effort
   through spicelib's common interface.
 
+### Platforms
+
+The project is cross-platform and its main user base runs it natively on
+Windows, where LTspice lives. WSL2 (the development host) and Linux are
+supported, and the WSL interop — the `/mnt` drive mapping, `wslpath`, the
+Windows-side temp directory for `.MEAS` — is a special case entered only
+when the server detects WSL, never the general path. A design that assumes
+POSIX (signals, process groups, symlinks, `\n`, UTF-8 defaults, binary
+`os.open`) is incomplete until it states what it does on Windows.
+
 ### Why an MCP server vs. asking the LLM to use spicelib directly
 
 An LLM with code execution (Claude Code, Cursor) could write spicelib

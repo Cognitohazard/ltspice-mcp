@@ -21,11 +21,13 @@ from pydantic import BeforeValidator, Field, SkipValidation, model_validator
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, LTSpiceMCPError, ResultError
 from ltspice_mcp.lib import (
+    O_BINARY,
     analysis_snapshot,
     fsync_dir,
     fsync_fd,
     metrics,
     pagination,
+    replace_file,
     response_budget,
     result_store,
     services,
@@ -1956,12 +1958,13 @@ def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
         # to stable storage, then the rename metadata after, so a crash between
         # digest and publish can't surface a truncated artifact under its final
         # name. The digest was already taken on this same byte content.
-        fd = os.open(artifact.pending, os.O_RDONLY)
+        # Opened for writing: Windows refuses to flush a read-only handle.
+        fd = os.open(artifact.pending, os.O_RDWR | O_BINARY)
         try:
             fsync_fd(fd)
         finally:
             os.close(fd)
-        os.replace(artifact.pending, artifact.final)
+        replace_file(artifact.pending, artifact.final)
         fsync_dir(artifact.final.parent)
 
 

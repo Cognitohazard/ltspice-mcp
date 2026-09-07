@@ -47,7 +47,7 @@ from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import staged_decks
+from tests.conftest import staged_decks, symlink_or_skip
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -368,7 +368,7 @@ class TestExperimentTypesAndStore:
         outside = work_dir / "outside.json"
         outside.write_text("{}")
         link = root / "exp_symlink.json"
-        link.symlink_to(outside)
+        symlink_or_skip(link, outside)
         with pytest.raises(ValueError, match="escapes the store"):
             experiment_store.load_job("exp_symlink", work_dir)
 

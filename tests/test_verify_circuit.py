@@ -124,7 +124,7 @@ _RES_ASC = (
 
 def _write(work_dir: Path, name: str, text: str) -> Path:
     p = work_dir / name
-    p.write_text(text)
+    p.write_text(text, newline="\n")
     return p
 
 

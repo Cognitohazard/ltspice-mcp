@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import signal
 from collections.abc import Collection
 from pathlib import PurePath
 
@@ -118,17 +119,18 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
     return killed
 
 
-def kill_process_group(pid: int, sig: int) -> bool:
+def kill_process_group(pid: int, sig: int | None = None) -> bool:
     """Signal the whole process group of a child spawned as a session leader
-    (its pid is the group id): the child and everything it started. True when
-    the group was signalled; False on Windows, which has no group to signal,
-    and when the group is already gone — the caller then signals the one
-    process it holds, if it still needs to.
+    (its pid is the group id): the child and everything it started. ``sig``
+    defaults to SIGKILL, resolved here because Windows has no such name. True
+    when the group was signalled; False on Windows, which has no group to
+    signal, and when the group is already gone — the caller then signals the
+    one process it holds, if it still needs to.
     """
     if os.name != "posix":
         return False
     try:
-        os.killpg(pid, sig)
+        os.killpg(pid, signal.SIGKILL if sig is None else sig)
     except (ProcessLookupError, PermissionError):
         return False
     return True

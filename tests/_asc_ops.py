@@ -38,7 +38,7 @@ def blank_sheet_file(state: SessionState, name: str) -> Path:
     from ltspice_mcp.tools.schematic_edit import _BLANK_TEMPLATE
 
     path = Path(state.working_dir) / f"{name}.asc"
-    path.write_text(_BLANK_TEMPLATE, encoding="utf-8")
+    path.write_text(_BLANK_TEMPLATE, encoding="utf-8", newline="\n")
     return path
 
 

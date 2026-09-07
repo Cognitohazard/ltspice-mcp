@@ -232,7 +232,7 @@ class TestInterop:
     def test_cards_from_path_round_trip(self, tmp_path) -> None:
         text = "* test\nR1 a b 1k\n.END\n"
         p = tmp_path / "t.cir"
-        p.write_text(text)
+        p.write_text(text, newline="\n")
         from ltspice_mcp.lib.spice_lex import cards_from_path
 
         result = cards_from_path(p)

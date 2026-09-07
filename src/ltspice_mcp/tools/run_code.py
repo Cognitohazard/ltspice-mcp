@@ -250,7 +250,7 @@ class CodeWorker:
         # was started as a session leader. A simulator LTspice launched over
         # WSL interop is a Windows process and is not reached; its job record,
         # owned by a dead pid, reads as interrupted.
-        kill_process_group(process.pid, signal.SIGKILL)
+        kill_process_group(process.pid)
         self.process = None
 
     def _interrupt(self) -> None:

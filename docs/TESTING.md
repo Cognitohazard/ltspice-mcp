@@ -231,6 +231,24 @@ and holds the thinking plane constant; it does not represent authoring from
 a blank sheet, topology choice, or long-horizon context growth, which need
 the instruments above.
 
+## Platforms
+
+The suite is developed on WSL2 and gated on Linux CI, but the users run
+Windows natively, and neither host reproduces it: a Linux container on a
+WSL2 box inherits the WSL kernel signature, so `is_wsl()` is true there and
+every WSL branch is taken. The 0.6.0 release gate found the whole class at
+once: dozens of Windows-only failures, among them a text-mode `os.open` that
+broke the revision guard, a `/mnt` drive mapping applied on Windows, and a
+`SIGKILL` that does not exist there.
+
+The release gate is therefore three runs: the Linux suite, the Linux
+container, and the suite run natively on Windows (the CI Windows job, or a
+Windows-side `uv run pytest tests` on a clone). A test that depends on a
+POSIX facility skips on Windows with the reason (symlinks need a privilege;
+`wslpath` does not exist), and a fixture that must be byte-exact is written
+with `newline="\n"` and read with `encoding="utf-8"`, because the platform
+newline and codec differ there.
+
 ## Conventions
 
 - **Behavior-named test files.** Tests are named for the behavior they cover,

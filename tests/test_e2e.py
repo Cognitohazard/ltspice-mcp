@@ -908,7 +908,7 @@ class TestResources:
 
     async def test_read_netlist_content_via_resource_template(self, tmp_path):
         netlist_text = "* My Circuit\nR1 a b 1k\nC1 b 0 10n\n.END\n"
-        (tmp_path / "mycirc.cir").write_text(netlist_text)
+        (tmp_path / "mycirc.cir").write_text(netlist_text, newline="\n")
         async with mcp_session(tmp_path) as session:
             result = await session.read_resource("spice://netlists/mycirc.cir")
             content = result.contents[0].text  # type: ignore[union-attr]

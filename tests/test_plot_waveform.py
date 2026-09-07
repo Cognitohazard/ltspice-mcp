@@ -7,6 +7,7 @@ launched. The AC dual-panel, .step overlay, and noise cases are load-bearing.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from ltspice_mcp.tools.analysis import (
     _union_panel,
     handle_plot_waveform,
 )
-from tests.conftest import make_experiment_job, stage_recorded_fixture
+from tests.conftest import make_experiment_job, stage_recorded_fixture, symlink_or_skip
 
 
 def _read(path: Path) -> str:
@@ -245,6 +246,7 @@ class TestOpenInDesktop:
         assert opened is True and method == "explorer.exe"
         assert calls == [["explorer.exe", "C:\\plot.html"]]
 
+    @pytest.mark.skipif(os.name == "nt", reason="stands in for Linux with a POSIX path")
     def test_linux_uses_xdg_open(self, monkeypatch):
         monkeypatch.setattr(desktop, "_chromium_exes", lambda: [])
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
@@ -256,6 +258,7 @@ class TestOpenInDesktop:
         assert opened is True and method == "xdg-open"
         assert calls == [["xdg-open", "/x/plot.html"]]
 
+    @pytest.mark.skipif(os.name == "nt", reason="stands in for Linux with a POSIX path")
     def test_failure_degrades(self, monkeypatch):
         monkeypatch.setattr(desktop, "_chromium_exes", lambda: [])
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
@@ -287,6 +290,7 @@ class TestOpenInDesktop:
             ]
         ]
 
+    @pytest.mark.skipif(os.name == "nt", reason="stands in for Linux with a POSIX path")
     def test_app_window_falls_back_when_spawn_fails(self, monkeypatch):
         # Chromium present but its spawn raises -> fall through to xdg-open.
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
@@ -516,7 +520,7 @@ class TestDeliveryAndSecurity:
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         outside = work_dir.parent / "plot_outside_target"
         outside.mkdir(exist_ok=True)
-        (work_dir / ".ltspice-mcp").symlink_to(outside)
+        symlink_or_skip(work_dir / ".ltspice-mcp", outside)
         with pytest.raises(ResultError, match="outside the destination directory"):
             await handle_plot_waveform(
                 PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),

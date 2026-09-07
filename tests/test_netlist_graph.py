@@ -604,7 +604,9 @@ def test_unreadable_included_file_degrades_to_a_recorded_fact(tmp_path: Path) ->
     assert flatten_graph(graph).unresolved_subckts == ("DIVBLOCK",)
 
 
-def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(tmp_path: Path) -> None:
+def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The include walk resolves references the way staging does.
 
     LTspice's own ``.asc`` netlister writes ``.lib C:\\...\\standard.mos``. Read
@@ -612,6 +614,7 @@ def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(tmp_path: P
     that exists nowhere — so the sandbox seam is asked about the wrong file and
     the deck's own library is reported unusable.
     """
+    monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: True)
     deck = tmp_path / "winref.cir"
     deck.write_text(".lib C:\\Users\\dev\\LTspice\\lib\\cmp\\standard.mos\nR1 a 0 1k\n.end\n")
     seen: list[Path] = []

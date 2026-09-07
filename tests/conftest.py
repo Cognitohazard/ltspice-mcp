@@ -190,6 +190,15 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
     return data
 
 
+def symlink_or_skip(link: Path, target: Path, **kwargs: typing.Any) -> None:
+    """Create ``link`` -> ``target``, or skip: on Windows a symlink needs a
+    privilege an ordinary account does not hold."""
+    try:
+        link.symlink_to(target, **kwargs)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available here: {exc.strerror or exc}")
+
+
 def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
     """Copy a recorded fixture's .raw (and .log when recorded) into work_dir.
 

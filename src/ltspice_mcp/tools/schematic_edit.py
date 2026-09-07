@@ -36,7 +36,7 @@ from pydantic import Field
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import atomic_write_bytes, fsync_dir, fsync_fd
+from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, replace_file
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.pin_legend import (
@@ -328,7 +328,9 @@ def _stage_asc(text: str, target: Path, build_id: str, encoding: str) -> Path:
     """Write ``text`` to a fsync'd temp sibling of ``target`` (pre-rename)."""
     tmp = target.with_name(f"{target.name}.staging-{build_id}")
     data = text.encode(encoding)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _target_mode(target))
+    # Binary, or Windows turns every "\n" into "\r\n" and the bytes on disk stop
+    # matching the sha the reply reports: every later expected_sha256 conflicts.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_BINARY, _target_mode(target))
     try:
         os.write(fd, data)
         fsync_fd(fd)
@@ -339,7 +341,7 @@ def _stage_asc(text: str, target: Path, build_id: str, encoding: str) -> Path:
 
 def _commit_rename(tmp: Path, target: Path) -> None:
     """Atomically move the staged file onto the target — the LAST commit step."""
-    os.replace(tmp, target)
+    replace_file(tmp, target)
     with contextlib.suppress(OSError):
         fsync_dir(target.parent)
 

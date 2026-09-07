@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from pathlib import Path
 
+import psutil
 import pytest
 
 from ltspice_mcp.config import ServerConfig
@@ -235,8 +236,7 @@ class TestLifetime:
             "previous_pid": before,
             "reason": "killed after a timeout",
         }
-        with pytest.raises(ProcessLookupError):
-            os.kill(before, 0)
+        assert not psutil.pid_exists(before)
 
     @pytest.mark.skipif(not POSIX, reason="process groups are POSIX")
     async def test_killing_the_worker_takes_its_children_with_it(self, state: SessionState):
@@ -319,8 +319,7 @@ class TestLifetime:
         await own.shutdown()
         assert worker.process is None
         # The process itself is gone, not just forgotten.
-        with pytest.raises(ProcessLookupError):
-            os.kill(reply["worker_pid"], 0)
+        assert not psutil.pid_exists(reply["worker_pid"])
 
     async def test_a_worker_that_cannot_start_is_a_structured_error(self, tmp_path: Path):
         worker = CodeWorker(tmp_path / "missing", None)
