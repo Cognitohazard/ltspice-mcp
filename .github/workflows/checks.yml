@@ -40,8 +40,8 @@ jobs:
       - name: Type check
         run: uv run pyright
 
-      - name: Install ngspice (enables the real-ngspice e2e tier)
-        run: sudo apt-get update && sudo apt-get install -y ngspice
+      - name: Install ngspice and cairo (the real-ngspice e2e tier and the raster tier)
+        run: sudo apt-get update && sudo apt-get install -y ngspice libcairo2
 
       # Coverage is gated here rather than in the pytest addopts so the repo's
       # documented single-file debug commands (e.g. `uv run pytest

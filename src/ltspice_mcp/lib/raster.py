@@ -129,15 +129,18 @@ def raster_available() -> bool:
 
 
 def _load_cairosvg():
-    """Import ``cairosvg`` if installed; ``None`` when the extra is absent.
+    """Import ``cairosvg`` if it is usable; ``None`` when the extra is absent.
 
     Imported lazily rather than at module load: the dependency is optional, and
     importing it costs a non-trivial shared-library load that a server never
-    rendering an image should not pay.
+    rendering an image should not pay. The extra is absent in two ways: the
+    package is not installed (ImportError), or it is installed but the native
+    cairo library it binds is not, which cairocffi reports as an OSError from
+    the import. Both mean there is no rasterizer here.
     """
     try:
         import cairosvg
-    except ImportError:
+    except (ImportError, OSError):
         return None
     return cairosvg
 
@@ -156,8 +159,9 @@ def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "
     cairosvg = _load_cairosvg()
     if cairosvg is None:
         raise RasterUnavailableError(
-            "PNG rasterization needs the optional 'cairosvg' dependency "
-            "(install the 'raster' extra: pip install 'ltspice-mcp[raster]')"
+            "PNG rasterization needs the optional 'cairosvg' dependency and its "
+            "native cairo library (install the 'raster' extra: pip install "
+            "'ltspice-mcp[raster]', and libcairo on a host without it)"
         )
     png = cairosvg.svg2png(
         bytestring=svg.encode("utf-8"),
