@@ -231,23 +231,50 @@ and holds the thinking plane constant; it does not represent authoring from
 a blank sheet, topology choice, or long-horizon context growth, which need
 the instruments above.
 
-## Platforms
+## Platforms and the release gate
 
 The suite is developed on WSL2 and gated on Linux CI, but the users run
 Windows natively, and neither host reproduces it: a Linux container on a
 WSL2 box inherits the WSL kernel signature, so `is_wsl()` is true there and
-every WSL branch is taken. The 0.6.0 release gate found the whole class at
-once: dozens of Windows-only failures, among them a text-mode `os.open` that
-broke the revision guard, a `/mnt` drive mapping applied on Windows, and a
-`SIGKILL` that does not exist there.
+every WSL branch is taken. The 0.6.0 release found the whole class at once:
+dozens of Windows-only failures, among them a text-mode `os.open` that broke
+the revision guard, a `/mnt` drive mapping applied on Windows, a `SIGKILL`
+that does not exist there, and two races that only Windows' file semantics
+expose. The same release then found the runner shapes one push at a time:
+a checkout with line-ending conversion on, a second Windows interpreter, a
+container without an init process, and finally the publisher's own metadata
+checker, which lags the build backend's default metadata version. Seven red
+runs in a row, each fixing the last failure and finding the next.
 
-The release gate is therefore three runs: the Linux suite, the Linux
-container, and the suite run natively on Windows (the CI Windows job, or a
-Windows-side `uv run pytest tests` on a clone). A test that depends on a
-POSIX facility skips on Windows with the reason (symlinks need a privilege;
-`wslpath` does not exist), and a fixture that must be byte-exact is written
-with `newline="\n"` and read with `encoding="utf-8"`, because the platform
-newline and codec differ there.
+The lesson is not "push earlier"; holding the push was deliberate. It is
+that a push must confirm a result, not test a guess. So the release gate is
+a matrix of every shape the runners and the users have, run locally before
+the push, and `scripts/release_gate.sh` runs it:
+
+| shape | why it exists |
+|-|-|
+| Linux, serially | what CI runs; the parallel run is a convenience and flakes under load |
+| Linux with WSL detection forced off (`scripts/nonwsl_plugin.py`) | Linux CI is not WSL; this box is, so the non-WSL branch is otherwise never executed here |
+| Ubuntu container, non-root, `--init` | a fresh machine with ngspice and libcairo2; `--init` because a container whose PID 1 is `bash` never reaps a killed child, and a zombie still answers `os.kill(pid, 0)` |
+| Windows native, Python 3.12 and 3.13, checkout with conversion on | the primary platform, both supported interpreters (3.13 changed `Path.resolve` on a NUL byte), and the bytes a runner with `core.autocrlf=true` sees |
+| the publisher's own metadata check | the PyPI action's bundled `twine` rejected a metadata version the build backend had started emitting by default, after the build job's own newer `twine` had passed it |
+
+The Windows shape needs a clone on a Windows disk with the Windows-side `uv`
+on PATH; point `LTSPICE_MCP_WINDOWS_CLONE` at its WSL path. Without it the
+script says SKIP, loudly, rather than passing by omission. The container
+shape clones the local `master`, so it tests the last commit.
+
+Two practices follow. A test that depends on a POSIX facility skips on
+Windows with the reason (symlinks need a privilege; `wslpath` does not
+exist), never fails. A fixture that must be byte-exact is written with
+`newline="\n"` and read with `encoding="utf-8"`, because the platform
+newline and codec differ there; and `.gitattributes` turns conversion off for
+the whole repository, so a checkout holds the committed bytes everywhere.
+
+The upload step itself has no local proxy. The publish workflow can be
+dispatched by hand against TestPyPI with an explicit version, which
+exercises trusted publishing and the metadata check without spending a
+release tag.
 
 ## Conventions
 
