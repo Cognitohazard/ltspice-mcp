@@ -60,6 +60,11 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
     if not allowed_dirs:
         raise PathSecurityError("No allowed directories configured")
 
+    # Refused up front: on Windows with Python 3.13, resolve() returns a path
+    # holding the NUL instead of raising, and the sandbox check would pass it.
+    if "\x00" in user_path:
+        raise PathSecurityError(f"Failed to resolve path {user_path!r}: embedded null byte")
+
     # Convert to Path object
     path = Path(user_path)
 
