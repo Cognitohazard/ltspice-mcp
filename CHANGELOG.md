@@ -6,7 +6,7 @@ project will adopt [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches `1.0.0`. Until then, minor versions may contain breaking
 tool-surface changes.
 
-## [0.6.0] - 2026-09-06
+## [0.6.0] - 2026-09-07
 
 One engine behind two interfaces. The MCP surface is eight tools in place of
 the 49-tool and 41-tool profiles: six operations arranged over execute,
@@ -564,6 +564,12 @@ every sample to a file and returns its path.
 
 ### Fixed
 
+- A host with the `raster` extra installed but no native cairo library now
+  degrades a PNG render to SVG with a note, the way a host without the extra
+  does. cairocffi reports the missing library as an OSError from the import,
+  which the optional-dependency guard let escape, so a render call failed
+  outright and the raster tests failed at collection on any machine without
+  libcairo.
 - A value spelled with the micro sign (`20µ`, `4.7µF`) parses as micro. That
   is how LTspice's netlist exporter writes `u`, so an exported current source
   had no nominal a Monte Carlo `component` rule could perturb: every case
@@ -835,6 +841,12 @@ every sample to a file and returns its path.
   the setup notes moved into `CLAUDE.md`, and the review rules it carried
   (a regression test fails before the fix, real code paths, plain language)
   already live there and in `docs/TESTING.md`.
+
+### Security
+
+- Dependency upgrades for published advisories in the locked runtime set:
+  `click` 8.3.2 → 8.5.0, `cryptography` 49.0.0 → 50.0.1, `pillow` 12.2.0 →
+  12.3.0.
 
 ## [0.5.0] - 2026-06-30
 
