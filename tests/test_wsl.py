@@ -66,7 +66,7 @@ class TestToWindowsPath:
         wsl_mod._is_wsl_cached = False
 
         path = Path("/tmp/test.cir")
-        assert to_windows_path(path) == "/tmp/test.cir"
+        assert to_windows_path(path) == str(path)
 
     def test_relative_path_passthrough(self):
         """Relative paths should pass through regardless of WSL status."""
@@ -92,7 +92,7 @@ class TestToWindowsPath:
         wsl_mod._is_wsl_cached = True
         with patch("subprocess.run", side_effect=FileNotFoundError):
             result = to_windows_path(Path("/tmp/foo"))
-            assert result == "/tmp/foo"
+            assert result == str(Path("/tmp/foo"))
 
     def test_wslpath_failure(self):
         import ltspice_mcp.lib.wsl as wsl_mod
@@ -101,7 +101,7 @@ class TestToWindowsPath:
         err = subprocess.CalledProcessError(1, "wslpath", stderr="bad path")
         with patch("subprocess.run", side_effect=err):
             result = to_windows_path(Path("/tmp/foo"))
-            assert result == "/tmp/foo"
+            assert result == str(Path("/tmp/foo"))
 
     def test_wslpath_timeout_falls_back(self):
         # A hung wslpath must not wedge the caller forever — fall back to the
@@ -110,7 +110,7 @@ class TestToWindowsPath:
 
         wsl_mod._is_wsl_cached = True
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("wslpath", 15)):
-            assert to_windows_path(Path("/tmp/foo")) == "/tmp/foo"
+            assert to_windows_path(Path("/tmp/foo")) == str(Path("/tmp/foo"))
 
     def test_wslpath_passes_timeout(self):
         import ltspice_mcp.lib.wsl as wsl_mod

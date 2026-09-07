@@ -564,6 +564,43 @@ every sample to a file and returns its path.
 
 ### Fixed
 
+- On Windows, `edit_schematic` wrote the sheet with `\r\n` line endings while
+  reporting the sha256 of the `\n` text it had hashed, so the revision it
+  handed back never matched the file and every later `expected_sha256` was
+  refused as a conflict. The staging descriptor is now opened in binary mode
+  (`os.open` defaults to text mode on Windows); the bytes on disk are the
+  bytes that were hashed.
+- On Windows, a `.include` or `.lib` reference by drive letter
+  (`C:\Users\...\standard.mos`) was resolved to `/mnt/c/...`, the WSL spelling,
+  so the include could not be found, staged, linted or targeted by a
+  variation. The `/mnt` mapping (and the UNC rewrite beside it) is WSL
+  interop and is now taken only when the server runs on WSL; anywhere else
+  the reference is the path it names.
+- On Windows, closing or resetting the `run_code` worker raised on
+  `signal.SIGKILL`, which does not exist there, so the tool's reset and the
+  server's shutdown failed. The process-group kill names the signal only on
+  POSIX.
+- On Windows, no `plot` or `waveform` artifact was ever published: the
+  publish step flushed the finished file through a read-only descriptor,
+  which Windows refuses, so every artifact handle came back without a digest
+  and pointing at a file that had been removed. The flush now goes through a
+  writable descriptor.
+- A staged deck spells an absolute reference the way the platform's own
+  netlister does: backslashes on Windows, POSIX elsewhere (it used to write
+  the POSIX form on Windows too).
+- On Windows, two calls creating records in a fresh store at the same
+  moment could fail one of them with "Invalid result_set_id" (or the job
+  record's equivalent): the store resolved the new record's path while its
+  peer was creating the directory, and Python's `realpath` there hands back
+  a path no comparison survives. A record that does not exist yet is no
+  longer resolved; the symlink check runs only on an existing record.
+- On Windows, two simultaneous reads of one result set that both produced
+  the same `plot` or `waveform` artifact could fail one of them with
+  "access denied": the second rename onto the shared, content-addressed
+  file lands while the first is still in flight, which Windows refuses for
+  an instant (11 of 15 runs of the paired read in isolation). Every
+  atomic rename now retries briefly on that refusal, on Windows only.
+
 - The no-simulator message names the setting that points at a simulator
   executable (`LTSPICE_MCP_SIMULATOR_EXE`, `simulator.path`) on every
   platform. Only the WSL wording did, so on a native Linux, macOS or Windows

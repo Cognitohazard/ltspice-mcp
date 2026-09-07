@@ -102,7 +102,7 @@ async def test_blank_build_parity_with_the_shared_op_runner(asc_state, work_dir)
     assert data["commit_state"] == "committed"
 
     control = work_dir / "parity_runner.asc"
-    control.write_text(se._BLANK_TEMPLATE)
+    control.write_text(se._BLANK_TEMPLATE, newline="\n")
     editor = get_asc_editor(control, asc_state)
     ops = _OPS_ADAPTER.validate_python(_DIVIDER_OPS)
     _, abort = run_op_batch(editor, ops, control, stop_on_error=True)

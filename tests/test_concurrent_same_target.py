@@ -378,7 +378,7 @@ def _slow_exporter(state: SessionState, handoffs: _ExportHandoffs) -> None:
         def create_netlist(path: str, timeout: float | None = None) -> str:
             index = next(exports)
             netlist = Path(path).with_suffix(".net")
-            with netlist.open("w", encoding="utf-8") as handle:
+            with netlist.open("w", encoding="utf-8", newline="\n") as handle:
                 if index == 0:
                     loop.call_soon_threadsafe(handoffs.exporting.set)
                 else:

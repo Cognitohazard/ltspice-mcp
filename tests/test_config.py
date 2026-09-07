@@ -137,6 +137,9 @@ class TestServerConfig:
         assert "analysis_budget_s" in content
         assert "result_set_ttl_hours" in content
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="the Claude Code scratch directory on Windows is not known"
+    )
     def test_default_sandbox_includes_the_claude_scratch_root(self, work_dir: Path):
         """Claude Code tells an agent to write throwaway files to its scratch
         directory, outside the working directory; the default sandbox admits
@@ -398,7 +401,7 @@ class TestWslLtspiceAutodetect:
             ),
         ):
             sim._autodetect_wsl_ltspice(diagnostics)
-        fake_cls.create_from.assert_called_once_with("/mnt/c/x/LTspice.exe")
+        fake_cls.create_from.assert_called_once_with(str(Path("/mnt/c/x/LTspice.exe")))
         assert any("Auto-detected" in d for d in diagnostics)
 
     def test_skips_when_already_configured(self):

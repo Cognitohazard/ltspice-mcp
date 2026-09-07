@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text
+from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text, wsl
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
@@ -197,10 +197,10 @@ def stage_deck(
 
     def _render_absolute(path: Path) -> str:
         if windows_paths:
-            from ltspice_mcp.lib import wsl
-
             return wsl.to_windows_path(path)
-        return path.as_posix()
+        # The platform's own spelling, as the netlister writes it: POSIX off
+        # Windows, backslashes on it.
+        return str(path)
 
     staging_root.mkdir(parents=True, exist_ok=True)
     manifest: list[ManifestEntry] = []
@@ -686,20 +686,21 @@ def _portable_relative(raw_path: str) -> Path:
 
 
 def resolve_reference(parent: Path, raw_path: str) -> Path:
-    """Resolve a SPICE file reference — POSIX, Windows drive (via ``/mnt``),
-    or UNC — against ``parent``.
+    """Resolve a SPICE file reference — POSIX, Windows drive (via ``/mnt``
+    on WSL), or UNC — against ``parent``.
 
     Public because it is the *only* answer to this question: a second resolver
     written elsewhere can disagree, and then another layer (the linter) reads
     a different file than the one staging staged.
     """
-    if _WINDOWS_DRIVE_RE.match(raw_path):
-        windows = PureWindowsPath(raw_path)
-        drive = windows.drive.rstrip(":").lower()
-        return Path("/mnt") / drive / Path(*windows.parts[1:])
-    if raw_path.startswith("\\\\"):
-        windows = PureWindowsPath(raw_path)
-        return Path("/") / Path(*windows.parts)
+    if wsl.is_wsl():  # the mount spellings are WSL interop, never the general path
+        if _WINDOWS_DRIVE_RE.match(raw_path):
+            windows = PureWindowsPath(raw_path)
+            drive = windows.drive.rstrip(":").lower()
+            return Path("/mnt") / drive / Path(*windows.parts[1:])
+        if raw_path.startswith("\\\\"):
+            windows = PureWindowsPath(raw_path)
+            return Path("/") / Path(*windows.parts)
     normalized = _portable_relative(raw_path)
     return normalized if normalized.is_absolute() else parent / normalized
 

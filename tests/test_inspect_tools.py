@@ -26,6 +26,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from tests.conftest import symlink_or_skip
 
 
 class FakeLT:
@@ -137,7 +138,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     # server can do: the import, a session on this working directory, and
     # the reference lookup that replaces guessing an op's arguments.
     assert data["python_api"]["import"] == "from ltspice_mcp.api import Api"
-    assert str(cap_state.working_dir) in data["python_api"]["open"]
+    assert repr(str(cap_state.working_dir)) in data["python_api"]["open"]
     assert "reference(" in data["python_api"]["reference"]
     # The exec tool is on unless the operator turned it off; the entry names
     # the key and that the change takes effect at the next start.
@@ -743,10 +744,7 @@ async def test_symbol_precedence_local_and_symlink_dedup(
     fixture_dir = asc_symbols
     # A symlink pointing at the same fixture directory must collapse to one entry.
     symlink_dir = work_dir / "linked_syms"
-    try:
-        symlink_dir.symlink_to(fixture_dir, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks unsupported on this filesystem")
+    symlink_or_skip(symlink_dir, fixture_dir, target_is_directory=True)
 
     proj = work_dir / "proj"
     proj.mkdir()

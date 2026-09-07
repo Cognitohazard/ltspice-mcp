@@ -128,6 +128,26 @@ def validate_job_id(job_id: str) -> str:
     return job_id
 
 
+def _record(directory: Path, name: str, error: str) -> Path:
+    """One record file under an already-resolved store directory.
+
+    An existing record comes back resolved and must resolve inside its
+    directory (a planted symlink is refused with ``error``). One that does not
+    exist yet is returned as named and NOT resolved: the name is already one
+    validated segment, and on Windows resolving a path whose directory a peer
+    is creating at that moment can come back with the ``\\?\\`` prefix still
+    on, which no comparison survives.
+    """
+    candidate = directory / name
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return candidate
+    if resolved.parent != directory:
+        raise StoreError(error)
+    return resolved
+
+
 def _validate_name(name: str, what: str) -> str:
     """Validate any other caller-supplied path segment."""
     if not isinstance(name, str) or _NAME_RE.fullmatch(name) is None:
@@ -411,11 +431,11 @@ class Store:
     def job_record(self, job_id: str) -> Path:
         """The durable record for one experiment job."""
         validate_job_id(job_id)
-        root = self.experiments_dir
-        candidate = (root / f"{job_id}.json").resolve()
-        if candidate.parent != root:
-            raise StoreError(f"Experiment job path escapes the store: {job_id!r}")
-        return candidate
+        return _record(
+            self.experiments_dir,
+            f"{job_id}.json",
+            f"Experiment job path escapes the store: {job_id!r}",
+        )
 
     def request_index(self, request_id: str) -> Path:
         """Where a ``request_id`` records which job it already submitted.
@@ -572,11 +592,11 @@ class Store:
 
     def result_set(self, result_set_id: str) -> Path:
         """One immutable ``analyze_results`` set."""
-        root = self.results_dir
-        path = (root / f"{_validate_name(result_set_id, 'result_set_id')}.json").resolve()
-        if path.parent != root:
-            raise StoreError(f"Invalid result_set_id: {result_set_id!r}")
-        return path
+        return _record(
+            self.results_dir,
+            f"{_validate_name(result_set_id, 'result_set_id')}.json",
+            f"Invalid result_set_id: {result_set_id!r}",
+        )
 
     def result_artifacts(self, result_set_id: str) -> Path:
         """Files one result set points at, deleted with it."""

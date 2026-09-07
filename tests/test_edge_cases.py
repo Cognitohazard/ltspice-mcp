@@ -6,6 +6,7 @@ input, and edge cases that the happy-path tests don't cover.
 """
 
 import hashlib
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -398,6 +399,10 @@ class TestParseSpiceTrailingUnits:
 
 
 class TestIsWindowsNativePath:
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="a /mnt path is a WSL mount; on Windows it is a rooted path on the current drive",
+    )
     def test_drive_letter_match(self):
         from ltspice_mcp.lib.wsl import is_windows_native_path
 

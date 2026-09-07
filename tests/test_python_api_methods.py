@@ -1011,7 +1011,7 @@ def test_run_experiments_takes_a_relative_circuit_path_from_the_working_dir(
     working directory must be reported there, not under the caller's cwd."""
     api = SyncApi(state_relative_sandbox)
     receipt = api.run_experiments(circuits=[{"path": "absent.cir"}], wait=False)
-    reported = json.dumps(receipt)
+    reported = json.dumps(receipt).replace("\\\\", "\\")  # JSON doubles a Windows separator
     assert str(work_dir / "absent.cir") in reported
     assert str(elsewhere / "absent.cir") not in reported
 

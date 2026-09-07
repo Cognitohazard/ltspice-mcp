@@ -6,6 +6,7 @@ import pytest
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib.pathutil import relative_paths_from, resolve_safe_path
+from tests.conftest import symlink_or_skip
 
 
 class TestResolveSafePath:
@@ -63,7 +64,7 @@ class TestResolveSafePath:
         secret.write_text("secret")
 
         link = sandbox / "sneaky_link"
-        link.symlink_to(secret)
+        symlink_or_skip(link, secret)
 
         with pytest.raises(PathSecurityError, match="outside allowed"):
             resolve_safe_path("sneaky_link", [sandbox])

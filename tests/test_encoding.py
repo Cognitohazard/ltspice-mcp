@@ -106,7 +106,7 @@ class TestReadSpiceText:
     def test_reads_utf8_file(self, tmp_path: Path) -> None:
         text = ".MODEL Q NPN\n"
         p = tmp_path / "x.lib"
-        p.write_text(text, encoding="utf-8")
+        p.write_text(text, encoding="utf-8", newline="\n")
         assert read_spice_text(p) == text
 
     def test_reads_utf16_le_no_bom_file(self, tmp_path: Path) -> None:

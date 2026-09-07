@@ -43,7 +43,7 @@ class TestToolCountInDocs:
     @pytest.mark.parametrize(("rel", "template"), _DOC_COUNT_CHECKS)
     def test_doc_count_matches_registry(self, rel: str, template: str) -> None:
         n = len(registry.get_tools()[0])
-        text = (ROOT / rel).read_text()
+        text = (ROOT / rel).read_text(encoding="utf-8")
         assert re.search(template.format(n=n), text), (
             f"{rel} must state the registered tool count {n} "
             f"(expected pattern {template.format(n=n)!r}) — update every place "
@@ -130,7 +130,7 @@ class TestStaleToolNamesInDocs:
         registered = _registered_names()
         failures: list[str] = []
         for rel in DOC_PATHS:
-            text = (ROOT / rel).read_text()
+            text = (ROOT / rel).read_text(encoding="utf-8")
             stale = sorted(f"ltspice_{name}" for name in registered if f"ltspice_{name}" in text)
             if stale:
                 failures.append(f"  {rel}: {stale}")
@@ -154,7 +154,7 @@ class TestStaleToolNamesInDocs:
         """
         failures: list[str] = []
         for rel in DOC_PATHS:
-            text = (ROOT / rel).read_text()
+            text = (ROOT / rel).read_text(encoding="utf-8")
             stale = sorted(
                 name
                 for name in REMOVED_TOOL_NAMES
@@ -186,7 +186,7 @@ class TestConsolidatedSkillDocCoverage:
         tool_defs, _ = registry.get_tools()
         names = sorted(t.name for t in tool_defs)
         assert names, "consolidated profile registered no tools"
-        text = (ROOT / "skills/spice-experiments/SKILL.md").read_text()
+        text = (ROOT / "skills/spice-experiments/SKILL.md").read_text(encoding="utf-8")
         missing = [name for name in names if name not in text]
         assert not missing, f"skills/spice-experiments/SKILL.md never mentions {missing}"
 
@@ -200,7 +200,7 @@ def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
     only — that's where tool-name rot actually hurts users.
     """
     try:
-        tree = ast.parse(py_path.read_text())
+        tree = ast.parse(py_path.read_text(encoding="utf-8"))
     except SyntaxError:
         return set()
     pat = re.compile(r"\bltspice_[a-z][a-z_]+\b")
@@ -220,7 +220,7 @@ def _non_docstring_strings(py_path: Path) -> list[str]:
     observation details are what a caller sees, and those are exactly the
     string constants that are NOT a docstring.
     """
-    tree = ast.parse(py_path.read_text())
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
     docstrings: set[int] = set()
     for node in ast.walk(tree):
         if not isinstance(

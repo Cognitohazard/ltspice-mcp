@@ -16,11 +16,12 @@ from ltspice_mcp.lib.deck_staging import (
     verify_staged_manifest,
 )
 from ltspice_mcp.lib.simulator import simulator_library_roots
+from tests.conftest import symlink_or_skip
 
 
 def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, newline="\n")
     return path
 
 
@@ -156,7 +157,7 @@ class TestManifestWalk:
         root = tmp_path / "root"
         outside = _write(tmp_path / "outside.inc", ".param x=1\n")
         root.mkdir()
-        (root / "escape.inc").symlink_to(outside)
+        symlink_or_skip(root / "escape.inc", outside)
         deck = _write(root / "deck.cir", '.include "escape.inc"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
@@ -415,7 +416,7 @@ class TestRootDeckSurvivesTheRun:
 
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         included = next(item for item in staged.includes if item.source.name == "core.inc")
-        assert reference == included.staged_path.as_posix()
+        assert reference == str(included.staged_path)  # the platform's own spelling
 
 
 class TestSimulatorLibraryRoots:
@@ -454,17 +455,24 @@ class TestSimulatorLibraryRoots:
         assert str(entry.staged_path) in staged.text
         assert not any(item["code"] == "live_include" for item in staged.observations)
 
-    def test_the_netlisters_windows_lib_spelling_lands_under_the_mount(self):
+    def test_the_netlisters_windows_lib_spelling_lands_under_the_mount(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         """The reference the netlister really writes is a Windows path.
 
-        The trusted root is discovered as its ``/mnt/<drive>`` spelling, so the
-        two only meet if the reference resolver maps one onto the other.
+        On WSL the trusted root is discovered as its ``/mnt/<drive>`` spelling,
+        so the two only meet if the reference resolver maps one onto the other.
+        Anywhere else the reference is the path it names.
         """
-        resolved = deck_staging.resolve_reference(
-            Path("/work"),
-            r"C:\Users\me\AppData\Local\LTspice\lib\cmp\standard.mos",
+        raw = r"C:\Users\me\AppData\Local\LTspice\lib\cmp\standard.mos"
+        monkeypatch.setattr(wsl, "is_wsl", lambda: True)
+        assert deck_staging.resolve_reference(Path("/work"), raw) == Path(
+            "/mnt/c/Users/me/AppData/Local/LTspice/lib/cmp/standard.mos"
         )
-        assert resolved == Path("/mnt/c/Users/me/AppData/Local/LTspice/lib/cmp/standard.mos")
+        monkeypatch.setattr(wsl, "is_wsl", lambda: False)
+        assert deck_staging.resolve_reference(Path("/work"), raw) == Path("/work") / Path(
+            raw.replace("\\", "/")
+        )
 
     def test_a_reference_outside_both_still_refuses_and_names_the_remedies(self, tmp_path: Path):
         root = tmp_path / "root"

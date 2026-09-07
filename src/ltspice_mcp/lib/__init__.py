@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -47,6 +48,10 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+#: Keeps ``os.open`` out of text mode on Windows; 0 where descriptors have none.
+O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 def fsync_fd(fd: int) -> None:
@@ -90,6 +95,29 @@ def fsync_dir(path: Path) -> None:
         os.close(dir_fd)
 
 
+def replace_file(src: Path, dst: Path) -> None:
+    """``os.replace`` that outlasts Windows' transient refusal.
+
+    A rename onto a target that another rename is landing on at that instant
+    (two callers publishing one content-addressed file), or that a reader
+    holds open, fails there with access denied and succeeds a moment later.
+    POSIX has no such window, so the call is direct.
+    """
+    if sys.platform != "win32":
+        os.replace(src, dst)
+        return
+    delay = 0.01
+    for attempt in range(6):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
 def _commit(tmp_path: Path, dst: Path, *, overwrite: bool) -> None:
     """Atomically move ``tmp_path`` over ``dst``.
 
@@ -100,7 +128,7 @@ def _commit(tmp_path: Path, dst: Path, *, overwrite: bool) -> None:
     (which fails if ``dst`` exists, unlike POSIX ``rename``).
     """
     if overwrite:
-        os.replace(tmp_path, dst)
+        replace_file(tmp_path, dst)
         return
     if sys.platform == "win32":
         # On Windows, os.rename raises if dst exists — that's the behavior
@@ -256,10 +284,12 @@ def atomic_write_json(
 
 __all__ = [
     "CIRCUIT_EXTENSIONS",
+    "O_BINARY",
     "atomic_write",
     "atomic_write_bytes",
     "atomic_write_json",
     "atomic_write_text",
     "now",
     "parse_iso_datetime",
+    "replace_file",
 ]

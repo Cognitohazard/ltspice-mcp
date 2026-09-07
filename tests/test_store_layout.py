@@ -287,6 +287,10 @@ class TestOwnerLivenessExitedProcess:
     running is what keeps the restart reconciliation from ever running.
     """
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="an exited process leaves the table at once on Windows; nothing is left uncollected",
+    )
     def test_probe_reports_an_exited_uncollected_process_as_dead(self) -> None:
         child = subprocess.Popen([sys.executable, "-c", ""])
         try:

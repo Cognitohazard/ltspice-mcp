@@ -680,7 +680,7 @@ class TestLogReadCap:
         # Under the cap → full read, unchanged behavior.
         log = tmp_path / "ok.log"
         body = "LTspice\n.step rval=100\n" + "line\n" * 50
-        log.write_text(body)
+        log.write_text(body, newline="\n")
         assert read_log_text(log) == body
 
 

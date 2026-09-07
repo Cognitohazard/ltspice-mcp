@@ -946,7 +946,7 @@ class TestCaseConcurrencyAndTimeouts:
                     request_id="job-deadline",
                     count=2,
                     max_parallel=1,
-                    job_deadline_s=0.01,
+                    job_deadline_s=0.1,
                     kill_grace_s=0.01,
                     analysis_callback=analyze,
                 )

@@ -77,7 +77,7 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
     circuit = working_dir / "saved.cir"
     circuit.write_text(".end\n", encoding="utf-8")
     (working_dir / "ltspice-mcp.toml").write_text(
-        f'[schematic]\nsymbol_paths = ["{symbol_dir}"]\n'
+        f'[schematic]\nsymbol_paths = ["{symbol_dir.as_posix()}"]\n'
         "[state]\npersist_jobs = true\npreload_recent_count = 10\n",
         encoding="utf-8",
     )
@@ -172,7 +172,7 @@ async def test_library_overrides_take_precedence_over_environment_toml_and_defau
     env_sandbox = tmp_path / "env-sandbox"
     explicit_sandbox = tmp_path / "explicit-sandbox"
     (working_dir / "ltspice-mcp.toml").write_text(
-        f'[simulation]\ntimeout = 10\n[security]\nallowed_paths = ["{toml_sandbox}"]\n',
+        f'[simulation]\ntimeout = 10\n[security]\nallowed_paths = ["{toml_sandbox.as_posix()}"]\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("LTSPICE_MCP_TIMEOUT", "20")
