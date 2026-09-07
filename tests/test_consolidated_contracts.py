@@ -627,7 +627,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # 'field' is required once 'reduce' or 'spec' is given (dependentRequired),
     # so the rule survives the compact listing.
     # include.fields says a bare name reads under value.
-    "analyze_results": 19000,
+    # Raised by 100 characters so the include description says which four
+    # names the bare list takes and that the row projection is the object
+    # form only: the old sentence listed 'fields' among the names, and two
+    # sessions in one day wrote include: ["fields"] and lost a turn each.
+    "analyze_results": 19100,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
