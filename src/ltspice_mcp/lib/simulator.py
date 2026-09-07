@@ -378,7 +378,7 @@ def install_hint() -> str:
     """
     if is_wsl():
         return (
-            "install ngspice in this WSL distro (`sudo apt-get install -y ngspice`), "
+            "install ngspice (`sudo apt-get install -y ngspice`), "
             f"or set {SIM_PATH_ENV} ({SIM_SECTION}.{SIM_PATH_KEY} in ltspice-mcp.toml) "
             "to a Windows LTspice.exe path"
         )
@@ -475,7 +475,7 @@ def no_simulator_message(short: bool = False) -> str:
     if short:
         return (
             f"No SPICE simulator detected — {install_hint()}, then restart this "
-            "MCP server (detection runs at startup). Authoring and .asc editing "
+            "MCP server (it detects at startup). Authoring and .asc editing "
             "still work."
         )
     return (

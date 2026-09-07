@@ -165,11 +165,12 @@ class TestBuildInstructions:
 
     def test_run_code_is_named_only_when_it_is_served(self):
         default = build_instructions({"ltspice": _LT}, _LT)
-        enabled = build_instructions({"ltspice": _LT}, _LT, served={"run_code"})
-        assert "run_code" not in default
-        assert "run_code runs Python with api in scope" in enabled
+        silent = build_instructions({"ltspice": _LT}, _LT, served=())
+        assert "run_code runs Python with api in scope" in default
+        assert "run_code" not in silent
         # Neither edition loses the library door.
-        assert "from ltspice_mcp.api import Api" in enabled
+        assert "from ltspice_mcp.api import Api" in silent
+        assert "from ltspice_mcp.api import Api" in default
 
 
 class TestInstructionHints:

@@ -61,11 +61,12 @@ result_set_ttl_hours = 24.0
 # removed, read on demand through inspect(kind="reference"); "full"
 # advertises them as registered. No tool gains or loses a capability.
 listing = "compact"
-# run_code = true adds a tool that runs a Python snippet with the engine in
-# scope (for loops over runs and numpy on samples). The snippet has the
-# server's own file and process authority, not the sandbox above, so
-# permission it in your client the way you would a shell.
-run_code = false
+# run_code = false removes the tool that runs a Python snippet with the engine
+# in scope (loops over runs, numpy on samples). The snippet has the server's
+# own file and process authority, not the sandbox above: permission it in
+# your client the way you would a shell, and turn it off when the server is
+# reachable by more than one trusted client, for example through a proxy.
+run_code = true
 
 [schematic]
 # Custom paths to LTspice symbol (.asy) files for .asc schematic support
