@@ -1,0 +1,4 @@
+# Check every file out byte-for-byte as committed, on every platform. Recorded
+# simulator fixtures and vendored documents are compared by digest, and a
+# Windows checkout with line-ending conversion on would change them.
+* -text
