@@ -753,16 +753,17 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        await await_until(lambda: len(submissions) == 1)
+        # The stub records a submission in the worker thread; the job's count
+        # is stamped on the loop a hop later, so wait on the count itself.
+        await await_until(lambda: receipt.job.completeness.submitted == 1)
         execution = runner._executions[receipt.job.job_id]
         assert execution.semaphore._value == 0
         assert len(execution.slots_held) == 1
-        assert receipt.job.completeness.submitted == 1
+        assert len(submissions) == 1
 
         first = submissions[0]
         callbacks[first](_success(work_dir, first))
-        await await_until(lambda: len(submissions) == 2)
-        assert receipt.job.completeness.submitted == 2
+        await await_until(lambda: receipt.job.completeness.submitted == 2)
         second = submissions[1]
         callbacks[second](_success(work_dir, second))
         assert await runner.wait(receipt.job, 1)
