@@ -600,6 +600,9 @@ every sample to a file and returns its path.
   file lands while the first is still in flight, which Windows refuses for
   an instant (11 of 15 runs of the paired read in isolation). Every
   atomic rename now retries briefly on that refusal, on Windows only.
+- A path with an embedded NUL byte is refused before resolution. On Windows
+  with Python 3.13 `Path.resolve` returns such a path instead of raising, so
+  it used to pass the sandbox check and fail only at open time.
 
 - The no-simulator message names the setting that points at a simulator
   executable (`LTSPICE_MCP_SIMULATOR_EXE`, `simulator.path`) on every

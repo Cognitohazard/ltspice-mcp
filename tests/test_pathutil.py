@@ -42,8 +42,9 @@ class TestResolveSafePath:
             resolve_safe_path("file.cir", [])
 
     def test_embedded_nul_byte_rejected(self, work_dir: Path):
-        # A NUL byte makes path.resolve raise ValueError (not OSError); it must
-        # surface as a PathSecurityError, not escape the security boundary.
+        # A NUL byte makes path.resolve raise ValueError on most platforms, and
+        # return a path holding the NUL on Windows with Python 3.13; either way
+        # it must surface as a PathSecurityError, not pass the sandbox check.
         with pytest.raises(PathSecurityError, match="Failed to resolve"):
             resolve_safe_path("file\x00.cir", [work_dir])
 
