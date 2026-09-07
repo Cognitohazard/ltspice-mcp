@@ -6,12 +6,21 @@ project will adopt [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches `1.0.0`. Until then, minor versions may contain breaking
 tool-surface changes.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-06
+
+One engine behind two interfaces. The MCP surface is eight tools in place of
+the 49-tool and 41-tool profiles: six operations arranged over execute,
+understand and author, the waveform widget, and a Python snippet runner. The
+same six operations are importable in-process as `ltspice_mcp.api.Api`, with
+complete results where the wire pages. Every job is one durable experiment
+across declared variations; every result is a typed recipe; every schematic
+edit is a transactional batch. This release breaks the 0.5 tool names; the
+first section says where each one went.
 
 ### Breaking: one tool surface replaces the `full` and `agentic` profiles
 
 The `full` (49-tool) and `agentic` (41-tool) MCP tool profiles are gone. The
-server now advertises seven tools:
+server now advertises eight tools:
 
 |Tool|What it does|
 |-|-|
@@ -22,6 +31,7 @@ server now advertises seven tools:
 |`edit_schematic`|A transactional, revision-guarded batch of typed ops on one `.asc` sheet|
 |`verify_circuit`|Lint, symbol and pin resolution, netlist export, layout and quality checks, comparison against a reference, optional rendering|
 |`plot_waveform`|An interactive HTML chart of a run, for a person to look at|
+|`run_code`|A Python snippet run in a worker process that holds the engine as `api`, for loops over runs and numpy on samples; on by default, `[tools] run_code = false` removes it|
 
 The same six operations are importable in-process as
 `from ltspice_mcp.api import Api` — one engine, two interfaces.
@@ -31,7 +41,7 @@ The same six operations are importable in-process as
 **What happens if you don't change your config.** `[tools] profile` is not a
 recognized key any more. A config that still sets it — to `"full"`,
 `"agentic"`, or anything else — loads with the key ignored, like any other
-key the server does not read, and the server starts normally with the seven
+key the server does not read, and the server starts normally with the eight
 tools.
 
 **Where each old tool went.**
@@ -48,268 +58,73 @@ tools.
 CSV waveform export is the `waveform` recipe with `format: "csv"`, which writes
 every sample to a file and returns its path.
 
-
-### Removed — argument spellings on the schematic and analysis tools
-
-- `analyze_results` recipes no longer accept `step` or `all_steps`; pass them on
-  the call (see Changed).
-- `analyze_results` recipes no longer accept `reduce_field`, and `spec` no longer
-  accepts `field`; pass `field` on the recipe (see Changed).
-- `verify_circuit` no longer accepts the flat `reference`, `compare_mode`,
-  `anchors` or `rtol`; pass the `compare` object, which carries all four.
-- `edit_schematic` no longer accepts the flat `reference`; pass `compare`.
-- `edit_schematic` no longer accepts `render`, `render_format`, `render_scale`,
-  or `render` in `return_views`, and its response carries neither `views.render`
-  nor the `artifacts` array that rendering was the only producer for.
-  Rendering is `verify_circuit`'s, whose policy adds a pixel cap, inline
-  delivery and a render-only mode.
-- `edit_schematic` no longer accepts `write_failed_draft`. A failed batch writes
-  nothing by design and the response names the stage that failed, so there was
-  no draft to quarantine that the caller's own ops did not already describe.
-- `edit_schematic` no longer accepts `format`; structured-aware clients render
-  only `structuredContent`, and the other six tools had already dropped it.
-
-### Removed — the MCP logging capability
-
-- The MCP logging capability. The 2026-07-28 revision deprecates it whole
-  (SEP-2577): the `logging` server capability, the server-to-client
-  `notifications/message` delivery and the per-request log-level opt-in that
-  replaced `logging/setLevel`, with no replacement offered, and
-  `logging/setLevel` is absent from that revision's schema. The server no
-  longer advertises the capability, answers `logging/setLevel` with
-  method-not-found, and sends no log notifications. Job lifecycle events and
-  diagnostics go to the process's stderr logger, which `[logging] level`
-  still controls.
-
-### Removed — the columns form of budget-limited rows
-
-A response cap (`budget`) used to re-render row surfaces once it got tight
-enough: rows became arrays of bare values, with a sibling `*_columns` list
-naming what each position meant. It was lossless, but it made a row's shape
-depend on how small the cap was, so reading a row meant first working out
-which form had come back.
-
-Rows now keep their shape at every budget: a row is always an object with
-the same keys, and a tight budget returns fewer of them rather than
-differently shaped ones. The reduction ladder is trim, then answer, then
-shrink. If you read the columns form — `items_columns`, `values_columns`,
-`reduced_columns`, or any other `*_columns` sibling — those keys are gone
-from every response and output schema; read the rows from `items`,
-`values`, or `reduced` and page on with the cursor the response carries.
-
-### Removed — the pre-0.6 tool handlers and job machinery
-
-The handlers behind the removed 0.5 tools were kept in place through 0.6
-development so a tool could be re-exposed by putting its decorator back.
-That seam is gone: a handler with no caller has been deleted, along with
-its argument model, its output schema, and the helpers only it used. The
-seven tools and the Python API are unaffected — the advertised schemas and
-`ltspice_mcp.api.__all__` are unchanged. Restoring one of the old tools
-now means restoring its module from v0.5.x.
-
-Gone with them: the single-simulation and batch job types, the sweep and
-Monte Carlo runners, and the batch result reader. Every job the server runs
-is an experiment, on one runner. The Monte Carlo perturbation engine is
-unchanged — it is what `run_experiments` draws its random variations from.
-
-Error codes that only those handlers emitted are gone with them:
-`legacy_analysis_result`, `case_selection_wrong_job_kind`,
-`run_unavailable` (now `case_not_found`),
-`run_failed`, `no_raw_output`, `parse_deadline` (now `analysis_deadline`),
-`decimated`, `window_applied`, `complex_format_used`, `unrecognized_save`,
-`max_pk_pk_bucket`, and `export_written`.
-
-### Changed
-
-- The `compact` tool listing is the default: about 45% less to load per
-  session, the same calls accepted, descriptions read on demand through
-  `inspect(kind: "reference")` and carried on every validation error.
-  Measured on the same day against the full listing: the same answers at the
-  same design quality, one listing-caused mismatch in 22 requests. `[tools]
-  listing = "full"` restores every description on the wire.
-- The AC crossing recipe's phase level is spelled `level_deg` only; the
-  earlier `phase_deg` spelling, kept as an alias for callers of an earlier
-  build, is gone.
-
-- The sandbox follows the config file while the server runs: `[security]
-  allowed_paths` is re-read whenever `ltspice-mcp.toml` changes, so a refused
-  path names the exact line to add and says it takes effect on the next call.
-  Before, the only self-serve route the refusal offered was copying the file,
-  because widening the sandbox needed a restart the agent cannot perform.
-  The server instructions state the sandbox rule in one sentence.
-- `edit_schematic`'s `compare` is `verify_circuit`'s: `mode`
-  (`equivalence` or `structural_diff`), `anchors` and `rtol`, run by the same
-  comparison engine, and `verification.comparison` carries the same payload
-  (a `structural_diff` delta with the verdict derived from it). A compare that
-  could not run reports `verification.compare_error` instead of raising.
-- `include.fields` accepts a bare name as the number it names: a path without a
-  dot that is not a row key reads under `value`, so `phase_margin_worst_deg`
-  means `value.phase_margin_worst_deg`. A dotted path with an unknown root is
-  still refused.
-
-- The default sandbox is the working directory plus the Claude Code scratch
-  directory (`<tempdir>/claude-<uid>`). Claude Code tells an agent to write
-  throwaway files there, outside the working directory, so a deck authored
-  there used to be refused and copied in first. The generated config documents
-  the default in a comment and leaves `allowed_paths` unset; setting it
-  replaces the default. Applies to the server and the Python API alike.
-
-- `analyze_results` takes `step` and `all_steps` as call-level arguments instead
-  of per-recipe ones, and `run_experiments`' attached `analyze` block takes the
-  same two, so an attached measurement and a standalone one read the same
-  `.step` iterations. A run's step axis belongs to the run, not to each
-  measurement taken on it, so the choice is made once and every recipe in the
-  call reads it. The selection travels in the stored result set, so a
-  continuation replays it. Because the attached block now hashes two more keys,
-  the request canonicalizer moves to version 4: a `request_id` stored under
-  version 3 raises an idempotency conflict instead of replaying.
-- A recipe names the number a reduction or a spec reads once, as `field`. It
-  replaces `reduce_field` and `spec.field`, which said the same thing and had to
-  agree; `spec` keeps `min`, `max` and `allow_incomplete`. A multi-field recipe
-  requires `field` as soon as `reduce` or `spec` is given; a keyed recipe
-  requires it for `spec`, and where it is given it narrows that recipe's
-  reduction to the named key too; a scalar recipe takes none.
-- The published JSON Schema no longer carries `"default": null` annotations or
-  `discriminator.mapping` tables: `required` and each branch's own `const`
-  already say both. Nothing a call may send changed, and together with the
-  argument removals above the tool listing is smaller in both modes.
-
-- Calling a tool name the server does not have now answers a JSON-RPC
-  invalid-params error (-32602) naming the unknown tool and listing the seven
-  that exist, instead of an error-flagged tool result. A lookup failure has no
-  tool to attribute a result to, and this matches how an unknown resource URI
-  is already answered.
-
-- Moved to the MCP Python SDK 2, which serves protocol revision 2026-07-28
-  alongside the older initialize handshake. Clients on either revision are
-  served the same seven tools.
-- A tool that rejects its arguments now says `Invalid arguments for <tool>: ...`
-  where it said `Input validation error: ...`. The SDK stopped validating a call
-  against the published schema, so the tool's own model reports it; both are
-  generated from that model, so nothing is checked less strictly.
-- Reading a resource URI the server does not serve now answers the JSON-RPC
-  invalid-params code (-32602). The 2026-07-28 revision dropped the separate
-  resource-not-found code earlier revisions used.
-
-- `analyze_results`' description names every recipe with the plain words a
-  caller searches for, so a host matching a request against tool descriptions
-  can route "phase margin", "distortion" or "bias point" to this tool. The
-  handshake instructions name the reference lookup.
-- A job whose owner process has exited but has not yet been collected by its
-  parent now reads as interrupted rather than running. Liveness used to ask
-  only whether the pid existed, and a finished child keeps its pid until the
-  process that started it collects it.
-
-- `analyze_results` computes every recipe through one numeric function per
-  metric (`ltspice_mcp.lib.metrics`) that takes the result source as an
-  argument. It used to reach its numbers by calling the removed 0.5 tool
-  handlers and unwrapping their responses, with the file to read passed
-  through a task-local that overrode the argument. Results are identical (the
-  recorded fixtures pin them); the last retained 0.5 handlers are deleted.
-
-- `edit_schematic` takes the same `compare` object `verify_circuit` takes
-  (`reference`, `anchors`, `rtol`) in place of its own flat spellings. The flat
-  `render_format`, `render_scale` and bare `reference` arguments were removed
-  before this release rather than kept as aliases, so the object form is the
-  only spelling; rendering itself is `verify_circuit`'s (see Removed).
-- Every tool's response is built from one envelope (`outcome`, `failures`,
-  `observations`, `warnings`, `hint`) with one outcome rule, and a finding's
-  location carries the same fields on every tool. The advertised schemas
-  did not change; the internal modules behind the tools were split so that
-  each tool is its own file.
-
-- One on-disk store. Everything the server writes under a working directory's
-  `.ltspice-mcp/` is laid out by one `Store`: `experiments/` (job records, a
-  request index, a per-circuit index, cancellation markers), `runs/{job_id}/`
-  (every artifact one job produced, with its staged decks), `results/`,
-  `renders/`, `verify/`, `edit-exports/`, and `locks/`, stamped with a single
-  `store_version`. The per-circuit pointer files that let a circuit's sidecar
-  find working-directory jobs are gone; the store's own index does that.
-
-### Removed — reading the job sidecars earlier releases wrote
-
-Releases before 0.6 wrote a job record beside each circuit, at
-`.ltspice-mcp/jobs/<job_id>.json`. Those files are no longer read: a job id
-that only one of them names is simply not found, and `jobs` says so like it
-would for any other unknown id. Nothing was ever written there by 0.6, and
-the files themselves are left alone — delete them by hand if you want the
-space back. The `legacy_job_record` observation code is gone with the
-reading of them.
-
-### Changed — the schematic edit engine moved into the core
-
-The `.asc` edit engine is now `ltspice_mcp.lib.schematic_ops`, and every
-name another module imports from it is public. It lived in the tool layer,
-which meant core modules importing back up into the tools package (a latent
-import cycle that depended on import order). Nothing about `edit_schematic`,
-`inspect`, or `verify_circuit` changes; the one visible difference is in the
-JSON Schema `edit_schematic` advertises, where the internal `$defs` keys for
-the op shapes lost their leading underscore (`_OpAddComponent` is now
-`OpAddComponent`). References resolve exactly as before.
-
-### Removed — the internal tool-profile filter
-
-Tool registration no longer takes a profile, and there is no profile filter
-to look a tool up through: there is one surface to serve. The `[tools]
-profile` config key is gone with it — a config that still sets it loads with
-the key ignored. Serving zero tools is still a hard error.
-
 ### Added
 
-- A validation error that names a branch (a recipe, an op, a check, a query
-  kind, a job action) now ends with that branch's field table, so a caller
-  corrects the call from the error instead of looking the branch up first.
-  Served on every path: the tool call, the Python API, and the attached
-  analysis of `run_experiments`.
-- The rule "`field` is required once `reduce` or `spec` is given" is stated in
-  the recipe schemas themselves (`dependentRequired`), so a client on the
-  compact listing, which carries no descriptions, still sees it.
-- A random rule's `tolerance`, `scale` and `distribution` say what they mean
-  on the field itself: the tolerance is a fraction of the nominal (or in the
-  value's units), and for a normal draw it is the 3-sigma bound. The
-  convention was stated only in a design document; an agent asked for a
-  Monte Carlo at a stated sigma read the package source to find it.
-- `inspect(kind: "capabilities")` reports the Python API under `python_api`:
-  the import line, the session call on this working directory, and where an
-  op's arguments are read (`api.reference`, `help`, `inspect.signature`).
-- The Python API drops the two MCP presentation controls, `budget` and
-  `execution.wait_s`, and says so in the result's `warnings`, instead of
-  refusing the call. Neither is part of a request's identity, so an MCP call
-  replayed through the API with them attached is the same request. Paging
-  controls are still refused, with `raw_page=True` named as the remedy.
-- A registered tool declares its own config gate (`gate="run_code"` on the
-  registration); the served surface, the reference table, the capabilities
-  entry and the instructions all derive from that one declaration.
-- A `run_code` tool, served only when `[tools] run_code = true`
-  (`LTSPICE_MCP_RUN_CODE`): it runs a Python snippet in a warm worker process
+- The Python API. `from ltspice_mcp.api import Api` boots the same engine
+  in-process on a working directory and exposes the six operations as
+  synchronous methods with complete results where the wire pages or caps,
+  plus `load_raw` and `measurements` for numpy access to a run and the AC and
+  transient metric functions under their existing names. It reads and writes
+  the same job records as a server in the same directory, so the two can run
+  side by side; a job belongs to the process that submitted it and `close()`
+  cancels what it owns, exactly like server shutdown. `__all__` is the
+  stability boundary and is pinned. The full contract is
+  `docs/design/python_api.md`.
+- `run_experiments` runs one experiment across declared variations — strict
+  assignments plus one random or Monte Carlo dimension — as a single durable
+  job. `request_id` is optional: omit it and a fresh id is generated and echoed
+  on the receipt; pass your own to make submission idempotent, so a retry with
+  the same id, the same arguments, and unchanged source decks replays the
+  existing receipt instead of running anything again.
+- A `run_experiments` call dwells up to `execution.wait_s` (default 60 s,
+  maximum 120 s) and returns the results inline when the job finishes in that
+  time. Otherwise it returns a receipt with a `job_id` and the job keeps
+  running; follow it with `jobs(action="wait")`. `wait_s: 0` returns
+  immediately.
+- `run_experiments` takes a per-run simulator (`execution.simulator`:
+  `"ltspice"` or `"ngspice"`), so one deck can be cross-checked on a second
+  engine without changing config. Runners are cached per (kind, simulator,
+  output folder), so a second engine's runner does not evict the first's
+  in-flight concurrency and cancel state, and a cancel resolves the runner by
+  the job's own recorded simulator. Result reads follow the job too: the raw
+  dialect comes from the simulator the job actually ran on, not the session
+  default, so an ngspice run under an LTspice default parses correctly and the
+  other way round.
+- `Api.run_experiments(wait=False, detach=True)` hands the job to a small
+  owner process that outlives the caller: the caller validates the request,
+  the owner submits, supervises the job to a terminal status, and exits. The
+  caller's `close()` leaves a detached job alone; `jobs(action="cancel")`
+  from any process stops it through the existing foreign-owner path; a
+  running server sees it as another session's live job. The receipt names
+  the owner's pid and log file. Requires `[state] persist_jobs`.
+
+- A `run_code` tool, on by default (`[tools] run_code`,
+  `LTSPICE_MCP_RUN_CODE`): it runs a Python snippet in a warm worker process
   that holds the engine as `api` (the same six ops as methods, complete
   results, plus `np`, `load_raw`, `measurements`, `reference`), for loops over
   runs and numpy on samples. Each call is a fresh namespace around the same
   live engine; `timeout_s` (default 60, max 600) interrupts the snippet and
   cancels a run it waits on; a second call during one is answered `busy`;
   `reset` replaces the worker. Output is capped and says what it dropped. The
-  snippet runs with the server's own authority, not the sandbox, so the tool is
-  off by default; the capabilities report names the key
-  (`python_api.run_code`) and the reference table lists the tool only on a
-  session that serves it.
-
-- Every tool carries a display title, the short label a client shows a person
-  in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,
-  and so on).
-- The tool, resource, template and prompt listings tell a client how long they
-  stay fresh (`ttlMs` / `cacheScope`: one hour, private). They are built once
-  at startup and cannot change while the process runs, so a client no longer
-  has to re-list them every turn. Clients on earlier revisions are unaffected.
-- `server/discover` answers with instructions naming the simulators actually
-  detected, the same as the initialize handshake.
-
+  snippet runs with the server process's own file and process authority, not
+  the sandbox: permission it in the client the way you would a shell, and set
+  `run_code = false` when the server is reachable by more than one trusted
+  client, for example through a proxy. The capabilities report names the key
+  (`python_api.run_code`), the reference table lists the tool only on a
+  session that serves it, and the registration itself declares the gate, so
+  the served surface, the reference table, the capabilities entry and the
+  instructions all derive from that one declaration.
 - `[tools] listing` (env `LTSPICE_MCP_TOOL_LISTING`) selects how much of each
-  tool definition the tool list carries. `full`, the default, is unchanged.
-  `compact` advertises the same seven tools and the same schemas with every
-  per-argument description removed: structure, enums, defaults, `required`
-  and `$defs` are intact, so a client can still build a valid call, and the
-  server validates and answers exactly as before. It takes roughly 45% off
-  what a session loads before it can call anything. Both listings are static.
+  tool definition the tool list carries. `compact`, the default, advertises
+  the same tools and the same schemas with every per-argument description
+  removed: structure, enums, defaults, `required` and `$defs` are intact, so a
+  client can still build a valid call, and the server validates and answers
+  exactly as before. It takes roughly 45% off what a session loads before it
+  can call anything; descriptions are read on demand through
+  `inspect(kind: "reference")` and carried on every validation error. Measured
+  on the same day against `full`: the same answers at the same design
+  quality, one listing-caused mismatch in 22 requests. `full` puts every
+  description back on the wire. Both listings are static.
 - `inspect(kind="reference")`: a searchable lookup over the tools' own
   vocabulary — each tool's top-level arguments, plus the branches (analysis
   recipes, schematic ops, variation kinds, query kinds, checks and job
@@ -321,14 +136,33 @@ the key ignored. Serving zero tools is still a hard error.
   validates against, so nothing callable can be missing from it. It is the
   route to any argument's meaning on the `compact` tool listing, where
   per-argument descriptions are not published.
-- `Api.run_experiments(wait=False, detach=True)` hands the job to a small
-  owner process that outlives the caller: the caller validates the request,
-  the owner submits, supervises the job to a terminal status, and exits. The
-  caller's `close()` leaves a detached job alone; `jobs(action="cancel")`
-  from any process stops it through the existing foreign-owner path; a
-  running server sees it as another session's live job. The receipt names
-  the owner's pid and log file. Requires `[state] persist_jobs`.
+- `inspect(kind: "capabilities")` reports the Python API under `python_api`:
+  the import line, the session call on this working directory, and where an
+  op's arguments are read (`api.reference`, `help`, `inspect.signature`).
+- `inspect(kind="capabilities")` reports `diagnostics`: the startup notes (a
+  bad configured simulator path, a requested engine that fell back, WSL
+  auto-detection) that say whether the server started degraded. They were
+  written only to the server's own log.
 
+- `inspect(kind: "capabilities")` reports the effective ngspice compatibility
+  mode (`ngbehavior`), so a command-line ngspice run that fails differently can
+  be compared with the server's setting.
+- `inspect(kind: "capabilities")` also returns `config_path` and lists every
+  known-but-undetected simulator with a remediation naming the exact config key
+  (`simulator.path`), the environment variable, the config file, a
+  platform-appropriate example executable path, and the restart requirement. The
+  text is built from the same constants the config loader reads, so it cannot
+  name a key that does not exist. When a non-empty `simulator.enabled` allowlist
+  is the reason an engine is off, the remediation says that instead of pointing
+  at an install. The WSL no-simulator error now names `simulator.path` alongside
+  the environment variable.
+- `inspect(kind: "capabilities")` gains a `python` block — executable, install
+  kind, whether the interpreter path is ephemeral, package location — so a
+  caller can check that environment before switching to the in-process API. The
+  server instructions carry a one-line pointer
+  (`from ltspice_mcp.api import Api`), and a finished `run_experiments` receipt
+  that expanded ten or more cases points at the in-process API in its `hint`,
+  because per-call overhead adds up over a loop of many cases.
 - `verify_circuit`'s render block carries `source_sha256`, the digest of the
   sheet it drew. Rendering reads the file on disk, so a peer that committed
   between `edit_schematic` returning and this call running was invisible:
@@ -358,31 +192,34 @@ the key ignored. Serving zero tools is still a hard error.
   section, so the corner select came back as a missing file with nothing
   pointing at the cause.
 
-- `inspect(kind="capabilities")` reports `diagnostics`: the startup notes (a
-  bad configured simulator path, a requested engine that fell back, WSL
-  auto-detection) that say whether the server started degraded. They were
-  written only to the server's own log.
+- Every tool carries a display title, the short label a client shows a person
+  in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,
+  and so on).
+- The tool, resource, template and prompt listings tell a client how long they
+  stay fresh (`ttlMs` / `cacheScope`: one hour, private). They are built once
+  at startup and cannot change while the process runs, so a client no longer
+  has to re-list them every turn. Clients on earlier revisions are unaffected.
+- `server/discover` answers with instructions naming the simulators actually
+  detected, the same as the initialize handshake.
 
-- `run_experiments` runs one experiment across declared variations — strict
-  assignments plus one random or Monte Carlo dimension — as a single durable
-  job. `request_id` is optional: omit it and a fresh id is generated and echoed
-  on the receipt; pass your own to make submission idempotent, so a retry with
-  the same id, the same arguments, and unchanged source decks replays the
-  existing receipt instead of running anything again.
-- A `run_experiments` call dwells up to `execution.wait_s` (default 60 s,
-  maximum 120 s) and returns the results inline when the job finishes in that
-  time. Otherwise it returns a receipt with a `job_id` and the job keeps
-  running; follow it with `jobs(action="wait")`. `wait_s: 0` returns
-  immediately.
-- `run_experiments` takes a per-run simulator (`execution.simulator`:
-  `"ltspice"` or `"ngspice"`), so one deck can be cross-checked on a second
-  engine without changing config. Runners are cached per (kind, simulator,
-  output folder), so a second engine's runner does not evict the first's
-  in-flight concurrency and cancel state, and a cancel resolves the runner by
-  the job's own recorded simulator. Result reads follow the job too: the raw
-  dialect comes from the simulator the job actually ran on, not the session
-  default, so an ngspice run under an LTspice default parses correctly and the
-  other way round.
+- A validation error that names a branch (a recipe, an op, a check, a query
+  kind, a job action) now ends with that branch's field table, so a caller
+  corrects the call from the error instead of looking the branch up first.
+  Served on every path: the tool call, the Python API, and the attached
+  analysis of `run_experiments`.
+- The rule "`field` is required once `reduce` or `spec` is given" is stated in
+  the recipe schemas themselves (`dependentRequired`), so a client on the
+  compact listing, which carries no descriptions, still sees it.
+- A random rule's `tolerance`, `scale` and `distribution` say what they mean
+  on the field itself: the tolerance is a fraction of the nominal (or in the
+  value's units), and for a normal draw it is the 3-sigma bound. The
+  convention was stated only in a design document; an agent asked for a
+  Monte Carlo at a stated sigma read the package source to find it.
+- The Python API drops the two MCP presentation controls, `budget` and
+  `execution.wait_s`, and says so in the result's `warnings`, instead of
+  refusing the call. Neither is part of a request's identity, so an MCP call
+  replayed through the API with them attached is the same request. Paging
+  controls are still refused, with `raw_page=True` named as the remedy.
 - `.asc` schematics now run on ngspice. The LTspice netlist export is converted
   for ngspice by removing the LTspice-only `.backanno` command (ngspice aborts
   on it) and translating `µ` suffixes and `§` name prefixes. The converted
@@ -409,42 +246,6 @@ the key ignored. Serving zero tools is still a hard error.
   start only in the raw header's `Offset:` field, which nothing applied — a
   196–202 µs window read as 0–6 µs everywhere. All raw loads now add the offset
   back, so window arguments and reported times are in deck coordinates.
-- Parallel-session coordination: independent server processes (for example
-  several coding agents sharing one directory) no longer interfere with each
-  other.
-  - Circuit-file mutations and `.asc` exports take a cross-process file lock
-    (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file from
-    two sessions serialize on the latest content instead of silently losing one
-    session's edit. Pin and route geometry resolves inside the lock, so it
-    reflects a peer's just-completed move; an export locks the sidecar `.net`
-    it overwrites as well as the `.asc`. If the lock is still held after a 10 s
-    wait, the call fails with a "locked by another ltspice-mcp process" error.
-  - Job sidecars record the owning server's pid. A running job whose owner is
-    still alive now loads in other sessions as `running` (previously it was
-    mislabeled `interrupted`), refreshes from its sidecar when its status or
-    results are read or listed, and is excluded from other sessions' shutdown
-    cleanup.
-  - `psutil` is now a direct dependency; it was already installed as a spicelib
-    transitive.
-- `inspect(kind: "capabilities")` reports the effective ngspice compatibility
-  mode (`ngbehavior`), so a command-line ngspice run that fails differently can
-  be compared with the server's setting.
-- `inspect(kind: "capabilities")` also returns `config_path` and lists every
-  known-but-undetected simulator with a remediation naming the exact config key
-  (`simulator.path`), the environment variable, the config file, a
-  platform-appropriate example executable path, and the restart requirement. The
-  text is built from the same constants the config loader reads, so it cannot
-  name a key that does not exist. When a non-empty `simulator.enabled` allowlist
-  is the reason an engine is off, the remediation says that instead of pointing
-  at an install. The WSL no-simulator error now names `simulator.path` alongside
-  the environment variable.
-- `inspect(kind: "capabilities")` gains a `python` block — executable, install
-  kind, whether the interpreter path is ephemeral, package location — so a
-  caller can check that environment before switching to the in-process API. The
-  server instructions carry a one-line pointer
-  (`from ltspice_mcp.api import Api`), and a finished `run_experiments` receipt
-  that expanded ten or more cases points at the in-process API in its `hint`,
-  because per-call overhead adds up over a loop of many cases.
 - The `transient_response` recipe takes `mode: "step" | "disturbance"`.
   `"step"` is the classic pulse response. `"disturbance"` is for a regulated
   output under a load or line step (LDO, PMIC), where the output returns to its
@@ -499,7 +300,7 @@ the key ignored. Serving zero tools is still a hard error.
   loop gain probed through an inverting sense or a reversed impedance probe
   reads in its natural convention without a behavioral inverter node in the
   deck.
-- Per-step AC entries carry `step_params`, the `.step` name=value point from the
+- Per-step AC entries carry `step_values`, the `.step` name=value point from the
   log, next to the bare step index. LTspice runs a `.step ... list` sorted
   ascending rather than in declared order, so index-only labeling could
   attribute curves to the wrong list positions.
@@ -507,6 +308,23 @@ the key ignored. Serving zero tools is still a hard error.
   ohms under the 1 A impedance probe, or |H| for a transfer function — which
   distinguishes a dBΩ peak from a dB dip. The recipe already promised the field;
   it now returns it.
+- Parallel-session coordination: independent server processes (for example
+  several coding agents sharing one directory) no longer interfere with each
+  other.
+  - Circuit-file mutations and `.asc` exports take a cross-process file lock
+    (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file from
+    two sessions serialize on the latest content instead of silently losing one
+    session's edit. Pin and route geometry resolves inside the lock, so it
+    reflects a peer's just-completed move; an export locks the sidecar `.net`
+    it overwrites as well as the `.asc`. If the lock is still held after a 10 s
+    wait, the call fails with a "locked by another ltspice-mcp process" error.
+  - Job sidecars record the owning server's pid. A running job whose owner is
+    still alive now loads in other sessions as `running` (previously it was
+    mislabeled `interrupted`), refreshes from its sidecar when its status or
+    results are read or listed, and is excluded from other sessions' shutdown
+    cleanup.
+  - `psutil` is now a direct dependency; it was already installed as a spicelib
+    transitive.
 - The `edit_schematic` `set_component_attribute` op with an empty value now
   clears the attribute, removing its SYMATTR line — the only representation of
   "no value" the `.asc` format can read back. InstName remains protected.
@@ -524,6 +342,97 @@ the key ignored. Serving zero tools is still a hard error.
 
 ### Changed
 
+- The sandbox follows the config file while the server runs: `[security]
+  allowed_paths` is re-read whenever `ltspice-mcp.toml` changes, so a refused
+  path names the exact line to add and says it takes effect on the next call.
+  Before, the only self-serve route the refusal offered was copying the file,
+  because widening the sandbox needed a restart the agent cannot perform.
+  The server instructions state the sandbox rule in one sentence.
+- `edit_schematic`'s `compare` is `verify_circuit`'s: `mode`
+  (`equivalence` or `structural_diff`), `anchors` and `rtol`, run by the same
+  comparison engine, and `verification.comparison` carries the same payload
+  (a `structural_diff` delta with the verdict derived from it). A compare that
+  could not run reports `verification.compare_error` instead of raising.
+- `include.fields` accepts a bare name as the number it names: a path without a
+  dot that is not a row key reads under `value`, so `phase_margin_worst_deg`
+  means `value.phase_margin_worst_deg`. A dotted path with an unknown root is
+  still refused.
+
+- The default sandbox is the working directory plus the Claude Code scratch
+  directory (`<tempdir>/claude-<uid>`). Claude Code tells an agent to write
+  throwaway files there, outside the working directory, so a deck authored
+  there used to be refused and copied in first. The generated config documents
+  the default in a comment and leaves `allowed_paths` unset; setting it
+  replaces the default. Applies to the server and the Python API alike.
+
+- `analyze_results` takes `step` and `all_steps` as call-level arguments instead
+  of per-recipe ones, and `run_experiments`' attached `analyze` block takes the
+  same two, so an attached measurement and a standalone one read the same
+  `.step` iterations. A run's step axis belongs to the run, not to each
+  measurement taken on it, so the choice is made once and every recipe in the
+  call reads it. The selection travels in the stored result set, so a
+  continuation replays it. Because the attached block now hashes two more keys,
+  the request canonicalizer moves to version 4: a `request_id` stored under
+  version 3 raises an idempotency conflict instead of replaying.
+- A recipe names the number a reduction or a spec reads once, as `field`. It
+  replaces `reduce_field` and `spec.field`, which said the same thing and had to
+  agree; `spec` keeps `min`, `max` and `allow_incomplete`. A multi-field recipe
+  requires `field` as soon as `reduce` or `spec` is given; a keyed recipe
+  requires it for `spec`, and where it is given it narrows that recipe's
+  reduction to the named key too; a scalar recipe takes none.
+- The published JSON Schema no longer carries `"default": null` annotations or
+  `discriminator.mapping` tables: `required` and each branch's own `const`
+  already say both. Nothing a call may send changed, and together with the
+  argument removals above the tool listing is smaller in both modes.
+
+- Calling a tool name the server does not have now answers a JSON-RPC
+  invalid-params error (-32602) naming the unknown tool and listing the eight
+  that exist, instead of an error-flagged tool result. A lookup failure has no
+  tool to attribute a result to, and this matches how an unknown resource URI
+  is already answered.
+
+- Moved to the MCP Python SDK 2, which serves protocol revision 2026-07-28
+  alongside the older initialize handshake. Clients on either revision are
+  served the same tools.
+- A tool that rejects its arguments now says `Invalid arguments for <tool>: ...`
+  where it said `Input validation error: ...`. The SDK stopped validating a call
+  against the published schema, so the tool's own model reports it; both are
+  generated from that model, so nothing is checked less strictly.
+- Reading a resource URI the server does not serve now answers the JSON-RPC
+  invalid-params code (-32602). The 2026-07-28 revision dropped the separate
+  resource-not-found code earlier revisions used.
+
+- `analyze_results`' description names every recipe with the plain words a
+  caller searches for, so a host matching a request against tool descriptions
+  can route "phase margin", "distortion" or "bias point" to this tool. The
+  handshake instructions name the reference lookup.
+- A job whose owner process has exited but has not yet been collected by its
+  parent now reads as interrupted rather than running. Liveness used to ask
+  only whether the pid existed, and a finished child keeps its pid until the
+  process that started it collects it.
+
+- Every tool's response is built from one envelope (`outcome`, `failures`,
+  `observations`, `warnings`, `hint`) with one outcome rule, and a finding's
+  location carries the same fields on every tool. The advertised schemas
+  did not change; the internal modules behind the tools were split so that
+  each tool is its own file.
+
+- One on-disk store. Everything the server writes under a working directory's
+  `.ltspice-mcp/` is laid out by one `Store`: `experiments/` (job records, a
+  request index, a per-circuit index, cancellation markers), `runs/{job_id}/`
+  (every artifact one job produced, with its staged decks), `results/`,
+  `detached/`, `verify/` (with its `renders/` beneath it), `edit-exports/`,
+  and `locks/`, stamped with a single `store_version`. The per-circuit pointer files that let a circuit's sidecar
+  find working-directory jobs are gone; the store's own index does that.
+
+- **The `.asc` edit engine moved into the core.** The `.asc` edit engine is now `ltspice_mcp.lib.schematic_ops`, and every
+  name another module imports from it is public. It lived in the tool layer,
+  which meant core modules importing back up into the tools package (a latent
+  import cycle that depended on import order). Nothing about `edit_schematic`,
+  `inspect`, or `verify_circuit` changes; the one visible difference is in the
+  JSON Schema `edit_schematic` advertises, where the internal `$defs` keys for
+  the op shapes lost their leading underscore (`_OpAddComponent` is now
+  `OpAddComponent`). References resolve exactly as before.
 - `jobs` publishes each action's own argument shape. `status`, `wait`,
   `cancel`, `list`, and `runs` are separate branches of one schema keyed on
   `action`, instead of nine optional fields policed after the fact by the
@@ -541,7 +450,7 @@ the key ignored. Serving zero tools is still a hard error.
   longer describe two different moments of the same job.
 
 - Every error class declares a stable `code`. No code a client sees has
-  changed; the full vocabulary (82 codes) is pinned by
+  changed; the full vocabulary (146 codes) is pinned by
   `tests/test_error_codes.py`, and renaming or removing one is a breaking
   change that will be listed here. See `docs/design/mcp_surface.md`, "Error
   codes".
@@ -549,23 +458,20 @@ the key ignored. Serving zero tools is still a hard error.
 - The `mcp` dependency no longer pulls the `cli` extra: six packages fewer
   (typer, rich, markdown-it-py, mdurl, shellingham, annotated-doc) for a
   server that never imported them.
-- Contributor documents: `CONTRIBUTING.md`, a code of conduct, issue
-  templates, `THIRD_PARTY_NOTICES.md`, and the tool-surface and Python API
-  contracts under `docs/design/`; the spicelib bug ledger is published as
+- New documents: `THIRD_PARTY_NOTICES.md`, the tool-surface and Python API
+  contracts under `docs/design/`, and the spicelib bug ledger, published as
   `docs/spicelib_bugs.md`.
-
 - The advertised tool definitions are exactly what the source says. Every
-  description declared on a tool or one of its arguments is served verbatim in
-  the tool listing, so reading the models tells you what a client is shown, and
+  description declared on a tool or one of its arguments is served verbatim on
+  the `full` listing, and the `compact` listing removes descriptions rather
+  than rewording them, so reading the models tells you what a client is shown, and
   the one text also feeds `api.reference('...')` and the `spice://guide`
   resource. What keeps the listing small is that the descriptions themselves
   are short: each states the unit, the convention, the default, and how the
   field interacts with its siblings, and the fuller explanation lives in
   `docs/design/mcp_surface.md` or the guide with a pointer on the field. Output
   schemas are still not advertised — response shapes are learned from
-  responses, and dropping them is what pays for the argument prose. The listing
-  a client loads is about 67,000 characters: shortening the descriptions took
-  about 9,000 characters off what the full text would otherwise cost.
+  responses, and dropping them is what pays for the argument prose.
   `tests/test_consolidated_contracts.py` holds an upper bound per tool, so the
   listing cannot grow without someone raising a number.
 - Three `analyze_results` recipes — `noise_integral`, `periodic`, and
@@ -734,7 +640,7 @@ the key ignored. Serving zero tools is still a hard error.
   only job kind the consolidated tools produce, with an error that named an
   internal type. The same error, where it can still occur on the other
   job-addressed paths, now names the tools that do accept an experiment job.
-- The `stability` recipe accepts `reduce_field` and `spec.field` on
+- The `stability` recipe accepts `field` (for `reduce` and for `spec`) on
   `unity_gain_hz` and `dc_gain_db`, not just on the two margins. "Keep the
   unity-gain bandwidth above 2 MHz" is the most common stability spec after
   phase margin, and the recipe already reported the number per case, but asking
@@ -768,9 +674,10 @@ the key ignored. Serving zero tools is still a hard error.
 - Converting an `.asc` schematic to a runnable netlist no longer runs the
   LTspice export subprocess on the server's event loop; it is offloaded to a
   worker thread, so concurrent requests, including a cancel, stay responsive
-  during the export. Exports of the same schematic are serialized by a
-  per-`.asc` lock: LTspice always writes the same sidecar `.net`, so concurrent
-  exports could otherwise tear the output and run the wrong deck.
+  during the export. Exports of the same schematic are serialized by the
+  per-`.asc` lock described under parallel-session coordination in Added:
+  LTspice always writes the same sidecar `.net`, so concurrent exports could
+  otherwise tear the output and run the wrong deck.
 - WSL interop calls (`wslpath`, `cmd.exe` environment resolution) now carry a
   15-second timeout; a hung Windows-interop process previously stalled server
   startup or left a run request waiting forever.
@@ -841,7 +748,7 @@ the key ignored. Serving zero tools is still a hard error.
 ### Removed
 
 - The `full` and `agentic` tool profiles, and 48 of the 49 tools they exposed.
-  (`plot_waveform` is the one that carried over unchanged.) The breaking-change
+  (`plot_waveform` is the one that carried over.) The breaking-change
   section above says where each capability went and how to pin the old surface.
 - Session library mounting (`load_library`, `unload_library`, `list_libraries`)
   is removed with no replacement. Reference libraries from the deck with `.lib`
@@ -850,6 +757,84 @@ the key ignored. Serving zero tools is still a hard error.
   `set_component_value` on a `.cir`/`.net`, `parameter`, `edit_directive`) are
   removed with no replacement. Write `.cir`, `.net`, and `.sp` decks with your
   own file tools; `inspect` reads them and `verify_circuit` checks them.
+
+- `analyze_results` recipes no longer accept `step` or `all_steps`; pass them on
+  the call (see Changed).
+- `analyze_results` recipes no longer accept `reduce_field`, and `spec` no longer
+  accepts `field`; pass `field` on the recipe (see Changed).
+- `verify_circuit` no longer accepts the flat `reference`, `compare_mode`,
+  `anchors` or `rtol`; pass the `compare` object, which carries all four.
+- `edit_schematic` no longer accepts the flat `reference`; pass `compare`.
+- `edit_schematic` no longer accepts `render`, `render_format`, `render_scale`,
+  or `render` in `return_views`, and its response carries neither `views.render`
+  nor the `artifacts` array that rendering was the only producer for.
+  Rendering is `verify_circuit`'s, whose policy adds a pixel cap, inline
+  delivery and a render-only mode.
+- `edit_schematic` no longer accepts `write_failed_draft`. A failed batch writes
+  nothing by design and the response names the stage that failed, so there was
+  no draft to quarantine that the caller's own ops did not already describe.
+- `edit_schematic` no longer accepts `format`; structured-aware clients render
+  only `structuredContent`, and the other six tools had already dropped it.
+- The AC crossing recipe's phase level is spelled `level_deg` only; the
+  earlier `phase_deg` spelling, kept as an alias for callers of an earlier
+  build, is gone.
+
+- The MCP logging capability. The 2026-07-28 revision deprecates it whole
+  (SEP-2577): the `logging` server capability, the server-to-client
+  `notifications/message` delivery and the per-request log-level opt-in that
+  replaced `logging/setLevel`, with no replacement offered, and
+  `logging/setLevel` is absent from that revision's schema. The server no
+  longer advertises the capability, answers `logging/setLevel` with
+  method-not-found, and sends no log notifications. Job lifecycle events and
+  diagnostics go to the process's stderr logger, which `[logging] level`
+  still controls.
+- **The columns form of budget-limited rows.** A response cap (`budget`) used to re-render row surfaces once it got tight
+  enough: rows became arrays of bare values, with a sibling `*_columns` list
+  naming what each position meant. It was lossless, but it made a row's shape
+  depend on how small the cap was, so reading a row meant first working out
+  which form had come back.
+
+  Rows now keep their shape at every budget: a row is always an object with
+  the same keys, and a tight budget returns fewer of them rather than
+  differently shaped ones. The reduction ladder is trim, then answer, then
+  shrink. If you read the columns form — `items_columns`, `values_columns`,
+  `reduced_columns`, or any other `*_columns` sibling — those keys are gone
+  from every response and output schema; read the rows from `items`,
+  `values`, or `reduced` and page on with the cursor the response carries.
+- **The pre-0.6 tool handlers and job machinery.** The handlers behind the removed 0.5 tools were kept in place through 0.6
+  development so a tool could be re-exposed by putting its decorator back.
+  That seam is gone: a handler with no caller has been deleted, along with
+  its argument model, its output schema, and the helpers only it used. The
+  eight tools and the Python API are unaffected — the advertised schemas and
+  `ltspice_mcp.api.__all__` are unchanged. Restoring one of the old tools
+  now means restoring its module from v0.5.x.
+
+  Gone with them: the single-simulation and batch job types, the sweep and
+  Monte Carlo runners, and the batch result reader. Every job the server runs
+  is an experiment, on one runner. The Monte Carlo perturbation engine is
+  unchanged — it is what `run_experiments` draws its random variations from.
+
+  Error codes that only those handlers emitted are gone with them:
+  `legacy_analysis_result`, `case_selection_wrong_job_kind`,
+  `run_unavailable` (now `case_not_found`),
+  `run_failed`, `no_raw_output`, `parse_deadline` (now `analysis_deadline`),
+  `decimated`, `window_applied`, `complex_format_used`, `unrecognized_save`,
+  `max_pk_pk_bucket`, and `export_written`.
+- **The job sidecars earlier releases wrote.** Releases before 0.6 wrote a job record beside each circuit, at
+  `.ltspice-mcp/jobs/<job_id>.json`. Those files are no longer read: a job id
+  that only one of them names is simply not found, and `jobs` says so like it
+  would for any other unknown id. Nothing was ever written there by 0.6, and
+  the files themselves are left alone — delete them by hand if you want the
+  space back. The `legacy_job_record` observation code is gone with the
+  reading of them.
+- **The internal tool-profile filter.** Tool registration no longer takes a
+  profile, and there is no profile filter to look a tool up through: there is
+  one surface to serve. Serving zero tools is still a hard error.
+- `CONTRIBUTING.md` and the code of conduct are gone, and the sdist no longer
+  ships them. The project is not taking outside contributions at this stage;
+  the setup notes moved into `CLAUDE.md`, and the review rules it carried
+  (a regression test fails before the fix, real code paths, plain language)
+  already live there and in `docs/TESTING.md`.
 
 ## [0.5.0] - 2026-06-30
 
@@ -1640,3 +1625,4 @@ Netlist and schematic editing:
 Release history before the first tagged version lives in `git log`; the
 `feat:` / `fix:` / `refactor:` prefixes and PR descriptions describe
 each change.
+
