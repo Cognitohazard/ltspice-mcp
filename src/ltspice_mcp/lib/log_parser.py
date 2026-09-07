@@ -18,7 +18,6 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
-from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.spice_validator import validate_directive
 
 logger = logging.getLogger(__name__)
@@ -88,23 +87,11 @@ class MeasurementsOutput(TypedDict):
     failed_measurements: list[str]
 
 
-_MAX_DIAGNOSTICS = 50
-
 # Cap on how much of a log ``extract_error_context`` reads (total bytes; half
 # head, half tail). The excerpt only ever needs the head (parse errors) and the
 # tail (abort/convergence dump), and a pathological abort log — a .control loop
 # echoing per step, a runaway node-voltage dump — can reach hundreds of MB.
 _ERROR_CONTEXT_READ_CAP = 8 * 1024 * 1024
-
-# Above this many ESTIMATED trace samples (axis points × number of non-axis
-# traces) a completed result is loaded axis-only and the per-trace value scan
-# (NaN/Inf/extreme-magnitude detection) is skipped, with the gap surfaced as a
-# coverage observation. At or below it, all traces are loaded and scanned so the
-# value facts are surfaced and no skip is reported. Budgeting on TOTAL samples,
-# not axis points alone, bounds the actual load: a wide node dump with a
-# moderate point count costs as much memory as a long single-probe .tran, and
-# both must skip. 5M samples ≈ 40 MB (real) / 80 MB (complex AC).
-_VALUE_SCAN_SAMPLE_BUDGET = 5_000_000
 
 # Error keywords to search for in log files (case-insensitive). The trailing
 # entries are LTspice convergence-abort phrases (the one-word "Timestep too
@@ -127,6 +114,10 @@ _ERROR_KEYWORDS = [
     # phrases and no "error" prefix.
     "file not found",
     "already defined",
+    # LTspice's two unsolvable-topology wordings, neither of which contains
+    # "singular matrix" (see _RE_UNSOLVABLE_MATRIX).
+    "matrix is singular",
+    "over-defined circuit matrix",
 ]
 
 # --- Structured log diagnostic extraction ---
@@ -208,6 +199,15 @@ _BARE_ERROR_PHRASES = [
     "no convergence",
     "questionable use of curly braces",
 ]
+# LTspice names an unsolvable matrix two ways that the bare phrase above
+# cannot reach: a source/inductor loop reports "…matrix is singular" and
+# paralleled ideal sources report an "over-defined circuit matrix", both
+# mid-sentence after the offending component names. Unlike "singular matrix",
+# neither wording can appear in a success narration, so neither needs the
+# start-of-line anchor. Same physical cause, so they classify alike.
+_RE_UNSOLVABLE_MATRIX = re.compile(
+    r"matrix is singular|over-defined circuit matrix", re.IGNORECASE
+)
 # ngspice-specific diagnostic patterns (not matched by the LTspice rules above).
 _RE_NGSPICE_MEAS_BLOCKED = re.compile(r"No \.measure possible in batch mode", re.IGNORECASE)
 _RE_NGSPICE_UNIMPLEMENTED = re.compile(r"unimplemented dot command '([^']+)'", re.IGNORECASE)
@@ -305,6 +305,26 @@ _RE_MISSING_SUBCKT_NGSPICE = re.compile(
     r"unable to find subcircuit named\s+['\"]?([A-Za-z0-9_.\-]+)['\"]?",
     re.IGNORECASE,
 )
+# An .include / .lib the simulator could not open, e.g.:
+#   Error: Could not find include file tt          (ngspice)
+#   Can't find .include file corners.lib           (LTspice)
+# The file it named is the rest of the line, so a caller sees which one.
+_RE_MISSING_INCLUDE = re.compile(
+    r"(?:could not|couldn'?t|cannot|can'?t)\s+(?:find|open)\s+(?:the\s+)?\.?include\s+file\s*:?\s*(\S+)",
+    re.IGNORECASE,
+)
+
+
+def missing_includes_from_text(text: str) -> list[str]:
+    """The include/library files a log says could not be opened, in order."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for match in _RE_MISSING_INCLUDE.finditer(text):
+        name = match.group(1).strip("\"'")
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 # Logs are normally KB to low-MB; even a huge stepped .op run stays well under
@@ -545,6 +565,55 @@ def extract_missing_refs(log_path: Path) -> list[str]:
     return missing_refs_from_text(read_log_text(log_path))
 
 
+# Phrases every simulator we support prints when the solver gave up. Grouped
+# with the OP-solve rung wording because a bias point that no method could find
+# IS a convergence failure — it just fails before the analysis starts.
+_CONVERGENCE_CODE_PHRASES = (
+    "time step too small",
+    "timestep too small",
+    "iteration limit reached",
+    "no convergence",
+    "trouble with node",
+    "failed to find operating point",
+)
+
+
+def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] | None]:
+    """Name the physics cause behind a failed run's log errors, with evidence.
+
+    Returns one of ``missing_include`` / ``missing_model`` /
+    ``singular_matrix`` / ``convergence_failed`` / ``execution_failed`` (the
+    fallback for a failure whose log says nothing we recognize) plus any
+    evidence the classification itself produced. Every cause used to arrive as one code, so a caller could
+    not tell an unresolved model from a convergence abort without reading
+    prose — and the phrase tables that CAN tell them apart were already being
+    run on the failing log and discarded.
+
+    Classifies off the diagnostics-extracted error lines rather than the whole
+    log so the anchoring those rules apply (a bare phrase must start its line)
+    carries over: a log narrating "the singular matrix decomposition succeeded"
+    must not classify as a singular matrix. Most specific cause first — a deck
+    that cannot resolve a model never reaches the solver, so any convergence
+    noise beneath it is downstream of the real failure.
+    """
+    blob = "\n".join(errors)
+    # Ahead of the model check: an include the simulator never opened is why
+    # the models inside it are missing, so reporting the models would name a
+    # symptom and hide the cause.
+    includes = missing_includes_from_text(blob)
+    if includes:
+        return "missing_include", {"missing_includes": includes}
+    refs = missing_refs_from_text(blob)
+    if refs:
+        return "missing_model", {"missing_refs": refs}
+    lowered = blob.lower()
+    if "singular matrix" in lowered or _RE_UNSOLVABLE_MATRIX.search(blob):
+        return "singular_matrix", None
+    if any(phrase in lowered for phrase in _CONVERGENCE_CODE_PHRASES):
+        return "convergence_failed", None
+    return "execution_failed", None
+
+
 def _op_block_recovered(lines: list[str], idx: int) -> bool:
     """Whether the OP-solve block holding a stepping-failure at ``idx`` converged.
 
@@ -710,10 +779,17 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             errors.append(stripped)
             i += 1
             continue
+        if _RE_UNSOLVABLE_MATRIX.search(stripped):
+            errors.append(stripped)
+            i += 1
+            continue
 
         # ngspice-specific diagnostics
         if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
-            warnings.append(stripped + " Use signal_stats or query_value for post-processing.")
+            warnings.append(
+                stripped + " Use the analyze_results 'signal_stats' or 'value' "
+                "recipes for post-processing."
+            )
             i += 1
             continue
         if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
@@ -756,8 +832,8 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 _RE_FILE_LINE_PREFIX = re.compile(r"^(?P<path>.+?)\((?P<line>\d+)\):\s+(?P<msg>.+)$")
 
 # How many distinguishing line numbers to list in a collapsed family before
-# truncating with a ``(+N more)`` tail — bounds a huge family's manifest the
-# same way ``cap_list`` bounds the diagnostics list itself.
+# truncating with a ``(+N more)`` tail, so a huge family's manifest stays
+# bounded.
 _FAMILY_EXAMPLE_CAP = 12
 
 
@@ -773,6 +849,34 @@ def _file_line_family(item: str) -> tuple[str, str] | None:
     if m is None:
         return None
     return (m.group("path"), m.group("msg"))
+
+
+# A whole numeric token: integer, decimal or exponent form, optionally signed.
+# The boundary guards are what keep it from eating the digits INSIDE an
+# identifier — ``2N3904`` and ``V(n001)`` carry no varying number, and folding
+# their digits would merge two different part numbers or two different nodes.
+_RE_NUMERIC_TOKEN = re.compile(
+    r"(?<![0-9A-Za-z_.])[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?(?![0-9A-Za-z_])"
+)
+
+
+def diagnostic_collapse_key(text: str) -> str:
+    """The grouping key for diagnostics that say the same thing about a run.
+
+    A convergence abort carries the run's own numeric state — the abort time,
+    the timestep, the node-voltage dump — so in a sweep or Monte Carlo, where
+    every case has different component values, no two cases write a
+    byte-identical excerpt and a verbatim key groups nothing. Folding whole
+    numeric tokens to a placeholder makes the cause the key and the numbers
+    incidental, which is what lets a caller be told "this happened N times"
+    instead of being handed N kilobytes of it.
+
+    Only numbers fold. Quoted spans in a SPICE diagnostic are usually the model
+    or subcircuit name (``Unable to find definition of model "mystery"``), which
+    is the one fact that distinguishes two unresolved-reference failures from
+    each other; folding those would merge them and drop a name.
+    """
+    return _RE_NUMERIC_TOKEN.sub("<n>", text)
 
 
 def _render_file_line_family(members: list[str], counts: Counter[str]) -> str:
@@ -952,135 +1056,6 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
     except Exception as e:
         logger.error(f"Error reading log file {log_file}: {e}")
         return f"(Error reading log file: {e})"
-
-
-def parse_success_summary(
-    raw_file: Path,
-    log_file: Path,
-    duration: float,
-    *,
-    dialect: str | None = None,
-    netlist: Path | None = None,
-) -> dict:
-    """Build the success-path summary that ``run_simulation`` returns.
-
-    Delegates to ``raw_parser.build_simulation_summary`` so the canonical
-    summary fields (``range``, ``measurements``, ``fourier``, ``meas_errors``)
-    are included alongside the legacy ``sim_type``/``step_count``/``signals``
-    fields. Adds ``raw_file``/``log_file`` for downstream tool chains that
-    feed these back into ``simulation_summary``, ``measurement_stats``, etc.
-
-    ``netlist`` (when supplied and readable) enables the requested-vs-produced
-    reconciliation in the observation surfacer.
-
-    Value surfacing respects the bounded-load contract: single-point results
-    (operating points) load full traces and are scanned for NaN/extremes;
-    multi-point results stay axis-only and record the skipped scan as a coverage
-    observation rather than materialising every trace on every completion.
-
-    Truncates ``warnings``/``errors`` to ``_MAX_DIAGNOSTICS`` entries with
-    the ``*_truncated`` sibling preserved from the prior implementation.
-
-    Returns partial data on parse errors (graceful degradation): an
-    unparseable raw still yields a dict carrying the paths and duration.
-    """
-    from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, build_simulation_summary
-    from ltspice_mcp.lib.result_observations import deck_observation_inputs
-
-    requested: dict[str, list[str]] | None = None
-    source_amplitudes: dict[str, float] | None = None
-    if netlist is not None:
-        requested, source_amplitudes = deck_observation_inputs(netlist)
-
-    result: dict = {
-        "sim_type": "Unknown",
-        "duration": duration,
-        "step_count": 1,
-        "warnings": [],
-        "signals": [],
-        "raw_file": str(raw_file),
-        "log_file": str(log_file),
-    }
-
-    try:
-        # Two-step load to keep the success-path bounded: read the header
-        # (no trace data) to discover the axis trace name, then re-open
-        # loading ONLY that single trace. ``build_simulation_summary``
-        # needs the axis to populate ``range`` and ``point_count``; it
-        # does NOT need V(*)/I(*) trace data. Loading "*" would
-        # materialise every signal on every completion — fine for a
-        # short .op, unbounded for a long .tran (Codex M3).
-        header = OffsetAwareRawRead(str(raw_file), traces_to_read=None, dialect=dialect)
-        trace_names = header.get_trace_names()
-        # Decide value-scan coverage by the ESTIMATED total sample count (axis
-        # points × number of non-axis traces) — the real memory/time cost of
-        # loading "*", not the axis length alone. At or below the budget, load
-        # all traces and scan (every normal interactive run, including a
-        # single-point operating point and the floating-node / 1e30 case worth
-        # scanning); above it (a long .tran OR a wide node dump) stay axis-only
-        # and let the surfacer record the skipped scan, bounding the worst-case
-        # load. Reading the header counts avoids a throwaway open to size it.
-        try:
-            point_count = header.nPoints
-        except Exception:
-            point_count = 1
-        trace_count = max(0, len(trace_names) - 1)  # exclude the axis
-        if point_count * trace_count <= _VALUE_SCAN_SAMPLE_BUDGET:
-            raw_read = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect=dialect)
-            value_scan = "scan"
-        else:
-            axis_only = [trace_names[0]] if trace_names else None
-            raw_read = OffsetAwareRawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
-            value_scan = "skipped_large"
-    except Exception as e:
-        logger.warning(f"Could not parse raw file {raw_file}: {e}")
-        # The raw exists but could not be read. That fact must reach the
-        # response, not just the server's stderr: without it the degraded
-        # summary below (sim_type Unknown, zero signals) renders as a clean
-        # success and the agent has no way to know the data was never read.
-        result["errors"] = [f"Raw file could not be parsed: {type(e).__name__}: {e}"]
-        result["observations"] = [
-            {
-                "code": "raw_parse_failed",
-                "kind": "coverage",
-                "detail": (
-                    "The .raw file exists but could not be parsed; signals, range, "
-                    "and point counts below reflect NO data from this run. "
-                    f"Parser error: {type(e).__name__}: {e}"
-                ),
-            }
-        ]
-        # Surface what diagnostics we can from the log alongside it.
-        if log_file.exists():
-            try:
-                diagnostics = extract_log_diagnostics(log_file)
-                result["warnings"] = diagnostics["warnings"]
-                if diagnostics["errors"]:
-                    result["errors"] = [*result["errors"], *diagnostics["errors"]]
-            except Exception as log_e:
-                logger.warning(f"Could not parse log file {log_file}: {log_e}")
-        return result
-
-    log_path = log_file if log_file.exists() else None
-    summary = build_simulation_summary(
-        raw_read,
-        log_path,
-        duration,
-        requested=requested,
-        value_scan=value_scan,
-        source_amplitudes=source_amplitudes,
-    )
-    # ``summary`` doesn't carry ``raw_file``/``log_file``; they're already
-    # set in ``result`` above and survive ``update``.
-    result.update(summary)
-
-    # Diagnostics truncation (preserved from the legacy contract).
-    for key in ("warnings", "errors"):
-        items = result.get(key) or []
-        if items:
-            cap_list(result, key, items, _MAX_DIAGNOSTICS)
-
-    return result
 
 
 # Suffixes that spicelib's LTSpiceLogReader peels off into separate flat

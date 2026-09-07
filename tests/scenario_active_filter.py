@@ -2,37 +2,69 @@
 
 Run with: uv run python tests/scenario_active_filter.py
 
-This exercises the full tool chain as a real MCP client would:
-1. Create a netlist from scratch
-2. Read and verify the circuit
-3. Set component values to target a specific cutoff frequency
-4. Run a simulation (requires LTspice installed)
-5. Analyze results: frequency response, measurements
-6. Sweep a component to explore design space
-7. Monte Carlo: check sensitivity to component tolerances
+This exercises the consolidated tool surface as a real MCP client would:
+1. Ask the server what it can do (inspect capabilities)
+2. Author the decks with plain file writes — the AUTHOR plane offers no
+   netlist editing on purpose; an agent writes SPICE text natively
+3. Gate them with verify_circuit before spending a simulator on them
+4. Run the AC characterization as an experiment with attached bode_filter
+   analysis, sweeping R1 across the design space in one call
+5. Wait on the receipt if the dwell ran out (jobs)
+6. Run the transient step response with attached signal_stats
+7. Re-analyze a finished job after the fact (analyze_results)
+8. Browse resources and a workflow prompt
 
-Steps 1-3 work without a simulator. Steps 4-7 require LTspice.
-The script reports which steps succeed and which need a simulator.
+Steps 1-3 work without a simulator. Steps 4-7 need one; the script reports
+which steps succeed and which were skipped.
 """
 
 import asyncio
 import json
 import os
-import re
 import sys
 import textwrap
-from datetime import timedelta
+import time
 from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-TIMEOUT = timedelta(seconds=30)
-SIM_TIMEOUT = timedelta(seconds=120)
+TIMEOUT = 30.0
+SIM_TIMEOUT = 180.0
 
 # Where to run — use the project workspace dir
 WORKSPACE = Path(__file__).resolve().parent.parent / "workspace"
 WORKSPACE.mkdir(exist_ok=True)
+
+# Sallen-Key 2nd-order low-pass, unity gain, fc ~= 1kHz with R=15.9k, C=10n.
+# One deck per analysis: a recipe is bound to a run type, so an AC metric and
+# a transient metric cannot come from the same run.
+FILTER_CORE = textwrap.dedent("""\
+    R1 in mid 15.9k
+    R2 mid inv 15.9k
+    C1 mid out 10n
+    C2 inv 0 10n
+    * Unity-gain buffer (ideal op-amp via VCVS): out follows the inv node,
+    * which is what makes this equal-R/equal-C pair a Sallen-Key section.
+    E1 out 0 inv 0 1
+""")
+
+AC_DECK = (
+    "* Sallen-Key 2nd-order Low-Pass Filter — AC characterization\n"
+    + FILTER_CORE
+    + "V1 in 0 AC 1\n"
+    ".ac dec 200 10 100k\n"
+    ".meas AC gain_dc FIND mag(V(out)/V(in)) AT=10\n"
+    ".end\n"
+)
+
+TRAN_DECK = (
+    "* Sallen-Key 2nd-order Low-Pass Filter — step response\n"
+    + FILTER_CORE
+    + "V1 in 0 PULSE(0 1 0 1n 1n 5m 10m)\n"
+    ".tran 10u 5m\n"
+    ".end\n"
+)
 
 
 def _params() -> StdioServerParameters:
@@ -52,11 +84,11 @@ def text(result) -> str:
 
 
 def structured(result) -> dict:
-    return result.structuredContent or {}
+    return result.structured_content or {}
 
 
 def ok(result) -> bool:
-    return not result.isError and not text(result).startswith("ERROR:")
+    return not result.is_error and not text(result).startswith("ERROR:")
 
 
 # Steps that produced a tool error despite being expected to succeed; the
@@ -83,269 +115,253 @@ def step(num: int | str, msg: str):
     print(f"\n--- Step {num}: {msg} ---")
 
 
+def show_findings(data: dict):
+    findings = data.get("findings") or []
+    if not findings:
+        print(f"  Clean: {data.get('checks_run')}")
+        return
+    for finding in findings:
+        print(f"  {finding['severity']}: {finding['rule_id']} ({finding.get('subject')})")
+
+
+def show_receipt(data: dict):
+    print(f"  job_id={data.get('job_id')} status={data.get('status')} ({data['outcome']})")
+    progress = data.get("progress") or {}
+    print(
+        f"  progress: {progress.get('terminal')}/{progress.get('expanded')} terminal, "
+        f"{progress.get('remaining')} remaining"
+    )
+    for failure in data.get("failures") or []:
+        print(f"  failure: {failure.get('code')} — {failure.get('message', '')[:120]}")
+
+
+def show_analysis(analysis: dict | None):
+    """Print recipe results, from either an analyze_results payload or the
+    ``analysis`` stage block a receipt carries (which nests one inside)."""
+    if not analysis:
+        print("  (no analysis in this payload)")
+        return
+    if "result" in analysis:
+        if analysis.get("error"):
+            print(f"  analysis error: {analysis['error']}")
+        analysis = analysis.get("result") or {}
+    for key, result in (analysis.get("results") or {}).items():
+        print(f"  {key} ({result.get('metric')}):")
+        for item in (result.get("reduced") or [])[:4]:
+            print(f"    {item.get('stat')}={item.get('value')} @ {item.get('assignments')}")
+        for item in (result.get("values") or [])[:3]:
+            print(f"    {json.dumps(item.get('value'))[:160]}")
+        for warning in result.get("warnings") or []:
+            print(f"    warning: {warning}")
+
+
+async def wait_for(session, job_id: str, label: str):
+    """Block on a receipt whose dwell ran out, then show what came back."""
+    r = await session.call_tool(
+        "jobs",
+        {"action": "wait", "job_id": job_id, "timeout_s": 180},
+        read_timeout_seconds=SIM_TIMEOUT,
+    )
+    if not expect_ok(r, f"jobs wait ({label})"):
+        return
+    data = structured(r)
+    show_receipt(data)
+    print(f"  analysis_status={data.get('analysis_status')}")
+    show_analysis(data.get("analysis"))
+
+
 async def run():
     params = _params()
+    stamp = int(time.time())
     async with stdio_client(params) as (rs, ws), ClientSession(rs, ws) as session:
         init = await session.initialize()
-        heading(f"Connected to {init.serverInfo.name}")
+        heading(f"Connected to {init.server_info.name}")
 
         # ----------------------------------------------------------
-        # Step 1: Check server status
+        # Step 1: Ask the server what it can do
         # ----------------------------------------------------------
-        step(1, "Check server status")
-        r = await session.call_tool("server_status", {}, read_timeout_seconds=TIMEOUT)
-        print(text(r))
-
-        has_simulator = "degraded" not in text(r)
-
-        # ----------------------------------------------------------
-        # Step 2: Create a Sallen-Key 2nd-order low-pass filter
-        # ----------------------------------------------------------
-        step(2, "Create Sallen-Key low-pass filter netlist")
-
-        # Target: fc = 1/(2*pi*sqrt(R1*R2*C1*C2)) ≈ 1kHz
-        # With R1=R2=15.9k, C1=C2=10nF: fc ≈ 1kHz
-        netlist = textwrap.dedent("""\
-                * Sallen-Key 2nd-order Low-Pass Filter
-                * Target cutoff: 1kHz, Butterworth (Q=0.707)
-                R1 in mid 15.9k
-                R2 mid inv 15.9k
-                C1 mid out 10n
-                C2 inv 0 10n
-                * Unity-gain buffer (ideal op-amp via VCVS)
-                E1 out 0 inv 0 1e6
-                * Source
-                V1 in 0 AC 1 PULSE(0 1 0 1n 1n 0.5m 1m)
-                * Analysis
-                .ac dec 200 10 100k
-                .tran 5m
-                .meas AC fc WHEN mag(V(out)/V(in))=0.707
-                .meas AC gain_dc FIND mag(V(out)/V(in)) AT=10
-                .meas TRAN vout_max MAX V(out)
-            """)
-
+        step(1, "Inspect server capabilities")
         r = await session.call_tool(
-            "create_netlist",
-            {"name": "sallen_key_lpf", "content": netlist},
-            read_timeout_seconds=TIMEOUT,
+            "inspect", {"queries": [{"kind": "capabilities"}]}, read_timeout_seconds=TIMEOUT
         )
-        if ok(r):
-            print(f"  OK: {text(r)}")
-        else:
-            print(f"  FAIL: {text(r)}")
-            return
+        expect_ok(r, "inspect capabilities")
+        caps = structured(r)["results"][0]["data"]
+        print(f"  Simulators: {caps['simulators'] or 'none detected'}")
+        print(f"  Default: {caps['default_simulator']}, exporter={caps['exporter_available']}")
+        print(f"  Profile: {caps['tool_profile']}, roots={caps['allowed_paths']}")
+
+        has_simulator = caps["default_simulator"] is not None
 
         # ----------------------------------------------------------
-        # Step 3: Read circuit and list components
+        # Step 2: Author the decks — plain file writes, no tool needed
         # ----------------------------------------------------------
-        step(3, "Read circuit back and list components")
-
-        r = await session.call_tool(
-            "read_circuit",
-            {"path": "sallen_key_lpf.cir"},
-            read_timeout_seconds=TIMEOUT,
-        )
-        print(f"  Circuit content:\n{textwrap.indent(text(r), '    ')}")
-
-        r = await session.call_tool(
-            "list_components",
-            {"path": "sallen_key_lpf.cir"},
-            read_timeout_seconds=TIMEOUT,
-        )
-        print(f"\n  Components:\n{textwrap.indent(text(r), '    ')}")
+        step(2, "Author the Sallen-Key decks (plain file writes)")
+        ac_path = WORKSPACE / "sallen_key_ac.cir"
+        tran_path = WORKSPACE / "sallen_key_tran.cir"
+        ac_path.write_text(AC_DECK)
+        tran_path.write_text(TRAN_DECK)
+        print(f"  Wrote {ac_path.name} ({len(AC_DECK)} bytes)")
+        print(f"  Wrote {tran_path.name} ({len(TRAN_DECK)} bytes)")
 
         # ----------------------------------------------------------
-        # Step 4: Read parameters
+        # Step 3: Gate both decks before spending a simulator on them
         # ----------------------------------------------------------
-        step(4, "Check parameters")
-        r = await session.call_tool(
-            "parameter",
-            {"path": "sallen_key_lpf.cir"},
-            read_timeout_seconds=TIMEOUT,
-        )
-        print(f"  Parameters: {text(r)}")
+        step(3, "Verify both decks")
+        for deck in (ac_path, tran_path):
+            r = await session.call_tool(
+                "verify_circuit", {"path": deck.name}, read_timeout_seconds=TIMEOUT
+            )
+            if expect_ok(r, f"verify_circuit {deck.name}"):
+                print(f"  {deck.name}:")
+                show_findings(structured(r))
 
         # ----------------------------------------------------------
-        # Step 5: Modify — change cutoff to ~500Hz by doubling R values
+        # Step 4: AC characterization — one call sweeps R1 and analyzes
         # ----------------------------------------------------------
-        step(5, "Change cutoff to ~500Hz (double R values)")
-        r = await session.call_tool(
-            "set_component_value",
-            {"path": "sallen_key_lpf.cir", "values": {"R1": "31.8k", "R2": "31.8k"}},
-            read_timeout_seconds=TIMEOUT,
-        )
-        print(f"  {text(r)}")
-
-        # Verify
-        r = await session.call_tool(
-            "list_components",
-            {"path": "sallen_key_lpf.cir", "reference": "R1"},
-            read_timeout_seconds=TIMEOUT,
-        )
-        print(f"  Verify R1: {text(r)}")
-
-        # Change back to 1kHz
-        r = await session.call_tool(
-            "set_component_value",
-            {"path": "sallen_key_lpf.cir", "values": {"R1": "15.9k", "R2": "15.9k"}},
-            read_timeout_seconds=TIMEOUT,
-        )
-        print(f"  Restored: {text(r)}")
-
-        # ----------------------------------------------------------
-        # Step 6: Run simulation (needs LTspice)
-        # ----------------------------------------------------------
-        step(6, "Run simulation")
-        # Artifacts are job-id-named ({job_id}.raw/.log in the runner's output
-        # folder), NOT {netlist stem}.* — the analysis step must address
-        # results via the job_id / paths the run response reports.
-        sim_job_id: str | None = None
-        sim_raw_file: str | None = None
+        step(4, "Run the AC sweep with attached bode_filter analysis")
+        ac_job: str | None = None
         if not has_simulator:
             print("  SKIPPED: No simulator available")
-            print("  (Install LTspice and set simulator.path in ltspice-mcp.toml)")
+            print("  (Install ngspice, or set simulator.path in ltspice-mcp.toml)")
         else:
             r = await session.call_tool(
-                "run_simulation",
-                {"netlist": "sallen_key_lpf.cir", "wait": True},
+                "run_experiments",
+                {
+                    "request_id": f"scenario-ac-{stamp}",
+                    "circuits": [{"path": ac_path.name, "id": "sallen_key"}],
+                    "variations": [
+                        {"kind": "assign", "assign": {"R1": ["7.95k", "15.9k", "31.8k"]}}
+                    ],
+                    "execution": {"wait_s": 90},
+                    "analyze": {
+                        "recipes": [
+                            {
+                                "key": "cutoff",
+                                "metric": "bode_filter",
+                                "signal": "V(out)",
+                                "reduce": ["min", "max"],
+                                "field": "cutoff_high_hz",
+                            }
+                        ],
+                        "group_by": ["R1"],
+                    },
+                },
                 read_timeout_seconds=SIM_TIMEOUT,
             )
-            if expect_ok(r, "run_simulation"):
-                print(f"  Simulation complete:\n{textwrap.indent(text(r), '    ')}")
-                sim_job_id = structured(r).get("job_id")
-                sim_raw_file = structured(r).get("raw_file")
-            else:
-                has_simulator = False
+            if expect_ok(r, "run_experiments (ac)"):
+                data = structured(r)
+                show_receipt(data)
+                ac_job = data.get("job_id")
+                show_analysis(data.get("analysis"))
 
         # ----------------------------------------------------------
-        # Step 7: Analyze results (needs completed sim)
+        # Step 5: Wait on the receipt if the dwell ran out
         # ----------------------------------------------------------
-        step(7, "Analyze results")
-        if not has_simulator or sim_job_id is None:
-            print("  SKIPPED: No simulation results available")
+        step(5, "Wait for the AC job to finish")
+        if ac_job is None:
+            print("  SKIPPED: no job to wait for")
         else:
-            # Measurements aggregated from the run's own log (job-addressed)
+            await wait_for(session, ac_job, "ac")
+
+        # ----------------------------------------------------------
+        # Step 6: Step response — a transient run with attached stats
+        # ----------------------------------------------------------
+        step(6, "Run the step response with attached signal_stats")
+        tran_job: str | None = None
+        if not has_simulator:
+            print("  SKIPPED: No simulator available")
+        else:
             r = await session.call_tool(
-                "measurement_stats",
-                {"job_id": sim_job_id},
-                read_timeout_seconds=TIMEOUT,
+                "run_experiments",
+                {
+                    "request_id": f"scenario-tran-{stamp}",
+                    "circuits": [{"path": tran_path.name, "id": "sallen_key"}],
+                    "execution": {"wait_s": 90},
+                    "analyze": {
+                        "recipes": [{"key": "vout", "metric": "signal_stats", "signal": "V(out)"}]
+                    },
+                },
+                read_timeout_seconds=SIM_TIMEOUT,
             )
-            if expect_ok(r, "measurement_stats"):
-                print(f"  Measurements:\n{textwrap.indent(text(r), '    ')}")
+            if expect_ok(r, "run_experiments (tran)"):
+                data = structured(r)
+                show_receipt(data)
+                tran_job = data.get("job_id")
+                show_analysis(data.get("analysis"))
+                if tran_job and data["outcome"] == "in_progress":
+                    await wait_for(session, tran_job, "tran")
 
-            # Simulation summary reads the raw path the run reported
-            if sim_raw_file:
-                r = await session.call_tool(
-                    "simulation_summary",
-                    {"raw_file": sim_raw_file},
-                    read_timeout_seconds=TIMEOUT,
-                )
-                if expect_ok(r, "simulation_summary"):
-                    print(f"  Summary:\n{textwrap.indent(text(r), '    ')}")
-
-            # Signal stats at output (job-addressed)
+        # ----------------------------------------------------------
+        # Step 7: Re-analyze a finished job after the fact
+        # ----------------------------------------------------------
+        step(7, "Analyze the finished runs again, asking new questions")
+        if ac_job is None:
+            print("  SKIPPED: no completed job to analyze")
+        else:
             r = await session.call_tool(
-                "signal_stats",
-                {"job_id": sim_job_id, "signal": "V(out)"},
-                read_timeout_seconds=TIMEOUT,
+                "analyze_results",
+                {
+                    "sources": [{"job_id": ac_job, "runs": "all", "label": "ac"}],
+                    "recipes": [
+                        {"key": "measured", "metric": "measurements"},
+                        {
+                            "key": "gain_1k",
+                            "metric": "bode_point",
+                            "signal": "V(out)",
+                            "at_hz": 1000,
+                        },
+                    ],
+                },
+                read_timeout_seconds=SIM_TIMEOUT,
             )
-            if expect_ok(r, "signal_stats"):
-                print(f"  V(out) stats:\n{textwrap.indent(text(r), '    ')}")
-
-        # ----------------------------------------------------------
-        # Step 8: Configure parameter sweep
-        # ----------------------------------------------------------
-        step(8, "Configure frequency sweep (vary R1)")
-        r = await session.call_tool(
-            "configure_sweep",
-            {
-                "netlist": "sallen_key_lpf.cir",
-                "parameters": [
-                    {
-                        "name": "R1",
-                        "type": "component",
-                        "start": 5000,
-                        "stop": 50000,
-                        "points": 10,
-                        "scale": "log",
-                    }
-                ],
-            },
-            read_timeout_seconds=TIMEOUT,
-        )
-        if ok(r):
-            print(f"  {text(r)}")
-            sweep_id = re.search(r"Config ID: (\S+)", text(r))
-            if has_simulator and sweep_id:
-                step("8b", "Run sweep")
-                r = await session.call_tool(
-                    "run_sweep",
-                    {"config_id": sweep_id.group(1)},
-                    read_timeout_seconds=SIM_TIMEOUT,
+            if expect_ok(r, "analyze_results"):
+                data = structured(r)
+                coverage = data["coverage"]
+                print(
+                    f"  coverage: {coverage['runs_analyzed']}/{coverage['runs_requested']} "
+                    "run(s) analyzed"
                 )
-                print(f"  {text(r)}")
-        else:
-            print(f"  FAIL: {text(r)}")
+                show_analysis(data)
+                for failure in data.get("failures") or []:
+                    print(f"  failure: {failure.get('code')} — {failure.get('message', '')[:120]}")
 
         # ----------------------------------------------------------
-        # Step 9: Configure Monte Carlo
+        # Step 8: What did the session leave behind?
         # ----------------------------------------------------------
-        step(9, "Configure Monte Carlo (5% resistors, 10% caps)")
-        r = await session.call_tool(
-            "configure_montecarlo",
-            {
-                "netlist": "sallen_key_lpf.cir",
-                "tolerances": [
-                    {"ref": "resistors", "tolerance": 0.05},
-                    {"ref": "capacitors", "tolerance": 0.10},
-                ],
-                "num_runs": 50,
-            },
-            read_timeout_seconds=TIMEOUT,
-        )
-        if ok(r):
-            print(f"  {text(r)}")
-            mc_id = re.search(r"Config ID: (\S+)", text(r))
-            if has_simulator and mc_id:
-                step("9b", "Run Monte Carlo")
-                r = await session.call_tool(
-                    "run_montecarlo",
-                    {"config_id": mc_id.group(1)},
-                    read_timeout_seconds=SIM_TIMEOUT,
+        step(8, "List the circuits this server has touched")
+        r = await session.call_tool("jobs", {"action": "list"}, read_timeout_seconds=TIMEOUT)
+        if expect_ok(r, "jobs list"):
+            for group in structured(r)["items"]:
+                print(
+                    f"  {Path(group['path']).name}: {group['status_counts'] or 'no jobs'} "
+                    f"({group['recent_jobs_total']} recent)"
                 )
-                print(f"  {text(r)}")
-        else:
-            print(f"  FAIL: {text(r)}")
 
         # ----------------------------------------------------------
-        # Step 10: Check resources
+        # Step 9: Check resources
         # ----------------------------------------------------------
-        step(10, "Browse resources")
-        from pydantic import AnyUrl
+        step(9, "Browse resources")
 
-        r = await session.read_resource(AnyUrl("spice://config"))
+        r = await session.read_resource("spice://config")
         config = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(
             f"  Config: working_dir={config['working_dir']}, "
             f"simulators={config['detected_simulators']}"
         )
 
-        r = await session.read_resource(AnyUrl("spice://netlists/"))
+        r = await session.read_resource("spice://netlists/")
         netlists = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(f"  Netlists: {[n['name'] for n in netlists['netlists']]}")
 
-        r = await session.read_resource(AnyUrl("spice://results/"))
+        r = await session.read_resource("spice://results/")
         results = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(f"  Jobs: {results['count']}")
 
         # ----------------------------------------------------------
-        # Step 11: Get a prompt
+        # Step 10: Get a prompt
         # ----------------------------------------------------------
-        step(11, "Get the characterize-filter prompt")
-        r = await session.get_prompt(
-            "characterize_filter",
-            {"path": "sallen_key_lpf.cir"},
-        )
+        step(10, "Get the characterize-filter prompt")
+        r = await session.get_prompt("characterize_filter", {"path": ac_path.name})
         msg = r.messages[0]
         prompt_text = msg.content if isinstance(msg.content, str) else msg.content.text  # type: ignore[union-attr]
         print(f"  Prompt ({len(prompt_text)} chars):")
@@ -358,11 +374,11 @@ async def run():
             for f in FAILURES:
                 print(f"    - {f}")
         elif has_simulator:
-            print("  All steps executed with real simulation.")
+            print(f"  All steps executed with real simulation (jobs {ac_job}, {tran_job}).")
         else:
-            print("  Circuit editing steps passed.")
-            print("  Simulation steps skipped (no LTspice detected).")
-            print("  To run full scenario, set simulator.path in ltspice-mcp.toml")
+            print("  Authoring and verification steps passed.")
+            print("  Simulation steps skipped (no simulator detected).")
+            print("  To run the full scenario, install ngspice or set simulator.path.")
         print()
 
 

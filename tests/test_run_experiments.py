@@ -1,0 +1,3048 @@
+"""run_experiments receipt, lint, idempotency, and accounting contract."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import dataclasses
+import errno
+import itertools
+import json
+import re
+import threading
+import warnings
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal
+from unittest.mock import AsyncMock
+
+import jsonschema
+import pytest
+from pydantic import ValidationError
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
+from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
+from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
+from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
+from ltspice_mcp.lib.store import Store
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import analyze as analyze_mod
+from ltspice_mcp.tools import experiments as experiments_mod
+from ltspice_mcp.tools import receipts as receipts_mod
+from ltspice_mcp.tools._schema import build_input_schema
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools.experiments import (
+    AnalysisPerRun,
+    RunExperimentsInput,
+    handle_run_experiments,
+)
+from ltspice_mcp.tools.jobs import (
+    JobsInput,
+    handle_jobs,
+)
+from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
+from tests.conftest import (
+    await_until,
+    fake_artifact_paths,
+    fake_simulator,
+    recorded_fixture_simulator,
+    resolve_local_ref,
+)
+
+
+def test_step_and_all_steps_are_exclusive_on_the_attached_block():
+    """The block states the rule in its own prose, so the block enforces it.
+
+    Left to the pre-flight that re-validates the expanded payload, the guard
+    sits one call site away from the model that claims it, and a future builder
+    that skips the pre-flight would send both.
+    """
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        experiments_mod.AttachedAnalysis.model_validate(
+            {
+                "recipes": [{"key": "v", "metric": "value", "expr": "V(out)"}],
+                "step": {"axis": "temp", "value": 27},
+                "all_steps": True,
+            }
+        )
+
+
+def test_attached_per_run_limit_shares_the_analyze_page_cap():
+    """One cap, both surfaces.
+
+    The attached block is handed straight to analyze_results, so a per_run
+    limit run_experiments advertises but that engine rejects would be a lever
+    that cannot work. Both bounds must come from the same constant, and the
+    over-cap request must be refused at submission, not at the analysis stage.
+    """
+    advertised = AnalysisPerRun.model_json_schema()["properties"]["limit"]["maximum"]
+    engine = analyze_mod.PerRunInclude.model_json_schema()["properties"]["limit"]["maximum"]
+
+    assert advertised == engine == analyze_mod.MAX_PAGE_SIZE
+
+    with pytest.raises(ValidationError):
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": "over-cap",
+                "circuits": [{"path": "dut.cir"}],
+                "analyze": {
+                    "recipes": [{"key": "vout", "metric": "summary"}],
+                    "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
+                },
+            }
+        )
+
+
+def test_wait_caps_keep_the_submission_and_control_plane_contracts():
+    run_schema = build_input_schema(RunExperimentsInput)
+    execution_schema = resolve_local_ref(
+        run_schema,
+        run_schema["properties"]["execution"],
+    )
+    jobs_schema = build_input_schema(JobsInput)
+    # The dwell cap lives on the action that takes it, so it is read through
+    # that action's branch rather than off a flat property list.
+    wait_branch = resolve_local_ref(
+        jobs_schema,
+        next(
+            entry["then"]
+            for entry in jobs_schema["allOf"]
+            if entry["if"]["properties"]["action"]["const"] == "wait"
+        ),
+    )
+
+    assert execution_schema["properties"]["wait_s"]["maximum"] == 120
+    assert wait_branch["properties"]["timeout_s"]["maximum"] == 300
+
+    with pytest.raises(ValidationError) as excinfo:
+        experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})
+    message = str(excinfo.value)
+    assert 'jobs(action="wait"' in message
+    assert "timeout_s<=300" in message
+
+
+def test_variation_schema_keeps_discriminated_union_through_defs():
+    """Schemas keep $defs instead of inlining: the assign/random discriminated
+    union must stay fully resolvable through local refs, so a client sees the
+    same composition contract inlining used to spell out."""
+    schema = build_input_schema(RunExperimentsInput)
+    variations = resolve_local_ref(schema, schema["properties"]["variations"]["items"])
+
+    assert variations["discriminator"]["propertyName"] == "kind"
+    assert len(variations["oneOf"]) == 2
+    branches = {}
+    for ref in variations["oneOf"]:
+        branch = resolve_local_ref(schema, ref)
+        branches[branch["properties"]["kind"]["const"]] = branch
+    assert branches["assign"]["additionalProperties"] is False
+    assert branches["assign"]["properties"]["combine"]["default"] == "grid"
+    random_rules = resolve_local_ref(schema, branches["random"]["properties"]["rules"]["items"])
+    assert random_rules["discriminator"]["propertyName"] == "rule"
+    assert all(
+        resolve_local_ref(schema, ref)["additionalProperties"] is False
+        for ref in random_rules["oneOf"]
+    )
+
+
+def test_the_random_rules_field_names_all_four_kinds_in_plain_words():
+    """Four rule kinds ship; only 'mismatch' was ever used, because only it was
+    taught. A caller reading 'rules' has to learn from that line what the other
+    three vary, or the capability is there and unreachable."""
+    schema = build_input_schema(RunExperimentsInput)
+    variations = resolve_local_ref(schema, schema["properties"]["variations"]["items"])
+    branches = {
+        resolve_local_ref(schema, ref)["properties"]["kind"]["const"]: resolve_local_ref(
+            schema, ref
+        )
+        for ref in variations["oneOf"]
+    }
+    description = branches["random"]["properties"]["rules"]["description"]
+    for kind in ("component", "param", "model", "mismatch"):
+        assert f"'{kind}'" in description, f"'rules' does not say what {kind} varies"
+    assert "tolerance" in description  # what 'component' means in a caller's words
+    assert "Pelgrom" in description  # and what 'mismatch' means in an engineer's
+
+
+def _deck(path: Path, body: str | None = None) -> Path:
+    path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    return path
+
+
+def _assert_attached_artifact(data: dict[str, Any], key: str) -> dict[str, Any]:
+    """The attached analysis handed back a handle, and it names a real file."""
+    block = data["analysis"]["result"]["results"][key]
+    rows = block.get("values") or block.get("per_run", {}).get("items") or []
+    assert rows, f"the attached {key} recipe returned no rows: {block}"
+    artifact = rows[0]["value"].get("artifact")
+    assert isinstance(artifact, dict), (
+        f"the attached {key} recipe returned no artifact handle: {rows[0]['value']}"
+    )
+    assert Path(artifact["path"]).is_file(), f"{key} handle names no file: {artifact}"
+    return artifact
+
+
+def _schematic(path: Path, resistance: str) -> Path:
+    """A schematic carrying one editable value, in .asc's own syntax."""
+    path.write_text(
+        f"Version 4\nSYMBOL res 0 0 R0\nSYMATTR InstName R1\nSYMATTR Value {resistance}\n"
+    )
+    return path
+
+
+def _asc_exporter(state: SessionState) -> None:
+    """Stand in for the LTspice binary that turns an .asc into a netlist.
+
+    The real exporter is a Windows process; what the replay path depends on is
+    only that a schematic reaches the simulator as a netlist written from it,
+    leaving the .asc itself read by nothing downstream.
+    """
+
+    class _Exporter:
+        @staticmethod
+        def create_netlist(path: str, timeout: float | None = None) -> str:
+            schematic = Path(path)
+            value = next(
+                line.split()[-1]
+                for line in schematic.read_text().splitlines()
+                if line.startswith("SYMATTR Value")
+            )
+            netlist = schematic.with_suffix(".net")
+            netlist.write_text(f"V1 in 0 1\nR1 in 0 {value}\n.op\n.end\n")
+            return str(netlist)
+
+    state.available_simulators["ltspice"] = _Exporter
+
+
+def _args(
+    path: Path,
+    request_id: str,
+    *,
+    wait_s: float = 1.0,
+    lint: str = "block",
+    **overrides,
+) -> RunExperimentsInput:
+    payload = {
+        "request_id": request_id,
+        "circuits": [{"path": str(path), "id": "dut"}],
+        "execution": {"wait_s": wait_s},
+        "lint": lint,
+    }
+    payload.update(overrides)
+    return RunExperimentsInput.model_validate(payload)
+
+
+def _observation_code(data: dict, code: str) -> dict | None:
+    return next((item for item in data["observations"] if item["code"] == code), None)
+
+
+async def _status_payload(job_id: str, state: SessionState) -> dict:
+    """The jobs(status) receipt for ``job_id`` — what a later reader gets."""
+    result = await handle_jobs(
+        JobsInput.model_validate({"action": "status", "job_id": job_id}),
+        state,
+    )
+    data = result.structured_content
+    assert data is not None
+    return data
+
+
+def _assert_schema(result) -> dict:
+    data = result.structured_content
+    assert data is not None
+    jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+    return data
+
+
+# One assign variation plus one real recipe grouped by the assigned target, so
+# a group_by that never matched would collapse to a single group and be seen.
+_VARIED_ANALYSIS: dict[str, Any] = {
+    "variations": [{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+    "analyze": {
+        "recipes": [
+            {
+                "key": "vout",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "reduce": ["mean"],
+            }
+        ],
+        "group_by": ["R1"],
+    },
+}
+
+
+async def _jobs_wait(
+    state: SessionState,
+    job_id: str,
+    wait_for: Literal["all", "runs"],
+    timeout_s: float,
+) -> dict[str, Any]:
+    result = await handle_jobs(
+        JobsInput.model_validate(
+            {
+                "action": "wait",
+                "job_id": job_id,
+                "wait_for": wait_for,
+                "timeout_s": timeout_s,
+            }
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    return result.structured_content
+
+
+@pytest.mark.asyncio
+class TestReceiptThenDwell:
+    async def test_quick_completion_returns_inline(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "quick.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "quick-complete"),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert data["outcome"] == "complete"
+        assert data["status"] == "completed"
+        # No cancel authority on a terminal receipt: there is nothing left to
+        # stop, and jobs(cancel) refuses a finished job anyway.
+        assert "control_token" not in data
+        assert data["completeness"]["produced"] == 1
+        assert data["progress"]["terminal"] == data["progress"]["expanded"] == 1
+        assert data["progress"]["remaining"] == 0
+        # progress is the DERIVED view; the raw counters live in completeness and
+        # are not restated here (they arrived twice in one receipt before).
+        assert set(data["progress"]) == {"expanded", "terminal", "remaining"}
+        assert len(submissions) == 1
+
+    async def test_zero_dwell_returns_receipt_then_job_finishes(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        callbacks = {}
+
+        def submit(self, _netlist: Path, run_filename: str, callback):
+            callbacks[run_filename] = callback
+            return object()
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+        deck = _deck(work_dir / "slow.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "slow-receipt", wait_s=0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert data["outcome"] == "in_progress"
+        assert data["job_id"] in state_with_sim.all_jobs
+        assert data["progress"]["expanded"] == 1
+        assert data["progress"]["terminal"] == 0
+        assert data["progress"]["remaining"] == 1
+        assert "jobs(wait)" in data["hint"]
+        counts = data["progress"]
+        assert f"{counts['terminal']}/{counts['expanded']}" in data["hint"]
+        assert f"{counts['remaining']} remaining" in data["hint"]
+
+        await await_until(lambda: bool(callbacks))
+        for run_filename, callback in callbacks.items():
+            raw = work_dir / f"{Path(run_filename).stem}.raw"
+            log = work_dir / f"{Path(run_filename).stem}.log"
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
+        job = state_with_sim.all_jobs[data["job_id"]]
+        await asyncio.wait_for(job.done_event.wait(), 1)
+
+    async def test_failure_after_submit_reports_committed_with_handles(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Submission is irreversible, so a later failure cannot say nothing started.
+
+        The simulator runs are under way by then and the job_id plus
+        control_token are the only handles that reach them; reporting
+        not_started with a null job_id leaves the caller no way to poll or
+        cancel real simulator work.
+        """
+        callbacks = {}
+
+        def submit(self, _netlist: Path, run_filename: str, callback):
+            callbacks[run_filename] = callback
+            return object()
+
+        async def failing_wait(self, job, timeout_s, *, wait_for="all"):
+            raise OSError("dwell exploded")
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+        monkeypatch.setattr(ExperimentRunner, "wait", failing_wait)
+        deck = _deck(work_dir / "post-submit.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "post-submit-failure", wait_s=1.0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert data["error"]["commit_state"] == "committed"
+        assert data["error"]["message"] == "dwell exploded"
+        assert data["job_id"] in state_with_sim.all_jobs
+        assert data["control_token"]
+        assert data["outcome"] == "in_progress"
+        assert data["job_id"] in data["hint"]
+
+        # Let the still-live job finish so teardown is not racing it.
+        await await_until(lambda: bool(callbacks))
+        for run_filename, callback in callbacks.items():
+            raw = work_dir / f"{Path(run_filename).stem}.raw"
+            log = work_dir / f"{Path(run_filename).stem}.log"
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
+        job = state_with_sim.all_jobs[data["job_id"]]
+        await asyncio.wait_for(job.done_event.wait(), 1)
+
+    async def test_receipt_builder_failure_still_returns_handles(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The last-resort path: even the payload builder failing keeps the handles."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+
+        def exploding_payload(*_args, **_kwargs):
+            raise ValueError("payload exploded")
+
+        monkeypatch.setattr(experiments_mod, "render_receipt_snapshot", exploding_payload)
+        deck = _deck(work_dir / "payload-fail.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "payload-failure"),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert data["error"]["commit_state"] == "committed"
+        assert data["error"]["message"] == "payload exploded"
+        assert data["job_id"] in state_with_sim.all_jobs
+        assert data["control_token"]
+
+    async def test_budget_renderer_failure_after_submit_keeps_minimal_handles(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+
+        async def exploding_renderer(*_args, **_kwargs):
+            raise RuntimeError("budget renderer exploded")
+
+        monkeypatch.setattr(experiments_mod, "render_run_receipt", exploding_renderer)
+        deck = _deck(work_dir / "budget-render-fail.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "budget-render-fail", budget=500),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert result.is_error
+        assert data["error"]["commit_state"] == "committed"
+        assert "budget renderer exploded" in data["error"]["message"]
+        assert data["job_id"] in state_with_sim.all_jobs
+        assert data["control_token"]
+
+
+@pytest.mark.asyncio
+class TestApiDoorPointer:
+    """A many-case terminal receipt points at the Python API; a
+    spot-check receipt does not. The pointer is aimed at the loop shape,
+    where per-call wire overhead compounds — pointing every receipt at the
+    Python API would be noise on exactly the calls it cannot help."""
+
+    async def test_sweep_receipt_points_at_the_python_door(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "sweep-pointer.cir")
+        values = [f"{k}k" for k in range(1, 11)]
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "sweep-pointer",
+                    wait_s=30,
+                    variations=[{"kind": "assign", "assign": {"R1": values}}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert data["completeness"]["expanded"] == 10
+        assert "from ltspice_mcp.api import Api" in data["hint"]
+
+    async def test_spot_check_receipt_does_not(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "spot-pointer.cir")
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "spot-pointer", wait_s=30), state_with_sim)
+        )
+        assert data["completeness"]["expanded"] == 1
+        assert "ltspice_mcp.api" not in data["hint"]
+
+    async def test_truncated_receipt_keeps_the_pointer(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A receipt big enough to truncate its inline run page is the biggest
+        loop of all — the truncation route must not displace the pointer
+        (found in review: the truncated branch returned early and every
+        50+-case receipt silently lost it)."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "trunc-pointer.cir")
+        values = [f"{k}k" for k in range(1, 56)]
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "trunc-pointer",
+                    wait_s=60,
+                    variations=[{"kind": "assign", "assign": {"R1": values}}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert data["completeness"]["expanded"] == 55
+        assert data["runs"]["truncated"] is True
+        assert "jobs(runs)" in data["hint"]
+        assert "from ltspice_mcp.api import Api" in data["hint"]
+
+
+@pytest.mark.asyncio
+class TestRequestGateContention:
+    """Waiting out the gate says nothing about what the holder committed."""
+
+    async def test_gate_timeout_reports_an_unknown_commit_state(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The holder is very likely committing a job under this exact id.
+
+        ``not_started`` would license a resubmission under a fresh request_id,
+        which is how one experiment ends up running twice. The caller has to
+        be told the id is held and to ask again with the same one.
+        """
+        monkeypatch.setattr(experiment_runner_mod, "REQUEST_GATE_TIMEOUT_S", 0.2)
+        deck = _deck(work_dir / "gate-busy.cir")
+        store_for_dir = Store(work_dir)
+        store_for_dir.ensure_root()
+        gate = store_for_dir.request_lock("held-by-a-peer")
+        gate.parent.mkdir(parents=True, exist_ok=True)
+
+        holding = threading.Event()
+        release = threading.Event()
+
+        def hold_the_gate() -> None:
+            with file_lock(gate, timeout=5.0):
+                holding.set()
+                release.wait(20.0)
+
+        holder = threading.Thread(target=hold_the_gate, daemon=True)
+        holder.start()
+        try:
+            assert holding.wait(5.0), "the gate holder never acquired the lock"
+            result = await handle_run_experiments(
+                _args(deck, "held-by-a-peer"),
+                state_with_sim,
+            )
+        finally:
+            release.set()
+            holder.join(timeout=5.0)
+
+        data = _assert_schema(result)
+        assert result.is_error
+        assert data["error"]["code"] == "request_gate_busy"
+        assert data["error"]["commit_state"] == "unknown"
+        assert data["error"]["retryable"] is True
+        assert "held-by-a-peer" in data["error"]["message"]
+
+
+@pytest.mark.asyncio
+class TestPostClaimFailures:
+    """Once the request index and the record are written, nothing started is a lie."""
+
+    async def test_unwritable_store_still_returns_the_durable_submission(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The circuit index is discovery, not identity.
+
+        A read-only store fails ``register_circuits`` and the save that would
+        record the note about it. The record the claim wrote is still the
+        durable one, and failing the whole submission over a lost note leaves
+        a job that exists, is queued, and has nothing running it.
+        """
+        fake_simulator(monkeypatch)
+        real_save_job = experiment_store.save_job
+        fallback_failed: list[str] = []
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        def flaky_save_job(job, *args, **kwargs):
+            noted = any(
+                item.get("code") == "experiment_index_write_failed" for item in job.observations
+            )
+            if noted and not fallback_failed:
+                fallback_failed.append(job.job_id)
+                raise OSError(errno.EROFS, "read-only file system")
+            return real_save_job(job, *args, **kwargs)
+
+        monkeypatch.setattr(experiment_store, "register_circuits", unwritable_index)
+        monkeypatch.setattr(experiment_store, "save_job", flaky_save_job)
+        deck = _deck(work_dir / "unwritable-index.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "unwritable-index", wait_s=1.0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert not result.is_error, data
+        assert data["job_id"] in state_with_sim.all_jobs
+        assert data["status"] == "completed", data
+        assert fallback_failed == [data["job_id"]]
+        assert _observation_code(data, "experiment_index_write_failed") is not None
+        assert experiment_store.load_request_index("unwritable-index", work_dir) is not None
+
+    async def test_a_failure_after_the_claim_is_not_reported_as_not_started(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The record exists under this request_id before this can be reached.
+
+        A caller told not_started resubmits, typically under a fresh
+        request_id, and the same experiment runs twice — while the record it
+        was not told about sits at queued with nothing running it.
+        """
+        fake_simulator(monkeypatch)
+
+        def broken_index(*_args, **_kwargs):
+            raise ValueError("the circuit index digest is not a directory name")
+
+        monkeypatch.setattr(experiment_store, "register_circuits", broken_index)
+        deck = _deck(work_dir / "post-claim.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "post-claim-failure", wait_s=1.0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert result.is_error
+        assert data["error"]["commit_state"] == "committed"
+        assert data["error"]["code"] == "submission_committed"
+        assert "post-claim-failure" in data["error"]["message"]
+        assert experiment_store.load_request_index("post-claim-failure", work_dir) is not None
+
+
+class TestIdempotency:
+    async def test_matching_replay_returns_token_and_observation(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        # A job still in flight, so the receipt carries the cancel handle whose
+        # stability across a replay is what this test is about.
+        fake_simulator(monkeypatch, submissions, delay_s=None)
+        deck = _deck(work_dir / "replay.cir")
+        args = _args(deck, "same-payload", wait_s=0)
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert replay["job_id"] == first["job_id"]
+        assert replay["control_token"] == first["control_token"]
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        # A zero dwell returns before the coordinator has necessarily reached the
+        # simulator, so wait for the one submission rather than racing it.
+        await await_until(lambda: len(submissions) == 1)
+        assert len(submissions) == 1
+
+    async def test_only_the_call_that_replayed_is_told_it_replayed(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Replaying is a fact about a call; the note on the record is not.
+
+        The record's observation is read by everyone who looks at the job
+        afterwards, the original submitter included — and that caller did
+        submit. So the per-call fact is the receipt's own ``replayed`` field,
+        and the durable note says only what happened to the record.
+        """
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "replay-voice.cir")
+        args = _args(deck, "replay-voice")
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        assert first["replayed"] is False
+        assert _observation_code(first, "idempotent_replay") is None
+
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        assert replay["replayed"] is True
+
+        # The note itself reads the same to the caller that replayed and to
+        # every later reader, because it describes the record either way.
+        recorded = await _status_payload(first["job_id"], state_with_sim)
+        for payload in (replay, recorded):
+            note = next(
+                item for item in payload["observations"] if item["code"] == "idempotent_replay"
+            )
+            assert "A later call carrying this request_id" in note["detail"], note
+
+    async def test_different_payload_replay_conflicts(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "conflict.cir")
+        await handle_run_experiments(
+            _args(deck, "conflicting-payload"),
+            state_with_sim,
+        )
+
+        result = await handle_run_experiments(
+            _args(deck, "conflicting-payload", lint="off", budget=500),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert result.is_error
+        assert set(data["error"]) == {
+            "code",
+            "message",
+            "stage",
+            "retryable",
+            "commit_state",
+        }
+        assert data["error"] == {
+            "code": "idempotency_conflict",
+            "message": (
+                "request_id 'conflicting-payload' was already used for a different "
+                "request payload or canonicalizer version"
+            ),
+            "stage": "submission",
+            "retryable": False,
+            "commit_state": "not_started",
+        }
+        assert "control_token" not in data
+        assert len(submissions) == 1
+
+
+@pytest.mark.asyncio
+class TestLeanReceipt:
+    """The default receipt is the answer channel: completed rows drop their
+    artifact paths (reachable via jobs(runs) or run_fields), non-completed
+    rows keep them (the failed row's log is its diagnostic), and the caller's
+    own attached-analysis request is echoed only under provenance."""
+
+    async def test_completed_rows_drop_artifact_paths(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "lean_rows.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "lean-rows"), state_with_sim)
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["status"] == "produced"
+        assert "raw" not in row and "log" not in row
+        assert row["assignments"] == {}
+
+    async def test_run_fields_still_fetch_artifact_paths(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "lean_fetch.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "lean-fetch", run_fields=["case_id", "raw", "log"]),
+                state_with_sim,
+            )
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["raw"] and row["log"]
+
+    @pytest.mark.parametrize(
+        ("request_id", "run_fields"),
+        [
+            ("snapshot-projected", ["case_id", "assignments"]),
+            ("snapshot-lean", None),
+        ],
+    )
+    async def test_handler_projection_matches_the_same_neutral_snapshot(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        request_id: str,
+        run_fields: list[str] | None,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / f"{request_id}.cir")
+        captured: list[receipts_mod.ReceiptSnapshot] = []
+        snapshot_receipt = experiments_mod.snapshot_receipt
+
+        def capture_snapshot(*args: Any, **kwargs: Any) -> receipts_mod.ReceiptSnapshot:
+            snapshot = snapshot_receipt(*args, **kwargs)
+            captured.append(snapshot)
+            return snapshot
+
+        monkeypatch.setattr(experiments_mod, "snapshot_receipt", capture_snapshot)
+        request = (
+            _args(deck, request_id, run_fields=run_fields)
+            if run_fields is not None
+            else _args(deck, request_id)
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                request,
+                state_with_sim,
+            )
+        )
+
+        (snapshot,) = captured
+        expected = receipts_mod.project_receipt_runs(
+            snapshot,
+            run_fields,
+            lean_default=True,
+        )
+        assert data["runs"] == expected
+
+    async def test_non_completed_rows_keep_artifact_path_keys(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "lean_blocked.cir", body="V1 in 0 1\nR1 out 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "lean-blocked"), state_with_sim)
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["status"] != "produced"
+        assert "raw" in row and "log" in row
+
+    async def test_analysis_request_echo_is_provenance(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "lean_echo.cir")
+
+        lean = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "lean-echo", **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+        assert lean["analysis"]["status"] == "completed"
+        assert "request" not in lean["analysis"]
+
+        loud = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "lean-echo", provenance=True, **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+        assert loud["analysis"]["request"] is not None
+
+    async def test_attached_plot_hands_back_the_file_it_wrote(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A plot recipe attached to a run answered with a series count and no
+        reachable handle, so the chart it had just written was unreachable and
+        the caller had to build one by hand."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached_plot.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-plot",
+                    analyze={"recipes": [{"key": "p", "metric": "plot", "signals": ["V(out)"]}]},
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["analysis"]["status"] == "completed"
+        _assert_attached_artifact(data, "p")
+
+
+@pytest.mark.asyncio
+class TestAttachedBlockPreflight:
+    """A malformed attached analyze block is refused BEFORE anything runs.
+
+    Validated only at the analysis stage, a typo'd recipe burns the whole
+    simulation cycle — and the corrected block changes the fingerprint, so
+    the retry re-runs every case."""
+
+    async def test_malformed_attached_block_refused_before_any_simulation(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_bad.cir")
+        bad = {"recipes": [{"key": "x", "metric": "no_such_metric"}]}
+
+        result = await handle_run_experiments(
+            _args(deck, "attached-bad", analyze=bad), state_with_sim
+        )
+
+        assert result.is_error
+        assert "attached analyze block" in json.dumps(result.structured_content)
+        assert submissions == []
+
+        # The refusal left no durable record: the same id retries the same
+        # way instead of replaying a failure or conflicting.
+        again = await handle_run_experiments(
+            _args(deck, "attached-bad", analyze=bad), state_with_sim
+        )
+        assert again.is_error
+        assert submissions == []
+
+    async def test_model_level_analyze_fault_also_refused_at_the_door(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_dup.cir")
+
+        result = await handle_run_experiments(
+            _args(
+                deck,
+                "attached-dup-group",
+                analyze={
+                    "recipes": [
+                        {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
+                    ],
+                    "group_by": ["R1", "R1"],
+                },
+            ),
+            state_with_sim,
+        )
+
+        assert result.is_error
+        assert "attached analyze block" in json.dumps(result.structured_content)
+        assert submissions == []
+
+
+class TestOptionalRequestId:
+    """request_id may be omitted: a fresh id is generated per call, so a
+    one-off run pays no idempotency ceremony, while an explicit id keeps the
+    durable replay/conflict semantics on the same code path."""
+
+    def test_omitted_request_id_autogenerates(self, work_dir: Path):
+        args = RunExperimentsInput.model_validate(
+            {"circuits": [{"path": str(work_dir / "a.cir"), "id": "dut"}]}
+        )
+        assert args.request_id.startswith("req_")
+
+    def test_autogenerated_ids_never_collide_or_replay(self, work_dir: Path):
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        payload = {"circuits": [{"path": str(work_dir / "a.cir"), "id": "dut"}]}
+        first = RunExperimentsInput.model_validate(payload)
+        second = RunExperimentsInput.model_validate(payload)
+        assert first.request_id != second.request_id
+        assert canonical_fingerprint(first) != canonical_fingerprint(second)
+
+    def test_explicit_request_id_is_preserved(self, work_dir: Path):
+        assert _args(work_dir / "a.cir", "chosen-id").request_id == "chosen-id"
+
+    def test_an_attached_analysis_hashes_the_recipes_the_caller_sent(self):
+        """The durable idempotency key over a request carrying recipes.
+
+        Typing `analyze.recipes` as the recipe union put a model annotation
+        where plain dicts had been, and the fingerprint is a hash of the
+        serialized request: had that serialization started filling in recipe
+        defaults or reordering keys, every stored request index would point at
+        a fingerprint no retry could reproduce, and every replay would come
+        back a conflict. The value below was taken before the change.
+        """
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "fingerprint-pin",
+                "circuits": [{"path": "dut.cir"}],
+                "variations": [{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+                "analyze": {
+                    "recipes": [
+                        {
+                            "key": "pm",
+                            "metric": "stability",
+                            "signal": "V(out)",
+                            "reduce": ["min"],
+                        },
+                        {"key": "vout", "metric": "summary"},
+                    ],
+                    "group_by": ["R1"],
+                    "include": {"per_run": {"limit": 7}, "fields": ["case_id"]},
+                },
+            }
+        )
+
+        assert args.strip_presentation()["analyze"]["recipes"] == [
+            {"key": "pm", "metric": "stability", "signal": "V(out)", "reduce": ["min"]},
+            {"key": "vout", "metric": "summary"},
+        ]
+        assert (
+            canonical_fingerprint(args)
+            == "3c5ed6e7b435eea3c31bf88c1128a54e44e0c3281158929154822a4a15938743"
+        )
+
+    def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
+        """Every submission dumps this block twice — for the fingerprint and
+        for the persisted request. The declared union would make pydantic warn
+        on each of those dumps about the plain dicts skipped validation left
+        behind, so the block serializes them itself."""
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "serializer-quiet",
+                "circuits": [{"path": "dut.cir"}],
+                "analyze": {"recipes": [{"key": "vout", "metric": "summary"}]},
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            args.strip_presentation()
+            args.model_dump(mode="json")
+
+    @pytest.mark.asyncio
+    async def test_omitted_id_runs_echoes_and_stays_durable(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "auto_id.cir")
+        args = RunExperimentsInput.model_validate(
+            {
+                "circuits": [{"path": str(deck), "id": "dut"}],
+                "execution": {"wait_s": 1.0},
+            }
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        assert data["request_id"] == args.request_id
+        assert data["status"] == "completed"
+
+        replay = _assert_schema(
+            await handle_run_experiments(_args(deck, args.request_id), state_with_sim)
+        )
+        assert replay["job_id"] == data["job_id"]
+        assert len(submissions) == 1
+
+
+@pytest.mark.asyncio
+class TestReplayRejectsChangedSources:
+    """A reused request_id over an edited circuit must not return the old numbers.
+
+    The canonical fingerprint covers the request arguments only, so nothing in
+    it moves when a deck is edited: an identical payload over a changed circuit
+    used to replay the earlier receipt as a confirmed success. That is the one
+    failure that returns wrong data rather than a wrong field, so it fails
+    closed on the digests the coordinator already recorded.
+    """
+
+    async def test_edited_deck_conflicts_instead_of_replaying(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "edited.cir")
+        args = _args(deck, "edited-deck")
+        await handle_run_experiments(args, state_with_sim)
+        _deck(deck, "V1 in 0 1\nR1 in 0 2k\n.op\n.end\n")
+
+        result = await handle_run_experiments(args, state_with_sim)
+        data = _assert_schema(result)
+
+        assert result.is_error
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(deck) in data["error"]["message"]
+        assert "control_token" not in data
+        assert len(submissions) == 1
+
+    async def test_edited_include_conflicts_with_the_root_deck_untouched(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+        args = _args(deck, "edited-include", lint="off")
+        await handle_run_experiments(args, state_with_sim)
+        root_bytes = deck.read_bytes()
+        core = work_dir / "core.inc"
+        core.write_text(".subckt core in out\nR1 in mid 2k\nC1 mid out 1n\n.ends\n")
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert deck.read_bytes() == root_bytes
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(core) in data["error"]["message"]
+        assert len(submitted) == 1
+
+    async def test_unchanged_deck_and_include_still_replay(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+        args = _args(deck, "unchanged-include", lint="off")
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert replay["job_id"] == first["job_id"]
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert len(submitted) == 1
+
+    async def test_deleted_source_conflicts_rather_than_replaying(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "removed.cir")
+        args = _args(deck, "removed-deck")
+        await handle_run_experiments(args, state_with_sim)
+        deck.unlink()
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert "no longer readable" in data["error"]["message"]
+        assert str(deck) in data["error"]["message"]
+        assert len(submissions) == 1
+
+    async def test_edited_schematic_conflicts_though_its_export_is_untouched(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The .asc is the file the author edits, and nothing else moves with it.
+
+        A schematic runs through an exported netlist, and a replay skips the
+        export — so the netlist the manifest recorded is still on disk, still
+        byte-identical, and still describes the circuit as it was. Checking only
+        that export is checking the one file an edit cannot reach.
+        """
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        schematic = _schematic(work_dir / "amp.asc", "1k")
+        _asc_exporter(state_with_sim)
+        args = _args(schematic, "edited-schematic", provenance=True)
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        exported = work_dir / "amp.net"
+        exported_bytes = exported.read_bytes()
+        _schematic(schematic, "2k")
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert exported.read_bytes() == exported_bytes
+        assert first["source"][0]["sha256"] != sha256_file(exported)
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(schematic) in data["error"]["message"]
+        assert len(submissions) == 1
+
+    async def test_schematic_source_digest_describes_the_schematic(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A record that pairs the .asc's path with the .net's digest describes
+        neither file, and no later reader can tell which one it meant."""
+        fake_simulator(monkeypatch)
+        schematic = _schematic(work_dir / "paired.asc", "3k")
+        _asc_exporter(state_with_sim)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(schematic, "paired-digest", provenance=True), state_with_sim
+            )
+        )
+
+        source = data["source"][0]
+        assert source["path"] == str(schematic)
+        assert source["sha256"] == sha256_file(schematic)
+
+    async def test_unchanged_schematic_still_replays(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Adding the schematic to the manifest must not make every .asc replay a
+        conflict — the export is regenerated per submission and never matches."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        schematic = _schematic(work_dir / "stable.asc", "4k7")
+        _asc_exporter(state_with_sim)
+        args = _args(schematic, "stable-schematic")
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert replay["job_id"] == first["job_id"]
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert len(submissions) == 1
+
+    async def test_live_include_conflicts_rather_than_replaying(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A file that was never digested cannot be shown to be unchanged.
+
+        allow_live_includes already says the job cannot prove what those files
+        held; a replay would make that claim a second time, later. It fails the
+        way every other unprovable case here does — a re-run, not stale numbers.
+        """
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        outside = work_dir.parent / f"{work_dir.name}-shared.inc"
+        outside.write_text(".param supply=5\n")
+        deck = _deck(
+            work_dir / "live.cir",
+            f'.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
+        )
+        args = _args(deck, "live-include", lint="off", allow_live_includes=True)
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert first["outcome"] == "complete"
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(outside) in data["error"]["message"]
+        assert len(submissions) == 1
+
+    async def test_record_without_source_digests_conflicts(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A record predating recorded digests must not replay as a match.
+
+        Such a record carries no manifest to compare against at all, so there is
+        no drift to find — the guard has to refuse it on the absence itself, or
+        the fix is inert for exactly the jobs already sitting on disk. The deck
+        is named so that no assertion here can pass on the filename instead of
+        the message.
+        """
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "older.cir")
+        args = _args(deck, "older-record")
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        await state_with_sim.job_registry.drain_pending()
+
+        record = Store(work_dir).job_record(first["job_id"])
+        stored = json.loads(record.read_text())
+        for source in stored["sources"]:
+            source["sha256"] = ""
+            source["manifest"] = []
+        record.write_text(json.dumps(stored))
+        del state_with_sim.all_jobs[first["job_id"]]
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        message = data["error"]["message"]
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert "carries no source digest" in message
+        # Not the drift path: nothing on disk changed, and a record with no
+        # manifest cannot report that it did.
+        assert "changed since" not in message
+        assert len(submissions) == 1
+
+
+@pytest.mark.asyncio
+class TestLintModes:
+    async def test_block_prevents_simulator_submission(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "blocked.cir",
+            "V1 in 0 1\nR1 out 1k\n.op\n.end\n",
+        )
+
+        result = await handle_run_experiments(
+            _args(
+                deck,
+                "lint-block",
+                variations=[
+                    {
+                        "kind": "assign",
+                        "assign": {"R1": ["1k", "2k"]},
+                    }
+                ],
+            ),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert submissions == []
+        assert data["completeness"]["skipped"] == 2
+        assert data["failures"][0]["code"] == "lint_blocked"
+        assert [item["assignments"]["R1"] for item in data["runs"]["items"]] == [
+            "1k",
+            "2k",
+        ]
+
+    async def test_warn_proceeds_and_preserves_findings(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "warn.cir",
+            "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n",
+        )
+
+        result = await handle_run_experiments(
+            _args(deck, "lint-warn", lint="warn"),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert len(submissions) == 1
+        assert any(
+            finding["rule_id"] == "suffix-mega-milli" for finding in data["lint"][0]["findings"]
+        )
+
+    async def test_a_step_deck_on_ngspice_is_told_the_sweep_will_not_happen(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ngspice ignores .step in batch mode and reports no error, so the run
+        comes back complete having swept nothing. The default lint mode has to
+        say so — this is the deck's only warning that the answer is one point,
+        not a curve."""
+        from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+        state_with_sim.available_simulators["ngspice"] = NGspiceSimulator
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "stepped.cir",
+            "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
+        )
+
+        result = await handle_run_experiments(
+            _args(
+                deck,
+                "ngspice-step",
+                execution={"wait_s": 1.0, "simulator": "ngspice"},
+            ),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert len(submissions) == 1
+        finding = next(
+            item for item in data["lint"][0]["findings"] if item["rule_id"] == "step-ngspice"
+        )
+        assert "variations" in finding["evidence"]["reason"]
+
+    async def test_block_resolves_models_through_staged_includes(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Windows-native staging spells the root deck's include references in
+        Windows form, which nothing on the Linux side can re-read from disk.
+        The staged include closure itself must satisfy the model lookup: the
+        include here defines the only subckt the deck instantiates, and a
+        model-missing false positive would refuse a perfectly runnable deck.
+        """
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        (work_dir / "amp.inc").write_text(".subckt AMP a b\nRA a b 1k\n.ends AMP\n")
+        deck = _deck(
+            work_dir / "with_include.cir",
+            '.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
+        )
+        route = experiments_mod.resolve_experiment_paths
+
+        def windows_native(working_dir, job_id, circuit_id, simulator):
+            return dataclasses.replace(
+                route(working_dir, job_id, circuit_id, simulator),
+                windows_native=True,
+            )
+
+        monkeypatch.setattr(experiments_mod, "resolve_experiment_paths", windows_native)
+        monkeypatch.setattr(
+            wsl, "to_windows_path", lambda path: "Z:" + str(path).replace("/", "\\")
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "staged-include-models"),
+                state_with_sim,
+            )
+        )
+
+        assert len(submissions) == 1
+        assert data["outcome"] == "complete"
+        assert data["failures"] == []
+
+    async def test_off_skips_linter(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "off.cir",
+            "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n",
+        )
+
+        result = await handle_run_experiments(
+            _args(deck, "lint-off", lint="off"),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert len(submissions) == 1
+        # No findings (linting was off) -> no lint entry at all; an empty
+        # per-circuit row is ceremony the lean receipt no longer carries.
+        assert data["lint"] == []
+
+
+@pytest.mark.asyncio
+class TestPerCircuitFailuresAndAccounting:
+    async def test_multi_circuit_failure_is_isolated_and_ordered(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        valid = _deck(work_dir / "valid.cir")
+        missing = work_dir / "missing.cir"
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "mixed-circuits",
+                "circuits": [
+                    {"path": str(valid), "id": "valid"},
+                    {"path": str(missing), "id": "missing"},
+                ],
+                "execution": {"wait_s": 1},
+            }
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert len(submissions) == 1
+        assert data["outcome"] == "partial"
+        assert data["completeness"]["expanded"] == 2
+        assert [item["circuit"] for item in data["runs"]["items"]] == [
+            "valid",
+            "missing",
+        ]
+        assert [item["run_index"] for item in data["runs"]["items"]] == [0, 1]
+        assert data["failures"][0]["case_id"] == "missing-case-0000"
+
+    async def test_case_deck_keeps_staged_relative_includes_reachable(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+
+        def submit(self, netlist: Path, run_filename: str, callback):
+            submitted.append(netlist)
+            raw, log = fake_artifact_paths(self.output_folder, run_filename)
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+            self.loop.call_soon_threadsafe(callback, outcome)
+            return object()
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+        (work_dir / "support.inc").write_text(".param supply=1\n")
+        deck = _deck(
+            work_dir / "relative.cir",
+            '.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "relative-include"),
+                state_with_sim,
+            )
+        )
+
+        assert data["outcome"] == "complete"
+        assert (submitted[0].parent / "support.inc").is_file()
+
+    async def test_asc_without_exporter_is_accounted(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        schematic = _deck(work_dir / "missing-exporter.asc", "Version 4\n")
+
+        result = await handle_run_experiments(
+            _args(schematic, "asc-unavailable"),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert submissions == []
+        assert data["failures"][0]["code"] == "asc_export_unavailable"
+        assert data["completeness"]["failed"] == 1
+
+    async def test_terminal_counters_reconcile(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "grid.cir")
+        args = _args(
+            deck,
+            "counter-grid",
+            variations=[
+                {
+                    "kind": "assign",
+                    "assign": {"R1": ["1k", "2k", "3k"]},
+                }
+            ],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        counts = data["completeness"]
+
+        assert counts["expanded"] == 3
+        assert (
+            counts["produced"] + counts["failed"] + counts["cancelled"] + counts["skipped"]
+            == counts["expanded"]
+        )
+
+    async def test_recent_circuit_is_noted_explicitly(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "recent.cir")
+        note = AsyncMock()
+        monkeypatch.setattr(state_with_sim, "note_recent_circuit", note)
+
+        result = await handle_run_experiments(
+            _args(deck, "recent-note"),
+            state_with_sim,
+        )
+        _assert_schema(result)
+
+        note.assert_awaited_once_with(deck.resolve())
+
+
+def _failing_simulator(
+    monkeypatch: pytest.MonkeyPatch, log_text: str, *, pass_deck: bool = False
+) -> None:
+    """Every case aborts the way the simulator aborts: non-zero exit, .fail log.
+
+    ``pass_deck`` hands the outcome collector the deck and simulator the real
+    ``submit_netlist`` does, for the classifications that read them.
+    """
+
+    def submit(self, netlist: Path, run_filename: str, callback):
+        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
+        log.write_text(log_text)
+        extra = {"netlist": netlist, "simulator": self.simulator_class} if pass_deck else {}
+        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log), **extra))
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+def _per_case_failing_simulator(
+    monkeypatch: pytest.MonkeyPatch, log_for: Callable[[int], str]
+) -> None:
+    """Every case aborts with its OWN log, the way a real Monte Carlo aborts.
+
+    Each case runs a different deck, so each writes a different abort time and a
+    different node-voltage dump. A stub that hands every case one fixed string
+    can only exercise the byte-identical path.
+
+    The log is chosen by the case's own run index, read off the run token, not
+    by a submission counter: cases are submitted in parallel, so a counter hands
+    case N whichever log the race decides and no assertion about a particular
+    case's numbers can hold.
+    """
+    counter = itertools.count()
+
+    def submit(self, _netlist: Path, run_filename: str, callback):
+        stem = Path(run_filename).stem
+        match = re.search(r"_case_(\d+)", stem)
+        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
+        log.write_text(log_for(int(match.group(1)) if match else next(counter)))
+        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+def _convergence_abort_log(index: int) -> str:
+    """One LTspice convergence abort, carrying this case's own numeric state."""
+    return (
+        "Time step too small; "
+        f"time = {1.7e-5 + index * 3.1e-7:.6e}, timestep = {1.2e-19 / (index + 1):.4e}\n"
+        "Last Node Voltages:\n"
+        f"V(out) = {0.51 + index * 0.017:.6f}\n"
+        f"V(n001) = {1.83 - index * 0.023:.6f}\n"
+    )
+
+
+@pytest.mark.asyncio
+class TestFailureChannel:
+    """What a caller learns from a batch that failed the same way N times."""
+
+    async def test_identical_failures_collapse_into_one_counted_row(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The channel the budget ladder may never trim must bound itself.
+
+        Twelve cases failing for one reason is one fact and twelve copies of a
+        20-line log excerpt; the row names its cases and its true count so
+        nothing is rounded away by the collapse.
+        """
+        _failing_simulator(
+            monkeypatch,
+            "Direct Newton iteration failed to find operating point.\n"
+            "Time step too small; time = 1.2e-06, timestep = 1e-18\n",
+        )
+        deck = _deck(work_dir / "stiff.cir")
+        args = _args(
+            deck,
+            "collapsing-failures",
+            variations=[{"kind": "assign", "assign": {"R1": [f"{n}k" for n in range(1, 13)]}}],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["completeness"]["expanded"] == 12
+        assert data["completeness"]["failed"] == 12
+        assert len(data["failures"]) == 1
+        row = data["failures"][0]
+        assert row["count"] == 12
+        assert len(row["case_ids"]) == 10
+        assert row["case_id"] == row["case_ids"][0]
+        assert json.dumps(data["failures"]).count("Time step too small") == 1
+
+    async def test_one_cause_collapses_even_though_every_case_logged_its_own_numbers(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The scenario the bound exists for: a Monte Carlo that will not converge.
+
+        Every case has different component values, so every case aborts at a
+        different instant with a different node-voltage dump — the excerpts are
+        never byte-identical, and a verbatim key groups nothing. One cause has
+        to arrive as one row whatever the numbers in it say.
+        """
+        _per_case_failing_simulator(monkeypatch, _convergence_abort_log)
+        deck = _deck(work_dir / "diverging.cir")
+        args = _args(
+            deck,
+            "varying-convergence-failures",
+            variations=[{"kind": "assign", "assign": {"R1": [f"{n}k" for n in range(1, 13)]}}],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["completeness"]["failed"] == 12
+        assert len(data["failures"]) == 1
+        row = data["failures"][0]
+        assert row["count"] == 12
+        assert len(row["case_ids"]) == 10
+        # One excerpt on the wire, and it is a real one rather than a rewritten
+        # summary — the numbers a caller sees belong to the case named first.
+        assert json.dumps(data["failures"]).count("Last Node Voltages") == 1
+        assert _convergence_abort_log(0).splitlines()[0] in row["message"]
+
+    async def test_two_causes_stay_two_rows_under_the_same_normalization(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Folding the numbers must not fold the diagnosis with them."""
+
+        def log_for(index: int) -> str:
+            if index % 2:
+                return _convergence_abort_log(index)
+            return (
+                f"Error on line {index + 2} : q1 c b e mystery "
+                'Unable to find definition of model "mystery"\n'
+            )
+
+        _per_case_failing_simulator(monkeypatch, log_for)
+        deck = _deck(work_dir / "mixed-causes.cir")
+        args = _args(
+            deck,
+            "mixed-cause-failures",
+            variations=[{"kind": "assign", "assign": {"R1": [f"{n}k" for n in range(1, 9)]}}],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        by_code = {row["code"]: row for row in data["failures"]}
+        assert set(by_code) == {"missing_model", "convergence_failed"}
+        assert by_code["missing_model"]["count"] == 4
+        assert by_code["convergence_failed"]["count"] == 4
+
+    async def test_a_classified_failure_carries_its_code_and_recovery_route(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _failing_simulator(
+            monkeypatch,
+            "Time step too small; time = 1.2e-06, timestep = 1e-18\n",
+        )
+        deck = _deck(work_dir / "stiff-one.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "classified-failure"), state_with_sim)
+        )
+
+        row = data["failures"][0]
+        assert row["code"] == "convergence_failed"
+        assert "reltol" in row["hint"]
+
+    async def test_ngspice_include_failure_names_the_ngbehavior_fix(
+        self,
+        work_dir: Path,
+        config,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ngspice reports a dropped .lib section as a missing include file.
+
+        Its compatibility modes read ``.lib <file> <section>`` as two plain
+        includes, so a PDK corner select fails with a message that says nothing
+        about the mode that caused it. The pre-flight lint catches this when it
+        can see the directive; this is the same fact after the run, for a deck
+        whose lint the caller turned off or whose sectioned .lib arrived through
+        an include.
+        """
+        # The spicelib default; set explicitly because it is process-wide state
+        # another test may have overridden.
+        monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
+        state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
+        _failing_simulator(
+            monkeypatch,
+            "Error: Could not find include file tt\n",
+            pass_deck=True,
+        )
+        (work_dir / "models.lib").write_text(".lib tt\n.model nmos nmos level=1\n.endl\n")
+        deck = _deck(
+            work_dir / "corner.cir",
+            "* pdk corner\n.lib models.lib tt\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "ngspice-lib-section", lint="off"),
+                state,
+            )
+        )
+
+        row = data["failures"][0]
+        assert row["code"] == "ngspice_lib_section"
+        assert row["evidence"]["ngbehavior"] == "kiltpsa"
+        assert "ngbehavior" in row["hint"]
+        assert "hsa" in row["hint"]
+
+    async def test_missing_model_failure_names_the_unresolved_reference(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _failing_simulator(
+            monkeypatch,
+            'Error on line 2 : q1 c b e mystery Unable to find definition of model "mystery"\n',
+        )
+        deck = _deck(work_dir / "unresolved.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "missing-model-failure"), state_with_sim)
+        )
+
+        row = data["failures"][0]
+        assert row["code"] == "missing_model"
+        assert row["evidence"] == {"missing_refs": ["mystery"]}
+
+
+@pytest.mark.asyncio
+class TestAttachedAnalysis:
+    """The analyze block runs on the real recipe engine, not a stub."""
+
+    async def test_recipes_and_group_by_run_end_to_end(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-analysis", **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+
+        analysis = data["analysis"]
+        assert analysis["status"] == "completed", analysis["error"]
+        result = analysis["result"]
+        assert result is not None, analysis
+        assert result["coverage"]["missing_cases"]["items"] == []
+        # Real recipe output, addressed by the recipe key the caller chose.
+        groups = result["results"]["vout"]["groups"]
+        assert sorted(group["by"]["R1"] for group in groups) == ["1k", "2k"]
+        assert all(group["count"] == 1 for group in groups)
+        assert all(
+            entry["stat"] == "mean" and entry["value"] is not None
+            for group in groups
+            for entry in group["reduced"]
+        )
+        assert result["coverage"]["runs_analyzed"] == 2
+
+    async def test_include_block_reaches_the_analysis_engine(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The include block is the caller's only lever over what comes back.
+
+        A recipe with 'reduce' returns reductions alone unless per_run is asked
+        for, so the rows are proof the block was forwarded rather than accepted
+        and dropped — a silent drop leaves the response looking exactly like a
+        caller who never asked.
+        """
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-include.cir")
+        analysis = {
+            **_VARIED_ANALYSIS["analyze"],
+            "include": {"per_run": {"limit": 5}, "signals_available": True},
+        }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-include",
+                    variations=_VARIED_ANALYSIS["variations"],
+                    analyze=analysis,
+                ),
+                state_with_sim,
+            )
+        )
+
+        result = data["analysis"]["result"]
+        assert result is not None, data["analysis"]
+        entry = result["results"]["vout"]
+        assert entry["per_run"]["returned"] == 2
+        assert {row["run_index"] for row in entry["per_run"]["items"]} == {0, 1}
+        assert result["signals_available"]
+
+    async def test_all_steps_reaches_the_attached_analysis(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The point of the hoist is that attached and standalone read the same
+        steps, so the attached half has to honour 'all_steps' on its own.
+
+        Dropped, every attached analysis quietly falls back to the first step
+        while the standalone tool keeps reading every one.
+        """
+        recorded_fixture_simulator(monkeypatch, "ltspice_step_tran")
+        deck = _deck(work_dir / "attached-steps.cir")
+        recipes = [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
+
+        every = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-all-steps",
+                    analyze={
+                        "recipes": recipes,
+                        "all_steps": True,
+                        "include": {"per_run": {"limit": 20}},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        rows = every["analysis"]["result"]["results"]["v"]["per_run"]["items"]
+        assert [row["step_index"] for row in rows] == [0, 1, 2]
+
+        # Absent, the same job reads the first step only — which is what makes
+        # the row list above evidence the argument was forwarded.
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-first-step",
+                    analyze={"recipes": recipes, "include": {"per_run": {"limit": 20}}},
+                ),
+                state_with_sim,
+            )
+        )
+        first_rows = first["analysis"]["result"]["results"]["v"]["per_run"]["items"]
+        assert [row["step_index"] for row in first_rows] == [0]
+
+    async def test_attached_step_selection_matches_the_standalone_tool(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Same job, same selection, same numbers — whichever door asked."""
+        recorded_fixture_simulator(monkeypatch, "ltspice_step_tran")
+        deck = _deck(work_dir / "attached-one-step.cir")
+        recipes = [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
+        selection = {"axis": "r", "value": 22}
+
+        attached = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-step-parity",
+                    analyze={
+                        "recipes": recipes,
+                        "step": selection,
+                        "include": {"per_run": {"limit": 20}},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": attached["job_id"], "runs": "all", "label": "dut"}],
+                    "recipes": recipes,
+                    "step": selection,
+                    "include": {"per_run": {"limit": 20}},
+                }
+            ),
+            state_with_sim,
+        )
+        assert standalone.structured_content is not None
+
+        def _rows(result: dict[str, Any]) -> list[tuple[Any, Any]]:
+            items = result["results"]["v"]["per_run"]["items"]
+            return [(row["step_index"], row["value"]) for row in items]
+
+        assert _rows(attached["analysis"]["result"]) == _rows(standalone.structured_content)
+        assert [index for index, _ in _rows(attached["analysis"]["result"])] == [1]
+
+    async def test_replay_projects_nested_content_from_the_neutral_snapshot(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-neutral.cir")
+        base = {
+            "recipes": [{"key": "summary", "metric": "summary"}],
+        }
+
+        lean = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-neutral", analyze=base),
+                state_with_sim,
+            )
+        )
+        wide = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-neutral",
+                    analyze={**base, "include": {"fields": ["value"]}},
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert wide["request_id"] == lean["request_id"]
+        assert any(item["code"] == "idempotent_replay" for item in wide["observations"])
+
+        lean_value = lean["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
+        wide_value = wide["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
+        assert not any(isinstance(value, (dict, list)) for value in lean_value.values())
+        assert any(isinstance(value, (dict, list)) for value in wide_value.values())
+        missing = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-neutral",
+                    analyze={
+                        **base,
+                        "include": {"fields": ["value.not_recorded"]},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        warning = missing["analysis"]["result"]["results"]["summary"]["warnings"][-1]
+        assert "value.not_recorded" in warning
+        assert "absent from every row" in warning
+        assert "keys present" in warning
+        job = state_with_sim.all_jobs[lean["job_id"]]
+        assert job.analysis.result is not None
+        assert job.analysis.result["kind"] == store.KIND_ANALYSIS_SNAPSHOT
+        assert job.analysis.request is not None
+        assert job.analysis.request["include"] is None
+
+    async def test_projection_survives_the_attached_continuation_and_replay_view_change(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-pages.cir")
+        analyze_request = {
+            "recipes": [{"key": "summary", "metric": "summary"}],
+            "include": {"per_run": {"limit": 1}, "fields": ["value"]},
+        }
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-pages",
+                    variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+                    analyze=analyze_request,
+                ),
+                state_with_sim,
+            )
+        )
+        result = first["analysis"]["result"]
+        page = result["results"]["summary"]["per_run"]
+        assert page["returned"] == 1 and page["next_cursor"] is not None
+        assert set(page["items"][0]) == {"value"}
+        assert any(isinstance(value, (dict, list)) for value in page["items"][0]["value"].values())
+
+        continuation = AnalyzeResultsInput.model_validate(
+            {
+                "continue": {
+                    "result_set_id": result["result_set_id"],
+                    "cursor": page["next_cursor"],
+                }
+            }
+        )
+        continued = await analyze_mod.handle_analyze_results(continuation, state_with_sim)
+        assert continued.structured_content is not None
+        continued_page = continued.structured_content["results"]["summary"]["per_run"]
+        assert set(continued_page["items"][0]) == {"value"}
+        assert continued_page["items"][0] == page["items"][0]
+        assert any(
+            isinstance(value, (dict, list))
+            for value in continued_page["items"][0]["value"].values()
+        )
+
+        changed = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-pages",
+                    variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+                    analyze={
+                        **analyze_request,
+                        "include": {"per_run": {"limit": 1}, "fields": ["case_id"]},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        changed_cursor = changed["analysis"]["result"]["results"]["summary"]["per_run"][
+            "next_cursor"
+        ]
+        assert result_store.cursor_view(changed_cursor) == ["case_id"]
+
+    async def test_budget_answer_reconstructs_values_independent_of_requested_page(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        original_trace_names = OffsetAwareRawRead.get_trace_names
+
+        def wide_trace_names(raw: OffsetAwareRawRead) -> list[str]:
+            return [
+                *original_trace_names(raw),
+                *(f"budget_trace_{index:03d}" for index in range(500)),
+            ]
+
+        monkeypatch.setattr(OffsetAwareRawRead, "get_trace_names", wide_trace_names)
+        deck = _deck(work_dir / "attached-answer.cir")
+        variations = [{"kind": "assign", "assign": {"R1": ["1k", "2k", "3k"]}}]
+        recipe = [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}]
+        expected_result = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-answer-expected",
+                    variations=variations,
+                    analyze={"recipes": recipe},
+                ),
+                state_with_sim,
+            )
+        )["analysis"]["result"]
+        expected = expected_result["results"]["vout"]["values"]
+
+        request = _args(
+            deck,
+            "attached-answer-budget",
+            variations=variations,
+            analyze={
+                "recipes": recipe,
+                "include": {
+                    "per_run": {"limit": 1},
+                    "signals_available": True,
+                },
+            },
+        )
+        full = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        await state_with_sim.job_registry.drain_pending()
+        job = state_with_sim.all_jobs[full["job_id"]]
+        assert job.analysis.result is not None
+        assert "answer_top" not in job.analysis.result
+        assert all(
+            "answer_facts" not in block for block in job.analysis.result["results"].values()
+        )
+        snapshot_identity = job.analysis.result
+        pristine_snapshot = copy.deepcopy(job.analysis.result)
+        pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
+        trim_rung = response_budget.Rung(
+            response_budget.RUNG_TRIM,
+            budget=10_000,
+            measured=0,
+            reserve=receipts_mod._RUN_BUDGET_NOTES.reserve,
+        )
+        answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
+        manual_snapshot = experiments_mod.snapshot_receipt(
+            job,
+            None,
+            control_token=job.control_token,
+        )
+        trim_view = experiments_mod.finalize_receipt(
+            experiments_mod.render_receipt_snapshot(
+                manual_snapshot,
+                control_token=job.control_token,
+            )
+        )
+        receipts_mod._degrade_receipt(trim_view, trim_rung)
+        answer_view = experiments_mod.finalize_receipt(
+            experiments_mod.render_receipt_snapshot(
+                manual_snapshot,
+                control_token=job.control_token,
+                analysis_answer_channel=True,
+            )
+        )
+        receipts_mod._degrade_receipt(answer_view, answer_rung)
+        trim_size = response_budget.estimate_tokens(trim_view)
+        answer_size = response_budget.estimate_tokens(answer_view)
+        assert answer_size < trim_size
+        # The handler's real response carries envelope text this manual view
+        # does not (replay observation, progress-augmented hint), so aim the
+        # budget a third of the rung gap above the measured answer size —
+        # still below trim — instead of exactly at it.
+        budget = (
+            answer_size + (trim_size - answer_size) // 3 + receipts_mod._RUN_BUDGET_NOTES.reserve
+        )
+        assert trim_size > budget - receipts_mod._RUN_BUDGET_NOTES.reserve
+        answer = _assert_schema(
+            await handle_run_experiments(
+                request.model_copy(update={"budget": budget}),
+                state_with_sim,
+            )
+        )
+        assert job.analysis.result is snapshot_identity
+        assert job.analysis.result == pristine_snapshot
+        assert experiment_store.serialize_job(job) == pristine_job
+        note = next(
+            item for item in answer["observations"] if item.get("code") == "budget_truncated"
+        )
+        assert "(answer)" in note["detail"]
+        answer_result = answer["analysis"]["result"]
+        entry = answer_result["results"]["vout"]
+        assert entry["values"] == expected
+        assert answer_result["outcome"] == expected_result["outcome"]
+        assert answer_result["coverage"] == expected_result["coverage"]
+        assert answer_result["next"] is None
+        assert answer_result["cursor"] is None
+        assert "signals_available" not in answer_result
+        assert "signals_available" in job.analysis.result["top"]
+        restored = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        assert restored["analysis"]["result"]["signals_available"]
+
+    async def test_successful_analysis_does_not_report_partial(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-complete.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-complete", **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+
+        assert data["completeness"]["produced"] == data["completeness"]["expanded"] == 2
+        assert data["outcome"] == "complete"
+        assert data["status"] == "completed"
+
+    async def test_failed_analysis_keeps_a_run_complete_outcome(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-bad.cir")
+        # A malformed block is refused before submission now, so a STAGE-time
+        # failure needs the engine itself to fail — patched through
+        # tools.analyze, the seam the callback deliberately resolves late.
+        analyze = {
+            "recipes": [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
+        }
+
+        async def exploding_engine(args, state):
+            raise ValueError("analysis engine failure injected by test")
+
+        monkeypatch.setattr(analyze_mod, "capture_attached_analysis", exploding_engine)
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-bad-request", analyze=analyze),
+                state_with_sim,
+            )
+        )
+
+        # The runs are what `outcome` describes; the analysis failure has its
+        # own field, its own observation, and a hint that points at both.
+        assert data["outcome"] == "complete"
+        assert data["completeness"]["produced"] == 1
+        assert data["completeness"]["failed"] == 0
+        assert data["analysis"]["status"] == "failed"
+        assert "analysis engine failure injected by test" in data["analysis"]["error"]
+        assert [item["code"] for item in data["analysis"]["observations"]] == ["analysis_failed"]
+        assert "attached analysis failed" in data["hint"]
+        # The coordinator still records the stage failure on the job status.
+        assert data["status"] == "completed_with_failures"
+
+    async def test_wait_for_runs_returns_before_analysis_finishes(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-wait.cir")
+        released = asyncio.Event()
+        engine = analyze_mod.capture_attached_analysis
+
+        async def gated(args, state):
+            await released.wait()
+            return await engine(args, state)
+
+        monkeypatch.setattr(analyze_mod, "capture_attached_analysis", gated)
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-wait", wait_s=0.0, **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+        job_id = receipt["job_id"]
+
+        runs_done = await _jobs_wait(state_with_sim, job_id, "runs", 2.0)
+        assert runs_done["timed_out"] is False
+        assert runs_done["status"] == "analyzing"
+
+        still_analyzing = await _jobs_wait(state_with_sim, job_id, "all", 0.05)
+        assert still_analyzing["timed_out"] is True
+
+        released.set()
+        finished = await _jobs_wait(state_with_sim, job_id, "all", 2.0)
+        assert finished["timed_out"] is False
+        assert finished["status"] == "completed"
+        assert finished["analysis_status"] == "completed"
+
+
+_CORE_INC = ".subckt core in out\nR1 in mid 1k\nC1 mid out 1n\n.ends\n"
+_FACTORED_ROOT = '.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
+
+
+def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path]) -> None:
+    """Instant simulator that records the case deck it was handed."""
+
+    def submit(self, netlist: Path, run_filename: str, callback):
+        submitted.append(Path(netlist))
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
+        raw.write_bytes(b"Title: mock")
+        log.write_text("ok")
+        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        self.loop.call_soon_threadsafe(callback, outcome)
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+def _include_targets(netlist: Path) -> list[Path]:
+    """Resolve a deck's include references without the production resolver."""
+    targets: list[Path] = []
+    for line in netlist.read_text().splitlines():
+        parts = line.split()
+        if parts and parts[0].casefold() in {".include", ".inc"}:
+            raw = Path(parts[1].strip('"'))
+            targets.append(raw if raw.is_absolute() else netlist.parent / raw)
+    return targets
+
+
+def _factored_deck(work_dir: Path, *, core: str = _CORE_INC, root: str = _FACTORED_ROOT) -> Path:
+    (work_dir / "core.inc").write_text(core)
+    return _deck(work_dir / "factored.cir", root)
+
+
+@pytest.mark.asyncio
+class TestVariationsReachIntoIncludes:
+    """A component only reachable through .include is still a sweep target.
+
+    Factoring a circuit into a reusable core used to cost the ability to vary
+    anything in it, which pushed authors into promoting every value they might
+    later sweep to a top-level .param before they knew which ones those were.
+    """
+
+    async def test_included_component_is_targetable(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-assign",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["outcome"] == "complete"
+        assert data["completeness"]["produced"] == 1
+        staged_core = _include_targets(submitted[0])[0]
+        assert "R1 in mid 2k" in staged_core.read_text()
+
+    async def test_each_case_edits_its_own_copy_of_the_include(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-isolation",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k", "3k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["completeness"]["produced"] == 2
+        cores = [_include_targets(path)[0] for path in sorted(submitted, key=lambda p: p.name)]
+        assert cores[0] != cores[1]
+        assert "R1 in mid 2k" in cores[0].read_text()
+        assert "R1 in mid 3k" in cores[1].read_text()
+
+    async def test_authored_include_is_never_written(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-readonly",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k", "3k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        # Both cases really did edit the include, so an untouched original is
+        # evidence of staging and not of a run that never got that far.
+        assert data["completeness"]["produced"] == 2
+        assert all("core.inc" in str(_include_targets(path)[0]) for path in submitted)
+        assert (work_dir / "core.inc").read_text() == _CORE_INC
+        assert not (work_dir / "case-0000__core.inc").is_file()
+        assert not (work_dir / "case-0001__core.inc").is_file()
+
+    async def test_root_deck_declaration_wins_over_an_include(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(
+            work_dir,
+            root='.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n.op\n.end\n',
+        )
+
+        _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-root-wins",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "R1 in out 2k" in submitted[0].read_text()
+        staged_core = _include_targets(submitted[0])[0]
+        assert "R1 in mid 1k" in staged_core.read_text()
+
+    async def test_two_includes_declaring_the_target_name_both_files(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        (work_dir / "left.inc").write_text(".subckt left in out\nR1 in out 1k\n.ends\n")
+        (work_dir / "right.inc").write_text(".subckt right in out\nR1 in out 2k\n.ends\n")
+        deck = _deck(
+            work_dir / "two-cores.cir",
+            '.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
+            "X1 in mid left\nX2 mid 0 right\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-ambiguous",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert submissions == []
+        failure = data["failures"][0]
+        assert failure["code"] == "ambiguous_target"
+        assert "left.inc" in failure["message"]
+        assert "right.inc" in failure["message"]
+
+    async def test_random_rule_reaches_an_included_component(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-random",
+                    lint="off",
+                    variations=[
+                        {
+                            "kind": "random",
+                            "runs": 2,
+                            "seed": 11,
+                            "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                        }
+                    ],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["completeness"]["produced"] == 2
+        values = [
+            _include_targets(path)[0].read_text().split("R1 in mid ")[1].split()[0]
+            for path in sorted(submitted, key=lambda p: p.name)
+        ]
+        assert len(set(values)) == 2
+        assert all(float(value) != 1000.0 for value in values)
+
+    async def test_two_level_include_chain_resolves_and_is_rewired(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        (work_dir / "core.inc").write_text(_CORE_INC)
+        (work_dir / "mid.inc").write_text('.include "core.inc"\n')
+        deck = _deck(
+            work_dir / "nested.cir",
+            '.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-nested",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["7k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["outcome"] == "complete"
+        staged_mid = _include_targets(submitted[0])[0]
+        assert staged_mid.name == "case-0000__mid.inc"
+        staged_core = _include_targets(staged_mid)[0]
+        assert staged_core.name == "case-0000__core.inc"
+        assert "R1 in mid 7k" in staged_core.read_text()
+
+
+class TestReceiptWeight:
+    """A receipt carries what the caller acts on; provenance is opt-in.
+
+    Provenance was 29% of the bytes in one measured experiment receipt —
+    absolute paths repeated four ways and a digest per staged file, none of
+    which a caller opens, because the analysis tools address runs by job_id.
+    """
+
+    async def test_provenance_is_absent_by_default_and_returned_on_request(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "weight.cir")
+
+        lean = _assert_schema(await handle_run_experiments(_args(deck, "lean-1"), state_with_sim))
+        source = lean["source"][0]
+        assert "sha256" not in source
+        assert "staged_deck" not in source
+        assert "manifest" not in source
+        assert "linter_version" not in source
+        # The count survives, so "how many files were staged" is still answerable
+        # without naming every one of them.
+        assert source["staged_files"] >= 1
+        # What the caller acts on is untouched.
+        assert source["circuit"] == "dut"
+        assert source["simulator"]
+
+        full = _assert_schema(
+            await handle_run_experiments(_args(deck, "full-1", provenance=True), state_with_sim)
+        )
+        full_source = full["source"][0]
+        assert full_source["sha256"]
+        assert full_source["staged_deck"]
+        assert full_source["manifest"]
+        assert full_source["linter_version"]
+
+    async def test_dropping_provenance_actually_shrinks_the_payload(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "shrink.cir")
+
+        lean = _assert_schema(
+            await handle_run_experiments(_args(deck, "shrink-lean"), state_with_sim)
+        )
+        full = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "shrink-full", provenance=True), state_with_sim
+            )
+        )
+        assert len(json.dumps(lean)) < len(json.dumps(full))
+
+    async def test_run_fields_projects_rows_and_preserves_nesting(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "proj.cir")
+
+        args = _args(
+            deck,
+            "proj-1",
+            variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+            run_fields=["case_id", "assignments"],
+        )
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        rows = data["runs"]["items"]
+        assert rows, "expected the sweep to produce runs"
+        for row in rows:
+            assert set(row) == {"case_id", "assignments"}
+            # Nesting is preserved, not flattened.
+            assert isinstance(row["assignments"], dict)
+
+    async def test_asking_for_provenance_replays_rather_than_conflicting(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Verbosity chooses how a receipt reads, not what runs.
+
+        If it reached the idempotency fingerprint, re-reading an existing
+        receipt with the audit trail turned on would be rejected as a changed
+        request — refusing the caller exactly when they want to see more.
+        """
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "verbosity.cir")
+
+        lean = _assert_schema(
+            await handle_run_experiments(_args(deck, "verbosity-1"), state_with_sim)
+        )
+        again = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "verbosity-1", provenance=True, run_fields=["case_id"]),
+                state_with_sim,
+            )
+        )
+
+        assert again.get("error") is None, "a verbosity change is not a conflict"
+        assert again["job_id"] == lean["job_id"], "expected a replay of the same job"
+        assert len(submissions) == 1, "the replay must not re-run anything"
+        assert again["source"][0]["sha256"], "the replay honours the new verbosity"
+
+    async def test_a_live_include_is_reported_even_without_provenance(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """An unprovable input is a disclosure, not provenance trivia.
+
+        Stripping the manifest wholesale would turn "this job cannot prove what
+        it ran against" into silence, which is the one thing the lean receipt
+        must not do.
+        """
+        fake_simulator(monkeypatch)
+        outside = work_dir.parent / "outside_core.inc"
+        outside.write_text("R9 in 0 1k\n")
+        # A stageable include alongside the live one: without both, "keep only
+        # the notable entries" is indistinguishable from "keep every entry".
+        inside = work_dir / "inside_core.inc"
+        inside.write_text("R8 in 0 2k\n")
+        deck = _deck(
+            work_dir / "live.cir",
+            f".include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "live-1", allow_live_includes=True), state_with_sim
+            )
+        )
+        entries = [e for src in data["source"] for e in src.get("manifest", [])]
+        assert entries, "the live include must still be disclosed"
+        assert all(e["live"] or e["reason"] for e in entries), (
+            "a lean receipt keeps only manifest entries that say something"
+        )
+        assert not any(str(inside) == e["path"] for e in entries), (
+            "the ordinary staged include is bulk, not a disclosure"
+        )
+
+    async def test_the_server_default_budget_keeps_a_requested_provenance_echo(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Asking for provenance is what makes a receipt big enough to trip the
+        budget — a default that answers by deleting it revokes an opt-in nobody
+        chose to trade away."""
+        fake_simulator(monkeypatch)
+        state_with_sim.config.default_budget = 100
+        deck = _deck(work_dir / "provenance-budget.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "provenance-under-default", provenance=True), state_with_sim
+            )
+        )
+
+        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        assert data["source"][0]["sha256"] == sha256_file(deck)
+
+    async def test_the_server_default_budget_keeps_a_staging_disclosure(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The non-provenance half of the same key: a live include is a fact.
+
+        Nobody opted out of it, so a server-side presentation default deleting it
+        turns the disclosure into exactly the silence the lean receipt refuses.
+        """
+        fake_simulator(monkeypatch)
+        state_with_sim.config.default_budget = 100
+        outside = work_dir.parent / "outside_budget.inc"
+        outside.write_text("R9 in 0 1k\n")
+        deck = _deck(
+            work_dir / "live-budget.cir",
+            f".include {outside}\nV1 in 0 1\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "live-under-default", allow_live_includes=True), state_with_sim
+            )
+        )
+
+        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        entries = [e for src in data["source"] for e in src.get("manifest", [])]
+        assert [e for e in entries if e["live"]], "the live include must still be disclosed"
+
+    def test_the_fingerprint_covers_exactly_the_execution_arguments(self):
+        """A new presentation field must not silently invalidate stored receipts.
+
+        A canonicalizer bump belongs only to a changed representation of a
+        previously valid request. Pinning the covered key set makes a real
+        execution-field change fail here instead of silently changing replay.
+        """
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        model = RunExperimentsInput.model_validate(
+            {"request_id": "r", "circuits": [{"path": "/tmp/a.cir", "id": "d"}]}
+        )
+        covered = model.model_dump(
+            mode="json",
+            exclude_unset=False,
+            exclude=RunExperimentsInput.PRESENTATION_FIELDS,
+        )
+        assert set(covered) == {
+            "request_id",
+            "circuits",
+            "variations",
+            "execution",
+            "analyze",
+            "lint",
+            "suppress",
+            "allow_live_includes",
+        }
+        loud = RunExperimentsInput.model_validate(
+            {
+                "request_id": "r",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "provenance": True,
+                "run_fields": ["case_id"],
+            }
+        )
+        assert canonical_fingerprint(model) == canonical_fingerprint(loud)
+
+    def test_day_one_presentation_fields_leave_old_canonical_bytes_unchanged(self):
+        # A tripwire, not the subject: whoever bumps the version has to come
+        # back here and confirm the presentation exclusions still change no
+        # bytes. Version 4 was the .step selection moving onto the attached
+        # analyze block, which is an execution field and does change them.
+        assert experiment_store.CANONICALIZER_VERSION == 4
+        model = RunExperimentsInput.model_validate(
+            {
+                "request_id": "stable-bytes",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "analyze": {
+                    "recipes": [{"key": "summary", "metric": "summary"}],
+                    "include": {"per_run": {"limit": 3}},
+                },
+            }
+        )
+        current = model.model_dump(
+            mode="json",
+            exclude_unset=False,
+            exclude=RunExperimentsInput.PRESENTATION_FIELDS,
+        )
+        legacy = model.model_dump(mode="json", exclude_unset=False)
+        legacy.pop("budget")
+        legacy["analyze"]["include"].pop("fields")
+        legacy["execution"].pop("wait_s")
+        legacy.pop("provenance")
+        legacy.pop("run_fields")
+
+        def encode(value: Any) -> bytes:
+            return json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+
+        assert encode(current) == encode(legacy)
+
+    def test_budget_and_attached_fields_do_not_change_the_fingerprint(self):
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        base = {
+            "request_id": "presentation-only",
+            "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+            "analyze": {
+                "recipes": [{"key": "summary", "metric": "summary"}],
+                "include": {"per_run": {"limit": 3}},
+            },
+        }
+        lean = RunExperimentsInput.model_validate({**base, "budget": 500})
+        roomy = RunExperimentsInput.model_validate({**base, "budget": 5000})
+        wide = RunExperimentsInput.model_validate(
+            {
+                **base,
+                "budget": 5000,
+                "analyze": {
+                    **base["analyze"],
+                    "include": {
+                        "per_run": {"limit": 3},
+                        "fields": ["value"],
+                    },
+                },
+            }
+        )
+        assert canonical_fingerprint(lean) == canonical_fingerprint(roomy)
+        assert canonical_fingerprint(lean) == canonical_fingerprint(wide)
+
+        without_include = RunExperimentsInput.model_validate(
+            {
+                "request_id": "presentation-only-container",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "analyze": {"recipes": [{"key": "summary", "metric": "summary"}]},
+            }
+        )
+        fields_only = RunExperimentsInput.model_validate(
+            {
+                "request_id": "presentation-only-container",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "analyze": {
+                    "recipes": [{"key": "summary", "metric": "summary"}],
+                    "include": {"fields": ["value"]},
+                },
+            }
+        )
+        assert canonical_fingerprint(without_include) == canonical_fingerprint(fields_only)
+
+    def test_the_fingerprint_ignores_the_dwell_but_not_the_rest_of_execution(self):
+        """execution.wait_s bounds only the response (the job is durable either
+        way), so the same experiment asked at a different dwell must REPLAY —
+        the CLI on-ramp submits with wait_s=0 and its receipt must stay
+        replayable by an explicit run-experiments call at the default dwell.
+        The rest of execution changes what runs and must keep conflicting."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        base = {"request_id": "r", "circuits": [{"path": "/tmp/a.cir", "id": "d"}]}
+        quick = RunExperimentsInput.model_validate({**base, "execution": {"wait_s": 0}})
+        patient = RunExperimentsInput.model_validate({**base, "execution": {"wait_s": 60}})
+        other_engine = RunExperimentsInput.model_validate(
+            {**base, "execution": {"wait_s": 0, "simulator": "ngspice"}}
+        )
+        assert canonical_fingerprint(quick) == canonical_fingerprint(patient)
+        assert canonical_fingerprint(quick) != canonical_fingerprint(other_engine)
+
+    def test_the_lean_manifest_filter_fails_closed(self):
+        """An entry that is neither staged, live, nor explained is an anomaly.
+
+        The store rebuilds `staged` with a False default, so this state is
+        reachable from a record written by an older or partial writer. A filter
+        listing known-bad states would hide it; one that keeps everything except
+        an ordinary staged reference cannot.
+        """
+        from ltspice_mcp.lib.experiment_types import ManifestEntry, SourceRecord
+
+        ordinary = ManifestEntry(path=Path("a.inc"), sha256="x", staged=True, live=False)
+        anomalous = ManifestEntry(path=Path("b.inc"), sha256="", staged=False, live=False)
+        record = SourceRecord(
+            circuit="dut",
+            path=Path("dut.cir"),
+            sha256="x",
+            staged_deck=Path("staged/dut.cir"),
+            manifest=[ordinary, anomalous],
+        )
+
+        lean = receipts_mod._source_payload(record, provenance=False)
+
+        kept = [entry["path"] for entry in lean.get("manifest", [])]
+        assert str(anomalous.path) in kept, "an unexplained un-staged entry must survive"
+        assert str(ordinary.path) not in kept, "an ordinary staged entry is bulk"
+        assert lean["staged_files"] == 2, "the count still covers every entry"

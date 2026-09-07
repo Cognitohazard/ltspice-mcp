@@ -1,15 +1,19 @@
 """Integration tests for MCP resource handlers."""
 
+import os
 from pathlib import Path
 
 import pytest
 from mcp.types import TextResourceContents
 
+from ltspice_mcp.lib import experiment_store, recent
 from ltspice_mcp.resources import (
     get_static_resources,
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
+from tests.conftest import persist_experiment_record
 
 
 def _text(contents) -> str:
@@ -82,12 +86,12 @@ class TestReadResource:
         assert result.contents
         contents = result.contents[0]
         assert isinstance(contents, TextResourceContents)
-        assert contents.mimeType == "text/markdown"
+        assert contents.mime_type == "text/markdown"
         text = contents.text
         # Both strings come from the real SKILL.md body, proving the packaged
         # guide is served (not a placeholder).
         assert "Schematic layout best practices" in text
-        assert "means MILLI" in text
+        assert "means milli" in text
 
     def test_unknown_uri_raises(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
@@ -96,6 +100,182 @@ class TestReadResource:
     def test_netlist_path_escape_blocked(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
             handle_read_resource("spice://netlists/../../etc/passwd", state_no_sim)
+
+
+class TestRecentResource:
+    """The job counts beside a recent circuit, and where they come from."""
+
+    @staticmethod
+    def _circuits(state: SessionState) -> list[dict]:
+        import json
+
+        result = handle_read_resource("spice://recent", state)
+        return json.loads(_text(result.contents[0]))["circuits"]
+
+    def test_counts_come_from_this_working_directorys_records(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Nothing else pins these four fields.
+
+        They are read through a path digest shared with the per-circuit index;
+        a divergence between the two would report zeros for every circuit and
+        leave the suite green.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        circuit = work_dir / "counted.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(
+            work_dir, circuit, job_id="exp_done", status="completed", expanded=3
+        )
+        persist_experiment_record(
+            work_dir, circuit, job_id="exp_lost", status="interrupted", expanded=2
+        )
+
+        entry = self._circuits(state_no_sim)[0]
+
+        assert Path(entry["path"]) == circuit
+        assert entry["exists"] is True
+        assert entry["total_jobs"] == 2
+        assert entry["total_runs"] == 5
+        assert entry["status_counts"] == {"completed": 1, "interrupted": 1}
+        assert entry["interrupted_job_ids"] == ["exp_lost"]
+
+    def test_a_record_in_another_working_directory_is_not_counted(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The index is user-global; the counts are one store's.
+
+        A circuit last run from elsewhere reports no jobs here, which is why
+        the resource description says which directory it is answering for.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        elsewhere = tmp_path_factory.mktemp("another-working-dir")
+        circuit = work_dir / "run-elsewhere.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(elsewhere, circuit, job_id="exp_far", expanded=4)
+
+        entry = self._circuits(state_no_sim)[0]
+
+        assert entry["total_jobs"] == 0
+        assert entry["total_runs"] == 0
+        assert entry["status_counts"] == {}
+
+
+class TestRecentAndJobsListAgree:
+    """``spice://recent`` and ``jobs(list)`` are two views of one join.
+
+    The counters are shared, so they cannot disagree about the records they
+    both read. The three things they do differ on are deliberate and stated on
+    ``services.CircuitJobSummary``; the tests below are what holds each of
+    them to what it says.
+    """
+
+    @staticmethod
+    async def _groups(state: SessionState) -> list[dict]:
+        result = await handle_jobs(JobsInput.model_validate({"action": "list"}), state)
+        data = result.structured_content
+        assert data is not None
+        return data["items"]
+
+    async def test_the_same_records_produce_the_same_counters(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        circuit = work_dir / "agreeing.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(
+            work_dir, circuit, job_id="exp_ok", status="completed", expanded=3
+        )
+        persist_experiment_record(
+            work_dir, circuit, job_id="exp_lost", status="interrupted", expanded=2
+        )
+
+        entry = TestRecentResource._circuits(state_no_sim)[0]
+        group = (await self._groups(state_no_sim))[0]
+
+        assert entry["status_counts"] == group["status_counts"]
+        assert entry["interrupted_job_ids"] == group["interrupted_job_ids"]
+        assert entry["total_jobs"] == group["recent_jobs_total"]
+        assert entry["exists"] == group["exists"] is True
+
+    async def test_only_the_resource_prunes_a_circuit_whose_file_is_gone(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The listing keeps naming it, because its jobs are still addressable.
+
+        Reading a list must not rewrite the user-global index as a side
+        effect either, which is the other half of why only the resource
+        prunes.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        circuit = work_dir / "deleted.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(work_dir, circuit, job_id="exp_orphan", status="completed")
+        circuit.unlink()
+
+        group = (await self._groups(state_no_sim))[0]
+        assert Path(group["path"]) == circuit
+        assert group["exists"] is False
+        assert group["recent_jobs_total"] == 1
+
+        assert TestRecentResource._circuits(state_no_sim) == []
+
+    async def test_only_the_listing_counts_a_job_that_is_still_in_memory(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The listing prefers the live registry; the resource reads disk.
+
+        The resource read runs on a worker thread, where the registry may not
+        be touched, so a transition this process has made but not yet written
+        reaches only the listing.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        circuit = work_dir / "in-flight.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(
+            work_dir,
+            circuit,
+            job_id="exp_live",
+            status="running",
+            owner_pid=os.getpid(),
+            expanded=1,
+        )
+        job = experiment_store.load_job("exp_live", work_dir, own_is_alive=True)
+        assert job is not None and job.status == "running"
+        # A transition made in memory and deliberately not persisted.
+        job.status = "completed"
+        state_no_sim.all_jobs[job.job_id] = job
+
+        group = (await self._groups(state_no_sim))[0]
+        entry = TestRecentResource._circuits(state_no_sim)[0]
+
+        assert group["status_counts"] == {"completed": 1}
+        assert entry["status_counts"] == {"running": 1}
 
 
 class TestNetlistResourceHardening:

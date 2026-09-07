@@ -3,44 +3,63 @@
 import json
 import typing
 
+import pytest
+from mcp import types
 from pydantic import ValidationError
 
-from ltspice_mcp.tools import get_tools_for_profile
-from ltspice_mcp.tools.circuit import SchematicOp
+from ltspice_mcp.lib.schematic_ops import SchematicOp
+from ltspice_mcp.tools import _base, _schema, get_tools
+from tests.conftest import resolve_local_ref
+
+
+def _all_profile_defs() -> list[types.Tool]:
+    """Every advertised tool definition.
+
+    The reversal/reversibility guards must see every registered tool, so a
+    one-way mutating tool can't ship without a reviewed _TOOL_REVERSAL entry."""
+    defs, _ = get_tools()
+    return list(defs)
+
+
+def _all_profile_declared_defs() -> list[types.Tool]:
+    """Every DISPATCH-side definition.
+
+    The tool list sent over the wire drops outputSchema; the declared
+    output contract lives on the dispatch definitions, which is what the
+    conformance hook validates emissions against. Contract pins on output
+    shapes must read this side, not the advertised list."""
+    _, dispatch = get_tools()
+    return [registered.definition for registered in dispatch.values()]
 
 
 class TestDispatchTable:
     def test_all_tools_wired(self):
         """Every registered tool definition should have a matching dispatch entry."""
-        defs, handlers = get_tools_for_profile("full")
+        defs, handlers = get_tools()
         expected = {tool_def.name for tool_def in defs}
         dispatched = set(handlers.keys())
         missing = expected - dispatched
         assert not missing, f"Tools defined but not dispatched: {missing}"
 
     def test_no_extra_handlers(self):
-        """Every dispatch entry either matches a tool definition, or is a
-        deprecated alias declared on the tool it dispatches to (see
-        RegisteredTool.aliases — e.g. 'connect' dispatching to 'wire_pins').
-        Anything else is a stray handler with no definition or alias."""
-        defs, handlers = get_tools_for_profile("full")
+        """Every dispatch entry matches a tool definition — a stray handler
+        with no advertised definition would be callable but undiscoverable."""
+        defs, handlers = get_tools()
         defined = {tool_def.name for tool_def in defs}
-        extra = set(handlers.keys()) - defined
-        unexplained = {name for name in extra if name not in handlers[name].aliases}
-        assert not unexplained, f"Dispatched but no definition or alias: {unexplained}"
+        assert set(handlers.keys()) == defined
 
     def test_all_handlers_callable(self):
-        _, handlers = get_tools_for_profile("full")
+        _, handlers = get_tools()
         for name, registered in handlers.items():
             assert callable(registered.handler), f"{name} handler is not callable"
 
     def test_required_inputs_reject_empty_args(self):
         """Tools with required fields should reject an empty argument object."""
-        _, handlers = get_tools_for_profile("full")
+        _, handlers = get_tools()
         for name, registered in handlers.items():
             if registered.input_model is None:
                 continue
-            required = registered.definition.inputSchema.get("required", [])
+            required = registered.definition.input_schema.get("required", [])
             if not required:
                 continue
             try:
@@ -50,148 +69,82 @@ class TestDispatchTable:
             raise AssertionError(f"{name} accepted empty args despite required fields {required}")
 
 
-class TestToolAliases:
-    """Deprecated former tool names (e.g. 'connect' -> 'wire_pins') stay
-    callable but are not advertised — they dispatch through tool_dispatch
-    without a matching entry in tool_defs (RegisteredTool.aliases)."""
-
-    def test_connect_dispatches_to_wire_pins_handler(self):
-        defs, handlers = get_tools_for_profile("full")
-        def_names = {tool_def.name for tool_def in defs}
-        assert "wire_pins" in def_names
-        assert "connect" not in def_names, "alias must not be advertised in tool_defs"
-        assert "connect" in handlers, "alias must still resolve via tool_dispatch"
-        assert handlers["connect"] is handlers["wire_pins"], (
-            "the 'connect' alias must dispatch to the exact same registration "
-            "(same handler) as 'wire_pins'"
-        )
-
-    def test_connect_alias_present_in_agentic_profile_too(self):
-        _, handlers = get_tools_for_profile("agentic")
-        assert "connect" in handlers
-        assert handlers["connect"] is handlers["wire_pins"]
-
-
 class TestToolSchemas:
     def test_all_schemas_valid(self):
-        defs, _ = get_tools_for_profile("full")
+        defs, _ = get_tools()
         for tool_def in defs:
-            schema = tool_def.inputSchema
+            schema = tool_def.input_schema
             assert schema, f"{tool_def.name}: no inputSchema"
             assert schema.get("type") == "object", f"{tool_def.name}: schema type is not 'object'"
             assert "properties" in schema, f"{tool_def.name}: no properties"
 
     def test_required_fields_in_properties(self):
-        defs, _ = get_tools_for_profile("full")
+        defs, _ = get_tools()
         for tool_def in defs:
-            schema = tool_def.inputSchema
+            schema = tool_def.input_schema
             required = schema.get("required", [])
             props = schema.get("properties", {})
             for req in required:
                 assert req in props, f"{tool_def.name}: required '{req}' not in properties"
 
 
-class TestToolProfiles:
-    def test_full_profile_returns_all_dispatch_entries(self):
-        """Every tool definition has a dispatch entry; the dispatch map may
-        also carry deprecated aliases that are intentionally absent from the
-        definition list (see RegisteredTool.aliases)."""
-        defs, handlers = get_tools_for_profile("full")
-        def_names = {tool_def.name for tool_def in defs}
-        assert def_names <= set(handlers.keys())
-        alias_only = set(handlers.keys()) - def_names
-        assert all(name in handlers[name].aliases for name in alias_only)
+class TestConsolidatedInputDocumentation:
+    """Every top-level argument must say what it is for. The description on
+    the model is what a client is shown, what api.reference() prints, and what
+    spice://guide renders — one text, three readers — so an argument with none
+    is undocumented everywhere at once. Keep each one short; the depth belongs
+    in docs/design/mcp_surface.md or the guide, with a pointer left behind."""
 
-    def test_agentic_profile_returns_subset(self):
-        defs, handlers = get_tools_for_profile("agentic")
-        agentic_names = {tool_def.name for tool_def in defs}
-        assert agentic_names <= set(handlers.keys())
-        alias_only = set(handlers.keys()) - agentic_names
-        assert all(name in handlers[name].aliases for name in alias_only)
+    def test_every_consolidated_top_level_field_is_documented(self):
+        _, dispatch = get_tools()
+        registered = [rt.definition for rt in dispatch.values()]
+        assert registered, "no tools registered"
+        undocumented: list[str] = []
+        for tool_def in registered:
+            for field, prop in (tool_def.input_schema.get("properties") or {}).items():
+                if not (prop.get("description") or "").strip():
+                    undocumented.append(f"{tool_def.name}.{field}")
+        assert not undocumented, (
+            "Tools with undocumented top-level input fields "
+            f"({len(undocumented)}): {sorted(undocumented)}. Give each a "
+            "Field(description=...) saying what the caller should put there."
+        )
 
-    def test_agentic_is_strict_subset_of_full(self):
-        full_defs, _ = get_tools_for_profile("full")
-        agentic_defs, _ = get_tools_for_profile("agentic")
-        full_names = {tool_def.name for tool_def in full_defs}
-        agentic_names = {tool_def.name for tool_def in agentic_defs}
-        assert full_names > agentic_names, "agentic tools should be a strict subset of full"
 
-    def test_unknown_profile_treated_as_full(self):
-        """Unrecognized profile name should behave like 'full'."""
-        full_defs, _ = get_tools_for_profile("full")
-        other_defs, _ = get_tools_for_profile("nonexistent")
-        assert {tool_def.name for tool_def in full_defs} == {
-            tool_def.name for tool_def in other_defs
-        }
+class TestRegisteredSurface:
+    def test_profile_returns_all_dispatch_entries(self):
+        """Every tool definition has a dispatch entry, and vice versa."""
+        defs, handlers = get_tools()
+        assert {tool_def.name for tool_def in defs} == set(handlers.keys())
 
-    def test_filtered_tools_not_in_agentic(self):
-        """Verify specific tools that should NOT be in agentic profile."""
-        filtered_out = {
-            "create_netlist",
-            "read_circuit",
-            "set_component_value",
-            "parameter",
-            "edit_directive",
-            "load_library",
-            "unload_library",
-            "list_libraries",
-        }
-        _, handlers = get_tools_for_profile("agentic")
-        present = filtered_out & set(handlers.keys())
-        assert not present, f"Tools that should be filtered out are present: {present}"
-
-    def test_sweep_montecarlo_reachable_in_agentic(self):
-        """Sweep and Monte Carlo must be runnable end to end in the agentic
-        profile. run_sweep/run_montecarlo consume a config_id that ONLY
-        configure_sweep/configure_montecarlo produce, so the config builders
-        have to ship in the same profile as the runners — otherwise every
-        config_id is rejected and the runners are structurally dead. Monte
-        Carlo perturbation + N-run aggregation and the batch-sweep route are
-        not something an agent reproduces with native file edits (unlike a
-        plain LTspice .step), so they belong in the agent-facing profile."""
-        _, handlers = get_tools_for_profile("agentic")
-        names = set(handlers.keys())
-        required = {
-            "configure_sweep",
-            "run_sweep",
-            "configure_montecarlo",
-            "run_montecarlo",
-            "batch_results",
-        }
-        missing = required - names
-        assert not missing, f"Sweep/MC chain broken in agentic, missing: {missing}"
-
-    def test_schematic_construction_writes_in_agentic(self):
-        """The schematic-construction writes stay in agentic: geometry-aware
-        .asc editing (orthogonal routing, pin-collision/junction checks) is
-        something an agent can't replicate by hand-writing the file, so it must
-        not be dropped from the agent-facing profile."""
-        construction = {
-            "create_schematic",
-            "apply_schematic_ops",
-        }
-        _, handlers = get_tools_for_profile("agentic")
-        missing = construction - set(handlers.keys())
-        assert not missing, f"Construction writes missing from agentic: {missing}"
+    def test_an_empty_registry_is_a_hard_error(self):
+        """An empty surface still completes the MCP handshake, so a client reads
+        it as 'this server has no capabilities' rather than 'misconfigured'.
+        Registration breakage must fail loudly instead of serving nothing."""
+        empty = _base.ToolRegistry()
+        with pytest.raises(RuntimeError, match="zero tools"):
+            empty.get_tools()
 
 
 class TestDestructiveAnnotations:
     """A tool's destructiveHint is what an MCP client gates write-risk on. A
     batch writer that can delete or overwrite must not advertise itself as
-    non-destructive — especially now that the schematic writes are in the
-    agent-facing profile."""
+    non-destructive."""
 
-    def test_component_removing_tools_are_destructive(self):
-        defs, _ = get_tools_for_profile("full")
+    def test_the_schematic_writer_is_destructive(self):
+        defs, _ = get_tools()
         by_name = {d.name: d for d in defs}
-        for name in ("create_schematic", "apply_schematic_ops"):
-            tool = by_name[name]
-            assert tool.annotations is not None
-            assert tool.annotations.destructiveHint is True, f"{name} not marked destructive"
-        # apply_schematic_ops earns the hint because its batch can run the
-        # remove_component op (and persist a partial subset); keep the two tied
-        # so the hint can't silently rot if that op is ever dropped.
-        assert "remove_component" in (by_name["apply_schematic_ops"].description or "")
+        tool = by_name["edit_schematic"]
+        assert tool.annotations is not None
+        assert tool.annotations.destructive_hint is True, "edit_schematic not marked destructive"
+        # edit_schematic earns the hint because its batch can run the
+        # remove_component op (and commit a whole-file rewrite); keep the two
+        # tied so the hint can't silently rot if that op is ever dropped. The
+        # tie is the op union itself, which names every op it accepts.
+        ops = tool.input_schema["properties"]["ops"]["items"]
+        defs = tool.input_schema["$defs"]
+        branches = [defs[branch["$ref"].split("/")[-1]] for branch in ops["oneOf"]]
+        assert "remove_component" in {branch["properties"]["op"]["const"] for branch in branches}
 
 
 # A self-inverse op reverts itself: re-applying it with the prior arguments
@@ -225,24 +178,12 @@ _DECLARED_INVERSES: dict[str, str] = {
     "move_component": _SELF_INVERSE,
 }
 
-# Deprecated ``op`` discriminator aliases: a second literal value that
-# deserializes to the SAME model as its primary name (``_OpWirePins.op`` is
-# ``Literal["wire_pins", "connect"]``). An alias is the same mutation under
-# an old spelling, so it shares its primary's declared inverse rather than
-# getting its own _DECLARED_INVERSES entry; test_every_alias_resolves_to_a_
-# declared_op still forces a linkage to exist so a stray/typo'd alias can't
-# silently escape the closure guard.
-_OP_ALIASES: dict[str, str] = {
-    "connect": "wire_pins",
-}
-
 
 def _schematic_op_literals() -> set[str]:
     """The ``op`` discriminator strings in the SchematicOp union, derived from
     the union itself so the test cannot silently miss a newly added op. A
-    member's ``op`` field may carry more than one literal (``_OpWirePins``'s
-    is ``Literal["wire_pins", "connect"]`` — the deprecated alias shares the
-    model), so this collects every literal per member rather than assuming one."""
+    member's ``op`` field may carry more than one literal, so this collects
+    every literal per member rather than assuming one."""
     literals: set[str] = set()
     for member in typing.get_args(SchematicOp):
         literals.update(typing.get_args(member.model_fields["op"].annotation))
@@ -262,11 +203,10 @@ class TestOpInverseClosure:
     property over the op union catches it the moment the asymmetry lands."""
 
     def test_every_op_has_a_declared_inverse(self):
-        """Each op in the union must classify its inverse in _DECLARED_INVERSES,
-        or be a declared alias of one that does (_OP_ALIASES). A new op with no
-        entry fails here, forcing the author to add an inverse op (or declare
-        it self-inverse) rather than ship a one-way mutation."""
-        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys() - _OP_ALIASES.keys()
+        """Each op in the union must classify its inverse in _DECLARED_INVERSES.
+        A new op with no entry fails here, forcing the author to add an inverse
+        op (or declare it self-inverse) rather than ship a one-way mutation."""
+        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys()
         assert not undeclared, (
             f"Schematic ops with no declared inverse: {sorted(undeclared)}. "
             "Add an inverse op to the SchematicOp union (mirroring "
@@ -274,22 +214,6 @@ class TestOpInverseClosure:
             "_DECLARED_INVERSES, or map it to _SELF_INVERSE if re-applying it "
             "with the prior arguments undoes it."
         )
-
-    def test_every_alias_resolves_to_a_declared_op(self):
-        """Every _OP_ALIASES entry must be a real literal in the union and
-        must resolve to a primary op that IS in _DECLARED_INVERSES — an alias
-        pointing at an unrecognized or undeclared primary name would silently
-        escape the inverse-closure guard above."""
-        literals = _schematic_op_literals()
-        for alias, primary in _OP_ALIASES.items():
-            assert alias in literals, (
-                f"Alias {alias!r} is declared in _OP_ALIASES but is not a real "
-                "op literal in the SchematicOp union."
-            )
-            assert primary in _DECLARED_INVERSES, (
-                f"Alias {alias!r} resolves to {primary!r}, which has no "
-                "declared inverse in _DECLARED_INVERSES."
-            )
 
     def test_no_stale_inverse_entries(self):
         """_DECLARED_INVERSES must not name ops that no longer exist — a stale
@@ -331,36 +255,22 @@ class TestOpInverseClosure:
 # outside the SchematicOp union. Each entry names how the mutation is undone, or
 # why a one-way mutation is accepted (see docs/TESTING.md).
 _TOOL_REVERSAL: dict[str, str] = {
-    # Schematic op batch — per-op closure guarded by TestOpInverseClosure.
-    "apply_schematic_ops": "per-op inverse (see TestOpInverseClosure)",
-    # Schematic standalone write whose inverse is an apply_schematic_ops op.
-    "wire_pins": "remove_wire op",
-    # Self-inverse standalone edits (re-invoke with the prior value/state).
-    "set_component_value": "re-set to prior value",
-    "parameter": "re-set to prior value, or delete=true to undo an added param",
-    "edit_directive": "action=add <-> action=remove",
-    # Recovery hatch — reset_schematic IS the inverse mechanism for .asc edits.
-    "reset_schematic": "reverts to the pre-edit snapshot (it is the undo)",
-    # Accepted one-way mutations (documented in docs/TESTING.md).
-    "create_netlist": "creates a file; deletion is a native filesystem op",
-    "create_schematic": "creates a file; deletion is a native filesystem op",
-    "configure_sweep": "overwrite-in-place config; a stale config is inert",
-    "configure_montecarlo": "overwrite-in-place config; a stale config is inert",
-    # Job lifecycle — not a file mutation; cancel / re-launch via the registry.
-    "run_simulation": "cancel_job; re-launch",
-    "run_sweep": "cancel_job; re-launch",
-    "run_montecarlo": "cancel_job; re-launch",
-    "cancel_job": "re-launch the run",
-    # Library session — paired load/unload.
-    "load_library": "unload_library",
-    "unload_library": "load_library",
-    # Export / render — emit a derived artifact (netlist, CSV, plot) from
-    # existing data; the source circuit/raw is untouched, so no edit-inverse
-    # applies. Not read-only because writing the artifact is an environment
-    # side effect, but the output is regenerable and deletable natively.
-    "export_netlist": "derived export; source .asc untouched, output regenerable",
-    "export_waveform": "derived export; source raw untouched, output regenerable",
+    # Render — emits a derived artifact from existing data; the source raw is
+    # untouched, so no edit-inverse applies. Not read-only because writing the
+    # artifact is an environment side effect, but the output is regenerable
+    # and deletable natively.
     "plot_waveform": "derived render; source raw untouched, output regenerable",
+    # The consolidated surface. inspect is read-only and needs no entry; the
+    # others are not read-only.
+    "run_experiments": "cancel via jobs; re-launch (idempotent by request_id)",
+    "jobs": "cancel action; re-launch the run to reverse a cancel",
+    "analyze_results": "derived artifacts; sources untouched, output regenerable",
+    "edit_schematic": "compensating op batch, or restore the file natively (file-access agent)",
+    "verify_circuit": "export_to:sidecar overwrites the .net, regenerable from the source; source untouched",
+    # Runs the caller's own code: what it changes is the code's to undo (files
+    # with the caller's file tools, jobs with cancel); the worker itself is
+    # replaced with reset. Served only when the operator turned it on.
+    "run_code": "the snippet's own effects; worker replaced by reset:true",
 }
 
 
@@ -372,19 +282,18 @@ class TestMutatingToolsAreReversible:
     directly via @registry.tool lives outside the SchematicOp union."""
 
     def test_every_mutating_tool_declares_a_reversal(self):
-        defs, _ = get_tools_for_profile("full")
-        mutating = {d.name for d in defs if not (d.annotations and d.annotations.readOnlyHint)}
+        defs = _all_profile_defs()
+        mutating = {d.name for d in defs if not (d.annotations and d.annotations.read_only_hint)}
         undeclared = mutating - _TOOL_REVERSAL.keys()
         assert not undeclared, (
             f"Mutating tools with no declared reversal: {sorted(undeclared)}. "
             "Add each to _TOOL_REVERSAL naming how the mutation is undone, or — if "
-            "it is a deliberately-accepted one-way mutation — note why (see the "
-            "accepted-one-way entries and docs/TESTING.md)."
+            "it is a deliberately-accepted one-way mutation — note why (see "
+            "docs/TESTING.md)."
         )
 
     def test_no_stale_reversal_entries(self):
-        defs, _ = get_tools_for_profile("full")
-        names = {d.name for d in defs}
+        names = {d.name for d in _all_profile_defs()}
         stale = _TOOL_REVERSAL.keys() - names
         assert not stale, f"_TOOL_REVERSAL names tools not in the registry: {sorted(stale)}"
 
@@ -400,37 +309,368 @@ def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:
             _assert_no_key_at_depth(item, key, tool_name, f"{path}[{i}]")
 
 
+def _walk_schema(node, check, path: str = "root", *, in_name_map: bool = False) -> None:
+    """Run ``check(node, path)`` on every node of a schema that IS a schema.
+
+    Inside a properties/$defs map the keys are argument names, not schema
+    keywords, so those levels are descended through without being checked —
+    the same distinction the publisher's own walk makes, and the whole point
+    of both walks below.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            for name, value in node.items():
+                _walk_schema(value, check, f"{path}.{name}")
+            return
+        check(node, path)
+        for key, value in node.items():
+            _walk_schema(
+                value, check, f"{path}.{key}", in_name_map=key in _schema._SCHEMA_NAME_MAPS
+            )
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _walk_schema(item, check, f"{path}[{index}]")
+
+
+def _assert_no_title_annotation(node, tool_name: str, path: str) -> None:
+    """Assert no 'title' SCHEMA KEYWORD survives, at any depth.
+
+    A key named 'title' inside a properties/$defs map is an argument name and
+    is left alone.
+    """
+
+    def check(schema, at: str) -> None:
+        assert "title" not in schema, f"{tool_name}: title annotation at {at}"
+
+    _walk_schema(node, check, path)
+
+
+def _assert_no_null_default(node, tool_name: str, path: str) -> None:
+    """Assert no ``"default": null`` SCHEMA KEYWORD survives, at any depth.
+
+    A key named 'default' inside a properties/$defs map is an argument name and
+    is left alone, exactly as the title walk leaves a property called 'title'.
+    """
+
+    def check(schema, at: str) -> None:
+        assert schema.get("default", "absent") is not None, (
+            f"{tool_name}: null default annotation at {at}"
+        )
+
+    _walk_schema(node, check, path)
+
+
 class TestSchemaPostProcessing:
     """Verify that Pydantic-generated schemas are cleaned for MCP compatibility."""
 
-    def test_no_defs_in_any_schema(self):
-        """No tool schema should contain $defs after inlining."""
-        defs, _ = get_tools_for_profile("full")
-        for tool_def in defs:
-            assert "$defs" not in tool_def.inputSchema, (
-                f"{tool_def.name}: schema still contains $defs"
+    def test_every_ref_resolves_within_its_own_schema(self):
+        """Input schemas keep $defs instead of inlining them — every $ref must
+        be internal and resolve against that same schema's $defs, in every
+        profile. A dangling or external ref is a schema a strict client
+        cannot resolve, and at least one schema must actually use $defs so a
+        silent return to inlining fails here instead of quietly re-bloating."""
+        any_defs = False
+        for tool_def in _all_profile_defs():
+            schema = tool_def.input_schema
+            defs = schema.get("$defs", {})
+            any_defs = any_defs or bool(defs)
+
+            def walk(node, path, tool=tool_def.name, defs=defs):
+                if isinstance(node, dict):
+                    ref = node.get("$ref")
+                    if ref is not None:
+                        assert isinstance(ref, str) and ref.startswith("#/$defs/"), (
+                            f"{tool}: non-local $ref {ref!r} at {path}"
+                        )
+                        assert ref.split("/")[-1] in defs, (
+                            f"{tool}: dangling $ref {ref!r} at {path}"
+                        )
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{path}[{i}]")
+
+            walk(schema, "root")
+        assert any_defs, "no schema uses $defs — inlining silently returned"
+
+    def test_no_defs_entry_is_unreferenced(self):
+        """A $defs entry nobody points at is pure weight on the wire. The
+        schema slimmer mints definitions of its own, so a rule that stopped
+        earning its keep would otherwise leave an orphan behind silently."""
+        for tool_def in _all_profile_defs():
+            schema = tool_def.input_schema
+            text = json.dumps(schema)
+            orphans = [name for name in schema.get("$defs", {}) if f'"#/$defs/{name}"' not in text]
+            assert not orphans, f"{tool_def.name}: unreferenced $defs entries {orphans}"
+
+    def test_nullable_unions_are_folded_to_type_arrays(self):
+        """``X | None`` is advertised as ``{"type": [X, "null"]}``, not as a
+        two-branch ``anyOf`` of bare types. Same acceptance, far fewer
+        characters; an anyOf whose branches differ only by type means the fold
+        stopped running."""
+        for tool_def in _all_profile_defs():
+
+            def walk(node, path, tool=tool_def.name):
+                if isinstance(node, dict):
+                    branches = node.get("anyOf")
+                    if isinstance(branches, list) and len(branches) > 1:
+                        assert not all(
+                            isinstance(b, dict) and b.keys() == {"type"} for b in branches
+                        ), f"{tool}: unfolded type-only anyOf at {path}"
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{path}[{i}]")
+
+            walk(tool_def.input_schema, "root")
+
+    def test_const_carries_no_redundant_type(self):
+        """A literal already pins its own type, so the ``type`` beside a
+        ``const`` narrows nothing — and the tagged unions carry one per
+        member."""
+        for tool_def in _all_profile_defs():
+
+            def walk(node, path, tool=tool_def.name):
+                if isinstance(node, dict):
+                    if "const" in node:
+                        assert "type" not in node, (
+                            f"{tool}: redundant 'type' beside 'const' at {path}"
+                        )
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{path}[{i}]")
+
+            walk(tool_def.input_schema, "root")
+
+    def test_no_null_default_is_advertised(self):
+        """``"default": null`` says nothing ``required`` has not said.
+
+        Pydantic writes one for every optional field with a ``None`` default,
+        and a JSON Schema ``default`` does not constrain anything, so the
+        annotation is characters every client downloads for no information.
+        Non-null defaults stay — those carry the value the server uses."""
+        for tool_def in _all_profile_defs():
+            _assert_no_null_default(tool_def.input_schema, tool_def.name, "root")
+
+    def test_discriminators_advertise_no_branch_mapping(self):
+        """``discriminator.mapping`` repeats each branch's own ``const``.
+
+        The useful half is ``propertyName``, which names the field that picks
+        the branch; the mapping restates, once per branch, the discriminant
+        value the branch already declares plus the ``$ref`` the ``oneOf`` list
+        already carries.
+
+        So the branch ``const`` is the whole justification for dropping the
+        table, and it is asserted here rather than left to two spot checks
+        elsewhere: a branch that stopped declaring its own discriminant would
+        leave a client with no way to pick one at all.
+        """
+        seen = 0
+        branches = 0
+        for tool_def in _all_profile_defs():
+            schema = tool_def.input_schema
+
+            def walk(node, path, tool=tool_def.name, schema=schema):
+                nonlocal seen, branches
+                if isinstance(node, dict):
+                    block = node.get("discriminator")
+                    if isinstance(block, dict):
+                        seen += 1
+                        assert "mapping" not in block, f"{tool}: discriminator.mapping at {path}"
+                        assert "propertyName" in block, (
+                            f"{tool}: discriminator without propertyName at {path}"
+                        )
+                        tag = block["propertyName"]
+                        for index, member in enumerate(node.get("oneOf", [])):
+                            branches += 1
+                            resolved = resolve_local_ref(schema, member)
+                            tagged = resolved.get("properties", {}).get(tag)
+                            assert isinstance(tagged, dict) and "const" in tagged, (
+                                f"{tool}: {path}.oneOf[{index}] declares no {tag!r} const, "
+                                "so nothing tells a client which branch it is"
+                            )
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for index, item in enumerate(node):
+                        walk(item, f"{path}[{index}]")
+
+            walk(schema, "root")
+        assert seen, "no discriminator survives — the tagged unions stopped being advertised"
+        assert branches > seen, "a tagged union with no branches is not a union"
+
+    def test_a_property_actually_named_default_would_survive(self):
+        """The publishing pass descends structurally.
+
+        Filtering by key name at every level would delete an argument called
+        ``default`` (or a ``discriminator`` object a caller sends), which is
+        exactly the bug the title strip already caused once."""
+        schema = {
+            "properties": {
+                "default": {"type": "string", "default": None},
+                "discriminator": {"type": "object"},
+            },
+            "default": None,
+        }
+        cleaned = _schema._rewrite(schema, _schema._publish_edits)
+        assert set(cleaned["properties"]) == {"default", "discriminator"}
+        assert cleaned["properties"]["default"] == {"type": "string"}
+        assert cleaned["properties"]["discriminator"] == {"type": "object"}
+        assert "default" not in cleaned
+
+    def test_no_title_annotation_survives_in_any_profile(self):
+        """Pydantic's 'title' metadata is stripped wherever it is a keyword.
+
+        Structural, not by key name: inside a properties/$defs map the keys are
+        argument names, and one of them really is called 'title'."""
+        for tool_def in _all_profile_defs():
+            _assert_no_title_annotation(tool_def.input_schema, tool_def.name, "root")
+
+    def test_a_property_actually_named_title_is_advertised(self):
+        """The plot recipe takes a 'title'; the handler reads it. Stripping the
+        title keyword at every level deleted the property entry too, so an
+        accepted argument was in no published schema and no client could find
+        it."""
+        from ltspice_mcp.lib.recipes import PlotRecipe
+
+        assert "title" in PlotRecipe.model_fields
+        for tool_def in _all_profile_defs():
+            if tool_def.name != "analyze_results":
+                continue
+            advertised = json.dumps(tool_def.input_schema)
+            assert '"title"' in advertised, (
+                "analyze_results advertises no 'title' property — the plot "
+                "recipe's title argument is undiscoverable again"
+            )
+            break
+        else:  # pragma: no cover - the consolidated profile always registers it
+            pytest.fail("analyze_results is not registered in any profile")
+
+    def test_wire_tool_list_omits_output_schema(self):
+        """The advertised list carries no outputSchema (it was 84% of the
+        `jobs` entry); the dispatch definition keeps the declared
+        shape so the conformance hook still enforces it. Both directions
+        pinned, so neither side can silently regress."""
+        declared = {t.name: t for t in _all_profile_declared_defs()}
+        stripped = 0
+        for tool_def in _all_profile_defs():
+            assert tool_def.output_schema is None, (
+                f"{tool_def.name}: wire definition still advertises outputSchema"
+            )
+            if declared[tool_def.name].output_schema is not None:
+                stripped += 1
+        assert stripped > 0, "no tool declares an output schema — hook is vacuous"
+
+    def test_output_schema_top_level_is_object(self):
+        """MCP requires outputSchema to be an object schema at the top level.
+
+        Claude Code's client validates this literally and rejects the ENTIRE
+        tools/list response when any one tool violates it, disabling every
+        tool on the server for that session. The wire no longer carries
+        outputSchema, but the pin stays on the declared side against the day
+        it is re-exposed."""
+        for tool_def in _all_profile_declared_defs():
+            schema = tool_def.output_schema
+            if schema is None:
+                continue
+            assert schema.get("type") == "object", (
+                f"{tool_def.name}: outputSchema top-level type is "
+                f"{schema.get('type')!r}; MCP requires 'object'"
             )
 
-    def test_no_title_at_any_depth(self):
-        """No 'title' key should exist at any depth in any tool schema."""
-        defs, _ = get_tools_for_profile("full")
-        for tool_def in defs:
-            _assert_no_key_at_depth(tool_def.inputSchema, "title", tool_def.name, "root")
+    def test_every_output_schema_admits_warnings(self):
+        """sanitize_payload can add ``warnings`` to any payload, so every schema
+        must accept it.
 
-    def test_no_ref_at_any_depth(self):
-        """No '$ref' key should exist after inlining."""
-        defs, _ = get_tools_for_profile("full")
-        for tool_def in defs:
-            schema_str = json.dumps(tool_def.inputSchema)
-            assert "$ref" not in schema_str, f"{tool_def.name}: schema contains un-inlined $ref"
+        A tool that closes itself with additionalProperties:false and omits the
+        key rejects its own response exactly when a run diverged — and a strict
+        client rejects the whole tools/list over it. Registration injects the
+        key so no individual tool has to remember; this pins that it reached
+        every one of them, in every profile."""
+        for tool_def in _all_profile_declared_defs():
+            schema = tool_def.output_schema
+            if schema is None:
+                continue
+            declared = (schema.get("properties") or {}).get("warnings")
+            assert declared is not None, (
+                f"{tool_def.name}: outputSchema does not declare 'warnings'"
+            )
+            # A tool that owns its own warnings channel may describe it, but the
+            # shape has to be the list of strings sanitize_payload writes.
+            assert declared.get("type") == "array", (
+                f"{tool_def.name}: 'warnings' is declared as {declared.get('type')!r}, not an array"
+            )
+            assert declared.get("items") == {"type": "string"}, (
+                f"{tool_def.name}: 'warnings' items are {declared.get('items')!r}, not strings"
+            )
 
-    def test_nested_model_inlining(self):
-        """Tools with nested models should have schemas fully inlined."""
-        defs, _ = get_tools_for_profile("full")
-        sweep_tools = [d for d in defs if d.name == "configure_sweep"]
-        assert sweep_tools, "configure_sweep not found"
-        schema = sweep_tools[0].inputSchema
-        # parameters property should have inlined items schema
-        params_prop = schema["properties"]["parameters"]
-        assert "items" in params_prop, "parameters should have items schema"
-        assert "properties" in params_prop["items"], "nested items should have inlined properties"
+    def test_nested_models_resolve_through_defs(self):
+        """Nested submodels are $refs into the schema's own $defs — the
+        composition contract is that they resolve to full object schemas a
+        local-ref-following client can read."""
+        defs, _ = get_tools()
+        experiment_tools = [d for d in defs if d.name == "run_experiments"]
+        assert experiment_tools, "run_experiments not found"
+        schema = experiment_tools[0].input_schema
+        circuits_prop = schema["properties"]["circuits"]
+        assert "items" in circuits_prop, "circuits should have items schema"
+        resolved = resolve_local_ref(schema, circuits_prop["items"])
+        assert "properties" in resolved, "nested items must resolve to an object schema"
+
+
+class TestAdvertisedOrderIsStable:
+    def test_tool_list_order_is_pinned(self):
+        """Servers should return tools/list in a deterministic order — clients
+        cache the list and LLM prompt caching keys on the exact bytes. Ours is
+        registration order, fixed by the sorted module imports in
+        tools/__init__; this pin turns an accidental reorder (a set, a dict
+        rebuild, an import shuffle) into a failure instead of a silent
+        cache-buster for every connected client."""
+        names = [t.name for t in get_tools()[0]]
+        assert names == [
+            "plot_waveform",
+            "analyze_results",
+            "run_experiments",
+            "jobs",
+            "inspect",
+            "edit_schematic",
+            "verify_circuit",
+            "run_code",
+        ]
+
+
+class TestLayering:
+    """``lib`` must not import ``tools``.
+
+    The layering is not decoration: ``tools/_base`` imports half of ``lib``, so
+    a ``lib`` module reaching back up closes a cycle. It resolves silently
+    whenever a tool module happens to be imported first and explodes on the one
+    entry point that imports the lib module first — which is how the schematic
+    engine's move out of ``tools/`` shipped a latent ImportError that only one
+    test file's import order revealed.
+    """
+
+    def test_no_lib_module_imports_the_tool_layer(self):
+        import ast
+        from pathlib import Path
+
+        lib = Path(__file__).resolve().parent.parent / "src" / "ltspice_mcp" / "lib"
+        offenders: list[str] = []
+        for path in sorted(lib.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                    "ltspice_mcp.tools"
+                ):
+                    offenders.append(f"{path.name}:{node.lineno} -> {node.module}")
+                elif isinstance(node, ast.Import):
+                    offenders.extend(
+                        f"{path.name}:{node.lineno} -> {alias.name}"
+                        for alias in node.names
+                        if alias.name.startswith("ltspice_mcp.tools")
+                    )
+        assert not offenders, "lib modules importing the tool layer: " + "; ".join(offenders)

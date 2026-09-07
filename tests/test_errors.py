@@ -4,16 +4,13 @@ import pytest
 
 from ltspice_mcp.errors import (
     BatchJobError,
-    ConvergenceError,
     JobNotFoundError,
     LibraryError,
     LTSpiceMCPError,
-    MissingModelError,
     NetlistError,
     PathSecurityError,
     ResultError,
     SimulationError,
-    SingularMatrixError,
 )
 
 
@@ -30,7 +27,7 @@ class TestSuggestions:
 
     @pytest.mark.parametrize(
         "cls",
-        [LibraryError, MissingModelError, NetlistError, ResultError, BatchJobError],
+        [LibraryError, SimulationError, NetlistError, ResultError, BatchJobError],
     )
     def test_all_subclasses_accept_suggestions(self, cls):
         e = cls("msg", suggestions=[{"name": "X"}])
@@ -44,19 +41,12 @@ class TestErrorHierarchy:
             PathSecurityError,
             NetlistError,
             SimulationError,
-            ConvergenceError,
-            SingularMatrixError,
-            MissingModelError,
             ResultError,
             JobNotFoundError,
             LibraryError,
             BatchJobError,
         ):
             assert issubclass(cls, LTSpiceMCPError), f"{cls.__name__} not subclass of base"
-
-    def test_simulation_subtypes(self):
-        for cls in (ConvergenceError, SingularMatrixError, MissingModelError):
-            assert issubclass(cls, SimulationError), f"{cls.__name__} not SimulationError"
 
     def test_job_not_found_is_result_error(self):
         """except ResultError must keep catching unknown-job-id errors."""
@@ -77,65 +67,31 @@ class TestErrorHierarchy:
 
     def test_message_preserved(self):
         msg = "timestep too small at t=1.234e-6"
-        err = ConvergenceError(msg)
+        err = SimulationError(msg)
         assert msg in str(err)
-
-    def test_catch_simulation_catches_subtypes(self):
-        """try/except SimulationError catches ConvergenceError — the real handler pattern."""
-        caught = False
-        try:
-            raise ConvergenceError("timestep too small")
-        except SimulationError:
-            caught = True
-        assert caught
 
 
 class TestErrorHints:
-    def test_full_hints_reference_tools(self):
-        """Full-profile hints should reference MCP tool names."""
+    def test_hints_reference_tools(self):
+        """A hint's job is to name the tool that recovers from the failure."""
         from ltspice_mcp.server import _get_error_hint
 
-        hint = _get_error_hint(ConvergenceError, "full")
+        hint = _get_error_hint(NetlistError)
         assert hint is not None
-        assert "edit_directive" in hint
+        assert "verify_circuit" in hint
 
-    def test_agentic_hints_no_filtered_tools(self):
-        """Agentic hints should not reference tools excluded from the profile."""
-        from ltspice_mcp.server import _get_error_hint
-        from ltspice_mcp.tools import get_tools_for_profile
-
-        filtered_tools = {
-            "edit_directive",
-            "read_circuit",
-            "load_library",
-            "unload_library",
-            "list_libraries",
-        }
-        agentic_defs, _ = get_tools_for_profile("agentic")
-        agentic_tools = {tool_def.name for tool_def in agentic_defs}
-        for err_type in (
-            ConvergenceError,
-            SingularMatrixError,
-            NetlistError,
-            LibraryError,
-            MissingModelError,
-        ):
-            hint = _get_error_hint(err_type, "agentic")
-            if hint is None:
-                continue
-            for tool_name in filtered_tools:
-                if tool_name not in agentic_tools:
-                    assert tool_name not in hint, (
-                        f"Agentic hint for {err_type.__name__} references "
-                        f"filtered tool {tool_name}"
-                    )
-
-    def test_all_error_types_have_both_hints(self):
-        """Every entry in _ERROR_HINTS should have both full and agentic variants."""
+    def test_every_error_type_carries_one_hint_string(self):
+        """One tool surface, one hint per error type — a hint that is not a
+        non-empty string reaches the caller as an empty recovery step."""
         from ltspice_mcp.server import _ERROR_HINTS
 
-        for err_type, pair in _ERROR_HINTS.items():
-            assert isinstance(pair, tuple), f"{err_type.__name__}: hint is not a tuple"
-            assert len(pair) == 2, f"{err_type.__name__}: expected 2-tuple"
-            assert pair[0], f"{err_type.__name__}: full hint is empty"
-            assert pair[1], f"{err_type.__name__}: agentic hint is empty"
+        for err_type, hint in _ERROR_HINTS.items():
+            assert isinstance(hint, str), f"{err_type.__name__}: hint is not a string"
+            assert hint.strip(), f"{err_type.__name__}: hint is empty"
+
+    def test_unhinted_error_type_returns_none(self):
+        """PathSecurityError builds its hint dynamically from allowed_paths, so
+        the table must not answer for it with a stale generic string."""
+        from ltspice_mcp.server import _get_error_hint
+
+        assert _get_error_hint(PathSecurityError) is None

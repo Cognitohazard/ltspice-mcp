@@ -8,6 +8,7 @@ wheels/
 *.egg-info
 .ruff_cache/
 .coverage
+.hypothesis/
 
 # Virtual environments
 .venv

@@ -4,7 +4,7 @@ description: >
   Use when writing or editing LTspice circuit netlists (.cir, .net, .sp),
   working with LTspice schematics (.asc), or interpreting simulation results
   (.raw, .log). Covers LTspice-specific SPICE syntax, behavioral sources,
-  waveform sources, .MEAS, parameters, convergence, and common gotchas that
+  waveform sources, .MEAS, parameters, convergence, and the conditions that
   cause silent errors. Use this skill whenever the user mentions LTspice,
   circuit simulation, filter design, frequency response, transient analysis,
   or any SPICE netlist work targeting LTspice.
@@ -50,9 +50,9 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | G | giga | 1e9 |
 | T | tera | 1e12 |
 
-**`M` means MILLI, not mega. Use `MEG` for 1e6.**
-This is the #1 SPICE mistake. `1M` = 0.001, not 1000000.
-Unrecognized suffix letters are silently ignored — no error, just wrong value.
+**`M` means milli, not mega. Use `MEG` for 1e6.**
+`1M` = 0.001, not 1000000. Unrecognized suffix letters are silently ignored:
+no error, just a wrong value.
 
 ### Waveform Sources
 
@@ -101,14 +101,14 @@ PWL file=<filename>
 .meas TRAN energy INTEG V(out)*I(R1)
 ```
 
-**Gotchas:**
+**Important behavior:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails (no error, no warning).
 - Without `TD=` parameter, TARG matches from t=0 — can hit wrong edge.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
-- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target LEVEL, not the crossing point.
+- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target level, not the crossing point.
 
-### General Pitfalls
+### General notes
 
 - **Node "0" vs "00"**: Different nodes. Ground is `0` (or `GND`).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
@@ -127,10 +127,10 @@ PWL file=<filename>
 .func myfn(x) {x*2}
 ```
 
-- Component values referencing params MUST use braces: `R1 in out {Rval}`
-- `.param` using other params MUST use braces: `.param x={y*2}`
+- Component values referencing params must use braces: `R1 in out {Rval}`
+- `.param` using other params must use braces: `.param x={y*2}`
 - `.func` body uses braces: `.func myfn(x) {x*2}`
-- B source expressions: do NOT wrap the expression itself in curly braces — parameters inside B source expressions DO use braces: `B1 out 0 V=V(in)*{Rval}`
+- B source expressions: do not wrap the expression itself in curly braces — parameters inside B source expressions do use braces: `B1 out 0 V=V(in)*{Rval}`
 
 ### Behavioral Sources (B sources)
 
@@ -143,7 +143,7 @@ B3 out 0 R=<expression>                       ; resistor (undocumented)
 B4 out 0 P=<expression> [VprXover=x]          ; power sink (undocumented)
 ```
 
-**Conditional:** `IF(cond, true, false)` — NOT ternary `?:` (that's ngspice).
+**Conditional:** `IF(cond, true, false)`, not ternary `?:` (that's ngspice).
 B source expressions must be single-line in schematics (netlists can use `+` continuation).
 
 **Operator precedence:**
@@ -184,7 +184,7 @@ B1 out 0 V=V(in) Laplace=1/(1+s/{2*pi*fc})
 ```
 In Laplace expressions, `^` means exponentiation (not XOR). Response must roll off at high frequencies.
 
-**Gotchas:**
+**Important behavior:**
 - `^` is **XOR** in normal expressions, exponentiation only in Laplace. Use `**` for power.
 - `R=<expr>` behavioral resistor: value must never reach zero (causes convergence failure).
 - `NoJacob` flag exists but "greatly increases risk of convergence problems" — avoid.
@@ -248,17 +248,17 @@ C1 out 0 {C}
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 - Model stepping: `.step param STM list 3904 2222` with `Q1: {STM}`.
 
-### Design workflow: .cir first, .asc last
+### Design workflow
 
-**Design and iterate over `.cir` netlists** — plain text, no placement overhead, fast to edit and simulate. Only build `.asc` schematics after the circuit design is finalized or when the user needs a visual schematic for review. The `.asc` tools are for presentation, not design iteration.
+**Design and iterate over `.cir` netlists**: plain text, no placement overhead, fast to edit and simulate. Build `.asc` schematics after the circuit design is final or when the user needs a schematic for review. Do not use the `.asc` tools for routine design iteration.
 
-**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, `run_simulation` auto-adds `.options logopinfo` and `operating_point` reads the log's *Semiconductor Device Operating Points* block (LTspice writes it only under that option, and only for `.op`). On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw; `operating_point` reads either uniformly via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table via `.dc` + `.save @m1[gm]`) still needs ngspice — LTspice's `logopinfo` is `.op`-only, so on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill / the `spice://guide` resource.
+**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, put `.op` in the deck; the server adds `.options logopinfo` to LTspice `.op` runs (writing it yourself is harmless), and the `operating_point` recipe reads the log's *Semiconductor Device Operating Points* block, which LTspice writes only under that option and only for `.op`. On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw. `operating_point` reads both the same way via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table from `.dc` + `.save @m1[gm]`) needs ngspice, because `logopinfo` is `.op`-only; on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill and the `spice://guide` resource.
 
 ### .asc Schematics
 
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`create_schematic`, `apply_schematic_ops`, `wire_pins`, ...) or LTspice's GUI. These are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Place components with the `apply_schematic_ops` `add_component` op, which returns placed pins, bounding box, and overlap warnings. Other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are also `apply_schematic_ops` ops, so batch them in one transaction.
+`.asc` files are structured text. Do not edit them by hand; use `edit_schematic` (or LTspice's GUI). It routes wires orthogonally and checks for pin collisions and wire junction overlaps. Start a new sheet with `base="blank"`, place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings. The other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are ops on the same call, so batch them in one transaction.
 
-**Delegate the build when you can.** Placement and wiring is meticulous, mechanical work that competes with design attention — done inline it tends to degrade into net-label soup instead of routed wires. If subagents are available, hand the schematic build to one whose entire brief is the layout playbook (`spice://guide`): give it the final netlist, require the schematic tools (never hand-written `.asc`), and have it verify before returning — `export_netlist` matching the source netlist, `trace_net` showing no multi-label shorts.
+**Delegate the build when you can.** Placement and wiring is detailed, mechanical work. Done inline alongside design work, it tends to end up as pins tagged with net labels instead of routed wires. If subagents are available, hand the schematic build to one whose only brief is the layout guidance in `spice://guide`: give it the final netlist, require `edit_schematic` (never a hand-written `.asc`), and have it verify before returning: `verify_circuit` against the source netlist, and `inspect(kind="net")` showing no multi-label shorts.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
@@ -275,7 +275,7 @@ C1 out 0 {C}
 | res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `symbol_info` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `inspect(kind="symbol")` for exact positions.
 
 #### MOSFET orientation conventions
 
@@ -287,35 +287,35 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 | R180 | Right | D bottom, S top | PMOS mirrored (gate faces right) |
 
 **Choose orientation based on where the gate connects:**
-- Gate wire must NOT cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
+- Gate wire must not cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
 - Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
 - For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
-- Use `symbol_info` with the intended rotation to verify pin directions before placing.
+- Use `inspect(kind="symbol")` with the intended rotation to verify pin directions before placing.
 
 #### Schematic layout best practices
 
 **Component placement:**
-- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
+- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) must share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
-- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
+- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
-- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `symbol_info` to check bbox extents at the intended rotation.
+- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `inspect(kind="symbol")` to check bbox extents at the intended rotation.
 
 **Wiring:**
 - **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `wire_pins` for L-shaped or multi-segment routes.
-- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `symbol_info` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
-- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
+- **Horizontal buses must route outside all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is inside the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates before placing components.
+- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, not straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed `wire_pins` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `apply_schematic_ops` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires — which reads as a wiring list, not a routed schematic (whether it nets up as intended then rides on the label names, which the profile does not check). Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
+- **Read the `wiring` profile `edit_schematic` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
 
 **Ground and net labels:**
-- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
+- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `wire_pins` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Repeating the same net label at distant pins is the idiomatic way to tie them — the netlister merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
+- **Named nets (VDD, outp, etc.)**: Repeating the same net label at distant pins ties them together — the netlister merges same-name labels into one net (correct, not a short), and no routing is needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.

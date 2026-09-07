@@ -4,8 +4,8 @@ Two classes of rot we guard against here:
 
 1. The tool count listed in README.md / CLAUDE.md falls out of sync
    with the actual registry when someone adds or removes a tool.
-2. Tool names hardcoded in error strings ("Use ltspice_foo to …") drift
-   when a tool is renamed, leaving users chasing ghosts.
+2. Tool names hardcoded in docs and error strings ("Use foo to …") drift
+   when a tool is removed or renamed, leaving users chasing ghosts.
 
 These tests are cheap and run on every CI pass.
 """
@@ -15,71 +15,59 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
-from ltspice_mcp.tools import (  # noqa: F401
-    advanced,
-    analysis,
-    circuit,
-    library,
-    simulation,
-    status,
-)
+import ltspice_mcp.tools  # noqa: F401  (imports trigger every registration)
 from ltspice_mcp.tools._base import registry
+from tests.conftest import TOOLS_REMOVED_IN_0_6
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def _profile_counts() -> tuple[int, int]:
-    full = sum(1 for t in registry._registered if "full" in t.profiles)
-    agentic = sum(1 for t in registry._registered if "agentic" in t.profiles)
-    return full, agentic
 
 
 def _registered_names() -> set[str]:
     return {t.definition.name for t in registry._registered}
 
 
-# (doc path, profile, count-pattern template). ``{n}`` is replaced with the
-# registry's count for that profile; each pattern is the exact regex the doc
-# must match (README/CLAUDE prose for full, profile-table rows otherwise).
+# (doc path, count-pattern template). ``{n}`` is replaced with the registry's
+# consolidated tool count; each pattern is the exact regex the doc must match.
 _DOC_COUNT_CHECKS = (
-    ("README.md", "full", r"All {n} tools"),
-    ("README.md", "agentic", r"\|\s*`agentic`\s*\|\s*{n}\s*\|"),
-    ("CLAUDE.md", "full", r"All {n}"),
-    ("CLAUDE.md", "agentic", r"\|\s*`agentic`\s*\|\s*{n}\s*\|"),
-    ("docs/DESIGN.md", "full", r"\|\s*`full`[^|]*\|\s*{n}\s*\|"),
-    ("docs/DESIGN.md", "agentic", r"\|\s*`agentic`[^|]*\|\s*{n}\s*\|"),
+    ("README.md", r"{n} tools"),
+    ("CLAUDE.md", r"{n} (?:registered )?tools"),
+    ("docs/DESIGN.md", r"{n} (?:registered )?tools"),
 )
 
 
 class TestToolCountInDocs:
-    @pytest.mark.parametrize(("rel", "profile", "template"), _DOC_COUNT_CHECKS)
-    def test_doc_count_matches_registry(self, rel: str, profile: str, template: str) -> None:
-        full, agentic = _profile_counts()
-        n = full if profile == "full" else agentic
+    @pytest.mark.parametrize(("rel", "template"), _DOC_COUNT_CHECKS)
+    def test_doc_count_matches_registry(self, rel: str, template: str) -> None:
+        n = len(registry.get_tools()[0])
         text = (ROOT / rel).read_text()
         assert re.search(template.format(n=n), text), (
-            f"{rel} must list {n} tools for the {profile} profile "
-            f"(expected pattern {template.format(n=n)!r}); the registry "
-            f"exposes {n} — update every place the count appears."
+            f"{rel} must state the registered tool count {n} "
+            f"(expected pattern {template.format(n=n)!r}) — update every place "
+            "the count appears."
         )
 
 
 DOC_PATHS = (
     "README.md",
+    "src/ltspice_mcp/assets/spice_guide.md",
     "docs/DESIGN.md",
     "skills/ltspice/SKILL.md",
     "skills/ngspice/SKILL.md",
+    "skills/spice-experiments/SKILL.md",
+    "skills/spice-bench-craft/SKILL.md",
 )
 
-# Tool names that existed before the consolidations and no longer do.
-# Their functionality moved into other tools (bode_metrics modes, query_value
-# step addressing, simulation_summary, find_model, edit_directive); a doc that
-# still names them as tools sends users chasing ghosts.
-REMOVED_TOOL_NAMES = (
+# Every tool name that has ever been removed from the registry: the
+# pre-consolidation removals plus the 42 v0.5 tools de-registered when the
+# consolidated profile became the product. Frozen history — grown, never
+# shrunk by hand.
+_DEAD_TOOL_NAMES: tuple[str, ...] = (
+    # Pre-0.6 consolidations (bode_metrics modes, query_value step addressing,
+    # simulation_summary, find_model, edit_directive absorbed them).
     "measurements",
     "model_info",
     "add_text",
@@ -93,7 +81,46 @@ REMOVED_TOOL_NAMES = (
     "schematic_from_netlist",
     "pulse_response",
     "disturbance_response",
+    # v0.5 tools removed in 0.6.0: single-homed in conftest.
+    *TOOLS_REMOVED_IN_0_6,
 )
+
+
+def _live_surface_vocabulary() -> set[str]:
+    """Every enum/const value in the registered tools' input schemas.
+
+    This is the live capability vocabulary — edit_schematic op kinds, recipe
+    metrics, inspect kinds, jobs actions. A dead TOOL name that is also one of
+    these (``wire_pins`` the op, ``signal_stats`` the metric,
+    ``operating_point`` the keyed metric) names a live capability, so docs may
+    reference it in backticks; forbidding it would forbid documenting the
+    product. Derived from the schemas rather than hand-listed so a name that
+    later stops being a live op automatically re-enters the removed-name gate.
+    """
+    vocab: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            enum = node.get("enum")
+            if isinstance(enum, list):
+                vocab.update(v for v in enum if isinstance(v, str))
+            const = node.get("const")
+            if isinstance(const, str):
+                vocab.add(const)
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    for reg in registry._registered:
+        walk(reg.definition.input_schema)
+    return vocab
+
+
+# The gate's operative list: dead tool names that are NOT also live-surface
+# vocabulary. Docs may not reference these in backticked tool position.
+REMOVED_TOOL_NAMES = tuple(sorted(set(_DEAD_TOOL_NAMES) - _live_surface_vocabulary()))
 
 
 class TestStaleToolNamesInDocs:
@@ -120,7 +147,10 @@ class TestStaleToolNamesInDocs:
         references; the bare words ("measurements" in prose) are fine.
         The old `ltspice_`-prefixed form counts too — the prefix check
         above only covers currently-registered names, so a removed tool's
-        prefixed form would otherwise slip through both guards.
+        prefixed form would otherwise slip through both guards. Dead names
+        that survive as live-surface vocabulary (edit_schematic ops,
+        analyze_results metrics — see _live_surface_vocabulary) are exempt
+        by derivation, never by hand.
         """
         failures: list[str] = []
         for rel in DOC_PATHS:
@@ -135,10 +165,30 @@ class TestStaleToolNamesInDocs:
         assert not failures, (
             "Docs reference tools that no longer exist:\n"
             + "\n".join(failures)
-            + "\nPoint at the absorbing tool instead (bode_metrics modes, "
-            "query_value step_axis/step_value, transient_response modes, simulation_summary, "
-            "find_model, edit_directive)."
+            + "\nPoint at the absorbing surface instead (run_experiments, "
+            "jobs, analyze_results recipes, inspect kinds, edit_schematic "
+            "ops, verify_circuit)."
         )
+
+    def test_dead_name_list_is_history_not_surface(self) -> None:
+        """A registered tool name in the dead list means the list rotted (or a
+        tool was resurrected without pruning it) — either way the gate would
+        forbid documenting a live tool."""
+        overlap = sorted(set(_DEAD_TOOL_NAMES) & _registered_names())
+        assert not overlap, f"dead-name list contains registered tools: {overlap}"
+
+
+class TestConsolidatedSkillDocCoverage:
+    def test_experiment_skill_doc_names_every_consolidated_tool(self) -> None:
+        # Derived from the registry, not hand-copied: adding a tool to the
+        # consolidated profile fails here until the skill doc teaches it (or
+        # this pin is deliberately revisited).
+        tool_defs, _ = registry.get_tools()
+        names = sorted(t.name for t in tool_defs)
+        assert names, "consolidated profile registered no tools"
+        text = (ROOT / "skills/spice-experiments/SKILL.md").read_text()
+        missing = [name for name in names if name not in text]
+        assert not missing, f"skills/spice-experiments/SKILL.md never mentions {missing}"
 
 
 def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
@@ -159,6 +209,122 @@ def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             found.update(pat.findall(node.value))
     return found
+
+
+def _non_docstring_strings(py_path: Path) -> list[str]:
+    """Every string literal in the file except module/class/function docstrings.
+
+    Docstrings are developer text — they legitimately name a helper after the
+    tool it once backed (":func:`handle_find_crossing`") and no client ever
+    reads them. Error messages, ``Field`` descriptions, warnings and
+    observation details are what a caller sees, and those are exactly the
+    string constants that are NOT a docstring.
+    """
+    tree = ast.parse(py_path.read_text())
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        ):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            docstrings.add(id(first.value))
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+class TestRemovedToolNamesInClientReachingStrings:
+    """Strings the CLIENT reads must not point at removed tools.
+
+    A resource note that says "Use check_job(job_id)" survives tool removal
+    silently — nothing imports the dead name, so only a client following the
+    advice finds out, as an "Unknown tool" error. Scoped to the modules whose
+    strings actually reach the wire (resources, server, prompts) plus the
+    advertised tool descriptions; a src-wide scan would drown in adapters'
+    own docstrings and ordinary English ("parameter", "recent"). Call-shaped
+    references only (``name(``): that is how guidance names a tool, while
+    prose reuse of a word like "recent" is legitimate.
+
+    The sibling scan below covers the OTHER live source of client-visible
+    prose: the error messages, warnings and observations raised in ``lib/``
+    and in the analysis adapters. Those never look like a call — they say
+    "use check_job (status + completion summary)" — so they need the wider,
+    word-shaped match, restricted to non-docstring strings.
+    """
+
+    # Every module whose strings a caller can read back: ``lib/`` raises the
+    # errors and builds the warnings/observations the tools relay verbatim,
+    # ``tools/`` holds the tools' own prose and the analysis adapters every
+    # ``analyze_results`` recipe reaches, and the client modules carry the
+    # handshake instructions, prompts and resources.
+    _PROSE_MODULES: ClassVar[tuple[str, ...]] = tuple(
+        sorted(
+            {
+                *(f"lib/{p.name}" for p in (ROOT / "src" / "ltspice_mcp" / "lib").glob("*.py")),
+                *(
+                    f"tools/{p.name}"
+                    for p in (ROOT / "src" / "ltspice_mcp" / "tools").glob("*.py")
+                ),
+                "resources.py",
+                "server.py",
+                "prompts.py",
+            }
+        )
+    )
+
+    # Removed tool names that are also ordinary English, so a word-shaped
+    # match over prose cannot tell a tool reference from a sentence. Both are
+    # single common words with no call syntax anywhere in the scanned tree;
+    # keeping them in would make the gate unusable rather than strict. Dead
+    # names that survive as live surface vocabulary (the ``signal_stats``
+    # recipe, the ``wire_pins`` op) are already subtracted upstream by
+    # REMOVED_TOOL_NAMES — those are exempt by derivation, not by this list.
+    _ENGLISH_HOMONYMS: ClassVar[frozenset[str]] = frozenset({"parameter", "recent"})
+
+    def test_exemptions_are_subsets_of_what_they_exempt(self) -> None:
+        assert set(REMOVED_TOOL_NAMES) >= self._ENGLISH_HOMONYMS
+
+    def test_no_removed_tool_names_in_prose_strings(self) -> None:
+        names = sorted(set(REMOVED_TOOL_NAMES) - self._ENGLISH_HOMONYMS)
+        pat = re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b")
+        failures: list[str] = []
+        for rel in self._PROSE_MODULES:
+            py_file = ROOT / "src" / "ltspice_mcp" / rel
+            hits: set[str] = set()
+            for text in _non_docstring_strings(py_file):
+                hits.update(m.group(1) for m in pat.finditer(text))
+            if hits:
+                failures.append(f"  src/ltspice_mcp/{rel}: {sorted(hits)}")
+        assert not failures, (
+            "Error messages, warnings or observations name removed tools:\n"
+            + "\n".join(failures)
+            + "\nName the live surface instead (an analyze_results recipe, "
+            "an inspect kind, a jobs action, run_experiments, verify_circuit)."
+        )
+
+    def test_no_removed_tool_names_in_advertised_descriptions(self) -> None:
+        # The subtracted list, same as the doc gate: a description may say
+        # "the signal_stats recipe" (live vocabulary) but not "use bode_metrics"
+        # (a dead tool with no live meaning).
+        pat = re.compile(r"\b(" + "|".join(map(re.escape, REMOVED_TOOL_NAMES)) + r")\b")
+        failures: list[str] = []
+        for reg in registry._registered:
+            hits = sorted({m.group(1) for m in pat.finditer(reg.definition.description or "")})
+            if hits:
+                failures.append(f"  {reg.definition.name}: {hits}")
+        assert not failures, "Advertised tool descriptions name removed tools:\n" + "\n".join(
+            failures
+        )
 
 
 class TestToolNamesInErrorStrings:

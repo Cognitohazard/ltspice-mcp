@@ -4,7 +4,8 @@ Covers the two pure halves of reading per-device op points (gm/gds/vth/vdsat)
 off LTspice: parsing the log's "Semiconductor Device Operating Points" block
 (read_device_op_points) and adding ``.options logopinfo`` to LTspice ``.op``
 decks so the block is produced (inject_logopinfo). The fold into
-operating_point is covered in test_analysis_tools.py.
+operating_point is covered in test_analysis_tools.py, and the experiments
+path's own injection in test_experiment_runner.py.
 """
 
 from pathlib import Path
@@ -12,12 +13,16 @@ from pathlib import Path
 from spicelib.simulators.ltspice_simulator import LTspice
 
 from ltspice_mcp.lib.log_parser import read_device_op_points
-from ltspice_mcp.tools._base import inject_logopinfo
-from ltspice_mcp.tools.analysis import (
-    _dev_instance,
-    _device_matches,
-    _filter_operating_point,
+from ltspice_mcp.lib.metrics import (
+    dev_instance as _dev_instance,
 )
+from ltspice_mcp.lib.metrics import (
+    device_matches as _device_matches,
+)
+from ltspice_mcp.lib.metrics import (
+    filter_operating_point as _filter_operating_point,
+)
+from ltspice_mcp.tools._base import inject_logopinfo
 
 # A trimmed real LTspice .op log (LTspice 26.x) with the logopinfo block.
 _LOG_WITH_BLOCK = """\

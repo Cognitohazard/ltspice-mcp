@@ -7,44 +7,13 @@ pure logic operating on BatchJob/SimulationJob state.
 """
 
 import asyncio
-import os
-import time
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
-from ltspice_mcp.lib import now
-from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
-from ltspice_mcp.lib.proc_kill import simulator_executable_names
+from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import discard_generated_netlist
-from ltspice_mcp.lib.sim_runner import (
-    SimulationRunner,
-    _link_or_copy,
-    collect_run_outcome,
-    deck_requests_raw,
-    ensure_output_alias,
-    generate_job_id,
-)
-from ltspice_mcp.lib.sweep_runner import SweepRunner
-from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob, SweepConfig
-
-
-async def _wait_for(cond, *, timeout_s: float = 5.0, interval: float = 0.01) -> None:
-    """Poll ``cond`` until it holds, failing at ``timeout_s``.
-
-    Deadline-based stand-in for a fixed ``asyncio.sleep`` before an assertion:
-    the awaited effect (a job admitted through the concurrency gate, a bridged
-    completion callback draining onto the loop) can take longer than any single
-    fixed sleep on a saturated runner, yet a real result still lands well within
-    the deadline. Modeled on ``_poll_batch_done`` in test_ngspice_e2e.py.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    while not cond():
-        if loop.time() > deadline:
-            pytest.fail(f"condition not met within {timeout_s}s")
-        await asyncio.sleep(interval)
+from ltspice_mcp.lib.spice_lex import lex
 
 
 class FakeSim:
@@ -76,1574 +45,13 @@ def loop():
     return asyncio.new_event_loop()
 
 
-@pytest.fixture
-def sim_runner(loop, work_dir: Path) -> SimulationRunner:
-    return SimulationRunner(
-        loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=1
-    )
-
-
-@pytest.fixture
-def sweep_runner(loop, work_dir: Path) -> SweepRunner:
-    return SweepRunner(loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=1)
-
-
-@pytest.fixture
-def mc_runner(loop, work_dir: Path) -> MonteCarloRunner:
-    return MonteCarloRunner(
-        loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=1
-    )
-
-
-def _make_job(
-    state: SessionState,
-    work_dir: Path,
-    status: str = "running",
-    job_id: str = "sim_test_1",
-) -> SimulationJob:
-    job = SimulationJob(
-        job_id=job_id,
-        netlist=work_dir / "n.cir",
-        simulator="FakeSim",
-        status=status,  # type: ignore[arg-type]
-        started_at=now(),
-    )
-    state.jobs[job.job_id] = job
-    return job
-
-
-class TestGenerateJobId:
-    def test_format(self):
-        jid = generate_job_id()
-        assert jid.startswith("sim_")
-        assert len(jid.split("_")) == 3
-
-
-class TestSimulationRunnerHandleCompletion:
-    def test_completion_success(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir)
-        raw = work_dir / "out.raw"
-        raw.write_text("non-empty")
-        log = work_dir / "out.log"
-        log.write_text("ok")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
-        )
-        assert job.status == "completed"
-        assert job.done_event.is_set()
-
-    def test_completion_empty_raw_marks_failed(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir)
-        raw = work_dir / "empty.raw"
-        raw.write_bytes(b"")  # zero size
-        log = work_dir / "empty.log"
-        log.write_text("Error: convergence failed\n")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
-        )
-        assert job.status == "failed"
-        assert job.error is not None
-        assert "no output" in job.error
-        assert job.done_event.is_set()
-
-    def test_completion_unknown_job(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        # Should silently warn, not raise
-        sim_runner._handle_completion(
-            "missing", collect_run_outcome("/x.raw", "/x.log"), state_no_sim
-        )
-
-    def test_completion_terminal_state_skipped(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir, status="cancelled")
-        raw = work_dir / "out.raw"
-        raw.write_text("data")
-        log = work_dir / "out.log"
-        log.write_text("ok")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
-        )
-        # Status should not change from cancelled
-        assert job.status == "cancelled"
-
-    def test_completion_dot_placeholder_marks_failed(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """spicelib signals failure by passing ``raw_file="."`` and a
-        ``.fail`` log file. Treating ``Path(".")`` as a real raw file
-        would let ``stat()`` succeed (directory size is non-zero) and
-        leak ``status="completed"`` + ``raw_file="."`` to clients."""
-        job = _make_job(state_no_sim, work_dir)
-        log = work_dir / "out.fail"
-        log.write_text("Error on line 2 : Q1 c b e mystery — undefined model\n")
-        sim_runner._handle_completion(job.job_id, collect_run_outcome(".", str(log)), state_no_sim)
-        assert job.status == "failed"
-        assert job.raw_file is None
-        assert job.error is not None and "no output" in job.error
-
-    def test_killed_job_callback_removes_partial_artifacts(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """A timed-out/cancelled run's late callback fires once the process
-        exits; its partial artifacts (possibly multi-GB) must be reclaimed,
-        not stranded on disk."""
-        job = _make_job(state_no_sim, work_dir, status="timeout")
-        artifacts = [
-            work_dir / f"{job.job_id}.cir",
-            work_dir / f"{job.job_id}.raw",
-        ]
-        # Logs survive the reclaim: they are the post-mortem for a killed run
-        # (the timeout response points job.log_file at one).
-        kept_logs = [
-            work_dir / f"{job.job_id}.log",
-            work_dir / f"{job.job_id}.exe.log",
-        ]
-        for path in artifacts + kept_logs:
-            path.write_text("partial")
-        # An unrelated job's file must survive — the glob is stem-scoped.
-        bystander = work_dir / "sim_other.raw"
-        bystander.write_text("keep me")
-
-        sim_runner._handle_completion(
-            job.job_id,
-            collect_run_outcome(
-                str(work_dir / f"{job.job_id}.raw"),
-                str(work_dir / f"{job.job_id}.log"),
-            ),
-            state_no_sim,
-        )
-
-        assert job.status == "timeout"  # status untouched
-        # Artifact removal is dispatched to a worker thread (file I/O must
-        # not run on the event loop) — poll for it rather than asserting
-        # synchronously.
-        deadline = time.monotonic() + 5.0
-        while any(p.exists() for p in artifacts):
-            if time.monotonic() > deadline:
-                pytest.fail(f"artifacts not removed: {[p for p in artifacts if p.exists()]}")
-            time.sleep(0.01)
-        assert all(p.exists() for p in kept_logs)
-        assert bystander.exists()
-
-    def test_completed_job_double_callback_keeps_artifacts(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """Cleanup is gated to killed statuses: a stray second callback on an
-        already-completed job must NOT delete its good output."""
-        job = _make_job(state_no_sim, work_dir, status="completed")
-        raw = work_dir / f"{job.job_id}.raw"
-        raw.write_text("good output")
-        sim_runner._handle_completion(job.job_id, collect_run_outcome(str(raw), ""), state_no_sim)
-        assert raw.exists()
-
-    def test_clean_exit_without_raw_completes_log_only(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """A clean simulator exit whose results live only in the log (e.g. an
-        ngspice .control script) is a completed log-only run, not a failure —
-        the log parses free of errors, so relay the simulator's own verdict."""
-        job = _make_job(state_no_sim, work_dir)
-        raw = work_dir / "missing.raw"  # never written by the simulator
-        log = work_dir / "out.log"
-        log.write_text("Note: batch run\nvout = 2.5\n")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
-        )
-        assert job.status == "completed"
-        assert job.raw_file is None
-        assert job.log_file == log
-        assert job.error is None
-
-    def test_clean_exit_without_raw_but_log_errors_fails(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """No raw + a log that carries error diagnostics stays a failure even
-        when the simulator exited 0 (ngspice exits 0 on some no-data runs)."""
-        job = _make_job(state_no_sim, work_dir)
-        log = work_dir / "bad.log"
-        log.write_text("Error: circuit not parsed.\n")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(work_dir / "missing.raw"), str(log)), state_no_sim
-        )
-        assert job.status == "failed"
-        assert job.error is not None and "no output" in job.error
-
-    def test_log_only_single_stepping_rung_is_recovered(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """No raw + a lone OP 'gmin stepping failed' rung: ngspice tries the next
-        method and may solve, so a single failed rung is not terminal. With no raw
-        to gate on, treat it as a completed log-only run, not a failure."""
-        job = _make_job(state_no_sim, work_dir)
-        log = work_dir / "recovered.log"
-        log.write_text("gmin stepping failed\nvout = 2.5\n")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(work_dir / "missing.raw"), str(log)), state_no_sim
-        )
-        assert job.status == "completed"
-        assert job.error is None
-
-    def test_log_only_full_ladder_exhausted_fails(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """No raw + BOTH gmin AND source stepping failed is ngspice's genuine
-        no-bias-point signature (the whole ladder exhausted) — stays a failure."""
-        job = _make_job(state_no_sim, work_dir)
-        log = work_dir / "nobias.log"
-        log.write_text("gmin stepping failed\nsource stepping failed\n")
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome(str(work_dir / "missing.raw"), str(log)), state_no_sim
-        )
-        assert job.status == "failed"
-        assert job.error is not None and "no output" in job.error
-
-    def test_clean_exit_no_raw_with_required_analysis_fails(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """A clean exit (exit 0, no error diagnostics) that wrote no raw is a
-        FAILURE when the deck requested a raw-producing analysis: LTspice 26.0.2
-        exits 0 with no .raw under a reduced .save list, and reporting that as a
-        completed empty run is data loss dressed as success."""
-        job = _make_job(state_no_sim, work_dir)
-        deck = work_dir / "reduced_save.cir"
-        deck.write_text(
-            "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 1m\n.save V(out)\n.end\n"
-        )
-        log = work_dir / "clean.log"
-        log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
-        outcome = collect_run_outcome(
-            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
-        )
-        assert outcome.error is not None and "no .raw" in outcome.error
-        # The missing artifact is named as a structured observation, and the
-        # .save workaround rides in the error text.
-        assert any(o["code"] == "missing_required_raw" for o in outcome.observations)
-        assert ".save" in outcome.error
-        sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
-        assert job.status == "failed"
-        assert job.observations and job.observations[0]["code"] == "missing_required_raw"
-
-    def test_clean_exit_no_raw_no_analysis_stays_log_only(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """A deck with no raw-producing analysis directive that exits cleanly with
-        no raw is still a legitimate log-only completion, not a failure."""
-        job = _make_job(state_no_sim, work_dir)
-        deck = work_dir / "noanalysis.cir"
-        deck.write_text("* netlist only\nV1 in 0 1\nR1 in 0 1k\n.end\n")
-        log = work_dir / "clean.log"
-        log.write_text("No errors.\n")
-        outcome = collect_run_outcome(
-            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
-        )
-        assert outcome.error is None
-        sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
-        assert job.status == "completed"
-        assert job.raw_file is None
-
-    def test_clean_exit_no_raw_control_deck_stays_log_only(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """An ngspice .control deck owns its output (results in the log), so a
-        no-raw outcome is the legitimate log-only idiom even with a top-level
-        .tran — the server normally injects a `write`, but a skipped injection
-        must still read as log-only, not a spurious missing-raw failure."""
-        job = _make_job(state_no_sim, work_dir)
-        deck = work_dir / "control.cir"
-        deck.write_text(
-            "* control deck\nV1 in 0 1\nR1 in out 1k\n.tran 1u 1m\n"
-            ".control\nrun\nprint v(out)\n.endc\n.end\n"
-        )
-        log = work_dir / "clean.log"
-        log.write_text("v(out) = 0.5\n")
-        outcome = collect_run_outcome(
-            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
-        )
-        assert outcome.error is None
-        sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
-        assert job.status == "completed"
-        assert job.raw_file is None
-
-    def test_missing_raw_without_save_still_fails_without_save_hint(self, work_dir: Path):
-        """The failure fires for any raw-producing analysis, not just decks with a
-        .save list; without a .save directive the .save workaround is not claimed
-        (evidence.has_save_list is False)."""
-        deck = work_dir / "nosave.cir"
-        deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\n.ac dec 10 1 1meg\n.end\n")
-        log = work_dir / "clean.log"
-        log.write_text("converged\n")
-        outcome = collect_run_outcome(
-            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
-        )
-        assert outcome.error is not None
-        obs = outcome.observations[0]
-        assert obs["code"] == "missing_required_raw"
-        assert obs["evidence"]["has_save_list"] is False
-        assert obs["evidence"]["analyses"] == [".ac"]
-
-    def test_unreadable_raw_is_failure_not_log_only(self, work_dir: Path):
-        """A raw whose stat fails for a reason other than absence (permissions,
-        a flaky mount) must surface as a failure with the path preserved, not
-        be misread as a successful log-only run."""
-        blocker = work_dir / "sim.raw"
-        blocker.write_text("a regular file, not a directory")
-        unreadable_raw = blocker / "inner.raw"  # stat -> NotADirectoryError
-        log = work_dir / "sim.log"
-        log.write_text("no errors here\n")
-        outcome = collect_run_outcome(str(unreadable_raw), str(log))
-        assert outcome.error is not None and "unreadable" in outcome.error
-        assert outcome.raw_file == str(unreadable_raw)
-
-    def test_killed_run_keeps_fail_log_and_repoints_job(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """A killed run exits nonzero, so spicelib renames its log to ``.fail``.
-        The artifact reclaim must keep that post-mortem, and the job must be
-        repointed at it — the timeout path derived ``{job_id}.log`` before the
-        rename happened."""
-        job = _make_job(state_no_sim, work_dir, status="timeout")
-        job.log_file = work_dir / f"{job.job_id}.log"  # pre-rename derivation
-        fail_log = work_dir / f"{job.job_id}.fail"
-        fail_log.write_text("Fatal Error: simulation killed\n")
-        raw = work_dir / f"{job.job_id}.raw"
-        raw.write_text("partial")
-
-        sim_runner._handle_completion(
-            job.job_id, collect_run_outcome("", str(fail_log)), state_no_sim
-        )
-
-        assert job.log_file == fail_log
-        deadline = time.monotonic() + 5.0
-        while raw.exists():
-            if time.monotonic() > deadline:
-                pytest.fail("partial raw not removed")
-            time.sleep(0.01)
-        assert fail_log.exists()
-
-
-class TestDeckRequestsRaw:
-    """deck_requests_raw's scanner scope: scanning stops at .end, and
-    .include/.inc/.lib references are followed best-effort."""
-
-    def test_analysis_only_in_include_is_detected(self, work_dir: Path):
-        """An analysis directive living only in an included file is still found."""
-        (work_dir / "sub.inc").write_text(".tran 1u 1m\n")
-        deck = work_dir / "top.cir"
-        deck.write_text("* top\nV1 in 0 1\nR1 in 0 1k\n.include sub.inc\n.end\n")
-        assert deck_requests_raw(deck) == ([".tran"], False)
-
-    def test_lib_section_form_follows_the_file_token(self, work_dir: Path):
-        """The `.lib file section` two-token form resolves the file, not the section."""
-        (work_dir / "corner.lib").write_text(".ac dec 10 1 1meg\n")
-        deck = work_dir / "top.cir"
-        deck.write_text("* top\n.lib corner.lib tt\n.end\n")
-        assert deck_requests_raw(deck) == ([".ac"], False)
-
-    def test_control_after_end_does_not_disarm(self, work_dir: Path):
-        """A dead .control past .end is inert — it must not turn a real .tran
-        requirement into a log-only (empty) result."""
-        deck = work_dir / "top.cir"
-        deck.write_text(
-            "* top\nV1 in 0 1\nR1 in out 1k\n.tran 1u 1m\n.end\n.control\nrun\n.endc\n"
-        )
-        assert deck_requests_raw(deck) == ([".tran"], False)
-
-    def test_analysis_after_end_creates_no_requirement(self, work_dir: Path):
-        """An analysis directive past .end is inert and must not be required."""
-        deck = work_dir / "top.cir"
-        deck.write_text("* top\nV1 in 0 1\nR1 in 0 1k\n.end\n.tran 1u 1m\n")
-        assert deck_requests_raw(deck) == ([], False)
-
-    def test_include_cycle_terminates(self, work_dir: Path):
-        """A self-referential include chain must not hang; the analysis reached
-        through it is still found."""
-        (work_dir / "a.inc").write_text(".include b.inc\n")
-        (work_dir / "b.inc").write_text(".include a.inc\n.tran 1u 1m\n")
-        deck = work_dir / "top.cir"
-        deck.write_text("* top\n.include a.inc\n.end\n")
-        assert deck_requests_raw(deck) == ([".tran"], False)
-
-    def test_missing_include_is_skipped(self, work_dir: Path):
-        """An unreadable include adds no requirement (fail-safe direction)."""
-        deck = work_dir / "top.cir"
-        deck.write_text("* top\nV1 in 0 1\nR1 in 0 1k\n.include nope.inc\n.end\n")
-        assert deck_requests_raw(deck) == ([], False)
-
-
-class TestLinkOrCopy:
-    def test_hardlink_success(self, work_dir: Path):
-        src = work_dir / "src.raw"
-        src.write_bytes(b"data")
-        dest = work_dir / "alias.raw"
-        alias, note = _link_or_copy(src, dest)
-        assert alias == dest
-        assert note is None
-        assert dest.read_bytes() == b"data"
-
-    def test_skips_and_never_overwrites_an_existing_dest(self, work_dir: Path):
-        src = work_dir / "src.raw"
-        src.write_bytes(b"data")
-        dest = work_dir / "alias.raw"
-        dest.write_bytes(b"pre-existing")
-        alias, note = _link_or_copy(src, dest)
-        assert alias is None
-        assert note is not None and "already exists" in note
-        assert dest.read_bytes() == b"pre-existing"
-
-    def test_dest_already_our_own_hardlink_is_success_not_a_collision(self, work_dir: Path):
-        # TOCTOU guard: ensure_output_alias awaits between its idempotency
-        # check and recording the result, so two concurrent callers for the
-        # SAME job (e.g. the wait path and a simultaneous check_job) can both
-        # reach _link_or_copy. Whichever runs second must see its own alias
-        # (same inode as source) as success, not misreport a real alias as a
-        # collision skip.
-        src = work_dir / "src.raw"
-        src.write_bytes(b"data")
-        dest = work_dir / "alias.raw"
-        os.link(src, dest)  # simulate the concurrent sibling call's alias
-        alias, note = _link_or_copy(src, dest)
-        assert alias == dest
-        assert note is None
-
-    def test_falls_back_to_copy_when_link_fails(self, work_dir: Path, monkeypatch):
-        src = work_dir / "src.raw"
-        src.write_bytes(b"data")
-        dest = work_dir / "alias.raw"
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.os.link",
-            lambda *a, **k: (_ for _ in ()).throw(OSError("cross-device link")),
-        )
-        alias, note = _link_or_copy(src, dest)
-        assert alias == dest
-        assert note is None
-        assert dest.read_bytes() == b"data"
-
-    def test_skips_large_file_instead_of_copying(self, work_dir: Path, monkeypatch):
-        # A hardlink failure on a file over the size cap must not fall back to
-        # a full copy — duplicating a multi-GB raw to satisfy a friendly name
-        # isn't worth doubling disk usage.
-        src = work_dir / "src.raw"
-        src.write_bytes(b"0123456789")
-        dest = work_dir / "alias.raw"
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.os.link",
-            lambda *a, **k: (_ for _ in ()).throw(OSError("cross-device link")),
-        )
-        monkeypatch.setattr("ltspice_mcp.lib.sim_runner._ALIAS_COPY_SIZE_LIMIT", 5)
-        alias, note = _link_or_copy(src, dest)
-        assert alias is None
-        assert note is not None and "too large" in note
-        assert not dest.exists()
-
-
-class TestEnsureOutputAlias:
-    @pytest.mark.asyncio
-    async def test_creates_raw_and_log_aliases(self, state_no_sim: SessionState, work_dir: Path):
-        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_ok")
-        job.output_basename = "myrun"
-        job.raw_file = work_dir / f"{job.job_id}.raw"
-        job.raw_file.write_bytes(b"rawdata")
-        job.log_file = work_dir / f"{job.job_id}.log"
-        job.log_file.write_text("log")
-
-        await ensure_output_alias(job, state_no_sim)
-
-        assert job.output_alias_raw == work_dir / "myrun.raw"
-        assert job.output_alias_log == work_dir / "myrun.log"
-        assert job.output_alias_note is None
-
-    @pytest.mark.asyncio
-    async def test_log_only_completion_aliases_the_log_not_a_raw(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_logonly")
-        job.output_basename = "opnow"
-        job.raw_file = None
-        job.log_file = work_dir / f"{job.job_id}.log"
-        job.log_file.write_text("log-only")
-
-        await ensure_output_alias(job, state_no_sim)
-
-        assert job.output_alias_raw is None
-        assert job.output_alias_log == work_dir / "opnow.log"
-        assert job.output_alias_note is None
-
-    @pytest.mark.asyncio
-    async def test_collision_is_skipped_and_recorded_as_a_note(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_clash")
-        job.output_basename = "clash"
-        job.raw_file = work_dir / f"{job.job_id}.raw"
-        job.raw_file.write_bytes(b"x")
-        (work_dir / "clash.raw").write_bytes(b"someone else's file")
-
-        await ensure_output_alias(job, state_no_sim)
-
-        assert job.output_alias_raw is None
-        assert job.output_alias_note is not None and "already exists" in job.output_alias_note
-        # The pre-existing file at the alias path must survive untouched.
-        assert (work_dir / "clash.raw").read_bytes() == b"someone else's file"
-
-    @pytest.mark.asyncio
-    async def test_no_basename_is_a_noop(self, state_no_sim: SessionState, work_dir: Path):
-        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_none")
-        job.raw_file = work_dir / f"{job.job_id}.raw"
-        job.raw_file.write_bytes(b"data")
-
-        await ensure_output_alias(job, state_no_sim)
-
-        assert job.output_alias_raw is None
-        assert job.output_alias_note is None
-
-    @pytest.mark.asyncio
-    async def test_second_call_does_not_redo_a_settled_alias(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_idempotent")
-        job.output_basename = "clash"
-        job.raw_file = work_dir / f"{job.job_id}.raw"
-        job.raw_file.write_bytes(b"x")
-        (work_dir / "clash.raw").write_bytes(b"pre-existing")
-
-        await ensure_output_alias(job, state_no_sim)
-        assert job.output_alias_note is not None
-
-        def _boom(*a, **k):
-            raise AssertionError("should not re-attempt an already-settled alias")
-
-        monkeypatch.setattr("ltspice_mcp.lib.sim_runner._link_or_copy", _boom)
-        await ensure_output_alias(job, state_no_sim)  # must not raise
-
-
-class TestSimulationRunnerCancel:
-    @pytest.mark.asyncio
-    async def test_cancel_unknown_job(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir)
-        # Runner not registered for this job
-        await sim_runner.cancel(job)
-
-
-class TestSimulationRunnerKillWsl:
-    """Regression: kill()/cancel() must terminate the real (Windows) sim.
-
-    On WSL the simulator is a Windows process invisible to Linux psutil, so
-    the runner taskkills it by job_id token; everywhere else the psutil kill
-    scoped by the same token applies. cancel() must also mark the job
-    terminal BEFORE killing, so the killed sim's late completion callback
-    can't record a partial raw as success.
-    """
-
-    @pytest.mark.asyncio
-    async def test_kill_invokes_windows_taskkill_and_scoped_kill(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=2,
-        )
-        job = _make_job(state_no_sim, work_dir)
-        tokens: list[str] = []
-        scoped: list[tuple[str, frozenset[str]]] = []
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
-            lambda tok: tokens.append(tok) or 1,
-        )
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_simulator_by_token",
-            lambda tok, names: scoped.append((tok, frozenset(names))) or 0,
-        )
-        await runner.kill(job.job_id)
-        assert tokens == [job.job_id]  # Windows kill targeted this specific job
-        # The psutil kill is scoped by the same token + this runner's simulator.
-        assert scoped == [(job.job_id, simulator_executable_names(FakeSim))]
-
-    @pytest.mark.asyncio
-    async def test_submit_passes_exe_log_and_job_token(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        # run_simulation must hand spicelib exe_log=True (ngspice stdout capture)
-        # and a job_id-named run_filename (the cancel/kill token) at submit time. A
-        # silent revert of either line would regress the feature with no other
-        # test catching it.
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=2,
-        )
-        captured: list[dict] = []
-        monkeypatch.setattr(
-            runner,
-            "_build_sim_runner",
-            lambda: MagicMock(run=MagicMock(side_effect=lambda *a, **k: captured.append(k))),
-        )
-        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_xlog")
-        task = asyncio.get_running_loop().create_task(
-            runner.start_simulation(job.netlist, job, state_no_sim)
-        )
-        await _wait_for(lambda: len(captured) == 1)
-        assert len(captured) == 1
-        assert captured[0].get("exe_log") is True
-        assert str(captured[0].get("run_filename", "")).startswith("sim_xlog")
-        if not task.done():
-            task.cancel()
-
-    @pytest.mark.asyncio
-    async def test_deletes_generated_logopinfo_run_file_after_submit(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        # A logopinfo-augmented copy is passed as the run file (not the user's
-        # netlist); spicelib stages it synchronously at submit, so start_simulation
-        # must remove the per-job copy when it returns — no litter, and the
-        # job_id-stamped name already prevents queued-run clobber.
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=2,
-        )
-        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
-        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_clean")
-        aug = work_dir / ".n.sim_clean.logopinfo.cir"
-        aug.write_text("* aug\n.op\n.options logopinfo\n.end\n")
-        await runner.start_simulation(aug, job, state_no_sim)
-        assert not aug.exists()
-
-    @pytest.mark.asyncio
-    async def test_never_deletes_the_users_own_netlist(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        # When no augmentation happened the run file IS job.netlist; the cleanup
-        # guard must leave it on disk.
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=2,
-        )
-        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
-        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_keep")
-        user = job.netlist  # work_dir / "n.cir"
-        user.write_text("* user\n.op\n.end\n")
-        await runner.start_simulation(user, job, state_no_sim)
-        assert user.exists()
-
-    @pytest.mark.asyncio
-    async def test_requirements_snapshotted_at_submission_not_completion(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        # The deck's raw requirements are captured when the run is submitted, not
-        # re-read at completion: a deck edited (or its shared export overwritten)
-        # between submit and completion must not change how the outcome is
-        # classified. Here a .tran deck is submitted, then rewritten analysis-free
-        # before the completion callback fires with a clean, no-raw result. The run
-        # must still classify as a missing-required-raw FAILURE (reflecting the
-        # SUBMITTED deck) — a completion-time re-read would wrongly read the edited
-        # deck as an analysis-free, log-only success.
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=2,
-        )
-        captured: dict = {}
-        monkeypatch.setattr(
-            runner,
-            "_build_sim_runner",
-            lambda: MagicMock(run=MagicMock(side_effect=lambda *a, **k: captured.update(k))),
-        )
-        deck = work_dir / "toctou.cir"
-        deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 1m\n.end\n")
-        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_toctou")
-        job.netlist = deck
-        await runner.start_simulation(deck, job, state_no_sim)
-        assert "callback" in captured  # submitted, so requirements are snapshotted
-
-        # Edit the deck AFTER submission: drop the .tran so a completion-time
-        # re-read would see an analysis-free, log-only deck.
-        deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\n.end\n")
-
-        log = work_dir / "sim_toctou.log"
-        log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
-        # Fire the recorded completion callback with a clean exit that wrote no
-        # raw (the missing.raw path does not exist).
-        captured["callback"](work_dir / "missing.raw", log)
-        await _wait_for(lambda: job.completed_at is not None)
-        assert job.status == "failed"
-        assert job.observations and job.observations[0]["code"] == "missing_required_raw"
-
-    @pytest.mark.asyncio
-    async def test_cancel_marks_terminal_before_kill(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=2,
-        )
-        job = _make_job(state_no_sim, work_dir)  # status="running"
-        status_at_kill: dict[str, str] = {}
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
-            lambda tok: status_at_kill.setdefault("status", job.status) or 0,
-        )
-        await runner.cancel(job, state_no_sim)
-        assert status_at_kill["status"] == "cancelled"  # terminal set before the kill ran
-        assert job.status == "cancelled"
-
-
-class TestSimulationRunnerConcurrencyGate:
-    """Regression: independent run_simulation jobs honor max_parallel.
-
-    Each job builds its own spicelib SimRunner (one task), so the session-level
-    semaphore is the only thing bounding concurrency across jobs.
-    """
-
-    @pytest.mark.asyncio
-    async def test_caps_concurrent_jobs_and_admits_queued_on_completion(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        loop = asyncio.get_running_loop()
-        runner = SimulationRunner(
-            loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=2
-        )
-        # submit_sim must return quickly WITHOUT firing the completion callback,
-        # so each launched job holds its slot until we release it explicitly.
-        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
-
-        jobs = [
-            _make_job(state_no_sim, work_dir, status="queued", job_id=f"sim_gate_{i}")
-            for i in range(3)
-        ]
-
-        tasks = [
-            loop.create_task(runner.start_simulation(j.netlist, j, state_no_sim)) for j in jobs
-        ]
-        await _wait_for(lambda: sum(j.status == "running" for j in jobs) == 2)
-        # max_parallel=2 -> exactly two launched, the third still queued.
-        assert sum(j.status == "running" for j in jobs) == 2, [j.status for j in jobs]
-        assert sum(j.status == "queued" for j in jobs) == 1
-
-        # Complete one running job -> frees a slot -> the queued job launches.
-        running = next(j for j in jobs if j.status == "running")
-        raw = work_dir / "g.raw"
-        raw.write_text("data")
-        log = work_dir / "g.log"
-        log.write_text("ok")
-        runner._handle_completion(
-            running.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
-        )
-        await _wait_for(lambda: sum(j.status == "queued" for j in jobs) == 0)
-
-        assert running.status == "completed"
-        assert sum(j.status == "queued" for j in jobs) == 0  # the waiter got admitted
-        assert sum(j.status == "running" for j in jobs) == 2
-
-        for t in tasks:
-            if not t.done():
-                t.cancel()
-
-    @staticmethod
-    def _gate_runner(work_dir: Path, launched: list, monkeypatch) -> SimulationRunner:
-        """A max_parallel=1 runner whose submit records each launched run_filename
-        (so a test can assert a job did / did NOT actually launch)."""
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=1,
-        )
-
-        def build():
-            m = MagicMock()
-            m.run.side_effect = lambda *a, **k: launched.append(k.get("run_filename"))
-            return m
-
-        monkeypatch.setattr(runner, "_build_sim_runner", build)
-        return runner
-
-    @pytest.mark.asyncio
-    async def test_timeout_while_queued_does_not_launch_orphan(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        """A job timed out while still QUEUED on the gate must end terminal and
-        must NOT launch when a slot later frees."""
-        from ltspice_mcp.lib.job_lifecycle import transition
-
-        launched: list = []
-        runner = self._gate_runner(work_dir, launched, monkeypatch)
-        loop = asyncio.get_running_loop()
-        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_to_a")
-        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_to_b")
-        ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
-        tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
-        await _wait_for(lambda: a.status == "running")
-        assert a.status == "running" and b.status == "queued"
-        launched_before = list(launched)
-
-        # The timeout handler marks the still-queued job terminal (queued->timeout).
-        transition(b, "timeout", state=state_no_sim)
-        # Free the only slot; b's task wakes and must self-heal, not launch.
-        raw = work_dir / "to.raw"
-        raw.write_text("data")
-        log = work_dir / "to.log"
-        log.write_text("ok")
-        runner._handle_completion(a.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim)
-        # b's queued waiter wakes when a's completion frees the slot; wait until
-        # its self-heal has run so the "stayed terminal / no orphan" checks below
-        # are meaningful rather than racing an unprocessed wake.
-        await _wait_for(lambda: tb.done())
-
-        assert b.status == "timeout"  # stayed terminal
-        assert launched == launched_before  # b's sim was never submitted (no orphan)
-        for t in (ta, tb):
-            if not t.done():
-                t.cancel()
-
-    @pytest.mark.asyncio
-    async def test_cancel_while_queued_self_heals_and_frees_slot(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        """Review finding: cancelling a queued job must not launch it nor raise an
-        illegal transition; the freed slot must admit the next job."""
-        launched: list = []
-        runner = self._gate_runner(work_dir, launched, monkeypatch)
-        loop = asyncio.get_running_loop()
-        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_a")
-        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_b")
-        ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
-        tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
-        await _wait_for(lambda: a.status == "running")
-        assert a.status == "running" and b.status == "queued"
-
-        await runner.cancel(b, state_no_sim)
-        assert b.status == "cancelled"
-        launched_before = list(launched)
-
-        raw = work_dir / "cq.raw"
-        raw.write_text("data")
-        log = work_dir / "cq.log"
-        log.write_text("ok")
-        runner._handle_completion(a.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim)
-        # a's completion frees the slot and wakes b's cancelled waiter; wait for
-        # it to finish self-healing before asserting it neither ran nor launched.
-        await _wait_for(lambda: tb.done())
-        assert b.status == "cancelled"  # woken task did not flip it to running
-        assert launched == launched_before  # no orphan launch
-
-        # The slot freed by completing 'a' (and not re-taken by cancelled 'b')
-        # admits a fresh job.
-        c = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_c")
-        tc = loop.create_task(runner.start_simulation(c.netlist, c, state_no_sim))
-        await _wait_for(lambda: c.status == "running")
-        assert c.status == "running"
-        for t in (ta, tb, tc):
-            if not t.done():
-                t.cancel()
-
-    @pytest.mark.asyncio
-    async def test_submission_failure_releases_slot(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        """A submit that raises must free the slot so later jobs aren't wedged."""
-        runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=1,
-        )
-
-        def boom():
-            raise RuntimeError("submit boom")
-
-        monkeypatch.setattr(runner, "_build_sim_runner", boom)
-        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_sf_a")
-        await runner.start_simulation(a.netlist, a, state_no_sim)
-        assert a.status == "failed"
-
-        # Slot released despite the failure: a working job runs.
-        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
-        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_sf_b")
-        tb = asyncio.get_running_loop().create_task(
-            runner.start_simulation(b.netlist, b, state_no_sim)
-        )
-        await _wait_for(lambda: b.status == "running")
-        assert b.status == "running"
-        if not tb.done():
-            tb.cancel()
-
-    @pytest.mark.asyncio
-    async def test_unverified_kill_keeps_slot_reserved_until_finalized(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
-    ):
-        """A cancel whose process termination cannot be verified (WSL taskkill
-        finds nothing / the scoped psutil kill raises) must NOT free the
-        concurrency slot — otherwise a queued job launches alongside a
-        still-running orphan and exceeds max_parallel. The slot stays reserved
-        until the process is actually finalized (completion callback fires)."""
-        launched: list = []
-        runner = self._gate_runner(work_dir, launched, monkeypatch)  # max_parallel=1
-        loop = asyncio.get_running_loop()
-        # Both best-effort termination paths "fail": WSL taskkill confirms nothing,
-        # and the scoped kill raises (and is swallowed).
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token", lambda tok: 0
-        )
-
-        def _kill_boom(tok, names):
-            raise RuntimeError("kill boom")
-
-        monkeypatch.setattr("ltspice_mcp.lib.sim_runner.kill_simulator_by_token", _kill_boom)
-        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_a")
-        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_b")
-        ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
-        tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
-        await _wait_for(lambda: a.status == "running")
-        assert a.status == "running" and b.status == "queued"
-        launched_before = list(launched)
-
-        await runner.cancel(a, state_no_sim)
-        # The unverified kill deliberately did NOT free the slot, so b's parked
-        # waiter has no wake event to poll for. Drain the loop instead: a
-        # regression that released the slot would schedule b's wake, which these
-        # yields would run (and b would start) before the "stayed reserved" asserts.
-        for _ in range(20):
-            await asyncio.sleep(0)
-        assert a.status == "cancelled"
-        # Unverified kill -> slot stays reserved -> b must NOT have started.
-        assert b.status == "queued", (
-            "queued job must not start while a possibly-live orphan holds the slot"
-        )
-        assert launched == launched_before
-
-        # The orphan finally ends -> completion callback finalizes a -> slot freed -> b runs.
-        raw = work_dir / "fk.raw"
-        raw.write_text("data")
-        log = work_dir / "fk.log"
-        log.write_text("ok")
-        runner._handle_completion(a.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim)
-        await _wait_for(lambda: b.status == "running")
-        assert b.status == "running"
-        for t in (ta, tb):
-            if not t.done():
-                t.cancel()
-
-
-def _make_batch(state: SessionState, work_dir: Path, *, job_type: str = "sweep") -> BatchJob:
-    bj = BatchJob(
-        job_id=f"{job_type}_test",
-        job_type=job_type,  # type: ignore[arg-type]
-        netlist=work_dir / "n.cir",
-        total_runs=3,
-    )
-    if job_type == "sweep":
-        bj.sweep_config = SweepConfig(netlist=work_dir / "n.cir", dimensions=[])
-    else:
-        bj.mc_config = MonteCarloConfig(netlist=work_dir / "n.cir")
-    state.batch_jobs[bj.job_id] = bj
-    return bj
-
-
-class TestSweepRunnerHandlers:
-    def test_handle_run_completion(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir)
-        raw = work_dir / "r0.raw"
-        raw.write_text("d")
-        log = work_dir / "r0.log"
-        log.write_text("l")
-        sweep_runner._handle_run_completion(bj.job_id, raw, log, state_no_sim)
-        assert bj.completed_runs == 1
-        assert 0 in bj.run_results
-
-    def test_handle_run_completion_unknown(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        sweep_runner._handle_run_completion(
-            "missing", work_dir / "x.raw", work_dir / "x.log", state_no_sim
-        )
-
-    def test_handle_run_completion_terminal_state(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.status = "cancelled"
-        sweep_runner._handle_run_completion(
-            bj.job_id, work_dir / "x.raw", work_dir / "x.log", state_no_sim
-        )
-        assert bj.completed_runs == 0
-
-    def test_handle_sweep_completion(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir)
-        # spicelib runnos are 1-based; run_results keys are 0-based runno.
-        bj.run_results = {0: {"raw_file": "x", "log_file": "y", "params": {}}}
-        stepper = MagicMock()
-        stepper.sim_info = {1: {"R1": "1k", "netlist": "n.cir"}}
-        sweep_runner._handle_sweep_completion(bj.job_id, stepper, state_no_sim)
-        assert bj.status == "completed"
-        assert bj.done_event.is_set()
-        assert bj.run_results[0]["params"]["R1"] == 1000.0
-
-    def test_parallel_completion_pairs_params_correctly(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        """Regression: under max_parallel>1, runs complete out of runno order.
-
-        Before this fix, run_results was keyed by completion-order index but
-        sim_info was zipped via runno-sorted enumerate, so under parallel
-        execution params got attached to the WRONG .raw. Here we record three
-        completions in reverse runno order and verify each .raw still ends
-        up paired with its own runno's params.
-        """
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.total_runs = 3
-        # Three runs complete in reverse runno order (3, 2, 1) — what
-        # max_parallel>1 would produce when later runs happen to finish first.
-        for runno in (3, 2, 1):
-            raw = work_dir / f"sweep_{runno}.raw"
-            raw.write_text("d")
-            log = work_dir / f"sweep_{runno}.log"
-            log.write_text("l")
-            sweep_runner._handle_run_completion(bj.job_id, raw, log, state_no_sim)
-        assert set(bj.run_results.keys()) == {0, 1, 2}
-        # Each run_result should reference its own runno's raw file.
-        assert bj.run_results[0]["raw_file"].endswith("sweep_1.raw")
-        assert bj.run_results[1]["raw_file"].endswith("sweep_2.raw")
-        assert bj.run_results[2]["raw_file"].endswith("sweep_3.raw")
-
-        stepper = MagicMock()
-        stepper.sim_info = {
-            1: {"Rd": "0.5", "netlist": "n.cir"},
-            2: {"Rd": "5", "netlist": "n.cir"},
-            3: {"Rd": "50", "netlist": "n.cir"},
-        }
-        sweep_runner._handle_sweep_completion(bj.job_id, stepper, state_no_sim)
-        # Each runno's params must pair with the matching raw file.
-        assert bj.run_results[0]["params"]["Rd"] == 0.5
-        assert bj.run_results[1]["params"]["Rd"] == 5.0
-        assert bj.run_results[2]["params"]["Rd"] == 50.0
-
-    def test_handle_sweep_completion_cancelled(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.status = "cancelled"
-        stepper = MagicMock()
-        stepper.sim_info = {}
-        sweep_runner._handle_sweep_completion(bj.job_id, stepper, state_no_sim)
-        # Status remains cancelled
-        assert bj.status == "cancelled"
-
-    def test_handle_sweep_completion_unknown(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState
-    ):
-        stepper = MagicMock()
-        sweep_runner._handle_sweep_completion("missing", stepper, state_no_sim)
-
-    @pytest.mark.asyncio
-    async def test_cancel(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir)
-        await sweep_runner.cancel(bj)
-        assert bj.status == "cancelled"
-        assert bj.done_event.is_set()
-
-    @pytest.mark.asyncio
-    async def test_cancel_taskkills_windows_by_job_token(
-        self,
-        sweep_runner: SweepRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # Batch process-kill: sub-runs are named "{job_id}_<index>", so cancel()
-        # must kill by job_id token — the WSL taskkill for Windows-side LTspice
-        # plus the scoped psutil kill for local simulator processes. After a
-        # pass that killed something, cancel re-scans until a clean pass
-        # confirms nothing matched (see TestBatchCancelSpawnRace).
-        bj = _make_batch(state_no_sim, work_dir)
-        monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
-        tokens: list[str] = []
-        scoped_tokens: list[str] = []
-        kill_returns = iter([1, 0, 0])
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
-            lambda tok: tokens.append(tok) or next(kill_returns),
-        )
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.runner_base.kill_simulator_by_token",
-            lambda tok, names: scoped_tokens.append(tok) or 0,
-        )
-        await sweep_runner.cancel(bj, state_no_sim)
-        # Both kills targeted this batch's token, then re-scanned to clean.
-        assert tokens == [bj.job_id] * 3
-        assert scoped_tokens == [bj.job_id] * 3
-        assert bj.status == "cancelled"
-
-    @pytest.mark.asyncio
-    async def test_sweep_passes_job_token_filenamer_and_exe_log(
-        self,
-        sweep_runner: SweepRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # execute_sweep must hand run_all a filenamer that embeds the job_id (so
-        # cancel's WSL taskkill can target the batch) and exe_log=True (so
-        # ngspice's stdout-only diagnostics are captured). spicelib's SimStepper
-        # / SimRunner are mocked — we assert OUR wiring, not spicelib iteration.
-        # SpiceEditor requires a leading "*" title line for encoding detection.
-        (work_dir / "n.cir").write_text("* sweep test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
-        bj = _make_batch(state_no_sim, work_dir)
-
-        captured: dict = {}
-
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sweep_runner._create_stepper",
-            lambda editor, runner: FakeStepper(run_all=captured.update),
-        )
-        monkeypatch.setattr(sweep_runner, "_build_sim_runner", lambda: MagicMock(_runno=0))
-        monkeypatch.setattr(sweep_runner, "_handle_sweep_completion", lambda *a, **k: None)
-
-        await sweep_runner.start_sweep(bj, state_no_sim)
-
-        assert captured.get("exe_log") is True
-        namer = captured.get("filenamer")
-        assert callable(namer)
-        # spicelib calls filenamer(**current_values); here current_values is {}.
-        n1 = namer()
-        n2 = namer()
-        assert isinstance(n1, str) and isinstance(n2, str)
-        assert n1.startswith(f"{bj.job_id}_") and n2.startswith(f"{bj.job_id}_")
-        assert n1 != n2  # unique per run
-
-
-class TestBatchCompletionAccounting:
-    """A batch must account for every run: a failed or dropped sub-run is
-    recorded as failed, never silently vanished, so a terminal 'completed'
-    can't mask a shortfall (completed_runs == total_runs, failed_runs honest).
-    """
-
-    def test_failed_run_recorded_not_dropped(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        # An aborted sub-run arrives with raw_file=None (callback_on_error).
-        bj = _make_batch(state_no_sim, work_dir)
-        fail_log = work_dir / "sweep_2.fail"
-        fail_log.write_text("Simulation Aborted")
-        sweep_runner._record_run_completion(
-            bj, None, fail_log, state_no_sim, kind="Sweep", runno=2
-        )
-        assert bj.completed_runs == 1
-        assert bj.failed_runs == 1
-        entry = bj.run_results[1]  # runno 2 -> 0-based key 1
-        assert entry["failed"] is True
-        assert entry["raw_file"] == ""
-        assert entry["log_file"].endswith("sweep_2.fail")
-
-    def test_missing_raw_path_is_failure(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        # raw_file given but never written on disk -> still counts as failed.
-        bj = _make_batch(state_no_sim, work_dir)
-        ghost = work_dir / "never_written.raw"
-        sweep_runner._record_run_completion(
-            bj, ghost, work_dir / "r.log", state_no_sim, kind="Sweep", runno=1
-        )
-        assert bj.failed_runs == 1
-        assert bj.run_results[0]["failed"] is True
-
-    def test_finalize_fills_missing_runs_as_failed(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        # Two of four runs reported; the other two vanished (silent drop).
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.total_runs = 4
-        bj.run_results = {
-            0: {"raw_file": "a.raw", "log_file": "a.log", "params": {}},
-            2: {"raw_file": "c.raw", "log_file": "c.log", "params": {}},
-        }
-        bj.completed_runs = 2
-        sweep_runner._finalize_batch(bj, "Sweep")
-        assert bj.completed_runs == bj.total_runs == 4
-        assert bj.failed_runs == 2
-        assert bj.run_results[1]["failed"] is True
-        assert bj.run_results[3]["failed"] is True
-
-    def test_all_runs_dropped_completes_with_full_failed_count(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        # The silent-whole-batch-drop scenario: every run vanished. The batch
-        # must finalize with failed_runs == total_runs and successful == 0, not
-        # report a clean 'completed' with zero runs and no error.
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.total_runs = 4
-        sweep_runner._finalize_batch(bj, "Sweep")
-        assert bj.completed_runs == 4
-        assert bj.failed_runs == 4
-        assert bj.completed_runs - bj.failed_runs == 0  # successful
-
-    def test_finalize_noop_when_all_present(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        bj.total_runs = 2
-        bj.run_results = {
-            0: {"raw_file": "a.raw", "log_file": "", "params": {}},
-            1: {"raw_file": "b.raw", "log_file": "", "params": {}},
-        }
-        bj.completed_runs = 2
-        mc_runner._finalize_batch(bj, "MC")
-        assert bj.failed_runs == 0
-        assert bj.completed_runs == 2
-
-
-class TestMonteCarloRunnerHandlers:
-    def test_handle_run_completion(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        raw = work_dir / "r0.raw"
-        raw.write_text("d")
-        log = work_dir / "r0.log"
-        log.write_text("l")
-        mc_runner._handle_run_completion(bj.job_id, raw, log, state_no_sim)
-        assert bj.completed_runs == 1
-
-    def test_handle_run_completion_unknown(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        mc_runner._handle_run_completion(
-            "missing", work_dir / "x.raw", work_dir / "x.log", state_no_sim
-        )
-
-    def test_handle_mc_completion(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        bj.run_results = {0: {"raw_file": "x", "log_file": "y", "params": {}}}
-        mc_runner._handle_mc_completion(bj.job_id, state_no_sim)
-        assert bj.status == "completed"
-        assert bj.done_event.is_set()
-
-    def test_handle_mc_completion_cancelled(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        bj.status = "cancelled"
-        mc_runner._handle_mc_completion(bj.job_id, state_no_sim)
-        assert bj.status == "cancelled"
-
-    def test_handle_mc_completion_unknown(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState
-    ):
-        mc_runner._handle_mc_completion("missing", state_no_sim)
-
-    @pytest.mark.asyncio
-    async def test_cancel(
-        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        await mc_runner.cancel(bj)
-        assert bj.status == "cancelled"
-
-    @pytest.mark.asyncio
-    async def test_mc_runs_named_by_job_token_and_capture_stdout(
-        self,
-        mc_runner: MonteCarloRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # Process-kill token + ngspice capture for the MC path. MC uses a
-        # per-call run_filename STRING (distinct from sweep's run_all filenamer),
-        # so it needs its own coverage: each sub-run must embed the job_id
-        # (cancel's WSL taskkill token) and pass exe_log=True (ngspice stdout capture).
-        (work_dir / "n.cir").write_text("* mc test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        bj.total_runs = 2
-        bj.mc_config = MonteCarloConfig(
-            netlist=work_dir / "n.cir",
-            type_tolerances={"R": (0.05, "uniform")},
-            num_runs=2,
-            seed=1,
-        )
-
-        runs: list = []
-
-        def build():
-            m = MagicMock(_runno=0)
-            m.run.side_effect = lambda *a, **k: runs.append(
-                (k.get("run_filename"), k.get("exe_log"))
-            )
-            return m
-
-        monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
-        monkeypatch.setattr(mc_runner, "_handle_mc_completion", lambda *a, **k: None)
-
-        await mc_runner.start_montecarlo(bj, state_no_sim)
-
-        assert len(runs) == 2
-        names = [n for n, _ in runs]
-        assert all(isinstance(n, str) and n.startswith(f"{bj.job_id}_") for n in names)
-        assert len(set(names)) == 2  # unique per run
-        assert all(exe is True for _, exe in runs)  # ngspice stdout capture on
-
-    @pytest.mark.asyncio
-    async def test_mc_params_are_numeric_like_sweep(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # Per-run params stored in run_results[i]["params"] are the actual
-        # perturbed magnitudes as FLOATS, matching the sweep runner (which
-        # stores parsed numerics) — not the formatted SPICE strings MC used
-        # to record. Drive the real perturbation path: the mocked spicelib
-        # runner fires the runno-aware completion callback so the real
-        # _handle_run_completion stores per_run_params into run_results.
-        # The runner is bound to the RUNNING loop so the bridged callbacks
-        # (call_soon_threadsafe) actually execute under this test.
-        mc_runner = MonteCarloRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=1,
-        )
-        (work_dir / "n.cir").write_text("* mc test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        bj.total_runs = 2
-        bj.mc_config = MonteCarloConfig(
-            netlist=work_dir / "n.cir",
-            type_tolerances={"R": (0.05, "uniform")},
-            num_runs=2,
-            seed=1,
-        )
-
-        def build():
-            m = MagicMock(_runno=0)
-
-            def fake_run(*a, callback=None, **k):
-                # A real spicelib runner increments _runno before the run task
-                # exists, and the runno-aware wrapper passes the runno into the
-                # callback as a kwarg. The mock's auto-attr ``run`` defeats the
-                # wrapper's idempotency sentinel, so emulate the wrapped shape
-                # here: invoke the callback with runno= directly.
-                m._runno += 1
-                runno = m._runno
-                raw = work_dir / f"mc_{runno}.raw"
-                raw.write_text("d")
-                log = work_dir / f"mc_{runno}.log"
-                log.write_text("l")
-                if callback is not None:
-                    callback(raw, log, runno=runno)
-
-            m.run.side_effect = fake_run
-            return m
-
-        monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
-
-        await mc_runner.start_montecarlo(bj, state_no_sim)
-        # The per-run + completion callbacks are bridged onto the loop via
-        # call_soon_threadsafe; poll until they have drained (job terminal)
-        # before we read results.
-        await _wait_for(lambda: bj.status == "completed")
-
-        assert bj.status == "completed"
-        assert set(bj.run_results.keys()) == {0, 1}
-        for run_index in (0, 1):
-            params = bj.run_results[run_index]["params"]
-            # R1 was the only perturbable component, so it must be present.
-            assert "R1" in params
-            # Every value is a real number, not a formatted SPICE string.
-            assert all(
-                isinstance(v, (int, float)) and not isinstance(v, bool) for v in params.values()
-            ), params
-            # The perturbed R1 is a plausible ±5% draw around the 1k nominal.
-            assert 900.0 < params["R1"] < 1100.0
-
-    @pytest.mark.asyncio
-    async def test_sweep_and_mc_params_are_same_type(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # Parity check: a sweep run records float params (see
-        # TestSweepRunnerHandlers.test_handle_sweep_completion's R1 == 1000.0),
-        # and a Monte Carlo run must use the same numeric type for its params
-        # so both job types are uniform for downstream consumers.
-        mc_runner = MonteCarloRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=FakeSim,
-            output_folder=work_dir,
-            max_parallel=1,
-        )
-        (work_dir / "n.cir").write_text("* mc test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        bj.total_runs = 1
-        bj.mc_config = MonteCarloConfig(
-            netlist=work_dir / "n.cir",
-            type_tolerances={"R": (0.05, "uniform")},
-            num_runs=1,
-            seed=1,
-        )
-
-        def build():
-            m = MagicMock(_runno=0)
-
-            def fake_run(*a, callback=None, **k):
-                m._runno += 1
-                raw = work_dir / f"mc_{m._runno}.raw"
-                raw.write_text("d")
-                log = work_dir / f"mc_{m._runno}.log"
-                log.write_text("l")
-                if callback is not None:
-                    callback(raw, log, runno=m._runno)
-
-            m.run.side_effect = fake_run
-            return m
-
-        monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
-        await mc_runner.start_montecarlo(bj, state_no_sim)
-        await _wait_for(lambda: bj.status == "completed")  # let the bridged callbacks drain
-
-        mc_params = bj.run_results[0]["params"]
-        # Mirror the sweep handler's assertion target: the param value is a
-        # float, the exact type the sweep runner stores via parse_spice_value.
-        sweep_r1_type = float
-        assert all(type(v) is sweep_r1_type for v in mc_params.values()), mc_params
-
-
-class TestParseRunno:
-    """``_parse_runno`` extracts spicelib's 1-based runno from raw filenames."""
-
-    def test_simple_runno(self):
-        from ltspice_mcp.lib.runner_base import _parse_runno
-
-        assert _parse_runno(Path("rlc_sweep_1.raw")) == 1
-        assert _parse_runno(Path("rlc_sweep_42.raw")) == 42
-
-    def test_stem_with_internal_underscores(self):
-        from ltspice_mcp.lib.runner_base import _parse_runno
-
-        # Trailing _<digits> is what counts; earlier underscores are stem.
-        assert _parse_runno(Path("circuit_v2_5.raw")) == 5
-        assert _parse_runno(Path("my_test_circuit_99.raw")) == 99
-
-    def test_no_trailing_runno(self):
-        from ltspice_mcp.lib.runner_base import _parse_runno
-
-        # One-shot sims (job-id stems) don't follow the spicelib pattern.
-        assert _parse_runno(Path("sim_1234abc.raw")) is None
-        assert _parse_runno(Path("plain.raw")) is None
-
-
-class TestWrapRunnerForRunnoCallbacks:
-    """The runner wrapper injects task.runno into the user's callback,
-    sidestepping spicelib's filename-parsing fallback path entirely."""
-
-    def test_callback_receives_runno_kwarg(self):
-        from unittest.mock import MagicMock
-
-        from ltspice_mcp.lib.runner_base import wrap_runner_for_runno_callbacks
-
-        runner = MagicMock()
-        runner._runno = 6  # wrap predicts _runno + 1 = 7
-
-        def fake_run(*args, callback=None, callback_args=None, **kwargs):
-            task = MagicMock()
-            task.runno = 7
-            task.callback = callback
-            return task
-
-        runner.run = fake_run
-        wrapped = wrap_runner_for_runno_callbacks(runner)
-
-        captured = {}
-
-        def user_cb(rf, lf, runno):
-            captured["rf"] = rf
-            captured["lf"] = lf
-            captured["runno"] = runno
-
-        # The wrapper passes runno_bound as the callback to original_run;
-        # fake_run stashes it on task.callback so we can invoke it here.
-        task = wrapped.run("netlist.cir", callback=user_cb)  # type: ignore[arg-type]
-        assert task is not None
-        runno_bound_cb = task.callback
-        assert runno_bound_cb is not None
-        runno_bound_cb(Path("netlist_7.raw"), Path("netlist_7.log"))
-        assert captured == {
-            "rf": Path("netlist_7.raw"),
-            "lf": Path("netlist_7.log"),
-            "runno": 7,
-        }
-
-    def test_idempotent(self):
-        from unittest.mock import MagicMock
-
-        from ltspice_mcp.lib.runner_base import wrap_runner_for_runno_callbacks
-
-        runner = MagicMock()
-
-        def fake_run(*args, callback=None, **kwargs):
-            task = MagicMock()
-            task.runno = 1
-            task.callback = callback
-            return task
-
-        runner.run = fake_run
-        first = wrap_runner_for_runno_callbacks(runner)
-        first_run = first.run
-        second = wrap_runner_for_runno_callbacks(runner)
-        # Wrapping twice should not double-wrap.
-        assert second.run is first_run
-
-    def test_no_callback_passes_through(self):
-        from unittest.mock import MagicMock
-
-        from ltspice_mcp.lib.runner_base import wrap_runner_for_runno_callbacks
-
-        runner = MagicMock()
-        seen_callbacks = []
-
-        def fake_run(*args, callback=None, **kwargs):
-            seen_callbacks.append(callback)
-            task = MagicMock()
-            task.runno = 1
-            return task
-
-        runner.run = fake_run
-        wrap_runner_for_runno_callbacks(runner)
-        runner.run("netlist.cir")
-        # Original is invoked with callback=None when user passes no cb.
-        assert seen_callbacks == [None]
-
-
 class TestMCSampler:
     """Our own MC perturbation engine. Replaces spicelib's Montecarlo class."""
 
     def test_normal_distribution_is_multiplicative(self):
         import statistics
 
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=42)
         spec = ToleranceSpec(tolerance=0.05, distribution="normal")
@@ -1662,7 +70,7 @@ class TestMCSampler:
         assert all(0.7 * nominal < s < 1.3 * nominal for s in samples)
 
     def test_uniform_distribution_within_tolerance(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=1)
         spec = ToleranceSpec(tolerance=0.10, distribution="uniform")
@@ -1672,7 +80,7 @@ class TestMCSampler:
         assert all(nominal * 0.9 <= s <= nominal * 1.1 for s in samples)
 
     def test_seed_reproducibility(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         spec = ToleranceSpec(tolerance=0.05, distribution="normal")
         s1 = MCSampler(seed=12345)
@@ -1682,7 +90,7 @@ class TestMCSampler:
         assert seq1 == seq2
 
     def test_different_seeds_diverge(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         spec = ToleranceSpec(tolerance=0.05, distribution="normal")
         s1 = MCSampler(seed=1).sample(1e-3, spec)
@@ -1692,7 +100,7 @@ class TestMCSampler:
     def test_unknown_distribution_raises(self):
         import pytest
 
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=0)
         # Deliberately bypass the Literal type to exercise the runtime
@@ -1767,7 +175,7 @@ class TestSampleOffset:
     kind uses the raw tolerance as σ (or half-range)."""
 
     def test_relative_zero_nominal_yields_zero_delta(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=1)
         spec = ToleranceSpec(tolerance=0.10, kind="relative")
@@ -1778,7 +186,7 @@ class TestSampleOffset:
     def test_absolute_kind_uses_raw_tolerance_as_3sigma(self):
         import statistics
 
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=42)
         # 30 mV ± 3σ → σ = 10 mV. Sample many; check std ≈ 10 mV.
@@ -1790,7 +198,7 @@ class TestSampleOffset:
     def test_relative_kind_scales_by_nominal(self):
         import statistics
 
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=7)
         spec = ToleranceSpec(tolerance=0.10, kind="relative")
@@ -1803,7 +211,6 @@ class TestSampleOffset:
 class TestModelPerturbationMath:
     def test_sample_model_perturbation_skips_missing_nominals(self):
         from ltspice_mcp.lib.montecarlo import (
-            MCSampler,
             ToleranceSpec,
             sample_model_perturbation,
         )
@@ -1824,7 +231,6 @@ class TestModelPerturbationMath:
 
     def test_sample_model_perturbation_accepts_lowercase_spec(self):
         from ltspice_mcp.lib.montecarlo import (
-            MCSampler,
             ToleranceSpec,
             sample_model_perturbation,
         )
@@ -1845,7 +251,6 @@ class TestModelPerturbationMath:
 
     def test_sample_model_perturbation_adds_delta(self):
         from ltspice_mcp.lib.montecarlo import (
-            MCSampler,
             ToleranceSpec,
             sample_model_perturbation,
         )
@@ -1920,8 +325,6 @@ class TestPelgromMismatch:
 
         from ltspice_mcp.lib.montecarlo import (
             InstanceGeometry,
-            MCSampler,
-            MismatchRule,
             sample_instance_mismatch,
         )
 
@@ -1948,8 +351,6 @@ class TestPelgromMismatch:
     def test_disabled_when_coefficients_zero(self):
         from ltspice_mcp.lib.montecarlo import (
             InstanceGeometry,
-            MCSampler,
-            MismatchRule,
             sample_instance_mismatch,
         )
 
@@ -2078,7 +479,7 @@ class TestParamPerturbation:
 
 class TestMismatchRuleMatching:
     def test_finds_first_matching_prefix(self):
-        from ltspice_mcp.lib.montecarlo import MismatchRule, find_mismatch_rule
+        from ltspice_mcp.lib.montecarlo import find_mismatch_rule
 
         rules = [
             MismatchRule(prefix="M", avt=3e-3, ak=0.02),
@@ -2101,7 +502,6 @@ class TestStreamIsolation:
     that makes regression-fixed-seed tests stable as the engine evolves."""
 
     def test_stream_keys_independent(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler
 
         sampler = MCSampler(seed=42)
         a1 = sampler.stream("A").gauss(0.0, 1.0)
@@ -2118,7 +518,7 @@ class TestStreamIsolation:
 
     def test_default_stream_compat(self):
         """The default stream still works for legacy single-stream callers."""
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         s1 = MCSampler(seed=7)
         s2 = MCSampler(seed=7)
@@ -2129,7 +529,6 @@ class TestStreamIsolation:
         """``derive(namespace)`` produces a child sampler whose streams
         are independent of the parent's, but reproducible from the parent
         seed + namespace."""
-        from ltspice_mcp.lib.montecarlo import MCSampler
 
         parent = MCSampler(seed=99)
         child_a = parent.derive("run1")
@@ -2144,7 +543,6 @@ class TestStreamIsolation:
     def test_adding_stream_doesnt_shift_existing(self):
         """If a future engine version adds a new perturbation source, the
         existing sources' sample sequences must be unchanged."""
-        from ltspice_mcp.lib.montecarlo import MCSampler
 
         # Old engine: only one stream "rcl:R1"
         old = MCSampler(seed=123)
@@ -2165,7 +563,7 @@ class TestTruncatedGaussian:
     values (e.g. negative VTO) that don't reflect real silicon."""
 
     def test_normal_samples_stay_within_bound(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=1)
         spec = ToleranceSpec(tolerance=0.10, distribution="normal")
@@ -2177,7 +575,7 @@ class TestTruncatedGaussian:
             assert abs(perturbed - 1.0) <= 0.10 + 1e-12  # within ±10% bound
 
     def test_offset_samples_stay_within_bound_absolute(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=2)
         spec = ToleranceSpec(tolerance=0.030, distribution="normal", kind="absolute")
@@ -2186,7 +584,7 @@ class TestTruncatedGaussian:
             assert abs(delta) <= 0.030 + 1e-12
 
     def test_offset_samples_stay_within_bound_relative(self):
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=3)
         spec = ToleranceSpec(tolerance=0.10, distribution="normal", kind="relative")
@@ -2200,7 +598,7 @@ class TestTruncatedGaussian:
         nominal σ (a tiny shrinkage from rejection at the tails)."""
         import statistics
 
-        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+        from ltspice_mcp.lib.montecarlo import ToleranceSpec
 
         sampler = MCSampler(seed=4)
         spec = ToleranceSpec(tolerance=0.10, distribution="normal")
@@ -2241,7 +639,7 @@ class TestMCRunnerCardFlowIntegration:
         )
 
     def test_phase1_model_perturbation_mutates_card_in_place(self):
-        from ltspice_mcp.lib.spice_lex import SpiceCard, lex
+        from ltspice_mcp.lib.spice_lex import SpiceCard
         from ltspice_mcp.lib.spice_lex_views import ModelCard
 
         cards = lex(self._baseline_netlist()).cards
@@ -2268,7 +666,7 @@ class TestMCRunnerCardFlowIntegration:
             render_variant_model_card,
             variant_model_name,
         )
-        from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+        from ltspice_mcp.lib.spice_lex import SpiceCard, emit
         from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
         from ltspice_mcp.lib.spice_lex_views import InstanceLine
 
@@ -2303,7 +701,7 @@ class TestMCRunnerCardFlowIntegration:
                 assert "NMOS1" in line and variant not in line
 
     def test_phase3_param_perturbation_mutates_param_card(self):
-        from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+        from ltspice_mcp.lib.spice_lex import SpiceCard, emit
         from ltspice_mcp.lib.spice_lex_views import ParamCard
 
         cards = lex(self._baseline_netlist()).cards
@@ -2324,7 +722,7 @@ class TestMCRunnerCardFlowIntegration:
             render_variant_model_card,
             variant_model_name,
         )
-        from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+        from ltspice_mcp.lib.spice_lex import SpiceCard, emit
         from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
         from ltspice_mcp.lib.spice_lex_views import (
             InstanceLine,
@@ -2379,7 +777,6 @@ class TestHierarchicalMcDoesNotJoinSpiceCircuits:
 
     def test_hierarchical_netlist_lexes_via_read_spice_text(self, tmp_path: Path) -> None:
         from ltspice_mcp.lib.encoding import read_spice_text
-        from ltspice_mcp.lib.spice_lex import lex
         from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 
         cir = tmp_path / "hier.cir"
@@ -2411,158 +808,6 @@ class TestHierarchicalMcDoesNotJoinSpiceCircuits:
         assert len(x_cards) == 1
         x_view = InstanceLine.from_card(x_cards[0])
         assert x_view.model == "stage"
-
-
-class TestBatchCancelSpawnRace:
-    """Cancelling a batch races spicelib's submission loop: killing the
-    in-flight runs frees simulator slots, which resumes a submission blocked
-    inside ``runner.run`` — observed live as a Monte-Carlo child created the
-    same second as the cancel that survived it and kept simulating. Two
-    defenses, both tested here: cancel() re-scans until a clean kill pass,
-    and the gated runner refuses submissions once the cancel event is set.
-    """
-
-    @pytest.mark.asyncio
-    async def test_cancel_rescans_until_late_spawn_killed(
-        self,
-        sweep_runner: SweepRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        bj = _make_batch(state_no_sim, work_dir)
-        monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
-        calls: list[str] = []
-        # A late spawn becomes visible only on the third scan; the loop must
-        # keep scanning past the first clean pass to catch it.
-        kill_returns = iter([2, 0, 1, 0])
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
-            lambda tok: calls.append(tok) or next(kill_returns),
-        )
-        await sweep_runner.cancel(bj, state_no_sim)
-        assert calls == [bj.job_id] * 4
-        assert bj.status == "cancelled"
-
-    @pytest.mark.asyncio
-    async def test_cancel_single_pass_when_nothing_matched(
-        self,
-        mc_runner: MonteCarloRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # No process matched (non-WSL no-op, or the batch already drained):
-        # one pass, no re-scan delay.
-        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
-        calls: list[str] = []
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
-            lambda tok: calls.append(tok) or 0,
-        )
-        await mc_runner.cancel(bj, state_no_sim)
-        assert calls == [bj.job_id]
-        assert bj.status == "cancelled"
-
-    @pytest.mark.asyncio
-    async def test_cancel_kill_passes_are_bounded(
-        self,
-        sweep_runner: SweepRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # A process that taskkill never manages to remove must not loop
-        # cancel() forever.
-        from ltspice_mcp.lib import runner_base
-
-        bj = _make_batch(state_no_sim, work_dir)
-        monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
-        calls: list[str] = []
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
-            lambda tok: calls.append(tok) or 1,
-        )
-        await sweep_runner.cancel(bj, state_no_sim)
-        assert len(calls) == runner_base._CANCEL_KILL_MAX_PASSES
-        assert bj.status == "cancelled"
-
-
-class TestGateRunnerOnCancel:
-    def test_gate_blocks_submissions_once_cancelled(self):
-        import threading
-
-        from ltspice_mcp.lib.runner_base import BatchCancelledError, gate_runner_on_cancel
-
-        ev = threading.Event()
-        inner = MagicMock()
-        launched: list[tuple] = []
-        inner.run = lambda *a, **k: launched.append(a)
-        gated = gate_runner_on_cancel(inner, ev, "sweep_x")
-
-        gated.run("first")
-        assert launched == [("first",)]
-
-        ev.set()
-        with pytest.raises(BatchCancelledError):
-            gated.run("second")
-        assert launched == [("first",)]  # nothing launched after cancel
-
-    def test_mark_batch_failed_ignores_cancel_abort(
-        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        # The gate can fire while cancel() is still mid-kill (job not yet
-        # transitioned). The abort exception must not mark the job failed —
-        # cancel() owns the terminal transition.
-        from ltspice_mcp.lib.runner_base import BatchCancelledError
-
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.status = "running"
-        sweep_runner._mark_batch_failed(
-            bj, state_no_sim, BatchCancelledError("cancelled"), kind="sweep"
-        )
-        assert bj.status == "running"  # untouched, not "failed"
-        assert bj.error is None
-
-    @pytest.mark.asyncio
-    async def test_cancelled_sweep_stops_launching_queued_runs(
-        self,
-        sweep_runner: SweepRunner,
-        state_no_sim: SessionState,
-        work_dir: Path,
-        monkeypatch,
-    ):
-        # End-to-end through start_sweep: once the cancel event fires
-        # mid-batch, the submission loop must stop launching the remaining
-        # queued runs instead of working through the rest of the queue.
-        (work_dir / "n.cir").write_text("* t\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
-        bj = _make_batch(state_no_sim, work_dir)
-        bj.status = "running"
-        inner = MagicMock(_runno=0)
-        launched: list[int] = []
-
-        def submit_five(runner):
-            def run_all(**kwargs):
-                for i in range(5):
-                    runner.run(f"run{i}")
-                    launched.append(i)
-                    if i == 1:
-                        # Cancel lands while the batch is mid-queue.
-                        sweep_runner._cancel_events[bj.job_id].set()
-
-            return run_all
-
-        monkeypatch.setattr(
-            "ltspice_mcp.lib.sweep_runner._create_stepper",
-            lambda editor, runner: FakeStepper(run_all=submit_five(runner)),
-        )
-        monkeypatch.setattr(sweep_runner, "_build_sim_runner", lambda: inner)
-        await sweep_runner.start_sweep(bj, state_no_sim)
-
-        assert launched == [0, 1]  # run 2..4 never submitted
-        # The abort is not a batch failure: cancel() owns the status.
-        assert bj.status == "running"
-        assert bj.error is None
 
 
 class TestDiscardGeneratedNetlist:

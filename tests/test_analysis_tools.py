@@ -1,81 +1,90 @@
-"""Tests for analysis tool handlers using mocked RawRead instances.
+"""The numeric core behind every analyze_results recipe, over mocked and recorded raws.
 
-The classes at the bottom (``TestRecordedAcRaw`` / ``TestRecordedSteppedAcRaw``)
-instead drive the handlers against real recorded LTspice binary raws from
-``tests/fixtures/`` — see those classes for what the mocks cannot cover.
+Each case builds the recipe a caller would send and runs it through
+``lib.metrics.METRICS`` — the same table the evaluator dispatches on — so what
+is pinned here is the production path, not a copy of it. The classes at the
+bottom (``TestRecordedAcRaw`` / ``TestRecordedSteppedAcRaw``) run against real
+recorded LTspice binary raws from ``tests/fixtures/``; see those classes for
+what the mocks cannot cover.
 """
 
-import json
-from datetime import timedelta
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from mcp import types
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import now
-from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
-from ltspice_mcp.tools.analysis import (
-    AcStructureInput,
-    BodeMetricsInput,
-    DisturbanceResponseInput,
-    EdgeMetricsInput,
-    ExportWaveformInput,
-    FilterMetricsInput,
-    FindCrossingInput,
-    GainAtInput,
-    GetWaveformInput,
-    MeasurementStatsInput,
-    NoiseIntegralInput,
-    OperatingPointInput,
-    PeriodicMetricsInput,
-    PulseResponseInput,
-    QueryValueInput,
-    ResonanceInput,
-    ReturnLossInput,
-    RollOffInput,
-    SignalStatsInput,
-    SimulationSummaryInput,
-    StabilityMetricsInput,
-    ThdInput,
-    TimingBetweenInput,
-    TransientResponseInput,
-    _filter_operating_point,
-    _noise_input_source_unit,
-    _split_ratio,
-    _trace_device,
-    handle_ac_structure,
-    handle_bode_metrics,
-    handle_disturbance_response,
-    handle_edge_metrics,
-    handle_export_waveform,
-    handle_filter_metrics,
-    handle_find_crossing,
-    handle_gain_at,
-    handle_get_waveform,
-    handle_measurement_stats,
-    handle_noise_integral,
-    handle_operating_point,
-    handle_periodic_metrics,
-    handle_pulse_response,
-    handle_query_value,
-    handle_resonance,
-    handle_return_loss,
-    handle_roll_off,
-    handle_signal_stats,
-    handle_simulation_summary,
-    handle_stability_metrics,
-    handle_thd,
-    handle_timing_between,
-    handle_transient_response,
+from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.metrics import (
+    MetricValue,
+    has_active_device,
 )
-from ltspice_mcp.tools.circuit import (
-    StepGetInput,
-    handle_step_get,
+from ltspice_mcp.lib.metrics import (
+    filter_operating_point as _filter_operating_point,
 )
+from ltspice_mcp.lib.metrics import (
+    guarded_axis as _guarded_axis,
+)
+from ltspice_mcp.lib.metrics import (
+    noise_input_source_unit as _noise_input_source_unit,
+)
+from ltspice_mcp.lib.metrics import (
+    parse_freq as _parse_freq,
+)
+from ltspice_mcp.lib.metrics import (
+    split_ratio as _split_ratio,
+)
+from ltspice_mcp.lib.metrics import (
+    trace_device as _trace_device,
+)
+from ltspice_mcp.lib.recipes import (
+    AcStructureRecipe,
+    BodeCrossingRecipe,
+    BodeFilterRecipe,
+    BodePointRecipe,
+    BodeSlopeRecipe,
+    EdgesRecipe,
+    MeasurementsRecipe,
+    NoiseIntegralRecipe,
+    OperatingPointRecipe,
+    PeriodicRecipe,
+    Recipe,
+    ResonanceRecipe,
+    ReturnLossRecipe,
+    SignalStatsRecipe,
+    StabilityRecipe,
+    SummaryRecipe,
+    ThdRecipe,
+    TimingEndpoint,
+    TimingRecipe,
+    ValueRecipe,
+    Window,
+)
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import safe_path
 from tests.conftest import stage_recorded_fixture as _stage_recorded
+
+
+def _source(state: SessionState, raw_file: str | Path) -> services.AnalysisSource:
+    """The source a caller-supplied raw path resolves to, as the tools resolve it."""
+    raw = raw_file if isinstance(raw_file, Path) else safe_path(str(raw_file), state)
+    return services.AnalysisSource.for_raw(raw)
+
+
+async def _metric(
+    state: SessionState,
+    raw_file: str | Path,
+    recipe: Recipe,
+    step: int = 0,
+    **options: Any,
+) -> MetricValue:
+    """Run one recipe through the table the evaluator dispatches on."""
+    return await metrics.METRICS[type(recipe)](
+        _source(state, raw_file), recipe, step, state, **options
+    )
 
 
 def _inject_raw_mock(state: SessionState, path: Path, raw: MagicMock) -> None:
@@ -112,23 +121,6 @@ def _make_raw_mock(
     return raw
 
 
-def _completed_batch(state: SessionState, run_results: dict, *, job_id: str = "b1") -> BatchJob:
-    """Register a completed sweep BatchJob so its runs are reachable by
-    ``job_id`` + ``run_index`` through the result read-model."""
-    bj = BatchJob(
-        job_id=job_id,
-        job_type="sweep",
-        netlist=Path("/tmp/x.cir"),
-        total_runs=len(run_results),
-        completed_runs=len(run_results),
-        status="completed",
-    )
-    bj.run_results = run_results
-    bj.completed_at = bj.started_at + timedelta(seconds=5)
-    state.add_batch_job(bj)
-    return bj
-
-
 @pytest.fixture
 def fake_raw(state_no_sim: SessionState, work_dir: Path) -> Path:
     raw_file = work_dir / "result.raw"
@@ -140,15 +132,14 @@ def fake_raw(state_no_sim: SessionState, work_dir: Path) -> Path:
 @pytest.mark.asyncio
 class TestSignalStats:
     async def test_transient(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=fake_raw.name, signal="V(out)"),
+        data = await _metric(
             state_no_sim,
+            fake_raw.name,
+            SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)"),
         )
-        text = result.content[0].text
-        assert "V(out)" in text
-        assert "Min:" in text
-        assert "Max:" in text
-        assert result.structuredContent["analysis_type"] == "transient"
+        assert data["signal"] == "V(out)"
+        assert data["analysis_type"] == "transient"
+        assert data["min"] < data["max"]
 
     async def test_dc_sweep_classification(self, state_no_sim: SessionState, work_dir: Path):
         """A .DC raw used to report ``analysis_type='transient'`` and
@@ -164,11 +155,12 @@ class TestSignalStats:
             axis=temps,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(vref)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(vref)"),
         )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["analysis_type"] == "dc"
         assert "sweep_start_used" in data
@@ -193,11 +185,12 @@ class TestSignalStats:
             axis=v,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(out)"),
         )
-        data = result.structuredContent
+        data = result
         assert data is not None
         assert data["analysis_type"] == "dc"
         # min/max computed over the flipped-to-ascending axis.
@@ -206,16 +199,19 @@ class TestSignalStats:
 
     async def test_signal_not_found(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="not found"):
-            await handle_signal_stats(
-                SignalStatsInput(raw_file=fake_raw.name, signal="V(missing)"),
+            await _metric(
                 state_no_sim,
+                fake_raw.name,
+                SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(missing)"),
             )
 
     async def test_step_out_of_range(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="out of range"):
-            await handle_signal_stats(
-                SignalStatsInput(raw_file=fake_raw.name, signal="V(out)", step=99),
+            await _metric(
                 state_no_sim,
+                fake_raw.name,
+                SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(out)"),
+                step=99,
             )
 
     async def test_ac_signal(self, state_no_sim: SessionState, work_dir: Path):
@@ -229,12 +225,13 @@ class TestSignalStats:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"),
+        data = await _metric(
             state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)"),
         )
-        assert "AC" in result.content[0].text
-        assert result.structuredContent["analysis_type"] == "ac"
+        assert data["analysis_type"] == "ac"
+        assert data["max_db"] == pytest.approx(0.0, abs=0.01)
 
     async def test_ac_rejects_window(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "ac.raw"
@@ -248,9 +245,15 @@ class TestSignalStats:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="not supported for AC"):
-            await handle_signal_stats(
-                SignalStatsInput(raw_file=raw_file.name, signal="V(out)", t_start="1k"),
+            await _metric(
                 state_no_sim,
+                raw_file.name,
+                SignalStatsRecipe(
+                    key="signal_stats",
+                    metric="signal_stats",
+                    signal="V(out)",
+                    window=Window(start="1k"),
+                ),
             )
 
     async def test_transient_time_weighted_rms(self, state_no_sim: SessionState, work_dir: Path):
@@ -265,11 +268,12 @@ class TestSignalStats:
             axis=t,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(out)"),
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["analysis_type"] == "transient"
         assert sc["rms"] == pytest.approx(amp / np.sqrt(2), rel=1e-3)
         assert sc["peak_to_peak"] == pytest.approx(2 * amp, rel=1e-3)
@@ -287,11 +291,17 @@ class TestSignalStats:
             axis=t,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(out)", t_start="0.6m", t_end="1m"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(
+                key="signal_stats",
+                metric="signal_stats",
+                signal="V(out)",
+                window=Window(start="0.6m", end="1m"),
+            ),
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["mean"] == pytest.approx(5.0)
         assert sc["rms"] == pytest.approx(5.0)
         assert sc["std"] == pytest.approx(0.0, abs=1e-9)
@@ -302,18 +312,20 @@ class TestSignalStats:
 @pytest.mark.asyncio
 class TestQueryValue:
     async def test_transient(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_query_value(
-            QueryValueInput(raw_file=fake_raw.name, signal="V(out)", at="0.5"),
+        data = await _metric(
             state_no_sim,
+            fake_raw.name,
+            ValueRecipe(key="v", metric="value", expr="V(out)", at="0.5"),
         )
-        assert "V(out)" in result.content[0].text
-        assert "Value:" in result.content[0].text
+        assert data["signal"] == "V(out)"
+        assert isinstance(data["value"], float)
 
     async def test_invalid_at(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="Invalid 'at'"):
-            await handle_query_value(
-                QueryValueInput(raw_file=fake_raw.name, signal="V(out)", at="bad"),
+            await _metric(
                 state_no_sim,
+                fake_raw.name,
+                ValueRecipe(key="value", metric="value", expr="V(out)", at="bad"),
             )
 
     async def test_ac_query(self, state_no_sim: SessionState, work_dir: Path):
@@ -327,11 +339,12 @@ class TestQueryValue:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="1k"),
+        data = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="v", metric="value", expr="V(out)", at="1k"),
         )
-        assert "Magnitude:" in result.content[0].text
+        assert "magnitude_db" in data and "phase_deg" in data
 
     async def test_queried_bogus_param_warns(self, state_no_sim: SessionState, work_dir: Path):
         # A queried @-param the model doesn't expose is a fake 0.0; the
@@ -348,11 +361,12 @@ class TestQueryValue:
             },
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="v(@m1[bogus])", at="0.5"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="v(@m1[bogus])", at="0.5"),
         )
-        warnings = (result.structuredContent or {}).get("warnings") or []
+        warnings = (result or {}).get("warnings") or []
         assert any("did not recognize" in w for w in warnings)
 
     async def test_unrecognized_not_relayed_for_other_signal(
@@ -371,11 +385,12 @@ class TestQueryValue:
             },
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="0.5"),
         )
-        warnings = (result.structuredContent or {}).get("warnings") or []
+        warnings = (result or {}).get("warnings") or []
         assert not any("did not recognize" in w for w in warnings)
 
     async def test_solve_failure_taints_any_read(self, state_no_sim: SessionState, work_dir: Path):
@@ -388,11 +403,12 @@ class TestQueryValue:
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="0.5"),
         )
-        warnings = (result.structuredContent or {}).get("warnings") or []
+        warnings = (result or {}).get("warnings") or []
         assert any("gmin stepping" in w.lower() for w in warnings)
 
     async def test_clean_read_has_no_warnings(self, state_no_sim: SessionState, work_dir: Path):
@@ -404,23 +420,22 @@ class TestQueryValue:
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="0.5"),
         )
-        assert not (result.structuredContent or {}).get("warnings")
+        assert not (result or {}).get("warnings")
 
 
 def test_has_active_device_detects_transistor_currents():
-    # _has_active_device is one arm of the empty op-point note's gate (the other
+    # has_active_device is one arm of the empty op-point note's gate (the other
     # is an ngspice run); an RC circuit trips neither, so it stays note-free. Sync
     # test, kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
-    from ltspice_mcp.tools.analysis import _has_active_device
-
-    assert _has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
-    assert _has_active_device({"Ic(Q2)": 1e-3})
-    assert not _has_active_device({"I(R1)": 1e-3, "I(V1)": 2e-3})
-    assert not _has_active_device({})
+    assert has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
+    assert has_active_device({"Ic(Q2)": 1e-3})
+    assert not has_active_device({"I(R1)": 1e-3, "I(V1)": 2e-3})
+    assert not has_active_device({})
 
 
 @pytest.mark.asyncio
@@ -437,12 +452,13 @@ class TestGetOperatingPoint:
             },
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        data = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="op", metric="operating_point"),
         )
-        text = result.content[0].text
-        assert "V(out)" in text
-        assert "I(R1)" in text
+        assert data["voltages"]["V(out)"] == pytest.approx(1.5)
+        assert data["currents"]["I(R1)"] == pytest.approx(0.001)
 
     async def test_clean_run_emits_empty_warnings(
         self, state_no_sim: SessionState, work_dir: Path
@@ -456,10 +472,12 @@ class TestGetOperatingPoint:
             waves={"V(out)": np.array([1.5]), "I(R1)": np.array([0.001])},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
         )
-        assert (result.structuredContent or {})["warnings"] == []
+        assert (result or {})["warnings"] == []
 
     async def test_folds_ltspice_logopinfo_op_points(
         self, state_no_sim: SessionState, work_dir: Path
@@ -486,19 +504,23 @@ class TestGetOperatingPoint:
             waves={"V(d)": np.array([1.8]), "Id(M1)": np.array([9.6e-5])},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
         )
-        sc = result.structuredContent or {}
+        sc = result or {}
         dop = sc.get("device_op_points") or {}
         assert dop.get("@m1[gm]") == pytest.approx(4.8e-4)
         assert dop.get("@m1[vth]") == pytest.approx(0.5)
         assert "@m1[model]" not in dop  # the string Model: row is dropped
         # device= scoping resolves the log-sourced params for one device.
-        scoped = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name, device="M1"), state_no_sim
+        scoped = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point", device="M1"),
         )
-        assert (scoped.structuredContent or {}).get("device_op_points", {}).get("@m1[gm]")
+        assert (scoped or {}).get("device_op_points", {}).get("@m1[gm]")
 
     async def test_dc_sweep_at_reads_chosen_point(
         self, state_no_sim: SessionState, work_dir: Path
@@ -517,10 +539,13 @@ class TestGetOperatingPoint:
             axis=np.array([0.0, 1.0, 2.0, 3.0]),
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name, at="2.0"), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
+            at="2.0",
         )
-        sc = result.structuredContent
+        sc = result
         assert sc is not None
         assert sc["voltages"]["V(out)"] == 30.0
         assert sc["currents"]["I(R1)"] == pytest.approx(0.3)
@@ -540,10 +565,12 @@ class TestGetOperatingPoint:
             waves={"V(out)": np.array([1.5]), "v(@m1[bogus])": np.array([0.0])},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
         )
-        warnings = (result.structuredContent or {}).get("warnings") or []
+        warnings = (result or {}).get("warnings") or []
         assert any("unrecognized" in w.lower() for w in warnings)
 
     async def test_carries_solve_failure(self, state_no_sim: SessionState, work_dir: Path):
@@ -557,10 +584,12 @@ class TestGetOperatingPoint:
             waves={"V(out)": np.array([1.5])},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
         )
-        warnings = (result.structuredContent or {}).get("warnings") or []
+        warnings = (result or {}).get("warnings") or []
         assert any("gmin stepping" in w.lower() for w in warnings)
 
     async def test_rejects_ac_raw(self, state_no_sim: SessionState, work_dir: Path):
@@ -582,7 +611,11 @@ class TestGetOperatingPoint:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="AC/Noise"):
-            await handle_operating_point(OperatingPointInput(raw_file=raw_file.name), state_no_sim)
+            await _metric(
+                state_no_sim,
+                raw_file.name,
+                OperatingPointRecipe(key="operating_point", metric="operating_point"),
+            )
 
     async def test_rejects_transient_raw(self, state_no_sim: SessionState, work_dir: Path):
         from ltspice_mcp.errors import ResultError
@@ -596,81 +629,19 @@ class TestGetOperatingPoint:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="t=0"):
-            await handle_operating_point(OperatingPointInput(raw_file=raw_file.name), state_no_sim)
+            await _metric(
+                state_no_sim,
+                raw_file.name,
+                OperatingPointRecipe(key="operating_point", metric="operating_point"),
+            )
 
 
 @pytest.mark.asyncio
 class TestGetSimulationSummary:
     async def test_basic(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
-        )
-        text = result.content[0].text
-        assert "Transient Analysis" in text
-        assert "Signals" in text
-
-    async def test_json_format(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file=fake_raw.name, format="json"),
-            state_no_sim,
-        )
-        assert result.structuredContent is not None
-        assert "sim_type" in result.structuredContent
-
-
-class TestFormatMeasurements:
-    def test_single_step(self):
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements(
-            {"fc": {"values": [1591.5]}, "vp": {"values": [3.3]}}, step_count=1
-        )
-        assert "fc" in text
-        assert "1591.5" in text or "1.5915e" in text
-
-    def test_failed_value(self):
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements({"fc": {"values": [None]}}, step_count=1)
-        assert "FAILED" in text
-
-    def test_multi_step(self):
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements({"fc": {"values": [1.0, 2.0, None]}}, step_count=3)
-        assert "3 steps" in text
-        assert "FAILED" in text
-
-    def test_window_metadata_appears(self):
-        """``range_from`` / ``range_to`` should be folded into the line, not surfaced as
-        separate measurements."""
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements(
-            {"v_rms": {"values": [0.707], "range_from": 0.002, "range_to": 0.01}},
-            step_count=1,
-        )
-        assert "FROM=0.002" in text
-        assert "TO=0.01" in text
-
-    def test_at_metadata_appears(self):
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements({"vref_op": {"values": [3.18], "at": 1.03}}, step_count=1)
-        assert "AT=1.03" in text
-
-    def test_empty_with_errors(self):
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements({}, step_count=0, errors=["bad", "very bad"])
-        assert "errors in log" in text
-        assert "bad" in text
-
-    def test_empty_no_errors(self):
-        from ltspice_mcp.tools.analysis import _format_measurements
-
-        text = _format_measurements({}, step_count=0)
-        assert "No .MEAS results" in text
+        data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
+        assert data["sim_type"] == "Transient Analysis"
+        assert data["signals"]
 
 
 @pytest.mark.asyncio
@@ -684,12 +655,12 @@ class TestSummaryWithMeasurements:
             "fc: mag(v(out))=0.707 AT 1591.5\n"
             "Total elapsed time: 0.001 seconds.\n"
         )
-        result = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file=fake_raw.name, log_file=log.name),
-            state_no_sim,
+        source = replace(_source(state_no_sim, fake_raw.name), log=log)
+        data = await metrics.summary(
+            source, SummaryRecipe(key="summary", metric="summary"), 0, state_no_sim
         )
-        text = result.content[0].text
-        assert "Transient Analysis" in text
+        assert data["sim_type"] == "Transient Analysis"
+        assert "fc" in data["measurements"]
 
 
 @pytest.mark.asyncio
@@ -705,12 +676,14 @@ class TestSummaryAcWithMetrics:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file=raw_file.name, signal="V(out)"),
+        data = await _metric(
             state_no_sim,
+            raw_file.name,
+            SummaryRecipe(key="s", metric="summary"),
+            signal="V(out)",
         )
-        text = result.content[0].text
-        assert "AC Analysis" in text
+        assert data["sim_type"] == "AC Analysis"
+        assert data["ac_bandwidth_metrics"]["bandwidth_3db"] == pytest.approx(1000.0, rel=0.05)
 
     async def test_ac_signal_used_when_autopicked(
         self, state_no_sim: SessionState, work_dir: Path
@@ -728,11 +701,10 @@ class TestSummaryAcWithMetrics:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file=raw_file.name, format="json"),
-            state_no_sim,
+        result = await _metric(
+            state_no_sim, raw_file.name, SummaryRecipe(key="summary", metric="summary")
         )
-        assert result.structuredContent["ac_signal_used"] == "V(out)"
+        assert result["ac_signal_used"] == "V(out)"
 
 
 @pytest.mark.asyncio
@@ -744,39 +716,35 @@ class TestSummarySuggestions:
     async def test_suggestions_in_schema_and_text(
         self, state_no_sim: SessionState, fake_raw: Path, monkeypatch
     ):
-        import ltspice_mcp.tools.analysis as analysis_mod
+        import ltspice_mcp.lib.metrics as metrics_mod
 
         fake = {"MYMODEL": [{"name": "MyModel", "score": 88, "source_path": "/libs/foo.lib"}]}
         monkeypatch.setattr(
-            analysis_mod.services,
+            metrics_mod.services,
             "suggestions_from_errors",
             lambda errors, libraries: fake,
         )
-        result = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
-        )
-        # Structured channel carries the suggestions (validated against the
-        # declared output_schema by the autouse conformance hook).
-        assert result.structuredContent["suggestions"] == fake
-        # Text channel renders them too — no longer structured-only.
-        text = result.content[0].text
-        assert "MyModel" in text
+        data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
+        assert data["suggestions"] == fake
 
 
 @pytest.mark.asyncio
 class TestQueryStepRange:
     async def test_step_out_of_range(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="out of range"):
-            await handle_query_value(
-                QueryValueInput(raw_file=fake_raw.name, signal="V(out)", at="0.5", step=99),
+            await _metric(
                 state_no_sim,
+                fake_raw.name,
+                ValueRecipe(key="value", metric="value", expr="V(out)", at="0.5"),
+                step=99,
             )
 
     async def test_signal_not_found(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="not found"):
-            await handle_query_value(
-                QueryValueInput(raw_file=fake_raw.name, signal="V(missing)", at="0.5"),
+            await _metric(
                 state_no_sim,
+                fake_raw.name,
+                ValueRecipe(key="value", metric="value", expr="V(missing)", at="0.5"),
             )
 
 
@@ -806,16 +774,12 @@ class TestEdgeMetrics:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
-        result = await handle_edge_metrics(
-            EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
+        data = await _metric(
+            state_no_sim, raw_file.name, EdgesRecipe(key="e", metric="edges", signal="V(out)")
         )
-        assert result.structuredContent is not None
-        sc = result.structuredContent
-        assert sc["is_rise_time"] is True
-        assert sc["signal"] == "V(out)"
-        assert sc["transition_time"] > 0
-        assert "Rise time" in result.content[0].text
+        assert data["is_rise_time"] is True
+        assert data["signal"] == "V(out)"
+        assert data["transition_time"] > 0
 
     async def test_ac_rejected(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "ac.raw"
@@ -829,9 +793,10 @@ class TestEdgeMetrics:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="transient analysis"):
-            await handle_edge_metrics(
-                EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"),
+            await _metric(
                 state_no_sim,
+                raw_file.name,
+                EdgesRecipe(key="edges", metric="edges", signal="V(out)"),
             )
 
     async def test_invalid_signal(self, state_no_sim: SessionState, work_dir: Path):
@@ -840,9 +805,10 @@ class TestEdgeMetrics:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="not found"):
-            await handle_edge_metrics(
-                EdgeMetricsInput(raw_file=raw_file.name, signal="V(missing)"),
+            await _metric(
                 state_no_sim,
+                raw_file.name,
+                EdgesRecipe(key="edges", metric="edges", signal="V(missing)"),
             )
 
     async def test_window_propagated(self, state_no_sim: SessionState, work_dir: Path):
@@ -851,16 +817,14 @@ class TestEdgeMetrics:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
-        result = await handle_edge_metrics(
-            EdgeMetricsInput(
-                raw_file=raw_file.name,
-                signal="V(out)",
-                t_start="100u",
-                t_end="1m",
-            ),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            EdgesRecipe(
+                key="edges", metric="edges", signal="V(out)", window=Window(start="100u", end="1m")
+            ),
         )
-        assert result.structuredContent["is_rise_time"] is True
+        assert result["is_rise_time"] is True
 
     async def test_invalid_t_start(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "edge.raw"
@@ -868,26 +832,13 @@ class TestEdgeMetrics:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="Invalid t_start"):
-            await handle_edge_metrics(
-                EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)", t_start="garbage"),
+            await _metric(
                 state_no_sim,
+                raw_file.name,
+                EdgesRecipe(
+                    key="edges", metric="edges", signal="V(out)", window=Window(start="garbage")
+                ),
             )
-
-    async def test_json_format(self, state_no_sim: SessionState, work_dir: Path):
-        raw_file = work_dir / "edge.raw"
-        t, y = _step_waveform()
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_edge_metrics(
-            EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)", format="json"),
-            state_no_sim,
-        )
-        assert result.structuredContent is not None
-        # JSON format emits the structured data as the text channel too — parse
-        # it and confirm it matches structuredContent (not just a leading "{").
-        parsed = json.loads(result.content[0].text)
-        assert parsed["signal"] == result.structuredContent["signal"] == "V(out)"
-        assert parsed == result.structuredContent
 
 
 # ---------------------------------------------------------------------------
@@ -915,16 +866,17 @@ class TestPulseResponse:
 
         # Pass explicit initial/final — the auto-detect window averages first 10%
         # which, with 500 pre samples and 20001 post samples, bleeds into ringing.
-        result = await handle_pulse_response(
-            PulseResponseInput(
-                raw_file=raw_file.name,
-                signal="V(out)",
-                initial_value=0.0,
-                final_value=1.0,
-            ),
+        result = await metrics.pulse_response(
+            _source(state_no_sim, raw_file.name),
+            "V(out)",
+            None,
+            None,
+            0,
             state_no_sim,
+            initial_value=0.0,
+            final_value=1.0,
         )
-        sc = result.structuredContent
+        sc = result
         assert sc is not None
         assert sc["direction"] == "rising"
         assert sc["overshoot_pct"] > 0
@@ -938,9 +890,8 @@ class TestPulseResponse:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="No step detected"):
-            await handle_pulse_response(
-                PulseResponseInput(raw_file=raw_file.name, signal="V(out)"),
-                state_no_sim,
+            await metrics.pulse_response(
+                _source(state_no_sim, raw_file.name), "V(out)", None, None, 0, state_no_sim
             )
 
     async def test_ringing_tail_renders_unknown_not_never(
@@ -962,19 +913,13 @@ class TestPulseResponse:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         # No explicit final_value -> trailing window is still ringing -> suppressed.
-        result = await handle_pulse_response(
-            PulseResponseInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
+        data = await metrics.pulse_response(
+            _source(state_no_sim, raw_file.name), "V(out)", None, None, 0, state_no_sim
         )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["settling_time"] is None
-        assert "settling_final_value_from_noisy_tail" in sc["quality"]
-        item = result.content[0]
-        assert isinstance(item, types.TextContent)
-        text = item.text
-        assert "unknown" in text.lower()
-        assert "never (within window)" not in text
+        # The null is qualified, not bare: the reason it is unknown (noisy tail)
+        # travels with it, so a reader cannot take it for "never settled".
+        assert data["settling_time"] is None
+        assert "settling_final_value_from_noisy_tail" in data["quality"]
 
     async def test_short_dwell_renders_unknown_not_never(
         self, state_no_sim: SessionState, work_dir: Path
@@ -990,19 +935,13 @@ class TestPulseResponse:
         y = levels[np.minimum((t // 5e-9).astype(int), len(levels) - 1)]
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_pulse_response(
-            PulseResponseInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
+        data = await metrics.pulse_response(
+            _source(state_no_sim, raw_file.name), "V(out)", None, None, 0, state_no_sim
         )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["settling_time"] is None
-        assert "settling_dwell_near_window_end" in sc["quality"]
-        item = result.content[0]
-        assert isinstance(item, types.TextContent)
-        text = item.text
-        assert "unknown" in text.lower()
-        assert "never (within window)" not in text
+        # The null is qualified, not bare: the reason it is unknown (short dwell)
+        # travels with it, so a reader cannot take it for "never settled".
+        assert data["settling_time"] is None
+        assert "settling_dwell_near_window_end" in data["quality"]
 
 
 # ---------------------------------------------------------------------------
@@ -1024,11 +963,19 @@ class TestTimingBetween:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
-        result = await handle_timing_between(
-            TimingBetweenInput(raw_file=raw_file.name, signal_a="V(in)", signal_b="V(out)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            TimingRecipe.model_validate(
+                {
+                    "key": "timing",
+                    "metric": "timing",
+                    "from": TimingEndpoint(signal="V(in)"),
+                    "to": TimingEndpoint(signal="V(out)"),
+                }
+            ),
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["delay"] == pytest.approx(0.2e-3, abs=1e-6)
         assert sc["threshold_a_used"] == pytest.approx(1.65, abs=0.01)
         assert sc["threshold_b_used"] == pytest.approx(0.9, abs=0.01)
@@ -1044,9 +991,17 @@ class TestTimingBetween:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="not found"):
-            await handle_timing_between(
-                TimingBetweenInput(raw_file=raw_file.name, signal_a="V(in)", signal_b="V(out)"),
+            await _metric(
                 state_no_sim,
+                raw_file.name,
+                TimingRecipe.model_validate(
+                    {
+                        "key": "timing",
+                        "metric": "timing",
+                        "from": TimingEndpoint(signal="V(in)"),
+                        "to": TimingEndpoint(signal="V(out)"),
+                    }
+                ),
             )
 
 
@@ -1066,11 +1021,12 @@ class TestPeriodicMetrics:
             axis=t,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_periodic_metrics(
-            PeriodicMetricsInput(raw_file=raw_file.name, signal="V(clk)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            PeriodicRecipe(key="periodic", metric="periodic", signal="V(clk)"),
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["frequency"] == pytest.approx(1000.0, rel=0.01)
         assert sc["duty_cycle_pct"] == pytest.approx(40.0, abs=1.0)
 
@@ -1081,9 +1037,10 @@ class TestPeriodicMetrics:
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="constant"):
-            await handle_periodic_metrics(
-                PeriodicMetricsInput(raw_file=raw_file.name, signal="V(out)"),
+            await _metric(
                 state_no_sim,
+                raw_file.name,
+                PeriodicRecipe(key="periodic", metric="periodic", signal="V(out)"),
             )
 
 
@@ -1107,25 +1064,31 @@ class TestMeasurementStats:
             "Date: today\n"
             "Total elapsed time: 0.001 seconds.\n"
         )
-        result = await handle_measurement_stats(
-            MeasurementStatsInput(log_file=log.name), state_no_sim
+        result = await _metric(
+            state_no_sim, log.name, MeasurementsRecipe(key="measurements", metric="measurements")
         )
-        assert result.structuredContent is not None
-        assert "stats" in result.structuredContent
+        assert result is not None
+        assert "stats" in result
         # Should have exactly one measurement aggregated
-        assert len(result.structuredContent["stats"]) >= 1
+        assert len(result["stats"]) >= 1
 
     async def test_missing_log_file(self, state_no_sim: SessionState, work_dir: Path):
         with pytest.raises(ResultError):
-            await handle_measurement_stats(
-                MeasurementStatsInput(log_file="nonexistent.log"), state_no_sim
+            await _metric(
+                state_no_sim,
+                "nonexistent.log",
+                MeasurementsRecipe(key="measurements", metric="measurements"),
             )
 
     async def test_empty_log_errors(self, state_no_sim: SessionState, work_dir: Path):
         log = work_dir / "empty.log"
         log.write_text("not a spice log\n")
         with pytest.raises(ResultError):
-            await handle_measurement_stats(MeasurementStatsInput(log_file=log.name), state_no_sim)
+            await _metric(
+                state_no_sim,
+                log.name,
+                MeasurementsRecipe(key="measurements", metric="measurements"),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1161,32 +1124,25 @@ def _ac_raw(
 class TestFilterMetricsTool:
     async def test_lpf_classification(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
-        result = await handle_filter_metrics(
-            FilterMetricsInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
+        data = await metrics.filter_metrics(
+            _source(state_no_sim, raw_file.name), "V(out)", 0, state_no_sim
         )
-        assert result.structuredContent is not None
-        sc = result.structuredContent
-        assert sc["filter_type"] == "lowpass"
-        assert sc["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.05)
-        assert sc["estimated_order"] == 1
-        item = result.content[0]
-        assert isinstance(item, types.TextContent)
-        assert "Filter Metrics" in item.text
+        assert data["signal"] == "V(out)"
+        assert data["filter_type"] == "lowpass"
+        assert data["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.05)
+        assert data["estimated_order"] == 1
 
     async def test_rejects_transient(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="AC analysis"):
-            await handle_filter_metrics(
-                FilterMetricsInput(raw_file=fake_raw.name, signal="V(out)"),
-                state_no_sim,
+            await metrics.filter_metrics(
+                _source(state_no_sim, fake_raw.name), "V(out)", 0, state_no_sim
             )
 
     async def test_ref_db_must_be_negative(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
         with pytest.raises(ResultError, match="negative"):
-            await handle_filter_metrics(
-                FilterMetricsInput(raw_file=raw_file.name, signal="V(out)", ref_db=3.0),
-                state_no_sim,
+            await metrics.filter_metrics(
+                _source(state_no_sim, raw_file.name), "V(out)", 0, state_no_sim, ref_db=3.0
             )
 
 
@@ -1194,16 +1150,11 @@ class TestFilterMetricsTool:
 class TestGainAtTool:
     async def test_batch_query(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
-        result = await handle_gain_at(
-            GainAtInput(
-                raw_file=raw_file.name,
-                signal="V(out)",
-                frequencies=["100", "1k", "10k"],
-            ),
-            state_no_sim,
+        result = await metrics.gain_at(
+            _source(state_no_sim, raw_file.name), "V(out)", ["100", "1k", "10k"], 0, state_no_sim
         )
-        assert result.structuredContent is not None
-        sc = result.structuredContent
+        assert result is not None
+        sc = result
         assert len(sc["points"]) == 3
         # 1-pole LPF at fc should be -3 dB.
         assert sc["points"][1]["magnitude_db"] == pytest.approx(-3.0, abs=0.1)
@@ -1211,21 +1162,15 @@ class TestGainAtTool:
     async def test_empty_frequencies(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
         with pytest.raises(ResultError, match="empty"):
-            await handle_gain_at(
-                GainAtInput(raw_file=raw_file.name, signal="V(out)", frequencies=[]),
-                state_no_sim,
+            await metrics.gain_at(
+                _source(state_no_sim, raw_file.name), "V(out)", [], 0, state_no_sim
             )
 
     async def test_invalid_frequency(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
         with pytest.raises(ResultError):
-            await handle_gain_at(
-                GainAtInput(
-                    raw_file=raw_file.name,
-                    signal="V(out)",
-                    frequencies=["not_a_number"],
-                ),
-                state_no_sim,
+            await metrics.gain_at(
+                _source(state_no_sim, raw_file.name), "V(out)", ["not_a_number"], 0, state_no_sim
             )
 
 
@@ -1253,11 +1198,10 @@ def _ac_ratio_raw(state: SessionState, work_dir: Path, *, fc: float = 1000.0, po
 class TestBodeRatioSignal:
     async def test_ratio_divides_two_traces(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_ratio_raw(state_no_sim, work_dir)
-        result = await handle_gain_at(
-            GainAtInput(raw_file=raw_file.name, signal="V(out)/V(mid)", frequencies=["1", "1k"]),
-            state_no_sim,
+        result = await metrics.gain_at(
+            _source(state_no_sim, raw_file.name), "V(out)/V(mid)", ["1", "1k"], 0, state_no_sim
         )
-        sc = result.structuredContent
+        sc = result
         assert sc is not None
         # The 2x cancels: deep passband is 0 dB (not +6 dB), and fc is -3 dB.
         assert sc["points"][0]["magnitude_db"] == pytest.approx(0.0, abs=0.2)
@@ -1266,9 +1210,8 @@ class TestBodeRatioSignal:
     async def test_ratio_missing_operand_errors(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_ratio_raw(state_no_sim, work_dir)
         with pytest.raises(ResultError, match="not found"):
-            await handle_gain_at(
-                GainAtInput(raw_file=raw_file.name, signal="V(out)/V(nope)", frequencies=["1k"]),
-                state_no_sim,
+            await metrics.gain_at(
+                _source(state_no_sim, raw_file.name), "V(out)/V(nope)", ["1k"], 0, state_no_sim
             )
 
     async def test_ratio_singular_denominator_reported(
@@ -1292,9 +1235,8 @@ class TestBodeRatioSignal:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="singular"):
-            await handle_gain_at(
-                GainAtInput(raw_file=raw_file.name, signal="V(out)/V(mid)", frequencies=["1k"]),
-                state_no_sim,
+            await metrics.gain_at(
+                _source(state_no_sim, raw_file.name), "V(out)/V(mid)", ["1k"], 0, state_no_sim
             )
 
 
@@ -1329,11 +1271,12 @@ class TestStabilityMetricsTool:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_stability_metrics(
-            StabilityMetricsInput(raw_file=raw_file.name, signal="V(loop)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            StabilityRecipe(key="stability", metric="stability", signal="V(loop)"),
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["stability"] in ("unconditional", "stable")
         assert sc["phase_margin_worst_deg"] is not None
         # 60 dB DC gain.
@@ -1344,17 +1287,11 @@ class TestStabilityMetricsTool:
 class TestRollOffTool:
     async def test_1pole_asymptote(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir, fc=100.0)
-        result = await handle_roll_off(
-            RollOffInput(
-                raw_file=raw_file.name,
-                signal="V(out)",
-                f_low="10k",
-                f_high="100k",
-            ),
-            state_no_sim,
+        result = await metrics.roll_off(
+            _source(state_no_sim, raw_file.name), "V(out)", "10k", "100k", 0, state_no_sim
         )
-        assert result.structuredContent is not None
-        sc = result.structuredContent
+        assert result is not None
+        sc = result
         assert sc["slope_db_per_decade"] == pytest.approx(-20.0, abs=1.0)
         assert sc["nearest_pole_order_estimate"] == 1
 
@@ -1375,11 +1312,12 @@ class TestResonanceTool:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_resonance(
-            ResonanceInput(raw_file=raw_file.name, signal="V(out)"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            ResonanceRecipe(key="resonance", metric="resonance", signal="V(out)"),
         )
-        sc = result.structuredContent
+        sc = result
         assert len(sc["peaks"]) == 1
         peak = sc["peaks"][0]
         assert peak["frequency_hz"] == pytest.approx(1000.0, rel=0.05)
@@ -1390,44 +1328,36 @@ class TestResonanceTool:
 class TestFindCrossingTool:
     async def test_magnitude_crossing(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
-        result = await handle_find_crossing(
-            FindCrossingInput(
-                raw_file=raw_file.name,
-                signal="V(out)",
-                quantity="magnitude_db",
-                level=-3.0,
-            ),
-            state_no_sim,
+        result = await metrics.find_crossing(
+            _source(state_no_sim, raw_file.name), "V(out)", "magnitude_db", -3.0, 0, state_no_sim
         )
-        assert result.structuredContent is not None
-        sc = result.structuredContent
+        assert result is not None
+        sc = result
         assert len(sc["crossings"]) == 1
         assert sc["crossings"][0]["frequency_hz"] == pytest.approx(1000.0, rel=0.05)
 
     async def test_rejects_transient(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="AC analysis"):
-            await handle_find_crossing(
-                FindCrossingInput(
-                    raw_file=fake_raw.name,
-                    signal="V(out)",
-                    quantity="magnitude_db",
-                    level=0.0,
-                ),
+            await metrics.find_crossing(
+                _source(state_no_sim, fake_raw.name),
+                "V(out)",
+                "magnitude_db",
+                0.0,
+                0,
                 state_no_sim,
             )
 
     async def test_max_results_validated(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = _ac_raw(state_no_sim, work_dir)
         with pytest.raises(ResultError, match="max_results"):
-            await handle_find_crossing(
-                FindCrossingInput(
-                    raw_file=raw_file.name,
-                    signal="V(out)",
-                    quantity="magnitude_db",
-                    level=0.0,
-                    max_results=0,
-                ),
+            await metrics.find_crossing(
+                _source(state_no_sim, raw_file.name),
+                "V(out)",
+                "magnitude_db",
+                0.0,
+                0,
                 state_no_sim,
+                max_results=0,
             )
 
 
@@ -1435,22 +1365,18 @@ class TestParseFreqUnitTolerance:
     """Frequency parsing accepts a trailing Hz/kHz unit."""
 
     def test_bare_number(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("1000") == pytest.approx(1000.0)
 
     def test_hz_suffix(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("159Hz") == pytest.approx(159.0)
 
     def test_khz_suffix(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("15.9kHz") == pytest.approx(15900.0)
 
     def test_si_prefix_still_works(self):
-        from ltspice_mcp.tools.analysis import _parse_freq
 
         assert _parse_freq("1k") == pytest.approx(1000.0)
         assert _parse_freq("1meg") == pytest.approx(1e6)
@@ -1507,501 +1433,62 @@ class TestQueryValueMagnitudeLinear:
         path = work_dir / "ac.raw"
         _inject_raw(state_no_sim, path, raw)
 
-        res = await handle_query_value(
-            QueryValueInput(raw_file="ac.raw", signal="V(out)", at="100"), state_no_sim
+        res = await _metric(
+            state_no_sim,
+            "ac.raw",
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="100"),
         )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
+        assert res is not None
+        sc = res
         assert sc["magnitude_linear"] == pytest.approx(abs(0.7 + 0.7j))
         assert "magnitude_db" in sc
-
-
-@pytest.mark.asyncio
-class TestStepGet:
-    async def test_raw_axis_snap_warning(self, state_no_sim: SessionState, work_dir: Path):
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "DC transfer characteristic"
-        raw.get_trace_names.return_value = ["Rval", "V(out)"]
-        raw.get_axis.return_value = np.array([500.0, 1000.0, 2000.0])
-        raw.get_steps.return_value = [0]
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0, 3.0])
-        path = work_dir / "dc.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_step_get(
-            StepGetInput(raw_file="dc.raw", axis="Rval", value="99999", signal="V(out)"),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["exact_match"] is False
-        assert sc["actual_value"] == 2000.0
-        assert sc.get("warnings")
-
-    async def test_raw_axis_rejects_at(self, state_no_sim: SessionState, work_dir: Path):
-        # 'at' selects the inner-axis point of a .step lookup; on the
-        # native-axis branch the queried axis IS the inner axis, so the
-        # param used to be silently ignored — it must refuse loudly.
-        from ltspice_mcp.errors import NetlistError
-
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "DC transfer characteristic"
-        raw.get_trace_names.return_value = ["Rval", "V(out)"]
-        raw.get_axis.return_value = np.array([500.0, 1000.0, 2000.0])
-        raw.get_steps.return_value = [0]
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0, 3.0])
-        path = work_dir / "dc_at.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        with pytest.raises(NetlistError, match="native axis"):
-            await handle_step_get(
-                StepGetInput(
-                    raw_file="dc_at.raw", axis="Rval", value="1k", signal="V(out)", at="1m"
-                ),
-                state_no_sim,
-            )
-
-    async def test_raw_axis_exact_match_no_warning(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "DC transfer characteristic"
-        raw.get_trace_names.return_value = ["Rval", "V(out)"]
-        raw.get_axis.return_value = np.array([500.0, 1000.0, 2000.0])
-        raw.get_steps.return_value = [0]
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0, 3.0])
-        path = work_dir / "dc2.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_step_get(
-            StepGetInput(raw_file="dc2.raw", axis="Rval", value="1k", signal="V(out)"),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["exact_match"] is True
-        assert sc["actual_value"] == 1000.0
-        assert not sc.get("warnings")
-
-    async def test_raw_axis_complex_ac_keeps_magnitude(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # axis name "frequency" == trace 0 → raw-axis branch on an AC raw.
-        # The complex sample must survive as magnitude/phase, not float()'d.
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "AC Analysis"
-        raw.get_trace_names.return_value = ["frequency", "V(out)"]
-        raw.get_axis.return_value = np.array([10.0, 100.0, 1000.0])
-        raw.get_steps.return_value = [0]
-        raw.get_wave = lambda name, step=0: np.array([1 + 0j, 0.7 + 0.7j, 0.1 + 0j])
-        path = work_dir / "acaxis.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_step_get(
-            StepGetInput(raw_file="acaxis.raw", axis="frequency", value="100", signal="V(out)"),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert "magnitude_linear" in sc
-        assert "magnitude_db" in sc
-        assert "value" not in sc  # complex sample, not a real scalar
-        assert sc["magnitude_linear"] == pytest.approx(abs(0.7 + 0.7j))
-        assert not sc.get("warnings")
-
-    async def test_raw_axis_interior_offgrid_no_clamp_warning(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # Dense continuous axis: an interior off-grid request is a normal
-        # nearest-neighbour lookup, NOT an out-of-range clamp — no warning.
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "DC transfer characteristic"
-        raw.get_trace_names.return_value = ["v1", "V(out)"]
-        raw.get_axis.return_value = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
-        raw.get_steps.return_value = [0]
-        raw.get_wave = lambda name, step=0: np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
-        path = work_dir / "dense.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_step_get(
-            StepGetInput(raw_file="dense.raw", axis="v1", value="1.01", signal="V(out)"),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["actual_value"] == 1.0
-        assert sc["exact_match"] is False  # off-grid, honest
-        assert not sc.get("warnings")  # but interior → not "clamped"
-
-    async def test_step_lookup_inside_range_snap_warning(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # temp=50 sits between discrete steps {27, 85}: nearest-step used, not
-        # "clamped" (it is inside the swept range).
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [{"temp": 27.0}, {"temp": 85.0}]
-        raw.get_axis.return_value = np.array([0.0, 1.0])
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
-        path = work_dir / "tempstep.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_step_get(
-            StepGetInput(raw_file="tempstep.raw", axis="temp", value="50", signal="V(out)"),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["actual_value"] == 27.0
-        assert sc["exact_match"] is False
-        assert any("nearest step" in w for w in sc.get("warnings", []))
-        assert all("clamped" not in w for w in sc.get("warnings", []))
-
-    async def test_step_lookup_default_at_label(self, state_no_sim: SessionState, work_dir: Path):
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "AC Analysis"
-        # Axis name != requested axis → falls to the .step parameter lookup.
-        raw.get_trace_names.return_value = ["frequency", "V(out)"]
-        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}, {"Rval": 2000.0}]
-        raw.get_axis.return_value = np.array([10.0, 100.0, 1000.0])
-        raw.get_wave = lambda name, step=0: np.array([0.5, 0.6, 0.7])
-        path = work_dir / "step.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_step_get(
-            StepGetInput(raw_file="step.raw", axis="Rval", value="1000", signal="V(out)"),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["step_index"] == 1
-        assert sc["exact_match"] is True
-        assert sc["actual_at"] == 10.0
-        assert any("No 'at' given" in w for w in sc.get("warnings", []))
 
 
 @pytest.mark.asyncio
 class TestBodeMetrics:
-    async def test_point_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+    async def test_point_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file="bode.raw", signal="V(out)", mode="point", frequencies=["1k"]
-            ),
+        data = await _metric(
             state_no_sim,
+            "bode.raw",
+            BodePointRecipe(key="p", metric="bode_point", signal="V(out)", at_hz="1k"),
         )
-        assert res.structuredContent is not None
-        assert "points" in res.structuredContent
+        assert "points" in data
 
-    async def test_crossing_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+    async def test_crossing_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode2.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file="bode2.raw",
-                signal="V(out)",
-                mode="crossing",
-                quantity="magnitude_db",
-                level=-3.0103,
-            ),
+        data = await _metric(
             state_no_sim,
+            "bode2.raw",
+            BodeCrossingRecipe(key="c", metric="bode_crossing", signal="V(out)", level_db=-3.0103),
         )
-        assert res.structuredContent is not None
-        cs = res.structuredContent["crossings"]
+        cs = data["crossings"]
         assert cs and abs(cs[0]["frequency_hz"] - 1591.5) / 1591.5 < 0.05
 
-    async def test_slope_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+    async def test_slope_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode3.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file="bode3.raw", signal="V(out)", mode="slope", f_low="10k", f_high="100k"
-            ),
+        data = await _metric(
             state_no_sim,
+            "bode3.raw",
+            BodeSlopeRecipe(
+                key="s", metric="bode_slope", signal="V(out)", from_hz="10k", to_hz="100k"
+            ),
         )
-        assert res.structuredContent is not None
         # First-order LPF stopband ≈ -20 dB/decade.
-        assert res.structuredContent["slope_db_per_decade"] < -15
+        assert data["slope_db_per_decade"] < -15
 
-    async def test_filter_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+    async def test_filter_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode4.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())
-        res = await handle_bode_metrics(
-            BodeMetricsInput(raw_file="bode4.raw", signal="V(out)", mode="filter"),
+        data = await _metric(
             state_no_sim,
+            "bode4.raw",
+            BodeFilterRecipe(key="f", metric="bode_filter", signal="V(out)"),
         )
-        assert res.structuredContent is not None
-        assert "filter_type" in res.structuredContent
-
-    async def test_crossing_requires_quantity_and_level(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        path = work_dir / "bode5.raw"
-        _inject_raw(state_no_sim, path, _ac_raw_mock())
-        with pytest.raises(ResultError, match="requires 'quantity' and 'level'"):
-            await handle_bode_metrics(
-                BodeMetricsInput(raw_file="bode5.raw", signal="V(out)", mode="crossing"),
-                state_no_sim,
-            )
-
-    async def test_slope_requires_bounds(self, state_no_sim: SessionState, work_dir: Path):
-        path = work_dir / "bode6.raw"
-        _inject_raw(state_no_sim, path, _ac_raw_mock())
-        with pytest.raises(ResultError, match="requires 'f_low' and 'f_high'"):
-            await handle_bode_metrics(
-                BodeMetricsInput(raw_file="bode6.raw", signal="V(out)", mode="slope"),
-                state_no_sim,
-            )
-
-
-@pytest.mark.asyncio
-class TestQueryValueStepAbsorb:
-    async def test_step_axis_dispatches_to_step_lookup(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}, {"Rval": 2000.0}]
-        raw.get_axis.return_value = np.array([0.0, 1.0])
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
-        path = work_dir / "qstep.raw"
-        _inject_raw(state_no_sim, path, raw)
-
-        res = await handle_query_value(
-            QueryValueInput(
-                raw_file="qstep.raw", signal="V(out)", step_axis="Rval", step_value="1000"
-            ),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        assert res.structuredContent["step_index"] == 1
-        assert res.structuredContent["exact_match"] is True
-
-    async def test_step_axis_requires_step_value(self, state_no_sim: SessionState, work_dir: Path):
-        path = work_dir / "qstep2.raw"
-        _inject_raw(state_no_sim, path, _ac_raw_mock())
-        with pytest.raises(ResultError, match="step_value"):
-            await handle_query_value(
-                QueryValueInput(raw_file="qstep2.raw", signal="V(out)", step_axis="Rval"),
-                state_no_sim,
-            )
-
-    async def test_requires_at_without_step_axis(self, state_no_sim: SessionState, work_dir: Path):
-        path = work_dir / "qstep3.raw"
-        _inject_raw(state_no_sim, path, _ac_raw_mock())
-        with pytest.raises(ResultError, match="'at' is required"):
-            await handle_query_value(
-                QueryValueInput(raw_file="qstep3.raw", signal="V(out)"), state_no_sim
-            )
-
-    async def test_step_axis_relays_unrecognized_param(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # The stepped read path must relay the unrecognized-variable warning too:
-        # a bogus @-param is a fake 0.0 here just like on the direct at= path.
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "v(@m1[bogus])"]
-        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}]
-        raw.get_axis.return_value = np.array([0.0, 1.0])
-        raw.get_wave = lambda name, step=0: np.array([0.0, 0.0])
-        path = work_dir / "qsw1.raw"
-        (work_dir / "qsw1.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
-        _inject_raw(state_no_sim, path, raw)
-        res = await handle_query_value(
-            QueryValueInput(
-                raw_file="qsw1.raw",
-                signal="v(@m1[bogus])",
-                step_axis="Rval",
-                step_value="1000",
-            ),
-            state_no_sim,
-        )
-        warnings = (res.structuredContent or {}).get("warnings") or []
-        assert any("did not recognize" in w for w in warnings)
-
-    async def test_step_axis_relays_solve_failure(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # A failed solve taints the whole run; the stepped read must surface it.
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}]
-        raw.get_axis.return_value = np.array([0.0, 1.0])
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
-        path = work_dir / "qsw2.raw"
-        (work_dir / "qsw2.log").write_text("gmin stepping failed\n")
-        _inject_raw(state_no_sim, path, raw)
-        res = await handle_query_value(
-            QueryValueInput(
-                raw_file="qsw2.raw", signal="V(out)", step_axis="Rval", step_value="1000"
-            ),
-            state_no_sim,
-        )
-        warnings = (res.structuredContent or {}).get("warnings") or []
-        assert any("gmin stepping" in w.lower() for w in warnings)
-
-    async def test_step_axis_clean_no_diagnostic_relay(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # No false positives: a clean log adds no unrecognized/solve-failure relay
-        # (the step lookup's own 'No at given' note is unrelated and allowed).
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}]
-        raw.get_axis.return_value = np.array([0.0, 1.0])
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
-        path = work_dir / "qsw3.raw"
-        (work_dir / "qsw3.log").write_text("Total elapsed time: 0.1 seconds.\n")
-        _inject_raw(state_no_sim, path, raw)
-        res = await handle_query_value(
-            QueryValueInput(
-                raw_file="qsw3.raw", signal="V(out)", step_axis="Rval", step_value="1000"
-            ),
-            state_no_sim,
-        )
-        warnings = (res.structuredContent or {}).get("warnings") or []
-        assert not any("did not recognize" in w or "singular" in w.lower() for w in warnings)
-
-
-@pytest.mark.asyncio
-class TestBodeMetricsAllSteps:
-    async def test_crossing_per_step(self, state_no_sim: SessionState, work_dir: Path):
-        fcs = [500.0, 5000.0]
-        path = work_dir / "stepped.raw"
-        _inject_raw(state_no_sim, path, _stepped_ac_raw(fcs))
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file="stepped.raw",
-                signal="V(out)",
-                mode="crossing",
-                quantity="magnitude_db",
-                level=-3.0103,
-                all_steps=True,
-            ),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["all_steps"] is True
-        assert sc["step_count"] == 2
-        steps = sc["steps"]
-        assert [s["step"] for s in steps] == [0, 1]
-        # The -3 dB crossing of each step tracks that step's cutoff.
-        for i, fc in enumerate(fcs):
-            cs = steps[i]["crossings"]
-            assert cs and abs(cs[0]["frequency_hz"] - fc) / fc < 0.05
-
-    async def test_all_steps_dedups_identical_step_warnings(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # Three lowpass steps, mode='filter' with NO stopband_range: every step
-        # emits the identical sweep-endpoint rejection warning. all_steps must
-        # hoist it to the top level ONCE with a coverage note, drop the per-step
-        # 'warnings' key, and strip it from each per-step text block.
-        fcs = [500.0, 1000.0, 5000.0]
-        path = work_dir / "stepped_dedup.raw"
-        _inject_raw(state_no_sim, path, _stepped_ac_raw(fcs))
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file="stepped_dedup.raw",
-                signal="V(out)",
-                mode="filter",
-                all_steps=True,
-            ),
-            state_no_sim,
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        assert sc["step_count"] == 3
-        warnings = sc.get("warnings", [])
-        # The sweep-endpoint rejection warning every step emits.
-        sentinel = "no stopband_range given"
-        hoisted = [w for w in warnings if sentinel in w]
-        # Hoisted exactly once (not once per step).
-        assert len(hoisted) == 1
-        # Carries a coverage note naming the steps it covered.
-        assert "steps" in hoisted[0]
-        assert "all 3 steps" in hoisted[0]
-        # Per-step structured entries no longer carry that warning under a
-        # 'warnings' key — it was popped during hoisting.
-        for entry in sc["steps"]:
-            assert sentinel not in entry.get("warnings", [])
-            assert not any(sentinel in w for w in entry.get("warnings", []))
-        # The per-step text blocks no longer repeat the warning either.
-        text = res.content[0].text
-        assert text.count(sentinel) == 1
-
-    def test_warning_coverage_lists_indices_for_large_subset(self):
-        # A warning on a >6 SUBSET of steps must enumerate every affected step
-        # index, not collapse to a bare "N of M" count — otherwise a structured
-        # consumer can't tell which sweep cases emitted it.
-        from ltspice_mcp.tools.analysis import _warning_coverage
-
-        idxs = [0, 2, 4, 6, 8, 10, 12]  # 7 of 20 — past the old 6-item cap
-        cov = _warning_coverage(idxs, 20)
-        for i in idxs:
-            assert str(i) in cov
-        assert "of 20" not in cov  # not collapsed to a count
-        # Every-step case stays compact.
-        assert _warning_coverage(list(range(5)), 5) == "all 5 steps"
-        # A small subset still enumerates.
-        assert _warning_coverage([1, 3], 5) == "steps 1,3"
-
-    async def test_single_step_warns(self, state_no_sim: SessionState, work_dir: Path):
-        path = work_dir / "onestep.raw"
-        _inject_raw(state_no_sim, path, _ac_raw_mock())  # get_steps == [0]
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file="onestep.raw", signal="V(out)", mode="filter", all_steps=True
-            ),
-            state_no_sim,
-        )
-        assert res.structuredContent is not None
-        sc = res.structuredContent
-        assert sc["step_count"] == 1
-        assert len(sc["steps"]) == 1
-        assert any("not stepped" in w for w in sc.get("warnings", []))
-
-    async def test_all_steps_still_validates_mode_args(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # all_steps must enforce the same per-mode required args as single-step.
-        path = work_dir / "stepped2.raw"
-        _inject_raw(state_no_sim, path, _stepped_ac_raw([500.0, 5000.0]))
-        with pytest.raises(ResultError, match="requires 'f_low' and 'f_high'"):
-            await handle_bode_metrics(
-                BodeMetricsInput(
-                    raw_file="stepped2.raw", signal="V(out)", mode="slope", all_steps=True
-                ),
-                state_no_sim,
-            )
-
-    async def test_all_steps_total_failure_raises(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # Regression: a non-AC raw makes every step fail. all_steps must surface
-        # a real error, not a "success" full of buried per-step errors.
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [0]
-        raw.get_axis.return_value = np.array([0.0, 1.0])
-        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
-        path = work_dir / "tran.raw"
-        _inject_raw(state_no_sim, path, raw)
-        with pytest.raises(ResultError, match="AC analysis"):
-            await handle_bode_metrics(
-                BodeMetricsInput(
-                    raw_file="tran.raw", signal="V(out)", mode="filter", all_steps=True
-                ),
-                state_no_sim,
-            )
+        assert "filter_type" in data
 
 
 # ---------------------------------------------------------------------------
@@ -2023,34 +1510,14 @@ class TestRecordedAcRaw:
 
     async def test_filter_mode_finds_rc_pole(self, state_no_sim: SessionState, work_dir: Path):
         raw = _stage_recorded(work_dir, "ltspice_ac_rc")
-        res = await handle_bode_metrics(
-            BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter"),
+        sc = await _metric(
             state_no_sim,
+            str(raw),
+            BodeFilterRecipe(key="f", metric="bode_filter", signal="V(out)"),
         )
-        sc = res.structuredContent
-        assert sc is not None
         assert sc["filter_type"] == "lowpass"
         assert sc["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.02)
         assert sc["estimated_order"] == 1
-
-    async def test_by_job_run_echoes_swept_params(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # Analyzing a sweep run by job_id+run_index echoes which sweep point it
-        # is (params + run_index), so no extra batch_results call is needed.
-        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
-        _completed_batch(
-            state_no_sim,
-            {0: {"raw_file": str(raw), "params": {"R": "1k"}}},
-        )
-        res = await handle_bode_metrics(
-            BodeMetricsInput(job_id="b1", run_index=0, signal="V(out)", mode="filter"),
-            state_no_sim,
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        assert sc["run_index"] == 0
-        assert sc["params"] == {"R": "1k"}
 
     async def test_leading_minus_flips_phase_180(self, state_no_sim: SessionState, work_dir: Path):
         # '-V(out)' and '-V(out)/V(out)' negate the complex wave: same |H|,
@@ -2059,14 +1526,12 @@ class TestRecordedAcRaw:
         raw = _stage_recorded(work_dir, "ltspice_ac_rc")
 
         async def point(signal: str) -> dict:
-            res = await handle_bode_metrics(
-                BodeMetricsInput(
-                    raw_file=str(raw), signal=signal, mode="point", frequencies=["1k"]
-                ),
+            data = await _metric(
                 state_no_sim,
+                str(raw),
+                BodePointRecipe(key="p", metric="bode_point", signal=signal, at_hz="1k"),
             )
-            assert res.structuredContent is not None
-            return res.structuredContent["points"][0]
+            return data["points"][0]
 
         plain = await point("V(out)")
         negated = await point("-V(out)")
@@ -2082,18 +1547,11 @@ class TestRecordedAcRaw:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = _stage_recorded(work_dir, "ltspice_ac_rc")
-        res = await handle_bode_metrics(
-            BodeMetricsInput(
-                raw_file=str(raw),
-                signal="V(out)",
-                mode="crossing",
-                quantity="magnitude_db",
-                level=-3.0103,
-            ),
+        sc = await _metric(
             state_no_sim,
+            str(raw),
+            BodeCrossingRecipe(key="c", metric="bode_crossing", signal="V(out)", level_db=-3.0103),
         )
-        sc = res.structuredContent
-        assert sc is not None
         assert len(sc["crossings"]) == 1
         assert sc["crossings"][0]["frequency_hz"] == pytest.approx(1000.0, rel=0.02)
 
@@ -2101,11 +1559,12 @@ class TestRecordedAcRaw:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = _stage_recorded(work_dir, "ltspice_ac_rc")
-        res = await handle_signal_stats(
-            SignalStatsInput(raw_file=str(raw), signal="V(out)"),
+        res = await _metric(
             state_no_sim,
+            str(raw),
+            SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(out)"),
         )
-        sc = res.structuredContent
+        sc = res
         assert sc is not None
         assert sc["analysis_type"] == "ac"
         assert sc["point_count"] == 81  # dec 20 over 4 decades
@@ -2116,20 +1575,22 @@ class TestRecordedAcRaw:
 
     async def test_query_value_passband_and_pole(self, state_no_sim: SessionState, work_dir: Path):
         raw = _stage_recorded(work_dir, "ltspice_ac_rc")
-        passband = await handle_query_value(
-            QueryValueInput(raw_file=str(raw), signal="V(out)", at="10"),
+        passband = await _metric(
             state_no_sim,
+            str(raw),
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="10"),
         )
-        sc = passband.structuredContent
+        sc = passband
         assert sc is not None
         assert sc["magnitude_linear"] == pytest.approx(1.0, abs=1e-3)
         assert sc["magnitude_db"] == pytest.approx(0.0, abs=0.01)
 
-        pole = await handle_query_value(
-            QueryValueInput(raw_file=str(raw), signal="V(out)", at="1k"),
+        pole = await _metric(
             state_no_sim,
+            str(raw),
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="1k"),
         )
-        sc = pole.structuredContent
+        sc = pole
         assert sc is not None
         assert sc["magnitude_db"] == pytest.approx(-3.0103, abs=0.02)
         assert sc["phase_deg"] == pytest.approx(-45.0, abs=0.5)
@@ -2145,114 +1606,61 @@ class TestRecordedSteppedAcRaw:
     # R = 1k / 2k / 4k with C = 100n.
     CUTOFFS = (1591.55, 795.77, 397.89)
 
-    async def test_all_steps_filter_cutoffs_distinct(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = _stage_recorded(work_dir, "ltspice_step_ac")
-        res = await handle_bode_metrics(
-            BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter", all_steps=True),
-            state_no_sim,
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        assert sc["all_steps"] is True
-        assert sc["step_count"] == 3
-        steps = sc["steps"]
-        assert [s["step"] for s in steps] == [0, 1, 2]
-        for entry, fc in zip(steps, self.CUTOFFS, strict=True):
-            assert entry["filter_type"] == "lowpass"
-            assert entry["cutoff_high_hz"] == pytest.approx(fc, rel=0.01)
-
-    async def test_all_steps_entries_carry_step_params(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # LTspice runs a ``.step ... list`` ascending-sorted, not in declared
-        # order — each entry must name its own .step point so curves can't be
-        # mis-attributed to list positions.
-        raw = _stage_recorded(work_dir, "ltspice_step_ac")
-        res = await handle_bode_metrics(
-            BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter", all_steps=True),
-            state_no_sim,
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        for i, r_ohm in enumerate((1000.0, 2000.0, 4000.0)):
-            params = sc["steps"][i].get("step_params")
-            assert params is not None
-            assert list(params.values()) == [pytest.approx(r_ohm)]
-
     async def test_single_step_filter_uses_requested_step(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = _stage_recorded(work_dir, "ltspice_step_ac")
         for step, fc in enumerate(self.CUTOFFS):
-            res = await handle_bode_metrics(
-                BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter", step=step),
+            sc = await _metric(
                 state_no_sim,
+                str(raw),
+                BodeFilterRecipe(key="f", metric="bode_filter", signal="V(out)"),
+                step=step,
             )
-            sc = res.structuredContent
-            assert sc is not None
             assert sc["cutoff_high_hz"] == pytest.approx(fc, rel=0.01)
-
-    async def test_query_value_pins_step_by_axis_value(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = _stage_recorded(work_dir, "ltspice_step_ac")
-        # Select the R=2k step by parameter value; query its own cutoff
-        # frequency, where a first-order LPF reads -3.01 dB / -45 degrees.
-        res = await handle_query_value(
-            QueryValueInput(
-                raw_file=str(raw),
-                signal="V(out)",
-                step_axis="R",
-                step_value="2k",
-                at="795.77",
-            ),
-            state_no_sim,
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        assert sc["step_index"] == 1
-        assert sc["actual_value"] == pytest.approx(2000.0)
-        assert sc["exact_match"] is True
-        assert sc["magnitude_db"] == pytest.approx(-3.0103, abs=0.05)
-        assert sc["phase_deg"] == pytest.approx(-45.0, abs=1.0)
 
 
 @pytest.mark.asyncio
-class TestQueryValueArgErrorHints:
-    """Argument-shape ResultErrors from query_value must NOT trigger the generic
-    'check_job for details' dispatch hint — they are caller mistakes, not run
-    failures, so they carry ``show_hint=False``."""
+class TestArgumentErrorsCarryNoDispatchHint:
+    """An argument-shape ResultError must NOT trigger the generic 'check the job
+    for details' dispatch hint — it is a caller mistake, not a run failure, so
+    it carries ``show_hint=False`` and its own complete redirect instead."""
 
-    async def test_step_axis_with_job_id_conflict_no_hint(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # step_axis selects a step of a .step raw; job_id already selects a run.
-        # The conflict is a caller mistake — suppress the generic hint.
-        path = work_dir / "conflict.raw"
+    async def test_unparseable_at_value(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "badat.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())
         with pytest.raises(ResultError) as excinfo:
-            await handle_query_value(
-                QueryValueInput(
-                    raw_file="conflict.raw",
-                    signal="V(out)",
-                    step_axis="Rval",
-                    step_value="1k",
-                    job_id="job-123",
-                ),
+            await _metric(
                 state_no_sim,
+                "badat.raw",
+                ValueRecipe(key="v", metric="value", expr="V(out)", at="not-a-number"),
             )
         assert excinfo.value.show_hint is False
 
-    async def test_missing_at_no_hint(self, state_no_sim: SessionState, work_dir: Path):
-        # 'at' omitted on a normal (non-step_axis) raw is a caller mistake.
-        path = work_dir / "needat.raw"
+    async def test_time_window_on_an_ac_sweep(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "acwin.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())
         with pytest.raises(ResultError) as excinfo:
-            await handle_query_value(
-                QueryValueInput(raw_file="needat.raw", signal="V(out)"),
+            await _metric(
                 state_no_sim,
+                "acwin.raw",
+                SignalStatsRecipe(
+                    key="s",
+                    metric="signal_stats",
+                    signal="V(out)",
+                    window=Window(start="1m"),
+                ),
+            )
+        assert excinfo.value.show_hint is False
+
+    async def test_noise_integral_on_a_transient_raw(
+        self, state_no_sim: SessionState, fake_raw: Path
+    ):
+        with pytest.raises(ResultError) as excinfo:
+            await _metric(
+                state_no_sim,
+                fake_raw.name,
+                NoiseIntegralRecipe(key="n", metric="noise_integral", signal="V(out)"),
             )
         assert excinfo.value.show_hint is False
 
@@ -2268,297 +1676,19 @@ class TestSimulationSummaryBuildFailureHint:
     ):
         # The raw loads fine; force build_simulation_summary to raise so we hit
         # the self-referential-hint suppression path.
-        import ltspice_mcp.tools.analysis as analysis_mod
+        import ltspice_mcp.lib.metrics as metrics_mod
 
         def _boom(*_args, **_kwargs):
             raise ValueError("synthetic build failure")
 
-        monkeypatch.setattr(analysis_mod, "build_simulation_summary", _boom)
+        monkeypatch.setattr(metrics_mod, "build_simulation_summary", _boom)
         with pytest.raises(ResultError) as excinfo:
-            await handle_simulation_summary(
-                SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
+            await _metric(
+                state_no_sim, fake_raw.name, SummaryRecipe(key="summary", metric="summary")
             )
         assert excinfo.value.show_hint is False
         # Must not re-suggest the tool that just failed.
         assert "simulation_summary" not in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-class TestGetWaveform:
-    """get_waveform decimates one real-valued signal into a min/max-preserving
-    stat-envelope. The autouse output-schema conformance hook validates the
-    structuredContent shape on every successful call, so each happy-path case
-    here is also a schema-conformance test."""
-
-    async def test_no_axis_op_raw_rejected(self, state_no_sim: SessionState, work_dir: Path):
-        # A real Operating Point raw has no axis; _guarded_axis must surface a
-        # clean ResultError pointing at operating_point, not a generic crash.
-        raw = _stage_recorded(work_dir, "op_extreme_node")
-        with pytest.raises(ResultError, match="operating_point"):
-            await handle_get_waveform(
-                GetWaveformInput(raw_file=raw.name, signal="V(hot)"), state_no_sim
-            )
-
-    async def test_transient_envelope_invariants(self, state_no_sim: SessionState, work_dir: Path):
-        raw_file = work_dir / "wave.raw"
-        t = np.linspace(0, 1, 200)
-        y = np.sin(2 * np.pi * t)
-        raw = _make_raw_mock(
-            plotname="Transient Analysis",
-            trace_names=["time", "V(out)"],
-            waves={"time": t, "V(out)": y},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["analysis_type"] == "transient"
-        assert sc["bucket_count"] > 0
-        assert sc["point_count"] > 0
-        assert len(sc["buckets"]) == sc["bucket_count"]
-        for b in sc["buckets"]:
-            assert b["min"] <= b["mean"] <= b["max"]
-            assert b["rms"] >= 0
-            assert b["pk_pk"] == pytest.approx(b["max"] - b["min"])
-
-    async def test_dc_sweep_descending_axis(self, state_no_sim: SessionState, work_dir: Path):
-        # A descending DC sweep must be decimated, not refused: the DC path
-        # flips the axis to ascending before bucketing.
-        raw_file = work_dir / "wave_dcdesc.raw"
-        v = np.linspace(5.0, 0.0, 200)  # high → low
-        raw = _make_raw_mock(
-            plotname="DC transfer characteristic",
-            trace_names=["v-sweep", "V(out)"],
-            waves={"v-sweep": v, "V(out)": v * 0.5},
-            axis=v,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["analysis_type"] == "dc"
-        assert sc["bucket_count"] > 0
-        # The envelope spans the full sweep regardless of original direction.
-        assert min(b["min"] for b in sc["buckets"]) == pytest.approx(0.0, abs=0.05)
-        assert max(b["max"] for b in sc["buckets"]) == pytest.approx(2.5, abs=0.05)
-
-    async def test_decimated_observations(self, state_no_sim: SessionState, work_dir: Path):
-        raw_file = work_dir / "wave.raw"
-        t = np.linspace(0, 1, 1000)
-        y = np.sin(2 * np.pi * 5 * t)
-        raw = _make_raw_mock(
-            plotname="Transient Analysis",
-            trace_names=["time", "V(out)"],
-            waves={"time": t, "V(out)": y},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(out)", buckets=10),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["decimated"] is True
-        codes = {(o["code"], o["kind"]) for o in sc["observations"]}
-        assert ("decimated", "coverage") in codes
-        assert "max_pk_pk_bucket" in {o["code"] for o in sc["observations"]}
-
-    async def test_bucket_cap_from_config(self, state_no_sim: SessionState, work_dir: Path):
-        raw_file = work_dir / "wave.raw"
-        t = np.linspace(0, 1, 500)
-        y = np.cos(2 * np.pi * t)
-        raw = _make_raw_mock(
-            plotname="Transient Analysis",
-            trace_names=["time", "V(out)"],
-            waves={"time": t, "V(out)": y},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-        state_no_sim.config.max_points_returned = 5
-
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(out)", buckets=1000),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["bucket_count"] <= 5
-        assert sc["max_points_ceiling"] == 5
-
-    async def test_ac_complex_rejected_points_to_bode(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw_file = work_dir / "ac.raw"
-        freqs = np.logspace(0, 6, 100)
-        wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
-            plotname="AC Analysis",
-            trace_names=["frequency", "V(out)"],
-            waves={"frequency": freqs, "V(out)": wave},
-            axis=freqs,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-        with pytest.raises(ResultError, match="bode_metrics"):
-            await handle_get_waveform(
-                GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
-                state_no_sim,
-            )
-
-    async def test_recorded_transient_fixture(self, state_no_sim: SessionState, work_dir: Path):
-        raw = _stage_recorded(work_dir, "ltspice_tran_rc")
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw.name, signal="V(out)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["analysis_type"] == "transient"
-        assert sc["bucket_count"] > 0
-
-    async def test_recorded_dc_fixture_accepted(self, state_no_sim: SessionState, work_dir: Path):
-        # get_waveform accepts a .DC sweep raw (it only rejects complex AC);
-        # the real Plotname 'DC transfer characteristic' must classify as 'dc'.
-        raw = _stage_recorded(work_dir, "ltspice_dc_div")
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw.name, signal="V(out)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["analysis_type"] == "dc"
-        assert sc["bucket_count"] > 0
-
-    async def test_narrower_window_zoom(self, state_no_sim: SessionState, work_dir: Path):
-        raw_file = work_dir / "wave.raw"
-        t = np.linspace(0, 1, 400)
-        y = np.sin(2 * np.pi * t)
-        raw = _make_raw_mock(
-            plotname="Transient Analysis",
-            trace_names=["time", "V(out)"],
-            waves={"time": t, "V(out)": y},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-
-        full = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
-        )
-        full_sc = full.structuredContent
-        assert full_sc is not None
-
-        zoom = await handle_get_waveform(
-            GetWaveformInput(
-                raw_file=raw_file.name,
-                signal="V(out)",
-                t_start="0.25",
-                t_end="0.75",
-            ),
-            state_no_sim,
-        )
-        zoom_sc = zoom.structuredContent
-        assert zoom_sc is not None
-        # The narrower window is strictly inside the full window.
-        assert zoom_sc["window_start_used"] >= full_sc["window_start_used"]
-        assert zoom_sc["window_end_used"] <= full_sc["window_end_used"]
-        assert zoom_sc["window_start_used"] >= 0.25 - 1e-9
-        assert zoom_sc["window_end_used"] <= 0.75 + 1e-9
-        # Every bucket's x-range stays within the requested zoom bounds.
-        for b in zoom_sc["buckets"]:
-            assert b["x_start"] >= 0.25 - 1e-9
-            assert b["x_end"] <= 0.75 + 1e-9
-
-    async def test_noise_classification(self, state_no_sim: SessionState, work_dir: Path):
-        # LTspice's real Plotname for a .noise run is "Noise Spectral Density -
-        # (V/Hz½)"; the axis is frequency (Hz), not time, and the wave is a real,
-        # positive spectral density. get_waveform must classify it as 'noise' and
-        # label the axis 'Hz'.
-        raw_file = work_dir / "noise.raw"
-        freqs = np.logspace(0, 6, 100)
-        density = 1e-9 / np.sqrt(1 + (freqs / 1000) ** 2)
-        raw = _make_raw_mock(
-            plotname="Noise Spectral Density - (V/Hz½)",
-            trace_names=["frequency", "V(onoise)"],
-            waves={"frequency": freqs, "V(onoise)": density},
-            axis=freqs,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(onoise)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["analysis_type"] == "noise"
-        assert sc["axis_unit"] == "Hz"
-
-    async def test_crest_factor_none_for_zero_signal(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # An all-zero wave makes every bucket's rms == 0, so crest_factor (peak/rms)
-        # is undefined and surfaced as null. Exercising it through the handler
-        # carries the None through format_response + the autouse schema-conformance
-        # hook, proving the WaveformBucket schema accepts a null crest_factor.
-        raw_file = work_dir / "zero.raw"
-        t = np.linspace(0, 1, 200)
-        y = np.zeros(200)
-        raw = _make_raw_mock(
-            plotname="Transient Analysis",
-            trace_names=["time", "V(out)"],
-            waves={"time": t, "V(out)": y},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-
-        result = await handle_get_waveform(
-            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
-            state_no_sim,
-        )
-        sc = result.structuredContent
-        assert sc is not None
-        assert sc["buckets"]
-        assert any(b["crest_factor"] is None for b in sc["buckets"])
-        # And the rms that drove it to None really is zero.
-        for b in sc["buckets"]:
-            if b["crest_factor"] is None:
-                assert b["rms"] == pytest.approx(0.0, abs=1e-12)
-
-    async def test_sub_three_sample_window_rejected(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # A coarse 5-point axis with a window that brackets a single sample:
-        # [1.5, 2.5] slices to index [2:3] (one sample). window_and_clean needs
-        # at least 3 samples, so the handler must RAISE a ResultError, not return
-        # a degenerate one-bucket envelope.
-        raw_file = work_dir / "coarse.raw"
-        t = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-        y = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-        raw = _make_raw_mock(
-            plotname="Transient Analysis",
-            trace_names=["time", "V(out)"],
-            waves={"time": t, "V(out)": y},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-
-        with pytest.raises(ResultError, match="at least 3"):
-            await handle_get_waveform(
-                GetWaveformInput(
-                    raw_file=raw_file.name, signal="V(out)", t_start="1.5", t_end="2.5"
-                ),
-                state_no_sim,
-            )
 
 
 @pytest.mark.asyncio
@@ -2570,35 +1700,41 @@ class TestDcRejectedByTransientTools:
     (a mock could mask the classification)."""
 
     @pytest.mark.parametrize(
-        ("handler", "input_factory"),
+        "run",
         [
-            (handle_edge_metrics, lambda name: EdgeMetricsInput(raw_file=name, signal="V(out)")),
-            (
-                handle_pulse_response,
-                lambda name: PulseResponseInput(raw_file=name, signal="V(out)"),
+            lambda state, name: _metric(
+                state, name, EdgesRecipe(key="e", metric="edges", signal="V(out)")
             ),
-            (
-                handle_periodic_metrics,
-                lambda name: PeriodicMetricsInput(raw_file=name, signal="V(out)"),
+            lambda state, name: metrics.pulse_response(
+                _source(state, name), "V(out)", None, None, 0, state
             ),
-            (
-                handle_timing_between,
-                lambda name: TimingBetweenInput(
-                    raw_file=name, signal_a="V(out)", signal_b="V(out)"
+            lambda state, name: _metric(
+                state, name, PeriodicRecipe(key="p", metric="periodic", signal="V(out)")
+            ),
+            lambda state, name: _metric(
+                state,
+                name,
+                TimingRecipe.model_validate(
+                    {
+                        "key": "t",
+                        "metric": "timing",
+                        "from": TimingEndpoint(signal="V(out)"),
+                        "to": TimingEndpoint(signal="V(out)"),
+                    }
                 ),
             ),
         ],
-        ids=["edge_metrics", "pulse_response", "periodic_metrics", "timing_between"],
+        ids=["edges", "transient_response", "periodic", "timing"],
     )
-    async def test_transient_tools_reject_dc_raw(
-        self, state_no_sim: SessionState, work_dir: Path, handler, input_factory
+    async def test_transient_metrics_reject_dc_raw(
+        self, state_no_sim: SessionState, work_dir: Path, run
     ):
-        # timing_between rejects at a DISTINCT call site from the edge/pulse/
-        # periodic loader, so it gets its own parametrize case rather than relying
-        # on the shared one being exercised.
+        # timing rejects at a DISTINCT call site from the edges/step/periodic
+        # loader, so it gets its own parametrize case rather than relying on the
+        # shared one being exercised.
         raw = _stage_recorded(work_dir, "ltspice_dc_div")
         with pytest.raises(ResultError, match="transient"):
-            await handler(input_factory(raw.name), state_no_sim)
+            await run(state_no_sim, raw.name)
 
 
 @pytest.mark.asyncio
@@ -2627,8 +1763,12 @@ class TestOperatingPointInternalsHint:
                 waves={"V(d)": np.array([0.9]), "Id(M1)": np.array([1e-4])},
             ),
         )
-        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
-        warnings = res.structuredContent.get("warnings", [])
+        res = await _metric(
+            state_no_sim,
+            p.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
+        )
+        warnings = res.get("warnings", [])
         # The note names both recovery paths: LTspice's .options logopinfo and
         # ngspice's .save.
         assert any("logopinfo" in w and ".save all @m1[gm]" in w for w in warnings), warnings
@@ -2650,8 +1790,12 @@ class TestOperatingPointInternalsHint:
                 waves={"V(d)": np.array([0.9])},
             ),
         )
-        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
-        warnings = res.structuredContent.get("warnings", [])
+        res = await _metric(
+            state_no_sim,
+            p.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
+        )
+        warnings = res.get("warnings", [])
         assert any(".save all @m1[gm]" in w for w in warnings), warnings
 
     async def test_passive_op_emits_no_hint(self, state_no_sim: SessionState, work_dir: Path):
@@ -2668,8 +1812,12 @@ class TestOperatingPointInternalsHint:
                 waves={"V(out)": np.array([0.5]), "I(R1)": np.array([1e-4])},
             ),
         )
-        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
-        warnings = res.structuredContent.get("warnings", [])
+        res = await _metric(
+            state_no_sim,
+            p.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
+        )
+        warnings = res.get("warnings", [])
         assert not any("logopinfo" in w.lower() for w in warnings), warnings
 
     async def test_saved_internals_emit_no_recovery_hint(
@@ -2687,162 +1835,14 @@ class TestOperatingPointInternalsHint:
                 waves={"V(d)": np.array([0.9]), "@m1[gm]": np.array([2e-3])},
             ),
         )
-        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
-        warnings = res.structuredContent.get("warnings", [])
+        res = await _metric(
+            state_no_sim,
+            p.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
+        )
+        warnings = res.get("warnings", [])
         assert not any("logopinfo" in w.lower() for w in warnings), warnings
-        assert res.structuredContent["device_op_points"].get("@m1[gm]") == pytest.approx(2e-3)
-
-
-@pytest.mark.asyncio
-class TestAnalysisToolsJobRun:
-    """A completed sweep/MC run must be analyzable by ``job_id`` + ``run_index``,
-    reaching the same raw — and returning the same result — as addressing that
-    run's raw by path. A reloaded job's raw can live outside ``allowed_paths``
-    (e.g. a WSL temp dir), so the job-run path deliberately skips ``safe_path``;
-    these address the run by index and compare against the by-path call.
-    """
-
-    async def test_signal_stats_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
-        p0, p1 = work_dir / "ss_run0.raw", work_dir / "ss_run1.raw"
-        t = np.linspace(0, 1, 100)
-        _inject_raw_mock(state_no_sim, p0, _make_raw_mock(waves={"time": t, "V(out)": t}, axis=t))
-        _inject_raw_mock(
-            state_no_sim, p1, _make_raw_mock(waves={"time": t, "V(out)": 2.0 * t}, axis=t)
-        )
-        _completed_batch(
-            state_no_sim,
-            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
-        )
-        by_job = await handle_signal_stats(
-            SignalStatsInput(job_id="b1", run_index=1, signal="V(out)"), state_no_sim
-        )
-        by_path = await handle_signal_stats(
-            SignalStatsInput(raw_file=p1.name, signal="V(out)"), state_no_sim
-        )
-        assert by_job.structuredContent == by_path.structuredContent
-        # run_index actually selected run 1 (2x amplitude), not run 0.
-        assert by_job.structuredContent["max"] == pytest.approx(2.0, abs=1e-6)
-
-    async def test_operating_point_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
-        p0, p1 = work_dir / "op_run0.raw", work_dir / "op_run1.raw"
-        _inject_raw_mock(
-            state_no_sim,
-            p0,
-            _make_raw_mock(
-                plotname="Operating Point",
-                trace_names=["V(out)"],
-                waves={"V(out)": np.array([1.0])},
-            ),
-        )
-        _inject_raw_mock(
-            state_no_sim,
-            p1,
-            _make_raw_mock(
-                plotname="Operating Point",
-                trace_names=["V(out)"],
-                waves={"V(out)": np.array([2.5])},
-            ),
-        )
-        _completed_batch(
-            state_no_sim,
-            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
-        )
-        by_job = await handle_operating_point(
-            OperatingPointInput(job_id="b1", run_index=1), state_no_sim
-        )
-        by_path = await handle_operating_point(OperatingPointInput(raw_file=p1.name), state_no_sim)
-        assert by_job.structuredContent == by_path.structuredContent
-        assert by_job.structuredContent["voltages"]["V(out)"] == pytest.approx(2.5)
-
-    async def test_edge_metrics_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
-        p0, p1 = work_dir / "em_run0.raw", work_dir / "em_run1.raw"
-        t, y = _step_waveform()
-        _inject_raw_mock(state_no_sim, p0, _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t))
-        _inject_raw_mock(state_no_sim, p1, _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t))
-        _completed_batch(
-            state_no_sim,
-            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
-        )
-        by_job = await handle_edge_metrics(
-            EdgeMetricsInput(job_id="b1", run_index=1, signal="V(out)"), state_no_sim
-        )
-        by_path = await handle_edge_metrics(
-            EdgeMetricsInput(raw_file=p1.name, signal="V(out)"), state_no_sim
-        )
-        assert by_job.structuredContent == by_path.structuredContent
-        assert by_job.structuredContent["is_rise_time"] is True
-
-    async def test_stability_metrics_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
-        freqs = np.logspace(0, 8, 500)
-        s = 1j * 2 * np.pi * freqs
-        H = 1000.0 / ((1 + s / (2 * np.pi * 1000)) * (1 + s / (2 * np.pi * 100000)))
-        p0, p1 = work_dir / "sm_run0.raw", work_dir / "sm_run1.raw"
-        for p in (p0, p1):
-            _inject_raw_mock(
-                state_no_sim,
-                p,
-                _make_raw_mock(
-                    plotname="AC Analysis",
-                    trace_names=["frequency", "V(loop)"],
-                    waves={"frequency": freqs, "V(loop)": H},
-                    axis=freqs,
-                ),
-            )
-        _completed_batch(
-            state_no_sim,
-            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
-        )
-        by_job = await handle_stability_metrics(
-            StabilityMetricsInput(job_id="b1", run_index=1, signal="V(loop)"), state_no_sim
-        )
-        by_path = await handle_stability_metrics(
-            StabilityMetricsInput(raw_file=p1.name, signal="V(loop)"), state_no_sim
-        )
-        assert by_job.structuredContent == by_path.structuredContent
-        assert by_job.structuredContent["dc_gain_db"] == pytest.approx(60.0, abs=0.1)
-
-    async def test_resonance_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
-        freqs = np.logspace(1, 5, 3000)
-        s = 1j * 2 * np.pi * freqs
-        w0 = 2 * np.pi * 1000
-        H = (w0 * w0) / (s * s + (w0 / 10.0) * s + w0 * w0)
-        p0, p1 = work_dir / "rs_run0.raw", work_dir / "rs_run1.raw"
-        for p in (p0, p1):
-            _inject_raw_mock(
-                state_no_sim,
-                p,
-                _make_raw_mock(
-                    plotname="AC Analysis",
-                    trace_names=["frequency", "V(out)"],
-                    waves={"frequency": freqs, "V(out)": H},
-                    axis=freqs,
-                ),
-            )
-        _completed_batch(
-            state_no_sim,
-            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
-        )
-        by_job = await handle_resonance(
-            ResonanceInput(job_id="b1", run_index=1, signal="V(out)"), state_no_sim
-        )
-        by_path = await handle_resonance(
-            ResonanceInput(raw_file=p1.name, signal="V(out)"), state_no_sim
-        )
-        assert by_job.structuredContent == by_path.structuredContent
-        assert by_job.structuredContent["peaks"][0]["frequency_hz"] == pytest.approx(
-            1000.0, rel=0.05
-        )
-
-    async def test_raw_file_and_job_id_mutually_exclusive(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="exactly one"):
-            await handle_signal_stats(
-                SignalStatsInput(raw_file="x.raw", job_id="b1", signal="V(out)"),
-                state_no_sim,
-            )
-
-    async def test_neither_raw_file_nor_job_id(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="exactly one"):
-            await handle_signal_stats(SignalStatsInput(signal="V(out)"), state_no_sim)
+        assert res["device_op_points"].get("@m1[gm]") == pytest.approx(2e-3)
 
 
 @pytest.mark.asyncio
@@ -2864,10 +1864,12 @@ class TestSignalStatsAnalysisTypeRobustness:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(onoise)"), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(onoise)"),
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["analysis_type"] == "noise"
         assert "mean" not in sc
         assert "min" in sc
@@ -2880,8 +1882,10 @@ class TestSignalStatsAnalysisTypeRobustness:
         # error / RuntimeError from spicelib's get_axis.
         raw = _stage_recorded(work_dir, "op_extreme_node")
         with pytest.raises(ResultError, match="operating_point"):
-            await handle_signal_stats(
-                SignalStatsInput(raw_file=raw.name, signal="V(hot)"), state_no_sim
+            await _metric(
+                state_no_sim,
+                raw.name,
+                SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(hot)"),
             )
 
 
@@ -2945,10 +1949,12 @@ class TestOperatingPointDeviceAndUnits:
 
     async def test_units_on_full_readout(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = self._op_raw(state_no_sim, work_dir)
-        res = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        res = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point"),
         )
-        sc = res.structuredContent
+        sc = res
         assert sc is not None
         assert sc["units"]["V(d)"] == "V"
         assert sc["units"]["Id(M1)"] == "A"
@@ -2959,10 +1965,12 @@ class TestOperatingPointDeviceAndUnits:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw_file = self._op_raw(state_no_sim, work_dir)
-        res = await handle_operating_point(
-            OperatingPointInput(raw_file=raw_file.name, device="M1"), state_no_sim
+        res = await _metric(
+            state_no_sim,
+            raw_file.name,
+            OperatingPointRecipe(key="operating_point", metric="operating_point", device="M1"),
         )
-        sc = res.structuredContent
+        sc = res
         assert sc is not None
         assert sc["device"] == "M1"
         assert set(sc["currents"]) == {"Id(M1)", "Ig(M1)"}
@@ -2975,8 +1983,10 @@ class TestOperatingPointDeviceAndUnits:
     ):
         raw_file = self._op_raw(state_no_sim, work_dir)
         with pytest.raises(ResultError, match="Devices present"):
-            await handle_operating_point(
-                OperatingPointInput(raw_file=raw_file.name, device="Q9"), state_no_sim
+            await _metric(
+                state_no_sim,
+                raw_file.name,
+                OperatingPointRecipe(key="operating_point", metric="operating_point", device="Q9"),
             )
 
 
@@ -2986,36 +1996,38 @@ class TestQueryValueDcLabelAndUnit:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = _stage_recorded(work_dir, "ltspice_dc_div")
-        res = await handle_query_value(
-            QueryValueInput(raw_file=str(raw), signal="V(out)", at="2"), state_no_sim
+        data = await _metric(
+            state_no_sim, str(raw), ValueRecipe(key="v", metric="value", expr="V(out)", at="2")
         )
-        sc = res.structuredContent
-        assert sc is not None
-        assert sc["unit"] == "V"
-        text = res.content[0].text  # type: ignore[union-attr]
-        # The DC sweep axis is the swept variable, not time.
-        assert " at t=" not in text
+        assert data["unit"] == "V"
+        # The DC sweep axis is the swept variable, not time, and the label a
+        # reader puts on the requested point says so.
+        loaded = await services.load_raw(raw, state_no_sim)
+        assert metrics.query_x_label(loaded, "DC transfer characteristic") not in ("t", "f")
 
     async def test_noise_density_labels_per_root_hz(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         # A .noise density trace is V/√Hz, not the plain V its whattype declares.
         raw = _stage_recorded(work_dir, "ltspice_noise_rc")
-        res = await handle_query_value(
-            QueryValueInput(raw_file=str(raw), signal="V(onoise)", at="1k"),
+        res = await _metric(
             state_no_sim,
+            str(raw),
+            ValueRecipe(key="value", metric="value", expr="V(onoise)", at="1k"),
         )
-        assert res.structuredContent["unit"] == "V/√Hz"
+        assert res["unit"] == "V/√Hz"
 
 
 @pytest.mark.asyncio
 class TestNoiseIntegralHandler:
     async def test_real_noise_fixture(self, state_no_sim: SessionState, work_dir: Path):
         raw = _stage_recorded(work_dir, "ltspice_noise_rc")
-        res = await handle_noise_integral(
-            NoiseIntegralInput(raw_file=str(raw), signal="V(onoise)"), state_no_sim
+        res = await _metric(
+            state_no_sim,
+            str(raw),
+            NoiseIntegralRecipe(key="noise_integral", metric="noise_integral", signal="V(onoise)"),
         )
-        sc = res.structuredContent
+        sc = res
         assert sc is not None
         assert sc["total_rms"] > 0
         assert sc["n_points"] > 1
@@ -3025,7 +2037,11 @@ class TestNoiseIntegralHandler:
     async def test_rejects_transient_raw(self, state_no_sim: SessionState, work_dir: Path):
         raw = _stage_recorded(work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match="noise"):
-            await handle_noise_integral(NoiseIntegralInput(raw_file=str(raw)), state_no_sim)
+            await _metric(
+                state_no_sim,
+                str(raw),
+                NoiseIntegralRecipe(key="noise_integral", metric="noise_integral"),
+            )
 
     def _inoise_raw_mock(self) -> MagicMock:
         freq = np.logspace(1, 5, 20)
@@ -3040,34 +2056,6 @@ class TestNoiseIntegralHandler:
             },
         )
 
-    async def test_inoise_unit_from_current_source(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        # .NOISE's input source is I1 (a current source) — the trace is still
-        # named "V(inoise)" (LTspice's naming quirk), so the unit must come
-        # from the deck's .NOISE line, not the trace name.
-        deck = work_dir / "noise_i.cir"
-        deck.write_text("Rtest out 0 1k\nI1 out 0 DC 0\n.NOISE V(out) I1 dec 10 1 100k\n.end\n")
-        raw_file = work_dir / "noise_i.raw"
-        _inject_raw_mock(state_no_sim, raw_file, self._inoise_raw_mock())
-        job = SimulationJob(
-            job_id="jnoise",
-            netlist=deck,
-            simulator="LTspice",
-            status="completed",
-            started_at=now(),
-            completed_at=now() + timedelta(seconds=1),
-            raw_file=raw_file,
-        )
-        state_no_sim.jobs["jnoise"] = job
-
-        res = await handle_noise_integral(
-            NoiseIntegralInput(job_id="jnoise", signal="V(inoise)"), state_no_sim
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        assert sc["unit"] == "A"
-
     async def test_inoise_unit_unverified_without_job(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -3076,10 +2064,12 @@ class TestNoiseIntegralHandler:
         raw_file = work_dir / "noise_bare.raw"
         _inject_raw_mock(state_no_sim, raw_file, self._inoise_raw_mock())
 
-        res = await handle_noise_integral(
-            NoiseIntegralInput(raw_file=str(raw_file), signal="V(inoise)"), state_no_sim
+        res = await _metric(
+            state_no_sim,
+            str(raw_file),
+            NoiseIntegralRecipe(key="noise_integral", metric="noise_integral", signal="V(inoise)"),
         )
-        sc = res.structuredContent
+        sc = res
         assert sc is not None
         assert sc["unit"] == "V"
         assert any("Could not verify" in w for w in sc["warnings"])
@@ -3136,60 +2126,6 @@ class TestNoiseInputSourceUnit:
 
 
 @pytest.mark.asyncio
-class TestExportDcHeader:
-    async def test_dc_x_header_names_swept_axis(self, state_no_sim: SessionState, work_dir: Path):
-        raw = _stage_recorded(work_dir, "ltspice_dc_div")
-        res = await handle_export_waveform(
-            ExportWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        # The x-column is the named swept variable, not the bare "sweep".
-        assert sc["columns"][0] != "sweep"
-        assert sc["columns"][0].lower() not in ("time_s", "freq_hz")
-
-    @pytest.mark.parametrize(
-        ("signals", "expect_relayed"),
-        [
-            pytest.param("all", True, id="all-includes-bogus"),
-            pytest.param(["@m1[bogus]"], True, id="selected-bogus"),
-            pytest.param(["V(out)"], False, id="unrelated-not-exported"),
-        ],
-    )
-    async def test_unrecognized_save_relay_gated_on_export_set(
-        self, state_no_sim: SessionState, work_dir: Path, signals, expect_relayed
-    ):
-        # A typo'd/unsupported .save'd @dev[param] is written to the raw as a
-        # real-looking 0.0 column; the simulator's unrecognized-variable warning
-        # is the only tell it's bogus. The export relays it — at the simulator's
-        # own warning severity, not invented as an error — but ONLY when the bogus
-        # column is in the export set, else a V(out)-only CSV would falsely claim
-        # it holds a bogus column it never exported.
-        raw_file = work_dir / "exp_bogus.raw"
-        (work_dir / "exp_bogus.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
-        t = np.linspace(0, 1, 100)
-        raw = _make_raw_mock(
-            trace_names=["time", "V(out)", "@m1[bogus]"],
-            waves={"time": t, "V(out)": np.sin(t), "@m1[bogus]": np.zeros(100)},
-            axis=t,
-        )
-        _inject_raw_mock(state_no_sim, raw_file, raw)
-        res = await handle_export_waveform(
-            ExportWaveformInput(raw_file=raw_file.name, signals=signals), state_no_sim
-        )
-        sc = res.structuredContent
-        assert sc is not None
-        bogus = [o for o in sc["observations"] if o["code"] == "unrecognized_save"]
-        if expect_relayed:
-            assert bogus, f"expected unrecognized relay for signals={signals!r}"
-            assert bogus[0]["severity"] == "warning"
-            assert "@m1[bogus]" in bogus[0]["detail"]
-        else:
-            assert not bogus
-            assert "@m1[bogus]" not in res.content[0].text
-
-
-@pytest.mark.asyncio
 class TestThdHandler:
     async def test_thd_on_synthetic_periodic_raw(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "thd.raw"
@@ -3203,11 +2139,12 @@ class TestThdHandler:
             axis=t,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        res = await handle_thd(
-            ThdInput(raw_file=raw_file.name, signal="V(out)", fundamental="1k", n_harmonics=3),
+        res = await _metric(
             state_no_sim,
+            raw_file.name,
+            ThdRecipe(key="thd", metric="thd", signal="V(out)", fundamental_hz="1k", harmonics=3),
         )
-        sc = res.structuredContent
+        sc = res
         assert sc is not None
         assert sc["thd_ratio"] == pytest.approx(0.1, rel=1e-2)
         assert sc["coherent"] is True
@@ -3225,11 +2162,12 @@ class TestThdHandler:
             axis=t,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        res = await handle_thd(
-            ThdInput(raw_file=raw_file.name, signal="V(out)", fundamental="1k"),
+        res = await _metric(
             state_no_sim,
+            raw_file.name,
+            ThdRecipe(key="thd", metric="thd", signal="V(out)", fundamental_hz="1k"),
         )
-        assert res.structuredContent["unit"] == "V"
+        assert res["unit"] == "V"
 
 
 def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock:
@@ -3243,7 +2181,7 @@ def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock
 
 
 async def _assert_relays_solve_failure(
-    state: SessionState, work_dir: Path, name: str, raw: MagicMock, handler, inp_factory
+    state: SessionState, work_dir: Path, name: str, raw: MagicMock, run
 ) -> None:
     """Drive ``handler`` against a raw whose sibling .log reports a singular
     matrix, and assert the failure surfaces in the rendered result. Covers the
@@ -3252,8 +2190,9 @@ async def _assert_relays_solve_failure(
     raw_file = work_dir / f"{name}.raw"
     _inject_raw_mock(state, raw_file, raw)
     (work_dir / f"{name}.log").write_text("gmin stepping failed\n")
-    result = await handler(inp_factory(raw_file.name), state)
-    assert "gmin stepping" in result.content[0].text.lower(), (
+    data = await run(state, raw_file.name)
+    warnings = data.get("warnings") or []
+    assert any("gmin stepping" in w.lower() for w in warnings), (
         f"{name} did not relay the run-level solve failure"
     )
 
@@ -3273,21 +2212,29 @@ class TestSolveFailureRelayCoverage:
             (
                 "ss",
                 _make_raw_mock(),
-                handle_signal_stats,
-                lambda n: SignalStatsInput(raw_file=n, signal="V(out)"),
+                lambda state, n: _metric(
+                    state, n, SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)")
+                ),
             ),
             (
                 "edge",
                 _make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
-                handle_edge_metrics,
-                lambda n: EdgeMetricsInput(raw_file=n, signal="V(out)"),
+                lambda state, n: _metric(
+                    state, n, EdgesRecipe(key="e", metric="edges", signal="V(out)")
+                ),
             ),
             (
                 "pulse",
                 _make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
-                handle_pulse_response,
-                lambda n: PulseResponseInput(
-                    raw_file=n, signal="V(out)", initial_value=0.0, final_value=1.0
+                lambda state, n: metrics.pulse_response(
+                    _source(state, n),
+                    "V(out)",
+                    None,
+                    None,
+                    0,
+                    state,
+                    initial_value=0.0,
+                    final_value=1.0,
                 ),
             ),
             (
@@ -3297,34 +2244,46 @@ class TestSolveFailureRelayCoverage:
                     waves={"time": t_step, "V(in)": y_step, "V(out)": y_step},
                     axis=t_step,
                 ),
-                handle_timing_between,
-                lambda n: TimingBetweenInput(raw_file=n, signal_a="V(in)", signal_b="V(out)"),
+                lambda state, n: _metric(
+                    state,
+                    n,
+                    TimingRecipe.model_validate(
+                        {
+                            "key": "t",
+                            "metric": "timing",
+                            "from": TimingEndpoint(signal="V(in)"),
+                            "to": TimingEndpoint(signal="V(out)"),
+                        }
+                    ),
+                ),
             ),
             (
                 "periodic",
                 _make_raw_mock(
                     trace_names=["time", "V(clk)"], waves={"time": t_sq, "V(clk)": y_sq}, axis=t_sq
                 ),
-                handle_periodic_metrics,
-                lambda n: PeriodicMetricsInput(raw_file=n, signal="V(clk)"),
+                lambda state, n: _metric(
+                    state, n, PeriodicRecipe(key="p", metric="periodic", signal="V(clk)")
+                ),
             ),
             (
                 "thd",
                 _make_raw_mock(waves={"time": t_sin, "V(out)": y_sin}, axis=t_sin),
-                handle_thd,
-                lambda n: ThdInput(raw_file=n, signal="V(out)", fundamental="1k", n_harmonics=3),
-            ),
-            (
-                # Egress, not a metric: a run→export-only loop must still see the
-                # solve failure on the CSV it just wrote, not only on the run.
-                "export",
-                _make_raw_mock(),
-                handle_export_waveform,
-                lambda n: ExportWaveformInput(raw_file=n, signals=["V(out)"]),
+                lambda state, n: _metric(
+                    state,
+                    n,
+                    ThdRecipe(
+                        key="d",
+                        metric="thd",
+                        signal="V(out)",
+                        fundamental_hz="1k",
+                        harmonics=3,
+                    ),
+                ),
             ),
         ]
-        for name, raw, handler, factory in cases:
-            await _assert_relays_solve_failure(state_no_sim, work_dir, name, raw, handler, factory)
+        for name, raw, run in cases:
+            await _assert_relays_solve_failure(state_no_sim, work_dir, name, raw, run)
 
     async def test_ac_tools(self, state_no_sim: SessionState, work_dir: Path):
         freqs = np.logspace(0, 6, 200)
@@ -3338,49 +2297,47 @@ class TestSolveFailureRelayCoverage:
             (
                 "stab",
                 _ac_response_raw("V(loop)", loop, freqs),
-                handle_stability_metrics,
-                lambda n: StabilityMetricsInput(raw_file=n, signal="V(loop)"),
+                lambda state, n: _metric(
+                    state, n, StabilityRecipe(key="st", metric="stability", signal="V(loop)")
+                ),
             ),
             (
                 "reson",
                 _ac_response_raw("V(out)", peak, freqs),
-                handle_resonance,
-                lambda n: ResonanceInput(raw_file=n, signal="V(out)"),
-            ),
-            (
-                "acstruct",
-                _ac_response_raw("V(out)", lpf, freqs),
-                handle_ac_structure,
-                lambda n: AcStructureInput(raw_file=n, signal="V(out)"),
+                lambda state, n: _metric(
+                    state, n, ResonanceRecipe(key="r", metric="resonance", signal="V(out)")
+                ),
             ),
             (
                 "bode1",
                 _ac_response_raw("V(out)", lpf, freqs),
-                handle_bode_metrics,
-                lambda n: BodeMetricsInput(
-                    raw_file=n, signal="V(out)", mode="point", frequencies=["1k"]
+                lambda state, n: _metric(
+                    state,
+                    n,
+                    BodePointRecipe(key="p", metric="bode_point", signal="V(out)", at_hz="1k"),
                 ),
             ),
         ]
-        for name, raw, handler, factory in cases:
-            await _assert_relays_solve_failure(state_no_sim, work_dir, name, raw, handler, factory)
+        for name, raw, run in cases:
+            await _assert_relays_solve_failure(state_no_sim, work_dir, name, raw, run)
 
-    async def test_bode_all_steps(self, state_no_sim: SessionState, work_dir: Path):
-        await _assert_relays_solve_failure(
+    async def test_ac_structure_relays_onto_observations(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # ac_structure is the one AC metric with an observations channel, so its
+        # relay lands there rather than in warnings — the two channels answer
+        # different questions and must not be merged.
+        freqs = np.logspace(0, 6, 200)
+        lpf = 1.0 / (1 + (2j * np.pi * freqs) / (2 * np.pi * 1000))
+        raw_file = work_dir / "acstruct.raw"
+        _inject_raw_mock(state_no_sim, raw_file, _ac_response_raw("V(out)", lpf, freqs))
+        (work_dir / "acstruct.log").write_text("gmin stepping failed\n")
+        data = await _metric(
             state_no_sim,
-            work_dir,
-            "bodeall",
-            _stepped_ac_raw([500.0, 5000.0]),
-            handle_bode_metrics,
-            lambda n: BodeMetricsInput(
-                raw_file=n,
-                signal="V(out)",
-                mode="crossing",
-                quantity="magnitude_db",
-                level=-3.0103,
-                all_steps=True,
-            ),
+            raw_file.name,
+            AcStructureRecipe(key="a", metric="ac_structure", signal="V(out)"),
         )
+        assert any("gmin stepping" in o["detail"].lower() for o in data["observations"])
 
     async def test_recovered_singular_matrix_not_flagged(
         self, state_no_sim: SessionState, work_dir: Path
@@ -3396,10 +2353,12 @@ class TestSolveFailureRelayCoverage:
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="0.5"),
         )
-        warnings = (result.structuredContent or {}).get("warnings") or []
+        warnings = (result or {}).get("warnings") or []
         assert not any("singular" in w.lower() for w in warnings)
 
     async def test_degenerate_raise_names_solve_failure(
@@ -3414,8 +2373,10 @@ class TestSolveFailureRelayCoverage:
         _inject_raw_mock(state_no_sim, raw_file, raw)
         (work_dir / "flat.log").write_text("gmin stepping failed\n")
         with pytest.raises(ResultError, match="gmin stepping"):
-            await handle_edge_metrics(
-                EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"), state_no_sim
+            await _metric(
+                state_no_sim,
+                raw_file.name,
+                EdgesRecipe(key="edges", metric="edges", signal="V(out)"),
             )
 
 
@@ -3428,111 +2389,21 @@ class TestDisturbanceResponseTool:
         y = 3.3 - 0.1 * tri  # 100 mV droop, recovers by ~2 ms
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_disturbance_response(
-            DisturbanceResponseInput(raw_file=raw_file.name, signal="V(out)", settle_band_pct=1.0),
+        result = await metrics.disturbance_response(
+            _source(state_no_sim, raw_file.name),
+            "V(out)",
+            None,
+            None,
+            0,
             state_no_sim,
+            settle_band_pct=1.0,
         )
-        sc = result.structuredContent
+        sc = result
         assert sc is not None
         assert sc["signal"] == "V(out)"
         assert sc["baseline"] == pytest.approx(3.3, abs=1e-6)
         assert sc["max_droop"] == pytest.approx(0.1, abs=2e-4)
         assert sc["recovery_time"] == pytest.approx(1.835e-3, abs=5e-5)
-
-
-@pytest.mark.asyncio
-class TestTransientResponseDispatch:
-    async def test_step_mode_dispatches_shared_and_step_fields(
-        self, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
-    ):
-        captured: PulseResponseInput | None = None
-        sentinel = object()
-
-        async def fake_step(args: PulseResponseInput, state: SessionState):
-            nonlocal captured
-            captured = args
-            assert state is state_no_sim
-            return sentinel
-
-        monkeypatch.setattr("ltspice_mcp.tools.analysis.handle_pulse_response", fake_step)
-        result = await handle_transient_response(
-            TransientResponseInput(
-                mode="step",
-                raw_file="step.raw",
-                signal="V(out)",
-                step=2,
-                t_start="1m",
-                t_end="2m",
-                initial_value=0.0,
-                final_value=3.3,
-                settling_tolerance_pct=1.0,
-                format="json",
-            ),
-            state_no_sim,
-        )
-
-        assert result is sentinel
-        assert captured is not None
-        assert captured.model_dump() == {
-            "raw_file": "step.raw",
-            "job_id": None,
-            "run_index": 0,
-            "signal": "V(out)",
-            "step": 2,
-            "t_start": "1m",
-            "t_end": "2m",
-            "initial_value": 0.0,
-            "final_value": 3.3,
-            "settling_tolerance_pct": 1.0,
-            "format": "json",
-        }
-
-    async def test_disturbance_mode_dispatches_shared_and_disturbance_fields(
-        self, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
-    ):
-        captured: DisturbanceResponseInput | None = None
-        sentinel = object()
-
-        async def fake_disturbance(args: DisturbanceResponseInput, state: SessionState):
-            nonlocal captured
-            captured = args
-            assert state is state_no_sim
-            return sentinel
-
-        monkeypatch.setattr(
-            "ltspice_mcp.tools.analysis.handle_disturbance_response", fake_disturbance
-        )
-        result = await handle_transient_response(
-            TransientResponseInput(
-                mode="disturbance",
-                job_id="mc_1",
-                run_index=4,
-                signal="V(vout)",
-                t_start="10u",
-                t_end="50u",
-                baseline=1.8,
-                settle_band=0.01,
-                settle_band_pct=0.5,
-                format="text",
-            ),
-            state_no_sim,
-        )
-
-        assert result is sentinel
-        assert captured is not None
-        assert captured.model_dump() == {
-            "raw_file": None,
-            "job_id": "mc_1",
-            "run_index": 4,
-            "signal": "V(vout)",
-            "step": 0,
-            "t_start": "10u",
-            "t_end": "50u",
-            "baseline": 1.8,
-            "settle_band": 0.01,
-            "settle_band_pct": 0.5,
-            "format": "text",
-        }
 
 
 @pytest.mark.asyncio
@@ -3548,11 +2419,13 @@ class TestReturnLossTool:
             axis=f,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_return_loss(
-            ReturnLossInput(raw_file=raw_file.name, signal="V(in)", z0=50.0, at="1e7"),
+        result = await _metric(
             state_no_sim,
+            raw_file.name,
+            ReturnLossRecipe(key="return_loss", metric="return_loss", signal="V(in)", z0=50.0),
+            at="1e7",
         )
-        sc = result.structuredContent
+        sc = result
         assert sc["signal"] == "V(in)"
         assert sc["z0_ohm"] == 50.0
         assert sc["return_loss_db"] == pytest.approx(9.542, abs=1e-2)
@@ -3571,10 +2444,12 @@ class TestSignalStatsConstantObservation:
         y = np.zeros_like(t)  # min == max == 0
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_signal_stats(
-            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"), state_no_sim
+        result = await _metric(
+            state_no_sim,
+            raw_file.name,
+            SignalStatsRecipe(key="signal_stats", metric="signal_stats", signal="V(out)"),
         )
-        codes = [o["code"] for o in result.structuredContent.get("observations", [])]
+        codes = [o["code"] for o in result.get("observations", [])]
         assert "constant_window" in codes
 
 
@@ -3587,16 +2462,18 @@ class TestQueryValueExactMatch:
         y = t * 2.0
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        snapped = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="1.5"),
+        snapped = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="1.5"),
         )
-        assert snapped.structuredContent["exact_match"] is False
-        exact = await handle_query_value(
-            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="2"),
+        assert snapped["exact_match"] is False
+        exact = await _metric(
             state_no_sim,
+            raw_file.name,
+            ValueRecipe(key="value", metric="value", expr="V(out)", at="2"),
         )
-        assert exact.structuredContent["exact_match"] is True
+        assert exact["exact_match"] is True
 
 
 class TestGuardedAxisSteppedOpHint:
@@ -3611,14 +2488,12 @@ class TestGuardedAxisSteppedOpHint:
         return raw
 
     def test_plain_op_points_at_operating_point(self, work_dir: Path):
-        from ltspice_mcp.tools.analysis import _guarded_axis
 
         raw_path = work_dir / "op.raw"  # no sibling .log
         with pytest.raises(ResultError, match="operating_point"):
             _guarded_axis(self._no_axis_raw(), 0, raw_path)
 
     def test_stepped_op_points_at_dc_conversion(self, work_dir: Path):
-        from ltspice_mcp.tools.analysis import _guarded_axis
 
         raw_path = work_dir / "stepped_op.raw"
         raw_path.with_suffix(".log").write_text(".step temp=-40\n.step temp=25\n.step temp=85\n")

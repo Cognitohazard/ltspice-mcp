@@ -5,7 +5,7 @@ description: >
   working with ngspice scripting (.control blocks), or interpreting simulation
   results. Covers ngspice-specific SPICE syntax, behavioral sources, .control
   scripting, Monte Carlo via control loops, parameters, XSPICE, .save, .MEAS,
-  convergence, and common gotchas that cause silent errors. Use this skill
+  convergence, and the conditions that cause silent errors. Use this skill
   whenever the user mentions ngspice, or is writing SPICE netlists targeting
   ngspice rather than LTspice.
 ---
@@ -25,7 +25,7 @@ description: >
 
 - `.END` must be last line. No statements after it.
 - `+` at start of line continues previous statement.
-- Comments: `*` (full line) or `$` (inline). Note: `;` is NOT the inline comment character in ngspice (that's LTspice).
+- Comments: `*` (full line) or `$` (inline). Note: `;` is not the inline comment character in ngspice (that's LTspice).
 
 ### Component Syntax
 
@@ -50,9 +50,9 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | G | giga | 1e9 |
 | T | tera | 1e12 |
 
-**`M` means MILLI, not mega. Use `MEG` for 1e6.**
-This is the #1 SPICE mistake. `1M` = 0.001, not 1000000.
-Unrecognized suffix letters are silently ignored — no error, just wrong value.
+**`M` means milli, not mega. Use `MEG` for 1e6.**
+`1M` = 0.001, not 1000000. Unrecognized suffix letters are silently ignored:
+no error, just a wrong value.
 
 ### Waveform Sources
 
@@ -102,18 +102,18 @@ PWL(t1 v1 t2 v2 ...)
 - `par('expression')` — inline algebraic expression on any output variable (uses B source syntax internally).
 - `SP` analysis type for spectrum (fft) measurements (via `meas` command, not `.meas` line).
 
-**Gotchas:**
+**Important behavior:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails.
-- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile` — the invocation `run_simulation` uses. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block written as the DOT-LESS `meas` command — e.g. `meas tran vmax MAX V(out)` (a dotted `.meas` inside `.control` is not a valid command and silently does nothing). The result prints to the run's log.
+- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile`, which is how `run_experiments` invokes ngspice. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block as the dot-less `meas` command, e.g. `meas tran vmax MAX V(out)`. A dotted `.meas` inside `.control` is not a valid command and silently does nothing. The result prints to the run's log.
 - `param` and `par` are not available inside `.control` blocks — use `let` instead.
 
-### General Pitfalls
+### General notes
 
 - **Node "0" is ground**. Using `GND` without `.global GND` or tying it to 0 creates a floating node — no error, wrong results.
-- **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does NOT auto-connect bulk to source (LTspice does).
+- **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does not auto-connect bulk to source (LTspice does).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
-- **Parameter sweep**: ngspice has **no native `.step`** (that is LTspice syntax). The MCP runs parametric sweeps through `configure_sweep` + `run_sweep`, which generate and simulate one netlist per value. For a hand-written deck outside the MCP, use a `.control` block with an `alter`/loop. A `.step` line in a deck handed to `run_simulation` is rejected with a pointer to `configure_sweep`.
+- **Parameter sweep**: ngspice has **no native `.step`** (that is LTspice syntax). The MCP runs parametric sweeps through `run_experiments` `variations` (an `assign` grid or a `random` rule), which stage and simulate one deck per case. For a hand-written deck outside the MCP, use a `.control` block with an `alter`/loop. A `.step` line in a deck handed to `run_experiments` is rejected with a pointer to `variations`.
 
 ---
 
@@ -129,7 +129,7 @@ PWL(t1 v1 t2 v2 ...)
 ```
 
 - Expressions in braces `{expr}` or single quotes `'expr'` — both work.
-- Expressions without delimiters work only when spaces are absent: `.param c=a+123` OK, `.param c = a + 123` FAILS silently (assigns only first token).
+- Expressions without delimiters work only when spaces are absent: `.param c=a+123` OK, `.param c = a + 123` fails silently (assigns only first token).
 - Self-referential params fail silently: `.param x = {x+3}` does not work.
 - Parameter names: must start with alpha; may contain `! # $ % [ ] _`. Cannot use reserved words: `time`, `temper`, `hertz`, `not`, `and`, `or`, `div`, `mod`, `sqr`, `sqrt`, `sin`, `cos`, `exp`, `ln`, `log`, `log10`, `arctan`, `abs`, `pwr`, `defined`.
 - String-valued params supported with limited concatenation.
@@ -178,7 +178,7 @@ B1 out 0 V=<expression>
 B2 out 0 I=<expression> [tc1=x] [tc2=x] [temp=x]
 ```
 
-**Conditional:** uses ternary `cond ? true : false` — NOT `IF()` (that's LTspice). Put a space before `?` so the parser doesn't confuse it with other tokens. Nested ternaries need explicit parentheses.
+**Conditional:** uses ternary `cond ? true : false`, not `IF()` (that's LTspice). Put a space before `?` so the parser doesn't confuse it with other tokens. Nested ternaries need explicit parentheses.
 
 **Available functions (B source context):** `cos`, `sin`, `tan`, `acos`, `asin`, `atan`, `cosh`, `sinh`, `acosh`, `asinh`, `atanh`, `exp`, `ln`, `log`, `log10`, `abs`, `sqrt`, `u` (unit step), `u2` (ramp 0-1), `uramp`, `floor`, `ceil`, `min`, `max`, `pow`, `**`, `pwr`, `^`, `i(device)`
 
@@ -191,7 +191,7 @@ Blimit b 0 V = pwl(v(1), -4,0, -2,2, 2,4, 4,5, 6,5)
 ```
 x values must be monotonically increasing — non-monotonic stops execution. Can use `time` or expressions as the independent variable.
 
-**Gotchas:**
+**Important behavior:**
 - `exp()` is internally capped at argument=14 — beyond that it becomes linear (for convergence).
 - `log`/`ln`/`sqrt` of negative values use `fabs()` automatically — no error, may give unexpected results.
 - Division by zero or `log(0)` causes an error.
@@ -210,10 +210,10 @@ X1 input output myfilter rval=1k cval=1n
 ```
 
 **Key differences from LTspice:**
-- Parameters on `.subckt` line do NOT need `params:` keyword — just `name=value` after nodes.
-- `.lib` behavior is compatibility-mode dependent, and no single `.lib` form works in every mode — so for unconditional whole-file inclusion use `.include <file>`, which resolves in every ngspice mode (verified on ngspice-42). If you use `.lib`:
-  - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does NOT load the file's models.
-  - **This server's default `kiltpsa`** (a PSPICE-family mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select idiom) is mis-split by the `lt`/`ps` tokens into two plain includes that drop the section, surfacing as a missing include (`could not find include file`). Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_simulation` emits this hint when a failed run matches the pattern.
+- Parameters on `.subckt` line do not need `params:` keyword — just `name=value` after nodes.
+- `.lib` behavior depends on the compatibility mode, and no single `.lib` form works in every mode. For unconditional whole-file inclusion use `.include <file>`, which works in every ngspice mode (verified on ngspice-42). If you use `.lib`:
+  - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does not load the file's models.
+  - **This server's default `kiltpsa`** (a PSPICE-family mode) is the reverse: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select form) is split by the `lt`/`ps` tokens into two plain includes that drop the section, and the run fails with `could not find include file`. Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_experiments` emits this hint when a failed run matches the pattern.
 - `.param` inside subcircuits is local scope (masks globals). Nesting up to 10 levels.
 - Subcircuit and model names are global — must be unique across the entire netlist.
 
@@ -222,20 +222,22 @@ X1 input output myfilter rval=1k cval=1n
 ```spice
 .save V(out) I(Vin)               $ save only these signals
 .save @m1[id] @m1[gm]             $ save internal device parameters
-.save all @m2[vdsat]               $ save defaults PLUS extras
+.save all @m2[vdsat]               $ save defaults plus extras
 ```
 
 - Without `.save`, all node voltages and source currents are saved (can create huge files).
-- Adding even ONE `.save` line drops all defaults — only listed signals are saved.
+- Adding even one `.save` line drops all defaults — only listed signals are saved.
 - To keep defaults plus extras: `.save all @m2[vdsat]`
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
 - **Read internals back as named numbers** (no rawfile parsing, no `.control`):
-  on a `.dc`/`.tran` sweep, `export_waveform(signals=['m1.gm','m1.id'])` gives the
-  gm/ID table in one CSV; `query_value(signal='m1.gm', at=...)` reads one point;
+  on a `.dc`/`.tran` sweep, an `analyze_results` `waveform` recipe over
+  `['m1.gm','m1.id']` gives the gm/ID table in one call; a `value` recipe
+  (`expr='m1.gm', at=...`) reads one point;
   `operating_point(device='M1')` gives the bias snapshot of one device. Address
   an internal by the `m1.gm` shorthand or the literal `@m1[gm]` (the tools resolve
-  the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read flow
-  is the gm/ID-characterization idiom — see the `spice://guide` resource.
+  the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read
+  sequence is how to build a gm/ID characterization table; see the
+  `spice://guide` resource.
 
 ### .control / .endc Blocks
 
@@ -253,18 +255,17 @@ wrdata output.txt V(out)          $ save as CSV-like text
 .endc
 ```
 
-**No `write`/`wrdata` in your script?** A `.control` block replaces ngspice's
-default raw output — the script runs instead of the plain `-r rawfile` write,
-so a script with no `write`/`wrdata` produces no rawfile for the analysis
-tools to read, even though the run completes cleanly. `run_simulation`
-auto-injects a `write <rawpath>` just before `.endc` when it detects this
-(exactly one `.control` block, no existing `write`/`wrdata` anywhere in the
-deck), so results still reach `get_waveform`/`signal_stats`/etc. without you
-doing anything. That injected write is a bare `write` — it captures only the
-*current/last* plot, so a script that runs multiple analyses, or writes
-per-iteration inside a Monte Carlo loop (see below), still needs its own
-explicit `write`/`wrdata` calls to capture each one; the moment your script
-has any `write`/`wrdata` of its own, the auto-injection steps aside entirely.
+**Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
+default raw output: the script runs instead of the `-r rawfile` write, so a
+script with no `write`/`wrdata` produces no rawfile for the analysis tools
+even though the run completes. When the deck has exactly one `.control` block
+and no `write`/`wrdata` anywhere, `run_experiments` inserts a `write <rawpath>`
+just before `.endc`, so results still reach the `waveform`/`signal_stats`
+recipes. That inserted line is a bare `write` and captures only the
+current/last plot. A script that runs several analyses, or writes per
+iteration inside a Monte Carlo loop (see below), needs its own `write`/`wrdata`
+for each. If the script already contains any `write`/`wrdata`, nothing is
+inserted.
 
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access with `$myvar`
@@ -381,7 +382,7 @@ Use `rshunt` for "no DC path to ground" errors. Use `rseries` when inductors par
 
 ### XSPICE
 
-Mixed-signal simulation with code models. A-devices (the `A` prefix) ARE the XSPICE code-model primitives, and XSPICE is enabled by default in the official/stock ngspice builds — no custom build needed. Only the experimental `XSPICE_EXP` extras (e.g. the capacitor/inductor code models) require a custom build.
+Mixed-signal simulation with code models. A-devices (the `A` prefix) are the XSPICE code-model primitives, and XSPICE is enabled by default in the official/stock ngspice builds — no custom build needed. Only the experimental `XSPICE_EXP` extras (e.g. the capacitor/inductor code models) require a custom build.
 
 ```spice
 A1 [in] [out] lut1
@@ -400,7 +401,7 @@ Digital nodes use `[name]` bracket syntax for buses.
 - **MOSFET bulk terminal**: required (4 pins), not auto-connected
 - **GND node**: must explicitly tie to 0 or use `.global`
 - No `startup` keyword in `.tran`
-- A-devices ARE the XSPICE code-model primitives (the `A` prefix) — available in stock/official builds (XSPICE enabled by default); only `XSPICE_EXP` extras need a custom build
+- A-devices are the XSPICE code-model primitives (the `A` prefix) — available in stock/official builds (XSPICE enabled by default); only `XSPICE_EXP` extras need a custom build
 - No Unicode mu issue — ngspice preserves `u` as-is
 - `.func` definitions cannot be recursive — causes hang, not error
 - Different `.raw` file format (all doubles vs LTspice mixed precision)

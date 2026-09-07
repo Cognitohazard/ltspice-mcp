@@ -49,7 +49,7 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
         return None
 
 
-def _fsync_fd(fd: int) -> None:
+def fsync_fd(fd: int) -> None:
     """Durable flush of ``fd`` to persistent storage.
 
     On macOS, plain ``fsync`` only reaches the drive's write cache;
@@ -67,7 +67,7 @@ def _fsync_fd(fd: int) -> None:
     os.fsync(fd)
 
 
-def _fsync_dir(path: Path) -> None:
+def fsync_dir(path: Path) -> None:
     """Best-effort fsync of a directory, persisting rename metadata.
 
     No-op on Windows (the API has no equivalent). OSError is swallowed:
@@ -199,7 +199,7 @@ def atomic_write(
             yield f
             f.flush()
             if durable:
-                _fsync_fd(f.fileno())
+                fsync_fd(f.fileno())
 
         if existing_mode is not None:
             with contextlib.suppress(OSError):
@@ -212,7 +212,7 @@ def atomic_write(
         raise
 
     if durable:
-        _fsync_dir(path.parent)
+        fsync_dir(path.parent)
 
 
 def atomic_write_text(

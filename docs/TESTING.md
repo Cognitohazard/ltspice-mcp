@@ -1,10 +1,10 @@
 # Testing & quality practice
 
-This is the durable record of *how* this project tests, and — more importantly
-— of a class of bug its testing kept missing and the mechanisms added to stop
-that. Read it before adding a tool, an op, or a stress pass.
+This document records how the project tests and, more importantly, a class
+of bug the tests kept missing and the mechanisms added to catch it. Read it
+before adding a tool, an op, or a test campaign.
 
-## The failure this codifies
+## The bugs this addresses
 
 Two defects shipped despite a long run of adversarial stress passes against a
 live server:
@@ -16,33 +16,34 @@ live server:
   add both, but not undo either.
 
 Neither is a wrong-output bug. Both are **absence-class** defects: a capability
-that is missing, or unusable for an input class the tests never fed it. That is
-why they survived. A stress pass *walks code paths*; absence has no path to
-walk. You cannot exercise a tool that does not exist, and a tool that quietly
-skips an input class looks correct on every input that isn't that class.
+that is missing, or unusable for an input class the tests never fed it. They
+survived because a stress pass exercises code that exists, and a missing
+capability has no code to exercise. You cannot exercise a tool that does not
+exist, and a tool that quietly skips an input class looks correct on every
+input outside that class.
 
-The deeper cause was the shape of the evaluation itself: it ran **tool-up and
-happy-path-down** — "here are the tools, drive them through a plausible
-workflow, did it work?" Three biases compounded inside that shape:
+The deeper cause was how the evaluation was run: it started from the tool
+list and drove the tools through a plausible workflow ("here are the tools,
+does a reasonable sequence work?"). Three biases followed from that:
 
 - **Passive-input bias.** The circuit batteries were almost entirely R/C/V.
   An active device was never pushed through the build or convert workflow, so
   the converter's active-device blindness never triggered.
-- **Additive bias.** Every workflow built something up; none tore one down.
-  Removal was never *needed* by a test, so its absence was never felt.
+- **Additive bias.** Every workflow built something up; none took anything
+  apart. No test needed removal, so nobody noticed it was missing.
 - **Self-grading.** The same agent that built a tool also chose the test
   circuit and judged the result — and chose inputs that showcased what it had
   built.
 
 ## What each instrument can and cannot catch
 
-|instrument|catches|blind to|
+|test method|detects|does not detect|
 |-|-|-|
-|stress pass / path-walking|wrong behavior in code that runs|absence (missing or unusable-for-a-class capability)|
-|unit / contract tests|wrong behavior in a unit|whether the surface as a whole covers the task|
+|stress pass / workflow tests|wrong behavior in code that runs|a missing capability, or one unusable for an input class the tests never feed it|
+|unit / contract tests|wrong behavior in a unit|whether the tool set as a whole can complete a user task|
 |ground-truth numeric checks|silently-wrong numbers|missing capability|
 
-The instruments below exist specifically to cover the blind column.
+The mechanisms below exist to cover the third column.
 
 ## The four mechanisms
 
@@ -50,18 +51,17 @@ The instruments below exist specifically to cover the blind column.
 
 `tests/test_dispatch.py::TestOpInverseClosure`. The schematic-editing op surface
 must be **closed under inversion**: for every op that mutates the `.asc`, an
-inverse op exists (or it is self-inverse). It is a *surface* guard — it asserts
-an undo *capability* exists, not that state round-trips byte-for-byte (e.g.
-`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore;
-`reset_schematic` is the recovery hatch for those). Each op in the `SchematicOp`
-union is either paired with an inverse op that exists, or declared self-inverse
-(re-applying it with the prior arguments reverts it). The pairing table is a
-*forcing function*: a new `add_*` / `wire_pins` / `create` op with no entry fails
-the test, so shipping a one-way mutation becomes a reviewed decision instead of
-an accident. This is the check that, run earlier, would have failed the day
-`add_net_label` shipped without `remove_net_label` and `wire_pins` without
-`remove_wire`. Building the pairing table surfaced one missing inverse —
-`add_directive` had no `remove_directive` op — which was added alongside the check.
+inverse op exists (or it is self-inverse). It checks that an undo capability
+exists, not that state round-trips byte-for-byte (e.g.
+`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore). Each op in the `SchematicOp` union is either
+paired with an inverse op that exists, or declared self-inverse (re-applying it
+with the prior arguments reverts it). The pairing table forces the decision: a
+new `add_*` / `wire_pins` / `create` op with no entry fails the test, so a
+one-way mutation ships only as a reviewed decision, not by accident. Had this
+check existed earlier, it would have caught `add_net_label` shipping without
+`remove_net_label` and `wire_pins` without `remove_wire`. Building the table
+also turned up one missing inverse (`add_directive` had no `remove_directive`
+op), which was added with the check.
 
 The standalone mutating tools live outside the op union, so a companion guard
 (`tests/test_dispatch.py::TestMutatingToolsAreReversible`) requires every
@@ -85,21 +85,19 @@ The build battery places and wires each class through the real build path; the
 ngspice test simulates an active circuit (a saturated NPN switch) end to end and
 asserts physical ground truth (the collector is pulled to saturation, proving
 the device conducts). An unusable-for-a-class regression now fails on the next
-run instead of after it ships. Keep the archetype set frozen and add to it when
-a new device class becomes supported — do not let a battery drift back to
-passive-only.
+run instead of after it ships. Keep the archetype set; add to it when a new
+device class becomes supported, and do not remove active-device coverage.
 
 ### 3. Task-down coverage pass (discipline)
 
 Path-walking asks "does what exists work?" Coverage asks "does what exists let
-me finish the job?" — and only the second can surface a missing capability.
-Periodically, enumerate the **user tasks** (build a circuit, edit one, **fix a
+me finish the job?" Only the second can find a missing capability.
+Periodically, list the **user tasks** (build a circuit, edit one, **fix a
 mistake**, analyze a result, convert between forms) and for each walk the
-*minimal tool sequence*, asking at every step "is this step possible?" The
-removal gap was exactly an impossible step — "undo a misplaced label" — that no
-happy-path walk ever attempted, because happy paths don't make mistakes. Run
-this task-down, not tool-up: start from what a user needs to accomplish, not
-from the tool list.
+*minimal tool sequence*, asking at every step whether the step is possible.
+The removal gap was an impossible step ("undo a misplaced label") that no
+happy-path walk attempted, because a happy path never needs to undo anything.
+Start from what a user needs to accomplish, not from the tool list.
 
 ### 4. Blind-artifact judging (part discipline, part regression test)
 
@@ -108,61 +106,137 @@ two halves, and only the second is automated — keep them distinct.
 
 - **The discipline (not automated).** Feed the **artifact alone** — the `.asc`,
   the plot, the netlist, with no build narrative — to an independent reviewer
-  (a person, or a separate model) against a rubric. This generalizes a lesson
-  learned the hard way in the plot-evaluation work: leaving the title and
-  filename on a plot leaked the expected answer into the vision evaluation and
-  inflated its scores; stripping them corrected it. There is no automated blind
+  (a person, or a separate model) against a rubric. This came out of the
+  plot-evaluation work: leaving the title and filename on a plot leaked the
+  expected answer into the vision evaluation and inflated its scores;
+  stripping them corrected it. There is no automated blind
   grader in the suite; this is a review step you run by hand.
 - **The code-backed piece.** `tests/test_circuit_asc.py::TestSchematicReadability`
   is a deterministic artifact-readback regression: it reads the built `.asc` back
   from disk and asserts the result is actually wired (real `WIRE` records, net
-  labels scoped to the terminal nets), not net-label soup — judged on the
-  artifact rather than on the sequence of calls that produced it. It is not a
+  labels only on the terminal nets) rather than connected only through net
+  labels, judged on the artifact rather than on the sequence of calls that
+  produced it. It is not a
   blind reviewer; it is a fixed assertion that encodes one rubric item.
 
-## Accepted one-way mutations (surfaced, not gaps)
+## Accepted one-way mutations
 
 Closure under inversion is the rule for the schematic op surface. A few
-tool-level mutations are deliberately *not* paired, and are recorded here so they
+tool-level mutations are *not* paired, and are recorded here so they
 are not mistaken for the absence-class bug above:
 
-- `create_netlist` / `create_schematic` create a file; deleting a file is a
-  native filesystem operation, intentionally out of scope for a circuit editor.
-  `reset_schematic` reverts in-session edits but does not remove a created file.
-- `configure_sweep` / `configure_montecarlo` create a persisted config with no
-  delete-config tool. Low value (a stale config is inert); accepted.
+- File creation (`edit_schematic` with `base: "blank"`; formerly the
+  `create_netlist` / `create_schematic` tools) has no delete pair; removing a
+  file is a native filesystem operation, intentionally out of scope for a
+  circuit editor.
+- The pre-0.6.0 `configure_sweep` / `configure_montecarlo` tools created a
+  persisted config with no delete-config tool. A delete tool had low value (a
+  stale config is inert). The question is moot now: sweeps are
+  `run_experiments` variations.
 
-These are decisions, not oversights. If one stops being acceptable, it graduates
-into mechanism 1 or 2.
+These are decisions, not oversights. If one stops being acceptable, add it to
+mechanism 1 or 2.
 
 ## The practice that was already working
 
-The half of the practice that was sound, kept, and assumed by everything above:
+The following practices were already sound. They are kept, and everything
+above assumes them:
 
 - **Real-path tests.** Tests drive actual code paths — `tests/test_e2e.py`
-  launches the real server over stdio and speaks the client protocol; tests go
-  through config and startup, not by monkey-patching internals.
+  launches the real server over stdio and speaks the client protocol, and the
+  rest go through config and startup rather than constructing state by hand.
+  Substitution is confined to a few named seams, and the suite does use
+  `monkeypatch` for them:
+  - **The simulator subprocess boundary.** `fake_simulator` and
+    `recorded_fixture_simulator` (`tests/conftest.py`) replace
+    `ExperimentRunner.submit_netlist` — the one call that spawns a simulator.
+    The first hands back a minimal artifact pair on a controllable delay (that
+    delay is what catches a caller who printed a receipt for a job still in
+    flight); the second copies a recorded real-LTspice `.raw`/`.log` pair in,
+    so an analysis stage parses genuine simulator output.
+  - **Platform and environment seams.** WSL detection and path conversion
+    (`lib/wsl.py`), simulator detection at bootstrap, desktop browser launch
+    (`lib/desktop.py`), and the optional cairosvg raster backend — so one
+    machine can exercise every platform branch.
+  - **Timeouts, lowered.** Parse deadlines and the shutdown cancel timeout are
+    dropped to fractions of a second, so a bound can be shown to fire inside
+    the suite instead of only being asserted about.
+
+  What is *not* substituted: handlers, the response path, the SPICE lexer and
+  validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the
+  job registry and store. A test for any of those runs the real thing.
 - **Ground-truth-first numeric validation.** Numeric results are checked against
   closed-form expected values, not "it didn't crash."
 - **Recorded-real fixtures.** Real simulator `.raw` / `.log` output is captured
   under `tests/fixtures/` so dialect and parse seams run against true output
   offline (see `tests/conftest.py`).
-- **Tiered live gating.** `tests/test_ngspice_e2e.py` runs whenever `ngspice` is
+- **Tiered live tests.** `tests/test_ngspice_e2e.py` runs whenever `ngspice` is
   on PATH (so it runs in CI); `tests/test_e2e.py` runs un-gated in degraded
   mode; `tests/test_ltspice_integration.py` is opt-in via an environment flag.
-- **Drift guards.** `tests/test_doc_drift.py` keeps documented tool counts and
-  names honest against the registry; `tests/test_guide_delivery.py` keeps the
+- **Drift guards.** `tests/test_doc_drift.py` checks documented tool counts and
+  names against the registry; `tests/test_guide_delivery.py` keeps the
   packaged guide in sync with the skill.
 
 See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
 `docs/DESIGN.md` for the architecture and the end-to-end verification recipe.
 
+## Measuring what cannot be run enough times
+
+Some questions about the product are only fully posed by a long, expensive
+run: a two-hour sizing project driven by a model, judged on the final design.
+Such runs are too costly and too noisy to repeat until an average clears the
+noise floor, and the model's own variance (how much it thinks, which path it
+takes) dwarfs most product-caused differences. Treat these as a class and
+answer them with instruments that do not need repetition.
+
+- **Detect patterns; do not estimate means.** Estimating a mean over long runs
+  is what is unaffordable. Detecting a named failure is not: a silently wrong
+  number, a stale artifact replayed as fresh, a cancel that reports success
+  while the run continues. Each of those was a finding at one occurrence. So
+  pre-register the patterns that would count, judge live, and stop a run once
+  its pattern is established rather than letting it finish for a score.
+- **Decompose, then check the decomposition.** A long task is thinking plus a
+  sequence of the short steps a scripted session samples (run, measure, edit,
+  sweep, verify, decide). A fix at the step level carries over. What does not
+  carry over is the class of failure that only exists at length: context
+  growth, state drift across dozens of edits, the agent losing a decision it
+  made an hour earlier, accumulated tool results crowding the window. Keep
+  that list explicit. A restricted test finds general problems only where it
+  samples the failure modes of the long task, so each scale-only class needs
+  a probe of its own.
+- **Prefer model-free instruments for scale.** Bytes per tool result, listing
+  and instruction size, growth per step: deterministic, one run, attributable
+  to the product. Transcript replay: record one long session once, then
+  replay its tool-call sequence against a new tree with no model in the loop;
+  any output difference is a product change, and a person judges whether it
+  would have moved the agent. Long edit batteries: many edits on one sheet,
+  then a coherence check, with no model at all.
+- **Pair the comparisons that do use a model.** Same day, same client, same
+  model and effort, arms alternating, two or more sessions a side, read
+  against the within-arm spread rather than the means. Cost is comparable
+  only within a day: the client's prompt size and cache warmth move it more
+  than the product does. When the spread exceeds the delta, stop measuring
+  cost and look at deterministic proxies; that is how one cost gap between
+  two trees became a one-line description fix.
+- **Run the full task once, as a falsifier.** One long session per release,
+  blind judged, against a pre-registered list of what would count as a
+  failure. It cannot say "ten percent better". It can say nothing on the
+  list happened, or name what did.
+
+The scripted designer session (a stream of small concrete requests over one
+working schematic, scored per request on correctness, geometry legality,
+cost and turns) is the workload this project uses for the paired
+comparisons. It represents the step plane a long project decomposes into,
+and holds the thinking plane constant; it does not represent authoring from
+a blank sheet, topology choice, or long-horizon context growth, which need
+the instruments above.
+
 ## Conventions
 
 - **Behavior-named test files.** Tests are named for the behavior they cover,
-  never for a stress pass, date, or version. A regression found in a stress pass
-  lands in the existing behavior module it belongs to; its origin goes in a
-  docstring or comment, not the filename.
+  never for a test campaign, date, or version. A regression found in a test
+  campaign goes in the existing behavior module it belongs to; its origin goes
+  in a docstring or comment, not the filename.
 - **Plain-language findings.** Shipped code, docstrings, commit messages, and
   this doc describe a bug by its actual behavior in plain technical terms — no
   internal severity codes, codenames, or pass numbers (those stay in the

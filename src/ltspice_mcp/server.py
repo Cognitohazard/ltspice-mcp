@@ -1,56 +1,49 @@
 """MCP server instance with lifespan management and tool dispatch."""
 
 import asyncio
-import base64
 import logging
 import os
-import sys
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Collection
 from contextlib import asynccontextmanager, suppress
-from typing import Any, NamedTuple
+from contextvars import ContextVar
+from typing import Any
 
 from mcp import types
+from mcp.server.caching import CacheHint
+from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.server.models import InitializationOptions
-from pydantic import AnyUrl, ValidationError
+from mcp.shared.exceptions import MCPError
+from pydantic import ValidationError
 
 from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
+from ltspice_mcp.api._session import acquire_session_lease, release_session_lease
 from ltspice_mcp.config import ServerConfig, generate_default_config
+from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
-from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
+from ltspice_mcp.lib.observability import configure_stderr_logging
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.simulator import detect_simulators, no_simulator_message
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.resources import (
     get_resource_templates,
     get_static_resources,
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
 _CIRCUIT_PATH_KEYS: tuple[str, ...] = ("path", "netlist")
 
 logger = logging.getLogger(__name__)
 
-# Set by main.py to the InitializationOptions passed to server.run(), so the
-# lifespan can rewrite its instructions once simulators are detected.
-_dynamic_init_options: InitializationOptions | None = None
 
-
-def register_init_options(opts: InitializationOptions) -> None:
-    """Hand the live initialize options to the lifespan for instruction rewrite."""
-    global _dynamic_init_options
-    _dynamic_init_options = opts
-
-
-def _get_state(server_: Server) -> SessionState:
-    """Extract session state from the lifespan context."""
+def _get_state(ctx: ServerRequestContext) -> SessionState:
+    """Extract session state from the request's lifespan context."""
     try:
-        return server_.request_context.lifespan_context["state"]
-    except (AttributeError, KeyError) as e:
+        return ctx.lifespan_context["state"]
+    except (AttributeError, KeyError, TypeError) as e:
         raise RuntimeError(f"Session state not available: {e}") from e
 
 
@@ -94,7 +87,7 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     if not raw:
         return
     try:
-        resolved = resolve_safe_path(raw, state.config.allowed_paths)
+        resolved = resolve_safe_path(raw, state.allowed_paths())
     except (PathSecurityError, OSError):
         return
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
@@ -105,167 +98,35 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     task.add_done_callback(_recent_touch_tasks.discard)
 
 
-def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
-    """Configure AscEditor library paths for .asc schematic support.
-
-    Schematic editing only needs the ``.asy`` symbol library — NOT a working
-    simulator binary — so symbol resolution is deliberately decoupled from
-    simulator detection. A WSL box with the symbols present but a mis-pathed
-    (or absent) LTspice executable can still edit ``.asc`` files.
-
-    Resolution order:
-    1. Explicit config.symbol_paths / LTSPICE_MCP_SYMBOL_PATHS override (any platform)
-    2. WSL — resolve symbols via Windows %LOCALAPPDATA%, regardless of whether
-       the LTspice *executable* was detected
-    3. Windows native / Linux+Wine — spicelib's prepare_for_simulator (needs
-       the detected LTspice class)
-    4. Otherwise — no symbols available, .asc editing disabled
-    """
-    from spicelib.editor.asc_editor import AscEditor
-
-    # 1. Explicit config override takes priority on all platforms
-    if config.symbol_paths:
-        valid = [str(p) for p in config.symbol_paths if p.is_dir()]
-        if valid:
-            AscEditor.custom_lib_paths = valid
-            logger.info(f"AscEditor symbol paths from config: {valid}")
-            return
-        logger.warning(f"Configured symbol_paths do not exist: {config.symbol_paths}")
-
-    from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
-
-    # 2. WSL — symbol libs live under %LOCALAPPDATA%/LTspice/lib/sym and resolve
-    #    independently of simulator-executable detection (spicelib can't find
-    #    them via /mnt/c/ on its own). This is the key decoupling: a stale
-    #    simulator path must not also disable schematic editing.
-    if is_wsl():
-        lib_paths = get_ltspice_lib_paths()
-        if lib_paths:
-            AscEditor.custom_lib_paths = lib_paths
-            logger.info(f"AscEditor WSL library paths: {lib_paths}")
-            return
-        logger.info(
-            ".asc schematic graphics editing unavailable on WSL (no LTspice symbol "
-            "library found); SPICE simulation and netlist editing are unaffected. "
-            "To enable it, set [schematic] symbol_paths in ltspice-mcp.toml or "
-            "LTSPICE_MCP_SYMBOL_PATHS env var."
-        )
-        return
-
-    # 3. Windows native (or Linux with Wine) — needs the detected LTspice class
-    ltspice_cls = available.get("ltspice")
-    if ltspice_cls is None:
-        logger.info(
-            ".asc schematic graphics editing unavailable (no LTspice symbol library "
-            "found); SPICE simulation and netlist editing are unaffected"
-        )
-        return
-
-    try:
-        AscEditor.prepare_for_simulator(ltspice_cls)
-        if AscEditor.simulator_lib_paths or AscEditor.custom_lib_paths:
-            logger.info("AscEditor configured via prepare_for_simulator()")
-            return
-        logger.warning("prepare_for_simulator() found no library paths")
-    except Exception as e:
-        logger.warning(f"AscEditor prepare_for_simulator failed: {e}")
-
-
-class _ErrorHint(NamedTuple):
-    """Profile-aware error hint: full references MCP tools, agentic gives direct guidance."""
-
-    full: str
-    agentic: str
-
-
-# Error type → profile-aware hint appended to error messages.
+# Error type → hint appended to error messages. Hints name only tools the
+# consolidated surface exposes (the only profile since 0.6.0).
 # PathSecurityError is handled separately (needs dynamic allowed_paths).
-_ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
-    _err.MissingModelError: _ErrorHint(
-        full=(
-            "Try find_model to fuzzy-match against loaded libraries "
-            "(catches typos and near-neighbour part numbers), or load_library "
-            "to load a library file containing it."
-        ),
-        agentic=(
-            "Try find_model to fuzzy-match against loaded libraries "
-            "(catches typos), or load a library containing it and rerun."
-        ),
+_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
+    _err.SimulationError: (
+        "Use inspect with a capabilities query to verify simulator availability."
     ),
-    _err.ConvergenceError: _ErrorHint(
-        full=(
-            "Suggestions:\n"
-            "  - Add .OPTIONS (e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-            "  - Use edit_directive to add a .OPTIONS directive\n"
-            "  - Check component values for very large/small ratios"
-        ),
-        agentic=(
-            "Suggestions:\n"
-            "  - Add a .OPTIONS directive to the netlist "
-            "(e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-            "  - Check component values for very large/small ratios"
-        ),
+    _err.NetlistError: (
+        "Use verify_circuit to lint the file, or inspect its components — "
+        "or read the netlist directly."
     ),
-    _err.SingularMatrixError: _ErrorHint(
-        full=(
-            "This usually means a floating node or short circuit.\n"
-            "Use read_circuit to inspect the netlist for connectivity issues."
-        ),
-        agentic=(
-            "This usually means a floating node or short circuit.\n"
-            "Inspect the netlist for connectivity issues."
-        ),
+    _err.JobNotFoundError: (
+        'Use jobs with action:"list" to see known jobs — the id may be '
+        "mistyped, evicted, or from a previous server session."
     ),
-    _err.SimulationError: _ErrorHint(
-        full="Use server_status to verify simulator availability.",
-        agentic="Use server_status to verify simulator availability.",
+    _err.ResultError: (
+        'Verify the run reached a terminal state with jobs (action:"status"), '
+        "and read signals with analyze_results."
     ),
-    _err.NetlistError: _ErrorHint(
-        full=(
-            "Use read_circuit to inspect the file, or "
-            "list_components to verify component references."
-        ),
-        agentic=(
-            "Inspect the netlist file directly, or use "
-            "list_components to verify component references."
-        ),
-    ),
-    _err.JobNotFoundError: _ErrorHint(
-        full=(
-            "Use check_job with no job_id to list known jobs — the id may be "
-            "mistyped, evicted, or from a previous server session."
-        ),
-        agentic=(
-            "Use check_job with no job_id to list known jobs — the id may be "
-            "mistyped, evicted, or from a previous server session."
-        ),
-    ),
-    _err.ResultError: _ErrorHint(
-        full=(
-            "Verify the simulation completed successfully with check_job, "
-            "and check signal names with simulation_summary."
-        ),
-        agentic=(
-            "Verify the simulation completed successfully with check_job, "
-            "and check signal names with simulation_summary."
-        ),
-    ),
-    _err.LibraryError: _ErrorHint(
-        full=("Use list_libraries to see loaded libraries, or load_library to load a new one."),
-        agentic=(
-            "Use find_model to fuzzy-match against loaded libraries, "
-            "or add .lib directives to the netlist manually."
-        ),
+    _err.LibraryError: (
+        'Use inspect with a model query (mode:"enumerate") to see loaded '
+        "libraries, or add .lib/.include directives to the netlist directly."
     ),
 }
 
 
-def _get_error_hint(err_type: type[LTSpiceMCPError], profile: str) -> str | None:
-    """Get the appropriate error hint for the active tool profile."""
-    hint = _ERROR_HINTS.get(err_type)
-    if hint is None:
-        return None
-    return hint.agentic if profile == "agentic" else hint.full
+def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
+    """Get the error hint appended to a failed call's message, if any."""
+    return _ERROR_HINTS.get(err_type)
 
 
 def _path_reject_guidance(state: SessionState) -> str:
@@ -273,14 +134,22 @@ def _path_reject_guidance(state: SessionState) -> str:
     boundary — tool calls AND resource reads. The agent can't widen the sandbox
     itself, so name the knob and the human-escalation/move-the-file fallback or
     it dead-ends. One builder so the two boundaries can't drift."""
-    allowed = ", ".join(str(p) for p in state.config.allowed_paths)
+    allowed = ", ".join(str(p) for p in state.allowed_paths())
     return (
         f"Allowed paths: {allowed}\n"
-        "To work on this file, move or copy it into one of those directories, "
-        "or ask the user to widen the sandbox: [security] allowed_paths in "
-        f"{state.config.config_path} or LTSPICE_MCP_ALLOWED_PATHS (restart "
-        "required). server_status shows the full sandbox configuration."
+        "To work on this file: pass its content inline where the argument takes "
+        "text (a compare reference), copy it into one of those directories, or "
+        "add its directory to [security] allowed_paths in "
+        f"{state.config.config_path} — that file is re-read on the next call, no "
+        "restart. LTSPICE_MCP_ALLOWED_PATHS sets the same list (restart "
+        "required). An inspect capabilities query shows the full sandbox "
+        "configuration."
     )
+
+
+def _configure_server_logging(config: ServerConfig) -> None:
+    """Install the server process's stderr logging configuration."""
+    configure_stderr_logging(config.log_level)
 
 
 @asynccontextmanager
@@ -296,130 +165,162 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     Raises:
         Various exceptions during config/simulator setup (allowed to propagate)
     """
-    config = ServerConfig.load()
-    config_file = config.config_path
+    lease_owner = object()
+    lease_pid = acquire_session_lease(lease_owner)
+    try:
+        boot = await bootstrap_server_engine(
+            on_config_loaded=_configure_server_logging,
+            logger=logger,
+        )
+        state = boot.state
+        config = state.config
+        available = state.available_simulators
+        config_file = config.config_path
 
-    if config_file.exists():
-        config_source = str(config_file)
-    else:
-        # No file: boot on built-in defaults. The default config is written
-        # lazily on the first tool call instead of here (see call_tool), so the
-        # server doesn't litter directories where its tools are never used.
-        config_source = f"{config_file} (defaults; written on first tool use)"
+        if config_file.exists():
+            config_source = str(config_file)
+        else:
+            # No file: boot on built-in defaults. The default config is written
+            # lazily on the first tool call instead of here (see call_tool), so the
+            # server doesn't litter directories where its tools are never used.
+            config_source = f"{config_file} (defaults; written on first tool use)"
 
-    logging.basicConfig(
-        level=getattr(logging, config.log_level.upper()),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr)],
-        force=True,  # Override any existing config
-    )
-    logger = logging.getLogger("ltspice_mcp.server")
-
-    diagnostics: list[str] = []
-    available = detect_simulators(config, diagnostics)
-    _configure_asc_editor(config, available)
-
-    state = SessionState.create(config, available, diagnostics)
-
-    # Rewrite the initialize instructions to name the actually-detected
-    # simulators. main.py stashes the InitializationOptions it passed to
-    # server.run() here; lifespan startup completes before the initialize
-    # request is answered, and that request reads the same object, so the
-    # client sees the dynamic line. Falls back to the static text if unset.
-    if _dynamic_init_options is not None:
-        _dynamic_init_options.instructions = build_instructions(available, state.default_simulator)
-
-    logger.info("=== LTSpice MCP Server Starting ===")
-    logger.info(f"Server name: {server.name}")
-    logger.info(f"Config source: {config_source}")
-    logger.info(f"Working directory: {state.working_dir}")
-    logger.info(f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools)")
-    logger.info(f"Log level: {config.log_level}")
-
-    logger.info("Detected simulators:")
-    if available:
-        for name, cls in available.items():
-            is_default = cls == state.default_simulator
-            default_marker = " (default)" if is_default else ""
-            logger.info(f"  - {name}{default_marker}")
-            try:
-                # Try to get executable path if available
-                if hasattr(cls, "spice_exe"):
-                    exe_path = (
-                        cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
-                    )
-                    logger.info(f"    Executable: {exe_path}")
-            except Exception:
-                pass
-    else:
-        logger.warning(
-            "No simulators detected. Circuit editing will work but simulation tools will return errors."
+        # Name the actually-detected simulators in the server instructions.
+        # Both routes that publish them read this attribute per request — the
+        # 2026-07-28 `server/discover` handler directly, and the older
+        # `initialize` handshake through the initialization options the runner
+        # builds when it answers — so setting it here, before the first request
+        # is served, is what a client of either era reads.
+        server.instructions = build_instructions(
+            available, state.default_simulator, served=state.tool_dispatch
         )
 
-    logger.info(
-        f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
-    )
+        logger.info("=== LTSpice MCP Server Starting ===")
+        logger.info(f"Server name: {server.name}")
+        logger.info(f"Config source: {config_source}")
+        logger.info(f"Working directory: {state.working_dir}")
+        # The listing belongs on this line because it is the operator's answer
+        # to "why did my argument descriptions vanish".
+        logger.info(f"Tools: {len(state.tool_defs)}, listing: {config.tool_listing}")
+        logger.info(f"Log level: {config.log_level}")
 
-    if state.diagnostics:
-        logger.warning("Startup diagnostics (also surfaced via server_status):")
-        for diag in state.diagnostics:
-            logger.warning(f"  - {diag}")
+        logger.info("Detected simulators:")
+        if available:
+            for name, cls in available.items():
+                is_default = cls == state.default_simulator
+                default_marker = " (default)" if is_default else ""
+                logger.info(f"  - {name}{default_marker}")
+                try:
+                    # Try to get executable path if available
+                    if hasattr(cls, "spice_exe"):
+                        exe_path = (
+                            cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
+                        )
+                        logger.info(f"    Executable: {exe_path}")
+                except Exception:
+                    pass
+        else:
+            logger.warning(
+                "No simulators detected. Circuit editing will work but simulation tools will return errors."
+            )
 
-    logger.info("Allowed paths (sandbox):")
-    for allowed_path in config.allowed_paths:
-        logger.info(f"  - {allowed_path.resolve()}")
+        logger.info(
+            f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
+        )
 
-    # Eager-load persisted jobs for the top-N recently-touched circuits so
-    # first-tool-call latency on those circuits doesn't surprise the user.
-    # Circuits outside this budget fall back to lazy load on first tool call.
-    if config.persist_jobs and config.preload_recent_count > 0:
-        preloaded = state.job_registry.preload_recent(max_circuits=config.preload_recent_count)
-        if preloaded:
-            logger.info("Preloaded persisted jobs for %d recent circuit(s)", preloaded)
+        if state.diagnostics:
+            logger.warning("Startup diagnostics:")
+            for diag in state.diagnostics:
+                logger.warning(f"  - {diag}")
 
-    logger.info("Startup complete. Server ready for MCP connections.")
+        logger.info("Allowed paths (sandbox):")
+        for allowed_path in config.allowed_paths:
+            logger.info(f"  - {allowed_path.resolve()}")
 
-    try:
-        yield {"state": state}
+        if boot.preloaded_circuits:
+            logger.info(
+                "Preloaded persisted jobs for %d recent circuit(s)",
+                boot.preloaded_circuits,
+            )
+
+        logger.info("Startup complete. Server ready for MCP connections.")
+
+        try:
+            yield {"state": state}
+        finally:
+            await state.shutdown()
+            logger.info("Server shutdown complete")
     finally:
-        await state.shutdown()
-        logger.info("Server shutdown complete")
+        release_session_lease(lease_owner, lease_pid)
 
 
 # Server-level guidance surfaced to the consuming LLM at the MCP initialize
 # handshake (forwarded by ``create_initialization_options`` ->
-# ``InitializationOptions.instructions``). Cross-cutting workflow guidance only —
-# per-tool detail stays in the individual tool descriptions, which remain the
-# contract (client injection of this string is not guaranteed). Kept terse
-# (~200 words) since every token is re-read on each LLM turn. The
-# "completed can be degenerate" line warns the consuming LLM not to
-# equate a completed run with a correct result.
-SERVER_INSTRUCTIONS = """\
-LTspice-MCP runs author-written SPICE decks and returns parsed, structured results — node voltages, branch currents, and per-device small-signal params (gm/gds/vth/…) on either LTspice or ngspice — as numbers, with SI units where the simulator declares the trace type. It also edits LTspice .asc schematics. Prefer it over shelling out to a simulator yourself: run_simulation sets the right batch flags, handles the ngspice headerless-raw dialect, routes the raw/log artifacts, and surfaces convergence/timeout errors — so you never hand-parse a rawfile or a wrdata dump.
+# ``InitializationOptions.instructions``). Cross-cutting workflow guidance
+# only — per-tool detail stays in the individual tool descriptions, which
+# remain the contract (client injection of this string is not guaranteed).
+# Six tools over three planes; terse, because the client re-reads it each
+# turn. Kept under _INSTRUCTIONS_BUDGET including the runtime simulator
+# prefix: Claude Code silently truncates server instructions at 2048 chars,
+# and the tail (the result-trust paragraph) is the part that must survive.
+_INSTRUCTIONS_TEMPLATE = """\
+For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Write .cir/.net/.sp decks with your own file tools; the six tools below run them, analyze results, check circuits, and edit .asc geometry; plot_waveform draws plots. Routing: run quick one-off ngspice jobs yourself and bring the .raw; analyze_results raw_path parses runs this server never executed. Use run_experiments for LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
-Prefer the netlist path by default — fewer steps, more reliable: author a .cir/.net netlist, validate_netlist, then run_simulation and the analysis tools. Build or edit .asc schematics only when the task is about schematic graphics/layout, or the user asks.
+Runs are cheap: simulate instead of reasoning it out.
 
-Match the analysis tool to the run type or it errors: bode_metrics/resonance/stability_metrics need a .AC run; signal_stats/edge_metrics/timing_between/periodic_metrics/transient_response/thd need .tran; operating_point needs .op and returns per-device small-signal params (gm/gds/vth/…) by name, not just nodes and branches — on LTspice (run_simulation auto-adds .options logopinfo) as well as ngspice; noise_integral needs .noise. For any scalar a .meas can express, prefer authoring a .meas directive in the deck: the simulator computes it (robust) and it lives in the deck (reproducible/portable), surfaced via measurement_stats (failures in failed_measurements). The exception is ngspice, which skips .meas under the server's batch mode (see spice://guide for the .control workaround) — on ngspice, read the trace with the analysis tools or use a .control meas block. Reach for the post-hoc analysis tools for derived metrics .meas can't express (FFT/THD, structural Bode, arbitrary windowed stats) or to avoid re-running — they parse the .raw in-process, which is a fragility surface .meas avoids. Read sweep/Monte-Carlo runs via batch_results or job_id+run_index, aggregates via measurement_stats. To visualize a waveform use plot_waveform (get_waveform for the raw numbers) — do not generate plots externally. Device operating-point params are addressed by name (`m1.gm` shorthand or literal `@m1[gm]`, subcircuit paths too); for the gm/ID-table idiom (`.dc` + `.save @m1[gm] @m1[gds]` → export_waveform) see spice://guide.
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. {code_loops}
 
-A run can report "completed" yet be degenerate (coerced value, skipped .meas) — check the returned warnings/errors and the `observations` list, don't assume success means correct; simulation_summary is the one-call triage for a finished job (type, signals, .MEAS results, errors). `observations` reads the RESULT and does not re-run netlist topology analysis; it surfaces facts worth weighing (the simulator's own error lines, requested .meas/.four that weren't produced, extreme/non-finite node values, and scans that were skipped) — they are facts for you to judge, not a verdict; an empty list means nothing tripped a check, NOT that the result is verified. validate_netlist is the pre-flight gate: topology faults like a floating or capacitive-island node are caught there, not by observations, but it won't catch value typos or undefined models (resolved at run time).
+UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check by plain words ('phase margin').
 
-Build or edit .asc with the schematic tools, never by hand (hand-writing forfeits wire_pins's orthogonal routing and its pin-collision/junction checks): create_schematic, apply_schematic_ops for component placement and other mutations, and wire_pins for signal nets. The apply_schematic_ops add_component op returns the symbol-specific pin names + coordinates — a resistor's are A/B, not 1/2. Wire signal nets with wire_pins — do NOT net-label them; put a ground flag at each ground pin with an apply_schematic_ops add_net_label op (net="0"). The full schematic-layout playbook (tier alignment, orientations, bus routing) is the spice://guide resource.
+AUTHOR — edit_schematic: typed op batch on one .asc sheet; transactional, revision-guarded (expected_sha256); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare, optional render.
+
+A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings, and per-item failures. Match the recipe to the run type (.AC vs .tran) or analyze_results errors.
+
+Paths must lie in the sandbox; a refused path names the config line that widens it.
 """
+
+# Claude Code's client truncates MCP server instructions at 2048 characters;
+# the runtime prefix (active-simulator line) must fit inside it too.
+_INSTRUCTIONS_BUDGET = 2048
 
 # Friendly display names for the detected-simulator line prepended to the
 # instructions at runtime (registry keys are lowercase).
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
-def build_instructions(available: dict[str, type], default: type | None) -> str:
+#: The code-loop clause, in its two editions: the library alone, or the tool
+#: in front of it when the operator turned run_code on.
+_CODE_LOOPS_LIBRARY = "Code loops: from ltspice_mcp.api import Api, the same ops in-process."
+_CODE_LOOPS_TOOL = (
+    "Code loops: run_code runs Python with api in scope, or from ltspice_mcp.api import Api."
+)
+
+#: The guide as the default configuration serves it (run_code on) — the static
+#: default the Server is constructed with, and what the tests pin.
+CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(code_loops=_CODE_LOOPS_TOOL)
+
+
+def build_instructions(
+    available: dict[str, type],
+    default: type | None,
+    *,
+    served: Collection[str] = ("run_code",),
+) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
     degradation. Stating the active engine up front removes that ambiguity.
+    ``served`` is the session's tool set (the default configuration's surface
+    when not given); the code-loop clause names run_code only when it is in it.
     """
+    instructions = _INSTRUCTIONS_TEMPLATE.format(
+        code_loops=_CODE_LOOPS_TOOL if "run_code" in served else _CODE_LOOPS_LIBRARY
+    )
     if not available:
-        active = no_simulator_message()
+        # The short no-simulator form: the long one plus the guide would
+        # overflow the client's 2 KB instruction truncation.
+        active = no_simulator_message(short=True)
     else:
 
         def disp(name: str) -> str:
@@ -433,51 +334,63 @@ def build_instructions(available: dict[str, type], default: type | None) -> str:
             active = f"Active simulators: {', '.join(parts)}."
         if "ltspice" not in available:
             active += (
-                " (LTspice not detected; .asc schematic editing needs LTspice "
-                "symbol files and may be unavailable — simulation and analysis "
-                "run on the active engine and are unaffected.)"
+                " (LTspice not detected; .asc editing needs its symbol files "
+                "and may be unavailable — simulation and analysis run on the "
+                "active engine, unaffected.)"
             )
-    return f"{active}\n\n{SERVER_INSTRUCTIONS}"
+    return f"{active}\n\n{instructions}"
 
 
-# The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
-# can self-identify in the handshake; it defaults to the canonical id. The env
-# var must be set before this module is imported. See packaging/aliases/.
-_SERVER_NAME = os.environ.get("LTSPICE_MCP_SERVER_NAME", "ltspice-mcp")
-server = Server(_SERVER_NAME, version=__version__, instructions=SERVER_INSTRUCTIONS)
-server.lifespan = server_lifespan
+_client_capabilities: ContextVar[types.ClientCapabilities | None] = ContextVar(
+    "mcp_client_capabilities", default=None
+)
+"""The calling client's capabilities, bound per tool call by ``call_tool``."""
 
 
 def get_client_capabilities() -> types.ClientCapabilities | None:
-    """The connected client's capabilities, or ``None`` if unavailable.
+    """The calling client's capabilities, or ``None`` if unavailable.
 
-    Reads the live MCP session's ``initialize`` params. Returns ``None`` outside a
-    request (``LookupError``) or in stateless mode (no ``client_params``). Call
-    this from a handler coroutine — the request context is a ``ContextVar`` bound
-    to the current task and is NOT propagated into ``asyncio.to_thread`` workers.
-    Used to pick the plot delivery channel (in-chat ``ui://`` widget vs local open).
+    Bound from the live request before the tool handler runs, so it reads the
+    same value whether the client declared its capabilities in the ``initialize``
+    handshake or in a 2026-07-28 per-request envelope. ``None`` outside a tool
+    call, and when the client declared none. Used to pick the plot delivery
+    channel (in-chat ``ui://`` widget vs local open).
     """
-    try:
-        params = server.request_context.session.client_params
-    except LookupError:
-        return None
-    return params.capabilities if params is not None else None
+    return _client_capabilities.get()
 
 
-@server.list_tools()
-async def list_tools() -> list[types.Tool]:
-    """Return MCP tools filtered by the active tool profile."""
-    return _get_state(server).tool_defs
+def _tool_error(text: str) -> types.CallToolResult:
+    """A failed tool call: the message on the text channel, ``is_error`` set.
+
+    A tool that fails reports it in its result rather than as a JSON-RPC error,
+    which is what lets the calling model read the message and correct itself.
+    The SDK turned an exception into this shape for us until MCP SDK 2, which
+    raises handler exceptions to the wire instead, so we build it here.
+    """
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)],
+        is_error=True,
+    )
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict | None):
+async def list_tools(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
+    """Return the advertised tool definitions."""
+    return types.ListToolsResult(tools=_get_state(ctx).tool_defs)
+
+
+async def call_tool(
+    ctx: ServerRequestContext, params: types.CallToolRequestParams
+) -> types.CallToolResult:
     """Dispatch tool calls to registered handlers.
 
     All handlers return types.CallToolResult (the MCP protocol's canonical
     response type). Data-returning tools populate structuredContent.
     """
-    state = _get_state(server)
+    state = _get_state(ctx)
+    name = params.name
+    arguments = params.arguments
 
     # Write a default config the first time a tool is actually used in this
     # directory — not at startup, which would litter every unrelated project
@@ -492,60 +405,50 @@ async def call_tool(name: str, arguments: dict | None):
             with suppress(OSError):
                 generate_default_config(cfg_path)
 
-    # Look up handler in profile-filtered dispatch table. A tool that exists in
-    # the registry but isn't in this profile's dispatch was hidden by the active
-    # profile — say so and name the knob, or the agent loops on "Unknown tool"
-    # with no recovery path. (Local import: the registry singleton, avoids a
-    # module-load cycle; this is a rare error path so the cost is irrelevant.)
     registered = state.tool_dispatch.get(name)
     if registered is None:
-        from ltspice_mcp.tools._base import registry
+        # A name this server does not serve is a lookup failure, not a tool
+        # failure: there is no tool to attribute an error-flagged result to,
+        # so it answers a JSON-RPC invalid-params error the way an unknown
+        # resource URI does. The message names what the caller asked for and
+        # the tools that do exist, which is the whole recovery.
+        available = ", ".join(state.tool_dispatch)
+        raise MCPError(
+            types.INVALID_PARAMS,
+            f"Unknown tool: {name}. Available tools: {available}.",
+        )
 
-        if name in registry.known_names():
-            raise ValueError(
-                f"Tool '{name}' exists but is hidden by the active tool profile "
-                f"'{state.config.tool_profile}'. Change it via [tools] profile in "
-                f"{state.config.config_path} or LTSPICE_MCP_TOOL_PROFILE (restart "
-                "required); server_status lists the tools this profile exposes."
-            )
-        raise ValueError(f"Unknown tool: {name}")
-
-    # Set up MCP protocol logging for this request.
-    # Handlers and services call mcp_log() which reads this ContextVar —
-    # no server/session reference needed downstream. Messages below the
-    # client's requested minimum level (logging/setLevel) are not sent.
-    session = server.request_context.session
-
-    async def _log(level: str, msg: str) -> None:
-        if _below_client_log_level(level, state.client_log_level):
-            return
-        await session.send_log_message(level=level, data=msg, logger="ltspice-mcp")  # type: ignore[arg-type]
-
-    set_log_fn(_log)
+    # Bind the caller's capabilities for the life of this request, so a
+    # handler can pick its delivery channel (widget vs local open).
+    _client_capabilities.set(ctx.session.client_capabilities)
 
     # Lazy-load persisted jobs for the circuit this tool is operating on,
     # and bump it in the recent-circuits index. Best-effort; errors swallowed;
     # the index write runs as a background task so it never gates dispatch.
     await _notice_circuit(arguments, state)
 
-    # Invoke handler — enrich known errors with actionable guidance.
-    # Exceptions propagate to the MCP SDK which sets isError=True.
+    # Invoke handler — enrich known errors with actionable guidance, and report
+    # every failure as an is_error result rather than a JSON-RPC error, so the
+    # calling model reads the message and can act on it.
     # Input validation (Pydantic model_validate) is handled by the registry
     # wrapper in _base.py — no need to validate here.
     try:
         return await registered.handler(arguments or {}, state)
     except ValidationError as e:
-        raise ValueError(f"Invalid arguments for {name}: {e}") from None
+        detail = validation_error_detail(name, e, field_owners=state.field_owners)
+        return _tool_error(f"Invalid arguments for {name}: {detail}")
     except PathSecurityError as e:
-        await mcp_log("warning", f"Path security violation in {name}: {e}")
-        raise PathSecurityError(f"{e}\n\n{_path_reject_guidance(state)}") from None
+        # The caller reads the refusal in the result; the operator reads it on
+        # the server's stderr, which is the only channel left for it.
+        logger.warning("Path security violation in %s: %s", name, e)
+        return _tool_error(f"{e}\n\n{_path_reject_guidance(state)}")
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
-        hint = _get_error_hint(type(e), state.config.tool_profile) if e.show_hint else None
+        hint = _get_error_hint(type(e)) if e.show_hint else None
         text = f"{e}\n\n{hint}" if hint else str(e)
         # When the error carries structured suggestions (e.g. fuzzy model
-        # matches), return them as structuredContent with isError=True so
+        # matches), return them as structuredContent with is_error=True so
         # clients can parse them without regex'ing the text message.
         if e.suggestions:
             # Mirror the hint into structuredContent (self-sufficiency
@@ -556,12 +459,10 @@ async def call_tool(name: str, arguments: dict | None):
                 structured["hint"] = hint
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=text)],
-                structuredContent=structured,
-                isError=True,
+                structured_content=structured,
+                is_error=True,
             )
-        if hint:
-            raise type(e)(f"{e}\n\n{hint}") from None
-        raise
+        return _tool_error(text)
     except Exception as e:
         # Surface the actual exception type + message in the response. A bare
         # "check server logs" is a dead end for an MCP client: the traceback
@@ -569,77 +470,54 @@ async def call_tool(name: str, arguments: dict | None):
         # reach. The concrete cause (e.g. "KeyError: 'PinName'") is what makes
         # an unexpected failure diagnosable. Full traceback still goes to logs.
         logger.exception(f"Unexpected error in tool {name}")
-        raise RuntimeError(f"Internal error in {name}: {type(e).__name__}: {e}") from e
+        return _tool_error(f"Internal error in {name}: {type(e).__name__}: {e}")
 
 
-# MCP log severities, ascending RFC-5424 rank (the protocol's LoggingLevel).
-_LOG_SEVERITY = {
-    "debug": 0,
-    "info": 1,
-    "notice": 2,
-    "warning": 3,
-    "error": 4,
-    "critical": 5,
-    "alert": 6,
-    "emergency": 7,
-}
-
-
-def _below_client_log_level(level: str, client_min: str | None) -> bool:
-    """True when ``level`` is below the client's requested minimum.
-
-    No minimum set (client never called logging/setLevel) or an unknown level
-    string sends the message — filtering is an opt-in narrowing, never a
-    silent drop of something we can't rank.
-    """
-    if client_min is None:
-        return False
-    rank = _LOG_SEVERITY.get(level)
-    floor = _LOG_SEVERITY.get(client_min)
-    if rank is None or floor is None:
-        return False
-    return rank < floor
-
-
-@server.set_logging_level()
-async def set_logging_level(level: types.LoggingLevel) -> None:
-    """Store the client's minimum log level; also declares the logging
-    capability (the SDK only advertises it when this handler exists, and
-    without it spec-conforming clients drop our notifications/message)."""
-    state = _get_state(server)
-    state.client_log_level = level
-
-
-@server.list_resources()
-async def list_resources() -> list[types.Resource]:
+async def list_resources(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListResourcesResult:
     """Return all static MCP resources."""
-    return get_static_resources()
+    return types.ListResourcesResult(resources=get_static_resources())
 
 
-@server.list_resource_templates()
-async def list_resource_templates() -> list[types.ResourceTemplate]:
+async def list_resource_templates(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListResourceTemplatesResult:
     """Return all dynamic MCP resource templates."""
-    return get_resource_templates()
+    return types.ListResourceTemplatesResult(resource_templates=get_resource_templates())
 
 
-@server.read_resource()
-async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
+def _resource_error(message: str) -> MCPError:
+    """The JSON-RPC error a failed resource read answers with.
+
+    A read has no result to carry a message, so a failure has to be a protocol
+    error. The 2026-07-28 revision dropped the separate resource-not-found code
+    that earlier revisions used, so a URI that names nothing this server serves
+    is an invalid parameter like any other.
+
+    For failures the caller can act on only: an unknown URI, a denied path, a
+    resource that refused the request. A server-side fault gets the
+    internal-error code instead, so a client is not told to retry with
+    different arguments when nothing it sends would help.
+    """
+    return MCPError(types.INVALID_PARAMS, message)
+
+
+async def read_resource(
+    ctx: ServerRequestContext, params: types.ReadResourceRequestParams
+) -> types.ReadResourceResult:
     """Read a specific resource by URI.
 
-    Dispatches to appropriate handler based on URI scheme and path.
-    Converts internal TextResourceContents/BlobResourceContents to the
-    SDK's ReadResourceContents format (which uses .content instead of .text).
-
-    Args:
-        uri: Resource URI to read (spice://...)
-
-    Returns:
-        Iterable of ReadResourceContents entries
+    Dispatches to the appropriate handler based on URI scheme and path.
 
     Raises:
-        ValueError: If URI is unknown or resource not found
+        MCPError: With the invalid-params code when the URI names no resource
+            this server serves, or the resource cannot be read; with the
+            internal-error code when the read raised something unexpected,
+            which is a fault in this server rather than in the request.
     """
-    state = _get_state(server)
+    state = _get_state(ctx)
+    uri = params.uri
 
     try:
         # Resource reads are synchronous and read-only but not cheap: the
@@ -647,49 +525,69 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
         # recent route polls a cross-process file lock (time.sleep), so the
         # whole router runs off the loop. It never touches loop-owned
         # mutable state (the editor cache and library sessions stay untouched).
-        result = await asyncio.to_thread(handle_read_resource, str(uri), state)
+        return await asyncio.to_thread(handle_read_resource, uri, state)
     except PathSecurityError as e:
         # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
         # enrich it here so every resource route gets the recovery guidance.
-        raise ValueError(f"{e}\n\n{_path_reject_guidance(state)}") from None
-    except LTSpiceMCPError as e:
-        raise ValueError(str(e)) from None
+        raise _resource_error(f"{e}\n\n{_path_reject_guidance(state)}") from None
+    except (LTSpiceMCPError, ValueError) as e:
+        raise _resource_error(str(e)) from None
     except Exception as e:
+        # Nothing above classified this, so it is a fault in the server, not in
+        # the request. Saying invalid-params here tells a client to try other
+        # arguments for a failure no argument can avoid.
         logger.exception(f"Unexpected error reading resource {uri}")
-        raise ValueError(f"Internal error reading resource: {type(e).__name__}: {e}") from e
-
-    # Convert from types.TextResourceContents/BlobResourceContents
-    # to the SDK's ReadResourceContents (which has .content not .text)
-    converted = []
-    for item in result.contents:
-        if isinstance(item, types.TextResourceContents):
-            converted.append(
-                ReadResourceContents(
-                    content=item.text,
-                    mime_type=item.mimeType,
-                )
-            )
-        elif isinstance(item, types.BlobResourceContents):
-            # Decode to bytes: the SDK's create_content dispatches on type —
-            # bytes are re-encoded into a proper BlobResourceContents, while a
-            # base64 *str* would be emitted as TextResourceContents whose text
-            # is raw base64 tagged with a binary mime type.
-            converted.append(
-                ReadResourceContents(
-                    content=base64.b64decode(item.blob),
-                    mime_type=item.mimeType,
-                )
-            )
-    return converted
+        raise MCPError(
+            types.INTERNAL_ERROR, f"Internal error reading resource: {type(e).__name__}: {e}"
+        ) from e
 
 
-@server.list_prompts()
-async def list_prompts() -> list[types.Prompt]:
+async def list_prompts(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListPromptsResult:
     """Return the workflow-starter prompts (registering this advertises the capability)."""
-    return prompts.list_prompts()
+    del ctx, params
+    return types.ListPromptsResult(prompts=prompts.list_prompts())
 
 
-@server.get_prompt()
-async def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+async def get_prompt(
+    ctx: ServerRequestContext, params: types.GetPromptRequestParams
+) -> types.GetPromptResult:
     """Return a prompt's messages with its arguments interpolated."""
-    return prompts.get_prompt(name, arguments)
+    del ctx
+    return prompts.get_prompt(params.name, params.arguments)
+
+
+# The tool, resource and prompt listings are all built once, during lifespan
+# startup, and never change while the process runs — so a client may hold onto
+# one instead of re-listing every turn. The scope is private: each listing is
+# shaped by this server's own configuration and sandbox, so it must not be
+# served from a cache shared with another authorization context. An hour is
+# well inside a session and well under any route by which the listings could
+# change, since that needs a new server process and therefore a new connection.
+_LISTING_CACHE_HINT = CacheHint(ttl_ms=3_600_000, scope="private")
+
+# The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
+# can self-identify in the handshake; it defaults to the canonical id. The env
+# var must be set before this module is imported. See packaging/aliases/.
+_SERVER_NAME = os.environ.get("LTSPICE_MCP_SERVER_NAME", "ltspice-mcp")
+
+server: Server[dict] = Server(
+    _SERVER_NAME,
+    version=__version__,
+    instructions=CONSOLIDATED_INSTRUCTIONS,
+    lifespan=server_lifespan,
+    cache_hints={
+        "tools/list": _LISTING_CACHE_HINT,
+        "resources/list": _LISTING_CACHE_HINT,
+        "resources/templates/list": _LISTING_CACHE_HINT,
+        "prompts/list": _LISTING_CACHE_HINT,
+    },
+    on_list_tools=list_tools,
+    on_call_tool=call_tool,
+    on_list_resources=list_resources,
+    on_list_resource_templates=list_resource_templates,
+    on_read_resource=read_resource,
+    on_list_prompts=list_prompts,
+    on_get_prompt=get_prompt,
+)

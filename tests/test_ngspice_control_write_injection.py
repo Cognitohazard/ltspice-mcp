@@ -12,11 +12,19 @@ integration test (run_simulation on a real ``.control`` deck) lives in
 test_ngspice_e2e.py, gated on ngspice being on PATH.
 """
 
+import re
 from pathlib import Path
 
+import pytest
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.tools._base import inject_ngspice_control_write
+from ltspice_mcp.tools.experiments import (
+    RunExperimentsInput,
+    handle_run_experiments,
+)
+from tests.conftest import fake_simulator
 
 
 class _NotNgspice:
@@ -161,3 +169,83 @@ class TestInjectNgspiceControlWrite:
         assert a != b
         assert a.exists() and b.exists()
         assert "jobA" in a.name and "jobB" in b.name
+
+
+@pytest.mark.asyncio
+class TestControlWriteThroughRunExperiments:
+    """The live run path.
+
+    ``run_experiments`` is the only registered surface that starts a simulator,
+    so a ``.control`` deck submitted through it must get the same injection the
+    single-run path gets — otherwise the case completes with no rawfile at all
+    and every recipe over it reads nothing.
+    """
+
+    _DECK = (
+        "* rc step\n"
+        "V1 in 0 PULSE(0 1 0 1n 1n 1 2)\n"
+        "R1 in out 1k\n"
+        "C1 out 0 1u\n"
+        ".tran 1u 5m\n"
+        ".control\n"
+        "run\n"
+        ".endc\n"
+        ".end\n"
+    )
+
+    @staticmethod
+    def _submission(state, work_dir: Path, monkeypatch, body: str, request_id: str):
+        """An ngspice experiment over ``body``, plus the list the deck text the
+        simulator was actually handed is recorded into."""
+        state.available_simulators["ngspice"] = NGspiceSimulator
+        fake_simulator(monkeypatch)
+        accepted = ExperimentRunner.submit_netlist
+        decks: list[str] = []
+
+        def spy(self, netlist: Path, run_filename: str, callback):
+            decks.append(Path(netlist).read_text())
+            return accepted(self, netlist, run_filename, callback)
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", spy)
+        deck = work_dir / f"{request_id}.cir"
+        deck.write_text(body)
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": request_id,
+                "circuits": [{"path": str(deck), "id": "dut"}],
+                "execution": {"wait_s": 5.0, "simulator": "ngspice"},
+            }
+        )
+        return args, decks
+
+    async def test_scripted_deck_gets_a_write_and_the_case_says_so(
+        self, state_with_sim, work_dir: Path, monkeypatch
+    ):
+        args, decks = self._submission(
+            state_with_sim, work_dir, monkeypatch, self._DECK, "ctrl-write"
+        )
+        result = await handle_run_experiments(args, state_with_sim)
+
+        data = result.structured_content
+        assert data is not None
+        assert data["status"] == "completed"
+        assert len(decks) == 1
+        assert re.search(r"(?m)^write \S+\.raw$", decks[0]), decks[0]
+        assert [item for item in data["observations"] if item["code"] == "control_write_injected"]
+
+    async def test_a_deck_that_writes_its_own_raw_is_left_alone(
+        self, state_with_sim, work_dir: Path, monkeypatch
+    ):
+        body = self._DECK.replace("run\n", "run\nwrite mine.raw V(out)\n")
+        args, decks = self._submission(
+            state_with_sim, work_dir, monkeypatch, body, "ctrl-own-write"
+        )
+        result = await handle_run_experiments(args, state_with_sim)
+
+        data = result.structured_content
+        assert data is not None
+        assert len(decks) == 1
+        assert decks[0].count("write ") == 1
+        assert not [
+            item for item in data["observations"] if item["code"] == "control_write_injected"
+        ]

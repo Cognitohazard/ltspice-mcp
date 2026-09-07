@@ -5,7 +5,7 @@ specifically to find logic bugs by exercising boundary conditions, malformed
 input, and edge cases that the happy-path tests don't cover.
 """
 
-import math
+import hashlib
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.batch_results import filter_runs_by_params
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics
 from ltspice_mcp.lib.raw_parser import (
@@ -67,6 +66,19 @@ class TestSweepPointsEdgeCases:
 # ---------------------------------------------------------------------------
 # parse_spice_value is case-sensitive but SPICE convention is not
 # ---------------------------------------------------------------------------
+
+
+class TestParseSpiceMicroSign:
+    """LTspice's netlist exporter spells micro as the µ sign (U+00B5), and a
+    person may type the Greek mu (U+03BC); both are the ``u`` suffix. A value
+    parser that refused them left every exported current source (``20µ``)
+    without a nominal a Monte Carlo rule could perturb."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"), [("20µ", 20e-6), ("20μ", 20e-6), ("4.7µF", 4.7e-6)]
+    )
+    def test_micro_sign_is_the_u_suffix(self, text: str, expected: float):
+        assert parse_spice_value(text) == pytest.approx(expected)
 
 
 class TestParseSpiceCaseSensitivity:
@@ -146,29 +158,6 @@ class TestLogDiagnosticsFalsePositives:
 # ---------------------------------------------------------------------------
 
 
-class TestFilterRunsByParamsNaN:
-    """NaN should never match a numeric filter (NaN comparisons return False)."""
-
-    def test_nan_value_does_not_match_exact(self):
-        runs = {
-            0: {"params": {"R": 1000.0}},
-            1: {"params": {"R": math.nan}},
-            2: {"params": {"R": 1000.0}},
-        }
-        result = filter_runs_by_params(runs, {"R": "1k"})
-        assert result == [0, 2]  # NaN run #1 must NOT match
-
-    def test_nan_value_does_not_match_range(self):
-        runs = {0: {"params": {"R": math.nan}}}
-        result = filter_runs_by_params(runs, {"R": "0..10k"})
-        assert result == []
-
-    def test_nan_filter_target_matches_nothing(self):
-        runs = {0: {"params": {"R": 1000.0}}}
-        result = filter_runs_by_params(runs, {"R": "nan"})
-        assert result == []
-
-
 # ---------------------------------------------------------------------------
 # compute_placed_geometry assumes symbol bbox starts at (0,0),
 # producing a bounding box that doesn't enclose pins on centered symbols.
@@ -211,66 +200,6 @@ class TestSymbolGeometryBboxContainsPins:
 # ---------------------------------------------------------------------------
 # get_progress_snapshot can produce negative ETA / negative elapsed
 # ---------------------------------------------------------------------------
-
-
-class TestGetProgressSnapshotEdgeCases:
-    def test_overshoot_does_not_produce_negative_eta(self):
-        import time
-        from pathlib import Path
-
-        from ltspice_mcp.lib.batch_results import get_progress_snapshot
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/x"),
-            total_runs=10,
-            completed_runs=15,  # overshoot
-            failed_runs=0,
-        )
-        snap = get_progress_snapshot(bj, time.time() - 1)
-        # ETA should be 0 (already done), not negative
-        assert snap["eta_s"] is None or snap["eta_s"] >= 0
-
-    def test_future_start_time_clamps_elapsed(self):
-        import time
-        from pathlib import Path
-
-        from ltspice_mcp.lib.batch_results import get_progress_snapshot
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/x"),
-            total_runs=10,
-            completed_runs=5,
-        )
-        snap = get_progress_snapshot(bj, time.time() + 100)
-        # Negative elapsed is nonsensical; should be clamped to 0
-        assert snap["elapsed_s"] >= 0
-
-
-# ---------------------------------------------------------------------------
-# _resolve_mc_ref preserved surrounding whitespace
-# ---------------------------------------------------------------------------
-
-
-class TestResolveMcRefWhitespace:
-    def test_surrounding_whitespace_stripped(self):
-        from ltspice_mcp.tools.advanced import _resolve_mc_ref
-
-        ref, is_type = _resolve_mc_ref("  R1  ")
-        assert ref == "R1"
-        assert is_type is False
-
-    def test_whitespace_around_type_name(self):
-        from ltspice_mcp.tools.advanced import _resolve_mc_ref
-
-        ref, is_type = _resolve_mc_ref("  resistors ")
-        assert ref == "R"
-        assert is_type is True
 
 
 # ---------------------------------------------------------------------------
@@ -347,14 +276,26 @@ class TestAcBandwidthMetrics:
 @pytest.mark.asyncio
 class TestWirePinsZeroLength:
     async def test_self_loop_rejected(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import WirePinsInput, handle_wire_pins
+        # Wiring a pin to itself would emit a zero-length wire, which LTspice
+        # renders as an invisible artifact rather than a connection. The op
+        # fails with the coordinate named instead of writing one.
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 
-        with pytest.raises(NetlistError, match="same coordinate"):
-            await handle_wire_pins(
-                WirePinsInput(path=asc_file.name, from_pin="R1.1", to_pin="R1.1"),
-                asc_state,
-            )
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "target": asc_file.name,
+                    "expected_sha256": hashlib.sha256(asc_file.read_bytes()).hexdigest(),
+                    "dry_run": True,
+                    "ops": [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.1"}],
+                }
+            ),
+            asc_state,
+        )
+        data = result.structured_content
+        assert data is not None
+        assert len(data["failures"]) == 1
+        assert "same coordinate" in data["failures"][0]["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -506,56 +447,9 @@ class TestParseMeasurementsUnparseable:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-class TestCheckJobQueued:
-    async def test_queued_job_reported_correctly(self, state_no_sim):
-        from ltspice_mcp.lib import now
-        from ltspice_mcp.state import SimulationJob
-        from ltspice_mcp.tools.simulation import CheckJobInput, handle_check_job
-
-        state_no_sim.jobs["jq"] = SimulationJob(
-            job_id="jq",
-            netlist=Path("/tmp/x.cir"),
-            simulator="F",
-            status="queued",
-            started_at=now(),
-        )
-        r = await handle_check_job(CheckJobInput(job_id="jq"), state_no_sim)
-        assert "unexpected" not in r.content[0].text
-        assert r.structuredContent["status"] == "queued"
-
-
 # ---------------------------------------------------------------------------
 # handle_set_component_value silently accepts contradictory inputs
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestSetComponentValueAmbiguous:
-    async def test_both_modes_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import SetComponentValueInput, handle_set_component_value
-
-        with pytest.raises(NetlistError, match="mutually exclusive"):
-            await handle_set_component_value(
-                SetComponentValueInput(
-                    path=sample_netlist.name,
-                    reference="R1",
-                    value="2k",
-                    values={"C1": "5n"},
-                ),
-                state_no_sim,
-            )
-
-    async def test_empty_values_dict_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import SetComponentValueInput, handle_set_component_value
-
-        with pytest.raises(NetlistError, match="empty"):
-            await handle_set_component_value(
-                SetComponentValueInput(path=sample_netlist.name, values={}),
-                state_no_sim,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -604,8 +498,10 @@ class TestConfigTomlValidation:
         assert cfg.max_parallel_sims == ServerConfig().max_parallel_sims
 
     def test_invalid_log_level_rejected(self, tmp_path, monkeypatch):
+        from ltspice_mcp.config import ServerConfig
+
         cfg = self._load(tmp_path, '[logging]\nlevel = "SUPERDEBUG"\n', monkeypatch)
-        assert cfg.log_level == "INFO"
+        assert cfg.log_level == ServerConfig().log_level
 
     def test_lowercase_log_level_normalized(self, tmp_path, monkeypatch):
         cfg = self._load(tmp_path, '[logging]\nlevel = "debug"\n', monkeypatch)
@@ -617,107 +513,15 @@ class TestConfigTomlValidation:
 # ---------------------------------------------------------------------------
 
 
-class TestResolveResultFileEmpty:
-    def test_batch_empty_string_path_rejected(self, state_no_sim):
-        from datetime import timedelta
-
-        from ltspice_mcp.errors import ResultError
-        from ltspice_mcp.lib import now, services
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/tmp/x.cir"),
-            total_runs=1,
-            completed_runs=1,
-            status="completed",
-        )
-        bj.completed_at = now() + timedelta(seconds=1)
-        bj.run_results = {0: {"raw_file": "", "log_file": "", "params": {}}}
-        state_no_sim.batch_jobs["b1"] = bj
-
-        with pytest.raises(ResultError, match="no raw file"):
-            services.resolve_raw_file("b1", state_no_sim)
-
-
 # ---------------------------------------------------------------------------
 # get_batch_signal_data accepted negative offset / zero limit
 # ---------------------------------------------------------------------------
-
-
-class TestBatchPaginationValidation:
-    def _make_bj(self, state, n_runs: int = 10):
-        from datetime import timedelta
-
-        from ltspice_mcp.lib import now
-        from ltspice_mcp.state import BatchJob
-
-        bj = BatchJob(
-            job_id="b1",
-            job_type="sweep",
-            netlist=Path("/tmp/x.cir"),
-            total_runs=n_runs,
-            completed_runs=n_runs,
-            status="completed",
-        )
-        bj.completed_at = now() + timedelta(seconds=1)
-        bj.run_results = {
-            i: {
-                "raw_file": Path(f"/tmp/r{i}.raw"),
-                "log_file": Path(f"/tmp/r{i}.log"),
-                "params": {},
-            }
-            for i in range(n_runs)
-        }
-        state.batch_jobs["b1"] = bj
-        return bj
-
-    async def test_negative_offset_rejected(self, state_no_sim):
-        from ltspice_mcp.errors import BatchJobError
-        from ltspice_mcp.lib import services
-
-        bj = self._make_bj(state_no_sim)
-        with pytest.raises(BatchJobError, match="offset"):
-            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=-5, limit=5)
-
-    async def test_zero_limit_rejected(self, state_no_sim):
-        from ltspice_mcp.errors import BatchJobError
-        from ltspice_mcp.lib import services
-
-        bj = self._make_bj(state_no_sim)
-        with pytest.raises(BatchJobError, match="limit"):
-            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=0, limit=0)
 
 
 # ---------------------------------------------------------------------------
 # handle_add_component corrupted the .asc file when given a
 # nonexistent symbol name, making the file unopenable afterwards
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestAddComponentSymbolValidation:
-    async def test_nonexistent_symbol_rejected(self, asc_state, asc_file):
-        from spicelib import AscEditor
-
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import AddComponentInput, handle_add_component
-
-        with pytest.raises(NetlistError, match="not found in any configured"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="X99",
-                    symbol="totally_fake_symbol_xyz",
-                    x=0,
-                    y=0,
-                ),
-                asc_state,
-            )
-        # The file must still be readable (previously this would corrupt it)
-        editor = AscEditor(str(asc_file))
-        assert "X99" not in editor.components
 
 
 # ---------------------------------------------------------------------------
@@ -741,65 +545,6 @@ class TestMergeContinuationBlankLine:
 
         result = _merge_continuation_lines([".MODEL Q NPN", "", "", "+ BF=200", "+ IS=1e-14"])
         assert result == [".MODEL Q NPN BF=200 IS=1e-14"]
-
-
-@pytest.mark.asyncio
-class TestEditDirectiveEmpty:
-    async def test_empty_instruction_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import EditDirectiveInput, handle_edit_directive
-
-        with pytest.raises(NetlistError, match="must not be empty"):
-            await handle_edit_directive(
-                EditDirectiveInput(path=sample_netlist.name, action="add", instruction=""),
-                state_no_sim,
-            )
-
-    async def test_empty_regex_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import EditDirectiveInput, handle_edit_directive
-
-        with pytest.raises(NetlistError, match="Empty regex"):
-            await handle_edit_directive(
-                EditDirectiveInput(
-                    path=sample_netlist.name, action="remove", instruction="regex:"
-                ),
-                state_no_sim,
-            )
-
-
-@pytest.mark.asyncio
-class TestHandleParameterModes:
-    async def test_value_without_name_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
-
-        with pytest.raises(NetlistError, match="requires 'name'"):
-            await handle_parameter(
-                ParameterInput(path=sample_netlist.name, value="2k"),
-                state_no_sim,
-            )
-
-    async def test_empty_name_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
-
-        with pytest.raises(NetlistError, match="name must not be empty"):
-            await handle_parameter(
-                ParameterInput(path=sample_netlist.name, name=" ", value="2k"),
-                state_no_sim,
-            )
-
-    async def test_read_single_param(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
-
-        r = await handle_parameter(
-            ParameterInput(path=sample_netlist.name, name="Rval"),
-            state_no_sim,
-        )
-        # Previously returned ALL params when given only name.
-        assert "Rval" in r.structuredContent["parameters"]
-        assert len(r.structuredContent["parameters"]) == 1
 
 
 class TestSimulatorSelectionCaseInsensitive:
@@ -886,93 +631,19 @@ class TestExtractOperatingPointCaseInsensitive:
 
 
 @pytest.mark.asyncio
-class TestMoveComponentWraps:
-    async def test_move_unknown_ref_raises_netlist_error(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import MoveComponentInput, handle_move_component
+class TestValueRecipeRejectsNaNInf:
+    """np.searchsorted treats NaN as greater than everything and returns the
+    last index, which looks like a valid answer and is not — so a non-finite
+    ``at`` is refused before the lookup rather than snapped to the sweep end."""
 
-        # Previously leaked spicelib's ComponentNotFoundError.
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_move_component(
-                MoveComponentInput(path=asc_file.name, reference="ZZZ", x=0, y=0),
-                asc_state,
-            )
-
-
-@pytest.mark.asyncio
-class TestSetComponentAttributeWraps:
-    async def test_unknown_ref_raises_netlist_error(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import (
-            SetComponentAttributeInput,
-            handle_set_component_attribute,
-        )
-
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name, reference="ZZZ", attribute="SpiceLine", value="x"
-                ),
-                asc_state,
-            )
-
-    async def test_empty_attribute_rejected(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import (
-            SetComponentAttributeInput,
-            handle_set_component_attribute,
-        )
-
-        with pytest.raises(NetlistError, match="not be empty"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name, reference="R1", attribute="  ", value="x"
-                ),
-                asc_state,
-            )
-
-
-@pytest.mark.asyncio
-class TestListComponentsValidation:
-    async def test_reference_and_prefix_mutually_exclusive(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
-
-        with pytest.raises(NetlistError, match="mutually exclusive"):
-            await handle_list_components(
-                ListComponentsInput(path=sample_netlist.name, reference="R1", prefix="C"),
-                state_no_sim,
-            )
-
-    async def test_metachar_prefix_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
-
-        # Previously propagated a raw NotImplementedError from spicelib.
-        with pytest.raises(NetlistError, match="single letter"):
-            await handle_list_components(
-                ListComponentsInput(path=sample_netlist.name, prefix="R.*"),
-                state_no_sim,
-            )
-
-    async def test_multichar_prefix_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
-
-        with pytest.raises(NetlistError, match="single letter"):
-            await handle_list_components(
-                ListComponentsInput(path=sample_netlist.name, prefix="RR"),
-                state_no_sim,
-            )
-
-
-@pytest.mark.asyncio
-class TestQueryValueRejectsNaNInf:
-    async def test_nan_at_rejected(self, state_no_sim, work_dir):
+    @pytest.mark.parametrize("spelling", ["nan", "inf"])
+    async def test_non_finite_at_rejected(self, state_no_sim, work_dir, spelling):
         import numpy as np
 
         from ltspice_mcp.errors import ResultError
-        from ltspice_mcp.tools.analysis import QueryValueInput, handle_query_value
+        from ltspice_mcp.lib.metrics import value
+        from ltspice_mcp.lib.recipes import ValueRecipe
+        from tests.test_analysis_tools import _source
 
         raw_file = work_dir / "x.raw"
         raw_file.write_bytes(b"placeholder")
@@ -986,66 +657,29 @@ class TestQueryValueRejectsNaNInf:
         state_no_sim.results.set(raw_file, raw)
 
         with pytest.raises(ResultError, match="finite"):
-            await handle_query_value(
-                QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="nan"),
-                state_no_sim,
-            )
-
-    async def test_inf_at_rejected(self, state_no_sim, work_dir):
-        import numpy as np
-
-        from ltspice_mcp.errors import ResultError
-        from ltspice_mcp.tools.analysis import QueryValueInput, handle_query_value
-
-        raw_file = work_dir / "x.raw"
-        raw_file.write_bytes(b"placeholder")
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [0]
-        axis = np.array([0.0, 1.0, 2.0])
-        raw.get_axis.return_value = axis
-        raw.get_wave = lambda n, step=0: axis
-        state_no_sim.results.set(raw_file, raw)
-
-        with pytest.raises(ResultError, match="finite"):
-            await handle_query_value(
-                QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="inf"),
+            await value(
+                _source(state_no_sim, raw_file.name),
+                ValueRecipe(key="v", metric="value", expr="V(out)", at=spelling),
+                0,
                 state_no_sim,
             )
 
 
 # ---------------------------------------------------------------------------
-# paginate() must floor limit — limit=0 produced a never-advancing next_offset
+# page() must floor limit — limit=0 produced a never-advancing next_cursor
 # ---------------------------------------------------------------------------
 
 
-class TestPaginateLimitFloor:
-    class _Args:
-        def __init__(self, offset=0, limit=50):
-            self.offset = offset
-            self.limit = limit
+class TestPageLimitFloor:
+    def test_the_page_cap_is_the_input_model_s_bound(self):
+        # The cap moved from the paginator to the field that takes the number:
+        # a limit out of range is refused at validation, not clamped after it.
+        from pydantic import ValidationError
 
-    def test_limit_zero_is_floored_and_advances(self):
-        from ltspice_mcp.tools._base import paginate, pagination_metadata
+        from ltspice_mcp.tools.jobs import JobsInput
 
-        page, total, offset, limit = paginate(list(range(10)), self._Args(limit=0))
-        assert limit == 1 and page == [0]
-        meta = pagination_metadata(total, offset, limit)
-        assert meta["has_more"] is True
-        assert meta["next_offset"] == 1  # advances — no livelock
-
-    def test_negative_limit_is_floored(self):
-        from ltspice_mcp.tools._base import paginate
-
-        page, _, _, limit = paginate(list(range(10)), self._Args(offset=2, limit=-5))
-        assert limit == 1 and page == [2]
-
-    def test_cap_still_applies(self):
-        from ltspice_mcp.tools._base import paginate
-
-        _, _, _, limit = paginate(list(range(100)), self._Args(limit=999))
-        assert limit == 50
+        with pytest.raises(ValidationError):
+            JobsInput.model_validate({"action": "list", "limit": 999})
 
 
 # ---------------------------------------------------------------------------
@@ -1093,9 +727,9 @@ class TestSanitizePayloadNonFinite:
         from ltspice_mcp.tools._base import format_response
 
         res = format_response("Value: nan", {"value": float("nan")})
-        assert res.structuredContent is not None
-        assert res.structuredContent["value"] is None
-        assert "warnings" in res.structuredContent
+        assert res.structured_content is not None
+        assert res.structured_content["value"] is None
+        assert "warnings" in res.structured_content
 
 
 # ---------------------------------------------------------------------------
@@ -1107,14 +741,14 @@ class TestSanitizePayloadNonFinite:
 class TestResolveNetlistPathSecurityError:
     def test_path_security_error_propagates(self, state_no_sim):
         from ltspice_mcp.errors import PathSecurityError
-        from ltspice_mcp.tools._base import resolve_netlist_path
+        from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 
         with pytest.raises(PathSecurityError):
             resolve_netlist_path("/etc/passwd", state_no_sim)
 
     def test_other_failures_still_wrapped(self, state_no_sim, work_dir):
         from ltspice_mcp.errors import SimulationError
-        from ltspice_mcp.tools._base import resolve_netlist_path
+        from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 
         with pytest.raises(SimulationError, match="not found"):
             resolve_netlist_path(str(work_dir / "missing.cir"), state_no_sim)

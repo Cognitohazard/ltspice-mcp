@@ -23,7 +23,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob, SimulationJob
+from ltspice_mcp.lib.experiment_types import ExperimentJob
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import JobEvent, emit_job_event
 
 if TYPE_CHECKING:
@@ -32,41 +33,66 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Sim job: created "queued" in the tool layer (``tools/simulation.py``); the
-# runner transitions queued → running once it acquires a max_parallel slot.
-# A job can therefore sit "queued" for a while under load, so cancel/timeout
-# must be able to terminate it directly from "queued" (not only "running").
-VALID_SIM_TRANSITIONS: dict[str, frozenset[str]] = {
-    "queued": frozenset({"running", "failed", "cancelled", "timeout"}),
-    "running": frozenset({"completed", "failed", "cancelled", "timeout"}),
-    "interrupted": frozenset({"completed"}),  # recovery promotion
-    # Terminal: completed / failed / cancelled / timeout — no outgoing.
+VALID_EXPERIMENT_TRANSITIONS: dict[str, frozenset[str]] = {
+    "queued": frozenset(
+        {
+            "running",
+            "completed",
+            "completed_with_failures",
+            "failed",
+            "cancelled",
+            "interrupted",
+        }
+    ),
+    "running": frozenset(
+        {
+            "analyzing",
+            "completed",
+            "completed_with_failures",
+            "failed",
+            "cancelled",
+            "interrupted",
+        }
+    ),
+    "analyzing": frozenset(
+        {"completed", "completed_with_failures", "failed", "cancelled", "interrupted"}
+    ),
     "completed": frozenset(),
-    "failed": frozenset(),
-    "cancelled": frozenset(),
-    "timeout": frozenset(),
-}
-
-# Batch job: dataclass default status is "running". No queued state.
-# Interrupted stays interrupted — there's no mid-recovery promotion
-# path for batches (no equivalent of a .raw file to validate).
-VALID_BATCH_TRANSITIONS: dict[str, frozenset[str]] = {
-    "running": frozenset({"completed", "failed", "cancelled"}),
-    "completed": frozenset(),
+    "completed_with_failures": frozenset(),
     "failed": frozenset(),
     "cancelled": frozenset(),
     "interrupted": frozenset(),
 }
 
-# Which event name fires when a job enters a given status.
-# 'timeout' maps to 'failed' — it's a failure variant, not its own
-# event type in the external log schema.
+
+def runs_terminal(status: str) -> bool:
+    """Have an experiment's runs all reached terminality at this status?
+
+    True for every terminal status, and also for ``analyzing``: the coordinator
+    validates completeness and sets ``runs_done_event`` BEFORE transitioning
+    there, and the table above lets nothing but a terminal status follow it — so
+    ``analyzing`` means every run is done and only the attached analysis is
+    still in flight. That is what lets an experiment's own attached analysis
+    read its own produced cases.
+
+    Lives beside the transition table because the table is what makes it true.
+    Every caller asking "are the runs done?" from a status reads this, so the
+    equivalence is stated once rather than re-derived per module.
+    """
+    return status in TERMINAL_STATUSES or status == "analyzing"
+
+
+# Which event name fires when a job enters a given status. Every entry must be
+# a status some transition actually reaches — an unreachable one reads as a
+# supported outcome nothing can produce. ('timeout' left with the job type that
+# could reach it; a case that runs out of time is recorded as failed.)
 STATUS_TO_EVENT: dict[str, JobEvent] = {
     "running": "started",
+    "analyzing": "analyzing",
     "completed": "completed",
+    "completed_with_failures": "completed_with_failures",
     "failed": "failed",
     "cancelled": "cancelled",
-    "timeout": "failed",
 }
 
 
@@ -74,17 +100,10 @@ class InvalidTransitionError(ValueError):
     """Raised when code attempts a status change not in the transition table."""
 
 
-def _transitions_for(job: SimulationJob | BatchJob) -> dict[str, frozenset[str]]:
-    """Pick the correct transition table for a job's class."""
-    if isinstance(job, SimulationJob):
-        return VALID_SIM_TRANSITIONS
-    if isinstance(job, BatchJob):
-        return VALID_BATCH_TRANSITIONS
-    raise TypeError(f"Unknown job type: {type(job).__name__}")
-
-
 def _apply(
-    job: SimulationJob | BatchJob, new_status: str, valid: dict[str, frozenset[str]]
+    job: ExperimentJob,
+    new_status: str,
+    valid: dict[str, frozenset[str]],
 ) -> None:
     """Validate and apply a status change; set completed_at + done_event
     on terminal transitions.
@@ -111,7 +130,7 @@ def _apply(
 
 
 def transition(
-    job: SimulationJob | BatchJob,
+    job: ExperimentJob,
     new_status: str,
     *,
     state: SessionState | None = None,
@@ -126,49 +145,31 @@ def transition(
     Raises ``InvalidTransitionError`` for same-status or out-of-table
     transitions.
     """
-    _apply(job, new_status, _transitions_for(job))
+    valid = VALID_EXPERIMENT_TRANSITIONS
+    event = STATUS_TO_EVENT.get(new_status)
+    if event is None and new_status in valid.get(job.status, frozenset()):
+        raise InvalidTransitionError(
+            f"status {new_status!r} is restart-only and has no event mapping"
+        )
+    _apply(job, new_status, valid)
     if state is not None:
         state.persist_job(job)
-    event = STATUS_TO_EVENT.get(new_status)
-    if event is None:
+    if event is None:  # Defensive: every valid runtime target must have a mapping.
         raise InvalidTransitionError(
             f"no event mapping for status {new_status!r}; update STATUS_TO_EVENT"
         )
     emit_job_event(event, job, **event_extra)
 
 
-def recover(
-    job: SimulationJob,
+def reconcile_experiment_restart(
+    job: ExperimentJob,
     new_status: str,
-    *,
-    state: SessionState | None = None,
-    **event_extra: Any,
 ) -> None:
-    """Promote an interrupted job to ``new_status`` after recovery.
+    """Apply the terminal status inferred while loading an abandoned experiment.
 
-    Emits ``interrupted_recovered`` (with ``recovered_as=new_status``)
-    rather than the usual new-status event, because this transition
-    semantically represents "we noticed a prior-session crash and
-    reconciled" rather than a fresh run reaching ``new_status``.
+    Restart reconciliation is persistence recovery, not a fresh runtime event.
+    The registry emits the discovery event after it installs the loaded job.
     """
-    if job.status != "interrupted":
-        raise InvalidTransitionError(
-            f"recover() requires current status 'interrupted', got {job.status!r}"
-        )
-    # ``_apply`` stamps ``completed_at = now()`` on terminal transitions, but a
-    # job recovered after a restart has no knowable true completion time — the
-    # producing process is gone and ``time.monotonic`` reset at process start.
-    # Preserve the prior value (``None`` for a freshly loaded interrupted job)
-    # so callers report a null duration instead of a bogus start-to-reload
-    # wall-clock figure.
-    prior_completed_at = job.completed_at
-    _apply(job, new_status, _transitions_for(job))
-    job.completed_at = prior_completed_at
-    if state is not None:
-        state.persist_job(job)
-    emit_job_event(
-        "interrupted_recovered",
-        job,
-        recovered_as=new_status,
-        **event_extra,
-    )
+    if new_status not in {"interrupted", "completed", "completed_with_failures"}:
+        raise InvalidTransitionError(f"invalid experiment restart outcome {new_status!r}")
+    _apply(job, new_status, VALID_EXPERIMENT_TRANSITIONS)
