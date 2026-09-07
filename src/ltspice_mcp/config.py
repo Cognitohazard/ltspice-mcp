@@ -567,15 +567,17 @@ class ServerConfig:
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
     On Windows and WSL these are auto-detected; set this to override."""
 
-    tool_listing: ToolListing = "full"
+    tool_listing: ToolListing = "compact"
     """How much of each tool definition the tool list carries.
 
-    ``"full"`` (the default) advertises the seven tools exactly as they are
-    registered. ``"compact"`` advertises the same seven with every per-argument
-    description removed from the published schema; structure, enums, defaults
-    and ``$defs`` are untouched, and the tools accept exactly what they did.
-    Both listings are static — the same for every connection, and unchanged by
-    anything called on it — so a client may cache either one."""
+    ``"compact"`` (the default) advertises the served tools with every
+    per-argument description removed from the published schema; structure,
+    enums, defaults and ``$defs`` are untouched, the tools accept exactly what
+    they do under ``"full"``, and ``inspect(kind="reference")`` and every
+    validation error carry the descriptions on demand. ``"full"`` advertises
+    the definitions exactly as registered, about 45% more to load per
+    session. Both listings are static — the same for every connection, and
+    unchanged by anything called on it — so a client may cache either one."""
 
     run_code: bool = False
     """Advertise the ``run_code`` tool: a Python snippet run in a warm worker
@@ -786,11 +788,11 @@ def generate_default_config(path: Path) -> None:
 
     # Tools section
     tools_tbl = table()
-    tools_tbl.add(comment('How much of each tool definition the tool list carries. "full"'))
-    tools_tbl.add(comment('(the default) advertises the seven tools as registered; "compact"'))
-    tools_tbl.add(comment("advertises the same seven with the per-argument descriptions"))
-    tools_tbl.add(comment("removed. No tool gains or loses a capability either way."))
-    tools_tbl.add("listing", "full")
+    tools_tbl.add(comment('How much of each tool definition the tool list carries. "compact"'))
+    tools_tbl.add(comment("(the default) advertises the tools with the per-argument descriptions"))
+    tools_tbl.add(comment('removed, read on demand through inspect(kind="reference"); "full"'))
+    tools_tbl.add(comment("advertises them as registered. No tool gains or loses a capability."))
+    tools_tbl.add("listing", "compact")
     tools_tbl.add(
         comment("run_code = true adds a tool that runs a Python snippet with the engine in")
     )
