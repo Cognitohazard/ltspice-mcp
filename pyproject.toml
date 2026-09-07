@@ -88,8 +88,6 @@ only-include = [
     "skills",
     "README.md",
     "CHANGELOG.md",
-    "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md",
     "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "SECURITY.md",
