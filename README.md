@@ -370,7 +370,7 @@ More: [docs/DESIGN.md](docs/DESIGN.md) (scope, architecture, non-goals) and [doc
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test gate, and how to add a tool or report a spicelib bug; the tool-surface and Python API contracts are in [docs/design/](docs/design/). The project follows the [Contributor Covenant](CODE_OF_CONDUCT.md); vendored components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The tool-surface and Python API contracts are in [docs/design/](docs/design/), the architecture in [docs/DESIGN.md](docs/DESIGN.md), and the test practice in [docs/TESTING.md](docs/TESTING.md). Vendored components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The project is not taking outside contributions at this stage; bug reports with a reproduction are welcome as issues.
 
 ## License
 
