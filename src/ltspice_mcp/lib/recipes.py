@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -440,13 +439,10 @@ class BodeCrossingRecipe(VariableRecipe):
         default=None,
         description="Magnitude level to cross, in dB; exactly one of level_db/level_deg.",
     )
-    # Named for its axis the way level_db is, and reachable under the older
-    # 'phase_deg' spelling. The pair reads as one choice of level on one of two
-    # axes, which is what it is; 'phase_deg' alone gave no hint that the
-    # magnitude axis was the other member of the same either-or.
+    # Named for its axis the way level_db is: the pair reads as one choice of
+    # level on one of two axes, which is what it is.
     level_deg: float | None = Field(
         default=None,
-        validation_alias=AliasChoices("level_deg", "phase_deg"),
         description=(
             "Phase level to cross, in degrees, scanned on the unwrapped phase "
             "so a crossing past ±180° is found once; exactly one of "

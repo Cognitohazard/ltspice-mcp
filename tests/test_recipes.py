@@ -227,8 +227,11 @@ class TestBodeCrossingLevel:
         assert recipe.level_db == -3.0
         assert recipe.level_deg is None
 
-    def test_phase_deg_still_reaches_the_same_field(self):
-        assert self._crossing(phase_deg=-45.0).level_deg == -45.0
+    def test_phase_deg_is_not_a_second_spelling(self):
+        """The older name was kept as an alias for an earlier build's callers;
+        this project owes its earlier builds no compatibility."""
+        with pytest.raises(ValueError, match="phase_deg"):
+            self._crossing(phase_deg=-45.0)
 
     def test_neither_level_is_refused_naming_both(self):
         with pytest.raises(ValidationError) as excinfo:
