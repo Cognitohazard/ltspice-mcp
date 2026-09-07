@@ -92,8 +92,6 @@ def test_raw_page_returns_each_handler_payload_verbatim(
 @pytest.mark.parametrize(
     ("method_name", "arguments", "field"),
     [
-        ("run_experiments", {"execution": {"wait_s": 1}}, "execution.wait_s"),
-        ("run_experiments", {"budget": 500}, "budget"),
         ("jobs", {"action": "list", "cursor": "o:1"}, "cursor"),
         (
             "analyze_results",
@@ -773,12 +771,14 @@ def _nest(path: tuple[str, ...], value: Any) -> dict[str, Any]:
 
 
 def _door_rejection(arguments: dict[str, Any]) -> str | None:
-    """The door's refusal for these arguments, or None if it lets them through."""
+    """What the door says about these arguments — the refusal, or the warning
+    it attaches when it drops a presentation control — or None if it lets
+    them through unremarked."""
     try:
-        methods_module._enforce_auto_door(arguments)
+        dropped = methods_module._enforce_auto_door(arguments)
     except ValueError as exc:
         return str(exc)
-    return None
+    return "; ".join(dropped) or None
 
 
 def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
@@ -805,32 +805,34 @@ def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
     assert not unnamed, "the interface rejected but did not name: " + ", ".join(unnamed)
 
 
-class TestAutoDoorRefusalsAreActionable:
-    """The refusal a caller who followed the skill actually hits.
-
-    ``budget`` is taught as a first-class knob on four tools and advertised in
-    the MCP schema; this door rejects it. That is the intended contract — but the
-    refusal has to name the fix for the field it refused, and be catchable by
-    the exception the API's own documentation tells callers to catch.
+class TestPresentationControlsAreDropped:
+    """``budget`` and ``execution.wait_s`` are taught as first-class knobs on
+    the MCP tools; a caller carrying the habit over loses nothing here. Neither
+    participates in a request's identity, so dropping them keeps an MCP
+    request and its API replay the same request; the drop is said in the
+    result's warnings rather than silently.
     """
 
-    def test_budget_is_refused_as_a_presentation_cap_not_a_paging_control(self):
-        with pytest.raises(ApiValidationError) as caught:
-            methods_module._enforce_auto_door({"budget": 4000})
-        message = str(caught.value)
-        assert "budget" in message
-        assert "complete results" in message
-        assert "raw_page" not in message, (
-            "raw_page returns one handler page instead of the collected result — "
-            "a semantic change, and the wrong fix for a presentation cap"
-        )
+    def test_budget_is_dropped_and_named(self):
+        arguments: dict[str, Any] = {"budget": 4000, "queries": []}
+        warnings = methods_module._enforce_auto_door(arguments)
+        assert arguments == {"queries": []}
+        assert len(warnings) == 1 and warnings[0].startswith("budget")
+        assert "complete results" in warnings[0]
+        assert "raw_page" not in warnings[0]
 
-    def test_wait_s_is_refused_by_pointing_at_the_doors_own_dwell(self):
-        with pytest.raises(ApiValidationError) as caught:
-            methods_module._enforce_auto_door({"execution": {"wait_s": 30}})
-        message = str(caught.value)
-        assert "execution.wait_s" in message
-        assert "api.wait" in message
+    def test_wait_s_is_dropped_and_named(self):
+        arguments: dict[str, Any] = {"execution": {"wait_s": 30, "simulator": "ngspice"}}
+        warnings = methods_module._enforce_auto_door(arguments)
+        assert arguments == {"execution": {"simulator": "ngspice"}}
+        assert warnings[0].startswith("execution.wait_s")
+        assert "api.wait" in warnings[0]
+
+    def test_a_dropped_control_reaches_the_result_as_a_warning(self, state_no_sim):
+        api = SyncApi(state_no_sim)
+        result = api.inspect(queries=[{"kind": "capabilities"}], budget=500)
+        assert result["ok_count"] == 1
+        assert any(w.startswith("budget: budget ignored") for w in result["warnings"])
 
     def test_a_paging_control_still_gets_the_raw_page_remedy(self):
         with pytest.raises(ApiValidationError) as caught:
@@ -841,7 +843,7 @@ class TestAutoDoorRefusalsAreActionable:
         """``ApiValidationError`` subclasses ValueError, not the reverse — a bare
         ValueError here slips past every documented ``except ApiValidationError``."""
         with pytest.raises(ApiValidationError):
-            methods_module._enforce_auto_door({"budget": 500})
+            methods_module._enforce_auto_door({"cursor": "o:1"})
 
 
 def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(
