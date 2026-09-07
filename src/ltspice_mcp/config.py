@@ -579,12 +579,14 @@ class ServerConfig:
     session. Both listings are static — the same for every connection, and
     unchanged by anything called on it — so a client may cache either one."""
 
-    run_code: bool = False
+    run_code: bool = True
     """Advertise the ``run_code`` tool: a Python snippet run in a warm worker
-    process that holds this server's engine as ``api``. Off by default because
-    the snippet runs with the server process's own file and process authority,
-    not inside ``allowed_paths``; turning it on is the operator's decision, and
-    it takes effect at the next start."""
+    process that holds this server's engine as ``api``. On by default: the
+    server is a local stdio process serving one trusted client, and the snippet
+    runs with that process's own file and process authority rather than inside
+    ``allowed_paths``, so an operator who exposes the server more widely (a
+    proxy in front of it, more than one client) sets this false. Takes effect
+    at the next start."""
 
     persist_jobs: bool = True
     """Persist experiment job records to the working directory's
@@ -794,12 +796,21 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(comment("advertises them as registered. No tool gains or loses a capability."))
     tools_tbl.add("listing", "compact")
     tools_tbl.add(
-        comment("run_code = true adds a tool that runs a Python snippet with the engine in")
+        comment("run_code = false removes the tool that runs a Python snippet with the engine")
     )
-    tools_tbl.add(comment("scope (for loops over runs and numpy on samples). The snippet has the"))
-    tools_tbl.add(comment("server's own file and process authority, not the sandbox above, so"))
-    tools_tbl.add(comment("permission it in your client the way you would a shell."))
-    tools_tbl.add("run_code", False)
+    tools_tbl.add(
+        comment("in scope (loops over runs, numpy on samples). The snippet has the server's")
+    )
+    tools_tbl.add(
+        comment("own file and process authority, not the sandbox above: permission it in")
+    )
+    tools_tbl.add(
+        comment("your client the way you would a shell, and turn it off when the server is")
+    )
+    tools_tbl.add(
+        comment("reachable by more than one trusted client, for example through a proxy.")
+    )
+    tools_tbl.add("run_code", True)
     doc.add("tools", tools_tbl)
     doc.add(nl())
 

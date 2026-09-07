@@ -292,25 +292,27 @@ _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", 
 #: in front of it when the operator turned run_code on.
 _CODE_LOOPS_LIBRARY = "Code loops: from ltspice_mcp.api import Api, the same ops in-process."
 _CODE_LOOPS_TOOL = (
-    "Code loops: run_code runs Python with api in scope, the same ops, complete "
-    "results (or from ltspice_mcp.api import Api)."
+    "Code loops: run_code runs Python with api in scope, or from ltspice_mcp.api import Api."
 )
 
-#: The guide as a server with run_code off serves it — the static default the
-#: Server is constructed with, and what the tests pin.
-CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(code_loops=_CODE_LOOPS_LIBRARY)
+#: The guide as the default configuration serves it (run_code on) — the static
+#: default the Server is constructed with, and what the tests pin.
+CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(code_loops=_CODE_LOOPS_TOOL)
 
 
 def build_instructions(
-    available: dict[str, type], default: type | None, *, served: Collection[str] = ()
+    available: dict[str, type],
+    default: type | None,
+    *,
+    served: Collection[str] = ("run_code",),
 ) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
     degradation. Stating the active engine up front removes that ambiguity.
-    ``served`` is the session's tool set; the code-loop clause names run_code
-    when it is in it.
+    ``served`` is the session's tool set (the default configuration's surface
+    when not given); the code-loop clause names run_code only when it is in it.
     """
     instructions = _INSTRUCTIONS_TEMPLATE.format(
         code_loops=_CODE_LOOPS_TOOL if "run_code" in served else _CODE_LOOPS_LIBRARY

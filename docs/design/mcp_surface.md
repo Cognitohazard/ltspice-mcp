@@ -24,14 +24,15 @@ A seventh tool, `plot_waveform`, is registered alongside them. It is the
 interactive MCP Apps waveform widget; it predates this envelope and stays
 outside it.
 
-An eighth, `run_code`, is registered always and served only when the operator
-sets `[tools] run_code = true`. It runs a Python snippet in a warm worker
+An eighth, `run_code`, is registered always and served unless the operator
+sets `[tools] run_code = false`. It runs a Python snippet in a warm worker
 process that holds the engine as `api` — the same six ops as methods, complete
 results — for loops over runs and numpy on samples. It is outside the envelope
 too: its reply is `status` (ok, error, timeout, busy, reset) plus captured
 output, and its contract is the tool description and `tools/run_code.py`. The
 snippet has the server process's own file and process authority, not the
-sandbox, which is why it is off by default.
+sandbox, which is why the setting exists: an operator who exposes the server
+beyond one trusted local client turns it off.
 
 Canonical loops:
 

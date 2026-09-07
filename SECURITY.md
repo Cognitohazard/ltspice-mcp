@@ -46,6 +46,13 @@ applies to both the server and the library. Relevant considerations:
   can therefore do anything the simulator binary can do on your machine.
   Treat third-party `.asc`, `.cir`, and `.lib` files the same way you would
   treat any untrusted executable input.
+- **`run_code` runs Python with the server's own authority** — on by default,
+  this tool executes a snippet in a worker process that holds the engine, with
+  the server process's file and process rights rather than the `allowed_paths`
+  sandbox. It is meant for the local single-client case: permission it in the
+  client the way you would a shell, and set `[tools] run_code = false` when
+  the server is reachable by more than one trusted client, for example
+  through a proxy in front of it.
 - **Job-addressed result reads bypass the sandbox by design** — when
   `analyze_results` or a job tool reads a `.raw` or `.log` for a `job_id`, the
   path comes from the server's own job record rather than from the caller, so
