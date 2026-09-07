@@ -88,3 +88,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           repository-url: ${{ github.event_name == 'workflow_dispatch' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
+          # A tag re-pushed for the alias workflow's sake must not fail here on
+          # files this version already has.
+          skip-existing: true
