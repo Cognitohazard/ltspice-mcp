@@ -139,10 +139,10 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     assert data["python_api"]["import"] == "from ltspice_mcp.api import Api"
     assert str(cap_state.working_dir) in data["python_api"]["open"]
     assert "reference(" in data["python_api"]["reference"]
-    # The exec tool is off unless the operator turned it on; the entry names
+    # The exec tool is on unless the operator turned it off; the entry names
     # the key and that the change takes effect at the next start.
     assert data["python_api"]["run_code"] == {
-        "enabled": False,
+        "enabled": True,
         "config_key": "tools.run_code",
         "restart_required": True,
     }
@@ -832,22 +832,22 @@ async def test_reference_lists_run_code_only_on_a_session_that_serves_it(
 ):
     """The index is built from the registry; the table a session hands out is
     cut to what it dispatches, so an agent is never pointed at a tool the
-    operator did not turn on."""
+    operator turned off."""
     from ltspice_mcp.config import ServerConfig
 
     (res,) = await _run(cap_state, [{"kind": "reference", "query": "run_code"}])
-    assert "run_code" not in {match["tool"] for match in res["data"]["matches"]}
+    assert res["data"]["matches"][0]["tool"] == "run_code"
     (toc,) = await _run(cap_state, [{"kind": "reference"}])
-    assert "run_code" not in {group["tool"] for group in toc["data"]["contents"]}
+    assert "run_code" in {group["tool"] for group in toc["data"]["contents"]}
 
-    serving = SessionState.create(
-        ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], run_code=True),
+    silent = SessionState.create(
+        ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], run_code=False),
         available={},
     )
-    (res,) = await _run(serving, [{"kind": "reference", "query": "run_code"}])
-    assert res["data"]["matches"][0]["tool"] == "run_code"
-    (toc,) = await _run(serving, [{"kind": "reference"}])
-    assert "run_code" in {group["tool"] for group in toc["data"]["contents"]}
+    (res,) = await _run(silent, [{"kind": "reference", "query": "run_code"}])
+    assert "run_code" not in {match["tool"] for match in res["data"]["matches"]}
+    (toc,) = await _run(silent, [{"kind": "reference"}])
+    assert "run_code" not in {group["tool"] for group in toc["data"]["contents"]}
 
 
 async def test_reference_without_a_query_returns_the_table_of_contents(
@@ -866,6 +866,7 @@ async def test_reference_without_a_query_returns_the_table_of_contents(
         "jobs",
         # Every tool's own arguments are listed too, plot_waveform included.
         "plot_waveform",
+        "run_code",
     }
     assert {group["family"] for group in data["contents"]} >= {"argument"}
     listed = sum(len(group["branches"]) for group in data["contents"])

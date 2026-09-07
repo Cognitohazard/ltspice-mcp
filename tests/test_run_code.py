@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -70,12 +71,13 @@ async def run(state: SessionState, code: str, **fields) -> dict:
 
 
 class TestSurface:
-    def test_off_by_default_is_neither_advertised_nor_dispatchable(self, state_no_sim):
-        assert state_no_sim.config.run_code is False
-        assert "run_code" not in {d.name for d in state_no_sim.tool_defs}
-        assert "run_code" not in state_no_sim.tool_dispatch
+    def test_off_takes_it_off_the_surface(self, config: ServerConfig):
+        assert config.run_code is True, "the default is on"
+        silent = SessionState.create(replace(config, run_code=False), available={})
+        assert "run_code" not in {d.name for d in silent.tool_defs}
+        assert "run_code" not in silent.tool_dispatch
         # Its arguments do not claim ownership of any wire field either.
-        assert "code" not in state_no_sim.field_owners
+        assert "code" not in silent.field_owners
 
     def test_on_puts_it_last_on_the_surface(self, state: SessionState):
         names = [d.name for d in state.tool_defs]
