@@ -376,18 +376,24 @@ def install_hint() -> str:
     error so a host with neither LTspice nor ngspice (a cloud sandbox, a fresh
     CI runner) gives the agent a concrete next step instead of a dead end.
     """
+    # Every platform ends with the same clause: pointing the config at an
+    # executable is the one route that exists everywhere, and the key it names
+    # is what an agent needs to act on the message.
+    configure = f"or set {SIM_PATH_ENV} ({SIM_SECTION}.{SIM_PATH_KEY} in ltspice-mcp.toml) to a "
     if is_wsl():
         return (
             "install ngspice (`sudo apt-get install -y ngspice`), "
-            f"or set {SIM_PATH_ENV} ({SIM_SECTION}.{SIM_PATH_KEY} in ltspice-mcp.toml) "
-            "to a Windows LTspice.exe path"
+            + configure
+            + "Windows LTspice.exe path"
         )
     system = platform.system()
     if system == "Darwin":
-        return "install ngspice (`brew install ngspice`) or LTspice"
-    if system == "Windows":
-        return "install LTspice (Analog Devices) or ngspice and add it to PATH"
-    return "install ngspice (`sudo apt-get install -y ngspice`, or your distro's package manager)"
+        install = "install ngspice (`brew install ngspice`) or LTspice"
+    elif system == "Windows":
+        install = "install LTspice or ngspice and add it to PATH"
+    else:
+        install = "install ngspice (`sudo apt-get install -y ngspice`)"
+    return f"{install}, {configure}simulator executable"
 
 
 def _platform_key() -> str:

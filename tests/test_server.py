@@ -151,6 +151,20 @@ class TestBuildInstructions:
                 served={"run_code"},
             ),
         ]
+        # The no-simulator prefix embeds a platform-specific install hint, and
+        # the longest of those is not the one this test happens to run on.
+        from ltspice_mcp.lib import simulator as simulator_module
+
+        for wsl, system in (
+            (True, "Linux"),
+            (False, "Linux"),
+            (False, "Darwin"),
+            (False, "Windows"),
+        ):
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(simulator_module, "is_wsl", lambda wsl=wsl: wsl)
+                mp.setattr(simulator_module.platform, "system", lambda system=system: system)
+                worst_cases.append(build_instructions({}, None))
         for text in worst_cases:
             assert len(text) <= _INSTRUCTIONS_BUDGET, (
                 f"instructions {len(text)} chars > {_INSTRUCTIONS_BUDGET} client truncation budget"
