@@ -2,7 +2,7 @@
 
 from mcp import types
 
-from ltspice_mcp.config import ToolListing
+from ltspice_mcp.config import ServerConfig, ToolListing
 from ltspice_mcp.tools._base import RegisteredTool, registry
 from ltspice_mcp.tools._schema import strip_argument_descriptions
 
@@ -45,7 +45,7 @@ ADVERTISED_ORDER: tuple[str, ...] = (
 def get_tools(
     listing: ToolListing = "full",
     *,
-    exclude: tuple[str, ...] = (),
+    config: ServerConfig | None = None,
 ) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
     """Return the advertised tool definitions and their dispatch metadata.
 
@@ -58,17 +58,19 @@ def get_tools(
       per-argument description removed from the published copy. Dispatch is
       untouched, so each tool still accepts exactly what it did.
 
-    ``exclude`` names registered tools this session does not serve at all —
-    neither advertised nor dispatchable (``run_code`` unless the operator
-    turned it on). A session's surface is the registry minus that set.
+    ``config`` is the session's configuration: a tool whose registration
+    declares a ``gate`` is served only when that config field is true. With no
+    config the whole registry is returned, which is what the contract gates
+    read.
     """
     tool_defs, tool_dispatch = registry.get_tools()
     unlisted = sorted(set(tool_dispatch) - set(ADVERTISED_ORDER))
     if unlisted:
         raise RuntimeError(f"registered tools missing from ADVERTISED_ORDER: {unlisted}")
-    if exclude:
-        tool_defs = [definition for definition in tool_defs if definition.name not in exclude]
-        tool_dispatch = {name: rt for name, rt in tool_dispatch.items() if name not in exclude}
+    if config is not None:
+        served = {name for name, rt in tool_dispatch.items() if _gate_open(rt, config)}
+        tool_defs = [definition for definition in tool_defs if definition.name in served]
+        tool_dispatch = {name: rt for name, rt in tool_dispatch.items() if name in served}
     tool_defs.sort(key=lambda definition: ADVERTISED_ORDER.index(definition.name))
     if listing == "compact":
         tool_defs = [
@@ -78,3 +80,15 @@ def get_tools(
             for definition in tool_defs
         ]
     return tool_defs, tool_dispatch
+
+
+def _gate_open(registered: RegisteredTool, config: ServerConfig) -> bool:
+    if registered.gate is None:
+        return True
+    try:
+        return bool(getattr(config, registered.gate))
+    except AttributeError:
+        raise RuntimeError(
+            f"{registered.definition.name} is gated on {registered.gate!r}, "
+            "which is not a ServerConfig field"
+        ) from None
