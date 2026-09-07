@@ -258,14 +258,20 @@ works.
 
 ## 7. Policy for wire-only controls
 
-Default (automatic) mode **rejects** `budget`, any cursor or continuation
-field, `view_cursors`, and `execution.wait_s`, with a message naming the
-remedy. It never auto-flips request fields that participate in the idempotency
-fingerprint: `per_run`, `outliers` and `signals_available` stay exactly as the
-caller wrote them, so an API replay of an MCP request never becomes an
-idempotency conflict. Detail beyond the handler's rendering comes from the §5
-collectors, not from mutating the submitted request. Presentation-only fields —
-`include.fields`, `run_fields`, `provenance` — pass through freely.
+Default (automatic) mode **drops** the two presentation controls, `budget`
+and `execution.wait_s`, and says so in the result's `warnings`: neither is
+part of a request's identity (the fingerprint excludes both), so an MCP call
+replayed through this door with them still attached is the same request, and
+a caller carrying the MCP habit over loses nothing but the field. It
+**rejects** any cursor or continuation field and `view_cursors`, with a
+message naming `raw_page=True` as the remedy, because a dropped paging control
+would change what the caller gets. It never auto-flips request fields that
+participate in the idempotency fingerprint: `per_run`, `outliers` and
+`signals_available` stay exactly as the caller wrote them, so an API replay of
+an MCP request never becomes an idempotency conflict. Detail beyond the
+handler's rendering comes from the §5 collectors, not from mutating the
+submitted request. Presentation-only fields — `include.fields`, `run_fields`,
+`provenance` — pass through freely.
 
 `raw_page=True` accepts every wire control verbatim and returns exactly one
 handler page. It is the preview mode, and the one way to get MCP-identical paging.

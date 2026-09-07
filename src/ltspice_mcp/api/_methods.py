@@ -112,25 +112,27 @@ def _walk_fields(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, 
             yield from _walk_fields(child, path)
 
 
-#: Why each class of wire-only control is refused here, and what to do instead.
-#: One remedy per class rather than one for all three: ``raw_page=True`` is the
-#: right answer for a pagination control and a semantic change for the other
-#: two, and a refusal that hands back the wrong fix costs a retry that ends
-#: somewhere worse than where it started.
+#: What the automatic mode says about each class of wire-only control. The two
+#: presentation controls are dropped and the drop is reported in the result's
+#: ``warnings``: neither participates in a request's identity (the
+#: fingerprint excludes them), so an MCP call replayed through this door with
+#: them still attached is the same request. A paging control is refused,
+#: because ``raw_page=True`` is its remedy and a silent drop would change what
+#: the caller gets.
 _DOOR_REMEDIES: dict[str, str] = {
     "budget": (
-        "budget is an MCP presentation cap; the Python API returns complete "
-        "results — remove the field"
+        "budget ignored: it is MCP's presentation cap, and the Python API returns complete results"
     ),
     "dwell": (
-        "execution.wait_s is MCP's response dwell; the Python API already "
-        "blocks — use wait=False for a fire-and-forget receipt, or api.wait(job_id)"
+        "execution.wait_s ignored: it is MCP's response dwell, and the Python API "
+        "blocks until the job is done (wait=False for a receipt, or api.wait(job_id))"
     ),
     "paging": (
         "pagination controls belong to a single handler page; the Python API collects "
         "every page — remove them, or pass raw_page=True to drive paging yourself"
     ),
 }
+_DROPPED_CLASSES = frozenset({"budget", "dwell"})
 
 
 def _door_class(path: tuple[str, ...]) -> str | None:
@@ -149,21 +151,51 @@ def _door_class(path: tuple[str, ...]) -> str | None:
     return None
 
 
-def _enforce_auto_door(arguments: Mapping[str, Any]) -> None:
+def _enforce_auto_door(arguments: Any) -> list[str]:
+    """Apply the automatic mode's rules to one call's arguments, in place.
+
+    Presentation controls (``budget``, ``execution.wait_s``) are removed and
+    the removal comes back as warnings for the result; a paging control raises.
+    """
     rejected: dict[str, list[str]] = {}
-    for path in _walk_fields(arguments):
+    dropped: list[str] = []
+    # Collected before any removal: the walk yields from the dict it reads.
+    for path in list(_walk_fields(arguments)):
         kind = _door_class(path)
-        if kind is not None:
+        if kind is None:
+            continue
+        if kind in _DROPPED_CLASSES:
+            _remove_field(arguments, path)
+            dropped.append(f"{'.'.join(path)}: {_DOOR_REMEDIES[kind]}")
+        else:
             rejected.setdefault(kind, []).append(".".join(path))
-    if not rejected:
-        return
-    parts = [
-        f"{', '.join(dict.fromkeys(fields))}: {_DOOR_REMEDIES[kind]}"
-        for kind, fields in rejected.items()
-    ]
-    raise ApiValidationError(
-        "Wire-only control(s) are not accepted in automatic mode. " + "; ".join(parts)
-    )
+    if rejected:
+        parts = [
+            f"{', '.join(dict.fromkeys(fields))}: {_DOOR_REMEDIES[kind]}"
+            for kind, fields in rejected.items()
+        ]
+        raise ApiValidationError(
+            "Wire-only control(s) are not accepted in automatic mode. " + "; ".join(parts)
+        )
+    return dropped
+
+
+def _remove_field(arguments: Any, path: tuple[str, ...]) -> None:
+    node = arguments
+    for key in path[:-1]:
+        node = node.get(key) if isinstance(node, dict) else None
+        if node is None:
+            return
+    if isinstance(node, dict):
+        node.pop(path[-1], None)
+
+
+def _with_warnings(payload: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    """The payload with the automatic mode's drops appended to its warnings."""
+    if warnings:
+        existing = payload.get("warnings")
+        payload["warnings"] = [*existing, *warnings] if isinstance(existing, list) else warnings
+    return payload
 
 
 async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
@@ -726,19 +758,19 @@ class ApiMethodsMixin(ABC):
         is also what admits the wire-only controls the automatic mode rejects.
         """
         self._check_process_and_thread()
-        if not raw_page:
-            _enforce_auto_door(arguments)
+        dropped = [] if raw_page else _enforce_auto_door(arguments)
         request = _validate(name, model, arguments, self._state)
         coroutine = (
             _handler_page(handler, request, self._state)
             if raw_page
             else _through_auto_door(collector(request, self._state))
         )
-        return self._marshal(
+        payload = self._marshal(
             coroutine,
             cancelable=_resolve_cancel(cancelable, request),
             cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
         )
+        return _with_warnings(payload, dropped)
 
     @catalogued
     def run_experiments(
@@ -784,7 +816,7 @@ class ApiMethodsMixin(ABC):
                 _handler_page(experiments.handle_run_experiments, request, self._state)
             )
 
-        _enforce_auto_door(arguments)
+        dropped = _enforce_auto_door(arguments)
         submitted_arguments = _submitted_arguments(copy.deepcopy(arguments))
         request = _validate(
             "run_experiments",
@@ -813,7 +845,7 @@ class ApiMethodsMixin(ABC):
             complete = self._marshal(
                 _through_auto_door(_complete_run_receipt(receipt, request, self._state))
             )
-            return complete if wait else _note_process_owned_job(complete)
+            return _with_warnings(complete if wait else _note_process_owned_job(complete), dropped)
         except KeyboardInterrupt as exc:
             raise ApiInterrupted(receipt=receipt, job_id=waited_job) from exc
         except Exception as exc:
@@ -828,11 +860,10 @@ class ApiMethodsMixin(ABC):
         submission both belong to the owner, which is what makes the job record
         name a live owner from its first byte.
         """
-        _enforce_auto_door(arguments)
-        # The owner is given the call as the caller wrote it and applies the
-        # same automatic-mode rules to it, dwell removal included — it is an
-        # ordinary Api caller. Sending it a request that already carried
-        # execution.wait_s would hand it a control that interface refuses.
+        dropped = _enforce_auto_door(arguments)
+        # The owner is given the call as the caller wrote it, presentation
+        # controls already dropped, and applies the same automatic-mode rules
+        # to it — it is an ordinary Api caller.
         payload = _detach.request_arguments(arguments)
         request = _validate(
             "run_experiments",
@@ -851,10 +882,13 @@ class ApiMethodsMixin(ABC):
             owner_pid = self._marshal(_record_owner_pid(handoff.receipt, self._state))
         except Exception as exc:
             raise _collector_error(handoff.receipt, exc) from exc
-        return _note_detached_owner(
-            handoff.receipt,
-            owner_pid=owner_pid if owner_pid is not None else handoff.supervisor_pid,
-            log_file=handoff.log_file,
+        return _with_warnings(
+            _note_detached_owner(
+                handoff.receipt,
+                owner_pid=owner_pid if owner_pid is not None else handoff.supervisor_pid,
+                log_file=handoff.log_file,
+            ),
+            dropped,
         )
 
     @catalogued
