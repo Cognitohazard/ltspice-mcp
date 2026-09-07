@@ -250,3 +250,29 @@ def test_end_to_end_svg_to_image_block() -> None:
     assert base64.b64decode(images[0].data).startswith(_PNG_MAGIC)
     assert result.structured_content is not None
     assert result.structured_content["image"]["image_format"] == PNG
+
+
+def test_a_missing_native_cairo_library_counts_as_the_extra_being_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cairocffi raises OSError, not ImportError, when cairosvg is installed
+    but libcairo is not — the state of a CI runner or a bare host that pip
+    installed the extra on. That must read as "no rasterizer here", not escape
+    from a render call."""
+    import importlib.abc
+    import sys
+
+    class NoNativeCairo(importlib.abc.MetaPathFinder):
+        def find_spec(self, name, path, target=None):
+            if name == "cairosvg":
+                raise OSError('no library called "cairo-2" was found')
+            return None
+
+    monkeypatch.delitem(sys.modules, "cairosvg", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [NoNativeCairo(), *sys.meta_path])
+
+    assert raster_available() is False
+    image = render_image(TINY_SVG, image_format=PNG)
+    assert image.image_format == SVG
+    assert image.data.decode("utf-8") == TINY_SVG
+    assert image.note is not None and "raster" in image.note
