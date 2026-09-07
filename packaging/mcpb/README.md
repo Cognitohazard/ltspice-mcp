@@ -32,8 +32,8 @@ needs a simulator.
 Requires Node (for the `mcpb` CLI). From this directory:
 
 ```bash
-npx @anthropic-ai/mcpb validate    # check manifest.json against the schema
-npx @anthropic-ai/mcpb pack        # produces ltspice-mcp.mcpb
+npx @anthropic-ai/mcpb validate manifest.json       # check it against the schema
+npx @anthropic-ai/mcpb pack . ltspice-mcp.mcpb      # zip this directory into the bundle
 ```
 
 `pack` zips this directory (`manifest.json` + `pyproject.toml` + `server/`).
