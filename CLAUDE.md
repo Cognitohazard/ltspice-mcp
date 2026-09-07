@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) working in this repository.
 
-Start with `CONTRIBUTING.md` (setup, gate, review rules) and `docs/DESIGN.md` (architecture and rationale). This file is the working map of the source: what lives where, and which patterns are load-bearing.
+Start with `docs/DESIGN.md` (architecture and rationale). This file is the working map of the source: what lives where, and which patterns are load-bearing. Setup is `uv sync` on Python 3.11 or newer; a simulator is optional for most of the suite (recorded `.raw`/`.log` fixtures cover the parse paths offline), `ngspice` on PATH enables the live end-to-end tests, and the LTspice integration tests are opt-in behind an environment flag.
 
 ## Project Overview
 
