@@ -180,6 +180,57 @@ above assumes them:
 See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
 `docs/DESIGN.md` for the architecture and the end-to-end verification recipe.
 
+## Measuring what cannot be run enough times
+
+Some questions about the product are only fully posed by a long, expensive
+run: a two-hour sizing project driven by a model, judged on the final design.
+Such runs are too costly and too noisy to repeat until an average clears the
+noise floor, and the model's own variance (how much it thinks, which path it
+takes) dwarfs most product-caused differences. Treat these as a class and
+answer them with instruments that do not need repetition.
+
+- **Detect patterns; do not estimate means.** Estimating a mean over long runs
+  is what is unaffordable. Detecting a named failure is not: a silently wrong
+  number, a stale artifact replayed as fresh, a cancel that reports success
+  while the run continues. Each of those was a finding at one occurrence. So
+  pre-register the patterns that would count, judge live, and stop a run once
+  its pattern is established rather than letting it finish for a score.
+- **Decompose, then check the decomposition.** A long task is thinking plus a
+  sequence of the short steps a scripted session samples (run, measure, edit,
+  sweep, verify, decide). A fix at the step level carries over. What does not
+  carry over is the class of failure that only exists at length: context
+  growth, state drift across dozens of edits, the agent losing a decision it
+  made an hour earlier, accumulated tool results crowding the window. Keep
+  that list explicit. A restricted test finds general problems only where it
+  samples the failure modes of the long task, so each scale-only class needs
+  a probe of its own.
+- **Prefer model-free instruments for scale.** Bytes per tool result, listing
+  and instruction size, growth per step: deterministic, one run, attributable
+  to the product. Transcript replay: record one long session once, then
+  replay its tool-call sequence against a new tree with no model in the loop;
+  any output difference is a product change, and a person judges whether it
+  would have moved the agent. Long edit batteries: many edits on one sheet,
+  then a coherence check, with no model at all.
+- **Pair the comparisons that do use a model.** Same day, same client, same
+  model and effort, arms alternating, two or more sessions a side, read
+  against the within-arm spread rather than the means. Cost is comparable
+  only within a day: the client's prompt size and cache warmth move it more
+  than the product does. When the spread exceeds the delta, stop measuring
+  cost and look at deterministic proxies; that is how one cost gap between
+  two trees became a one-line description fix.
+- **Run the full task once, as a falsifier.** One long session per release,
+  blind judged, against a pre-registered list of what would count as a
+  failure. It cannot say "ten percent better". It can say nothing on the
+  list happened, or name what did.
+
+The scripted designer session (a stream of small concrete requests over one
+working schematic, scored per request on correctness, geometry legality,
+cost and turns) is the workload this project uses for the paired
+comparisons. It represents the step plane a long project decomposes into,
+and holds the thinking plane constant; it does not represent authoring from
+a blank sheet, topology choice, or long-horizon context growth, which need
+the instruments above.
+
 ## Conventions
 
 - **Behavior-named test files.** Tests are named for the behavior they cover,
