@@ -212,7 +212,7 @@ class TestToolListing:
     """[tools] listing selects how the tool list is served."""
 
     def test_default_listing_is_full(self):
-        assert ServerConfig().tool_listing == "full"
+        assert ServerConfig().tool_listing == "compact"
 
     @pytest.mark.parametrize("mode", ["full", "compact"])
     def test_listing_from_toml(self, work_dir: Path, mode: str):
@@ -231,14 +231,14 @@ class TestToolListing:
         monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "compact")
         assert ServerConfig.load(toml_path).tool_listing == "compact"
 
-    def test_unknown_value_in_toml_falls_back_to_full(
+    def test_unknown_value_in_toml_falls_back_to_the_default(
         self, work_dir: Path, caplog: pytest.LogCaptureFixture
     ):
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text('[tools]\nlisting = "sparse"\n')
         with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
             config = ServerConfig.load(toml_path)
-        assert config.tool_listing == "full"
+        assert config.tool_listing == "compact"
         message = "\n".join(record.getMessage() for record in caplog.records)
         assert "sparse" in message
         assert "compact" in message, "the warning must enumerate the valid values"
@@ -255,8 +255,8 @@ class TestToolListing:
         path = work_dir / "generated.toml"
         generate_default_config(path)
         content = path.read_text()
-        assert 'listing = "full"' in content
-        assert "compact" in content
+        assert 'listing = "compact"' in content
+        assert '"full"' in content
 
 
 class TestSimulatorExeConfig:

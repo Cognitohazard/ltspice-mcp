@@ -234,14 +234,14 @@ ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" 
 timeout = 300.0          # seconds
 
 [tools]
-listing = "full"         # "compact" serves the same tools without their per-argument descriptions
+listing = "compact"      # "full" serves every per-argument description on the wire, about 45% more to load
 run_code = false         # true adds run_code; the snippet has the server's own authority, not the sandbox
 
 [state]
 persist_jobs = true
 ```
 
-`listing = "compact"` cuts about 45% off what a session loads before it can call anything; the same tools accept exactly the same calls, and `inspect(kind="reference", query="...")` looks up a branch's arguments when you need them.
+`listing = "compact"`, the default, keeps about 45% off what a session loads before it can call anything; the tools accept exactly the same calls, `inspect(kind="reference", query="...")` looks up a branch's arguments with their descriptions when you need them, and a rejected call ends with the branch's field table. `listing = "full"` puts every description back on the wire.
 
 `run_code = true` adds a tool that runs a Python snippet in a worker process holding the engine as `api` (the same six ops as methods, complete results), for loops over runs and numpy on samples. The snippet runs with the server process's own file and process authority, not inside `allowed_paths`: permission `mcp__ltspice__run_code` in your client the way you permission a shell, and never blanket-allow it as part of `mcp__ltspice__*`. It is off by default and takes effect at the next start; `inspect(kind="capabilities")` reports whether it is on.
 

@@ -403,8 +403,8 @@ There is one tool surface and nothing selects it: the guide is one document,
 the prompts have one edition, and no config key names a profile.
 `inspect(kind="capabilities")` reports `tool_profile: "consolidated"` so a
 client can read which surface it is talking to. What `[tools]` does select is
-`listing` — `full` or `compact`, the two amounts of each definition the same
-tools can be advertised with (see
+`listing` — `compact` (the default) or `full`, the two amounts of each
+definition the same tools can be advertised with (see
 [docs/design/mcp_surface.md](design/mcp_surface.md), "Two listing modes").
 
 |surface|tool count|use case|

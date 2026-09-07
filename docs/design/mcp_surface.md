@@ -183,8 +183,10 @@ descriptions must equal the source ones, and each tool's serialized definition
 has an upper size bound.
 
 **Two listing modes.** `[tools] listing` (or `LTSPICE_MCP_TOOL_LISTING`)
-chooses how much of each definition goes on the wire. `full`, the default, is
-the paragraph above. `compact` publishes the same tools and the same
+chooses how much of each definition goes on the wire. `full` is the paragraph
+above. `compact`, the default since the listing was measured against it
+(same answers, one listing-caused mismatch in 22 requests, answered by the
+error's field table), publishes the same tools and the same
 schemas with every per-argument description removed — structure, enums,
 defaults, `required` and `$defs` are untouched, so a client can still build a
 valid call, and the models are not filtered, so the server accepts exactly what
