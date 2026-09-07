@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import Any
@@ -192,7 +192,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         # builds when it answers — so setting it here, before the first request
         # is served, is what a client of either era reads.
         server.instructions = build_instructions(
-            available, state.default_simulator, run_code=config.run_code
+            available, state.default_simulator, served=state.tool_dispatch
         )
 
         logger.info("=== LTSpice MCP Server Starting ===")
@@ -302,17 +302,18 @@ CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(code_loops=_CODE_LOOPS
 
 
 def build_instructions(
-    available: dict[str, type], default: type | None, *, run_code: bool = False
+    available: dict[str, type], default: type | None, *, served: Collection[str] = ()
 ) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
     degradation. Stating the active engine up front removes that ambiguity.
-    ``run_code`` swaps the code-loop clause for the one naming the tool.
+    ``served`` is the session's tool set; the code-loop clause names run_code
+    when it is in it.
     """
     instructions = _INSTRUCTIONS_TEMPLATE.format(
-        code_loops=_CODE_LOOPS_TOOL if run_code else _CODE_LOOPS_LIBRARY
+        code_loops=_CODE_LOOPS_TOOL if "run_code" in served else _CODE_LOOPS_LIBRARY
     )
     if not available:
         # The short no-simulator form: the long one plus the guide would

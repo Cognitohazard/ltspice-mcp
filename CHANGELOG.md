@@ -121,6 +121,10 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- The AC crossing recipe's phase level is spelled `level_deg` only; the
+  earlier `phase_deg` spelling, kept as an alias for callers of an earlier
+  build, is gone.
+
 - The sandbox follows the config file while the server runs: `[security]
   allowed_paths` is re-read whenever `ltspice-mcp.toml` changes, so a refused
   path names the exact line to add and says it takes effect on the next call.
@@ -262,6 +266,14 @@ the key ignored. Serving zero tools is still a hard error.
 - `inspect(kind: "capabilities")` reports the Python API under `python_api`:
   the import line, the session call on this working directory, and where an
   op's arguments are read (`api.reference`, `help`, `inspect.signature`).
+- The Python API drops the two MCP presentation controls, `budget` and
+  `execution.wait_s`, and says so in the result's `warnings`, instead of
+  refusing the call. Neither is part of a request's identity, so an MCP call
+  replayed through the API with them attached is the same request. Paging
+  controls are still refused, with `raw_page=True` named as the remedy.
+- A registered tool declares its own config gate (`gate="run_code"` on the
+  registration); the served surface, the reference table, the capabilities
+  entry and the instructions all derive from that one declaration.
 - A `run_code` tool, served only when `[tools] run_code = true`
   (`LTSPICE_MCP_RUN_CODE`): it runs a Python snippet in a warm worker process
   that holds the engine as `api` (the same six ops as methods, complete
