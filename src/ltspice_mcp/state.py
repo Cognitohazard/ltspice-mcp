@@ -1,40 +1,32 @@
 """Per-session container: config, simulators, caches, job registry.
 
-The job domain types (``SimulationJob``, ``BatchJob``, ``SweepConfig``,
-``SweepDimension``, ``MonteCarloConfig``) and status constants live in
-``lib/job_types.py``; they're re-exported here so call sites that
-imported them from ``state`` keep working. Splitting them out broke a
-cluster of import cycles — see ``lib/job_types.py`` for the full story.
+The job status constants live in ``lib/job_types.py``; they're re-exported
+here so call sites can read them from either place. Splitting them out broke
+a cluster of import cycles — see ``lib/job_types.py`` for the full story.
 """
 
 import asyncio
 import logging
-from collections.abc import MutableMapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mcp import types
-
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
-from ltspice_mcp.lib.job_types import (
-    NON_TERMINAL_LIVE_STATUSES,
-    TERMINAL_STATUSES,
-    BatchJob,
-    MonteCarloConfig,
-    RunRef,
-    SimulationJob,
-    SweepConfig,
-    SweepDimension,
-)
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
+from ltspice_mcp.lib.store import Store
 
 if TYPE_CHECKING:
+    from mcp import types
+
     from ltspice_mcp.tools._base import RegisteredTool
+    from ltspice_mcp.tools.run_code import CodeWorker
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +35,13 @@ logger = logging.getLogger(__name__)
 # eviction past this just re-parses on the next access.
 RESULT_CACHE_MAXSIZE = 32
 
-# Re-export the job-type surface so existing
-# ``from ltspice_mcp.state import SimulationJob`` imports keep working.
+# Re-export the job-status vocabulary so a caller can read it from either
+# ``ltspice_mcp.state`` or ``ltspice_mcp.lib.job_types``.
 __all__ = [
     "NON_TERMINAL_LIVE_STATUSES",
     "TERMINAL_STATUSES",
-    "BatchJob",
-    "MonteCarloConfig",
-    "RunRef",
+    "ExperimentJob",
     "SessionState",
-    "SimulationJob",
-    "SweepConfig",
-    "SweepDimension",
 ]
 
 
@@ -75,10 +62,11 @@ class SessionState:
         editors: Cache of parsed SpiceEditor instances
         results: Cache of parsed RawRead instances
         libraries: Loaded component libraries
-        runners: RunnerManager (sim/sweep/MC runner lifecycle)
+        runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
-        tool_defs / tool_dispatch: Profile-filtered MCP tool exposure
-        sweep_configs / mc_configs: Saved configs keyed by config_id
+        tool_defs / tool_dispatch / field_owners: Profile-filtered MCP tool exposure
+        sweep_configs / mc_configs: Sweep and Monte Carlo run configurations
+            held for the session, keyed by config_id
         job_registry: Owns the union job store + disk persistence
     """
 
@@ -91,32 +79,36 @@ class SessionState:
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
-    tool_defs: list[types.Tool] = field(default_factory=list)
-    tool_dispatch: dict[str, "RegisteredTool"] = field(default_factory=dict)
-    sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
-    mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
+    sandbox_stamp: tuple[int, int] | None = None
+    """(mtime_ns, size) of the config file as last read for the sandbox."""
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
-    auto-detection). Surfaced via ``server_status`` so silent degradation is
-    visible to the client instead of buried in the server log."""
+    auto-detection). Logged at startup and carried verbatim on the ``inspect``
+    capabilities payload, which is where a client can see the degradation —
+    the log itself reaches nobody but whoever started the server."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
     """Whether the lazy default-config write has been tried this session (once)."""
-    asc_snapshots: dict[str, bytes] = field(default_factory=dict, repr=False)
-    """Pre-first-edit byte snapshots of .asc schematics touched this session,
-    keyed by resolved path string. Captured before the first in-session
-    mutation; backs ``reset_schematic`` (revert to last good state)."""
+    code_worker: "CodeWorker | None" = field(default=None, repr=False)
+    """The ``run_code`` worker supervisor, created on the first call and
+    closed at shutdown."""
     raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
     """Raw dialect per job-resolved raw path, recorded when the path is
     resolved (``services._resolve_result_file``) and read by ``load_raw`` —
     a per-run simulator override's raw must not parse with the session
     default's dialect. Paths never resolved through a job aren't listed."""
-    client_log_level: str | None = field(default=None, repr=False)
-    """Minimum log level the client requested via logging/setLevel, or None
-    when the client never set one (send everything — the pre-setLevel
-    default). Registering the setLevel handler is also what makes the SDK
-    declare the logging capability in the initialize result."""
+
+    @property
+    def store(self) -> Store:
+        """Every path this session writes. See ``lib/store.py`` for the layout.
+
+        A value object over the working directory, so it is rebuilt per access
+        rather than cached — nothing about it is stateful, and a session that
+        changed its working directory would otherwise keep writing to the old
+        one.
+        """
+        return Store(self.working_dir)
 
     @property
     def raw_dialect(self) -> str | None:
@@ -127,6 +119,65 @@ class SessionState:
         header that spicelib needs for auto-detection.
         """
         return simulator_dialect(self.default_simulator)
+
+    # ------------------------------------------------------------------
+    # Tool surface — built on FIRST ACCESS, not at session creation. The
+    # Python API (Api) calls handlers directly and never reads these, so it
+    # never pays the tools-package import (mcp + the analysis chain); the MCP
+    # server touches tool_defs during its handshake and builds then. A
+    # property, not a flag: no caller can ever observe an empty surface.
+    # ------------------------------------------------------------------
+
+    @cached_property
+    def _surface(
+        self,
+    ) -> "tuple[list[types.Tool], dict[str, RegisteredTool], dict[str, tuple[str, ...]]]":
+        from ltspice_mcp.tools import get_tools
+        from ltspice_mcp.tools._base import registry as tool_registry
+
+        # A registration may declare a config gate; the surface is what the
+        # gates leave open for this session's config.
+        defs, dispatch = get_tools(self.config.tool_listing, config=self.config)
+        owners = {
+            name: kept
+            for name, tools in tool_registry.field_owners().items()
+            if (kept := tuple(owner for owner in tools if owner in dispatch))
+        }
+        return (defs, dispatch, owners)
+
+    @property
+    def tool_defs(self) -> "list[types.Tool]":
+        """Profile-filtered advertised tool definitions."""
+        return self._surface[0]
+
+    @property
+    def tool_dispatch(self) -> "dict[str, RegisteredTool]":
+        """Tool name -> RegisteredTool dispatch map for the active profile."""
+        return self._surface[1]
+
+    @property
+    def field_owners(self) -> "dict[str, tuple[str, ...]]":
+        """Advertised top-level wire fields -> owning tool names."""
+        return self._surface[2]
+
+    def __post_init__(self) -> None:
+        self.sandbox_stamp = _file_stamp(self.config.config_path)
+
+    def allowed_paths(self) -> list[Path]:
+        """The sandbox, re-read from the config file whenever that file changed.
+
+        The refusal an agent gets names the config line that widens the sandbox;
+        picking the edit up on the next call is what makes that line the agent's
+        own to act on. Only ``[security] allowed_paths`` follows the file: the
+        rest of it is startup state (detected simulators, runners, caches).
+        """
+        stamp = _file_stamp(self.config.config_path)
+        if stamp != self.sandbox_stamp:
+            self.sandbox_stamp = stamp
+            self.config.allowed_paths = ServerConfig.load(
+                self.config.config_path, overrides={"working_dir": self.config.working_dir}
+            ).allowed_paths
+        return self.config.allowed_paths
 
     @classmethod
     def create(
@@ -140,15 +191,16 @@ class SessionState:
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session for ``server_status`` to surface.
+        on the session and logged at startup.
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
-        from ltspice_mcp.tools import get_tools_for_profile
 
         diagnostics = diagnostics if diagnostics is not None else []
         default = select_default_simulator(available, config, diagnostics)
-        tool_defs, tool_dispatch = get_tools_for_profile(config.tool_profile)
-        registry = JobRegistry(persist_enabled=config.persist_jobs)
+        registry = JobRegistry(
+            persist_enabled=config.persist_jobs,
+            working_dir=config.working_dir,
+        )
 
         return cls(
             config=config,
@@ -164,8 +216,6 @@ class SessionState:
             runners=RunnerManager(),
             working_dir=config.working_dir,
             job_registry=registry,
-            tool_defs=tool_defs,
-            tool_dispatch=tool_dispatch,
             diagnostics=diagnostics,
         )
 
@@ -174,31 +224,23 @@ class SessionState:
     # ------------------------------------------------------------------
 
     @property
-    def jobs(self) -> MutableMapping[str, SimulationJob]:
-        """Type-filtered view of the single-simulation jobs."""
-        return self.job_registry.sim_jobs
-
-    @property
-    def batch_jobs(self) -> MutableMapping[str, BatchJob]:
-        """Type-filtered view of the batch (sweep/MC) jobs."""
-        return self.job_registry.batch_jobs
-
-    @property
-    def all_jobs(self) -> dict[str, "SimulationJob | BatchJob"]:
-        """The union job store — every job regardless of run type."""
+    def all_jobs(self) -> dict[str, ExperimentJob]:
+        """The job store — every job this session knows."""
         return self.job_registry.jobs
 
-    def add_job(self, job: SimulationJob) -> None:
-        self.job_registry.add_sim_job(job)
+    def add_experiment_job(
+        self,
+        experiment_job: ExperimentJob,
+        *,
+        already_persisted: bool = False,
+    ) -> None:
+        self.job_registry.add_experiment_job(
+            experiment_job,
+            already_persisted=already_persisted,
+        )
 
-    def add_batch_job(self, batch_job: BatchJob) -> None:
-        self.job_registry.add_batch_job(batch_job)
-
-    def persist_job(self, job: "SimulationJob | BatchJob") -> None:
+    def persist_job(self, job: ExperimentJob) -> None:
         self.job_registry.persist_job(job)
-
-    def persist_batch_progress(self, batch_job: BatchJob) -> None:
-        self.job_registry.persist_batch_progress(batch_job)
 
     def ensure_jobs_loaded_for(self, circuit_path: Path) -> None:
         self.job_registry.ensure_loaded_for(circuit_path)
@@ -243,6 +285,15 @@ class SessionState:
         """Clean up session resources at server shutdown."""
         self.editors.clear()
         self.results.clear()
-        self.asc_snapshots.clear()
+        if self.code_worker is not None:
+            await self.code_worker.close()
         await self.job_registry.cancel_running(self.runners, self)
         await self.job_registry.drain_pending()
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)

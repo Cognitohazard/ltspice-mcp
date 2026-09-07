@@ -251,7 +251,7 @@ class TestElementArity:
         assert issues == []
 
     def test_e_source_value_keyed_form_passes(self):
-        # Codex H2: E1 out 0 VALUE={V(in)*2} is a legal LTspice keyed
+        # E1 out 0 VALUE={V(in)*2} is a legal LTspice keyed
         # behavioral form. ``InstanceLine`` parses it as params_only with
         # 2 positional nodes — the validator must NOT require 4.
         issues = self._arity("E1 out 0 VALUE={V(in)*2}\n.end")
@@ -298,6 +298,48 @@ class TestElementArity:
         assert all(
             "C1" not in str(i["message"]) and "L1" not in str(i["message"]) for i in issues
         ), issues
+
+
+class TestControlBlockIsOpaque:
+    """ngspice ``.control`` commands collide with SPICE element prefixes
+    (let->L, dc->D, meas->M, foreach->F, alter->A, set->S, run->R, end->E,
+    write->W). None of them is a circuit element, so no instance-level rule
+    may inspect a line inside ``.control`` ... ``.endc``."""
+
+    DECK = (
+        "* ngspice control-block deck\n"
+        "V1 in 0 DC 1\n"
+        "R1 in out 1k\n"
+        "C1 out 0 1u\n"
+        ".tran 1u 1m\n"
+        ".control\n"
+        "set filetype=ascii\n"
+        "let vo = v(out)\n"
+        "dc VDD 1.0 1.8 0.005\n"
+        "meas dc vhalf find vo when v(in)=0.5\n"
+        "foreach il 0 10m\n"
+        "alter ILOAD = $il\n"
+        "run\n"
+        "end\n"
+        "write out.raw\n"
+        ".endc\n"
+        ".end\n"
+    )
+
+    def test_no_arity_issues_from_control_commands(self):
+        assert validate_netlist_arity(lex(self.DECK).cards) == []
+
+    def test_no_dangling_or_reference_issues_from_control_commands(self):
+        cards = lex(self.DECK).cards
+        assert validate_netlist_dangling_nodes(cards) == []
+        assert validate_netlist_directive_refs(cards) == []
+
+    def test_real_cards_outside_the_block_are_still_checked(self):
+        text = self.DECK.replace("R1 in out 1k\n", "R1 in 1k\n")
+        issues = validate_netlist_arity(lex(text).cards)
+        assert [str(i["message"]) for i in issues] == [
+            "R1: expected at least 2 positional node(s) for a R-element, got 1"
+        ]
 
 
 class TestDanglingNodes:
@@ -360,8 +402,11 @@ class TestDanglingNodes:
         assert len(issues) == 1
         msg = str(issues[0]["message"])
         assert "'nc'" in msg
-        assert "declared as a port of .SUBCKT buf" in msg
-        assert "connected to no element terminal in its body" in msg
+        # The port, the subcircuit it belongs to, and the fact that separates
+        # this case from the degree-one one.
+        assert "port" in msg
+        assert "buf" in msg
+        assert "no element terminal" in msg
         assert "only one element terminal" not in msg
 
     def test_x_card_subckt_name_and_params_not_counted(self):

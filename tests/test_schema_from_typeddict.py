@@ -34,8 +34,8 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     window_and_clean,
 )
-from ltspice_mcp.tools import get_tools_for_profile
-from ltspice_mcp.tools._base import _schema_for_type, schema_from_typeddict
+from ltspice_mcp.tools import get_tools
+from ltspice_mcp.tools._schema import schema_for_type, schema_from_typeddict
 
 
 class TestPrimitives:
@@ -147,7 +147,7 @@ class TestContainers:
 
     def test_homogeneous_variadic_tuple_is_array(self):
         # tuple[X, ...] maps faithfully to an array of X.
-        assert _schema_for_type(tuple[int, ...]) == {
+        assert schema_for_type(tuple[int, ...]) == {
             "type": "array",
             "items": {"type": "integer"},
         }
@@ -157,7 +157,7 @@ class TestContainers:
         # the first element would silently drop the rest, so it must refuse loudly
         # rather than emit a schema that lies about the shape.
         with pytest.raises(TypeError, match="heterogeneous tuple"):
-            _schema_for_type(tuple[int, str])
+            schema_for_type(tuple[int, str])
 
 
 class _NestedInner(TypedDict):
@@ -328,12 +328,14 @@ class TestRegisteredOutputSchemas:
                 for i, value in enumerate(node):
                     check(value, f"{path}[{i}]")
 
-        # get_tools_for_profile imports the tool modules (triggering registration)
-        # and returns the published Tool defs — the same surface MCP clients see.
-        defs, _ = get_tools_for_profile("full")
+        # get_tools imports the tool modules (triggering
+        # registration). The wire defs no longer carry outputSchema, so the
+        # declared shapes are read from the dispatch-side definitions.
+        _, dispatch = get_tools()
         checked = 0
-        for tool in defs:
-            if tool.outputSchema is not None:
+        for registered in dispatch.values():
+            tool = registered.definition
+            if tool.output_schema is not None:
                 checked += 1
-                check(tool.outputSchema, tool.name)
+                check(tool.output_schema, tool.name)
         assert checked > 0, "no output schemas were checked — tool registration likely broken"

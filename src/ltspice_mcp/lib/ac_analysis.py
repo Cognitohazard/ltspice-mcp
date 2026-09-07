@@ -5,7 +5,8 @@ returns dicts of Python floats. No I/O, no spicelib dependencies. Raises
 ``ValueError`` with user-facing messages on domain errors — the tool layer
 re-raises these as ``ResultError``.
 
-Depends on numpy and scipy.signal.find_peaks; no other third-party code.
+Depends on numpy, plus scipy.signal.find_peaks imported at the call sites
+(scipy costs ~0.5 s to import; a session that never detects peaks never pays).
 
 Convention: throughout this module
 
@@ -27,7 +28,6 @@ from collections.abc import Sequence
 from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
-from scipy.signal import find_peaks
 
 # Re-exported as ``magnitude_db`` for readability in the AC domain; the
 # implementation lives in raw_parser so AC and transient tools share the
@@ -1251,7 +1251,7 @@ def compute_stability_metrics(
         stability = "flat_at_unity"
         warnings.append(
             "Loop magnitude sits at unity (0 dB) across the whole sweep — the "
-            "gain never genuinely crosses 0 dB, so phase margin is ill-defined. "
+            "gain never crosses 0 dB, so phase margin is ill-defined. "
             "This looks like an allpass or a flat-gain loop, not a normal "
             "single-crossover response; the stability verdict does not apply."
         )
@@ -1274,16 +1274,17 @@ def compute_stability_metrics(
             warnings.append(
                 f"Unconditionally stable (loop-gain phase never reaches -180°), "
                 f"but the worst phase margin is only {phase_margin_worst:.1f}° — "
-                "the loop is marginal and will ring/peak. 'unconditional' means "
-                "'no gain-margin limit', not 'comfortable phase margin'."
+                "the loop is marginal and will ring or peak. 'unconditional' "
+                "means there is no gain-margin limit; it says nothing about the "
+                "phase margin."
             )
     elif len(unity_crossings) > 1 or len(phase_crossings) > 1:
         stability = "conditional"
         warnings.append(
             f"Multiple crossovers detected ({len(unity_crossings)} unity-gain, "
             f"{len(phase_crossings)} -180° phase). System is conditionally "
-            "stable — worst-case margins govern stability but each "
-            "crossover deserves individual inspection."
+            "stable — worst-case margins govern stability, but inspect each "
+            "crossover individually."
         )
     else:
         # Single unity-gain + single -180° crossing. Stable if both
@@ -1430,6 +1431,8 @@ def compute_resonances(
 
     mag_db = magnitude_db(H)
     phase_deg = np.angle(H, deg=True)
+
+    from scipy.signal import find_peaks  # deferred: scipy costs ~0.5 s at import
 
     peak_indices, _props = find_peaks(mag_db, prominence=min_prominence_db)
 

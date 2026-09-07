@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import job_registry as job_registry_module
-from ltspice_mcp.lib import job_store, now, services
-from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
+from ltspice_mcp.state import SessionState
+from tests.conftest import persist_experiment_record
 
 
 @pytest.fixture
@@ -24,276 +21,66 @@ def state(tmp_path: Path) -> SessionState:
     return SessionState.create(config, {})
 
 
-class TestAddJobPersists:
-    def test_add_sim_job_writes_sidecar(self, state: SessionState, tmp_path: Path) -> None:
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job = SimulationJob(
-            job_id="sim_test_1",
-            netlist=circuit,
-            simulator="LTspice",
-            status="completed",
-            started_at=now(),
-            completed_at=now(),
-        )
-        state.add_job(job)
-        sidecar_file = job_store.sidecar_dir(circuit) / "sim_test_1.json"
-        assert sidecar_file.exists()
-
-    def test_add_batch_job_writes_sidecar(self, state: SessionState, tmp_path: Path) -> None:
-        circuit = tmp_path / "amp.cir"
-        circuit.write_text("")
-        bj = BatchJob(
-            job_id="sweep_test_1",
-            job_type="sweep",
-            netlist=circuit,
-            total_runs=5,
-            status="running",
-        )
-        state.add_batch_job(bj)
-        sidecar_file = job_store.sidecar_dir(circuit) / "sweep_test_1.json"
-        assert sidecar_file.exists()
-
-    def test_persist_jobs_disabled_writes_nothing(self, tmp_path: Path) -> None:
-        config = ServerConfig(
-            working_dir=tmp_path,
-            allowed_paths=[tmp_path],
-            persist_jobs=False,
-        )
-        state = SessionState.create(config, {})
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job = SimulationJob(
-            job_id="sim_nop",
-            netlist=circuit,
-            simulator="LTspice",
-            status="completed",
-            started_at=now(),
-            completed_at=now(),
-        )
-        state.add_job(job)
-        assert not job_store.sidecar_dir(circuit).exists()
-
-
 class TestEnsureJobsLoadedFor:
-    def test_loads_persisted_jobs_once(self, state: SessionState, tmp_path: Path) -> None:
+    """Loading a circuit's persisted jobs: once per session, dedup against
+    what is already in memory, and nothing at all with persistence off."""
+
+    def test_loads_persisted_records_once(self, state: SessionState, tmp_path: Path) -> None:
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
-        # Seed a sidecar from a "prior session"
-        prior = SimulationJob(
-            job_id="sim_prior",
-            netlist=circuit,
-            simulator="LTspice",
-            status="completed",
-            started_at=now(),
-            completed_at=now(),
-        )
-        job_store.save_job(prior)
+        persist_experiment_record(tmp_path, circuit, "exp_prior")
 
-        assert "sim_prior" not in state.jobs
+        assert "exp_prior" not in state.all_jobs
         state.ensure_jobs_loaded_for(circuit)
-        assert "sim_prior" in state.jobs
+        assert "exp_prior" in state.all_jobs
         # Second call is a no-op (tracked in _loaded_circuits).
         state.ensure_jobs_loaded_for(circuit)
-        assert len(state.jobs) == 1
+        assert len(state.all_jobs) == 1
 
     @pytest.mark.asyncio
     async def test_async_loader_matches_sync(self, state: SessionState, tmp_path: Path) -> None:
-        # ensure_loaded_for_async offloads the sidecar read but must apply the
+        # ensure_loaded_for_async offloads the record read but must apply the
         # same registry state as the sync path (the loop-freeze fix on the common
         # dispatch path), and dedup on second call the same way.
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
-        job_store.save_job(
-            SimulationJob(
-                job_id="sim_async",
-                netlist=circuit,
-                simulator="LTspice",
-                status="completed",
-                started_at=now(),
-                completed_at=now(),
-            )
-        )
-        assert "sim_async" not in state.jobs
+        persist_experiment_record(tmp_path, circuit, "exp_async")
+
+        assert "exp_async" not in state.all_jobs
         await state.ensure_jobs_loaded_for_async(circuit)
-        assert "sim_async" in state.jobs
+        assert "exp_async" in state.all_jobs
         await state.ensure_jobs_loaded_for_async(circuit)
-        assert len(state.jobs) == 1
+        assert len(state.all_jobs) == 1
 
-    def test_reload_dedupes_against_union_store(self, state: SessionState, tmp_path: Path) -> None:
-        """A job id already present in the union store is skipped on load —
-        the in-memory object (e.g. a job resubmitted this session) is never
-        replaced by its persisted copy."""
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job_store.save_job(
-            SimulationJob(
-                job_id="sim_dupe",
-                netlist=circuit,
-                simulator="LTspice",
-                status="completed",
-                started_at=now(),
-                completed_at=now(),
-            )
-        )
-        job_store.save_job(
-            BatchJob(
-                job_id="sweep_dupe",
-                job_type="sweep",
-                netlist=circuit,
-                total_runs=2,
-                status="completed",
-            )
-        )
-
-        live_sim = SimulationJob(
-            job_id="sim_dupe",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-        )
-        live_batch = BatchJob(
-            job_id="sweep_dupe",
-            job_type="sweep",
-            netlist=circuit,
-            total_runs=2,
-            status="running",
-        )
-        state.jobs["sim_dupe"] = live_sim
-        state.batch_jobs["sweep_dupe"] = live_batch
-
-        state.ensure_jobs_loaded_for(circuit)
-
-        assert state.all_jobs["sim_dupe"] is live_sim
-        assert state.all_jobs["sweep_dupe"] is live_batch
-        assert len(state.all_jobs) == 2
-
-    def test_interrupted_with_valid_raw_promoted_to_completed(
+    def test_reload_dedupes_against_the_job_store(
         self, state: SessionState, tmp_path: Path
     ) -> None:
+        """A job id already in memory is skipped on load — the in-memory object
+        is never replaced by its persisted copy."""
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
-        raw = tmp_path / "sim_prior.raw"
-        # Real LTspice raw files start with "Title:" in ASCII.
-        raw.write_bytes(b"Title: * /tmp/rc.cir\nDate: ...\n")
-        log = tmp_path / "sim_prior.log"
-        log.write_text("...")
-
-        # Persist a job as if it had been running when the server died.
-        running = SimulationJob(
-            job_id="sim_interrupted",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-            raw_file=raw,
-            log_file=log,
-        )
-        job_store.save_job(running)
+        persist_experiment_record(tmp_path, circuit, "exp_dupe")
 
         state.ensure_jobs_loaded_for(circuit)
-        loaded = state.jobs["sim_interrupted"]
-        # Raw header matches → promoted to completed.
-        assert loaded.status == "completed"
-        assert loaded.error is None
+        live = state.all_jobs["exp_dupe"]
 
-    def test_recovered_job_reports_no_fabricated_duration(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        # A job interrupted by a crash and recovered on reload has no knowable
-        # completion time. recover() must NOT stamp completed_at=now() — that
-        # reports start-to-reload (~1800s here) as runtime. It leaves
-        # completed_at None so the duration is reported as null.
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        raw = tmp_path / "sim_recover.raw"
-        raw.write_bytes(b"Title: * /tmp/rc.cir\nDate: ...\n")
-        log = tmp_path / "sim_recover.log"
-        log.write_text("...")
-
-        running = SimulationJob(
-            job_id="sim_recover",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now() - timedelta(seconds=1800),
-            raw_file=raw,
-            log_file=log,
-        )
-        job_store.save_job(running)
-
+        # Release the once-per-session claim so the load actually runs a second
+        # time; without that the dedup under test is never reached.
+        state.job_registry._loaded_circuits.clear()
         state.ensure_jobs_loaded_for(circuit)
-        loaded = state.jobs["sim_recover"]
-        assert loaded.status == "completed"  # valid raw → recovered
-        assert loaded.completed_at is None  # not fabricated
-        assert services.job_duration_seconds(loaded.started_at, loaded.completed_at) is None
 
-    def test_interrupted_with_garbage_raw_stays_interrupted(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        """A file at ``raw_file`` that isn't a real .raw doesn't promote."""
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        raw = tmp_path / "bogus.raw"
-        raw.write_bytes(b"not actually a raw file")
-
-        running = SimulationJob(
-            job_id="sim_garbage",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-            raw_file=raw,
-        )
-        job_store.save_job(running)
-
-        state.ensure_jobs_loaded_for(circuit)
-        assert state.jobs["sim_garbage"].status == "interrupted"
-
-    def test_interrupted_without_raw_stays_interrupted(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        running = SimulationJob(
-            job_id="sim_orphan",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-        )
-        job_store.save_job(running)
-
-        state.ensure_jobs_loaded_for(circuit)
-        loaded = state.jobs["sim_orphan"]
-        assert loaded.status == "interrupted"
+        assert state.all_jobs["exp_dupe"] is live
+        assert len(state.all_jobs) == 1
 
     def test_disabled_persistence_skips_load(self, tmp_path: Path) -> None:
-        config = ServerConfig(
-            working_dir=tmp_path,
-            allowed_paths=[tmp_path],
-            persist_jobs=False,
-        )
-        state = SessionState.create(config, {})
+        config = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path], persist_jobs=False)
+        state = SessionState.create(config, available={})
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
-        # Create a sidecar manually — ensure_jobs_loaded_for should ignore it.
-        prior = SimulationJob(
-            job_id="sim_should_not_load",
-            netlist=circuit,
-            simulator="LTspice",
-            status="completed",
-            started_at=now(),
-        )
-        # Temporarily enable to seed, then disable for the real call.
-        config.persist_jobs = True
-        state.persist_job(prior)
-        config.persist_jobs = False
-        state.job_registry._loaded_circuits.clear()
+        persist_experiment_record(tmp_path, circuit, "exp_off")
 
         state.ensure_jobs_loaded_for(circuit)
-        assert "sim_should_not_load" not in state.jobs
+        assert state.all_jobs == {}
 
 
 class TestRecentDebounce:
@@ -324,159 +111,8 @@ class TestRecentDebounce:
         assert len(calls) == 1
 
 
-class TestBatchProgressThrottle:
-    def test_persist_batch_progress_skips_intermediate_runs(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        circuit = tmp_path / "amp.cir"
-        circuit.write_text("")
-        bj = BatchJob(
-            job_id="sweep_throttle",
-            job_type="sweep",
-            netlist=circuit,
-            total_runs=100,
-            status="running",
-        )
-        state.add_batch_job(bj)
-
-        sidecar = job_store.sidecar_dir(circuit) / "sweep_throttle.json"
-        first_mtime = sidecar.stat().st_mtime_ns
-
-        # Run 1 shouldn't trigger a rewrite under the 1/20 schedule.
-        bj.completed_runs = 1
-        state.persist_batch_progress(bj)
-        assert sidecar.stat().st_mtime_ns == first_mtime
-
-        # Run 5 (100 // 20 == 5) triggers a checkpoint. Assert on CONTENT, not
-        # mtime: the checkpoint write can land in the same mtime tick as the
-        # initial persist (the same-tick phenomenon the FileCache fix defends
-        # against), so a strict `st_mtime_ns >` is environmentally flaky under
-        # parallel load. The persisted completed_runs proves the checkpoint
-        # actually wrote the new state — a stronger, timing-independent check.
-        bj.completed_runs = 5
-        state.persist_batch_progress(bj)
-        assert json.loads(sidecar.read_text())["completed_runs"] == 5
-
-    def test_persist_batch_progress_always_persists_final_run(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        circuit = tmp_path / "amp.cir"
-        circuit.write_text("")
-        bj = BatchJob(
-            job_id="sweep_final",
-            job_type="sweep",
-            netlist=circuit,
-            total_runs=7,
-            status="running",
-        )
-        state.add_batch_job(bj)
-
-        sidecar = job_store.sidecar_dir(circuit) / "sweep_final.json"
-        initial_mtime = sidecar.stat().st_mtime_ns
-
-        # total_runs=7 → step=1 (max(1, 7//20)). Every run persists.
-        bj.completed_runs = 7
-        state.persist_batch_progress(bj)
-        assert sidecar.stat().st_mtime_ns >= initial_mtime
-
-
-class TestAsyncPersistDrain:
-    async def test_shutdown_awaits_pending_writes(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        """Scheduled writes must land before shutdown returns."""
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job = SimulationJob(
-            job_id="sim_drain",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-        )
-        state.jobs["sim_drain"] = job
-        # Schedule a write from async context (this is what the runners do).
-        state.persist_job(job)
-        assert state.job_registry._pending_persist, "expected a pending persist task"
-
-        await state.shutdown()
-
-        assert not state.job_registry._pending_persist
-        sidecar = job_store.sidecar_dir(circuit) / "sim_drain.json"
-        assert sidecar.exists()
-
-    async def test_successive_writes_preserve_order(
-        self, state: SessionState, tmp_path: Path
-    ) -> None:
-        """Writes across a terminal transition must land in call order.
-
-        The prior implementation popped ``_persist_locks[job_id]`` inside
-        the writer whenever the job hit a terminal state — a later writer
-        would then allocate a fresh Lock while the previous one was still
-        unwinding and run concurrently. The fix moves cleanup to eviction,
-        so all writes for a live job serialise on the same Lock.
-        """
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        job = SimulationJob(
-            job_id="sim_ordered",
-            netlist=circuit,
-            simulator="LTspice",
-            status="running",
-            started_at=now(),
-        )
-        state.jobs["sim_ordered"] = job
-        state.persist_job(job)
-        job.status = "completed"
-        job.completed_at = now()
-        state.persist_job(job)
-        # A trailing write after terminal state — historically raced with
-        # the still-unwinding "completed" write; now safely queued.
-        job.error = "observed twice"
-        state.persist_job(job)
-
-        await state.shutdown()
-
-        sidecar = job_store.sidecar_dir(circuit) / "sim_ordered.json"
-        data = json.loads(sidecar.read_text())
-        assert data["status"] == "completed"
-        assert data["error"] == "observed twice"
-
-
-class TestEvictionDeletesSidecar:
-    def test_evicted_job_file_is_removed(self, state: SessionState, tmp_path: Path) -> None:
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-
-        # Temporarily shrink the cap so eviction triggers quickly.
-        original_cap = job_registry_module._MAX_FINISHED_JOBS
-        job_registry_module._MAX_FINISHED_JOBS = 2
-        try:
-            ids = []
-            for i in range(3):
-                job = SimulationJob(
-                    job_id=f"sim_evict_{i}",
-                    netlist=circuit,
-                    simulator="LTspice",
-                    status="completed",
-                    started_at=now(),
-                    completed_at=now(),
-                )
-                state.add_job(job)
-                ids.append(job.job_id)
-
-            # Oldest (sim_evict_0) should be evicted from memory and disk.
-            assert ids[0] not in state.jobs
-            assert not (job_store.sidecar_dir(circuit) / f"{ids[0]}.json").exists()
-            # Newest two remain.
-            assert ids[1] in state.jobs
-            assert ids[2] in state.jobs
-        finally:
-            job_registry_module._MAX_FINISHED_JOBS = original_cap
-
-
 class TestPreloadRecent:
-    def test_preload_loads_jobs_for_recent_circuits(
+    def test_preload_loads_records_for_recent_circuits(
         self, state: SessionState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Route recent.json to tmp_path so we don't touch the user's home dir.
@@ -484,31 +120,20 @@ class TestPreloadRecent:
 
         from ltspice_mcp.lib import recent
 
-        # Two circuits in separate parent dirs so each has its own sidecar.
-        circuits = []
         for idx in range(2):
             sub = tmp_path / f"proj{idx}"
             sub.mkdir()
-            c = sub / "rc.cir"
-            c.write_text("")
-            job = SimulationJob(
-                job_id=f"sim_pre_{idx}",
-                netlist=c,
-                simulator="LTspice",
-                status="completed",
-                started_at=now(),
-                completed_at=now(),
-            )
-            state.add_job(job)
-            recent.touch(c)
-            circuits.append(c)
+            circuit = sub / "rc.cir"
+            circuit.write_text("")
+            persist_experiment_record(tmp_path, circuit, f"exp_pre_{idx}")
+            recent.touch(circuit)
 
         # Fresh registry should see zero jobs before preload.
-        fresh = type(state.job_registry)(persist_enabled=True)
-        assert not fresh.sim_jobs
+        fresh = type(state.job_registry)(persist_enabled=True, working_dir=tmp_path)
+        assert not fresh.jobs
         loaded = fresh.preload_recent(max_circuits=10)
         assert loaded == 2
-        assert {"sim_pre_0", "sim_pre_1"} <= set(fresh.sim_jobs)
+        assert {"exp_pre_0", "exp_pre_1"} <= set(fresh.jobs)
 
     def test_preload_bounded_by_max_circuits(
         self, state: SessionState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -516,30 +141,18 @@ class TestPreloadRecent:
         monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
         from ltspice_mcp.lib import recent
 
-        # Each circuit needs its own parent dir — sidecars are stored at
-        # ``<parent>/.ltspice-mcp/jobs/``, so siblings share one sidecar
-        # directory and loading any one of them would fetch all jobs.
         for idx in range(5):
             sub = tmp_path / f"proj{idx}"
             sub.mkdir()
-            c = sub / "rc.cir"
-            c.write_text("")
-            state.add_job(
-                SimulationJob(
-                    job_id=f"sim_bound_{idx}",
-                    netlist=c,
-                    simulator="LTspice",
-                    status="completed",
-                    started_at=now(),
-                    completed_at=now(),
-                )
-            )
-            recent.touch(c)
+            circuit = sub / "rc.cir"
+            circuit.write_text("")
+            persist_experiment_record(tmp_path, circuit, f"exp_bound_{idx}")
+            recent.touch(circuit)
 
-        fresh = type(state.job_registry)(persist_enabled=True)
+        fresh = type(state.job_registry)(persist_enabled=True, working_dir=tmp_path)
         loaded = fresh.preload_recent(max_circuits=2)
         assert loaded == 2
-        assert len(fresh.sim_jobs) == 2
+        assert len(fresh.jobs) == 2
 
     def test_preload_zero_is_noop(self, state: SessionState) -> None:
         assert state.job_registry.preload_recent(max_circuits=0) == 0

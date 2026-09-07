@@ -67,7 +67,7 @@ def _device_usage(device_type: str, name: str) -> str:
     return template.replace("<name>", name)
 
 
-def _part_aware_score(query_lower: str, candidate_lower: str) -> float:
+def part_aware_score(query_lower: str, candidate_lower: str) -> float:
     """Similarity in [0.0, 1.0] biased for part-number-style names.
 
     Base is ``rapidfuzz.fuzz.ratio`` — a length-aware (Levenshtein) whole-string
@@ -102,6 +102,24 @@ def _shared_prefix_len(a: str, b: str) -> int:
             break
         n += 1
     return n
+
+
+# Process-wide (mtime, size) cache of parsed library files, so callers that
+# parse a library file by path repeatedly — e.g. the inspect model queries
+# enumerating or searching the same .lib across paged calls — reuse one parse
+# instead of re-reading and re-lexing it every time. The values are immutable
+# and re-derivable, so bounded LRU eviction is safe.
+_library_file_cache: FileCache[LibraryIndex] = FileCache(maxsize=64)
+
+
+def parse_library_file_cached(path: Path) -> LibraryIndex:
+    """Parse a library file through a shared (mtime, size) cache.
+
+    Public accessor over the same ``FileCache``-backed parse the built-in
+    library index uses, for any caller that parses a library file by path more
+    than once. A stale entry (the file's mtime or size changed) re-parses.
+    """
+    return _library_file_cache.get(path, parse_library_file)
 
 
 class LibraryManager:
@@ -465,7 +483,7 @@ class LibraryManager:
 
         With ``exact=True`` returns at most one entry (score 1.0) when the
         name matches case-insensitively. Otherwise fuzzy-ranks via
-        ``_part_aware_score`` (rapidfuzz ratio + first-word-token bonus).
+        ``part_aware_score`` (rapidfuzz ratio + first-word-token bonus).
 
         ``include_builtin=True`` lazy-parses every built-in .lib on first
         call — hundreds of ms on a full LTspice install.
@@ -480,7 +498,7 @@ class LibraryManager:
         query_lower = name.lower()
 
         def score(entry: ModelEntry) -> float:
-            return _part_aware_score(query_lower, entry.name_lower)
+            return part_aware_score(query_lower, entry.name_lower)
 
         candidates: list[tuple[float, ModelEntry]] = []
 

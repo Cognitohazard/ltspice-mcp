@@ -4,7 +4,8 @@ Independent MCP server processes can share one working directory. Three
 mechanisms keep them out of each other's way:
 
 - the cross-process circuit-file lock — concurrent edits of the same file
-  serialize (edit-on-latest) instead of last-writer-wins;
+  serialize, and the revision check runs inside the lock so a peer's committed
+  write is seen instead of silently overwritten;
 - owner-pid liveness in job sidecars — a live sibling's running job isn't
   mislabeled ``interrupted``, shutdown only cancels this process's own jobs,
   and a foreign job's status refreshes from disk at resolution time;
@@ -16,6 +17,7 @@ separate fd — flock/msvcrt contention is per open file description, so this
 exercises the exact cross-process semantics without spawning a process.
 """
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -27,16 +29,28 @@ import psutil
 import pytest
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import job_store, now
+from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib import proc_kill as proc_kill_mod
-from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.experiment_types import (
+    Completeness,
+    ExperimentCase,
+    ExperimentJob,
+    SourceRecord,
+)
+from ltspice_mcp.lib.filelock import circuit_lock_target, file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
-from ltspice_mcp.lib.job_types import SimulationJob
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
+from ltspice_mcp.lib.schematic_ops import (
+    get_asc_editor,
+    resolve_pin,
+)
+from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import circuit_lock_target
-from ltspice_mcp.tools.circuit import handle_set_component_value
-from tests.conftest import make_batch_job, make_sim_job
+from tests._asc_ops import apply_ops, sha_of
+
+#: The line a peer session appends while holding the lock.
+_PEER_MARKER = b"TEXT -48 320 Left 2 ;external marker\n"
 
 
 def _hold_lock_then_write(target: Path, content: bytes, hold_s: float) -> threading.Thread:
@@ -77,92 +91,94 @@ def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading
 
 @pytest.mark.asyncio
 class TestCircuitFileLock:
-    async def test_cir_edit_waits_for_peer_and_keeps_both_edits(
-        self, state_no_sim: SessionState, work_dir: Path
+    async def test_asc_edit_sees_a_peer_write_instead_of_overwriting_it(
+        self, asc_state: SessionState, asc_file: Path
     ):
-        # Without the cross-process lock this is last-writer-wins: our edit
-        # reads the pre-peer bytes immediately and the peer's later write
-        # erases it. With the lock, our edit blocks until the peer releases,
-        # re-reads, and lands on top of the peer's version.
-        cir = work_dir / "shared.cir"
-        cir.write_text("* shared\nR1 in 0 1k\n.END\n")
-        peer_version = b"* shared\nR1 in 0 1k\nC1 out 0 1n\n.END\n"
-        t = _hold_lock_then_write(cir, peer_version, hold_s=0.4)
-
-        await handle_set_component_value(
-            {"path": cir.name, "reference": "R1", "value": "2k"}, state_no_sim
-        )
-        t.join(5)
-        text = cir.read_text()
-        assert "2k" in text, "our edit must survive"
-        assert "C1 out 0 1n" in text, "the peer session's edit must survive too"
-
-    async def test_asc_edit_waits_for_peer_and_keeps_both_edits(
-        self, asc_state: SessionState, asc_file: Path, work_dir: Path
-    ):
-        # Same scenario through the cached-AscEditor path: the editor fetch
-        # stats the file INSIDE the guard, so the peer's completed write
-        # forces a reload instead of saving a stale in-memory editor.
-        from ltspice_mcp.tools.circuit import handle_list_components
-
-        await handle_list_components({"path": asc_file.name}, asc_state)  # warm the cache
-        peer_version = asc_file.read_bytes() + b"TEXT -48 320 Left 2 ;external marker\n"  # noqa: ASYNC240
+        # The editor fetch and the revision check both run INSIDE the guard, so
+        # a peer's completed write is seen. Without that ordering our edit would
+        # read the pre-peer bytes, pass its own stale sha, and erase the peer's
+        # work; with it, the stale revision is refused and nothing is written.
+        sha_before = sha_of(asc_file)
+        peer_version = asc_file.read_bytes() + _PEER_MARKER  # noqa: ASYNC240
         t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
 
-        await handle_set_component_value(
-            {"path": asc_file.name, "reference": "R1", "value": "2k2"}, asc_state
+        data = await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k2"}],
+            expected_sha256=sha_before,
         )
         t.join(5)
-        data = asc_file.read_bytes()  # noqa: ASYNC240
-        assert b"2k2" in data, "our edit must survive"
-        assert b"external marker" in data, "the peer session's edit must survive too"
+        assert data["outcome"] == "failed"
+        assert data["error"]["code"] == "revision_conflict"
+        assert data["commit_state"] == "not_committed"
+        payload = asc_file.read_bytes()  # noqa: ASYNC240
+        assert _PEER_MARKER in payload, "the peer session's edit must survive"
+        assert b"2k2" not in payload, "a refused edit must write nothing"
+
+    async def test_asc_edit_on_the_peers_revision_keeps_both_edits(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # Same race, but the caller submits the peer's revision: our edit blocks
+        # on the lock, re-reads inside it, and lands on top of the peer's bytes.
+        peer_version = asc_file.read_bytes() + _PEER_MARKER  # noqa: ASYNC240
+        peer_sha = hashlib.sha256(peer_version).hexdigest()
+        t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
+
+        data = await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k2"}],
+            expected_sha256=peer_sha,
+        )
+        t.join(5)
+        assert data["outcome"] == "complete"
+        payload = asc_file.read_bytes()  # noqa: ASYNC240
+        assert b"2k2" in payload, "our edit must survive"
+        assert _PEER_MARKER in payload, "the peer session's edit must survive too"
 
     async def test_contended_lock_times_out_with_clear_error(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+        self, asc_state: SessionState, asc_file: Path, monkeypatch
     ):
-        import ltspice_mcp.tools._base as base_mod
+        import ltspice_mcp.lib.filelock as lock_mod
 
-        cir = work_dir / "busy.cir"
-        cir.write_text("* busy\nR1 in 0 1k\n.END\n")
         # Shrink the acquisition window so the test doesn't sit out the
         # full default timeout.
-        monkeypatch.setattr(base_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
-        t, release = _hold_lock_until_released(cir)
+        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
+        t, release = _hold_lock_until_released(asc_file)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
-                await handle_set_component_value(
-                    {"path": cir.name, "reference": "R1", "value": "2k"}, state_no_sim
+                await apply_ops(
+                    asc_state,
+                    asc_file.name,
+                    [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
                 )
         finally:
             release.set()
             t.join(5)
 
     async def test_pin_geometry_resolved_under_the_lock(
-        self, asc_state: SessionState, asc_file: Path, work_dir: Path
+        self, asc_state: SessionState, asc_file: Path
     ):
-        # A peer session moves R1 while holding the lock. Our add_net_label
-        # by pin reference must resolve R1's position AFTER acquiring the
-        # lock (post-move), not from the editor cached before it — otherwise
-        # the label lands at the old, now-empty coordinate.
-        from ltspice_mcp.tools.circuit import (
-            NetLabelInput,
-            _get_asc_editor,
-            _resolve_pin,
-            handle_add_net_label,
-            handle_list_components,
-        )
-
-        await handle_list_components({"path": asc_file.name}, asc_state)  # warm the cache
+        # A peer session moves R1 while holding the lock. Our add_net_label by
+        # pin reference must resolve R1's position AFTER acquiring the lock
+        # (post-move), not from the editor cached before it — otherwise the
+        # label lands at the old, now-empty coordinate.
         original = asc_file.read_bytes()  # noqa: ASYNC240
         moved = original.replace(b"SYMBOL res 128 112 R90", b"SYMBOL res 128 240 R90")
         assert moved != original, "fixture layout changed — update the SYMBOL line above"
+        moved_sha = hashlib.sha256(moved).hexdigest()
         t = _hold_lock_then_write(asc_file, moved, hold_s=0.4)
 
-        await handle_add_net_label(
-            NetLabelInput(path=asc_file.name, net="probe", pin="R1.1"), asc_state
+        data = await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "add_net_label", "net": "probe", "pin": "R1.1"}],
+            expected_sha256=moved_sha,
         )
         t.join(5)
-        x, y = _resolve_pin("R1.1", _get_asc_editor(asc_file, asc_state))
+        assert data["outcome"] == "complete"
+        x, y = resolve_pin("R1.1", get_asc_editor(asc_file, asc_state))
         text = asc_file.read_text(errors="replace")  # noqa: ASYNC240
         assert f"FLAG {x} {y} probe" in text, "label must sit at R1's post-move pin position"
 
@@ -172,10 +188,10 @@ class TestCircuitFileLock:
         # LTspice's export overwrites the sibling .net; a peer session editing
         # that .net holds ITS file lock, so the export guard must contend on
         # the .net lock too — not just the .asc.
-        import ltspice_mcp.tools._base as base_mod
-        from ltspice_mcp.tools._base import asc_export_lock
+        import ltspice_mcp.lib.filelock as lock_mod
+        from ltspice_mcp.lib.deck_prep import asc_export_lock
 
-        monkeypatch.setattr(base_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
+        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
         t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
@@ -186,19 +202,58 @@ class TestCircuitFileLock:
             t.join(5)
 
     async def test_lock_file_lives_in_sidecar_dir_not_next_to_circuit(
-        self, state_no_sim: SessionState, work_dir: Path
+        self, asc_state: SessionState, asc_file: Path, work_dir: Path
     ):
-        cir = work_dir / "tidy.cir"
-        cir.write_text("* tidy\nR1 in 0 1k\n.END\n")
-        await handle_set_component_value(
-            {"path": cir.name, "reference": "R1", "value": "2k"}, state_no_sim
+        await apply_ops(
+            asc_state,
+            asc_file.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
         )
-        assert (work_dir / ".ltspice-mcp" / "locks" / "tidy.cir.lock").exists()
-        assert not (work_dir / "tidy.cir.lock").exists()
+        assert (work_dir / ".ltspice-mcp" / "locks" / f"{asc_file.name}.lock").exists()
+        assert not (work_dir / f"{asc_file.name}.lock").exists()
 
 
-def _make_running_job(work_dir: Path, job_id: str, pid: int) -> SimulationJob:
-    return make_sim_job(job_id, status="running", netlist=work_dir / "deck.cir", owner_pid=pid)
+def _running_experiment(work_dir: Path, job_id: str, pid: int) -> ExperimentJob:
+    """A running experiment recorded as owned by ``pid``."""
+    circuit = work_dir / "deck.cir"
+    if not circuit.exists():
+        circuit.write_text(".op\n.end\n", encoding="utf-8")
+    job = ExperimentJob(
+        job_id=job_id,
+        request_id=f"request-{job_id}",
+        fingerprint="f" * 64,
+        canonicalizer_version=1,
+        control_token="control-secret",
+        store_path=Store(work_dir).job_record(job_id),
+        cases=[
+            ExperimentCase(
+                case_id="case_0000",
+                run_index=0,
+                circuit="dut",
+                circuit_path=circuit,
+                staged_deck=circuit,
+                deck_sha256="a" * 64,
+                assignments={},
+                status="queued",
+            )
+        ],
+        sources=[
+            SourceRecord(
+                circuit="dut",
+                path=circuit,
+                sha256="b" * 64,
+                staged_deck=circuit,
+                manifest=[],
+                simulator="FakeSim",
+                dialect="ltspice",
+            )
+        ],
+        simulator="FakeSim",
+        completeness=Completeness(declared=1, expanded=1),
+        status="running",
+    )
+    job.owner_pid = pid
+    return job
 
 
 @pytest.fixture(scope="module")
@@ -216,136 +271,90 @@ def live_peer_pid():
 
 class TestOwnerPidLiveness:
     def test_running_job_with_live_owner_stays_running(self, work_dir: Path, live_peer_pid: int):
-        job = _make_running_job(work_dir, "sim_1_livepeer", live_peer_pid)
-        job_store.save_job(job)
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert len(sim_jobs) == 1
-        assert sim_jobs[0].status == "running"
-        assert sim_jobs[0].owner_pid == live_peer_pid
-        assert sim_jobs[0].error is None
+        job = _running_experiment(work_dir, "exp_livepeer", live_peer_pid)
+        experiment_store.save_job(job)
+
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+        assert loaded is not None
+        assert loaded.status == "running"
+        assert loaded.owner_pid == live_peer_pid
 
     def test_running_job_with_dead_owner_loads_interrupted(self, work_dir: Path):
         proc = subprocess.Popen([sys.executable, "-c", "pass"])
         proc.wait()  # pid is now dead
-        job = _make_running_job(work_dir, "sim_1_deadpeer", proc.pid)
-        job_store.save_job(job)
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert sim_jobs[0].status == "interrupted"
+        job = _running_experiment(work_dir, "exp_deadpeer", proc.pid)
+        experiment_store.save_job(job)
 
-    def test_running_record_without_pid_loads_interrupted(self, work_dir: Path):
-        # Records from builds that predate the pid field: no liveness signal,
-        # so the pre-pid behavior (interrupted) stands.
-        job = _make_running_job(work_dir, "sim_1_legacy", os.getpid())
-        data = job_store.serialize_job(job)
-        del data["pid"]
-        target = job_store.sidecar_dir(job.netlist) / f"{job.job_id}.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        import json
-
-        target.write_text(json.dumps(data, default=str))
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert sim_jobs[0].status == "interrupted"
-        assert sim_jobs[0].owner_pid == 0
-
-    def test_own_pid_in_record_counts_as_dead(self, work_dir: Path):
-        # A record carrying OUR pid can't be ours (it isn't in our registry),
-        # so it must be a recycled pid — treated as a dead owner.
-        job = _make_running_job(work_dir, "sim_1_recycled", os.getpid())
-        job_store.save_job(job)
-        sim_jobs, _ = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert sim_jobs[0].status == "interrupted"
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+        assert loaded is not None
+        assert loaded.status == "interrupted"
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_only_own_jobs(self, work_dir: Path, live_peer_pid: int):
-        registry = JobRegistry(persist_enabled=False)
-        own = _make_running_job(work_dir, "sim_1_own", os.getpid())
-        foreign = _make_running_job(work_dir, "sim_1_foreign", live_peer_pid)
+        registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
+        own = _running_experiment(work_dir, "exp_own", os.getpid())
+        foreign = _running_experiment(work_dir, "exp_foreign", live_peer_pid)
         registry.jobs[own.job_id] = own
         registry.jobs[foreign.job_id] = foreign
 
         cancelled: list[str] = []
 
         class _StubRunners:
-            def get_existing_sim_runner(self, simulator=None):
+            def get_experiment_runner_for(self, job):
                 return self
 
-            async def cancel(self, job, state):
+            async def cancel(self, job, **kwargs):
                 cancelled.append(job.job_id)
+                job.status = "cancelled"
+                job.done_event.set()
+                return []
 
         await registry.cancel_running(_StubRunners(), None)
-        assert cancelled == ["sim_1_own"]
+        assert cancelled == ["exp_own"]
         assert foreign.status == "running", "a parallel session's live job must be left alone"
 
-    @pytest.mark.asyncio
-    async def test_refresh_foreign_job_picks_up_owner_completion(
+    def test_refresh_foreign_job_picks_up_owner_completion(
         self, work_dir: Path, live_peer_pid: int
     ):
-        # Async test: the registry swap is loop-only, so this runs on a loop.
-        registry = JobRegistry(persist_enabled=True)
-        stale = _make_running_job(work_dir, "sim_1_refresh", live_peer_pid)
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        stale = _running_experiment(work_dir, "exp_refresh", live_peer_pid)
         registry.jobs[stale.job_id] = stale
         # The owner finishes the job and persists the terminal state.
-        done = _make_running_job(work_dir, "sim_1_refresh", live_peer_pid)
+        done = _running_experiment(work_dir, "exp_refresh", live_peer_pid)
         done.status = "completed"
-        done.completed_at = now()
-        job_store.save_job(done)
+        done.cases[0].status = "produced"
+        done.completeness.produced = 1
+        experiment_store.save_job(done)
 
         fresh = registry.refresh_foreign_job(stale)
         assert fresh.status == "completed"
-        assert registry.jobs["sim_1_refresh"] is fresh
+        # Off the loop (the worker-thread situation a resource read runs in):
+        # the caller gets the owner's latest state, but the loop-owned registry
+        # must not be mutated from a thread.
+        assert registry.jobs["exp_refresh"] is stale
 
-    async def test_refresh_foreign_job_async_matches_sync(
+    @pytest.mark.asyncio
+    async def test_refresh_on_the_loop_swaps_the_registry_entry(
         self, work_dir: Path, live_peer_pid: int
     ):
-        # The async variant offloads the sidecar read (loop-freeze fix) but must
-        # produce the same result + registry swap as the sync path on a loop.
-        registry = JobRegistry(persist_enabled=True)
-        stale = _make_running_job(work_dir, "sim_1_async_refresh", live_peer_pid)
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        stale = _running_experiment(work_dir, "exp_async_refresh", live_peer_pid)
         registry.jobs[stale.job_id] = stale
-        done = _make_running_job(work_dir, "sim_1_async_refresh", live_peer_pid)
+        done = _running_experiment(work_dir, "exp_async_refresh", live_peer_pid)
         done.status = "completed"
-        done.completed_at = now()
-        job_store.save_job(done)
+        done.cases[0].status = "produced"
+        done.completeness.produced = 1
+        experiment_store.save_job(done)
 
         fresh = await registry.refresh_foreign_job_async(stale)
         assert fresh.status == "completed"
-        assert registry.jobs["sim_1_async_refresh"] is fresh
-
-    def test_refresh_off_loop_returns_fresh_without_registry_swap(
-        self, work_dir: Path, live_peer_pid: int
-    ):
-        # Sync test = no running loop, the worker-thread situation (resource
-        # reads run there). The caller still gets the owner's latest state,
-        # but the loop-owned registry must not be mutated off-loop.
-        registry = JobRegistry(persist_enabled=True)
-        stale = _make_running_job(work_dir, "sim_1_threadview", live_peer_pid)
-        registry.jobs[stale.job_id] = stale
-        done = _make_running_job(work_dir, "sim_1_threadview", live_peer_pid)
-        done.status = "completed"
-        done.completed_at = now()
-        job_store.save_job(done)
-
-        fresh = registry.refresh_foreign_job(stale)
-        assert fresh.status == "completed"
-        assert registry.jobs["sim_1_threadview"] is stale
+        assert registry.jobs["exp_async_refresh"] is fresh
 
     def test_refresh_foreign_job_leaves_own_jobs_alone(self, work_dir: Path):
-        registry = JobRegistry(persist_enabled=True)
-        own = _make_running_job(work_dir, "sim_1_mine", os.getpid())
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        own = _running_experiment(work_dir, "exp_mine", os.getpid())
         registry.jobs[own.job_id] = own
         assert registry.refresh_foreign_job(own) is own
-
-    def test_batch_jobs_roundtrip_owner_pid(self, work_dir: Path, live_peer_pid: int):
-        bj = make_batch_job(
-            "sweep_1_peer",
-            status="running",
-            netlist=work_dir / "deck.cir",
-            owner_pid=live_peer_pid,
-        )
-        job_store.save_job(bj)
-        _, batch_jobs = job_store.load_jobs_for_circuit(work_dir / "deck.cir")
-        assert batch_jobs[0].status == "running"
-        assert batch_jobs[0].owner_pid == live_peer_pid
 
 
 class _FakeProc:
@@ -401,6 +410,29 @@ class TestScopedKill:
         assert not longer_id.killed, "a different job whose id extends ours must be spared"
         assert own_single.killed
         assert own_subrun.killed
+
+    def test_stemmed_id_kills_its_own_case_runs(self, monkeypatch):
+        # Experiment ids carry the deck's name; the token must still match the
+        # per-case run files staged as {job_id}_case_{n}.
+        token = generate_id("exp", "RC Filter.v2")
+        own_case = _FakeProc(501, "ngspice", ["ngspice", "-b", f"/runs/{token}_case_2.net"])
+        self._iter(monkeypatch, [own_case])
+
+        assert kill_simulator_by_token(token, {"ngspice"}) == 1
+        assert own_case.killed
+
+    def test_a_deck_named_after_an_older_job_id_does_not_cross_match(self, monkeypatch):
+        # The adversarial stem: a deck named after an artifact of an earlier
+        # job, so the older id appears verbatim inside the newer one. Folding
+        # the stem's underscores away is what keeps the older job's cancel from
+        # killing the newer job's simulator.
+        older = generate_id("exp", "amp")
+        newer = generate_id("exp", older)
+        victim = _FakeProc(502, "ngspice", ["ngspice", "-b", f"/runs/{newer}_case_0.net"])
+        self._iter(monkeypatch, [victim])
+
+        assert kill_simulator_by_token(older, {"ngspice"}) == 0
+        assert not victim.killed, "a later job whose deck was named after this id must be spared"
 
     def test_vanished_process_is_skipped(self, monkeypatch):
         token = "sim_1751000000_feedf00d"

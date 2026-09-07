@@ -10,13 +10,12 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from importlib.resources import files
 from typing import Any
 from urllib.parse import quote, unquote
 
 from mcp import types
-from pydantic import AnyUrl
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
 from ltspice_mcp.lib.encoding import read_spice_text
@@ -26,7 +25,7 @@ from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
     build_widget_html,
 )
-from ltspice_mcp.state import SessionState, SimulationJob
+from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +58,11 @@ class ResourceRouter:
     def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
         """Dispatch a URI to the first matching route.
 
-        Captured template params are percent-decoded: the SDK validates
-        resources/read URIs as AnyUrl, which percent-encodes spaces and
-        non-ASCII on ingest ("rc filter.cir" arrives as "rc%20filter.cir"),
-        so the raw capture would never match a real filename on disk.
+        Captured template params are percent-decoded: a client that encodes
+        spaces and non-ASCII sends "rc filter.cir" as "rc%20filter.cir", and
+        the raw capture would never match a real filename on disk. A client
+        that sends the name unencoded is unaffected — decoding a string with
+        nothing to decode returns it unchanged.
         """
         for route in self._routes:
             match = route.pattern.fullmatch(uri_str)
@@ -98,51 +98,54 @@ def get_static_resources() -> list[types.Resource]:
     return [
         types.Resource(
             name="netlists",
-            uri=AnyUrl("spice://netlists/"),
+            uri="spice://netlists/",
             description="List of netlist files in the working directory",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="results",
-            uri=AnyUrl("spice://results/"),
+            uri="spice://results/",
             description="List of all simulation jobs and their status",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="models",
-            uri=AnyUrl("spice://models/"),
+            uri="spice://models/",
             description="User-loaded SPICE model libraries and their models",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="config",
-            uri=AnyUrl("spice://config"),
+            uri="spice://config",
             description="Server configuration and detected simulators",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="plot_widget",
-            uri=AnyUrl(WIDGET_RESOURCE_URI),
+            uri=WIDGET_RESOURCE_URI,
             description=(
                 "Interactive chart renderer (MCP Apps / SEP-1865). plot_waveform "
                 "references this via _meta.ui.resourceUri; an apps-capable host "
                 "fetches it and renders the chart inline."
             ),
-            mimeType=WIDGET_MIME_TYPE,
+            mime_type=WIDGET_MIME_TYPE,
         ),
         types.Resource(
             name="recent",
-            uri=AnyUrl("spice://recent"),
+            uri="spice://recent",
             description=(
                 "Recently-edited circuit files with persisted-job summary counts. "
-                "Surfaces work from prior sessions, including interrupted jobs."
+                "The file list spans every directory worked in; the counts come "
+                "from this working directory's store, so a circuit last run "
+                "elsewhere reports none. Surfaces work from prior sessions, "
+                "including interrupted jobs."
             ),
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="guide",
-            uri=AnyUrl("spice://guide"),
-            mimeType="text/markdown",
+            uri="spice://guide",
+            mime_type="text/markdown",
             description=(
                 "SPICE authoring & schematic guide (LTspice + ngspice): syntax, value "
                 "notation (M=milli), waveform sources, .meas, behavioral sources, "
@@ -159,21 +162,21 @@ def get_resource_templates() -> list[types.ResourceTemplate]:
     return [
         types.ResourceTemplate(
             name="netlist_content",
-            uriTemplate="spice://netlists/{filename}",
+            uri_template="spice://netlists/{filename}",
             description="Full text content of a specific netlist file",
-            mimeType="text/plain",
+            mime_type="text/plain",
         ),
         types.ResourceTemplate(
             name="job_signals",
-            uriTemplate="spice://results/{job_id}/signals",
+            uri_template="spice://results/{job_id}/signals",
             description="List of signal/trace names in a simulation result",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.ResourceTemplate(
             name="job_measurements",
-            uriTemplate="spice://results/{job_id}/measurements",
+            uri_template="spice://results/{job_id}/measurements",
             description="SPICE .MEAS measurement results for a simulation",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
     ]
 
@@ -201,9 +204,9 @@ def _make_result(
     return types.ReadResourceResult(
         contents=[
             types.TextResourceContents(
-                uri=AnyUrl(uri_str),
+                uri=uri_str,
                 text=text,
-                mimeType=mime,
+                mime_type=mime,
             )
         ]
     )
@@ -222,9 +225,9 @@ def _read_plot_widget(
     return _make_result(uri_str, build_widget_html(), mime=WIDGET_MIME_TYPE)
 
 
-@lru_cache(maxsize=1)
+@cache
 def _guide_text() -> str:
-    """Read the packaged guide once; it is immutable for the process lifetime."""
+    """Read the packaged guide once; it is immutable for the process."""
     return (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
 
 
@@ -268,9 +271,9 @@ def _read_netlists_list(
     """List all netlist files in the working directory."""
     del params
     working_dir = state.working_dir
-    # quote(): a listed URI must round-trip through the client's AnyUrl
-    # normalization and back through dispatch's unquote — a raw space or 'µ'
-    # here would list a resource the read path can never serve.
+    # quote(): a listed URI must survive whatever normalization a client
+    # applies to it and come back through dispatch's unquote — a raw space or
+    # 'µ' here would list a resource the read path can never serve.
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
         for f in working_dir.iterdir()
@@ -296,7 +299,7 @@ def _read_netlist_content(
     Decodes via ``read_spice_text`` — the same BOM-sniffing/UTF-16/cp1252
     path every tool-side netlist read uses (LTspice writes UTF-16 LE
     artifacts; a hard-coded utf-8 read returned NUL-riddled mojibake for
-    them, diverging from what read_circuit shows for the same file).
+    them, diverging from what the tool-side reads show for the same file).
     """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.config.allowed_paths)
@@ -304,8 +307,8 @@ def _read_netlist_content(
         allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
         raise ValueError(
             f"Not a netlist file: {filename!r}. This resource serves netlist "
-            f"text ({allowed}); simulation artifacts are read via their tools "
-            "(get_waveform / simulation_summary), not as text resources."
+            f"text ({allowed}); simulation artifacts are read via analyze_results "
+            "(waveform / summary recipes), not as text resources."
         )
     try:
         size = resolved.stat().st_size
@@ -327,7 +330,7 @@ def _read_netlist_content(
 def _read_results_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List all simulation and batch jobs with their status."""
+    """List experiment jobs, and the records earlier releases left behind."""
     del params
     items: list[dict] = []
 
@@ -335,46 +338,55 @@ def _read_results_list(
     # run on a worker thread, where the refresh returns fresh views without
     # touching the loop-owned registry.)
     for job in state.job_registry.refreshed_jobs():
-        if isinstance(job, SimulationJob):
-            items.append(
-                {
-                    "job_id": job.job_id,
-                    "type": "simulation",
-                    "netlist": job.netlist.name,
-                    "simulator": job.simulator,
-                    "status": job.status,
-                    "started_at": job.started_at.isoformat() if job.started_at else None,
-                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
-                }
-            )
-        else:
-            items.append(
-                {
-                    "job_id": job.job_id,
-                    "type": job.job_type,
-                    "netlist": job.netlist.name,
-                    "status": job.status,
-                    "total_runs": job.total_runs,
-                    "completed_runs": job.completed_runs,
-                    "failed_runs": job.failed_runs,
-                    "started_at": (job.started_at.isoformat() if job.started_at else None),
-                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
-                }
-            )
+        items.append(
+            {
+                "job_id": job.job_id,
+                "type": "experiment",
+                "sources": [str(source.path) for source in job.sources],
+                "status": job.status,
+                "completeness": {
+                    "declared": job.completeness.declared,
+                    "expanded": job.completeness.expanded,
+                    "submitted": job.completeness.submitted,
+                    "produced": job.completeness.produced,
+                    "failed": job.completeness.failed,
+                    "cancelled": job.completeness.cancelled,
+                    "skipped": job.completeness.skipped,
+                },
+                "started_at": job.started_at.isoformat(),
+                "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
+            }
+        )
 
     items.sort(key=lambda x: x.get("started_at") or "", reverse=True)
     data = {"jobs": items, "count": len(items)}
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
+def _per_run_read_pointer(job_id: str, state: SessionState) -> str:
+    """Why a per-job read has to go somewhere else, for this job.
+
+    Both per-job result routes addressed a single run by job id. Every job is
+    an experiment, and an experiment's runs are case-addressed, so the read
+    goes to the tool that takes a case.
+    """
+    # Resolved and discarded: it raises JobNotFoundError for an id that names
+    # nothing, so an unknown job never gets the authoritative-sounding answer
+    # below.
+    services.resolve_job(job_id, state)
+    return (
+        f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
+        "with analyze_results (job_id plus run_index or case_id)."
+    )
+
+
 @_router.route("spice://results/{job_id}/signals")
 def _read_signals(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List signal/trace names from a completed simulation's .raw file."""
+    """Explain where a job's trace names are read from."""
     job_id = params["job_id"]
-    signal_names = services.load_signal_names(job_id, state)
-    data = {"job_id": job_id, "signals": signal_names}
+    data = {"job_id": job_id, "signals": [], "note": _per_run_read_pointer(job_id, state)}
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
@@ -382,12 +394,13 @@ def _read_signals(
 def _read_measurements(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Return .MEAS measurement results from a completed simulation's log file."""
+    """Explain where a job's .MEAS results are read from."""
     job_id = params["job_id"]
-    meas_data = services.load_measurements(job_id, state, include_log_text=True)
-    data: dict[str, Any] = {"job_id": job_id, "measurements": meas_data["measurements"]}
-    if "log_text" in meas_data:
-        data["log_text"] = meas_data["log_text"]
+    data: dict[str, Any] = {
+        "job_id": job_id,
+        "measurements": {},
+        "note": _per_run_read_pointer(job_id, state),
+    }
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
@@ -396,13 +409,13 @@ def _read_recent(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Summary of recently-touched circuits + persisted job counts per circuit."""
-    del params, state  # state is unused; recent.json is user-global
-    circuits = services.collect_recent_circuits()
+    del params  # recent.json is user-global; the job counts are this store's
+    circuits = services.collect_recent_circuits(state.working_dir)
     data = {
         "circuits": circuits,
         "count": len(circuits),
         "note": (
-            "Use check_job(job_id) or batch_results(job_id) to inspect "
+            'Use jobs (action:"status" or "runs") with a job_id to inspect '
             "a specific job; interrupted jobs were running when the server last stopped."
         ),
     }
@@ -431,6 +444,9 @@ def _read_models(
 
     data = {
         "libraries": libraries,
-        "note": ("Use find_model(include_builtin=true) to find models in built-in libraries."),
+        "note": (
+            'Use inspect with a model query (kind:"model", mode:"search") to '
+            "fuzzy-match a part name against these libraries."
+        ),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))

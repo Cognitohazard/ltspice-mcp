@@ -6,377 +6,835 @@ project will adopt [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches `1.0.0`. Until then, minor versions may contain breaking
 tool-surface changes.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-06
+
+One engine behind two interfaces. The MCP surface is eight tools in place of
+the 49-tool and 41-tool profiles: six operations arranged over execute,
+understand and author, the waveform widget, and a Python snippet runner. The
+same six operations are importable in-process as `ltspice_mcp.api.Api`, with
+complete results where the wire pages. Every job is one durable experiment
+across declared variations; every result is a typed recipe; every schematic
+edit is a transactional batch. This release breaks the 0.5 tool names; the
+first section says where each one went.
+
+### Breaking: one tool surface replaces the `full` and `agentic` profiles
+
+The `full` (49-tool) and `agentic` (41-tool) MCP tool profiles are gone. The
+server now advertises eight tools:
+
+|Tool|What it does|
+|-|-|
+|`run_experiments`|Stage decks, expand declared variations (sweeps, corners, Monte Carlo), and run them as one durable job|
+|`jobs`|Job lifecycle by `job_id` or `request_id`: `status`, `wait` (long-poll), `cancel`, `runs` (per-run pages), and `list` (recent circuits and their job counts)|
+|`analyze_results`|Typed measurement recipes over finished runs and `.raw` files, with reductions, group splits, and spec verdicts|
+|`inspect`|Read-only lookups: `capabilities`, `symbols`, `symbol`, `net`, `components`, `model`, `reference`|
+|`edit_schematic`|A transactional, revision-guarded batch of typed ops on one `.asc` sheet|
+|`verify_circuit`|Lint, symbol and pin resolution, netlist export, layout and quality checks, comparison against a reference, optional rendering|
+|`plot_waveform`|An interactive HTML chart of a run, for a person to look at|
+|`run_code`|A Python snippet run in a worker process that holds the engine as `api`, for loops over runs and numpy on samples; on by default, `[tools] run_code = false` removes it|
+
+The same six operations are importable in-process as
+`from ltspice_mcp.api import Api` — one engine, two interfaces.
+
+**How to keep the old tools.** Pin `ltspice-mcp==0.5.*`.
+
+**What happens if you don't change your config.** `[tools] profile` is not a
+recognized key any more. A config that still sets it — to `"full"`,
+`"agentic"`, or anything else — loads with the key ignored, like any other
+key the server does not read, and the server starts normally with the eight
+tools.
+
+**Where each old tool went.**
+
+|Old tools|Now|
+|-|-|
+|`run_simulation`, `configure_sweep`, `run_sweep`, `configure_montecarlo`, `run_montecarlo`|`run_experiments`|
+|`check_job`, `cancel_job`, `batch_results`, `recent`|`jobs`|
+|`simulation_summary`, `measurement_stats`, `query_value`, `signal_stats`, `get_waveform`, `export_waveform`, `edge_metrics`, `timing_between`, `periodic_metrics`, `transient_response`, `thd`, `bode_metrics`, `stability_metrics`, `resonance`, `return_loss`, `ac_structure`, `noise_integral`, `operating_point`|`analyze_results` recipes, one per `metric`|
+|`server_status`, `symbol_info`, `component_info`, `trace_net`, `list_components`, `find_model`|`inspect` kinds|
+|`create_schematic`, `apply_schematic_ops`, `wire_pins`|`edit_schematic` (a blank sheet is `base: "blank"`; wiring is the `wire_pins` op)|
+|`export_netlist`, `validate_netlist`, `diff_circuit`|`verify_circuit` checks|
+
+CSV waveform export is the `waveform` recipe with `format: "csv"`, which writes
+every sample to a file and returns its path.
 
 ### Added
 
-- `run_simulation(simulator=)` — per-run simulator selection by detected name
-  (`'ltspice'`, `'ngspice'`, ...), so one deck can be cross-checked on a second
-  engine without changing config. Runners are now cached per (kind, simulator,
-  output folder) so a second engine's runner doesn't evict the first's
-  in-flight concurrency/cancel state, and cancel resolves the runner by the
-  job's own recorded simulator. Result reads follow the job too: the raw
-  dialect comes from the simulator the job actually ran on — not the session
-  default — for the inline result, `check_job`, and every job-addressed
-  analysis tool, so an ngspice run under an LTspice default parses correctly
-  (and vice versa).
-- Fast runs return results inline on the default path: `run_simulation` now
-  waits a short grace window (10 s) for completion before handing back a job
-  id, so sub-second `.op`/`.ac` runs no longer force a `check_job` round-trip.
-  (The configured timeout is still enforced by the deadline watchdog.)
-- Log-only completions: a clean simulator exit that wrote results only to the
-  log (e.g. an ngspice `.control` script) now reports `completed` with the
-  log-parsed measurements and a `no_raw_output` coverage observation, instead
-  of "Simulation failed (no output generated)". No-raw runs whose log carries
-  errors still report failed.
-- `.asc` schematics now run on ngspice: the LTspice netlist export is
-  sanitized for an ngspice target — the exporter's `.backanno` (an
-  LTspice-only dot command ngspice aborts on) is stripped, and `µ` suffixes /
-  `§` name prefixes are translated. The scrub is written to its own
-  `{name}.ngspice.net` sidecar rather than rewriting the shared `.net`, so
-  concurrent LTspice- and ngspice-target runs of one schematic can't hand
-  each other the wrong deck.
-- `timing_between` aggregates over ALL sequential edge pairs — `pair_count`,
-  `delay_min`/`delay_max`/`delay_mean` and the times of the extremes — for
-  dead-time / minimum-off audits across a pulse train (previously only the
-  first crossing pair was measured).
-- Windowed-transient time axes are rebased to deck time: LTspice stores
+- The Python API. `from ltspice_mcp.api import Api` boots the same engine
+  in-process on a working directory and exposes the six operations as
+  synchronous methods with complete results where the wire pages or caps,
+  plus `load_raw` and `measurements` for numpy access to a run and the AC and
+  transient metric functions under their existing names. It reads and writes
+  the same job records as a server in the same directory, so the two can run
+  side by side; a job belongs to the process that submitted it and `close()`
+  cancels what it owns, exactly like server shutdown. `__all__` is the
+  stability boundary and is pinned. The full contract is
+  `docs/design/python_api.md`.
+- `run_experiments` runs one experiment across declared variations — strict
+  assignments plus one random or Monte Carlo dimension — as a single durable
+  job. `request_id` is optional: omit it and a fresh id is generated and echoed
+  on the receipt; pass your own to make submission idempotent, so a retry with
+  the same id, the same arguments, and unchanged source decks replays the
+  existing receipt instead of running anything again.
+- A `run_experiments` call dwells up to `execution.wait_s` (default 60 s,
+  maximum 120 s) and returns the results inline when the job finishes in that
+  time. Otherwise it returns a receipt with a `job_id` and the job keeps
+  running; follow it with `jobs(action="wait")`. `wait_s: 0` returns
+  immediately.
+- `run_experiments` takes a per-run simulator (`execution.simulator`:
+  `"ltspice"` or `"ngspice"`), so one deck can be cross-checked on a second
+  engine without changing config. Runners are cached per (kind, simulator,
+  output folder), so a second engine's runner does not evict the first's
+  in-flight concurrency and cancel state, and a cancel resolves the runner by
+  the job's own recorded simulator. Result reads follow the job too: the raw
+  dialect comes from the simulator the job actually ran on, not the session
+  default, so an ngspice run under an LTspice default parses correctly and the
+  other way round.
+- `Api.run_experiments(wait=False, detach=True)` hands the job to a small
+  owner process that outlives the caller: the caller validates the request,
+  the owner submits, supervises the job to a terminal status, and exits. The
+  caller's `close()` leaves a detached job alone; `jobs(action="cancel")`
+  from any process stops it through the existing foreign-owner path; a
+  running server sees it as another session's live job. The receipt names
+  the owner's pid and log file. Requires `[state] persist_jobs`.
+
+- A `run_code` tool, on by default (`[tools] run_code`,
+  `LTSPICE_MCP_RUN_CODE`): it runs a Python snippet in a warm worker process
+  that holds the engine as `api` (the same six ops as methods, complete
+  results, plus `np`, `load_raw`, `measurements`, `reference`), for loops over
+  runs and numpy on samples. Each call is a fresh namespace around the same
+  live engine; `timeout_s` (default 60, max 600) interrupts the snippet and
+  cancels a run it waits on; a second call during one is answered `busy`;
+  `reset` replaces the worker. Output is capped and says what it dropped. The
+  snippet runs with the server process's own file and process authority, not
+  the sandbox: permission it in the client the way you would a shell, and set
+  `run_code = false` when the server is reachable by more than one trusted
+  client, for example through a proxy. The capabilities report names the key
+  (`python_api.run_code`), the reference table lists the tool only on a
+  session that serves it, and the registration itself declares the gate, so
+  the served surface, the reference table, the capabilities entry and the
+  instructions all derive from that one declaration.
+- `[tools] listing` (env `LTSPICE_MCP_TOOL_LISTING`) selects how much of each
+  tool definition the tool list carries. `compact`, the default, advertises
+  the same tools and the same schemas with every per-argument description
+  removed: structure, enums, defaults, `required` and `$defs` are intact, so a
+  client can still build a valid call, and the server validates and answers
+  exactly as before. It takes roughly 45% off what a session loads before it
+  can call anything; descriptions are read on demand through
+  `inspect(kind: "reference")` and carried on every validation error. Measured
+  on the same day against `full`: the same answers at the same design
+  quality, one listing-caused mismatch in 22 requests. `full` puts every
+  description back on the wire. Both listings are static.
+- `inspect(kind="reference")`: a searchable lookup over the tools' own
+  vocabulary — each tool's top-level arguments, plus the branches (analysis
+  recipes, schematic ops, variation kinds, query kinds, checks and job
+  actions). A plain-words `query` ("phase margin", "connect two pins") returns
+  the closest entries with their fields, types, defaults, bounds and units, and
+  an argument name ("all_steps", "expected_sha256") reaches its tool's own
+  table; with no `query` it returns the table of contents. `limit` defaults to
+  5 and caps at 20. The index is built from the same input models the wire
+  validates against, so nothing callable can be missing from it. It is the
+  route to any argument's meaning on the `compact` tool listing, where
+  per-argument descriptions are not published.
+- `inspect(kind: "capabilities")` reports the Python API under `python_api`:
+  the import line, the session call on this working directory, and where an
+  op's arguments are read (`api.reference`, `help`, `inspect.signature`).
+- `inspect(kind="capabilities")` reports `diagnostics`: the startup notes (a
+  bad configured simulator path, a requested engine that fell back, WSL
+  auto-detection) that say whether the server started degraded. They were
+  written only to the server's own log.
+
+- `inspect(kind: "capabilities")` reports the effective ngspice compatibility
+  mode (`ngbehavior`), so a command-line ngspice run that fails differently can
+  be compared with the server's setting.
+- `inspect(kind: "capabilities")` also returns `config_path` and lists every
+  known-but-undetected simulator with a remediation naming the exact config key
+  (`simulator.path`), the environment variable, the config file, a
+  platform-appropriate example executable path, and the restart requirement. The
+  text is built from the same constants the config loader reads, so it cannot
+  name a key that does not exist. When a non-empty `simulator.enabled` allowlist
+  is the reason an engine is off, the remediation says that instead of pointing
+  at an install. The WSL no-simulator error now names `simulator.path` alongside
+  the environment variable.
+- `inspect(kind: "capabilities")` gains a `python` block — executable, install
+  kind, whether the interpreter path is ephemeral, package location — so a
+  caller can check that environment before switching to the in-process API. The
+  server instructions carry a one-line pointer
+  (`from ltspice_mcp.api import Api`), and a finished `run_experiments` receipt
+  that expanded ten or more cases points at the in-process API in its `hint`,
+  because per-call overhead adds up over a loop of many cases.
+- `verify_circuit`'s render block carries `source_sha256`, the digest of the
+  sheet it drew. Rendering reads the file on disk, so a peer that committed
+  between `edit_schematic` returning and this call running was invisible:
+  the block's `sha256` is the image's and the export block's is the netlist's.
+  Compare `source_sha256` with the `sha256` `edit_schematic` returned to know
+  the picture is of the revision you wrote.
+- `verify_circuit`'s `quality` check runs on a `.cir`/`.net`/`.sp` netlist,
+  not only on a schematic. Three connectivity rules that had been written but
+  never called report as findings: a node wired to a single element terminal
+  (`dangling_node`, an observation — a bias fragment or a test stub leaves
+  nodes open on purpose), a `V(...)`/`I(...)` reference in a directive naming
+  something no element declares (`undefined_reference`, a warning — the
+  unlabelled net that exports as `N00x` while the `.meas` still asks for
+  `V(vref)` and measures nothing), and a net with two or more terminals that
+  reaches ground through no DC-conductive element (`floating_net`, a warning —
+  its operating point is undefined). The default check set for a netlist is
+  `syntax` and `quality`; pass `checks` to narrow it.
+- A run that fails because the simulator could not open an `.include` or
+  `.lib` reports the failure code `missing_include` instead of the generic
+  `execution_failed`, with the file it could not find as evidence. When that
+  deck selects a `.lib` section and the run was ngspice in an LTspice or
+  PSPICE compatibility `ngbehavior`, the code is `ngspice_lib_section` and the
+  receipt's hint names the fix: `[simulator] ngbehavior = "hsa"` (or
+  `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart, or `set ngbehavior=hsa` in a
+  `.spiceinit` in the run directory. Those modes read `.lib <file> <section>`
+  — the standard PDK corner idiom — as two plain includes and drop the
+  section, so the corner select came back as a missing file with nothing
+  pointing at the cause.
+
+- Every tool carries a display title, the short label a client shows a person
+  in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,
+  and so on).
+- The tool, resource, template and prompt listings tell a client how long they
+  stay fresh (`ttlMs` / `cacheScope`: one hour, private). They are built once
+  at startup and cannot change while the process runs, so a client no longer
+  has to re-list them every turn. Clients on earlier revisions are unaffected.
+- `server/discover` answers with instructions naming the simulators actually
+  detected, the same as the initialize handshake.
+
+- A validation error that names a branch (a recipe, an op, a check, a query
+  kind, a job action) now ends with that branch's field table, so a caller
+  corrects the call from the error instead of looking the branch up first.
+  Served on every path: the tool call, the Python API, and the attached
+  analysis of `run_experiments`.
+- The rule "`field` is required once `reduce` or `spec` is given" is stated in
+  the recipe schemas themselves (`dependentRequired`), so a client on the
+  compact listing, which carries no descriptions, still sees it.
+- A random rule's `tolerance`, `scale` and `distribution` say what they mean
+  on the field itself: the tolerance is a fraction of the nominal (or in the
+  value's units), and for a normal draw it is the 3-sigma bound. The
+  convention was stated only in a design document; an agent asked for a
+  Monte Carlo at a stated sigma read the package source to find it.
+- The Python API drops the two MCP presentation controls, `budget` and
+  `execution.wait_s`, and says so in the result's `warnings`, instead of
+  refusing the call. Neither is part of a request's identity, so an MCP call
+  replayed through the API with them attached is the same request. Paging
+  controls are still refused, with `raw_page=True` named as the remedy.
+- `.asc` schematics now run on ngspice. The LTspice netlist export is converted
+  for ngspice by removing the LTspice-only `.backanno` command (ngspice aborts
+  on it) and translating `µ` suffixes and `§` name prefixes. The converted
+  netlist is written to a separate `{name}.ngspice.net` sidecar instead of
+  replacing the shared `.net`, so concurrent LTspice and ngspice runs of one
+  schematic cannot pick up a netlist generated for the other simulator.
+- A clean simulator exit that wrote results only to the log (for example an
+  ngspice `.control` script) now completes with the log-parsed measurements
+  instead of reporting "Simulation failed (no output generated)". A run with no
+  raw file whose log carries errors still fails. When the deck asked for an
+  analysis that must produce a `.raw` and none appeared, the run fails with a
+  `missing_required_raw` observation, a log excerpt, and the known `.save`-list
+  workaround.
+- Timed-out runs now include diagnostics. The timeout response derives the
+  run's log path (the completion callback does not record it for a job that is
+  already terminal) and shows the end of the log. Cleanup of a killed run keeps
+  the `.log`, `.exe.log`, and `.fail` files and removes the possibly
+  multi-gigabyte `.raw` and netlist copies. A killed run exits with a nonzero
+  status, so spicelib renames its log to `.fail`; the job record is updated with
+  the renamed path once the process exit is observed, so the excerpt stays
+  readable.
+- Windowed transient time axes are rebased to deck time. LTspice stores
   `.tran 0 <tstop> <tstart>` output with the axis starting at 0 and the true
   start only in the raw header's `Offset:` field, which nothing applied — a
-  196–202 µs window read as 0–6 µs in every tool. All raw loads now add the
-  offset back, so window arguments and reported times are in deck coordinates.
-- `server_status` reports the effective ngspice compatibility mode
-  (`ngbehavior`) so a differently-failing CLI run can be reconciled with the
-  server's.
-- `create_netlist(append_end=false)` writes a shared include fragment without
-  the forced `.END` (which would otherwise terminate the including deck
-  early); fragments skip the standalone-deck validation.
-- `set_component_attribute` with an empty value now CLEARS the attribute
-  (removes its SYMATTR line — the only representation of "no value" the .asc
-  format can read back). InstName remains protected.
-- `measurement_stats` warns when it aggregates a still-running or partial
-  batch ("N of M runs — partial, not final") and caps the `per_run` table at
-  100 rows with an explicit `per_run_truncated` count
-  (`include_per_run=true/false` for full/none).
-- Timed-out runs now carry diagnostics: the timeout response derives the run's
-  log path (the completion callback never records it for an already-terminal
-  job) and shows the log tail, and killed-run artifact cleanup keeps the
-  `.log`/`.exe.log`/`.fail` post-mortems while still reclaiming the
-  possibly-multi-GB `.raw` and netlist copies. A killed run exits nonzero, so
-  spicelib renames its log to `.fail` — the job is repointed at the renamed
-  file once the process exit is observed, keeping the excerpt readable from
-  `check_job`.
-
-- Parallel-session coordination: independent server processes (e.g. several
-  coding agents sharing one directory) now stay out of each other's way.
-  - Circuit-file mutations and `.asc` exports take a cross-process file lock
-    (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file
-    from two sessions serialize on the latest content instead of silently
-    losing one session's edit. Pin/route geometry (`wire_pins`,
-    `add_net_label`, `remove_component`) resolves inside the lock, so it
-    reflects a peer's just-completed move; exports lock the sidecar `.net`
-    they overwrite as well as the `.asc`. A still-held lock surfaces as a
-    clear "locked by another ltspice-mcp process" error after a 10 s wait.
-  - Job sidecars record the owning server's pid. A running job whose owner
-    is still alive now loads in other sessions as `running` (previously it
-    was mislabeled `interrupted`), refreshes from its sidecar when its
-    status or results are read or listed (`check_job`, `spice://results/`),
-    and is excluded from other sessions' shutdown cleanup. `recent`
-    summaries report this server's own live job as `running` too.
-  - `psutil` is now a direct dependency (already installed as a spicelib
-    transitive).
-- `transient_response` gains `mode="disturbance"` — for a regulated output under
-  a load/line step (LDO/PMIC), where the output returns to its own level so the
-  step mode correctly nulls its metrics. Measures droop and overshoot against the
-  pre-disturbance baseline (explicit or auto from the leading window) and the
-  recovery time back into a settle band. Reports null recovery — with the reason
-  in `warnings` — when the output never re-enters the band or the band is
-  undefined (zero baseline, no absolute band). Available in both tool profiles.
-- `return_loss` — reflection metrics (Γ magnitude/phase, return loss in dB,
-  VSWR) from an AC impedance trace measured under the documented 1 A probe,
-  against a reference `z0` (default 50 Ω). Evaluates a given frequency or scans
-  for the worst match across the sweep; flags a reversed probe (negative-real
-  Zin) and reports null return loss / VSWR at the perfect-match / total-
-  reflection limits. Available in both tool profiles. (Full tool count 49 → 51,
-  agentic 41 → 43.)
-- `simulation_summary` surfaces the run temperature (`temp_c`) and nominal
+  196–202 µs window read as 0–6 µs everywhere. All raw loads now add the offset
+  back, so window arguments and reported times are in deck coordinates.
+- The `transient_response` recipe takes `mode: "step" | "disturbance"`.
+  `"step"` is the classic pulse response. `"disturbance"` is for a regulated
+  output under a load or line step (LDO, PMIC), where the output returns to its
+  own level and so the step mode correctly reports null metrics; it measures
+  droop and overshoot against the pre-disturbance baseline (explicit, or taken
+  automatically from the leading window) and the recovery time back into a
+  settle band. It reports null recovery, with the reason in `warnings`, when the
+  output never re-enters the band or the band is undefined (zero baseline, no
+  absolute band).
+- The `return_loss` recipe reports reflection metrics — Γ magnitude and phase,
+  return loss in dB, VSWR — from an AC impedance trace measured under the
+  documented 1 A probe, against a reference `z0` (default 50 Ω). It evaluates a
+  given frequency or scans for the worst match across the sweep, flags a
+  reversed probe (negative-real Zin), and reports null return loss and VSWR at
+  the perfect-match and total-reflection limits. It also reports the |Zin|
+  extrema across the sweep (`zin_min_mag_ohm`, `zin_max_mag_ohm`, and their
+  frequencies) and, when the worst-match scan lands on a nearly purely reactive
+  point (|Γ| ≈ 1 for any real z0), says so and points at a meaningful z0 choice
+  for power and filter ports, where the 50 Ω RF default is rarely the right
+  reference.
+- The `timing` recipe aggregates over all sequential edge pairs — `pair_count`,
+  `delay_min`, `delay_max`, `delay_mean`, and the times of the extremes — for
+  dead-time and minimum-off audits across a pulse train. Previously only the
+  first crossing pair was measured.
+- The `summary` recipe reports the run temperature (`temp_c`) and nominal
   temperature (`tnom_c`) parsed from the simulator log, so tempco, noise, and
-  leakage tasks don't have to assume 27 °C.
-- `signal_stats` emits a `constant_window` observation when a signal is constant
-  across the whole analyzed window (min == max) — a fact (e.g. a latched/
-  degenerate DC solution reads as a flat line), surfaced without a verdict.
-- `signal_stats` reports `t_at_min`/`t_at_max`, the time of the minimum and
-  maximum sample, so a transient droop or peak can be located in time from one
-  call. (Named to read as "time of the extremum" — `t_min`/`t_max` would read
-  as window bounds next to `t_start_used`/`t_end_used`.)
-- Source-relative extreme-value observation: a run summary now flags a voltage
-  trace whose peak dwarfs every independent voltage source in the deck (supply
-  rails included) — the signature of a moderate-magnitude divergence, e.g. an
-  undamped LC growing to hundreds of volts from a millivolt-scale drive, which
-  sits far below the absolute extreme-value floor. Surfaced as a fact with the
-  source name/amplitude in evidence, per the result-trust doctrine; armed only
-  for `.tran`/`.op`, where node-voltage-vs-drive-level is meaningful.
+  leakage tasks don't have to assume 27 °C. It also declares `ac_signal_used`,
+  and it declares, attaches, and renders `suggestions` (model-resolution
+  candidates for unresolved references) on completed runs as well as on
+  failures — the success path previously computed them and dropped them.
+- The `signal_stats` recipe reports `t_at_min` and `t_at_max`, the time of the
+  minimum and maximum sample, so a transient droop or peak can be located in
+  time from one call. (Named `t_at_*` rather than `t_min`/`t_max`, which would
+  read as window bounds next to `t_start_used` and `t_end_used`.) It also emits
+  a `constant_window` observation when a signal is constant across the whole
+  analyzed window, min equal to max — for example a latched or degenerate DC
+  solution that reads as a flat line. The observation states the fact only; it
+  does not judge the result.
+- A run summary flags a voltage trace whose peak exceeds every independent
+  voltage source in the deck, supply rails included, by a large ratio. This
+  identifies a moderate divergence, for example an undamped LC response that
+  grows to hundreds of volts from a millivolt-scale drive but stays below the
+  absolute extreme-value threshold. The observation reports the source name and
+  amplitude and does not rate the result. It applies only to `.tran` and `.op`,
+  where comparing a node voltage with a source amplitude is meaningful.
 - `meas_batch_abort` observation: when one `.meas` directive fails to parse,
-  LTspice abandons the whole `.meas` batch (even directives earlier in the
-  deck come back missing). The summary now links the misses to the failing
+  LTspice abandons the whole `.meas` batch, and even directives earlier in the
+  deck come back missing. The summary now links the misses to the failing
   directive instead of listing N independent-looking gaps.
-- `return_loss` reports the |Zin| extrema across the sweep
-  (`zin_min/zin_max_mag_ohm` + their frequencies) and, when the worst-match
-  scan lands on a nearly purely reactive point (|Γ|≈1 for any real z0), says
-  so and points at a meaningful z0 choice for power/filter ports — the 50 Ω
-  RF default is rarely the right reference there.
-- AC tools accept a leading `-` on the signal expression (`-V(out)` or
-  `-V(vout)/V(vsense)`): the complex wave is negated (a 180° phase flip), so a
+- The AC recipes accept a leading `-` on the signal expression (`-V(out)`, or
+  `-V(vout)/V(vsense)`): the complex wave is negated, a 180° phase flip, so a
   loop gain probed through an inverting sense or a reversed impedance probe
-  reads in its natural convention without a behavioral inverter node.
-- `bode_metrics(all_steps=true)` entries carry `step_params` (the `.step`
-  name=value point from the log) next to the bare step index — LTspice runs a
-  `.step ... list` ascending-sorted, not in declared order, so index-only
-  labeling invited mis-attributing curves to list positions.
+  reads in its natural convention without a behavioral inverter node in the
+  deck.
+- Per-step AC entries carry `step_values`, the `.step` name=value point from the
+  log, next to the bare step index. LTspice runs a `.step ... list` sorted
+  ascending rather than in declared order, so index-only labeling could
+  attribute curves to the wrong list positions.
 - `resonance` peaks carry `magnitude_linear` alongside `magnitude_db` — |Z| in
-  ohms under the 1 A impedance probe (or |H| for a transfer function), which
-  disambiguates a dBΩ peak from a dB dip. (The tool's own description already
-  promised this field; it now returns it.)
-- Placed schematic directives auto-declutter: two directives that would land on
-  the same anchor — the common case when several are added without explicit
-  coordinates — are nudged apart so they don't render on top of each other. A
-  `stacked_directive` advisory also surfaces exact-anchor coincidences that
-  arrive by other paths (a hand-authored `.asc`, a move op).
-- `read_circuit` on an `.asc` carries the schematic-wiring norm in its `hint`
-  (draw wires; reserve net-labels for ground, rails, and genuinely distant
-  nets) — the co-design entry point, matching the norm `create_schematic`
-  already leads with.
-
-- `configure_sweep`, `run_sweep`, `configure_montecarlo`, and `run_montecarlo`
-  now return `structuredContent` (with an output schema) carrying the
-  load-bearing `config_id`/`job_id`, run counts, warnings, and a monitoring
-  `hint` — previously these lived only in prose, forcing agents to parse them
-  out of text. The text channel is unchanged.
-- `read_circuit` surfaces netlist-lexer warnings (e.g. an unclosed `.SUBCKT`)
-  in both the structured `warnings` field and the text rendering; previously
-  they reached neither channel.
-- `run_simulation`/`check_job` declare and attach `suggestions`
-  (model-resolution candidates for unresolved references) on completed runs as
-  well as failures — the success path previously computed them and dropped
-  them. `check_job` job listings declare `job_type`; `find_model` declares
-  `raw_text` (the `full=true` model body); `simulation_summary` declares and
-  renders `suggestions` and declares `ac_signal_used`.
-
-- Structured responses are now self-sufficient for agents: caller-guidance that
-  previously existed only in the human-readable text channel is mirrored into
-  `structuredContent` as an optional `hint` field. Structured-aware MCP clients
-  (Claude Code included) render only `structuredContent` when present and drop
-  the text channel, so hints delivered there never reached agents. Affected
-  tools: `create_schematic` (layout checklist), `check_job` (hidden finished
-  jobs, filtered-empty listing, queued/running cancel route, timeout log
-  excerpt + remedy, interrupted, batch redirect),
-  `run_simulation` (async referral, timeout log excerpt + remedy — new
-  `log_excerpt` field on timeout paths), `find_model` (no-match retry knobs and
-  schematic-symbol referral), `batch_results` (partial-results route,
-  step-collapse recovery), `list_libraries` and `recent` (empty-state
-  referrals). `diff_circuit` adds the unparseable-file caveat to its structured
-  `warnings`.
-- The SPICE guide documents the LTspice-primary noise-figure route:
-  `NF_dB = 20*log10(V(onoise)/V(Rs))` using the per-source noise contribution
-  traces LTspice exposes in `.noise` raw files (no temperature constant or 4kT
-  term needed; verified against a reference divider at 3.0103 dB). The engine-
-  neutral `4kT·Rs` form remains as the fallback and the only route on ngspice.
+  ohms under the 1 A impedance probe, or |H| for a transfer function — which
+  distinguishes a dBΩ peak from a dB dip. The recipe already promised the field;
+  it now returns it.
+- Parallel-session coordination: independent server processes (for example
+  several coding agents sharing one directory) no longer interfere with each
+  other.
+  - Circuit-file mutations and `.asc` exports take a cross-process file lock
+    (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file from
+    two sessions serialize on the latest content instead of silently losing one
+    session's edit. Pin and route geometry resolves inside the lock, so it
+    reflects a peer's just-completed move; an export locks the sidecar `.net`
+    it overwrites as well as the `.asc`. If the lock is still held after a 10 s
+    wait, the call fails with a "locked by another ltspice-mcp process" error.
+  - Job sidecars record the owning server's pid. A running job whose owner is
+    still alive now loads in other sessions as `running` (previously it was
+    mislabeled `interrupted`), refreshes from its sidecar when its status or
+    results are read or listed, and is excluded from other sessions' shutdown
+    cleanup.
+  - `psutil` is now a direct dependency; it was already installed as a spicelib
+    transitive.
+- The `edit_schematic` `set_component_attribute` op with an empty value now
+  clears the attribute, removing its SYMATTR line — the only representation of
+  "no value" the `.asc` format can read back. InstName remains protected.
+- Placed schematic directives no longer overlap. When two directives would use
+  the same anchor, which is the common case when several are added without
+  explicit coordinates, the second is moved. A `stacked_directive` advisory also
+  reports exact-anchor coincidences that arrive by other paths, such as a
+  hand-authored `.asc` or a move op.
+- The bundled SPICE guide documents the LTspice-first noise-figure method:
+  `NF_dB = 20*log10(V(onoise)/V(Rs))`, using the per-source noise contribution
+  traces LTspice writes into `.noise` raw files, with no temperature constant or
+  4kT term needed (checked against a reference divider at 3.0103 dB). The
+  engine-neutral `4kT·Rs` form remains the fallback and the only method on
+  ngspice.
 
 ### Changed
 
-- Tool-guidance pass driven by observed agent usage: `configure_sweep` now says
-  when a native `.step` in the deck is the better route (LTspice one-parameter
-  sweeps) and when the sweep pipeline wins (no `.step` on the simulator,
-  per-run isolated artifacts, cross-product corners); `simulation_summary` is
-  described as the one-call post-run triage rather than a feature list, and
-  the server instructions point to it after any finished run.
-- The schematic layout playbook (`spice://guide`, the LTspice skill, and
-  `create_schematic`'s checklist) now recommends delegating placement+wiring
-  to a focused subagent when the harness supports one — the build is
-  mechanical, meticulous work that degrades into net-label soup when done
-  inline — with a verification gate before it returns (`export_netlist`
-  matches the source netlist, `trace_net` shows no multi-label shorts).
-- `query_value` returns an `exact_match` flag: `false` when the requested
-  time/frequency/sweep value snapped to a different sample. On a coarse sweep
-  this matters — a `.dc temp` run silently snapping 27 → 25 °C biases a tempco
-  reading. The `at` field now documents that it addresses the run's primary
-  sweep axis (time, frequency, or the `.dc` sweep variable), and the `step_axis`
-  field documents that it is for stepped (`.step`) sweeps, not a bare `.dc`/`.ac`
-  primary axis — with the no-step error now pointing at `at` instead of a bare
-  "axis not found".
-- `set_component_value` (and the `apply_schematic_ops` `set_component_value` op)
-  warn when a GUI opamp complexity label (e.g. `Level.2`) is written to a
-  subcircuit's Value, which LTspice emits as a stray positional token → a
-  cryptic "sub-circuit name is not defined" at netlist time. The warning now
-  fires on **any** Value written to a symbol whose model is chosen via
-  `SpiceModel` (e.g. `UniversalOpamp2`), not only the `Level.N` label — any
-  value there corrupts identically. A library part that carries its subckt name
-  in Value (no `SpiceModel`) is left alone.
-- `add_component` rejects an unknown attribute name (a typo like `Val` for
-  `Value`) instead of silently dropping it at export time, matching
-  `set_component_attribute`.
-- `thd` labels its per-harmonic magnitudes with the signal's native `unit`
-  (V/A); the ratios, percentages, and dB stay dimensionless.
-- Net-label guidance across `create_schematic`, its checklist hint, and the
-  `wire_pins` conflict error now names the `apply_schematic_ops` `add_net_label`
-  op rather than implying a standalone `add_net_label` tool exists.
-- `get_waveform` (and the other axis-backed analysis tools) point a no-axis
-  error at the `.dc` conversion when the result is a stepped `.op` collapsed to
-  step 0, matching the hint `simulation_summary` already emits.
-- Guide (`spice://guide`): documents the two-directive `.meas` argmax idiom
-  (find the frequency/time OF a maximum), the dBΩ reading of an impedance trace
-  under the 1 A probe, the quantized/staircase egress route, and cross-links the
-  new `return_loss` tool. `ac_structure`'s `net_order` is documented as a real
-  computed order (0 or negative possible), never a sentinel. Adds notes on the
-  3- vs 4-terminal transistor symbols (`nmos4`/`pnp4`/…), the diode symbol's
-  built-in default-`D` model collision, and the `AC <mag>` small-signal source
-  syntax. Also: the `.meas MAX` signed-trace trap (`MAX I(...)` on an
-  always-negative current returns the least-negative sample, not the peak
-  magnitude — wrap in `abs()`; verified against LTspice) and how to steer
-  bistable circuits (bandgaps, mirrors, latches) to the intended DC root when
-  `.nodeset` alone won't.
-- `pulse_response` and the load/line-step analysis were consolidated into
-  `transient_response(mode="step"|"disturbance")` with no aliases: `mode="step"`
-  is the former `pulse_response`, `mode="disturbance"` the regulated-output
-  droop/overshoot/recovery analysis. A single tool with a `mode` selector
-  replaces the two names, so an agent at a buck-load-step no longer has to
-  discover a separate tool.
-- Auto-generated and example config files no longer write a live
-  `max_parallel = 4` key — it is now a comment documenting the real default
-  (number of CPU cores, capped at 8). The written key silently pinned every
-  auto-generated setup back to 4 concurrent simulations on multi-core hosts.
-- Output schemas now declare the full emitted shape where they had drifted:
-  `batch_results` (progress/ETA fields such as `eta_s`, `elapsed_s`,
-  signal-mode pagination fields such as `total_matching`, step-collapse and
-  `error` fields), `symbol_info` (declares the actually-emitted
-  `symbol`/`bounding_box` instead of never-emitted `name`/`bbox_width`/
-  `bbox_height`), `list_components` (single-reference mode `reference`/`value`
-  and the `prefix` filter echo), and `apply_schematic_ops` (per-op result
-  payload keys such as `wire_count` on each `results` item).
-- Error and description text that named `apply_schematic_ops` ops
-  (`add_net_label`, `remove_component`, `set_component_attribute`) as if they
-  were standalone tools now addresses them as ops of `apply_schematic_ops`.
-- README no longer claims all circuit editing is simulator-free: netlist
-  (`.cir`/`.net`) editing needs no simulator; `.asc` schematic editing needs
-  LTspice's `.asy` symbol libraries.
-- The `circuit-mcp`/`ngspice-mcp` alias packages publish only after the test
-  workflow passes (previously ungated), pin `ltspice-mcp` to exactly the
-  co-released version at build time, and wait for that version to be
-  installable from PyPI first — a published alias can no longer resolve an
-  older canonical package under a newer alias version.
+- The sandbox follows the config file while the server runs: `[security]
+  allowed_paths` is re-read whenever `ltspice-mcp.toml` changes, so a refused
+  path names the exact line to add and says it takes effect on the next call.
+  Before, the only self-serve route the refusal offered was copying the file,
+  because widening the sandbox needed a restart the agent cannot perform.
+  The server instructions state the sandbox rule in one sentence.
+- `edit_schematic`'s `compare` is `verify_circuit`'s: `mode`
+  (`equivalence` or `structural_diff`), `anchors` and `rtol`, run by the same
+  comparison engine, and `verification.comparison` carries the same payload
+  (a `structural_diff` delta with the verdict derived from it). A compare that
+  could not run reports `verification.compare_error` instead of raising.
+- `include.fields` accepts a bare name as the number it names: a path without a
+  dot that is not a row key reads under `value`, so `phase_margin_worst_deg`
+  means `value.phase_margin_worst_deg`. A dotted path with an unknown root is
+  still refused.
 
-- The `connect` schematic-wiring tool was renamed `wire_pins`; `connect` is kept
-  as a deprecated dispatch alias — it still resolves to the same handler but is
-  not listed in the tool definitions.
-- The SPICE guide's named-nets rule now matches the runtime guidance: repeating
-  a same-name net label validly ties distant pins (the netlist merges same-name
-  labels into one net); with duplicate labels, `wire_pins` should target a
-  component pin rather than `net:NAME`. `create_schematic`'s tool description
-  states the same idiom.
-- `wire_pins`'s duplicate-label error now names the actual net in its guidance
-  instead of a canned `net='0'`/`M3.S` example.
-- The `format` parameter description documents that `'text'` is the default and
+- The default sandbox is the working directory plus the Claude Code scratch
+  directory (`<tempdir>/claude-<uid>`). Claude Code tells an agent to write
+  throwaway files there, outside the working directory, so a deck authored
+  there used to be refused and copied in first. The generated config documents
+  the default in a comment and leaves `allowed_paths` unset; setting it
+  replaces the default. Applies to the server and the Python API alike.
+
+- `analyze_results` takes `step` and `all_steps` as call-level arguments instead
+  of per-recipe ones, and `run_experiments`' attached `analyze` block takes the
+  same two, so an attached measurement and a standalone one read the same
+  `.step` iterations. A run's step axis belongs to the run, not to each
+  measurement taken on it, so the choice is made once and every recipe in the
+  call reads it. The selection travels in the stored result set, so a
+  continuation replays it. Because the attached block now hashes two more keys,
+  the request canonicalizer moves to version 4: a `request_id` stored under
+  version 3 raises an idempotency conflict instead of replaying.
+- A recipe names the number a reduction or a spec reads once, as `field`. It
+  replaces `reduce_field` and `spec.field`, which said the same thing and had to
+  agree; `spec` keeps `min`, `max` and `allow_incomplete`. A multi-field recipe
+  requires `field` as soon as `reduce` or `spec` is given; a keyed recipe
+  requires it for `spec`, and where it is given it narrows that recipe's
+  reduction to the named key too; a scalar recipe takes none.
+- The published JSON Schema no longer carries `"default": null` annotations or
+  `discriminator.mapping` tables: `required` and each branch's own `const`
+  already say both. Nothing a call may send changed, and together with the
+  argument removals above the tool listing is smaller in both modes.
+
+- Calling a tool name the server does not have now answers a JSON-RPC
+  invalid-params error (-32602) naming the unknown tool and listing the eight
+  that exist, instead of an error-flagged tool result. A lookup failure has no
+  tool to attribute a result to, and this matches how an unknown resource URI
+  is already answered.
+
+- Moved to the MCP Python SDK 2, which serves protocol revision 2026-07-28
+  alongside the older initialize handshake. Clients on either revision are
+  served the same tools.
+- A tool that rejects its arguments now says `Invalid arguments for <tool>: ...`
+  where it said `Input validation error: ...`. The SDK stopped validating a call
+  against the published schema, so the tool's own model reports it; both are
+  generated from that model, so nothing is checked less strictly.
+- Reading a resource URI the server does not serve now answers the JSON-RPC
+  invalid-params code (-32602). The 2026-07-28 revision dropped the separate
+  resource-not-found code earlier revisions used.
+
+- `analyze_results`' description names every recipe with the plain words a
+  caller searches for, so a host matching a request against tool descriptions
+  can route "phase margin", "distortion" or "bias point" to this tool. The
+  handshake instructions name the reference lookup.
+- A job whose owner process has exited but has not yet been collected by its
+  parent now reads as interrupted rather than running. Liveness used to ask
+  only whether the pid existed, and a finished child keeps its pid until the
+  process that started it collects it.
+
+- Every tool's response is built from one envelope (`outcome`, `failures`,
+  `observations`, `warnings`, `hint`) with one outcome rule, and a finding's
+  location carries the same fields on every tool. The advertised schemas
+  did not change; the internal modules behind the tools were split so that
+  each tool is its own file.
+
+- One on-disk store. Everything the server writes under a working directory's
+  `.ltspice-mcp/` is laid out by one `Store`: `experiments/` (job records, a
+  request index, a per-circuit index, cancellation markers), `runs/{job_id}/`
+  (every artifact one job produced, with its staged decks), `results/`,
+  `detached/`, `verify/` (with its `renders/` beneath it), `edit-exports/`,
+  and `locks/`, stamped with a single `store_version`. The per-circuit pointer files that let a circuit's sidecar
+  find working-directory jobs are gone; the store's own index does that.
+
+- **The `.asc` edit engine moved into the core.** The `.asc` edit engine is now `ltspice_mcp.lib.schematic_ops`, and every
+  name another module imports from it is public. It lived in the tool layer,
+  which meant core modules importing back up into the tools package (a latent
+  import cycle that depended on import order). Nothing about `edit_schematic`,
+  `inspect`, or `verify_circuit` changes; the one visible difference is in the
+  JSON Schema `edit_schematic` advertises, where the internal `$defs` keys for
+  the op shapes lost their leading underscore (`_OpAddComponent` is now
+  `OpAddComponent`). References resolve exactly as before.
+- `jobs` publishes each action's own argument shape. `status`, `wait`,
+  `cancel`, `list`, and `runs` are separate branches of one schema keyed on
+  `action`, instead of nine optional fields policed after the fact by the
+  server. Every call that was accepted before is still accepted, unchanged;
+  a call that is not now names the legal actions, or the exact field that
+  action does not take, before it is dispatched.
+- `run_experiments`' `analyze.recipes` is validated against the same typed
+  recipe grammar `analyze_results` takes, so a malformed recipe is refused
+  before any deck is staged instead of after the simulation has run. The
+  schema advertises the metric names and points at `analyze_results` for the
+  fields each one takes, rather than carrying a second copy of the grammar
+  that every client would download in every session.
+- One `jobs` call reads its job once. The MCP response and the in-process
+  API result are two renderings of the same evaluation, so they can no
+  longer describe two different moments of the same job.
+
+- Every error class declares a stable `code`. No code a client sees has
+  changed; the full vocabulary (146 codes) is pinned by
+  `tests/test_error_codes.py`, and renaming or removing one is a breaking
+  change that will be listed here. See `docs/design/mcp_surface.md`, "Error
+  codes".
+
+- The `mcp` dependency no longer pulls the `cli` extra: six packages fewer
+  (typer, rich, markdown-it-py, mdurl, shellingham, annotated-doc) for a
+  server that never imported them.
+- New documents: `THIRD_PARTY_NOTICES.md`, the tool-surface and Python API
+  contracts under `docs/design/`, and the spicelib bug ledger, published as
+  `docs/spicelib_bugs.md`.
+- The advertised tool definitions are exactly what the source says. Every
+  description declared on a tool or one of its arguments is served verbatim on
+  the `full` listing, and the `compact` listing removes descriptions rather
+  than rewording them, so reading the models tells you what a client is shown, and
+  the one text also feeds `api.reference('...')` and the `spice://guide`
+  resource. What keeps the listing small is that the descriptions themselves
+  are short: each states the unit, the convention, the default, and how the
+  field interacts with its siblings, and the fuller explanation lives in
+  `docs/design/mcp_surface.md` or the guide with a pointer on the field. Output
+  schemas are still not advertised — response shapes are learned from
+  responses, and dropping them is what pays for the argument prose.
+  `tests/test_consolidated_contracts.py` holds an upper bound per tool, so the
+  listing cannot grow without someone raising a number.
+- Three `analyze_results` recipes — `noise_integral`, `periodic`, and
+  `return_loss` — advertise only their `metric` and a one-line documentation
+  pointer, about 700 characters less schema per session. They remain fully
+  callable with every field they had; the full argument trees are in
+  `api.reference('analyze_results')` and the `spice://guide` resource.
+- `import ltspice_mcp.api` and `Api()` boot lazily: the package `__init__` is a
+  PEP 562 lazy table, `SessionState` builds its tool surface on first access,
+  the API method layer resolves tool modules through deferred imports, and scipy
+  is imported at its call sites. A cold `Api()` drops from about 1.5 s to about
+  0.4 s and no longer imports scipy or the MCP SDK at all. Method docstrings
+  install on the first catalogue read or operation call; until then `help()` on
+  a method shows only its signature.
+- The README now describes the MCP server and the Python library as two ways to
+  use one engine, opens with a runnable Python-API sweep example next to the MCP
+  quick start, and cites published studies for the main design choices. PyPI
+  metadata and the Desktop-extension description now mention the Python library
+  and one-call sweeps and Monte Carlo. The README also no longer claims all
+  circuit editing is simulator-free: netlist (`.cir`/`.net`) editing needs no
+  simulator, but `.asc` schematic editing needs LTspice's `.asy` symbol
+  libraries.
+- The `value` recipe returns an `exact_match` flag, `false` when the requested
+  time, frequency, or sweep value snapped to a different sample. On a coarse
+  sweep this matters: a `.dc temp` run that silently snaps 27 °C to 25 °C biases
+  a tempco reading. The `at` field now documents that it addresses the run's
+  primary sweep axis — time, frequency, or the `.dc` sweep variable — and
+  `step_axis` documents that it is for stepped (`.step`) sweeps rather than a
+  bare `.dc` or `.ac` primary axis; the no-step error now points at `at` instead
+  of a bare "axis not found".
+- The `set_component_value` op warns when a GUI opamp complexity label such as
+  `Level.2` is written to a subcircuit's Value, which LTspice emits as a stray
+  positional token and which produces a cryptic "sub-circuit name is not
+  defined" error at netlist time. The warning now fires on any Value written to
+  a symbol whose model is chosen via `SpiceModel` — `UniversalOpamp2`, for
+  example — not only on the `Level.N` label, because any value there corrupts
+  identically. A library part that carries its subckt name in Value, with no
+  `SpiceModel`, is left alone.
+- The `add_component` op rejects an unknown attribute name — a typo such as
+  `Val` for `Value` — instead of silently dropping it at export time, matching
+  `set_component_attribute`.
+- The `thd` recipe labels its per-harmonic magnitudes with the signal's native
+  `unit` (V or A); the ratios, percentages, and dB values stay dimensionless.
+- An axis-backed recipe run against a stepped `.op` whose raw collapsed to step
+  0 points its no-axis error at the `.dc` conversion, matching the hint the
+  `summary` recipe already emits.
+- The SPICE guide gained several sections and corrections: the two-directive
+  `.meas` argmax idiom (finding the frequency or time *of* a maximum), the dBΩ
+  reading of an impedance trace under the 1 A probe, how to export quantized and
+  staircase waveforms, and a cross-link to the `return_loss` recipe.
+  `ac_structure`'s `net_order` is documented as a real computed order — 0 or
+  negative is possible — never a sentinel. It adds notes on the three- versus
+  four-terminal transistor symbols (`nmos4`, `pnp4`, and the rest), the diode
+  symbol's built-in default-`D` model collision, and the `AC <mag>` small-signal
+  source syntax; the `.meas MAX` signed-trace case, where `MAX I(...)` on an
+  always-negative current returns the least-negative sample rather than the peak
+  magnitude, so wrap it in `abs()`; and how to steer bistable circuits —
+  bandgaps, mirrors, latches — to the intended DC root when `.nodeset` alone will
+  not. Its named-nets rule now matches the runtime guidance: repeating a
+  same-name net label validly ties distant pins, because the netlist merges
+  same-name labels into one net, and with duplicate labels a wire should target a
+  component pin rather than `net:NAME`.
+- The duplicate-label error names the actual net in its guidance instead of a
+  canned `net='0'` / `M3.S` example.
+- The schematic layout guidance in `spice://guide`, the LTspice skill, and the
+  new-sheet checklist now recommends delegating placement and wiring to a
+  separate agent when the harness supports one, because the build is mechanical,
+  detailed work that tends to end up as net labels everywhere when done inline.
+  It also asks for a verification step before that agent returns: the
+  `verify_circuit` export must match the source netlist, and
+  `inspect(kind: "net")` must report no multi-label shorts.
+- Auto-generated and example config files no longer write a live
+  `max_parallel = 4` key; it is now a comment documenting the real default,
+  which is the number of CPU cores capped at 8. The written key silently pinned
+  every auto-generated setup back to 4 concurrent simulations on multi-core
+  hosts.
+- The `format` parameter description states that `'text'` is the default and
   that structured content is identical for both formats.
-- `operating_point` always includes `warnings` (as `[]` on a clean run) instead
-  of omitting the key.
+- The `operating_point` recipe always includes `warnings`, as `[]` on a clean
+  run, instead of omitting the key.
+- The `circuit-mcp` and `ngspice-mcp` alias packages publish only after the test
+  workflow passes — previously they were ungated — pin `ltspice-mcp` to exactly
+  the co-released version at build time, and wait for that version to be
+  installable from PyPI first, so a published alias can no longer resolve an
+  older canonical package under a newer alias version.
+- The README, changelog, security policy, packaging text, developer docs,
+  skills, and packaged guide were rewritten in plain language: shorter
+  sentences, no slogans or metaphors, internal shorthand replaced with what it
+  refers to. Facts, code, and tested instructions are unchanged.
 
 ### Fixed
 
-- The LTspice skill no longer claims device operating points (gm/gds/vth/…)
-  require ngspice: LTspice `.op` runs surface them via the auto-injected
-  `.options logopinfo`, and `operating_point` reads both engines uniformly.
-  The packaged guide was already correct; the skill's copy had drifted. Swept
-  gm (the gm/ID `.dc` table) still needs ngspice, as both now say.
-- Event-loop wedge on simulator abort: the completion callback used to run its
-  log post-mortem (an uncapped read + scan) on the event-loop thread — a
-  stalled read (huge abort log, hung network/DrvFs mount) froze every request
-  in the server process until restart, including `server_status`. All
-  completion-path file I/O now runs on worker threads, and the log-excerpt
-  reader caps its read to head+tail slices of oversized logs.
-- `thd` per-harmonic `magnitude` is now the sinusoid amplitude in the signal's
-  own units; it was the raw FFT bin (off by n_fft/2 — an 0.1 V harmonic read
-  as ~819 "V" at n_fft=16384). The Hann path's ±2-bin lobe sum is calibrated
-  back to amplitude as well (a bin-centered tone's lobe RSS is √1.5× the
-  amplitude). THD%/dBc ratios were and remain correct.
-- Setting a `.asc` behavioral source's expression (`set_component_value` with
-  `V=...`) corrupted the schematic: the expression was routed to SpiceLine as
-  a parameter while the old expression stayed in Value, netlisting two
-  expressions on one B-line ("No such node") behind a success message. The
-  whole value now replaces the Value slot for B references.
+- A value spelled with the micro sign (`20µ`, `4.7µF`) parses as micro. That
+  is how LTspice's netlist exporter writes `u`, so an exported current source
+  had no nominal a Monte Carlo `component` rule could perturb: every case
+  failed before submission with `random_nominal_unavailable`. The Greek mu is
+  accepted too.
+- A compare reference written outside the sandbox is refused with the
+  alternative named: the deck's text itself, passed as `compare.reference`.
+  A client's scratch directory is usually outside `allowed_paths`, and both
+  tools now resolve the reference the same way, so `edit_schematic` accepts
+  literal netlist text as its description always said (it used to treat the
+  text as a path).
+- A recipe's `field` accepts the result row's own key. `stability` reports
+  `phase_margin_worst_deg`, and passing that name back for a reduction or a
+  spec was refused in favour of `phase_margin_deg`; either spelling now names
+  the number (the one reducible name is carried downstream). A key two fields
+  read, such as `transition_time` under `edges`, is still refused as ambiguous.
+- `edit_schematic` accepts an empty `ops` list when `return_views` is set: the
+  batch runs as a dry run and returns the requested pin table. The whole-sheet
+  table is only reachable through this tool, and reading it used to need a
+  throwaway op.
+
+- Two `run_experiments` calls sharing a `request_id` and fired at the same
+  time now stage one set of decks between them, not two. A submission claims
+  its `request_id` before it stages: it takes that id's gate, looks the id up,
+  and only stages if nothing is recorded under it. The second call waits on
+  the gate, finds the record, and replays it — or is refused as an
+  `idempotency_conflict` — without copying a deck set of its own. Both used to
+  stage in full and the loser's `runs/{job_id}/` tree was deleted afterwards,
+  so a crash in between left an unclaimed tree in the shared runs root.
+- `edit_schematic` reports `outcome: "partial"` when a dry run's ops fail,
+  when the post-commit comparison against `reference` does not match or
+  cannot export, or when a requested render fails. It reported `complete`
+  in all three cases while `verify_circuit` reported `partial` for the same
+  conditions; every tool now decides its outcome by one rule, and a test
+  scans every handler module for a hand-written outcome.
+- `max_parallel_sims` is enforced per simulator runner, not per
+  `run_experiments` call. Three concurrent calls in one server used to get
+  three times the cap, and a request could raise its own share above it.
+
+- An analysis failure is classified as a deadline by its exception type, not
+  by whether its message contained "deadline" or "exceeded". A source path, a
+  signal name, or a filesystem error carrying those words (a full disk
+  reports "Disk quota exceeded") was reported as `analysis_deadline`, sending
+  the caller to retry a fault that more time cannot fix.
+- Opening a schematic whose symbol, sub-sheet, or model library is missing
+  reports the missing dependency. The old check looked for ".asy" in the
+  editor's message, so a hierarchical block whose sheet was gone reported
+  "File not found" against the schematic that had opened fine.
+- Cancelling a job distinguishes an unauthorized request from any other
+  cancellation failure by type rather than by the words "not authorized".
+
+- ngspice decks that drive their own analysis from a `.control` block now get
+  a rawfile through `run_experiments`. The write injection was wired only into
+  a path no registered tool reaches, so a scripted deck completed cleanly with
+  nothing for any recipe to read. The case reports `control_write_injected`
+  when the server supplied the write.
+- A `.step` directive on ngspice is reported by the deck lint
+  (`step-ngspice`): ngspice ignores the line in batch mode, so the deck ran
+  once at its base value and nothing said the sweep had not happened. The
+  lint rule set is versioned as `2`.
+- `verify_circuit` and `inspect` relay the netlist lexer's own notes (unclosed
+  `.SUBCKT`, unmatched `.ENDS`, stray continuation) instead of discarding
+  them — into `observations` and the netlist payload's `warnings`.
+- `edit_schematic` reports the warnings its ops raise. They were dropped
+  entirely; identical advisories across a batch now arrive once, with how
+  many ops they cover.
+- `edit_schematic`'s refusal of an existing target submitted without
+  `expected_sha256` carries that file's current sha256 (code
+  `expected_sha256_required`), so the retry is one call.
+
+- `plot_waveform` accepts a `run_experiments` job: pass its `job_id` with
+  `run_index` (default 0), or the new `case_id`, and the chart is written next
+  to the case's source circuit like any other job plot. It used to refuse the
+  only job kind the consolidated tools produce, with an error that named an
+  internal type. The same error, where it can still occur on the other
+  job-addressed paths, now names the tools that do accept an experiment job.
+- The `stability` recipe accepts `field` (for `reduce` and for `spec`) on
+  `unity_gain_hz` and `dc_gain_db`, not just on the two margins. "Keep the
+  unity-gain bandwidth above 2 MHz" is the most common stability spec after
+  phase margin, and the recipe already reported the number per case, but asking
+  it to reduce or check that number was refused. A spec on a field the loop
+  never reaches is `indeterminate`.
+- `verify_circuit`'s `render.delivery` now states on the wire what an inline
+  image costs: about 3k tokens at the default scale, paid again on every later
+  turn of the session. The bare enum gave no reason to prefer the default,
+  `artifact`, which writes the file and returns its path.
+- Cancelling a job, a simulation timeout, and shutdown cleanup now terminate the
+  simulator process on every supported platform and simulator combination.
+  Previously only WSL with LTspice worked: everywhere else the code called
+  spicelib's `kill_all_spice`, which matches an empty process name in the pinned
+  spicelib and therefore killed nothing, so a cancelled ngspice, Wine, or
+  Windows-native run kept simulating to completion. The replacement kill
+  requires both the simulator's executable name and the job id in its command
+  line, so it cannot terminate a parallel session's simulators, which a
+  name-global kill would have hit once it worked.
+- Cancelling a batch when several batch runners were live, with decks running in
+  different output folders, could signal the wrong runner instance: the
+  in-flight processes were killed, but the owning runner's submission loop kept
+  launching the batch's queued runs behind a `cancelled` status. Batch cancels,
+  both explicit and at shutdown, now route to the runner instance that owns the
+  job's cancel state.
+- Simulator aborts no longer stall the event loop. The completion callback used
+  to read and scan the entire log on the event-loop thread, so a stalled read —
+  a huge abort log, a hung network or DrvFs mount — blocked every request in the
+  server process until restart. All completion-path file I/O now runs on worker
+  threads, and the log-excerpt reader caps its read to head and tail slices of
+  oversized logs.
+- Converting an `.asc` schematic to a runnable netlist no longer runs the
+  LTspice export subprocess on the server's event loop; it is offloaded to a
+  worker thread, so concurrent requests, including a cancel, stay responsive
+  during the export. Exports of the same schematic are serialized by the
+  per-`.asc` lock described under parallel-session coordination in Added:
+  LTspice always writes the same sidecar `.net`, so concurrent exports could
+  otherwise tear the output and run the wrong deck.
+- WSL interop calls (`wslpath`, `cmd.exe` environment resolution) now carry a
+  15-second timeout; a hung Windows-interop process previously stalled server
+  startup or left a run request waiting forever.
+- The `thd` per-harmonic `magnitude` is now the sinusoid amplitude in the
+  signal's own units. It was the raw FFT bin, off by n_fft/2 — a 0.1 V harmonic
+  read as about 819 "V" at n_fft=16384. The Hann path's ±2-bin lobe sum is
+  calibrated back to amplitude as well; a bin-centered tone's lobe RSS is √1.5
+  times the amplitude. THD percentages and dBc ratios were, and remain, correct.
+- Setting a `.asc` behavioral source's expression — a `set_component_value` op
+  with `V=...` — corrupted the schematic: the expression was routed to SpiceLine
+  as a parameter while the old expression stayed in Value, netlisting two
+  expressions on one B-line ("No such node") behind a success message. The whole
+  value now replaces the Value slot for B references.
 - Directives with embedded newlines corrupted the `.asc` TEXT record; they are
   now stored as LTspice's literal `\n` escapes, so multi-line directives
   round-trip.
-- `measurement_stats` now reads each `.MEAS` directive's operator from the
-  deck (relay over inference) to pick the aggregation axis: a `FIND` probe
-  whose value is constant across runs can no longer be mistaken for a WHEN
-  crossing and silently aggregate the probe axis instead of the values, and a
-  deck-confirmed bare `WHEN` aggregates crossing times even when every run
-  crossed at the same instant (a deterministic batch).
-- Cancelling a sweep/Monte-Carlo batch when several batch runners were live
-  (decks running in different output folders) could signal the wrong runner
-  instance: the in-flight processes were killed, but the owning runner's
-  submission loop kept launching the batch's queued runs behind a `cancelled`
-  status. Batch cancels (tool and shutdown) now route to the runner instance
-  that owns the job's cancel state.
-- Analysis window bounds a few ulps past the axis end (SI-suffix rounding:
-  `t_end=1500u` vs an axis ending at exactly 1.5 ms) are clamped instead of
-  rejected with a self-contradicting "outside axis range" message.
-- Repeated identical log diagnostics collapse to one entry with a repeat count
-  (a PDK deck repeats "unknown model parameter" once per device instance,
-  burying the fatal line), and the failure-excerpt reader now anchors on
-  "File not found" / "already defined" lines, which previously fell outside
-  the excerpt entirely.
-- `apply_schematic_ops` collapses identical per-op warnings within one batch
-  (the documented per-pin-label style repeated the same duplicate-label
-  advisory once per label op — hundreds of lines on converter-scale builds).
 - The error for setting the `Prefix` attribute no longer misdirects to
-  SpiceLine: Prefix is a symbol (.asy) property; the message now points at
+  SpiceLine. Prefix is a symbol (`.asy`) property, and the message now points at
   symbol-based placement.
-- `cancel_job`, simulation timeouts, and shutdown cleanup now actually
-  terminate the simulator process on every platform/simulator combination.
-  Previously only WSL + LTspice worked: everywhere else the code deferred to
-  spicelib's `kill_all_spice`, which matches an empty process name in the
-  pinned spicelib and therefore killed nothing — a cancelled ngspice, Wine,
-  or Windows-native run kept simulating to completion. The replacement kill
-  requires both the simulator's executable name and the job id embedded in
-  its command line, so it is also incapable of touching a parallel session's
-  simulators (which a name-global kill would have hit once it worked).
-- Converting an `.asc` schematic to a runnable netlist (`run_simulation`,
-  `configure_sweep`, `configure_montecarlo`, `export_netlist`) no longer runs
-  the LTspice export subprocess on the server's event loop — it is offloaded
-  to a worker thread, so concurrent requests (including `cancel_job`) stay
-  responsive during the export. Exports of the same schematic are serialized
-  by a per-`.asc` lock: LTspice always writes the same sidecar `.net`, so
-  concurrent exports could otherwise tear the output and run the wrong deck.
-- WSL interop calls (`wslpath`, `cmd.exe` environment resolution) now carry a
-  15-second timeout; a hung Windows-interop process previously wedged server
-  startup or left a run request waiting forever.
-- The per-schematic export-diff cache is bounded (LRU, 64 schematics) instead
-  of growing without limit over a long session.
-
-- `transient_response(mode="step")` no longer reports a definite `settling_time`
-  when the signal entered the settle band only just before the window ends and
-  the final value
-  was auto-derived from that same short tail — indistinguishable from a
-  still-ringing waveform paused on a plateau (e.g. a transmission-line
-  staircase). Requires in-band dwell of at least 1.5× the nominal trailing
-  window (the final 10% of the analyzed time span — a sampling-invariant
-  yardstick, so sparsely-sampled settled tails are not falsely suppressed) on
-  the auto-final path; suppressed results carry the
-  `settling_dwell_near_window_end` quality flag and render as "unknown", with
-  an explicit `final_value` as the escape hatch.
-- `batch_results` status text referred to a nonexistent `get_batch_results`
-  tool; it now names `batch_results`.
+- The `measurements` recipe reads each `.MEAS` directive's operator from the
+  deck instead of inferring it from the results. A `FIND` probe whose value is
+  constant across runs is no longer mistaken for a `WHEN` crossing, which
+  previously made it aggregate over the probe axis instead of over the values. A
+  deck-confirmed bare `WHEN` now aggregates crossing times even when every run
+  crossed at the same instant, as in a deterministic batch. The recipe also
+  warns when it aggregates a still-running or partial batch ("N of M runs —
+  partial, not final").
+- `transient_response(mode: "step")` no longer reports a definite
+  `settling_time` when the signal entered the settle band only just before the
+  window ends and the final value was derived automatically from that same short
+  tail. That case cannot be told apart from a still-ringing waveform that is
+  momentarily flat, such as a transmission-line staircase. When `final_value` is
+  not given, the signal must now stay in the band for at least 1.5× the nominal
+  trailing window, the final 10% of the analyzed time span. The requirement is
+  based on elapsed time rather than sample count, so sparsely sampled settled
+  tails are not falsely suppressed. Suppressed results carry the
+  `settling_dwell_near_window_end` quality flag and render as "unknown"; passing
+  an explicit `final_value` bypasses the check.
+- Analysis window bounds a few ulps past the axis end — SI-suffix rounding, such
+  as `t_end=1500u` against an axis ending at exactly 1.5 ms — are clamped
+  instead of rejected with a self-contradicting "outside axis range" message.
+- Repeated identical log diagnostics collapse to one entry with a repeat count.
+  A PDK deck repeats "unknown model parameter" once per device instance, burying
+  the fatal line. The failure-excerpt reader now also anchors on "File not
+  found" and "already defined" lines, which previously fell outside the excerpt
+  entirely.
 - Temperature-swept runs (`.step temp`) no longer report "no temperature steps"
-  on modern LTspice: the simulator log is decoded through the same
-  BOM/UTF-16/cp1252 sniffer the netlist and library readers use, instead of the
+  on modern LTspice. The simulator log is now decoded with the same BOM, UTF-16,
+  and cp1252 detection the netlist and library readers use, instead of the
   platform-default codec. A UTF-16 log (current LTspice) or a cp1252 degree byte
-  previously garbled the `.step`/temperature lines so the parse found nothing;
-  the same fix un-garbles simulator diagnostics (including the character shown
-  in a failed-run excerpt) and the `temp_c`/`tnom_c` passthrough on such logs.
-- `query_value` labels a `.noise` spectral-density read as `V/√Hz` (or
-  `A/√Hz`), not the plain `V` its trace type declares — matching
-  `noise_integral` and the raw's own "Noise Spectral Density" plotname.
+  previously garbled the `.step` and temperature lines so the parse found
+  nothing. The same fix correctly decodes simulator diagnostics, including the
+  character shown in a failed-run excerpt, and the `temp_c` and `tnom_c`
+  passthrough on such logs.
+- The `value` recipe labels a `.noise` spectral-density read as `V/√Hz` (or
+  `A/√Hz`), not the plain `V` its trace type declares, matching `noise_integral`
+  and the raw file's own "Noise Spectral Density" plotname.
+- The `spice-experiments` and `ltspice` skills said that nothing adds
+  `.options logopinfo` for you. In fact the server adds it to every LTspice
+  `.op` run, as the packaged guide already said. Both skills now say the server
+  adds it and that writing it yourself is harmless.
+- The LTspice skill no longer claims device operating points — gm, gds, vth, and
+  the rest — require ngspice: LTspice `.op` runs surface them via the
+  auto-injected `.options logopinfo`, and the `operating_point` recipe reads both
+  engines uniformly. The packaged guide was already correct; the skill's copy had
+  drifted. Swept gm, the gm/ID `.dc` table, still needs ngspice, as both now say.
+
+### Removed
+
+- The `full` and `agentic` tool profiles, and 48 of the 49 tools they exposed.
+  (`plot_waveform` is the one that carried over.) The breaking-change
+  section above says where each capability went and how to pin the old surface.
+- Session library mounting (`load_library`, `unload_library`, `list_libraries`)
+  is removed with no replacement. Reference libraries from the deck with `.lib`
+  and `.include` directives instead.
+- The netlist authoring and editing tools (`create_netlist`, `read_circuit`,
+  `set_component_value` on a `.cir`/`.net`, `parameter`, `edit_directive`) are
+  removed with no replacement. Write `.cir`, `.net`, and `.sp` decks with your
+  own file tools; `inspect` reads them and `verify_circuit` checks them.
+
+- `analyze_results` recipes no longer accept `step` or `all_steps`; pass them on
+  the call (see Changed).
+- `analyze_results` recipes no longer accept `reduce_field`, and `spec` no longer
+  accepts `field`; pass `field` on the recipe (see Changed).
+- `verify_circuit` no longer accepts the flat `reference`, `compare_mode`,
+  `anchors` or `rtol`; pass the `compare` object, which carries all four.
+- `edit_schematic` no longer accepts the flat `reference`; pass `compare`.
+- `edit_schematic` no longer accepts `render`, `render_format`, `render_scale`,
+  or `render` in `return_views`, and its response carries neither `views.render`
+  nor the `artifacts` array that rendering was the only producer for.
+  Rendering is `verify_circuit`'s, whose policy adds a pixel cap, inline
+  delivery and a render-only mode.
+- `edit_schematic` no longer accepts `write_failed_draft`. A failed batch writes
+  nothing by design and the response names the stage that failed, so there was
+  no draft to quarantine that the caller's own ops did not already describe.
+- `edit_schematic` no longer accepts `format`; structured-aware clients render
+  only `structuredContent`, and the other six tools had already dropped it.
+- The AC crossing recipe's phase level is spelled `level_deg` only; the
+  earlier `phase_deg` spelling, kept as an alias for callers of an earlier
+  build, is gone.
+
+- The MCP logging capability. The 2026-07-28 revision deprecates it whole
+  (SEP-2577): the `logging` server capability, the server-to-client
+  `notifications/message` delivery and the per-request log-level opt-in that
+  replaced `logging/setLevel`, with no replacement offered, and
+  `logging/setLevel` is absent from that revision's schema. The server no
+  longer advertises the capability, answers `logging/setLevel` with
+  method-not-found, and sends no log notifications. Job lifecycle events and
+  diagnostics go to the process's stderr logger, which `[logging] level`
+  still controls.
+- **The columns form of budget-limited rows.** A response cap (`budget`) used to re-render row surfaces once it got tight
+  enough: rows became arrays of bare values, with a sibling `*_columns` list
+  naming what each position meant. It was lossless, but it made a row's shape
+  depend on how small the cap was, so reading a row meant first working out
+  which form had come back.
+
+  Rows now keep their shape at every budget: a row is always an object with
+  the same keys, and a tight budget returns fewer of them rather than
+  differently shaped ones. The reduction ladder is trim, then answer, then
+  shrink. If you read the columns form — `items_columns`, `values_columns`,
+  `reduced_columns`, or any other `*_columns` sibling — those keys are gone
+  from every response and output schema; read the rows from `items`,
+  `values`, or `reduced` and page on with the cursor the response carries.
+- **The pre-0.6 tool handlers and job machinery.** The handlers behind the removed 0.5 tools were kept in place through 0.6
+  development so a tool could be re-exposed by putting its decorator back.
+  That seam is gone: a handler with no caller has been deleted, along with
+  its argument model, its output schema, and the helpers only it used. The
+  eight tools and the Python API are unaffected — the advertised schemas and
+  `ltspice_mcp.api.__all__` are unchanged. Restoring one of the old tools
+  now means restoring its module from v0.5.x.
+
+  Gone with them: the single-simulation and batch job types, the sweep and
+  Monte Carlo runners, and the batch result reader. Every job the server runs
+  is an experiment, on one runner. The Monte Carlo perturbation engine is
+  unchanged — it is what `run_experiments` draws its random variations from.
+
+  Error codes that only those handlers emitted are gone with them:
+  `legacy_analysis_result`, `case_selection_wrong_job_kind`,
+  `run_unavailable` (now `case_not_found`),
+  `run_failed`, `no_raw_output`, `parse_deadline` (now `analysis_deadline`),
+  `decimated`, `window_applied`, `complex_format_used`, `unrecognized_save`,
+  `max_pk_pk_bucket`, and `export_written`.
+- **The job sidecars earlier releases wrote.** Releases before 0.6 wrote a job record beside each circuit, at
+  `.ltspice-mcp/jobs/<job_id>.json`. Those files are no longer read: a job id
+  that only one of them names is simply not found, and `jobs` says so like it
+  would for any other unknown id. Nothing was ever written there by 0.6, and
+  the files themselves are left alone — delete them by hand if you want the
+  space back. The `legacy_job_record` observation code is gone with the
+  reading of them.
+- **The internal tool-profile filter.** Tool registration no longer takes a
+  profile, and there is no profile filter to look a tool up through: there is
+  one surface to serve. Serving zero tools is still a hard error.
+- `CONTRIBUTING.md` and the code of conduct are gone, and the sdist no longer
+  ships them. The project is not taking outside contributions at this stage;
+  the setup notes moved into `CLAUDE.md`, and the review rules it carried
+  (a regression test fails before the fix, real code paths, plain language)
+  already live there and in `docs/TESTING.md`.
 
 ## [0.5.0] - 2026-06-30
 
@@ -1167,3 +1625,4 @@ Netlist and schematic editing:
 Release history before the first tagged version lives in `git log`; the
 `feat:` / `fix:` / `refactor:` prefixes and PR descriptions describe
 each change.
+

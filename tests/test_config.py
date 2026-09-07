@@ -1,12 +1,19 @@
 """Unit tests for configuration loading."""
 
+import dataclasses
+import logging
 import os
 from pathlib import Path
 
 import pytest
 
 import ltspice_mcp.config as config_module
-from ltspice_mcp.config import ServerConfig, generate_default_config
+from ltspice_mcp.config import (
+    ServerConfig,
+    claude_scratch_root,
+    default_allowed_paths,
+    generate_default_config,
+)
 
 
 class TestServerConfig:
@@ -18,7 +25,12 @@ class TestServerConfig:
         assert config.simulator_exe is None
         assert config.max_parallel_sims == min(os.cpu_count() or 4, 8)
         assert config.default_timeout == 300.0
-        assert config.log_level == "INFO"
+        assert config.analysis_budget_s == 60.0
+        assert config.result_set_ttl_hours == 24.0
+        # WARNING, not INFO: the server's stderr is the caller's stderr on the
+        # in-process and per-script doors, and a startup banner there gets
+        # answered with a blanket 2>/dev/null that also hides real tracebacks.
+        assert config.log_level == "WARNING"
 
     def test_max_parallel_defaults_to_capped_core_count(self, monkeypatch: pytest.MonkeyPatch):
         # Core-aware default: use the host's cores, but cap so a many-core box
@@ -30,9 +42,10 @@ class TestServerConfig:
         monkeypatch.setattr(config_module.os, "cpu_count", lambda: None)
         assert ServerConfig().max_parallel_sims == 4
 
-    def test_allowed_paths_defaults_to_working_dir(self):
+    def test_allowed_paths_defaults_to_working_dir_and_scratch_root(self):
         config = ServerConfig()
-        assert config.allowed_paths == [config.working_dir]
+        assert config.allowed_paths == default_allowed_paths(config.working_dir)
+        assert config.allowed_paths[0] == config.working_dir
 
     def test_load_from_toml(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
@@ -121,6 +134,32 @@ class TestServerConfig:
         content = path.read_text()
         assert "ltspice" in content
         assert "allowed_paths" in content
+        assert "analysis_budget_s" in content
+        assert "result_set_ttl_hours" in content
+
+    def test_default_sandbox_includes_the_claude_scratch_root(self, work_dir: Path):
+        """Claude Code tells an agent to write throwaway files to its scratch
+        directory, outside the working directory; the default sandbox admits
+        it so a deck written there runs without a copy first."""
+        root = claude_scratch_root()
+        assert root is not None
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        # The generated file documents the default without pinning a machine-
+        # specific path, so the same default reaches the file-less library boot.
+        assert "claude-<uid>" in path.read_text()
+        assert root in ServerConfig.load(path).allowed_paths
+        assert root in ServerConfig(working_dir=work_dir).allowed_paths
+
+    def test_analysis_budget_and_result_ttl_load_from_toml(
+        self,
+        work_dir: Path,
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text("[analysis]\nanalysis_budget_s = 12.5\nresult_set_ttl_hours = 48\n")
+        config = ServerConfig.load(toml_path)
+        assert config.analysis_budget_s == 12.5
+        assert config.result_set_ttl_hours == 48.0
 
     def test_generated_config_does_not_pin_max_parallel(
         self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -142,47 +181,82 @@ class TestServerConfig:
 
 
 class TestToolProfile:
-    """Tests for tool_profile configuration."""
+    """There is one tool surface, and no setting names it."""
 
-    def test_default_profile_is_full(self):
-        config = ServerConfig()
-        assert config.tool_profile == "full"
-
-    def test_profile_from_toml(self, work_dir: Path):
+    @pytest.mark.parametrize("value", ["consolidated", "full", "agentic", "bogus"])
+    def test_a_profile_key_in_toml_is_not_read(self, work_dir: Path, value: str):
+        """``[tools] profile`` is no longer a key this loader knows. Whatever it
+        names, the file still loads and the rest of the section is read — an
+        unknown key is ignored like any other."""
         toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "agentic"\n')
+        toml_path.write_text(f'[tools]\nprofile = "{value}"\nlisting = "compact"\n')
         config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "agentic"
+        assert not hasattr(config, "tool_profile")
+        assert config.tool_listing == "compact"
 
-    def test_invalid_profile_in_toml_falls_back(self, work_dir: Path):
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "bogus"\n')
-        config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "full"
-
-    def test_env_var_override(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
+    def test_a_profile_env_var_is_not_read(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "full")
         config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "agentic"
-
-    def test_env_var_overrides_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "full"\n')
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
-        config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "agentic"
-
-    def test_invalid_env_var_falls_back(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "bogus")
-        config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "full"
+        assert not hasattr(config, "tool_profile")
 
     def test_generated_config_includes_tools_section(self, work_dir: Path):
         path = work_dir / "generated.toml"
         generate_default_config(path)
         content = path.read_text()
         assert "[tools]" in content
-        assert "profile" in content
+        assert "listing" in content
+        assert "profile" not in content
+
+
+class TestToolListing:
+    """[tools] listing selects how the tool list is served."""
+
+    def test_default_listing_is_full(self):
+        assert ServerConfig().tool_listing == "compact"
+
+    @pytest.mark.parametrize("mode", ["full", "compact"])
+    def test_listing_from_toml(self, work_dir: Path, mode: str):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(f'[tools]\nlisting = "{mode}"\n')
+        assert ServerConfig.load(toml_path).tool_listing == mode
+
+    @pytest.mark.parametrize("mode", ["full", "compact"])
+    def test_listing_from_env(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: str):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", mode)
+        assert ServerConfig.load(work_dir / "nonexistent.toml").tool_listing == mode
+
+    def test_env_overrides_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nlisting = "full"\n')
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "compact")
+        assert ServerConfig.load(toml_path).tool_listing == "compact"
+
+    def test_unknown_value_in_toml_falls_back_to_the_default(
+        self, work_dir: Path, caplog: pytest.LogCaptureFixture
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nlisting = "sparse"\n')
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(toml_path)
+        assert config.tool_listing == "compact"
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert "sparse" in message
+        assert "compact" in message, "the warning must enumerate the valid values"
+
+    def test_unknown_env_value_does_not_clobber_a_valid_toml_listing(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nlisting = "compact"\n')
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "sparse")
+        assert ServerConfig.load(toml_path).tool_listing == "compact"
+
+    def test_generated_config_documents_the_listing_key(self, work_dir: Path):
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+        assert 'listing = "compact"' in content
+        assert '"full"' in content
 
 
 class TestSimulatorExeConfig:
@@ -424,3 +498,359 @@ class TestEnabledSimulators:
         monkeypatch.setenv("LTSPICE_MCP_ENABLED_SIMULATORS", "ngspice,ltspice")
         cfg = ServerConfig.load(work_dir / "nonexistent.toml")
         assert cfg.enabled_simulators == ["ngspice", "ltspice"]
+
+
+class TestSimulatorRemediation:
+    """The capabilities remediation names the keys the loader actually reads,
+    and leads with the allowlist when the allowlist is the cause."""
+
+    def test_names_the_loader_keys(self):
+        from ltspice_mcp.config import SIM_PATH_ENV
+        from ltspice_mcp.lib.simulator import simulator_remediation
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        remediation = simulator_remediation("ltspice", cfg)
+        assert remediation["config_key"] == "simulator.path"
+        assert remediation["env_var"] == SIM_PATH_ENV
+        assert remediation["config_file"] == str(cfg.config_path)
+        assert "restart" in str(remediation["action"])
+        # On this project's platforms an example executable exists for ltspice.
+        assert "LTspice" in str(remediation.get("example_value", "LTspice"))
+
+    def test_allowlist_exclusion_is_the_first_fact(self):
+        """A simulator turned off by [simulator] enabled must not be answered
+        with an install hint — the install is not the cause."""
+        from ltspice_mcp.lib.simulator import simulator_remediation
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        cfg.enabled_simulators = ["ngspice"]
+        remediation = simulator_remediation("ltspice", cfg)
+        assert remediation["excluded_by_allowlist"] is True
+        action = str(remediation["action"])
+        assert "simulator.enabled" in action
+        assert "Install" not in action
+
+    def test_loader_and_remediation_share_one_key_spelling(self):
+        """The constant is used at the loader's read site: a config written
+        with the remediation's key names must actually load."""
+        import textwrap
+
+        from ltspice_mcp.lib.simulator import simulator_remediation
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        remediation = simulator_remediation("ltspice", cfg)
+        section, key = str(remediation["config_key"]).split(".")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            toml = Path(tmp) / "ltspice-mcp.toml"
+            toml.write_text(
+                textwrap.dedent(f"""
+                    [{section}]
+                    {key} = "/opt/fake/LTspice.exe"
+                """)
+            )
+            loaded = ServerConfig.load(toml)
+        assert loaded.simulator_exe == Path("/opt/fake/LTspice.exe")
+
+
+# Every LTSPICE_MCP_* variable the loader reads, with a value distinct from
+# both the dataclass default and the TOML below.
+ENV_OVERRIDES: dict[str, str] = {
+    "LTSPICE_MCP_SIMULATOR": "ltspice",
+    "LTSPICE_MCP_ENABLED_SIMULATORS": "LTspice, xyce",
+    "LTSPICE_MCP_SIMULATOR_EXE": "/opt/env/ltspice",
+    "LTSPICE_MCP_NGBEHAVIOR": "  hsa  ",
+    "LTSPICE_MCP_WORKING_DIR": "/tmp/env-working-dir",
+    "LTSPICE_MCP_ALLOWED_PATHS": f"/tmp/env-a{os.pathsep}/tmp/env-b",
+    "LTSPICE_MCP_MAX_PARALLEL": "9",
+    "LTSPICE_MCP_MAX_EXPERIMENT_CASES": "88",
+    "LTSPICE_MCP_TIMEOUT": "99.5",
+    "LTSPICE_MCP_MAX_POINTS": "777",
+    "LTSPICE_MCP_ANALYSIS_BUDGET_S": "21.5",
+    "LTSPICE_MCP_DEFAULT_BUDGET": "3300",
+    "LTSPICE_MCP_RESULT_SET_TTL_HOURS": "72",
+    "LTSPICE_MCP_MAX_ESTIMATED_POINTS": "7654321",
+    "LTSPICE_MCP_MAX_RAW_MB": "256",
+    "LTSPICE_MCP_LOG_LEVEL": "error",
+    "LTSPICE_MCP_SYMBOL_PATHS": f"/tmp/env-sym-a{os.pathsep}/tmp/env-sym-b",
+    "LTSPICE_MCP_TOOL_LISTING": "full",
+    "LTSPICE_MCP_PERSIST_JOBS": "on",
+    "LTSPICE_MCP_RUN_CODE": "off",
+    "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "7",
+}
+
+# One TOML naming every key the loader reads, with values distinct from both
+# the dataclass defaults and the env values above, so a dropped key shows up
+# as a default and a swapped precedence shows up as the wrong source.
+FULL_TOML = """
+[simulator]
+default = "ngspice"
+path = "/opt/toml/ngspice"
+enabled = ["NGspice", " LTspice "]
+ngbehavior = "  kipsa  "
+
+[security]
+allowed_paths = ["/tmp/toml-a", "/tmp/toml-b"]
+
+[simulation]
+max_parallel = 6
+max_experiment_cases = 77
+timeout = 45.5
+max_estimated_points = 1234567
+max_raw_mb = 512
+
+[analysis]
+max_points = 555
+analysis_budget_s = 12.5
+default_budget = 2500
+result_set_ttl_hours = 48
+
+[logging]
+level = "debug"
+
+[schematic]
+symbol_paths = ["/tmp/sym-a", "/tmp/sym-b"]
+
+[tools]
+listing = "compact"
+run_code = true
+
+[state]
+persist_jobs = false
+preload_recent_count = 3
+"""
+
+
+@pytest.fixture
+def no_ltspice_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop every LTSPICE_MCP_* variable so a load sees only TOML + defaults."""
+    for name in list(os.environ):
+        if name.startswith("LTSPICE_MCP_"):
+            monkeypatch.delenv(name, raising=False)
+
+
+def _snapshot(cfg: ServerConfig) -> dict[str, object]:
+    """Every field of a loaded config, as a plain dict."""
+    return {f.name: getattr(cfg, f.name) for f in dataclasses.fields(cfg)}
+
+
+class TestLoadCoversEveryKey:
+    """Whole-surface snapshots of ``ServerConfig.load``.
+
+    Each key is read from TOML, overridden from the environment, and rejected
+    on a bad value in one place, so a change to how the loader is wired shows
+    up as a diff in a snapshot rather than as one silently dropped setting.
+    """
+
+    def test_every_toml_key_lands_on_its_field(self, work_dir: Path, no_ltspice_env: None):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(FULL_TOML)
+        assert _snapshot(ServerConfig.load(toml_path)) == {
+            "simulator": "ngspice",
+            "enabled_simulators": ["ngspice", "ltspice"],
+            "simulator_exe": Path("/opt/toml/ngspice"),
+            "ngbehavior": "kipsa",
+            "working_dir": Path.cwd(),
+            "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
+            "max_parallel_sims": 6,
+            "max_experiment_cases": 77,
+            "default_timeout": 45.5,
+            "max_estimated_points": 1234567,
+            "max_raw_mb": 512,
+            "max_points_returned": 555,
+            "analysis_budget_s": 12.5,
+            "result_set_ttl_hours": 48.0,
+            "default_budget": 2500,
+            "log_level": "DEBUG",
+            "symbol_paths": [Path("/tmp/sym-a"), Path("/tmp/sym-b")],
+            "tool_listing": "compact",
+            "run_code": True,
+            "persist_jobs": False,
+            "preload_recent_count": 3,
+            "config_path": toml_path,
+        }
+
+    def test_every_env_var_overrides_its_toml_key(
+        self, work_dir: Path, no_ltspice_env: None, monkeypatch: pytest.MonkeyPatch
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(FULL_TOML)
+        for name, value in ENV_OVERRIDES.items():
+            monkeypatch.setenv(name, value)
+        assert _snapshot(ServerConfig.load(toml_path)) == {
+            "simulator": "ltspice",
+            "enabled_simulators": ["ltspice", "xyce"],
+            "simulator_exe": Path("/opt/env/ltspice"),
+            "ngbehavior": "hsa",
+            "working_dir": Path("/tmp/env-working-dir"),
+            "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],
+            "max_parallel_sims": 9,
+            "max_experiment_cases": 88,
+            "default_timeout": 99.5,
+            "max_estimated_points": 7654321,
+            "max_raw_mb": 256,
+            "max_points_returned": 777,
+            "analysis_budget_s": 21.5,
+            "result_set_ttl_hours": 72.0,
+            "default_budget": 3300,
+            "log_level": "ERROR",
+            "symbol_paths": [Path("/tmp/env-sym-a"), Path("/tmp/env-sym-b")],
+            "tool_listing": "full",
+            "run_code": False,
+            "persist_jobs": True,
+            "preload_recent_count": 7,
+            "config_path": toml_path,
+        }
+
+    def test_env_overrides_apply_without_any_toml(
+        self, work_dir: Path, no_ltspice_env: None, monkeypatch: pytest.MonkeyPatch
+    ):
+        """With no TOML file at all, every env override still applies."""
+        missing = work_dir / "nonexistent.toml"
+        for name, value in ENV_OVERRIDES.items():
+            monkeypatch.setenv(name, value)
+        snapshot = _snapshot(ServerConfig.load(missing))
+        assert snapshot["max_parallel_sims"] == 9
+        assert snapshot["default_timeout"] == 99.5
+        assert snapshot["log_level"] == "ERROR"
+        assert snapshot["persist_jobs"] is True
+        assert snapshot["config_path"] == missing
+
+    def test_a_rejected_env_value_leaves_the_toml_value_standing(
+        self,
+        work_dir: Path,
+        no_ltspice_env: None,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """Every validating key: a bad env value warns and is dropped, so the
+        TOML value survives instead of being clobbered."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(FULL_TOML)
+        rejected = {
+            "LTSPICE_MCP_ENABLED_SIMULATORS": "",  # falsy: no override at all
+            "LTSPICE_MCP_NGBEHAVIOR": "   ",  # blank after strip
+            "LTSPICE_MCP_MAX_PARALLEL": "9999",  # above the bound
+            "LTSPICE_MCP_MAX_EXPERIMENT_CASES": "0",  # below the bound
+            "LTSPICE_MCP_TIMEOUT": "0",  # exclusive minimum
+            "LTSPICE_MCP_MAX_POINTS": "not-a-number",
+            "LTSPICE_MCP_ANALYSIS_BUDGET_S": "0",  # exclusive minimum
+            "LTSPICE_MCP_DEFAULT_BUDGET": "-1",
+            "LTSPICE_MCP_RESULT_SET_TTL_HOURS": "0",  # exclusive minimum
+            "LTSPICE_MCP_MAX_ESTIMATED_POINTS": "0",
+            "LTSPICE_MCP_MAX_RAW_MB": "0",
+            "LTSPICE_MCP_LOG_LEVEL": "LOUD",
+            "LTSPICE_MCP_TOOL_LISTING": "sparse",
+            "LTSPICE_MCP_PERSIST_JOBS": "maybe",
+            "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "-2",
+        }
+        for name, value in rejected.items():
+            monkeypatch.setenv(name, value)
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            snapshot = _snapshot(ServerConfig.load(toml_path))
+        assert snapshot["enabled_simulators"] == ["ngspice", "ltspice"]
+        assert snapshot["ngbehavior"] == "kipsa"
+        assert snapshot["max_parallel_sims"] == 6
+        assert snapshot["max_experiment_cases"] == 77
+        assert snapshot["default_timeout"] == 45.5
+        assert snapshot["max_points_returned"] == 555
+        assert snapshot["analysis_budget_s"] == 12.5
+        assert snapshot["default_budget"] == 2500
+        assert snapshot["result_set_ttl_hours"] == 48.0
+        assert snapshot["max_estimated_points"] == 1234567
+        assert snapshot["max_raw_mb"] == 512
+        assert snapshot["log_level"] == "DEBUG"
+        assert snapshot["tool_listing"] == "compact"
+        assert snapshot["persist_jobs"] is False
+        assert snapshot["preload_recent_count"] == 3
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        for named in (
+            "LTSPICE_MCP_MAX_PARALLEL",
+            "LTSPICE_MCP_MAX_EXPERIMENT_CASES",
+            "LTSPICE_MCP_TIMEOUT",
+            "LTSPICE_MCP_MAX_POINTS",
+            "LTSPICE_MCP_ANALYSIS_BUDGET_S",
+            "LTSPICE_MCP_DEFAULT_BUDGET",
+            "LTSPICE_MCP_RESULT_SET_TTL_HOURS",
+            "LTSPICE_MCP_MAX_ESTIMATED_POINTS",
+            "LTSPICE_MCP_MAX_RAW_MB",
+            "LTSPICE_MCP_LOG_LEVEL",
+            "LTSPICE_MCP_PERSIST_JOBS",
+            "LTSPICE_MCP_PRELOAD_RECENT_COUNT",
+        ):
+            assert named in message, f"no warning named {named}: {message!r}"
+
+    def test_a_rejected_toml_value_falls_back_to_the_default(
+        self, work_dir: Path, no_ltspice_env: None, caplog: pytest.LogCaptureFixture
+    ):
+        """The TOML side of the same contract: an out-of-range or wrongly typed
+        value is dropped with a warning, never half-applied."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(
+            "[simulator]\n"
+            "ngbehavior = 42\n"
+            'enabled = "ngspice"\n'
+            "[security]\n"
+            'allowed_paths = "/tmp/scalar"\n'
+            "[simulation]\n"
+            "max_parallel = 0\n"
+            "max_experiment_cases = 99999999\n"
+            "timeout = 0\n"
+            "max_estimated_points = 0\n"
+            "max_raw_mb = 0\n"
+            "[analysis]\n"
+            'max_points = "lots"\n'
+            "analysis_budget_s = 0\n"
+            "default_budget = -1\n"
+            "result_set_ttl_hours = 0\n"
+            "[logging]\n"
+            'level = "LOUD"\n'
+            "[schematic]\n"
+            'symbol_paths = "/tmp/scalar-sym"\n'
+            "[state]\n"
+            'persist_jobs = "yes"\n'
+            "preload_recent_count = -1\n"
+        )
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(toml_path)
+        defaults = ServerConfig(working_dir=config.working_dir)
+        assert config.ngbehavior is None
+        assert config.enabled_simulators == []
+        # A scalar string must NOT be expanded character-wise into paths.
+        assert config.allowed_paths == default_allowed_paths(config.working_dir)
+        assert config.symbol_paths == []
+        assert config.max_parallel_sims == defaults.max_parallel_sims
+        assert config.max_experiment_cases == defaults.max_experiment_cases
+        assert config.default_timeout == defaults.default_timeout
+        assert config.max_estimated_points == defaults.max_estimated_points
+        assert config.max_raw_mb == defaults.max_raw_mb
+        assert config.max_points_returned == defaults.max_points_returned
+        assert config.analysis_budget_s == defaults.analysis_budget_s
+        assert config.default_budget == defaults.default_budget
+        assert config.result_set_ttl_hours == defaults.result_set_ttl_hours
+        assert config.log_level == defaults.log_level
+        assert config.persist_jobs is True
+        assert config.preload_recent_count == defaults.preload_recent_count
+
+    def test_explicit_overrides_win_over_environment(
+        self, work_dir: Path, no_ltspice_env: None, monkeypatch: pytest.MonkeyPatch
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(FULL_TOML)
+        monkeypatch.setenv("LTSPICE_MCP_MAX_PARALLEL", "9")
+        config = ServerConfig.load(toml_path, overrides={"max_parallel_sims": 3})
+        assert config.max_parallel_sims == 3
+
+
+def test_checked_in_example_matches_the_generator(tmp_path: Path) -> None:
+    """ltspice-mcp.example.toml is the generator's output plus a two-line
+    header; it once drifted to a removed profile for a whole release cycle."""
+    from ltspice_mcp.config import generate_default_config
+
+    generated = tmp_path / "generated.toml"
+    generate_default_config(generated)
+    example = (Path(__file__).resolve().parent.parent / "ltspice-mcp.example.toml").read_text()
+    body = "\n".join(example.splitlines()[2:]) + "\n"
+    expected = "\n".join(generated.read_text().splitlines()[1:]) + "\n"
+    assert body == expected

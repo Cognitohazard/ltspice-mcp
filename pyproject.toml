@@ -1,8 +1,8 @@
 [project]
 name = "ltspice-mcp"
 dynamic = ["version"]
-description = "MCP server for LTspice: lets Claude and other LLMs edit schematics, run SPICE simulations, and parse results."
-keywords = ["mcp", "ltspice", "spice", "ngspice", "qspice", "circuit-simulation", "eda", "claude", "anthropic", "model-context-protocol", "ai"]
+description = "SPICE simulation through an MCP server and an in-process Python API for LTspice and ngspice. Supports schematic editing, sweeps, Monte Carlo analysis, and structured measurements."
+keywords = ["mcp", "ltspice", "spice", "ngspice", "qspice", "circuit-simulation", "eda", "claude", "anthropic", "model-context-protocol", "ai", "python-api", "analog", "monte-carlo"]
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
@@ -25,12 +25,17 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.0,<5.0",
-    "mcp[cli]>=1.27.0,<2.0",
+    # No [cli] extra: nothing here imports typer or rich, and that extra pulls
+    # both into every install for the `mcp` command-line tool we never invoke.
+    "mcp>=2.1,<3.0",
     "numpy>=1.26,<3.0",
     # Direct use (scoped simulator kill, job owner-pid liveness); also a
     # spicelib transitive, so this adds no new install weight.
     "psutil>=5.9,<8.0",
-    "pydantic>=2.7,<3.0",
+    # 2.9 is the floor for BeforeValidator(json_schema_input_type=...), which is
+    # what lets a coerced argument (verify_circuit's boolean `render`) advertise
+    # the spelling it accepts instead of only accepting it.
+    "pydantic>=2.9,<3.0",
     "rapidfuzz>=3.0,<4.0",
     "scipy>=1.12,<2.0",
     # Capped below 1.6 (tested range). spicelib 1.6 refactored the editor model:
@@ -43,6 +48,13 @@ dependencies = [
     "spicelib>=1.4.9,<1.6",
     "tomlkit>=0.14.0,<1.0",
 ]
+
+[project.optional-dependencies]
+# Rasterizing a rendered schematic to PNG. Optional because cairosvg pulls in
+# native Cairo libraries, and a server that never returns an image should not
+# carry them: without this extra a render still comes back, as SVG markup rather
+# than a bitmap (see lib/raster.py).
+raster = ["cairosvg>=2.7,<3.0"]
 
 [project.urls]
 Homepage = "https://github.com/cognitohazard/ltspice-mcp"
@@ -60,10 +72,34 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
+# Everything under the package directory ships, including the runtime data in
+# src/ltspice_mcp/assets/ (the packaged SPICE guide and the bundled widget
+# assets) — the server reads those at run time, so they are not optional.
 packages = ["src/ltspice_mcp"]
+
+# An explicit list, because the default sdist ships everything git tracks: the
+# repo's development surface (CI workflows, the maintainer's notes, test
+# fixtures, packaging scratch) is not something a source install needs.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src",
+    "tests",
+    "docs",
+    "skills",
+    "README.md",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE",
+    "SECURITY.md",
+    "pyproject.toml",
+]
 
 [dependency-groups]
 dev = [
+    # Ships as the optional 'raster' extra, but is a dev requirement: without it
+    # every rasterization test skips and the PNG render path would go unexercised
+    # in CI.
+    "cairosvg>=2.7,<3.0",
     "hypothesis>=6.152.4",
     "pyright>=1.1",
     "pytest>=9.0.2",
@@ -95,7 +131,7 @@ select = [
 ]
 ignore = [
     "E501",    # line length (handled by formatter)
-    "TRY003",  # long exception messages are fine for a CLI tool
+    "TRY003",  # a long exception message is the caller-facing text here
     "TRY300",  # return-in-try is fine when the logic reads better inline
     "TRY301",  # raise-within-try is used intentionally for re-raising with context
     "TRY400",  # logger.error in except is acceptable

@@ -12,7 +12,7 @@ hit, not an exhaustive grammar. It grows as we find more.
 Implementation note: rules walk classified tokens (``MeasCard.function_calls``)
 rather than substring-matching regex. This keeps cases like
 ``.MEAS WHEN x=vdb_safe`` (a variable name that happens to start with
-``vdb``) from being false-flagged, and opens the door to checks the
+``vdb``) from being false-flagged, and opens the interface to checks the
 regex couldn't do — signal-reference resolution, analysis-kind
 mismatches, etc.
 """
@@ -83,9 +83,9 @@ _RULES: tuple[_Rule, ...] = (
             "supports mag(), re(), im(), ph()."
         ),
         suggestion=(
-            "Use mag(V(node)) and convert to dB downstream, or rely on "
-            "bode_metrics(mode='filter') for −3 dB cutoffs and "
-            "bode_metrics(mode='point') for point queries."
+            "Use mag(V(node)) and convert to dB downstream, or rely on the "
+            "analyze_results 'bode_filter' recipe for −3 dB cutoffs and "
+            "'bode_point' for a gain/phase reading at one frequency."
         ),
     ),
     _Rule(
@@ -107,9 +107,9 @@ _RULES: tuple[_Rule, ...] = (
             "waveform-viewer-only function in LTspice."
         ),
         suggestion=(
-            "Compute group delay via bode_metrics(mode='point') with "
-            "include_unwrapped_phase=True, then numerically differentiate "
-            "the unwrapped phase."
+            "Read phase with the analyze_results 'bode_point' recipe at two "
+            "closely spaced frequencies and differentiate numerically; "
+            "phase comes back wrapped, so undo a ±360° step between samples."
         ),
     ),
 )
@@ -524,7 +524,7 @@ _TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z
 # V(...) / I(...) probe references inside expression text on instance
 # cards (B/E/G bodies, behavioural params). Probed identifiers are
 # connections too — they feed the suppressor set, never a terminal count.
-_PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
+PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
 
 
 def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
@@ -694,7 +694,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                     continue
                 record(card.scope, node, inst.ref, card)
             suppressed.update(tok.lower() for tok in rest)
-            for probe in _PROBE_REF_RE.finditer(card.body):
+            for probe in PROBE_REF_RE.finditer(card.body):
                 for part in probe.group(1).split(","):
                     name = part.strip()
                     if name:
@@ -702,7 +702,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
         elif card.kind in ("directive", "meas"):
             # A node that exists only to be probed by a .meas/.print/.plot/.save
             # is intentional, not dangling — suppress it like instance probe refs.
-            for probe in _PROBE_REF_RE.finditer(card.body):
+            for probe in PROBE_REF_RE.finditer(card.body):
                 for part in probe.group(1).split(","):
                     name = part.strip()
                     if name:
@@ -825,7 +825,7 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
         # .func defines a formal-parameter expression; its V(formal) is not a node.
         if card.kind == "directive" and card.body.lstrip().lower().startswith(".func"):
             continue
-        for probe in _PROBE_REF_RE.finditer(card.body):
+        for probe in PROBE_REF_RE.finditer(card.body):
             kind = probe.group(0)[0].upper()  # 'V' or 'I'
             for part in probe.group(1).split(","):
                 name = part.strip()

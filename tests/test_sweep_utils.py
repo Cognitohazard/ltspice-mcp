@@ -1,8 +1,16 @@
-"""Unit tests for sweep range generation."""
+"""Unit tests for sweep range generation and id minting."""
+
+import re
 
 import pytest
 
-from ltspice_mcp.lib.sweep_utils import generate_sweep_range, sweep_range_count
+from ltspice_mcp.lib.store import validate_job_id
+from ltspice_mcp.lib.sweep_utils import (
+    generate_id,
+    generate_sweep_range,
+    sanitize_stem,
+    sweep_range_count,
+)
 
 
 class TestLinearSweep:
@@ -100,3 +108,48 @@ class TestSweepRangeCount:
             sweep_range_count(0, 10, None, 5, "quadratic")
         with pytest.raises(ValueError, match="positive"):
             sweep_range_count(0, 100, None, 5, "log")
+
+
+class TestGenerateId:
+    """Ids name their deck, and stay usable as filenames and kill tokens."""
+
+    def test_stemless_form_is_prefix_timestamp_random(self):
+        assert re.fullmatch(r"exp_\d+_[0-9a-f]{8}", generate_id("exp"))
+
+    def test_stem_is_embedded_between_prefix_and_timestamp(self):
+        assert re.fullmatch(r"exp_rc-filter_\d+_[0-9a-f]{8}", generate_id("exp", "rc-filter"))
+
+    @pytest.mark.parametrize(
+        ("stem", "expected"),
+        [
+            ("RC Filter", "rc-filter"),
+            ("rc.filter.v2", "rc-filter-v2"),
+            ("two__scores", "two-scores"),
+            ("--edges--", "edges"),
+            ("ldo_µA_bias", "ldo-a-bias"),
+            ("x" * 200, "x" * 24),
+        ],
+    )
+    def test_sanitization(self, stem: str, expected: str):
+        assert sanitize_stem(stem) == expected
+
+    @pytest.mark.parametrize("stem", ["", "   ", "___", "回路", "..."])
+    def test_unusable_stem_falls_back_to_the_stemless_form(self, stem: str):
+        assert sanitize_stem(stem) == ""
+        assert re.fullmatch(r"exp_\d+_[0-9a-f]{8}", generate_id("exp", stem))
+
+    def test_a_long_stem_cannot_push_the_id_past_the_job_id_limit(self):
+        job_id = generate_id("exp", "a-very-long-deck-name-" + "z" * 200)
+        assert validate_job_id(job_id) == job_id
+
+    @pytest.mark.parametrize("stem", [None, "amp", "RC Filter.v2", "x" * 200])
+    def test_ids_stay_filename_safe(self, stem: str | None):
+        assert re.fullmatch(r"[a-z0-9_-]+", generate_id("exp", stem))
+
+    @pytest.mark.parametrize("stem", [None, "amp", "amp_v2", "RC Filter.v2", "回路"])
+    def test_underscore_count_is_fixed_whatever_the_stem(self, stem: str | None):
+        # proc_kill matches a job id at a filename boundary; that match can only
+        # be scoped to one job because no id is a prefix of another, which rests
+        # on the stem contributing no underscores of its own.
+        job_id = generate_id("exp", stem)
+        assert job_id.count("_") == (3 if sanitize_stem(stem or "") else 2)

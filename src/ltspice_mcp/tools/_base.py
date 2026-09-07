@@ -1,31 +1,47 @@
 """Shared utilities for tool handlers."""
 
-import asyncio
+import base64
 import contextlib
-import copy
+import contextvars
 import hashlib
 import json
 import logging
 import math
-import re
-import types as _stdlib_types
-import typing
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from functools import cache, wraps
+from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
 
 from mcp import types
-from pydantic import BaseModel, ConfigDict
+from pydantic import Field
 
-from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
-from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
-from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
+from ltspice_mcp.errors import PathSecurityError, SimulationError
+from ltspice_mcp.lib import atomic_write_bytes, response_budget
+
+# Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
+# below the tool layer declare models too), and the tool modules reach it here.
+from ltspice_mcp.lib.models import StrictModel as StrictModel
+from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER
-from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
+
+# Re-exported, not defined here: both netlist injections live in the runner
+# layer so the experiment coordinator (lib/) can call them without importing
+# tools/, and the tool handlers keep reaching them through this module as before.
+from ltspice_mcp.lib.runner_base import inject_logopinfo as inject_logopinfo
+from ltspice_mcp.lib.runner_base import (
+    inject_ngspice_control_write as inject_ngspice_control_write,
+)
+from ltspice_mcp.lib.schematic_renderer import render_svg
+from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
+from ltspice_mcp.lib.simulator import no_simulator_message, simulator_library_roots
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._schema import (
+    ToolInput,
+    build_input_schema,
+    schema_from_typeddict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +49,11 @@ logger = logging.getLogger(__name__)
 # Response helpers — standardize tool output format
 #
 # All helpers return types.CallToolResult, the MCP protocol's canonical
-# response type.  text_response() returns text-only (for confirmations).
-# format_response() returns both human-readable text content AND structured
-# data via structuredContent (for data-returning tools).
+# response type. format_response() returns both human-readable text content AND
+# structured data via structuredContent, which is what every tool here does:
+# a structured-aware client renders only structuredContent, so the text channel
+# is presentation and the data dict has to carry everything a caller acts on.
 # ---------------------------------------------------------------------------
-
-
-def text_response(text: str) -> types.CallToolResult:
-    """Return a text-only CallToolResult (confirmations, simple messages)."""
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=text)],
-    )
 
 
 # Most named key paths one scrub warning lists — a fully-NaN trace array
@@ -92,7 +102,7 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
     NaN/Inf are not JSON: pydantic silently serializes them as null on the
     wire while the text channel prints "nan" — the two channels contradict
     each other exactly on degenerate results. Per the emit-a-null-over-a-
-    meaningless-number doctrine (lib/result_observations.py), substitute null
+    meaningless-number rule (lib/result_observations.py), substitute null
     OURSELVES and say so, naming the affected keys, so the substitution is a
     surfaced fact instead of a serializer accident.
     """
@@ -118,7 +128,7 @@ def json_response(data: Any) -> types.CallToolResult:
         data = sanitize_payload(data)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=json.dumps(data, indent=2, allow_nan=False))],
-        structuredContent=data,
+        structured_content=data,
     )
 
 
@@ -152,8 +162,51 @@ def format_response(
     payload = sanitize_payload(payload)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
-        structuredContent=payload,
+        structured_content=payload,
     )
+
+
+def image_response(
+    image: RenderedImage,
+    text: str,
+    data: Mapping[str, Any] | None = None,
+) -> types.CallToolResult:
+    """Return a rendered image plus the metadata describing it.
+
+    A raster is carried as an MCP image block, which is what a model actually
+    looks at. Vector output is carried as text instead: SVG is markup, and
+    ``image/svg+xml`` is not reliably rendered by clients, so sending it as an
+    image block would produce a blank space where a picture should be.
+
+    Self-sufficiency contract (as for :func:`format_response`): a client that
+    renders only ``structuredContent`` must still be able to act, so the image's
+    own description — format, scale actually applied, byte size, and any note
+    explaining a degraded result — is always mirrored there. That is what tells
+    a caller it asked for a PNG and received SVG, without decoding anything.
+    """
+    payload: dict[str, Any] = dict(data or {})
+    if "image" in payload:
+        raise ValueError(
+            "image_response owns the 'image' key in structuredContent; the "
+            "caller's data must not set it (rename the caller's key)"
+        )
+    payload["image"] = image.to_dict()
+    payload = sanitize_payload(payload)
+
+    content: list[Any] = []
+    if image.is_raster:
+        content.append(
+            types.ImageContent(
+                type="image",
+                data=base64.b64encode(image.data).decode("ascii"),
+                mime_type=image.mime_type,
+            )
+        )
+    else:
+        content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
+    content.append(types.TextContent(type="text", text=text))
+
+    return types.CallToolResult(content=content, structured_content=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +225,7 @@ FORMAT_DESCRIPTION = (
 # contract). Sites needing a custom description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
-# Free-text measurement caveats (see the observations-vs-warnings doctrine in
+# Free-text measurement caveats (see the observations-vs-warnings rule in
 # lib/result_observations.py).
 WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 
@@ -191,17 +244,6 @@ SUGGESTIONS_SCHEMA: dict[str, Any] = {
                 "source_path": {"type": "string"},
             },
         },
-    },
-}
-
-PAGINATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "total": {"type": "integer"},
-        "offset": {"type": "integer"},
-        "limit": {"type": "integer"},
-        "has_more": {"type": "boolean"},
-        "next_offset": {"type": ["integer", "null"]},
     },
 }
 
@@ -279,7 +321,7 @@ MEAS_ERRORS_SCHEMA: dict[str, Any] = {
 }
 
 # Surfaced result observations — see lib/result_observations.py and the
-# "Result-trust: surface, don't judge" in CLAUDE.md. A "surfacer"
+# "Result trust: report facts, do not rate them" in CLAUDE.md. A surfacing
 # layer: facts lifted into view for the consuming agent to judge, never a trust
 # verdict. ``severity`` is present only on ``relay`` items (the simulator's own
 # classification); ``value``/``reconciliation``/``coverage`` items omit it.
@@ -318,7 +360,7 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "items": {"type": ["number", "null"]},
                 "description": (
                     "Per-.step scalar(s). For a WHEN/AT measurement this is the "
-                    "constant trigger LEVEL, not the crossing point — read 'at' "
+                    "constant trigger level, not the crossing point; read 'at' "
                     "for the crossing time/frequency."
                 ),
             },
@@ -337,7 +379,7 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "items": {"type": ["number", "null"]},
                 "description": (
                     "Crossing time (.tran) or frequency (.ac) for a WHEN/AT point "
-                    "measurement — THIS is the answer for a WHEN rise-time/crossing "
+                    "measurement. This is the answer for a WHEN rise-time/crossing "
                     "query; 'values' holds the constant level. Null for plain "
                     "value measurements."
                 ),
@@ -346,23 +388,6 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
         "required": ["values"],
     },
 }
-
-
-def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
-    """Render structured .MEAS errors for the text-format response.
-
-    Returns the lines (no trailing blank); callers append to their own
-    line list. Empty input returns an empty list so callers don't need
-    to guard.
-    """
-    if not meas_errors:
-        return []
-    lines = [f".MEAS errors ({len(meas_errors)}):"]
-    for me in meas_errors:
-        lines.append(f"  Directive: {me['directive']}")
-        if me.get("suggestion"):
-            lines.append(f"    Suggestion: {me['suggestion']}")
-    return lines
 
 
 def format_observations(observations: list[dict[str, Any]]) -> list[str]:
@@ -381,28 +406,336 @@ def format_observations(observations: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-RO_ANNOTATIONS = types.ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-)
+# ---------------------------------------------------------------------------
+# The shared response envelope
+#
+# Every consolidated tool's payload carries these five keys, and they mean the
+# same thing on all of them. Defined once here so agreement is a property of
+# the construction rather than of a test that compares six hand-written
+# schemas.
+# ---------------------------------------------------------------------------
+
+#: The ratified call-level outcome vocabulary, in escalating order.
+CONTRACT_OUTCOMES: tuple[str, ...] = ("complete", "partial", "failed", "in_progress")
+
+CallOutcome = Literal["complete", "partial", "failed", "in_progress"]
 
 
-class StrictModel(BaseModel):
-    """Shared Pydantic config for all strict models (tool inputs and nested schemas)."""
+class Envelope(TypedDict, total=False):
+    """The five keys shared by every consolidated tool's payload.
 
-    model_config = ConfigDict(
-        extra="forbid",
-        str_strip_whitespace=True,
-        validate_assignment=True,
+    ``outcome`` — the call-level verdict, from ``CONTRACT_OUTCOMES``, decided
+    by ``outcome_of``.
+
+    ``failures`` — what did not work. One channel, but deliberately NOT one row
+    shape: a verify failure names the stage that failed, and a receipt failure
+    names the case that failed. Each tool declares its own row schema; what is
+    shared is that the channel exists, is an array, and is separate from the
+    two below.
+
+    ``observations`` — is the data trustworthy: relayed simulator errors,
+    coverage gaps, provenance facts. Structured on the tools that have a
+    structured vocabulary (``OBSERVATIONS_SCHEMA``), free text on the rest.
+
+    ``warnings`` — did this measurement assume something: a clamped window, an
+    unparseable deck diffed as empty. Free text, always actionable.
+
+    ``hint`` — the one next step, mirrored from the text channel because a
+    structured-aware client renders only ``structuredContent``.
+
+    ``observations`` and ``warnings`` are never merged; see the
+    surface-don't-judge rules in ``lib/result_observations.py``.
+    """
+
+    outcome: CallOutcome
+    failures: list[Any]
+    observations: list[Any]
+    warnings: list[str]
+    hint: str
+
+
+#: The envelope's keys, in declaration order. Derived from the type so the
+#: contract battery reads one declaration instead of restating the list.
+ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
+
+#: The three fact channels, which stay separate on every tool that has them.
+ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
+
+
+def outcome_of(
+    failures: Any,
+    *,
+    partial: bool = False,
+    in_progress: bool = False,
+    delivered: bool = True,
+) -> CallOutcome:
+    """The one call-level outcome rule.
+
+    ``failures`` is anything truthy-when-non-empty (a list, a count, a bool).
+
+    * ``in_progress`` — the work has not reached a terminal state, so nothing
+      else is decided yet. It outranks every other signal.
+    * ``failed`` — something failed AND nothing came back with it. Pass
+      ``delivered=False`` from a surface where a failure means the whole call
+      produced nothing; the default is the read/batch case, where a failed item
+      sits beside items that answered.
+    * ``partial`` — something failed, or the caller-visible shortfall in
+      ``partial`` was recorded, but results came back too.
+    * ``complete`` — nothing failed and nothing fell short.
+
+    The shortfalls each tool counts as ``partial`` are its own — a finding of
+    error severity, a comparison mismatch, a truncated page, a run that never
+    produced — so they arrive as one already-decided flag rather than as a
+    growing pile of tool-specific branches in here.
+    """
+    if in_progress:
+        return "in_progress"
+    has_failures = bool(failures)
+    if has_failures and not delivered:
+        return "failed"
+    if has_failures or partial:
+        return "partial"
+    return "complete"
+
+
+def comparison_mismatch(comparison: Mapping[str, Any] | None) -> bool:
+    """Anything short of a positive match — a real difference OR no verdict at all.
+
+    Deliberately not ``not equivalent``: only ``True`` is a clean result, so a null
+    verdict (the compared side could not be exported or parsed) keeps the outcome
+    off ``complete`` instead of falling through it. Shared, because
+    ``verify_circuit`` and ``edit_schematic`` both compare against a reference and
+    a caller cannot be told the same mismatch is a shortfall on one and a clean
+    result on the other. ``None`` means no comparison was asked for, which is no
+    shortfall.
+    """
+    if comparison is None:
+        return False
+    return comparison.get("equivalent") is not True
+
+
+def outcome_schema(*outcomes: str) -> dict[str, Any]:
+    """The ``outcome`` property, restricted to the outcomes a tool can reach.
+
+    A read that cannot fail the whole call never returns ``failed``, and a tool
+    with no durable job never returns ``in_progress``; declaring the values a
+    tool can actually produce is what makes the enum worth reading. Every value
+    must come from ``CONTRACT_OUTCOMES``.
+    """
+    chosen = outcomes or CONTRACT_OUTCOMES
+    stray = [value for value in chosen if value not in CONTRACT_OUTCOMES]
+    if stray:
+        raise ValueError(f"outcome(s) {stray} are not in the ratified vocabulary")
+    return {"type": "string", "enum": list(chosen)}
+
+
+OUTCOME_SCHEMA: dict[str, Any] = outcome_schema()
+
+
+def failures_schema(row: dict[str, Any]) -> dict[str, Any]:
+    """The ``failures`` channel over one tool's failure-row shape."""
+    return {"type": "array", "items": row}
+
+
+# One lint/check finding, wherever findings are reported. ``at`` locates it as
+# precisely as the checked artifact allows: a netlist has a file and a line, a
+# schematic also has coordinates, and only ``file`` is guaranteed.
+FINDING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "rule_id": {"type": "string"},
+        "severity": {"type": "string"},
+        "ok": {"type": "boolean"},
+        "evidence": {},
+        "at": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string"},
+                "line": {"type": "integer"},
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+            },
+            "required": ["file"],
+        },
+        "subject": {"type": "string"},
+    },
+    "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
+}
+
+#: The keys every offset page declares — see ``lib/pagination.page``, which
+#: builds them.
+PAGE_REQUIRED: list[str] = ["items", "total", "returned", "truncated", "next_cursor"]
+
+
+def page_schema(
+    items: dict[str, Any] | None = None,
+    **extra_properties: dict[str, Any],
+) -> dict[str, Any]:
+    """The offset-page object: the five shared keys plus a tool's own additions.
+
+    ``items`` overrides the item-array schema (a tool with a narrower row
+    passes its own fragment). ``extra_properties`` are declared but not
+    required, so a reader of any page can rely on the five without knowing
+    which tool produced it.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "items": items
+            if items is not None
+            else {"type": "array", "items": {"type": "object"}},
+            "total": {"type": "integer"},
+            "returned": {"type": "integer"},
+            "truncated": {"type": "boolean"},
+            **extra_properties,
+            "next_cursor": {"type": ["string", "null"]},
+        },
+        "required": list(PAGE_REQUIRED),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Shared argument models
+#
+# "Compare this against that netlist" is the same request wherever it is asked,
+# so both tools that ask it take the same model. A tool that can do more than
+# the shared model describes SUBCLASSES it (verify's compare also chooses
+# between the two comparison modes) rather than growing a parallel spelling, so
+# every field on the base means the same thing on every tool and a field a tool
+# cannot honour is not advertised there at all.
+#
+# ``RenderPolicy`` is the base for the same reason even though verify_circuit is
+# the only tool that draws today: it is the half of a render policy any renderer
+# here can honour, and ``api/types.py`` exports it under that name.
+# ---------------------------------------------------------------------------
+
+
+class RenderPolicy(StrictModel):
+    """How to draw a schematic: the choices any renderer here can honour."""
+
+    format: Literal["png", "svg"] = Field(
+        default="png",
+        description=(
+            "PNG (lossless, what a model looks at) needs the optional 'raster' "
+            "extra; without it the render degrades to SVG and says so."
+        ),
+    )
+    scale: float = Field(
+        default=DEFAULT_SCALE,
+        ge=0.5,
+        le=4.0,
+        description=(
+            "Render scale. Image token cost tracks pixel area, so halving the "
+            "scale costs about a quarter as much."
+        ),
+    )
+    max_pixels: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Cap the rendered pixel area. A PNG larger than this is re-rendered at "
+            "a reduced scale that fits, and 'downscaled' is set. Bounds inline cost."
+        ),
     )
 
 
-class ToolInput(StrictModel):
-    """Base for top-level tool input models registered via @registry.tool(input_model=...)."""
+class CompareSpec(StrictModel):
+    """What to compare a circuit against, and how closely."""
 
-    pass
+    reference: str = Field(
+        description=(
+            "Reference netlist: a file path, or literal netlist text (anything "
+            "containing a newline is read as text)."
+        ),
+    )
+    anchors: list[str] | None = Field(
+        default=None,
+        description=(
+            "Named nets that must map by name between the reference and this "
+            "circuit — ports, rails, outputs. A design that is isomorphic but "
+            "puts 'vout' in the wrong place fails on these. Ground is implicit."
+        ),
+    )
+    rtol: float = Field(
+        default=1e-6,
+        description="Relative tolerance when comparing numeric values and parameters.",
+    )
+
+
+def render_spellings(policy: type[RenderPolicy]) -> str:
+    """The refusal text for a bad ``render`` argument, listing what does work.
+
+    Read off the policy's own fields — names, and for a closed choice its
+    values — so a tool that adds a field (or has fewer) cannot advertise a
+    spelling its model would reject, and a renamed value cannot leave the
+    refusal naming the old one.
+    """
+    parts: list[str] = []
+    for name in sorted(policy.model_fields):
+        annotation = policy.model_fields[name].annotation
+        choices = get_args(annotation) if get_origin(annotation) is Literal else ()
+        parts.append(f"{name} {'|'.join(repr(c) for c in choices)}" if choices else name)
+    return (
+        "render takes true (draw with the default policy), false or omitted (do "
+        f"not draw), or an object with any of: {', '.join(parts)}"
+    )
+
+
+def coerce_render_policy(value: Any, *, policy: type[RenderPolicy]) -> Any:
+    """Accept the bare-boolean spellings of "just draw it" / "do not draw".
+
+    Bind it into a tool's ``render`` field with ``BeforeValidator`` and a
+    ``json_schema_input_type`` naming that tool's policy class; see the
+    ``RenderArgument`` alias in verify.py. ``policy`` is required because the
+    refusal text is read off it, and a default would let a tool advertise the
+    base model's spellings while validating against its own.
+
+    ``render=True`` is what a caller reaches for first, and rejecting it used to
+    name the policy class — a type the message gave no way to reach — instead of
+    the keys and values that actually work. The boolean is coerced here so the
+    policy object stays the single source of truth for the defaults, and the
+    refusal for anything else enumerates the accepted spellings inline.
+    """
+    if value is True:
+        return {}
+    if value is False:
+        return None
+    if value is None or isinstance(value, (Mapping, RenderPolicy)):
+        return value
+    raise ValueError(render_spellings(policy))
+
+
+# The behaviour hints a client shows a person before it approves a call. Each
+# constant names what the four flags MEAN together, so a tool declares the
+# claim it is making rather than four booleans a reader has to re-derive.
+
+#: Reads and reports; changes nothing, and the same call answers the same way.
+RO_ANNOTATIONS = types.ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+
+#: Starts new work, leaving new artifacts beside whatever was already there.
+#: Calling it again does the work again rather than returning the first answer,
+#: and it reaches a simulator and a filesystem outside the server's own state.
+NEW_WORK_ANNOTATIONS = types.ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=True,
+)
+
+#: Changes something that is already there — a running job, an exported file —
+#: within the paths and records this server owns. Repeating the call settles on
+#: the same state instead of changing more.
+REPEATABLE_CHANGE_ANNOTATIONS = types.ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
 
 
 @dataclass(frozen=True)
@@ -412,182 +745,49 @@ class RegisteredTool:
     definition: types.Tool
     handler: Callable
     input_model: type[ToolInput] | None
-    profiles: frozenset[str]
-    # Deprecated former names that still dispatch to this tool but are NOT
-    # advertised in the tool list (keeps a rename back-compatible without
-    # growing the tool surface).
-    aliases: frozenset[str] = frozenset()
+    gate: str | None = None
+    """The ``ServerConfig`` field that must be true for a session to serve the
+    tool, or None for a tool every session serves. The one declaration the
+    served surface, the reference table, the capabilities report and the
+    instructions all derive from."""
 
 
-def _strip_titles(node: Any) -> Any:
-    """Recursively remove Pydantic title metadata from a JSON schema node."""
-    if isinstance(node, dict):
-        node = {k: _strip_titles(v) for k, v in node.items() if k != "title"}
-        return node
-    if isinstance(node, list):
-        return [_strip_titles(item) for item in node]
-    return node
+def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
+    """Declare the ``warnings`` key any payload can grow.
 
+    ``sanitize_payload`` injects a top-level ``warnings`` list into ANY
+    tool's payload the moment a float in it is non-finite — reachable
+    through raw waveform samples on a diverged run. A schema that closes
+    itself with ``additionalProperties: false`` and does not declare the key
+    therefore rejects its own response exactly when a run went wrong, and a
+    strict client rejects the whole ``tools/list`` over one such schema,
+    disabling every tool on the server.
 
-def _inline_json_schema(node: Any, defs: dict[str, Any]) -> Any:
-    """Inline ``$defs`` references in a Pydantic-generated schema."""
-    if isinstance(node, dict):
-        ref = node.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            name = ref.split("/")[-1]
-            resolved = copy.deepcopy(defs[name])
-            return _inline_json_schema(resolved, defs)
-        return {key: _inline_json_schema(value, defs) for key, value in node.items()}
-    if isinstance(node, list):
-        return [_inline_json_schema(item, defs) for item in node]
-    return node
+    Declared here because this is the schema choke point, mirroring the
+    response choke point that adds the key: per-tool declarations put the
+    two in different places and let each new tool omit it silently. Both
+    schema entry points pass through it: ``@registry.tool`` and
+    ``declare_output_schema``.
 
-
-def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
-    """Generate a cleaned MCP-ready JSON schema from a Pydantic model."""
-    schema = input_model.model_json_schema()
-    defs = schema.pop("$defs", {})
-    schema = _inline_json_schema(schema, defs)
-    return _strip_titles(schema)
-
-
-# ---------------------------------------------------------------------------
-# TypedDict → JSON Schema generator
-# ---------------------------------------------------------------------------
-
-
-_PRIMITIVE_MAP: dict[type, str] = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-}
-
-
-def _is_typeddict(tp: Any) -> bool:
-    return isinstance(tp, type) and typing.is_typeddict(tp)
-
-
-def _jsontype_from_union(args: tuple[Any, ...]) -> dict[str, Any]:
-    """Handle ``X | None`` and ``X | Y | None`` unions.
-
-    ``X | None`` becomes ``{"type": ["X", "null"]}`` when X is a single
-    primitive — the common case for ``float | None`` fields. Mixed unions
-    with complex members fall back to ``anyOf``.
+    Edits the schema in place and returns it, so a module's exported
+    ``*_OUTPUT_SCHEMA`` constant IS the schema clients are served — a copy
+    would leave the two able to disagree, which is the drift this exists to
+    remove. A schema that already declares ``warnings`` is left alone.
     """
-    non_none = [a for a in args if a is not type(None)]
-    has_none = len(non_none) != len(args)
-    if len(non_none) == 1:
-        inner = _schema_for_type(non_none[0])
-        if has_none and "type" in inner and isinstance(inner["type"], str):
-            type_val = inner["type"]
-            return {**inner, "type": [type_val, "null"]}
-        if has_none:
-            # Complex inner (nested object/array) — use anyOf with null.
-            return {"anyOf": [inner, {"type": "null"}]}
-        return inner
-    variants = [_schema_for_type(a) for a in non_none]
-    if has_none:
-        variants.append({"type": "null"})
-    return {"anyOf": variants}
-
-
-def _is_union(tp: Any) -> bool:
-    """True for both ``typing.Union[X, Y]`` and ``X | Y`` syntax."""
-    if get_origin(tp) is Union:
-        return True
-    # Python 3.10+: `X | Y` has origin == types.UnionType (the class).
-    return get_origin(tp) is _stdlib_types.UnionType
-
-
-def _schema_for_type(tp: Any) -> dict[str, Any]:
-    """Return a JSON Schema fragment for a type annotation."""
-    if tp is Any:
-        return {}
-    if tp is type(None):
-        return {"type": "null"}
-    if tp in _PRIMITIVE_MAP:
-        return {"type": _PRIMITIVE_MAP[tp]}
-    if _is_typeddict(tp):
-        return schema_from_typeddict(tp)
-
-    origin = get_origin(tp)
-    args = get_args(tp)
-
-    if origin is Literal:
-        return {"enum": list(args)}
-    if _is_union(tp):
-        return _jsontype_from_union(args)
-    if origin in (list, tuple):
-        # A fixed, heterogeneous tuple (``tuple[int, str]``) has no single
-        # ``items`` schema; rendering ``args[0]`` only would SILENTLY drop the
-        # rest, so refuse it loudly (use a TypedDict or list[...], or add
-        # prefixItems support) rather than emit a schema that lies about the
-        # shape. A list, a ``tuple[X, ...]``, and a single-type/empty tuple all
-        # map faithfully to an array of one item type.
-        if origin is tuple and len(args) > 1 and args[1] is not Ellipsis:
-            raise TypeError(
-                f"Fixed heterogeneous tuple {tp!r} has no faithful single-`items` "
-                "JSON Schema. Use a TypedDict (named fields) or list[...] for the "
-                "output model, or add prefixItems support to _schema_for_type."
-            )
-        item_type = args[0] if args else Any
-        return {"type": "array", "items": _schema_for_type(item_type)}
-    if origin is dict:
-        value_type = args[1] if len(args) == 2 else Any
-        return {
-            "type": "object",
-            "additionalProperties": _schema_for_type(value_type),
-        }
-
-    raise TypeError(
-        f"Unsupported type annotation for schema generation: {tp!r}. "
-        "Extend _schema_for_type in tools/_base.py if this construct is "
-        "now used in the repo."
-    )
-
-
-@cache
-def schema_from_typeddict(td: type) -> dict[str, Any]:
-    """Generate a JSON Schema (``{"type": "object", ...}``) from a TypedDict.
-
-    Every field is emitted under ``properties``. ``required`` reflects the
-    two DISTINCT ways a field can be optional, both of which exist in the
-    wire format: a ``NotRequired``/``total=False`` field may be ABSENT
-    (omit-when-empty convention; e.g. ``GainAtPoint.phase_deg_unwrapped``),
-    while an ``X | None`` field is always present but may be null. Marking
-    an omitted key as required makes schema-validating MCP clients reject
-    responses that follow the documented omit-when-empty behavior.
-    """
-    if not _is_typeddict(td):
-        raise TypeError(f"Expected TypedDict, got {td!r}")
-
-    hints = get_type_hints(td)
-    # ``__required_keys__`` is computed at class-creation time and is UNRELIABLE
-    # for ``NotRequired`` fields when the defining module uses ``from __future__
-    # import annotations``: the wrapper is stringized, so the TypedDict metaclass
-    # can't see it and wrongly counts the field as required (verified on 3.13).
-    # ``get_type_hints(..., include_extras=True)`` EVALUATES the annotation,
-    # recovering the ``NotRequired`` wrapper, so it detects optionality regardless
-    # of stringization. (``Required`` in a ``total=False`` class is the symmetric
-    # case but isn't used in this repo, so it's not special-cased.)
-    extra_hints = get_type_hints(td, include_extras=True)
-    structurally_required = getattr(td, "__required_keys__", frozenset(hints))
-    properties: dict[str, Any] = {}
-    required: list[str] = []
-    for field_name, field_type in hints.items():
-        properties[field_name] = _schema_for_type(field_type)
-        # A field is required unless the key may be absent entirely
-        # (NotRequired / total=False) or its type admits None.
-        admits_none = _is_union(field_type) and type(None) in get_args(field_type)
-        not_required = get_origin(extra_hints.get(field_name)) is typing.NotRequired
-        if field_name in structurally_required and not admits_none and not not_required:
-            required.append(field_name)
-
-    schema: dict[str, Any] = {"type": "object", "properties": properties}
-    if required:
-        schema["required"] = required
+    properties = schema.setdefault("properties", {})
+    properties.setdefault("warnings", WARNINGS_SCHEMA)
     return schema
+
+
+def _stamp_output_schema(fn: Callable, schema: dict[str, Any]) -> None:
+    """Stamp a handler's structuredContent contract onto the handler itself.
+
+    The single choke point for the "contract belongs to the handler" rule:
+    both ``@registry.tool`` and ``declare_output_schema`` stamp through here.
+    Written via ``__dict__`` because a plain attribute assignment on a function
+    is a pyright error, and ruff auto-rewrites ``setattr()`` back into one.
+    """
+    fn.__dict__["__output_schema__"] = schema
 
 
 class ToolRegistry:
@@ -600,16 +800,27 @@ class ToolRegistry:
         self,
         *,
         name: str,
+        title: str,
         description: str,
         input_model: type[ToolInput] | None,
         annotations: types.ToolAnnotations,
-        profiles: tuple[str, ...] = ("full",),
         output_schema: dict[str, Any] | None = None,
         output_model: type | None = None,
         meta: dict[str, Any] | None = None,
-        aliases: tuple[str, ...] = (),
+        gate: str | None = None,
     ) -> Callable[[Callable], Callable]:
         """Register a tool and derive its schema from the input model.
+
+        ``gate`` names the ``ServerConfig`` boolean that must be true for a
+        session to serve the tool at all (advertise it, dispatch it, list it
+        in the reference table, name it in the instructions). A tool is
+        registered whether or not its gate is open, so its contract is gated
+        with the rest of the surface.
+
+        ``title`` is the short human-readable label a client shows in place of
+        the wire name — a few words, no punctuation, readable by someone who
+        does not know the tool. The description stays the contract; this is
+        only what a person sees in a list.
 
         ``output_model`` (a TypedDict) is preferred over ``output_schema``
         (a hand-written dict): the schema is generated once at registration
@@ -636,115 +847,189 @@ class ToolRegistry:
 
             definition_kwargs: dict[str, Any] = {
                 "name": name,
+                "title": title,
                 "description": description,
-                "inputSchema": (
-                    _build_input_schema(input_model)
+                "input_schema": (
+                    build_input_schema(input_model)
                     if input_model is not None
                     else {"type": "object", "properties": {}, "additionalProperties": False}
                 ),
                 "annotations": annotations,
             }
             if output_model is not None:
-                definition_kwargs["outputSchema"] = schema_from_typeddict(output_model)
+                definition_kwargs["output_schema"] = _declare_warnings_key(
+                    schema_from_typeddict(output_model)
+                )
             elif output_schema is not None:
-                definition_kwargs["outputSchema"] = output_schema
+                definition_kwargs["output_schema"] = _declare_warnings_key(output_schema)
 
             definition = types.Tool(**definition_kwargs)
             if meta is not None:
                 # ``meta`` is the field name; serializes by alias to ``_meta``.
                 definition.meta = meta
 
+            # The structuredContent contract belongs to the handler, not to
+            # its registration: stamp it on both the original handler (whose
+            # code object is the emitting stack frame) and the returned
+            # wrapper (the module-visible name), so the test suite's
+            # conformance hook attributes emissions uniformly for registered
+            # tools and unregistered adapters alike (see
+            # declare_output_schema).
+            if definition.output_schema is not None:
+                _stamp_output_schema(handler, definition.output_schema)
+                _stamp_output_schema(wrapped, definition.output_schema)
+
             self._registered.append(
                 RegisteredTool(
                     definition=definition,
                     handler=wrapped,
                     input_model=input_model,
-                    profiles=frozenset(profiles),
-                    aliases=frozenset(aliases),
+                    gate=gate,
                 )
             )
             return wrapped
 
         return decorator
 
-    def known_names(self) -> set[str]:
-        """All registered tool names, across every profile (for diagnostics).
+    def gate_of(self, name: str) -> str | None:
+        """The config field gating a registered tool, or None if it has none."""
+        for registered in self._registered:
+            if registered.definition.name == name:
+                return registered.gate
+        raise KeyError(name)
 
-        Lets the dispatcher tell a profile-filtered tool (exists, hidden by the
-        active profile) apart from a genuinely unknown name.
-        """
-        return {rt.definition.name for rt in self._registered} | {
-            a for rt in self._registered for a in rt.aliases
-        }
+    def field_owners(self) -> dict[str, tuple[str, ...]]:
+        """Map each advertised top-level wire field to the tools that take it."""
+        owners: dict[str, list[str]] = {}
+        for registered in self._registered:
+            properties = registered.definition.input_schema.get("properties", {})
+            for field in properties:
+                owners.setdefault(field, []).append(registered.definition.name)
+        return {field: tuple(sorted(set(names))) for field, names in owners.items()}
 
-    def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
-        """Return the tool list and dispatch map for a profile."""
-        effective_profile = profile if profile in {"full", "agentic"} else "full"
+    def get_tools(self) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
+        """Return the advertised tool list and the dispatch map behind it."""
         tool_defs: list[types.Tool] = []
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
-            if effective_profile in registered.profiles:
-                tool_defs.append(registered.definition)
-                tool_dispatch[registered.definition.name] = registered
-        # Second pass: deprecated aliases dispatch to their tool but are not
-        # listed in tool_defs. Done AFTER all definition names so a real tool
-        # name always wins; a collision with a real name or another tool's
-        # alias is a registration bug we surface loudly, never silently drop.
-        for registered in self._registered:
-            if effective_profile not in registered.profiles:
-                continue
-            for alias in registered.aliases:
-                existing = tool_dispatch.get(alias)
-                if existing is not None and existing is not registered:
-                    raise ValueError(
-                        f"Alias {alias!r} of tool {registered.definition.name!r} collides "
-                        f"with an existing tool name or alias ({existing.definition.name!r})"
-                    )
-                tool_dispatch[alias] = registered
+            # The ADVERTISED definition is the registered one with its
+            # outputSchema dropped, and nothing else changed. Every
+            # description a model declares — the tool's own and each field's
+            # — reaches the client verbatim, so reading the source tells you
+            # exactly what a client is shown; the surface is kept small by
+            # writing each description short, which the size pins in
+            # tests/test_consolidated_contracts.py hold to. The outputSchema
+            # is the one exception: it was the single largest schema block
+            # (84% of `jobs`, -35% across the surface) and a response teaches
+            # its own shape, so it stays on the registered definition — the
+            # dispatch side, which the doc gates scan and the conformance hook
+            # validates emissions against.
+            definition = registered.definition.model_copy(update={"output_schema": None})
+            tool_defs.append(definition)
+            tool_dispatch[registered.definition.name] = registered
+        if not tool_defs:
+            # Zero tools would complete the MCP handshake while advertising
+            # nothing — a working connection to an empty server, which every
+            # client reads as "no capabilities" rather than "misconfigured".
+            # Fail loudly instead.
+            raise RuntimeError(
+                "The tool registry resolved to zero tools — a module that "
+                "registers one is no longer imported"
+            )
         return tool_defs, tool_dispatch
+
+
+def declare_output_schema(
+    output_schema: dict[str, Any] | None = None,
+    *,
+    output_model: type | None = None,
+) -> Callable[[Callable], Callable]:
+    """Declare the structuredContent contract of an unregistered handler.
+
+    ``@registry.tool`` stamps ``__output_schema__`` on the handler it
+    registers; this decorator stamps the same attribute on an internal
+    adapter — a de-registered tool handler that a consolidated tool delegates
+    to. The test suite's conformance hook validates every structuredContent
+    emission at the first stack frame carrying the attribute, so a delegated
+    emission is checked against the ADAPTER's contract instead of falling
+    through to the delegating tool's envelope. Re-exposing an adapter as an
+    MCP tool is a decorator swap back to ``@registry.tool(...)``.
+
+    Accepts either a hand-written schema dict or a TypedDict ``output_model``
+    (mutually exclusive), resolved exactly as ``registry.tool`` resolves them,
+    including the shared ``warnings``-key declaration.
+    """
+    if (output_schema is None) == (output_model is None):
+        raise ValueError("supply exactly one of output_schema or output_model")
+    schema = schema_from_typeddict(output_model) if output_model is not None else output_schema
+    assert schema is not None
+    resolved = _declare_warnings_key(schema)
+
+    def decorator(handler: Callable) -> Callable:
+        _stamp_output_schema(handler, resolved)
+        return handler
+
+    return decorator
 
 
 registry = ToolRegistry()
 
 
-# ---------------------------------------------------------------------------
-# Pagination helper
-# ---------------------------------------------------------------------------
+class ResponseBudget(NamedTuple):
+    """The budget one call negotiates against, and how far its ladder may go."""
+
+    tokens: int | None
+    max_rung: int = response_budget.RUNG_SHRINK
 
 
-DEFAULT_PAGE_CAP = 50
-"""Server-side ceiling on list-endpoint page size — the "caps at 50" the
-``limit`` field descriptions document."""
+_AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "automatic_door", default=False
+)
 
 
-def paginate(
-    items: list, arguments: Any, cap: int = DEFAULT_PAGE_CAP
-) -> tuple[list, int, int, int]:
-    """Slice a list according to offset/limit from tool arguments.
+@contextlib.contextmanager
+def automatic_door() -> Iterator[None]:
+    """Mark the handler calls inside as arriving through the API's automatic mode.
 
-    Returns:
-        (page, total, offset, limit) tuple
+    Entered from inside the coroutine the engine loop runs, so the flag lives in
+    that one task's context: a co-resident MCP server sharing the process (and
+    the same :class:`ServerConfig`) cannot see it, which a config field or a
+    session attribute could not promise.
     """
-    total = len(items)
-    offset = max(0, min(int(getattr(arguments, "offset", 0)), total))
-    # Floor as well as cap: limit=0 would otherwise report has_more=true with
-    # next_offset == offset — a pagination loop that never advances — and a
-    # negative limit would mis-slice. Server-side clamping (not rejection) is
-    # the documented contract for out-of-range limits.
-    limit = max(1, min(int(getattr(arguments, "limit", cap)), cap))
-    return items[offset : offset + limit], total, offset, limit
+    token = _AUTOMATIC_DOOR.set(True)
+    try:
+        yield
+    finally:
+        _AUTOMATIC_DOOR.reset(token)
 
 
-def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
-    """Build structured pagination metadata for JSON responses."""
-    has_more = offset + limit < total
-    return {
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": offset + limit if has_more else None,
-    }
+def resolve_response_budget(explicit: int | None, state: SessionState) -> ResponseBudget:
+    """Resolve one call's budget: the caller's, else the server's default.
+
+    An explicit budget is the caller's decision and runs the full ladder. Absent
+    one, the server's ``[analysis] default_budget`` applies at the trim rung
+    ONLY. That asymmetry is the whole safety argument: rung 0 removes empty
+    presentation blocks and the identity echo and nothing else, so it can cut no
+    fact and revoke no detail the caller asked for, while rung 1 revokes opt-ins
+    — doing that unasked would silently answer a different question.
+
+    Only the four consolidated tools that advertise ``budget`` consult this, so
+    the default reaches exactly the surface it was designed for; ``0`` disables it
+    and restores the fully undegraded default response.
+
+    The API's automatic mode gets no default at all. That mode promises complete
+    results and refuses ``budget`` outright, so a presentation ladder there would
+    both contradict the promise and leave the caller no way to lift it — the
+    ladder's own route text would send them at the field the interface rejects.
+    """
+    if explicit is not None:
+        return ResponseBudget(explicit)
+    if _AUTOMATIC_DOOR.get():
+        return ResponseBudget(None)
+    default = state.config.default_budget
+    if default <= 0:
+        return ResponseBudget(None)
+    return ResponseBudget(default, response_budget.RUNG_TRIM)
 
 
 # ---------------------------------------------------------------------------
@@ -772,426 +1057,14 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
         if sim_cls is None:
             raise SimulationError(
                 f"Simulator '{requested}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}). server_status "
-                "lists the detected simulators.",
+                f"(detected: {list(state.available_simulators)}). "
+                "inspect(kind='capabilities') lists the detected simulators.",
                 show_hint=False,
             )
         return sim_cls
     require_simulator(state)
     assert state.default_simulator is not None  # guaranteed by require_simulator
     return state.default_simulator
-
-
-def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
-    """Resolve and validate a netlist path. Raises SimulationError on failure.
-
-    PathSecurityError propagates unchanged: the dispatch layer has a dedicated
-    branch that appends the sandbox-widening guidance (allowed paths, the TOML
-    knob, the restart requirement) — re-wrapping it as SimulationError would
-    replace that guidance with a misdirecting simulator hint.
-    """
-    try:
-        netlist_path = safe_path(netlist_str, state)
-    except PathSecurityError:
-        raise
-    except Exception as e:
-        raise SimulationError(f"Invalid netlist path: {e}") from e
-    if not netlist_path.exists():
-        raise SimulationError(f"Netlist file not found: {netlist_path}")
-    return netlist_path
-
-
-def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> asyncio.Lock:
-    """Get or create a per-path lock in ``registry``, LRU-bounded at ``cap``.
-
-    Shared mechanism behind every per-file lock registry (schematic edits,
-    ``.asc`` exports): refresh recency on hit; at capacity evict the oldest
-    *unheld* lock — if all are held, overshoot temporarily rather than break
-    mutual exclusion by evicting a lock someone is inside.
-    """
-    if path in registry:
-        registry[path] = registry.pop(path)
-        return registry[path]
-    if len(registry) >= cap:
-        for candidate in list(registry):
-            if not registry[candidate].locked():
-                del registry[candidate]
-                break
-    registry[path] = asyncio.Lock()
-    return registry[path]
-
-
-def circuit_lock_target(path: Path) -> Path:
-    """Anchor for the cross-process lock on one circuit file.
-
-    Lives under the circuit's ``.ltspice-mcp/locks/`` sidecar directory
-    (``file_lock`` appends ``.lock``) so user directories aren't littered
-    with lock files next to their circuits.
-    """
-    return path.parent / SIDECAR_DIRNAME / "locks" / path.name
-
-
-@contextlib.asynccontextmanager
-async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
-    """Cross-process lock for mutations/exports of one circuit file.
-
-    Parallel MCP server processes editing the same circuit serialize here —
-    without it, the whole-file read-modify-write saves are last-writer-wins
-    and a concurrent session's edit is silently lost. Acquisition polls in a
-    worker thread (per filelock's contract, so a contended lock never stalls
-    the event loop); release is two fast syscalls, done inline.
-
-    Acquire this BEFORE fetching a cached editor: the editor cache re-stats
-    the file on every fetch, so taking the lock first guarantees the stat
-    sees a concurrent writer's completed save rather than a mid-edit state.
-    (Residual: on coarse-mtime filesystems like WSL's /mnt/c a same-size
-    rewrite within one mtime tick can still go undetected — see FileCache.)
-    """
-    # Acquire INSIDE the try so stack.close() always runs: a cancel (cancel_job
-    # / shutdown) landing at the await boundary right after the worker thread
-    # took the flock would otherwise leak it until process exit. (Residual: if
-    # the cancel lands while the worker is still blocked acquiring, the thread
-    # can register the lock after close() already ran — inherent to to_thread,
-    # not fixable without a cancel-aware lock; the narrow window is cancel-only.)
-    stack = contextlib.ExitStack()
-    try:
-        try:
-            await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
-        except TimeoutError as e:
-            raise NetlistError(
-                f"{path.name} is locked by another ltspice-mcp process "
-                f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
-            ) from e
-        yield
-    finally:
-        stack.close()
-
-
-# LTspice's ``create_netlist`` always writes the sidecar ``<name>.net`` next to
-# the ``.asc``, so two concurrent exports of the same schematic would race on
-# one output file (torn/partial reads of the deck). Serialize per resolved
-# ``.asc`` path; distinct schematics still export in parallel.
-_asc_export_locks: dict[Path, asyncio.Lock] = {}
-
-
-@contextlib.asynccontextmanager
-async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
-    """Serialize LTspice netlist exports of one schematic.
-
-    In-process: a per-``.asc`` asyncio lock. Cross-process: the shared
-    circuit file locks on BOTH the schematic and the sidecar ``.net`` —
-    LTspice reads the ``.asc`` and overwrites the ``.net``, and a parallel
-    session may be editing the ``.net`` itself under its own file lock.
-    Fixed acquisition order (``.asc`` then ``.net``); edit paths take exactly
-    one file lock, so no cycle is possible.
-    """
-    async with (
-        path_lock(_asc_export_locks, asc_path),
-        circuit_file_lock(asc_path),
-        circuit_file_lock(asc_path.with_suffix(".net")),
-    ):
-        yield
-
-
-def _sanitize_export_for_ngspice(net_path: Path) -> Path:
-    """Write an ngspice-runnable twin of an LTspice-exported netlist.
-
-    LTspice's exporter appends ``.backanno`` — an LTspice-only dot command
-    ngspice aborts on ("unimplemented dot command") — and can emit its
-    private ``§`` name-prefix character and ``µ`` unit suffix, neither of
-    which ngspice's parser accepts. The scrub goes to its own
-    ``{stem}.ngspice.net`` sidecar rather than rewriting the shared ``.net``
-    in place: a concurrent LTspice-target run of the same schematic
-    regenerates ``.net`` after the export lock releases, and an in-place
-    rewrite would hand one of the two runs the other simulator's deck.
-    """
-    from ltspice_mcp.lib import atomic_write_text
-    from ltspice_mcp.lib.encoding import read_spice_text
-
-    text = read_spice_text(net_path)
-    lines = [ln for ln in text.splitlines() if ln.strip().lower() != ".backanno"]
-    cleaned = "\n".join(lines).replace("§", "").replace("µ", "u").replace("μ", "u")
-    out_path = net_path.with_name(net_path.stem + ".ngspice.net")
-    atomic_write_text(out_path, cleaned + "\n", durable=False)
-    return out_path
-
-
-async def resolve_runnable_netlist(
-    netlist_str: str, state: SessionState, simulator: type | None = None
-) -> Path:
-    """Resolve a path AND auto-export ``.asc`` → ``.net`` if needed.
-
-    spicelib's ``SpiceEditor`` (used by the sweep / Monte Carlo runners)
-    rejects ``.asc`` schematics — it expects the ``^*`` netlist comment
-    header and otherwise fails with a cryptic ``Expected pattern "^\\*"
-    not found``. This helper detects ``.asc`` and runs the LTspice
-    ``create_netlist`` exporter to produce a sidecar ``.net``, so
-    callers (sweep / MC config) can store the runnable path up front.
-
-    ``simulator`` is the class the run will execute on (defaults to the
-    session default): when it is ngspice, the LTspice export is sanitized
-    for it (see ``_sanitize_export_for_ngspice``) — without that, every
-    schematic run on ngspice dies on the exporter's ``.backanno``.
-
-    The cheap safe_path/exists checks run inline, but the export launches the
-    LTspice binary and blocks until it exits — heavy work that would stall the
-    shared event loop, so it is offloaded via ``asyncio.to_thread``. It touches
-    no cached editors, so the offload is safe under the concurrency contract.
-    """
-    netlist_path = resolve_netlist_path(netlist_str, state)
-    if netlist_path.suffix.lower() != ".asc":
-        return netlist_path
-
-    ltspice_cls = state.available_simulators.get("ltspice")
-    if ltspice_cls is None:
-        # Don't recommend export_netlist here — it ALSO needs LTspice, so that
-        # advice dead-ends when only ngspice/etc. is available.
-        raise SimulationError(
-            f"{netlist_path.name} is an .asc schematic, which only LTspice can "
-            "convert to a netlist, and LTspice is not available "
-            f"(simulators: {list(state.available_simulators.keys())}). Supply a "
-            "hand-written .cir/.net to simulate with the current simulator, or "
-            "point the server at an LTspice executable ([simulator] path in the "
-            "config file or LTSPICE_MCP_SIMULATOR_EXE) and restart. (The .asc's "
-            "embedded .model/.lib/analysis directives can be reused in a .cir.)",
-            show_hint=False,
-        )
-    async with asc_export_lock(netlist_path):
-        try:
-            # Bound the export: create_netlist launches LTspice, which can hang
-            # indefinitely on a Windows-side modal dialog. The export lock is
-            # held across this call, so an unbounded hang wedges every later run
-            # of this schematic — cap it at the sim timeout so it fails loudly.
-            net_path = Path(
-                await asyncio.to_thread(
-                    ltspice_cls.create_netlist,
-                    str(netlist_path),
-                    timeout=state.config.default_timeout,
-                )
-            )
-        except Exception as e:
-            raise SimulationError(
-                f"Auto-exporting {netlist_path.name} to a netlist failed: {e}"
-            ) from e
-        if not await asyncio.to_thread(net_path.exists):
-            raise SimulationError(f"Auto-export of {netlist_path.name} produced no .net file")
-        from ltspice_mcp.lib.simulator import is_ngspice
-
-        if is_ngspice(simulator or state.default_simulator):
-            net_path = await asyncio.to_thread(_sanitize_export_for_ngspice, net_path)
-
-        # Snapshot the fresh deck INSIDE the lock and return THAT: create_netlist
-        # writes a shared <stem>.net, so a parallel session re-exporting this .asc
-        # overwrites it — and a caller that stored the shared path (sweep/MC
-        # config, or a run staged moments later) would then read the peer's deck.
-        # The snapshot stays in the same directory so a relative .include/.lib in
-        # the deck still resolves against it.
-        return await asyncio.to_thread(_stage_deck_snapshot, net_path)
-
-
-def _stage_deck_snapshot(net_path: Path) -> Path:
-    """Copy the exported deck to a content-addressed sibling and return it.
-
-    Named by a hash of its bytes so repeat exports of the same .asc reuse one
-    file — the snapshots stay bounded to one per distinct deck content, not one
-    per run (a plain per-call unique name accumulates unbounded). Written
-    atomically so a concurrent reader sees a whole file, never a torn copy.
-    """
-    from ltspice_mcp.lib import atomic_write_bytes
-
-    data = net_path.read_bytes()
-    digest = hashlib.sha1(data).hexdigest()[:12]
-    snapshot = net_path.with_name(f"{net_path.stem}.run-{digest}{net_path.suffix}")
-    if not snapshot.exists():
-        atomic_write_bytes(snapshot, data, durable=False)
-    return snapshot
-
-
-def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
-    """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
-
-    LTspice writes each semiconductor's small-signal operating point (gm, gds,
-    vth, vdsat, junction caps) to the ``.log`` only under ``.options logopinfo``,
-    and only for ``.op`` analyses — so adding it lets ``operating_point`` read
-    those params back by name. ngspice uses ``@dev[param]`` raw traces instead
-    and needs nothing here.
-
-    Append-only into a per-job sibling file (a leading-dot, ``job_id``-stamped
-    name) so the simulator sees the user's deck byte-for-byte plus the one
-    directive; the original is never touched and relative ``.include``/``.lib``
-    paths still resolve from the same directory. The ``job_id`` stamp keeps two
-    concurrent or queued runs of the same netlist from clobbering each other's
-    augmented copy; ``start_simulation`` deletes it once spicelib has staged the
-    run. Returns the original path unchanged when injection doesn't apply
-    (non-LTspice, non-text netlist, no ``.op``, or ``logopinfo`` already
-    present) or the sibling can't be written.
-    """
-    from spicelib.simulators.ltspice_simulator import LTspice
-
-    if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
-        return netlist_path
-    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
-        return netlist_path
-    try:
-        data = netlist_path.read_bytes()
-    except OSError:
-        return netlist_path
-
-    # Detect on the raw bytes (the directives are ASCII) — same plane the .end
-    # splice below works on, so no decode round-trip is needed.
-    if b"logopinfo" in data.lower():
-        return netlist_path
-    # ``.op\b`` excludes ``.options`` (the 't' blocks the word boundary); only a
-    # real .op analysis emits the operating-point block. ``.dc`` does not.
-    if not re.search(rb"(?im)^[ \t]*\.op\b", data):
-        return netlist_path
-
-    # Byte-level insertion before the final ``.end`` keeps the original encoding
-    # intact (the added line is pure ASCII). ``.end\b`` skips ``.ends``.
-    line = b".options logopinfo\n"
-    ends = list(re.finditer(rb"(?im)^[ \t]*\.end\b.*$", data))
-    if ends:
-        at = ends[-1].start()
-        augmented = data[:at] + line + data[at:]
-    else:
-        augmented = data + (b"" if not data or data.endswith(b"\n") else b"\n") + line
-
-    run_path = netlist_path.with_name(
-        f".{netlist_path.stem}.{job_id}{LOGOPINFO_MARKER}{netlist_path.suffix}"
-    )
-    try:
-        run_path.write_bytes(augmented)
-    except OSError:
-        return netlist_path
-    return run_path
-
-
-# A ``.control``...``.endc`` block, case-insensitive. Group 1 is the body —
-# everything between the ``.control`` line and the ``.endc`` line — so
-# ``match.end(1)`` is exactly where the ``.endc`` line begins (the fallback
-# insertion point when the block has no ``quit``/``exit``).
-_RE_CONTROL_BLOCK = re.compile(rb"(?ims)^[ \t]*\.control\b[^\n]*\n(.*?)^[ \t]*\.endc\b[^\n]*$")
-# A ``write``/``wrdata`` command starting a line, anywhere in the deck — not
-# just inside the block, since a script could call either from a subckt or a
-# second block this pass doesn't otherwise recognize.
-_RE_EXISTING_WRITE = re.compile(rb"(?im)^[ \t]*(?:write|wrdata)\b")
-# ``quit``/``exit`` end control-script execution; a command placed after one
-# would never run, so the injected ``write`` must land before the LAST one.
-_RE_QUIT_EXIT = re.compile(rb"(?im)^[ \t]*(?:quit|exit)\b.*$")
-# A tail (from just after a quit/exit line to the block's .endc) that is only
-# blank lines and ``*`` comments — i.e. the quit/exit was the block's LAST
-# statement. Used to tell a script-ending trailing quit from one nested in an
-# if/while (which must NOT anchor the injected write, or it lands inside that
-# conditional and never runs on the success path).
-_RE_TRIVIAL_TAIL = re.compile(rb"(?m)\A(?:[ \t]*(?:\*.*)?(?:\n|\Z))*\Z")
-
-
-def inject_ngspice_control_write(
-    netlist_path: Path, simulator: type, job_id: str, output_folder: Path
-) -> Path:
-    """Return a runnable netlist with a ``write`` injected into its
-    ``.control`` block, for ngspice decks that drive their own analyses via
-    scripting.
-
-    This is ngspice runtime behavior, not a spicelib bug: a ``.control``
-    block replaces the raw ngspice would otherwise write from the ``-r
-    <rawfile>`` switch spicelib always passes — the script runs instead, and
-    unless it calls ``write``/``wrdata`` itself, no raw file is ever
-    produced. ``collect_run_outcome`` already classifies that as a clean
-    log-only completion (not a failure), but nothing then exists for
-    get_waveform/signal_stats/etc. to read. Injecting a canonical ``write
-    <rawpath>`` gives the deck a raw at the exact path the runner expects for
-    this job, so the existing raw>0 code path (raw_parser + every analysis
-    tool) picks it up unchanged — no new parser, no new tool.
-
-    Limitation: a bare ``write`` captures ngspice's current/last plot only. A
-    script that runs multiple analyses, or writes per Monte-Carlo iteration
-    inside a loop, needs its own explicit writes to capture each one — guard
-    (c) below leaves any deck that already writes its own output alone
-    rather than duplicating or fighting it. A second, unrelated limitation:
-    ngspice's ``write`` parser cannot handle a target containing whitespace
-    at all — neither quoting nor backslash-escaping works, both fail with
-    "No such file or directory" (verified empirically). So a run whose
-    output folder path contains a space can't get an auto-injected write
-    either (guard (d)) — that run just stays log-only, same as today.
-
-    Guards (all required, or the original path is returned unchanged):
-    (a) ngspice only (LTspice has no ``.control``; ``inject_logopinfo``
-        covers its own op-point injection separately).
-    (b) exactly one ``.control``...``.endc`` block (ambiguous otherwise —
-        e.g. which block's last analysis is "the" result).
-    (c) no existing ``write``/``wrdata`` anywhere in the deck — never
-        override a user who already captures their own output.
-    (d) the write target has no whitespace (see the limitation above).
-
-    The ``write`` target is the ABSOLUTE path ``{output_folder}/{job_id}.raw``
-    — the same path spicelib's own (suppressed) ``-r`` would use, since it
-    derives the rawfile from the staged netlist's own path via
-    ``.with_suffix('.raw')``. It must be absolute: the runner's SimRunner
-    passes no ``cwd``, so ngspice inherits the MCP server's own working
-    directory, not the output folder — a relative ``write`` target would land
-    there instead. Written UNQUOTED — see the whitespace limitation above.
-    Inserted before the block's LAST ``quit``/``exit`` (if any) so it
-    actually runs — those commands end script execution, so a ``write``
-    placed after one would never fire; otherwise inserted just before
-    ``.endc``.
-
-    Same per-job sibling-file technique as ``inject_logopinfo`` (see its
-    docstring): append-only into a leading-dot, ``job_id``-stamped copy so
-    the user's deck is never touched and relative ``.include``/``.lib``
-    paths still resolve. Returns the original path when injection doesn't
-    apply or the sibling can't be written.
-
-    Scope: single runs only. A sweep/Monte-Carlo batch's per-sub-run raw
-    naming isn't static the way a one-shot job's is, so this is not wired
-    into those batch paths.
-    """
-    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
-
-    if not (isinstance(simulator, type) and issubclass(simulator, NGspiceSimulator)):
-        return netlist_path
-    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
-        return netlist_path
-    try:
-        data = netlist_path.read_bytes()
-    except OSError:
-        return netlist_path
-
-    if _RE_EXISTING_WRITE.search(data):
-        return netlist_path
-    blocks = list(_RE_CONTROL_BLOCK.finditer(data))
-    if len(blocks) != 1:
-        return netlist_path
-    block = blocks[0]
-    body_start, body_end = block.start(1), block.end(1)
-
-    raw_path = (output_folder / f"{job_id}.raw").as_posix()
-    # ngspice's `write` parser cannot handle a spaced target at all — not
-    # quoted, not escaped (verified empirically) — so a spaced output folder
-    # can't get an auto-injected write; that run just stays log-only.
-    if any(c.isspace() for c in raw_path):
-        return netlist_path
-    write_line = f"write {raw_path}\n".encode()
-
-    # Insert before .endc, UNLESS the block's last statement is an
-    # unconditional trailing quit/exit — a write after that would never run. A
-    # quit/exit nested in an if/while is not the last statement (an ``end`` and
-    # possibly more follow it), so anchoring on it is skipped: the write goes
-    # before .endc and runs on the normal path.
-    insert_at = body_end
-    quit_matches = list(_RE_QUIT_EXIT.finditer(data, body_start, body_end))
-    if quit_matches and _RE_TRIVIAL_TAIL.match(data[quit_matches[-1].end() : body_end]):
-        insert_at = quit_matches[-1].start()
-    augmented = data[:insert_at] + write_line + data[insert_at:]
-
-    run_path = netlist_path.with_name(
-        f".{netlist_path.stem}.{job_id}{NGSPICE_CONTROL_WRITE_MARKER}{netlist_path.suffix}"
-    )
-    try:
-        run_path.write_bytes(augmented)
-    except OSError:
-        return netlist_path
-    return run_path
 
 
 # ---------------------------------------------------------------------------
@@ -1215,15 +1088,32 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     Raises:
         PathSecurityError: If path violates security constraints
     """
-    return resolve_safe_path(user_path, state.config.allowed_paths)
+    return resolve_safe_path(user_path, state.allowed_paths())
+
+
+def resolve_reference(reference: str, state: SessionState) -> str | Path:
+    """A ``CompareSpec.reference`` is literal netlist text when it spans lines,
+    else a path inside the sandbox. A path outside it is refused with the text
+    alternative named, since a caller's scratch directory is usually outside."""
+    if "\n" in reference:
+        return reference
+    try:
+        return safe_path(reference, state)
+    except PathSecurityError as exc:
+        raise PathSecurityError(
+            f"{exc} A reference may also be the netlist text itself: pass the "
+            "deck's lines (with newlines) as compare.reference instead of a path."
+        ) from None
 
 
 # ---------------------------------------------------------------------------
 # Concurrency contract
 #
 # The MCP SDK dispatches EVERY incoming request as its own asyncio task on
-# one shared event loop (mcp.server.lowlevel.Server.run start_soons a task
-# per message), so tool handlers run concurrently. Anything that blocks the
+# one shared event loop (mcp.shared.jsonrpc_dispatcher.JSONRPCDispatcher.run
+# start_soons a task per message; only `initialize` is served inline, so that
+# a client pipelining it with the next request still sees an initialized
+# connection), so tool handlers run concurrently. Anything that blocks the
 # loop stalls every in-flight request — including cancel_job — and the
 # transport's receive loop itself. Where work runs:
 #
@@ -1238,8 +1128,6 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 #     read-only or atomic. The categories, one example each: result parsing
 #     (services.load_raw), batch result/log loops (compute_batch_stats),
 #     cross-process index writes (the recent-circuits touch: filelock poll
-#     plus a durable fsync write), WSL interop (the first-call cmd.exe spawn
-#     inside resolve_output_folder), and resource reads (the whole resource
 #     router behind server.read_resource). Offloaded functions must stay
 #     effect-free or atomic under cancellation: the awaiting task sees
 #     CancelledError, but a worker thread that has started runs to
@@ -1266,112 +1154,108 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 # ---------------------------------------------------------------------------
 
 
-# .include / .inc / .lib / .libfile <path> [extra]
-_INCLUDE_DIRECTIVE_RE = re.compile(r"^\s*\.(?:include|inc|lib|libfile)\b\s+(.+)$", re.IGNORECASE)
+# ---------------------------------------------------------------------------
+# Schematic include-resolver + symbol-resolver + scene render (shared)
+# ---------------------------------------------------------------------------
 
 
-def _first_path_token(rest: str) -> str:
-    """First (possibly quoted) path token of an include/lib directive's args."""
-    rest = rest.strip()
-    if rest[:1] in ("'", '"'):
-        end = rest.find(rest[0], 1)
-        if end != -1:
-            return rest[1:end]
-    parts = rest.split()
-    return parts[0] if parts else ""
+def make_include_resolver(state: SessionState) -> IncludeResolver:
+    """An include resolver that routes every include/lib open through safe_path.
 
+    The graph engine calls this before opening any include, so an in-deck include
+    that escapes the allowed roots is denied and never read.
 
-def _netlist_has_local_dependency(netlist_path: Path) -> bool:
-    """True if the netlist pulls in a sibling file via a *relative* .include/.lib.
-
-    Such a netlist can't be relocated to the run sidecar: a simulator resolves a
-    relative include against the (now-moved) netlist's own directory, so the
-    dependency would no longer be found. Bare library NAMES resolved via the
-    simulator's own lib path (no matching local file) and absolute paths both
-    survive relocation and don't count.
+    The detected simulator's own library directories are a second allowed set,
+    the same trust class ``deck_staging.stage_deck`` accepts as
+    ``simulator_roots``: LTspice's ``.asc`` netlister appends a ``.lib`` into the
+    install's model library on every sheet carrying a MOSFET, so with only
+    ``allowed_paths`` this resolver denies a file the run path just staged —
+    and ``verify_circuit`` reports the schematic's own library as an unusable
+    include. The MCP and the Python API must answer "may I read this referenced file?" the
+    same way, or the answer depends on which one you asked. The roots are
+    resolved once per resolver rather than per include, and a deck still may
+    not RUN from one — staging checks the authored file against
+    ``allowed_paths`` alone.
     """
-    from ltspice_mcp.lib.encoding import read_spice_text
+    simulator_roots = simulator_library_roots(state.default_simulator)
 
-    try:
-        text = read_spice_text(netlist_path)
-    except OSError:
-        return True  # unreadable — be conservative, keep it in place
-    base = netlist_path.parent
-    for line in text.splitlines():
-        m = _INCLUDE_DIRECTIVE_RE.match(line)
-        if not m:
-            continue
-        tok = _first_path_token(m.group(1))
-        if not tok:
-            continue
-        # Absolute (POSIX, Windows drive, or UNC) paths survive relocation.
-        if Path(tok).is_absolute() or re.match(r"^[A-Za-z]:[\\/]", tok) or tok.startswith("\\\\"):
-            continue
-        if (base / tok).exists():
-            return True
-    return False
+    def resolver(candidate: Path) -> Path | None:
+        try:
+            return safe_path(str(candidate), state)
+        except PathSecurityError:
+            pass
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            return None
+        if any(resolved.is_relative_to(root) for root in simulator_roots):
+            return resolved
+        return None
+
+    return resolver
 
 
-async def resolve_output_folder(
-    state: SessionState,
-    netlist_path: Path | None = None,
-    simulator: type | None = None,
-) -> Path:
-    """Determine the output folder for the simulation runner.
+def symbol_resolver_for(
+    asc_path: Path | None, state: SessionState | None = None
+) -> SymbolResolver:
+    """Resolver with the sheet's own dir first, then configured/stock libraries.
 
-    Kept **stable** — one ``{working_dir}/.ltspice-mcp/runs`` sidecar — so the
-    single cached runner, ``cancel_job``, and the global ``max_parallel`` cap stay
-    valid across runs. A per-deck output dir would change the folder on every run
-    in a different directory, and ``RunnerManager`` invalidates the whole runner
-    cache when the folder changes (losing in-flight process handles and splitting
-    the concurrency semaphore per directory). Each run's artifacts are uniquely
-    named (``{job_id}.*``), so they stay isolated within this shared folder; a
-    caller finds them through the result path ``check_job`` reports.
-
-    Two overrides:
-
-    - **Relative ``.include``/``.lib`` deck:** the deck's own dir — the simulator
-      resolves the relative path against the staged netlist's directory, so it
-      can't be relocated (applies to single runs and sweeps/MC alike).
-    - **WSL + LTspice + Linux-fs source:** a Windows-native temp dir. LTspice (a
-      Windows process reaching the Linux fs over a ``wsl.localhost`` UNC share)
-      can't write the SQLite ``.db`` behind ``.MEAS`` over UNC.
-
-    Adds the chosen dir to allowed_paths so analysis tools can read results via
-    safe_path(). The Windows temp-dir resolution spawns a cmd.exe interop
-    subprocess on first call (memoized), so it runs via ``asyncio.to_thread`` — a
-    wedged interop must not freeze the loop; the allowed_paths mutation stays on
-    the loop after the await.
+    Mirrors the precedence the compiler and LTspice's own export use so a
+    schematic that resolves for them resolves here too. When ``state`` is given,
+    its configured ``symbol_paths`` take precedence over the stock libraries.
+    ``asc_path`` may be ``None`` for a vocabulary lookup with no schematic in
+    hand (``inspect(symbols)`` without a ``path``): the local dir is then simply
+    absent from the precedence and only the configured/stock libraries apply.
     """
-    from spicelib.simulators.ltspice_simulator import LTspice
+    from spicelib import AscEditor
 
-    from ltspice_mcp.lib.wsl import get_windows_output_dir, is_windows_native_path, is_wsl
+    project: list[Path] = []
+    if state is not None:
+        project += [Path(p) for p in state.config.symbol_paths]
+    project += [Path(p) for p in (AscEditor.custom_lib_paths or [])]
+    project += [Path(p) for p in (getattr(AscEditor, "simulator_lib_paths", None) or [])]
+    return SymbolResolver(
+        local_dir=asc_path.parent if asc_path is not None else None,
+        project_paths=project,
+        stock_paths=default_stock_paths(),
+    )
 
-    source_dir = netlist_path.parent if netlist_path is not None else state.working_dir
-    has_local_dep = netlist_path is not None and _netlist_has_local_dependency(netlist_path)
 
-    # Override: WSL + LTspice + Linux-fs source → Windows temp (UNC .db failure).
-    if is_wsl() and not is_windows_native_path(source_dir) and not has_local_dep:
-        sim_cls = simulator or state.default_simulator
-        if sim_cls is not None and issubclass(sim_cls, LTspice):
-            out = await asyncio.to_thread(get_windows_output_dir)
-            if out is not None:
-                if out not in state.config.allowed_paths:
-                    logger.info(
-                        f"WSL: routing LTspice output to {out} (source dir "
-                        f"{source_dir} is on the Linux filesystem; .db/.MEAS "
-                        "cannot write over UNC)"
-                    )
-                    state.config.allowed_paths.append(out)
-                return out
+def render_scene_artifact(
+    scene: Scene,
+    out_dir: Path,
+    *,
+    image_format: Literal["png", "svg"],
+    scale: float,
+    max_pixels: int | None = None,
+) -> tuple[RenderedImage, Path, bool]:
+    """Render a scene, bound its pixels, and write a content-hashed artifact.
 
-    # Override: relative-include deck runs in its own dir so the include resolves.
-    if has_local_dep:
-        return source_dir
+    Rasterizes to ``image_format`` at ``scale``; when ``max_pixels`` is set and a
+    raster exceeds it, re-renders at the largest scale that fits and flags
+    ``downscaled``. Writes ``<source-stem>.<sha8>.<suffix>`` into ``out_dir``
+    (created on demand). Returns ``(image, out_path, downscaled)``.
+    """
+    svg = render_svg(scene)
+    image = render_image(svg, image_format=image_format, scale=scale)
+    downscaled = False
+    if (
+        image.is_raster
+        and max_pixels is not None
+        and image.width
+        and image.height
+        and image.width * image.height > max_pixels
+    ):
+        factor = math.sqrt(max_pixels / (image.width * image.height))
+        reduced = max(0.1, round(scale * factor, 3))
+        if reduced < scale:
+            image = render_image(svg, image_format=image_format, scale=reduced)
+            downscaled = True
 
-    # Default: one stable sidecar; per-job {job_id} naming isolates each run.
-    runs = state.working_dir / ".ltspice-mcp" / "runs"
-    runs.mkdir(parents=True, exist_ok=True)
-    if runs not in state.config.allowed_paths:
-        state.config.allowed_paths.append(runs)
-    return runs
+    suffix = "png" if image.is_raster else "svg"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = (
+        out_dir / f"{scene.source.stem}.{hashlib.sha256(image.data).hexdigest()[:8]}.{suffix}"
+    )
+    atomic_write_bytes(out_path, image.data, durable=False)
+    return image, out_path, downscaled

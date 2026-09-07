@@ -1,11 +1,9 @@
 """Centralized runner lifecycle management.
 
-Owns SimulationRunner, SweepRunner, and MonteCarloRunner instances.
-Replaces the fragile module-level singleton pattern where each tool module
-independently checked for staleness (event loop, simulator, output folder).
-
-All three runners share the same constructor signature and staleness
-conditions. This class provides a single invalidation mechanism.
+Owns the experiment runner instances. Replaces the fragile module-level
+singleton pattern where each tool module independently checked for staleness
+(event loop, simulator, output folder), and keeps one invalidation mechanism
+for all of them.
 """
 
 from __future__ import annotations
@@ -18,17 +16,13 @@ from typing import TYPE_CHECKING, Any
 from ltspice_mcp.lib.runner_base import DEFAULT_MAX_PARALLEL
 
 if TYPE_CHECKING:
-    from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
-    from ltspice_mcp.lib.sim_runner import SimulationRunner
-    from ltspice_mcp.lib.sweep_runner import SweepRunner
+    from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 
 logger = logging.getLogger(__name__)
 
 # Import paths for lazy loading (avoids circular imports with state.py)
 _RUNNER_IMPORTS: dict[str, tuple[str, str]] = {
-    "sim": ("ltspice_mcp.lib.sim_runner", "SimulationRunner"),
-    "sweep": ("ltspice_mcp.lib.sweep_runner", "SweepRunner"),
-    "mc": ("ltspice_mcp.lib.montecarlo_runner", "MonteCarloRunner"),
+    "experiment": ("ltspice_mcp.lib.experiment_runner", "ExperimentRunner"),
 }
 
 
@@ -112,75 +106,25 @@ class RunnerManager:
         self._runners.clear()
         self._loop = None
 
-    def _get_existing(self, kind: str, simulator: str | None) -> Any | None:
-        """Most-recently-used cached runner of ``kind``.
-
-        ``simulator`` (a class name, e.g. ``"LTspiceWSL"``) narrows the match —
-        pass the job's own ``simulator`` field when cancelling, so the kill uses
-        that simulator's executable names and the launching runner's cancel
-        events rather than whichever runner was used last.
-        """
-        of_kind = [(cls, runner) for (k, cls, _f), runner in self._runners.items() if k == kind]
-        if simulator is not None:
-            named = [runner for cls, runner in of_kind if cls.__name__ == simulator]
-            if named:
-                return named[-1]
-            # Name matched nothing (runner evicted, or a recovered job whose
-            # recorded name predates this session). With a single live runner
-            # of this kind, prefer it over giving up: its kill is token-scoped,
-            # so a class mismatch just matches no process — same as returning
-            # None — while a match kills the right one.
-            if len(of_kind) != 1:
-                return None
-        return of_kind[-1][1] if of_kind else None
-
-    def get_batch_runner_for(self, job: Any) -> Any | None:
-        """Runner to cancel batch ``job`` with.
-
-        Batch cancel state (the cancel event that stops the submission loop)
-        lives on the instance that launched the batch — with several runners
-        of one kind cached (distinct output folders), most-recent is not
-        necessarily the owner, so prefer the instance whose cancel registry
-        owns the job id. Fall back to the most-recent runner of the kind for
-        a job whose owner is gone (e.g. recovered after a restart): its
-        token-scoped kill still reaches the right processes.
-        """
-        kind = "mc" if job.job_type == "montecarlo" else "sweep"
-        for (k, _cls, _folder), runner in self._runners.items():
-            if k == kind and runner.owns_batch_job(job.job_id):
+    def get_experiment_runner_for(self, job: Any) -> ExperimentRunner | None:
+        """Return the live coordinator that owns an experiment job."""
+        for (kind, _cls, _folder), runner in self._runners.items():
+            if kind == "experiment" and runner.owns_experiment_job(job.job_id):
                 return runner
-        return self._get_existing(kind, None)
+        return None
 
-    def get_existing_sim_runner(self, simulator: str | None = None) -> SimulationRunner | None:
-        """Return a cached ``SimulationRunner`` if present (see ``_get_existing``)."""
-        return self._get_existing("sim", simulator)
-
-    def get_sim_runner(
+    def get_experiment_runner(
         self,
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
         max_parallel: int = DEFAULT_MAX_PARALLEL,
-    ) -> SimulationRunner:
-        """Get or create a SimulationRunner."""
-        return self._get_or_create("sim", loop, simulator_class, output_folder, max_parallel)
-
-    def get_sweep_runner(
-        self,
-        loop: asyncio.AbstractEventLoop,
-        simulator_class: type,
-        output_folder: Path,
-        max_parallel: int = DEFAULT_MAX_PARALLEL,
-    ) -> SweepRunner:
-        """Get or create a SweepRunner."""
-        return self._get_or_create("sweep", loop, simulator_class, output_folder, max_parallel)
-
-    def get_mc_runner(
-        self,
-        loop: asyncio.AbstractEventLoop,
-        simulator_class: type,
-        output_folder: Path,
-        max_parallel: int = DEFAULT_MAX_PARALLEL,
-    ) -> MonteCarloRunner:
-        """Get or create a MonteCarloRunner."""
-        return self._get_or_create("mc", loop, simulator_class, output_folder, max_parallel)
+    ) -> ExperimentRunner:
+        """Get or create an ExperimentRunner."""
+        return self._get_or_create(
+            "experiment",
+            loop,
+            simulator_class,
+            output_folder,
+            max_parallel,
+        )

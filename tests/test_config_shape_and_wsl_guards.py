@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import ServerConfig, default_allowed_paths
 from ltspice_mcp.lib.wsl import _resolve_win_env, kill_windows_ltspice_by_token
 
 
@@ -34,7 +34,7 @@ class TestAllowedPathsShape:
         with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
             config = ServerConfig.load(toml_path)
         # Falls back to the working-dir default, not a per-character explosion.
-        assert config.allowed_paths == [config.working_dir]
+        assert config.allowed_paths == default_allowed_paths(config.working_dir)
         assert Path("/") not in config.allowed_paths
         assert "allowed_paths" in caplog.text
         assert "list of strings" in caplog.text
