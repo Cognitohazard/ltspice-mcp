@@ -83,6 +83,19 @@ class TestSurface:
         assert "run_code" in state.tool_dispatch
         assert state.field_owners["code"] == ("run_code",)
 
+    def test_the_gate_is_declared_on_the_registration(self):
+        """One declaration: the served surface, the reference table, the
+        capabilities entry and the instructions all read it from here."""
+        from ltspice_mcp.config import ServerConfig, config_key
+        from ltspice_mcp.tools._base import registry
+
+        assert registry.gate_of("run_code") == "run_code"
+        assert config_key("run_code") == "tools.run_code"
+        # Every gate names a real boolean field, fail-closed at listing time.
+        for registered in registry._registered:  # pyright: ignore[reportPrivateUsage]
+            if registered.gate is not None:
+                assert isinstance(getattr(ServerConfig(), registered.gate), bool)
+
     def test_empty_code_without_reset_is_refused(self):
         with pytest.raises(ValueError, match="code is empty"):
             RunCodeInput(code="   ")

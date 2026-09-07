@@ -535,6 +535,7 @@ def worker_for(state: SessionState) -> CodeWorker:
         open_world_hint=True,
     ),
     output_schema=RUN_CODE_OUTPUT_SCHEMA,
+    gate="run_code",
 )
 async def handle_run_code(args: RunCodeInput, state: SessionState) -> types.CallToolResult:
     reply = await worker_for(state).run(args.code, args.timeout_s, args.reset)

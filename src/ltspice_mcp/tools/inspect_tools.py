@@ -758,6 +758,19 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
 # ---------------------------------------------------------------------------
 
 
+def _gated_tool_report(name: str, state: SessionState) -> dict[str, Any]:
+    """Whether this session serves a gated tool, and the config line that
+    decides it — read off the registration's own gate."""
+    from ltspice_mcp.config import config_key
+
+    gate = registry.gate_of(name)
+    return {
+        "enabled": name in state.tool_dispatch,
+        "config_key": config_key(gate) if gate is not None else None,
+        "restart_required": True,
+    }
+
+
 def _python_runtime_facts() -> dict[str, Any]:
     """The interpreter this engine runs in, and whether it will still exist.
 
@@ -851,11 +864,7 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
             ),
             # The same engine behind a tool call, when the operator turned it
             # on; the key and the restart are what an agent relays to them.
-            "run_code": {
-                "enabled": state.config.run_code,
-                "config_key": "tools.run_code",
-                "restart_required": True,
-            },
+            "run_code": _gated_tool_report("run_code", state),
         },
         # Which of the two tool listings this session was served. The guide
         # tells a caller to reach for inspect(kind="reference") whenever the

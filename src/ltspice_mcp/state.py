@@ -135,10 +135,9 @@ class SessionState:
         from ltspice_mcp.tools import get_tools
         from ltspice_mcp.tools._base import registry as tool_registry
 
-        # The exec tool is registered always (its contract is gated with the
-        # rest) and served only when the operator turned it on.
-        exclude = () if self.config.run_code else ("run_code",)
-        defs, dispatch = get_tools(self.config.tool_listing, exclude=exclude)
+        # A registration may declare a config gate; the surface is what the
+        # gates leave open for this session's config.
+        defs, dispatch = get_tools(self.config.tool_listing, config=self.config)
         owners = {
             name: kept
             for name, tools in tool_registry.field_owners().items()

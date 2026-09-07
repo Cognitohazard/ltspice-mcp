@@ -460,6 +460,14 @@ _SETTINGS: tuple[_Setting, ...] = (
 )
 
 
+def config_key(field: str) -> str:
+    """The ``section.key`` an operator writes for one ``ServerConfig`` field."""
+    for setting in _SETTINGS:
+        if setting.field == field and setting.section is not None:
+            return f"{setting.section}.{setting.key}"
+    raise KeyError(field)
+
+
 @dataclass
 class ServerConfig:
     """Configuration for the LTSpice MCP server.

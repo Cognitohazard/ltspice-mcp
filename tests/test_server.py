@@ -142,9 +142,13 @@ class TestBuildInstructions:
             # that shipped truncated in v0.5.0.
             build_instructions({"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG),
             # The run_code edition swaps the code-loop clause for a longer one.
-            build_instructions({"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG, run_code=True),
             build_instructions(
-                {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG}, _LT, run_code=True
+                {"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG, served={"run_code"}
+            ),
+            build_instructions(
+                {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG},
+                _LT,
+                served={"run_code"},
             ),
         ]
         for text in worst_cases:
@@ -161,7 +165,7 @@ class TestBuildInstructions:
 
     def test_run_code_is_named_only_when_it_is_served(self):
         default = build_instructions({"ltspice": _LT}, _LT)
-        enabled = build_instructions({"ltspice": _LT}, _LT, run_code=True)
+        enabled = build_instructions({"ltspice": _LT}, _LT, served={"run_code"})
         assert "run_code" not in default
         assert "run_code runs Python with api in scope" in enabled
         # Neither edition loses the library door.

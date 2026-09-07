@@ -745,6 +745,11 @@ class RegisteredTool:
     definition: types.Tool
     handler: Callable
     input_model: type[ToolInput] | None
+    gate: str | None = None
+    """The ``ServerConfig`` field that must be true for a session to serve the
+    tool, or None for a tool every session serves. The one declaration the
+    served surface, the reference table, the capabilities report and the
+    instructions all derive from."""
 
 
 def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
@@ -802,8 +807,15 @@ class ToolRegistry:
         output_schema: dict[str, Any] | None = None,
         output_model: type | None = None,
         meta: dict[str, Any] | None = None,
+        gate: str | None = None,
     ) -> Callable[[Callable], Callable]:
         """Register a tool and derive its schema from the input model.
+
+        ``gate`` names the ``ServerConfig`` boolean that must be true for a
+        session to serve the tool at all (advertise it, dispatch it, list it
+        in the reference table, name it in the instructions). A tool is
+        registered whether or not its gate is open, so its contract is gated
+        with the rest of the surface.
 
         ``title`` is the short human-readable label a client shows in place of
         the wire name — a few words, no punctuation, readable by someone who
@@ -872,11 +884,19 @@ class ToolRegistry:
                     definition=definition,
                     handler=wrapped,
                     input_model=input_model,
+                    gate=gate,
                 )
             )
             return wrapped
 
         return decorator
+
+    def gate_of(self, name: str) -> str | None:
+        """The config field gating a registered tool, or None if it has none."""
+        for registered in self._registered:
+            if registered.definition.name == name:
+                return registered.gate
+        raise KeyError(name)
 
     def field_owners(self) -> dict[str, tuple[str, ...]]:
         """Map each advertised top-level wire field to the tools that take it."""
