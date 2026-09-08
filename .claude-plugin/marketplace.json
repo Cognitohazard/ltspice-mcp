@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "MCP tools for LTspice/ngspice circuit simulation and LTspice .asc schematic editing in Claude Code. Structured results include per-device operating points (gm/gds/vth) by device name.",
-    "version": "0.6.0"
+    "version": "0.6.1"
   },
   "plugins": [
     {
       "name": "ltspice-mcp",
       "source": ".",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "author": {
         "name": "cognitohazard"
       },
