@@ -36,6 +36,8 @@ sed -i -E 's/("version": *)"[^"]*"/\1"'"$ver"'"/' "${manifests[@]/#/$root/}"
 
 git -C "$root" add "${manifests[@]}"
 git -C "$root" commit -m "release: v$ver"
-git -C "$root" tag "v$ver"
+# Annotated, so the tag carries its own object and message rather than
+# borrowing the release commit's subject when something reads it back.
+git -C "$root" tag -a "v$ver" -m "Release $ver"
 
 echo "Tagged v$ver. Publish (triggers PyPI) with:  git push && git push origin v$ver"
