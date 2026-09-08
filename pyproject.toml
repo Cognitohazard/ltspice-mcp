@@ -153,3 +153,11 @@ known-first-party = ["ltspice_mcp"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--strict-markers --tb=short"
+# A wedged test used to consume the whole CI job and report nothing but "the
+# operation was canceled" fifteen minutes later. pytest arms these per test
+# (setup, call and teardown), so a hang now dumps every thread's stack and
+# exits with the frame it is stuck in. Well above the longest legitimate wait
+# in the suite (a live simulator job may wait 120s by design) and well below
+# the job timeout, so the dump still reaches the log.
+faulthandler_timeout = 300
+faulthandler_exit_on_timeout = true

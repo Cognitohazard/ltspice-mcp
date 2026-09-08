@@ -524,6 +524,28 @@ _CANCEL_KILL_RESCAN_DELAY = 0.5
 process to become visible to the next scan."""
 
 
+class _NonBlockingSimRunner(SimRunner):
+    """A SimRunner whose destructor cannot pin the thread that drops it.
+
+    spicelib's ``__del__`` calls ``wait_completion(timeout=None)``, which loops
+    ``while active_tasks: sleep(1)`` and takes its deadline only from tasks
+    that have already started — a task that is not alive and never started
+    yields no deadline and is never retired, so the loop has no exit at all.
+    The last reference is dropped by ordinary garbage collection, so that wait
+    lands on whatever thread happened to allocate: the event loop, or the
+    thread running the test suite (a 12-minute silent CI hang, 2026-09-07).
+
+    Nothing here needs the destructor. Completion reaches this module through
+    the run callback, liveness is read off the task threads, and the only other
+    thing it does on timeout is ``kill_all_spice()`` — the name-global kill
+    this project deliberately never uses, because it would reach another
+    session's simulator. See ``docs/spicelib_bugs.md`` Bug 10.
+    """
+
+    def __del__(self) -> None:
+        return
+
+
 class RunnerBase:
     """Shared constructor, launch capacity, and thread-safe callback bridging."""
 
@@ -576,7 +598,7 @@ class RunnerBase:
 
     def _build_sim_runner(self) -> SimRunner:
         """Construct a spicelib SimRunner with this runner's settings."""
-        return SimRunner(
+        return _NonBlockingSimRunner(
             simulator=self.simulator_class,
             output_folder=str(self.output_folder),
             parallel_sims=self.max_parallel,
@@ -618,13 +640,12 @@ class RunnerBase:
         Call from a worker thread. The requirements snapshot and completion
         artifact reads intentionally happen on spicelib's worker threads.
 
-        The SimRunner is returned AND retained here. spicelib's
-        ``SimRunner.__del__`` calls ``wait_completion()``, so a caller that
-        discards the return value has its thread pinned inside the destructor
-        for the entire simulation — the calling coroutine never resumes, so it
-        never reaches the code that watches for a cancellation, and the run
-        becomes unstoppable. Retaining at this choke point means no caller can
-        re-arm that by forgetting to keep it.
+        The SimRunner is returned AND retained here, because the kill and
+        liveness paths need the handle for as long as the simulation runs.
+        Retaining at this choke point means no caller can lose it by
+        forgetting to keep the return value. (Dropping one is no longer
+        dangerous in itself: ``_NonBlockingSimRunner`` removes the destructor
+        that used to pin the dropping thread for the whole simulation.)
         """
         requirements = deck_requests_raw(netlist)
 
@@ -669,13 +690,12 @@ class RunnerBase:
     def _retire_finished_runners(self) -> None:
         """Release SimRunners whose simulation threads have all exited.
 
+        Liveness is read off the RunTask threads rather than spicelib's own
+        bookkeeping, which only updates when something calls into it — and
+        which never retires a task that was appended but never started.
         Pruned on the way into the next submission rather than from a
-        completion callback: dropping the last reference runs
-        ``SimRunner.__del__`` -> ``wait_completion()``, which waits on
-        ``active_tasks`` — from inside a task's own callback that would be the
-        task waiting for itself. Liveness is read off the RunTask threads
-        instead of spicelib's bookkeeping, which only updates when something
-        calls into it.
+        completion callback, so a task is never released from inside its own
+        callback.
         """
         for key, runner in list(self._inflight_runners.items()):
             if not any(task.is_alive() for task in runner.active_tasks):
