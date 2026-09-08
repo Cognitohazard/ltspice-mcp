@@ -7,64 +7,26 @@
 > became importable as a Python API. Pin `ltspice-mcp==0.5.*` if you need the
 > old 49-tool surface.
 
-ltspice-mcp lets LLM assistants and Python code run LTspice and ngspice simulations and edit LTspice `.asc` schematics. It returns structured measurements such as cutoff frequency, overshoot, phase margin, rise time, and per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …). Callers access these values by name without parsing raw files. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
+ltspice-mcp lets LLM assistants run LTspice and ngspice simulations and edit LTspice `.asc` schematics. It returns structured measurements such as cutoff frequency, overshoot, phase margin, rise time, and per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …). Callers access these values by name without parsing raw files. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
-One install covers both ways of using this: it puts the library on your path
-for `import`, and an `ltspice-mcp` executable for an MCP client to launch.
+**Claude Code** — two commands, and the tools are there in your next session:
+
+```
+/plugin marketplace add cognitohazard/ltspice-mcp
+/plugin install ltspice-mcp
+```
+
+**Claude Desktop** — build the extension in [`packaging/mcpb/`](packaging/mcpb/)
+and drag the `.mcpb` file onto Claude Desktop. It installs in one click and
+asks which folder your circuits are in.
+
+**Any other MCP client** — [Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp) and others. Install the server, then add it to that client's MCP config file (each client's own docs say where that file lives):
 
 ```bash
-pip install ltspice-mcp        # or: uv add ltspice-mcp
+uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
 ```
-
-`uv tool install` and `pipx install` work too, but they keep the package in an
-environment of their own: you get the executable for an MCP client, not an
-`import` for your own code.
-
-You also need **LTspice or ngspice** on the host — auto-detected on Windows,
-Linux and macOS; on WSL, set the LTspice path explicitly ([WSL notes](#configuration)).
-Python 3.11+. Reading and checking netlists (`.cir`/`.net`) works with no
-simulator at all; `.asc` schematic editing needs LTspice's `.asy` symbol
-libraries. Verify the install with `ltspice-mcp --help`.
-
-### From code
-
-```python
-from ltspice_mcp.api import Api
-
-with Api(working_dir="circuits") as api:
-    result = api.run_experiments(
-        circuits=[{"path": "rc.cir"}],
-        variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k", "4k"]}}],
-        analyze={"recipes": [
-            {"key": "fc", "metric": "bode_filter", "signal": "V(out)",
-             "field": "cutoff_high_hz", "reduce": ["min", "max"]},
-        ]},
-    )
-    print(result["analysis"]["result"]["results"]["fc"]["reduced"])
-```
-
-`run_experiments` defines a three-case sweep, measures each case, and returns
-the minimum and maximum cutoff frequencies with their assignments. `rc.cir` is
-the RC low-pass deck printed under
-[the tool-level loop](#under-the-hood-the-tool-level-loop) below.
-`api.reference()` lists the six operations. `api.reference("run_experiments")`
-prints that operation's full argument tree. From a shell, use
-`python -m ltspice_mcp.api reference [op]`. `api.load_raw()` returns numpy
-arrays for direct waveform access.
-
-### From an assistant
-
-Point your MCP client at the executable the install just gave you.
-
-**[Claude Code](https://code.claude.com/docs/en/mcp)** — one command (drop `-s project` to install it globally):
-
-```bash
-claude mcp add -s project ltspice -- ltspice-mcp
-```
-
-**Other clients** — [Claude Desktop](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop), [Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp) and others — add this `mcpServers` stanza to the client's MCP config file (each client documents its own path):
 
 ```json
 {
@@ -74,89 +36,40 @@ claude mcp add -s project ltspice -- ltspice-mcp
 }
 ```
 
-The same server is also published under two alias names — `circuit-mcp` and
-`ngspice-mcp` — so `uvx circuit-mcp` / `uvx ngspice-mcp` are drop-in
-equivalents of `uvx ltspice-mcp` if one of those names is more discoverable
-for you.
+Needs Python 3.11 or newer; `ltspice-mcp --help` confirms it installed. In
+[Claude Code](https://code.claude.com/docs/en/mcp) you can skip the JSON with
+`claude mcp add -s project ltspice -- ltspice-mcp`. The same server is also
+published as `circuit-mcp` and `ngspice-mcp` — same program, in case one of
+those names is easier to remember.
 
-### Tools only, with no project install
+**You also need a simulator on the same machine.** LTspice or ngspice —
+auto-detected on Windows, Linux and macOS; on WSL you point at LTspice
+yourself ([WSL notes](#configuration)). Install LTspice if you can: `.asc`
+schematic work needs its symbol libraries. Reading and checking netlists works
+with no simulator at all. The plugin and the extension fetch the server for
+you, so those two routes need [`uv`](https://docs.astral.sh/uv/) installed.
 
-In Claude Code, the plugin fetches and runs the server for you:
-
-```
-/plugin marketplace add cognitohazard/ltspice-mcp
-/plugin install ltspice-mcp
-```
-
-This route needs `uv` and a simulator on the host, and runs the server in its
-own throwaway environment. That is the one difference worth knowing: your own
-scripts still cannot `import ltspice_mcp` without the install above — but an
-assistant can still reach the Python engine, because `run_code` runs its
-snippet inside the server's process, where `api` is already bound. A **Claude
-Desktop extension** works the same way: build the `.mcpb` in
-[`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a
-one-click install with a native folder picker for your circuits directory.
-Neither route bundles LTspice or ngspice.
-
-### Make sure the assistant actually uses it
-
-Some clients defer MCP tool schemas until first use, so when an assistant
-chooses how to simulate it may have seen only the tool names — and may reach
-for a simulator through the shell instead. Name the server `ltspice` or
-`spice`, so the tool names carry the domain even while the schemas are
-deferred, and add this rule to your project's `CLAUDE.md` or the equivalent
-file for your client:
+**If your assistant ignores it.** Some clients don't show an assistant what a
+tool does until it picks one, so it may reach for the command line instead.
+Start with the name: the assistant sees every tool prefixed with it
+(`mcp__ltspice__run_experiments`), so a name carrying the domain reads as a
+SPICE tool even before anything else loads. That name is the key in the JSON
+above, or the word after `claude mcp add`; the plugin and the extension already
+use `ltspice`. If yours is something like `sim1`, rename it. Then say so
+outright, in your project's `CLAUDE.md` (or whatever your client calls it):
 
 > Always use the ltspice MCP server for any SPICE/circuit simulation, sweep,
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
-## Two ways to use it
-
-You can use the same six operations as an **MCP server** or as a **Python
-API**. Both run the same engine: the same code handles each operation,
-reads the same files, and writes the same job records to disk.
-
-| | MCP server | Python API |
-|-|-|-|
-| Who calls it | an assistant in Claude Code, Claude Desktop, Cursor, or another MCP client | a script, notebook, or CI job — usually one an assistant wrote |
-| What a call looks like | a tool call in the conversation; large results are split into pages and continued with a cursor | a method call; results are returned in full, with waveforms as numpy arrays |
-| Long runs | the server keeps the job running; check on it with `jobs` | the process owns the job; `api.close()` or normal interpreter shutdown cancels unfinished work |
-| Good for | interactive work: explore, edit, run a few checks per turn | code: optimizers, custom post-processing, pipelines, full result sets |
-
-A sweep or Monte Carlo matrix is one call through either interface. Use the
-Python API when each run depends on code that processes the previous result,
-such as an optimizer, curve fit, or CI check. The API returns the complete
-result set, while MCP paginates large results. Both interfaces use the same
-working directory and job records. An assistant can start a sweep over MCP,
-and a script can read the completed job by its `job_id`. A script can also
-run a batch for an assistant to analyze later.
-
-**An assistant can use either, and does not have to choose up front.** Over MCP
-it calls the six tools directly. Where it can execute code it can also drive the
-same engine in Python: `run_code` runs a snippet inside the server's own process
-with `api` already bound, so nothing has to be installed for it; and
-`from ltspice_mcp.api import Api` works in any script whose environment has the
-package. Both print their own argument trees on demand —
-`inspect(kind="reference")` over MCP, `api.reference()` in Python — so the whole
-surface is discoverable from inside the session without reading this file.
-
-## Using both at once
-
-The two ways are meant to run side by side. The MCP server is the
-long-lived process: it owns jobs that must outlive a call, serves the
-packaged guide and job resources, and renders the waveform widget on hosts
-that support it. A script using the Python API works in the same directory
-against the same job records, so a job started by either can be read by the
-other by its `job_id`. A job the script submits belongs to the script, and
-exiting cancels it — unless it asks for a detached owner
-(`run_experiments(wait=False, detach=True)`), which hands that one job to a
-process spawned to supervise it. The script can then exit, and the job, the
-server and any later script all still see the same record.
+That rule is absolute on purpose. An assistant invited to weigh it up will
+usually reach for the shell it already knows, which is the behaviour you are
+trying to correct. If you would rather it judge case by case, [when to shell
+out instead](#when-to-shell-out-instead) gives the real boundary.
 
 ## Using it
 
-Once connected, you ask for circuit work in plain language. The assistant designs the circuit and decides what to measure; the server runs the simulator, parses the binary output, and returns the numbers. It returns the simulation results and includes the simulator's warnings. You and the assistant decide whether the results are acceptable.
+Once connected, you ask for circuit work in plain language. The assistant designs the circuit and decides what to measure; the server runs the simulator, parses the binary output, and returns the numbers. You and the assistant decide whether the results are acceptable.
 
 > **"Bias this NMOS common-source stage into saturation at the target drain current and report gm/ID."**
 
@@ -185,40 +98,11 @@ Everything operates on ordinary LTspice and SPICE files. You and the assistant c
 
 ### When to shell out instead
 
-An agent with a shell should run quick one-off ngspice simulations directly. Local ngspice runs are scriptable and usually take under a second, so MCP adds little in that case. Use the server when you need LTspice execution, named values parsed from binary raw files, declared sweep and Monte Carlo matrices with durable idempotent submission, jobs that outlive a call, or geometry-checked `.asc` editing. `analyze_results` can also read a bare `raw_path` produced outside the server, so a simulation can run in the shell and be analyzed here.
+The rule in the quick start forbids the shell outright, which is the right
+default for an assistant that would otherwise never find the server. The real
+boundary is narrower, and it matters if you drop the rule.
 
-## Why it is shaped this way
-
-Three published studies by other groups report results that support the main design choices.
-
-- **Measurements are returned as named numbers.** SPICEAssistant (Nau, Krummenauer, Zimmermann, [arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) exposes scalar LTspice results to the model. The paper reports that, in a five-case ripple test, GPT-4o returned the correct value in 2 cases from a raw numeric vector and in 1 case from a plot image. It also reports that o3's solve rate on a 269-task power-supply benchmark increased from 25.4% to 84.9% with its tools, while retrieval-augmented prompting alone added 18.7 percentage points. This server returns measurements as named numbers. `plot_waveform` displays signal shape, while the measurement recipes return scalar values. AnalogCoder-Pro ([arXiv:2508.02518](https://arxiv.org/abs/2508.02518)) also uses images for diagnosis and scalar values for measurement.
-- **Schematic edits use typed operations and validation.** NetlistBench (Ma et al., [arXiv:2608.12197](https://arxiv.org/html/2608.12197)) evaluated LLM edits to SPICE netlists across 2,342 cases. It reports 96–100% accuracy for parameter changes and device removal, compared with 41–83% for device addition. For the strongest model evaluated, accuracy on compound edits fell from 80% with 3 dependent steps to 26% with 15. The authors conclude that current models should not be relied on as netlist editors without verification. The benchmark measured unassisted edits — it had no tool-assisted arm — and it covers text netlists, while `edit_schematic` edits `.asc` schematics. So the design here is a response to that finding rather than a measured fix for it: `edit_schematic` accepts a batch of typed operations, validates them before writing, and returns the resulting geometry, and `verify_circuit` can then compare the schematic with an exported netlist.
-- **The tool interface is typed.** An RTL-to-GDS agent benchmark ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) reports that 31.7% of physical-design errors were tool-interface failures: valid commands that failed because of tool state or version. The authors recommend registered APIs, persistent sessions, normalized result structures instead of log parsing, and stateful validation. This result concerns physical-design tooling rather than SPICE simulation, so it is supporting context rather than direct evidence for this server. The server uses typed tool schemas, persistent session state, structured results, and syntax and arity validation before a simulation runs.
-
-## The Python API, same engine
-
-`Api` starts the same engine in the caller's process and does not require an
-MCP server. Its interface differs from MCP in the following ways:
-
-- **Complete results.** Large MCP responses may be paginated or capped. The
-  API collects every page and returns the complete result. It rejects
-  MCP-only controls such as response budgets, pagination cursors, and wait
-  dwells instead of rewriting them. This keeps replayed calls consistent
-  between MCP and Python.
-- **The Python process owns its jobs, unless you detach them.**
-  `run_experiments(wait=False)` returns a receipt immediately, and unfinished
-  jobs are cancelled by `api.close()`, at the end of a `with` block, or during
-  normal interpreter shutdown. Adding `detach=True` gives that job its own
-  supervising process instead: the call still returns as soon as the
-  submission is durable, the receipt names the owner and its log, and the job
-  runs on after this process exits. Read it back or cancel it later by
-  `job_id`, from here, a later script, or a server.
-- **One live engine per process.** An `Api` created inside a running server
-  process raises an error. A cold `Api()` starts in well under a second; the
-  heavy imports are loaded by the first call that needs them.
-- `api.load_raw()` / `api.measurements()` return numpy-backed data for your
-  own post-processing, and `api.reference(op)` prints any operation's full
-  argument tree.
+An agent with a shell can run quick one-off ngspice simulations directly. Local ngspice runs are scriptable and usually take under a second, so MCP adds little in that case. Use the server when you need LTspice execution, named values parsed from binary raw files, declared sweep and Monte Carlo matrices with durable idempotent submission, jobs that outlive a call, or geometry-checked `.asc` editing. `analyze_results` can also read a bare `raw_path` produced outside the server, so a simulation can run in the shell and be analyzed here.
 
 ## What it does
 
@@ -308,6 +192,110 @@ The `skills/` directory carries the domain knowledge that pairs with the surface
 
 **Where it runs.** The server shells out to a local LTspice/ngspice and reads circuit files from disk, so it must run where the simulator and the files are. Two setups work: a local MCP host (Claude Desktop, Claude Code, Cursor, Gemini CLI, Codex, …) on your own machine, or a browser-based cloud agent whose sandbox can install ngspice and register the server (verified with Claude). LTspice is local-only (a Windows app); ngspice is open-source and works in either place. Consumer web chat with no sandbox has no simulator and no file access, so it can't run this server directly; bridge it to a machine you control with a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) if you want that UI. Only expose the server on a network you fully control: it writes files and spawns processes inside `allowed_paths`.
 
+## Two ways to use it
+
+You can use the same six operations as an **MCP server** or as a **Python
+API**. Both run the same engine: the same code handles each operation,
+reads the same files, and writes the same job records to disk.
+
+| | MCP server | Python API |
+|-|-|-|
+| Who calls it | an assistant in Claude Code, Claude Desktop, Cursor, or another MCP client | a script, notebook, or CI job — usually one an assistant wrote |
+| What a call looks like | a tool call in the conversation; large results are split into pages and continued with a cursor | a method call; results are returned in full, with waveforms as numpy arrays |
+| Long runs | the server keeps the job running; check on it with `jobs` | the process owns the job; `api.close()` or normal interpreter shutdown cancels unfinished work |
+| Good for | interactive work: explore, edit, run a few checks per turn | code: optimizers, custom post-processing, pipelines, full result sets |
+
+A sweep or Monte Carlo matrix is one call through either interface. Use the
+Python API when each run depends on code that processes the previous result,
+such as an optimizer, curve fit, or CI check. The API returns the complete
+result set, while MCP paginates large results. Both interfaces use the same
+working directory and job records. An assistant can start a sweep over MCP,
+and a script can read the completed job by its `job_id`. A script can also
+run a batch for an assistant to analyze later.
+
+**An assistant can use either.** Over MCP it calls the six tools; where it can
+execute code it can drive the same engine in Python instead, through `run_code`
+or an installed package (see below). Either way it can read the full argument
+tree for itself — `inspect(kind="reference")` over MCP, `api.reference()` in
+Python.
+
+## Driving it from code
+
+To write your own script against the engine, or to have an assistant write one
+that outlives the conversation, install the package:
+
+```bash
+pip install ltspice-mcp        # or: uv add ltspice-mcp
+```
+
+This is a separate step from the quick start. The plugin and the Desktop
+extension run the server in an environment of their own, so neither one puts
+the package where your code can `import` it. An assistant working inside a
+session does not need this install to write Python against the engine —
+`run_code` runs its snippet in the server's own process, with `api` already
+bound — but a standalone script does.
+
+```python
+from ltspice_mcp.api import Api
+
+with Api(working_dir="circuits") as api:
+    result = api.run_experiments(
+        circuits=[{"path": "rc.cir"}],
+        variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k", "4k"]}}],
+        analyze={"recipes": [
+            {"key": "fc", "metric": "bode_filter", "signal": "V(out)",
+             "field": "cutoff_high_hz", "reduce": ["min", "max"]},
+        ]},
+    )
+    print(result["analysis"]["result"]["results"]["fc"]["reduced"])
+```
+
+`run_experiments` defines a three-case sweep, measures each case, and returns
+the minimum and maximum cutoff frequencies with their assignments. `rc.cir` is
+the RC low-pass deck printed under
+[the tool-level loop](#under-the-hood-the-tool-level-loop) above.
+`api.reference()` lists the six operations. `api.reference("run_experiments")`
+prints that operation's full argument tree. From a shell, use
+`python -m ltspice_mcp.api reference [op]`. `api.load_raw()` returns numpy
+arrays for direct waveform access.
+
+### Using both at once
+
+The two run side by side. The MCP server is the long-lived process: it owns jobs that must outlive a call, serves the
+packaged guide and job resources, and renders the waveform widget on hosts
+that support it. A script using the Python API works in the same directory
+against the same job records, so a job started by either can be read by the
+other by its `job_id`. A job the script submits belongs to the script, and
+exiting cancels it — unless it asks for a detached owner
+(`run_experiments(wait=False, detach=True)`), which hands that one job to a
+process spawned to supervise it. The script can then exit, and the job, the
+server and any later script all still see the same record.
+
+### What the Python side does differently
+
+`Api` starts the same engine in the caller's process and does not require an
+MCP server. Its interface differs from MCP:
+
+- **Complete results.** Large MCP responses may be paginated or capped. The
+  API collects every page and returns the complete result. It rejects
+  MCP-only controls such as response budgets, pagination cursors, and wait
+  dwells instead of rewriting them. This keeps replayed calls consistent
+  between MCP and Python.
+- **The Python process owns its jobs, unless you detach them.**
+  `run_experiments(wait=False)` returns a receipt immediately, and unfinished
+  jobs are cancelled by `api.close()`, at the end of a `with` block, or during
+  normal interpreter shutdown. Adding `detach=True` gives that job its own
+  supervising process instead: the call still returns as soon as the
+  submission is durable, the receipt names the owner and its log, and the job
+  runs on after this process exits. Read it back or cancel it later by
+  `job_id`, from here, a later script, or a server.
+- **One live engine per process.** An `Api` created inside a running server
+  process raises an error. A cold `Api()` starts in well under a second; the
+  heavy imports are loaded by the first call that needs them.
+- `api.load_raw()` / `api.measurements()` return numpy-backed data for your
+  own post-processing, and `api.reference(op)` prints any operation's full
+  argument tree.
+
 ## Under the hood: the tool-level loop
 
 What the assistant actually does for "design a 1 kHz RC low-pass and verify it". It writes the netlist (R=1k, C=159.155n → fc = 1 kHz):
@@ -375,6 +363,14 @@ Sweeps and Monte Carlo are not separate tools: they are `run_experiments` `varia
 There is no temperature axis. Temperature is a simulator setting, so it goes in the deck (`.temp`, `.step temp`, `.options temp=`); a `.param TEMP` is rejected by the deck lint, because SPICE never reads it as the simulation temperature and every point of such a sweep would solve at the same temperature.
 
 </details>
+
+## Why it is shaped this way
+
+Three published studies by other groups support the main design choices.
+
+- **Measurements come back as named numbers.** SPICEAssistant (Nau, Krummenauer, Zimmermann, [arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) hands the model scalar LTspice results instead of raw output, and reports o3's solve rate on a 269-task power-supply benchmark rising from 25.4% to 84.9%, against 18.7 points for retrieval-augmented prompting alone. Here the measurement recipes return scalars and `plot_waveform` is for shape.
+- **Schematic edits are typed and validated.** NetlistBench (Ma et al., [arXiv:2608.12197](https://arxiv.org/html/2608.12197)) put 2,342 LLM netlist edits through a benchmark: for the strongest model, accuracy on compound edits fell from 80% at 3 dependent steps to 26% at 15, and the authors conclude models should not be relied on as netlist editors without verification. It measured unassisted edits on text netlists, so this is a response to that finding rather than a measured fix for it: `edit_schematic` takes a batch of typed operations, validates before writing, and returns the resulting geometry, and `verify_circuit` compares the schematic against an exported netlist.
+- **The tool interface is typed.** An RTL-to-GDS agent benchmark ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) attributes 31.7% of physical-design errors to tool-interface failures: valid commands defeated by tool state or version. Different domain, so it is supporting context rather than evidence; its recommendations — registered APIs, persistent sessions, structured results instead of log parsing — are what the server does.
 
 ## Development
 
