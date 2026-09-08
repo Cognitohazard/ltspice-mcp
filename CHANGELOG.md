@@ -6,6 +6,26 @@ project will adopt [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches `1.0.0`. Until then, minor versions may contain breaking
 tool-surface changes.
 
+## [0.6.1] - 2026-09-08
+
+### Fixed
+
+- A simulation runner released while one of its tasks had been queued but
+  never started could hang the process that released it, indefinitely and
+  without a diagnostic. spicelib's runner destructor waits for its task list
+  to drain and takes its deadline only from tasks that have started, so that
+  one shape is retired by nothing and bounds nothing; because the last
+  reference usually goes away with garbage collection, the wait lands on
+  whichever thread happens to be allocating. The runner is now built from a
+  subclass with no destructor — completion arrives on the run callback and
+  liveness is read from the task threads, so nothing here needed it.
+
+### Changed
+
+- A test that wedges now dumps every thread's stack and exits naming the
+  frame it is stuck in, rather than running until the caller gives up. This
+  uses pytest's own faulthandler settings and adds no dependency.
+
 ## [0.6.0] - 2026-09-07
 
 One engine behind two interfaces. The MCP surface is eight tools in place of
