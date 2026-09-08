@@ -7,12 +7,16 @@ pure logic operating on BatchJob/SimulationJob state.
 """
 
 import asyncio
+import threading
 from pathlib import Path
+from typing import cast
 
 import pytest
+from spicelib.sim.run_task import RunTask
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
-from ltspice_mcp.lib.runner_base import discard_generated_netlist
+from ltspice_mcp.lib.runner_base import RunnerBase, discard_generated_netlist
 from ltspice_mcp.lib.spice_lex import lex
 
 
@@ -837,3 +841,42 @@ class TestDiscardGeneratedNetlist:
 
     def test_none_is_noop(self):
         discard_generated_netlist(None)  # must not raise
+
+
+class _NeverStartedTask:
+    """A spicelib RunTask appended to ``active_tasks`` that never ran.
+
+    spicelib retires a task only once it is finished AND has a start time, and
+    derives its wait deadline the same way, so this shape is retired by nothing
+    and bounds nothing.
+    """
+
+    timeout = None
+    start_time = None
+
+    def is_alive(self) -> bool:
+        return False
+
+
+class TestSimRunnerRelease:
+    def test_dropping_a_runner_whose_task_never_started_does_not_block(self, loop, tmp_path: Path):
+        """Releasing a SimRunner must never pin the thread that drops it.
+
+        spicelib's destructor waits for ``active_tasks`` to drain, with a
+        deadline read only from tasks that have started — so a task that never
+        started makes that wait unbounded, on whatever thread the garbage
+        collector happens to run on. A CI job lost twelve silent minutes to it.
+        """
+        released = threading.Event()
+
+        def build_and_drop() -> None:
+            runner = RunnerBase(loop, NGspiceSimulator, tmp_path)._build_sim_runner()
+            runner.active_tasks.append(cast(RunTask, _NeverStartedTask()))
+            del runner  # the last reference: the destructor runs here
+            released.set()
+
+        dropper = threading.Thread(target=build_and_drop, daemon=True)
+        dropper.start()
+        dropper.join(timeout=10)
+
+        assert released.is_set(), "the destructor is still waiting on a task that never started"

@@ -867,9 +867,14 @@ drop our exact-equality override.
 `__del__`, `:711` `wait_completion`). Present unchanged across the pinned range
 (`>=1.4.9,<1.6`).
 **Our workaround:** `src/ltspice_mcp/lib/runner_base.py` —
-`RunnerBase.submit_netlist` retains every `SimRunner` it builds in
-`self._inflight_runners` and releases it in `_retire_finished_runners` once its
-run-task threads have exited. Remove the retention once upstream's destructor no
+`_NonBlockingSimRunner` overrides `__del__` to do nothing, and
+`RunnerBase._build_sim_runner` constructs that subclass instead of `SimRunner`.
+Nothing in this project needs the destructor: completion arrives through the run
+callback, liveness is read off the task threads, and the only other thing it
+does is the name-global `kill_all_spice()` this project deliberately never uses.
+`submit_netlist` still retains every runner in `self._inflight_runners` (the
+kill and liveness paths need the handle) and releases it in
+`_retire_finished_runners`. Drop the subclass once upstream's destructor no
 longer waits.
 
 ### Summary
@@ -878,6 +883,25 @@ longer waits.
 `wait_completion` loops `while len(self.active_tasks) > 0: sleep(1)`. A
 destructor therefore blocks for as long as the simulation runs, up to the
 instance timeout.
+
+**And in one shape the wait has no bound at all.** `wait_completion(timeout=None)`
+recomputes its deadline every second from `_maximum_stop_time()`, which reads
+`task.start_time + timeout` and **skips any task whose `start_time` is None**;
+`update_completed()` likewise retires a task only `if not (is_alive() or
+start_time is None)`. A task that was appended to `active_tasks` and never
+started — `run()` does `active_tasks.append(t)` and only then `t.start()` — is
+therefore retired by nothing and bounds nothing: the loop condition stays true,
+the deadline stays `None`, and the destructor spins on `sleep(1)` forever. The
+same predicate makes `RunTask.wait_results()` unbounded
+(`while self.is_alive() or self.start_time is None or self.retcode == -1`).
+
+Because the last reference is usually dropped by ordinary garbage collection,
+that infinite wait lands on whichever thread happened to allocate. On
+2026-09-07 a release-gate CI job lost twelve minutes and forty-eight seconds
+of complete silence to it and was killed by the job timeout, reporting only
+"The operation was canceled" — no traceback, no failing test, and no simulator
+process left behind, because the simulation had finished and only the waiting
+thread was stuck.
 
 Under CPython's refcounting this fires at the most surprising possible moment:
 the statement that submits. `run()` launches the simulation on a run-task thread
@@ -949,6 +973,12 @@ merely stopped referencing.
 ### Proposed fix
 
 A destructor must not block. Two options, in preference order:
+
+0. **Give the wait a floor that always advances.** Whatever else changes,
+   `_maximum_stop_time()` and `update_completed()` should treat a task that is
+   not alive and has no `start_time` as finished (it can never start), or
+   `wait_completion` should fall back to the instance `timeout` when no task
+   offers a deadline. As written the loop has a reachable state with no exit.
 
 1. **Drop the wait from `__del__`.** Leave `wait_completion()` as the explicit
    call it already is, and let `close()` or context-manager use handle teardown.
