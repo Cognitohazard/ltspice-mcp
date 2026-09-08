@@ -2,6 +2,7 @@
 
 <!-- mcp-name: io.github.cognitohazard/ltspice-mcp -->
 
+> **WIP**
 > **0.6.0 was a breaking release:** the tool surface consolidated to six
 > operations plus a waveform widget and a code runner, and the same engine
 > became importable as a Python API. Pin `ltspice-mcp==0.5.*` if you need the
