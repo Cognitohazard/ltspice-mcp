@@ -2,61 +2,33 @@
 
 <!-- mcp-name: io.github.cognitohazard/ltspice-mcp -->
 
-> **0.6.0 (upcoming) is a breaking release:** the tool surface consolidates to
-> six operations plus a plot widget, and the same engine becomes importable as
-> a Python API. The 0.5 series keeps the old 49-tool surface
-> (`ltspice-mcp==0.5.*`).
+> **0.6.0 was a breaking release:** the tool surface consolidated to six
+> operations plus a waveform widget and a code runner, and the same engine
+> became importable as a Python API. Pin `ltspice-mcp==0.5.*` if you need the
+> old 49-tool surface.
 
 ltspice-mcp lets LLM assistants and Python code run LTspice and ngspice simulations and edit LTspice `.asc` schematics. It returns structured measurements such as cutoff frequency, overshoot, phase margin, rise time, and per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …). Callers access these values by name without parsing raw files. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
-## Two ways to use it
+## Quick start
 
-You can use the same six operations as an **MCP server** or as a **Python
-API**. Both run the same engine: the same code handles each operation,
-reads the same files, and writes the same job records to disk.
-
-| | MCP server | Python API |
-|-|-|-|
-| Who calls it | an assistant in Claude Code, Claude Desktop, Cursor, or another MCP client | a script, notebook, or CI job |
-| What a call looks like | a tool call in the conversation; large results are split into pages and continued with a cursor | a method call; results are returned in full, with waveforms as numpy arrays |
-| Long runs | the server keeps the job running; check on it with `jobs` | the process owns the job; `api.close()` or normal interpreter shutdown cancels unfinished work |
-| Good for | interactive work: explore, edit, run a few checks per turn | code: optimizers, custom post-processing, pipelines, full result sets |
-
-A sweep or Monte Carlo matrix is one call through either interface. Use the
-Python API when each run depends on code that processes the previous result,
-such as an optimizer, curve fit, or CI check. The API returns the complete
-result set, while MCP paginates large results. Both interfaces use the same
-working directory and job records. An assistant can start a sweep over MCP,
-and a script can read the completed job by its `job_id`. A script can also
-run a batch for an assistant to analyze later.
-
-One measurement, taken on 3 August 2026 against an earlier build: eleven
-op-amp design tasks, run once through each interface by the same assistant.
-Both sessions answered all eleven correctly. The Python-API session cost
-$5.37 in tokens against the MCP session's $9.31, because one script replaces a
-series of tool calls and the results they return. The MCP session took fewer
-turns (52 against 74) and less time (14 against 21 minutes). The MCP side has
-been rebuilt since that day and the pair has not been measured again, so these
-are numbers from that date, not properties of this release.
-
-## Using both at once
-
-The two ways are meant to run side by side. The MCP server is the
-long-lived process: it owns jobs that must outlive a call, serves the
-packaged guide and job resources, and renders the waveform widget on hosts
-that support it. A script using the Python API works in the same directory
-against the same job records, so a job started by either can be read by the
-other by its `job_id`. A job the script submits belongs to the script, and
-exiting cancels it — unless it asks for a detached owner
-(`run_experiments(wait=False, detach=True)`), which hands that one job to a
-process spawned to supervise it. The script can then exit, and the job, the
-server and any later script all still see the same record.
-
-## Quick start — Python API
+One install covers both ways of using this: it puts the library on your path
+for `import`, and an `ltspice-mcp` executable for an MCP client to launch.
 
 ```bash
-pip install ltspice-mcp        # or: uv tool install / pipx install
+pip install ltspice-mcp        # or: uv add ltspice-mcp
 ```
+
+`uv tool install` and `pipx install` work too, but they keep the package in an
+environment of their own: you get the executable for an MCP client, not an
+`import` for your own code.
+
+You also need **LTspice or ngspice** on the host — auto-detected on Windows,
+Linux and macOS; on WSL, set the LTspice path explicitly ([WSL notes](#configuration)).
+Python 3.11+. Reading and checking netlists (`.cir`/`.net`) works with no
+simulator at all; `.asc` schematic editing needs LTspice's `.asy` symbol
+libraries. Verify the install with `ltspice-mcp --help`.
+
+### From code
 
 ```python
 from ltspice_mcp.api import Api
@@ -82,24 +54,9 @@ prints that operation's full argument tree. From a shell, use
 `python -m ltspice_mcp.api reference [op]`. `api.load_raw()` returns numpy
 arrays for direct waveform access.
 
-## Quick start — MCP server
+### From an assistant
 
-In Claude Code, install the plugin:
-
-```
-/plugin marketplace add cognitohazard/ltspice-mcp
-/plugin install ltspice-mcp
-```
-
-You also need LTspice or ngspice on the host (auto-detected on Windows, Linux, and macOS; on WSL set the LTspice path explicitly — [WSL notes](#configuration)). Reading and checking netlists (`.cir`/`.net`) works with no simulator at all; `.asc` schematic editing needs LTspice's `.asy` symbol libraries. `uv` is required; the server itself is fetched from PyPI on first use.
-
-### Manual install (any MCP client)
-
-Install the server, then point your client at it:
-
-```bash
-uv tool install ltspice-mcp     # or: pip install ltspice-mcp / pipx install ltspice-mcp
-```
+Point your MCP client at the executable the install just gave you.
 
 **[Claude Code](https://code.claude.com/docs/en/mcp)** — one command (drop `-s project` to install it globally):
 
@@ -117,20 +74,85 @@ claude mcp add -s project ltspice -- ltspice-mcp
 }
 ```
 
-Python 3.11+ required. Verify with `ltspice-mcp --help`. The same server is also published under two alias names — `circuit-mcp` and `ngspice-mcp` — so `uvx circuit-mcp` / `uvx ngspice-mcp` are drop-in equivalents of `uvx ltspice-mcp` if one of those names is more discoverable for you.
+The same server is also published under two alias names — `circuit-mcp` and
+`ngspice-mcp` — so `uvx circuit-mcp` / `uvx ngspice-mcp` are drop-in
+equivalents of `uvx ltspice-mcp` if one of those names is more discoverable
+for you.
 
-**Configure the agent to use this server.** Some agent clients defer MCP tool
-schemas until first use. When an agent chooses how to simulate, it may have
-seen only the tool names and may use a simulator through the shell instead.
-Name the server `ltspice` or `spice`, so the tool names carry the domain even
-while the schemas are deferred, and add this rule to your project's
-`CLAUDE.md` or the equivalent file for your client:
+### Tools only, with no project install
+
+In Claude Code, the plugin fetches and runs the server for you:
+
+```
+/plugin marketplace add cognitohazard/ltspice-mcp
+/plugin install ltspice-mcp
+```
+
+This route needs `uv` and a simulator on the host, and runs the server in its
+own throwaway environment. That is the one difference worth knowing: your own
+scripts still cannot `import ltspice_mcp` without the install above — but an
+assistant can still reach the Python engine, because `run_code` runs its
+snippet inside the server's process, where `api` is already bound. A **Claude
+Desktop extension** works the same way: build the `.mcpb` in
+[`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a
+one-click install with a native folder picker for your circuits directory.
+Neither route bundles LTspice or ngspice.
+
+### Make sure the assistant actually uses it
+
+Some clients defer MCP tool schemas until first use, so when an assistant
+chooses how to simulate it may have seen only the tool names — and may reach
+for a simulator through the shell instead. Name the server `ltspice` or
+`spice`, so the tool names carry the domain even while the schemas are
+deferred, and add this rule to your project's `CLAUDE.md` or the equivalent
+file for your client:
 
 > Always use the ltspice MCP server for any SPICE/circuit simulation, sweep,
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
-A **Claude Desktop extension** is also available: build the `.mcpb` in [`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a one-click install with a native folder picker for your circuits directory. Like the plugin, it wraps the PyPI package and needs `uv` and a simulator on the host (it does not bundle LTspice or ngspice).
+## Two ways to use it
+
+You can use the same six operations as an **MCP server** or as a **Python
+API**. Both run the same engine: the same code handles each operation,
+reads the same files, and writes the same job records to disk.
+
+| | MCP server | Python API |
+|-|-|-|
+| Who calls it | an assistant in Claude Code, Claude Desktop, Cursor, or another MCP client | a script, notebook, or CI job — usually one an assistant wrote |
+| What a call looks like | a tool call in the conversation; large results are split into pages and continued with a cursor | a method call; results are returned in full, with waveforms as numpy arrays |
+| Long runs | the server keeps the job running; check on it with `jobs` | the process owns the job; `api.close()` or normal interpreter shutdown cancels unfinished work |
+| Good for | interactive work: explore, edit, run a few checks per turn | code: optimizers, custom post-processing, pipelines, full result sets |
+
+A sweep or Monte Carlo matrix is one call through either interface. Use the
+Python API when each run depends on code that processes the previous result,
+such as an optimizer, curve fit, or CI check. The API returns the complete
+result set, while MCP paginates large results. Both interfaces use the same
+working directory and job records. An assistant can start a sweep over MCP,
+and a script can read the completed job by its `job_id`. A script can also
+run a batch for an assistant to analyze later.
+
+**An assistant can use either, and does not have to choose up front.** Over MCP
+it calls the six tools directly. Where it can execute code it can also drive the
+same engine in Python: `run_code` runs a snippet inside the server's own process
+with `api` already bound, so nothing has to be installed for it; and
+`from ltspice_mcp.api import Api` works in any script whose environment has the
+package. Both print their own argument trees on demand —
+`inspect(kind="reference")` over MCP, `api.reference()` in Python — so the whole
+surface is discoverable from inside the session without reading this file.
+
+## Using both at once
+
+The two ways are meant to run side by side. The MCP server is the
+long-lived process: it owns jobs that must outlive a call, serves the
+packaged guide and job resources, and renders the waveform widget on hosts
+that support it. A script using the Python API works in the same directory
+against the same job records, so a job started by either can be read by the
+other by its `job_id`. A job the script submits belongs to the script, and
+exiting cancels it — unless it asks for a detached owner
+(`run_experiments(wait=False, detach=True)`), which hands that one job to a
+process spawned to supervise it. The script can then exit, and the job, the
+server and any later script all still see the same record.
 
 ## Using it
 
@@ -364,7 +386,7 @@ uv run ruff check src/ tests/  # lint
 uv run ltspice-mcp             # run the server (stdio)
 ```
 
-Release with `scripts/release.sh 0.5.1`. The script updates the plugin manifests, commits the changes, and creates the tag. The package version comes from hatch-vcs. Push the tag to publish to PyPI.
+Release with `scripts/release.sh 0.6.2`. The script refuses a dirty tree or a version with no dated `CHANGELOG.md` section, stamps the plugin manifests, commits, and creates an annotated tag. The package version comes from hatch-vcs. Push the tag to publish to PyPI.
 
 More: [docs/DESIGN.md](docs/DESIGN.md) (scope, architecture, non-goals) and [docs/spice_lex.md](docs/spice_lex.md) (SPICE parser internals).
 
