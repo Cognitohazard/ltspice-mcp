@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
   "manifest_version": "0.4",
   "name": "ltspice-mcp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "LTspice/ngspice circuit simulation and LTspice .asc schematic editing for Claude Desktop. Supports sweeps and Monte Carlo in one request, structured measurements, per-device operating points (gm/gds/vth) by device name, and schematic geometry checks.",
   "author": {
     "name": "cognitohazard",
