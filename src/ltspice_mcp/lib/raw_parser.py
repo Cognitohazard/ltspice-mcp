@@ -253,6 +253,7 @@ _RE_TRANSIENT = re.compile(r"\bTRANSIENT\b", re.IGNORECASE)
 _RE_AC = re.compile(r"\bAC\b", re.IGNORECASE)
 _RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
 _RE_NOISE = re.compile(r"\bNOISE\b", re.IGNORECASE)
+_RE_OP = re.compile(r"\bOPERATING\s+POINT\b", re.IGNORECASE)
 
 
 def safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
@@ -300,6 +301,15 @@ def is_noise_analysis(sim_type: str) -> bool:
     composite types like "DC NOISE ANALYSIS".
     """
     return bool(_RE_NOISE.search(sim_type))
+
+
+def is_operating_point(sim_type: str) -> bool:
+    """Check if the sim type is a bias-point solve (``.op``).
+
+    Both simulators name it "Operating Point". Word-boundary matched like its
+    siblings so a composite name cannot false-positive on a substring.
+    """
+    return bool(_RE_OP.search(sim_type))
 
 
 def is_dc_analysis(sim_type: str) -> bool:
@@ -953,3 +963,42 @@ def build_simulation_summary(
     )
 
     return summary
+
+
+#: How much of a raw header to read when naming its writer. Every header field
+#: that matters (``Command`` last among them) precedes the variables block.
+_SNIFF_BYTES = 8192
+_TITLE_UTF16 = "Title:".encode("utf-16-le")
+
+
+def sniff_raw_dialect(path: Path) -> str | None:
+    """Name the simulator that wrote a raw, from the file's own bytes.
+
+    spicelib auto-detects from the ``Command:`` header, which ngspice only
+    began writing in version 44. Before that the header has no writer field at
+    all, so a raw handed over as a bare path — the one route with no job to
+    ask — cannot be read at all.
+
+    Two structural facts settle it without that field. LTspice writes the
+    header in UTF-16LE and every other supported simulator writes ASCII; and
+    the dialect's one load-bearing effect inside spicelib is
+    ``always_double = dialect != 'ltspice'``, so separating LTspice from the
+    rest *is* the decision. qspice and xyce always write ``Command:``, which
+    leaves ngspice as the only writer of a headerless ASCII raw.
+
+    Returns ``None`` when the file is not a raw, or when it carries a
+    ``Command:`` field — there spicelib names the writer itself, and its
+    answer is better than a guess.
+    """
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(_SNIFF_BYTES)
+    except OSError:
+        return None
+    if head.startswith(_TITLE_UTF16):
+        return "ltspice"
+    if not head.startswith(b"Title:"):
+        return None
+    if b"Command:" in head:
+        return None
+    return "ngspice"

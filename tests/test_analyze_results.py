@@ -1748,6 +1748,121 @@ def _bare_device_op_raw(work_dir: Path) -> Path:
     return raw
 
 
+def _transfer_function_raw(work_dir: Path) -> Path:
+    """A ``.tf`` run: one point, three derived columns.
+
+    Plot name and values are transcribed from a live ngspice run of a 1k/1k
+    divider — gain 0.5, 2k in, 500R out, the impedances riding in
+    voltage-typed columns because that is the only column type the format
+    offers them. The ``Command`` line is the one addition: ngspice writes no
+    dialect marker, so its own raws are unreadable offline without a job to
+    name the dialect, and every recorded raw here carries one.
+    """
+    raw = work_dir / "transfer_function.raw"
+    raw.write_text(
+        "Title: * transfer function of a resistive divider\n"
+        "Date: Tue Sep  8 01:02:20 2026\n"
+        "Plotname: Transfer Function\n"
+        "Flags: real\n"
+        "No. Variables: 3\n"
+        "No. Points: 1\n"
+        "Offset: 0.0000000000000000e+00\n"
+        "Command: Linear Technology Corporation LTspice\n"
+        "Variables:\n"
+        "\t0\tv(Transfer_function)\tvoltage\n"
+        "\t1\tv(v1#Input_impedance)\tvoltage\n"
+        "\t2\tv(output_impedance_at_V(out))\tvoltage\n"
+        "Values:\n"
+        "0\t5.0000000000000000e-01\n"
+        "\t2.0000000000000000e+03\n"
+        "\t5.0000000000000000e+02\n"
+    )
+    return raw
+
+
+@pytest.mark.asyncio
+async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The route the server's own instructions advertise: bring your own raw.
+
+    ngspice before version 44 writes no ``Command:`` field, so spicelib cannot
+    name the writer, and the fallback asked the *session default* instead —
+    which is ``None`` whenever LTspice is the default, the configuration this
+    project is built around. Every such raw was refused as corrupt. Nothing
+    about the file changed between then and now; only what we ask about it.
+    """
+    raw = work_dir / "brought_along.raw"
+    raw.write_text(
+        "Title: * divider\n"
+        "Date: Tue Sep  8 01:02:20 2026\n"
+        "Plotname: Operating Point\n"
+        "Flags: real\n"
+        "No. Variables: 2\n"
+        "No. Points: 1\n"
+        "Variables:\n"
+        "\t0\tv(in)\tvoltage\n"
+        "\t1\tv(out)\tvoltage\n"
+        "Values:\n"
+        "0\t1.0000000000000000e+00\n"
+        "\t5.0000000000000000e-01\n"
+    )
+
+    data = await _analyze(state_no_sim, raw, [{"key": "op", "metric": "operating_point"}])
+
+    assert data["failures"] == []
+    assert data["results"]["op"]["values"][0]["value"]["voltages"]["v(out)"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """``operating_point`` names what it can read, not what it cannot.
+
+    It used to refuse AC, noise and transient by name and treat every other
+    plot as a bias point. ngspice alone writes four more — Transfer Function,
+    Pole-Zero Analysis, Sensitivity Analysis, DISTORTION — and each was
+    answered: poles in rad/s came back as node voltages in V, and point 0 of a
+    251-point distortion sweep came back as the bias, with no warning either
+    time. The traces stay readable through the recipe that reads traces.
+    """
+    raw = _transfer_function_raw(work_dir)
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {"key": "op", "metric": "operating_point"},
+            {"key": "gain", "metric": "value", "expr": "v(Transfer_function)"},
+        ],
+    )
+
+    refusals = [failure["message"] for failure in data["failures"]]
+    assert any("Transfer Function" in message for message in refusals), refusals
+    assert "op" not in data["results"]
+    assert data["results"]["gain"]["values"][0]["value"]["value"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_a_dc_sweep_still_reads_as_a_bias_point(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The allowlist's other half: a sweep is one of the two plots it admits."""
+    data = await _analyze(
+        state_no_sim,
+        stage_recorded_fixture(work_dir, "ltspice_dc_div"),
+        [{"key": "op", "metric": "operating_point"}],
+    )
+
+    entry = data["results"]["op"]["values"][0]["value"]
+    assert entry["voltages"]
+    assert any("sweep" in warning.lower() for warning in entry["warnings"])
+
+
 @pytest.mark.asyncio
 async def test_a_value_recipe_accepts_the_documented_device_param_shorthand(
     state_no_sim: SessionState,

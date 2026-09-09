@@ -768,7 +768,12 @@ class TestStepTempDegreeStripping:
 
     def test_temp_axis_strips_degree(self, tmp_path: Path):
         log = tmp_path / "step_temp.log"
-        log.write_text("Circuit: foo\n.step temp=-40°\n.step temp=27°\n.step temp=125°\n")
+        # Explicit, because the platform default would otherwise decide which
+        # bytes the degree sign becomes: UTF-8 here, cp1252 on Windows.
+        log.write_text(
+            "Circuit: foo\n.step temp=-40°\n.step temp=27°\n.step temp=125°\n",
+            encoding="utf-8",
+        )
         steps = parse_step_iterations(log)
         # Without the ° fix, the value capture would include '°' and
         # parse_value would fail downstream — the row would be dropped.

@@ -255,6 +255,26 @@ def collect_run_outcome(
         try:
             raw_size = Path(raw_file).stat().st_size
         except FileNotFoundError:
+            # Windows maps "a path component is a file" to ERROR_PATH_NOT_FOUND
+            # and raises FileNotFoundError, where POSIX raises NotADirectoryError
+            # and lands in the branch below. Left undistinguished, the same
+            # broken location reads as an unreadable raw on Linux and as a clean
+            # run that produced nothing on Windows. Only the immediate parent is
+            # checked; a file further up the chain still reads as a plain
+            # absence, which is the same answer both platforms already give.
+            parent = Path(raw_file).parent
+            try:
+                location_is_not_a_directory = parent.exists() and not parent.is_dir()
+            except OSError:
+                location_is_not_a_directory = False
+            if location_is_not_a_directory:
+                return RunOutcome(
+                    raw_file,
+                    log_file,
+                    0,
+                    "Simulation finished but its raw file is unreadable: "
+                    f"{parent} is not a directory",
+                )
             raw_size = 0
         except OSError as exc:
             return RunOutcome(
