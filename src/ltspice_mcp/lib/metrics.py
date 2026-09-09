@@ -66,6 +66,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_ac_analysis,
     is_dc_analysis,
     is_noise_analysis,
+    is_operating_point,
     nearest_index,
     query_point_value,
     real_axis,
@@ -1058,7 +1059,11 @@ async def _value_from_operating_point(
 ) -> MetricValue:
     """A no-axis run's answer for ``recipe.expr``, read off its bias point."""
     op = await operating_point(
-        source, OperatingPointRecipe(key=recipe.key, metric="operating_point"), step, state
+        source,
+        OperatingPointRecipe(key=recipe.key, metric="operating_point"),
+        step,
+        state,
+        as_bias_point=False,
     )
     flat = operating_point_flat(op)
     # The 'm1.gm' shorthand the guide and read_device_op_points both promise
@@ -1873,8 +1878,16 @@ async def operating_point(
     state: SessionState,
     *,
     at: str | None = None,
+    as_bias_point: bool = True,
 ) -> MetricValue:
-    """DC bias point: node voltages, branch currents, per-device small-signal params."""
+    """DC bias point: node voltages, branch currents, per-device small-signal params.
+
+    ``as_bias_point`` is what the caller is claiming, not what it is reading.
+    The ``value`` recipe reaches this function to read one named scalar off a
+    run with no axis and asserts nothing about what that scalar means, so it
+    opts out of the plot-type guard below; every caller that presents the
+    result as a bias point keeps it.
+    """
     raw = await services.load_raw(source.raw, state)
 
     sim_type = detect_sim_type(raw)
@@ -1899,10 +1912,29 @@ async def operating_point(
             "the converged DC bias. Run a separate ``.OP`` analysis."
         )
 
+    # Everything past here is treated as carrying a bias point, so name the
+    # plot types that do rather than the ones that do not. ngspice alone adds
+    # Transfer Function, Pole-Zero Analysis, Sensitivity Analysis and two
+    # DISTORTION plots; each used to be answered with a bias point assembled
+    # from whatever its traces happened to be named, so a pole in rad/s came
+    # back as a node voltage and point 0 of a 251-point distortion sweep came
+    # back as the bias.
+    if as_bias_point and not (is_operating_point(sim_type) or is_dc_analysis(sim_type)):
+        raise ResultError(
+            f"Cannot extract a DC operating point from {sim_type!r}: that "
+            "analysis does not solve for one. Its traces are still readable — "
+            "list them with the summary recipe and include.signals_available, "
+            "then read one with the value recipe."
+        )
+
     services.validate_step(raw, step)
     op_step_count = get_step_count(raw)
 
-    is_dc = "transfer" in sim_lower or "dc" in sim_lower.split()
+    # The shared matcher, not a substring test: ngspice names a ``.tf`` run
+    # "Transfer Function", which a bare "transfer" match reads as the
+    # "DC transfer characteristic" of a sweep and answers with sweep advice
+    # for a run that has no sweep to point at.
+    is_dc = is_dc_analysis(sim_type)
 
     # For a .dc sweep, at=<value> reads the full bias snapshot at a chosen sweep
     # point (nearest) instead of the sweep's first point.

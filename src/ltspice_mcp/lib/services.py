@@ -32,7 +32,11 @@ from ltspice_mcp.lib.log_parser import (
     missing_refs_from_text,
 )
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
+from ltspice_mcp.lib.raw_parser import (
+    OffsetAwareRawRead,
+    get_step_count,
+    sniff_raw_dialect,
+)
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.state import SessionState
 
@@ -430,10 +434,18 @@ def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
     Job-addressed reads record the producing job's dialect when the path is
     resolved (see ``_resolve_result_file``), so a run launched with a per-run
     simulator override parses with that simulator's dialect rather than the
-    session default's. Paths with no recorded producer (a user-supplied
-    ``raw_file``) use the default.
+    session default's.
+
+    A path with no recorded producer is the caller's own raw, and the session
+    default is the wrong thing to guess with: it is ``None`` whenever LTspice
+    is the default, which is what an ngspice raw written before version 44
+    needs least — it has no ``Command:`` header either, so spicelib has
+    nothing to detect from and refuses the file. Ask the bytes instead, and
+    fall back to the default only when they do not answer.
     """
-    return state.raw_dialect_hints.get(raw_path, state.raw_dialect)
+    if raw_path in state.raw_dialect_hints:
+        return state.raw_dialect_hints[raw_path]
+    return sniff_raw_dialect(raw_path) or state.raw_dialect
 
 
 # Hard wall-clock bound on one raw parse. A raw is an untrusted simulator

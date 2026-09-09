@@ -16,7 +16,11 @@ from spicelib.sim.run_task import RunTask
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
-from ltspice_mcp.lib.runner_base import RunnerBase, discard_generated_netlist
+from ltspice_mcp.lib.runner_base import (
+    RunnerBase,
+    collect_run_outcome,
+    discard_generated_netlist,
+)
 from ltspice_mcp.lib.spice_lex import lex
 
 
@@ -880,3 +884,54 @@ class TestSimRunnerRelease:
         dropper.join(timeout=10)
 
         assert released.is_set(), "the destructor is still waiting on a task that never started"
+
+
+class TestRawLocationClassification:
+    """A raw whose parent is a file, not a directory.
+
+    The two platforms report it as different exceptions, so the classification
+    has to name the condition rather than the errno it arrived as. Both tests
+    build the same broken layout; they differ only in which error the stat
+    raises. Both must name the condition — POSIX by relaying the OS message,
+    Windows by our own, since there is no OS message to relay there.
+    """
+
+    def _broken_layout(self, tmp_path: Path) -> tuple[Path, Path]:
+        not_a_directory = tmp_path / "job_id"
+        not_a_directory.write_text("a file sitting where the run directory belongs\n")
+        log = tmp_path / "run.log"
+        log.write_text("Circuit: divider\nTotal elapsed time: 0.01 seconds.\n")
+        return not_a_directory / "run.raw", log
+
+    def test_posix_reports_the_broken_location(self, tmp_path: Path):
+        raw, log = self._broken_layout(tmp_path)
+
+        outcome = collect_run_outcome(str(raw), str(log), exit_code=0)
+
+        assert outcome.error is not None
+        assert "not a directory" in outcome.error.lower()
+
+    def test_windows_reports_it_the_same_way(self, tmp_path: Path, monkeypatch):
+        """Windows raises FileNotFoundError where POSIX raises NotADirectoryError.
+
+        The stat is patched to raise what Windows raises for this exact layout,
+        because no layout produces that error on this platform. Only the errno
+        is simulated — the classification under test runs for real, against a
+        parent that genuinely is a file.
+        """
+        raw, log = self._broken_layout(tmp_path)
+        real_stat = Path.stat
+
+        def windows_shaped_stat(self: Path, *args, **kwargs):
+            if self == raw:
+                raise FileNotFoundError(2, "The system cannot find the path specified")
+            return real_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", windows_shaped_stat)
+
+        outcome = collect_run_outcome(str(raw), str(log), exit_code=0)
+
+        assert outcome.error is not None, (
+            "a raw under a file-shaped parent read as a clean run that produced nothing"
+        )
+        assert "not a directory" in outcome.error.lower()
