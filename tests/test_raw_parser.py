@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import numpy as np
@@ -42,8 +43,10 @@ class TestNearestIndex:
 class _FakeRaw:
     """Minimal stub exposing the RawRead interface extract_operating_point uses.
 
-    extract_operating_point only calls ``get_trace_names()`` and
-    ``get_wave(trace, step=...)``, so this stub implements exactly those.
+    ``get_trace`` answers an untyped trace on purpose: a real raw declares a
+    type for every variable, and these cases are about what the *name* decides
+    when the type says nothing — which is what ngspice leaves behind for
+    everything but its axis.
     """
 
     def __init__(self, waves: dict[str, float]):
@@ -55,6 +58,10 @@ class _FakeRaw:
     def get_wave(self, trace: str, step: int = 0) -> np.ndarray:
         del step
         return np.array([self._waves[trace]])
+
+    def get_trace(self, trace: str) -> SimpleNamespace:
+        del trace
+        return SimpleNamespace(whattype=None)
 
 
 def test_operating_point_classifies_device_terminal_currents():
@@ -519,3 +526,79 @@ class TestSniffRawDialect:
         other.write_text("Command: ngspice-46\nnot a raw at all\n")
         assert raw_parser.sniff_raw_dialect(other) is None
         assert raw_parser.sniff_raw_dialect(tmp_path / "absent.raw") is None
+
+
+def _ltspice_transfer_function_raw(directory: Path) -> Path:
+    """An LTspice ``.tf`` result, with the types LTspice actually declares.
+
+    Transcribed from a live run: the trace names carry no ``V(``/``I(`` prefix
+    and the types are LTspice's own words for what the numbers are. ngspice
+    writes the same three quantities as ``v(...)``/``voltage``, so this file is
+    the one that shows whether the declared type is being read at all.
+    """
+    raw = directory / "ltspice_tf.raw"
+    raw.write_text(
+        "Title: * divider\n"
+        "Date: Tue Sep  8 01:19:35 2026\n"
+        "Plotname: Transfer Function\n"
+        "Flags: real\n"
+        "No. Variables: 3\n"
+        "No. Points: 1\n"
+        "Offset: 0.0000000000000000e+00\n"
+        "Command: Linear Technology Corporation LTspice\n"
+        "Variables:\n"
+        "\t0\ttransfer_function\ttransfer\n"
+        "\t1\tV1#input_impedance\timpedance\n"
+        "\t2\toutput_impedance_at_v(out)\timpedance\n"
+        "Values:\n"
+        "0\t5.0000000000000000e-01\n"
+        "\t2.0000000000000000e+03\n"
+        "\t5.0000000000000000e+02\n"
+    )
+    return raw
+
+
+class TestBiasPointBucketing:
+    """Traces are sorted by the type the simulator declared, then by name."""
+
+    def test_a_trace_typed_neither_voltage_nor_current_is_kept(self, tmp_path: Path) -> None:
+        """It used to be discarded, and the run read back as holding nothing.
+
+        The name test had no else branch, so a trace matching neither prefix
+        left no trace of itself — a caller could not tell an empty run from an
+        unrecognised one.
+        """
+        raw = RawRead(str(_ltspice_transfer_function_raw(tmp_path)))
+
+        op = extract_operating_point(raw)
+
+        assert op["voltages"] == {}
+        assert op["currents"] == {}
+        assert op["other"]["transfer_function"] == pytest.approx(0.5)
+        assert op["other"]["V1#input_impedance"] == pytest.approx(2000.0)
+
+    def test_the_declared_type_decides_before_the_name(self, tmp_path: Path) -> None:
+        """``V1#input_impedance`` starts with a V but is not a node voltage.
+
+        It does not start with ``V(``, so the name test alone would drop it;
+        what places it is the simulator having typed it ``impedance``.
+        """
+        raw = RawRead(str(_ltspice_transfer_function_raw(tmp_path)))
+
+        assert raw_parser.declared_type(raw, "V1#input_impedance") == "impedance"
+        assert raw_parser.trace_unit(raw, "V1#input_impedance") == "Ω"
+        assert raw_parser.trace_unit(raw, "transfer_function") is None
+
+    def test_a_bias_point_still_sorts_by_name_when_the_type_says_nothing(self) -> None:
+        """ngspice types every ``.op`` trace ``voltage``; LTspice types currents.
+
+        Both must land in the same buckets, which is what the recorded fixture
+        with its real device_current traces pins.
+        """
+        raw = RawRead(str(FIXTURES_DIR / "op_extreme_node.raw"))
+
+        op = extract_operating_point(raw)
+
+        assert op["voltages"]
+        assert op["currents"]
+        assert op["other"] == {}

@@ -650,10 +650,15 @@ def operating_point_units(raw, op_data: dict) -> dict[str, str]:
     return units
 
 
+#: Every bucket an operating-point value can carry. One definition, because a
+#: reader that misses a bucket silently drops the numbers in it.
+OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
+
+
 def operating_point_flat(value: dict[str, Any]) -> dict[str, Any]:
     """Every named number an operating-point value carries, in one map."""
     flat: dict[str, Any] = {}
-    for bucket in ("voltages", "currents", "device_op_points"):
+    for bucket in OP_BUCKETS:
         if isinstance(value.get(bucket), dict):
             flat.update(value[bucket])
     return flat
