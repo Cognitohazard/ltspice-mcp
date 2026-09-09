@@ -241,6 +241,11 @@ class OperatingPointOutput(_OperatingPointStepMeta):
     voltages: dict[str, float]
     currents: dict[str, float]
     device_op_points: dict[str, float]
+    #: Traces the raw carries that are neither. Present so a reader can tell
+    #: "this run holds nothing" from "we did not recognise these names": an
+    #: LTspice ``.tf`` result is typed ``transfer``/``impedance`` and named
+    #: without a ``V(``/``I(`` prefix, so it used to be dropped on the floor.
+    other: dict[str, float]
 
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
@@ -386,6 +391,7 @@ _WHATTYPE_UNIT = {
     "frequency": "Hz",
     "hertz": "Hz",
     "admittance": "S",
+    "impedance": "Ω",
     "capacitance": "F",
 }
 
@@ -398,6 +404,25 @@ def whattype_unit(whattype: str | None) -> str | None:
     return _WHATTYPE_UNIT.get(whattype.strip().lower())
 
 
+def declared_type(raw: RawRead, name: str) -> str | None:
+    """The simulator's own word for what a trace holds, lowercased, or None.
+
+    LTspice types a ``.tf`` result ``transfer`` and ``impedance``; ngspice
+    types the same quantities ``voltage``, because it builds them as voltage
+    vectors. So this is authoritative where it is specific and merely
+    unhelpful where it is not — never wrong in a way that needs overriding.
+
+    A trace the raw does not carry, or one the reader cannot type, answers
+    None so the caller falls back rather than reporting a fault it can do
+    nothing about.
+    """
+    with contextlib.suppress(*_RAW_ACCESS_ERRORS):
+        whattype = getattr(raw.get_trace(name), "whattype", None)
+        if whattype:
+            return str(whattype).strip().lower()
+    return None
+
+
 def trace_unit(raw: RawRead, name: str) -> str | None:
     """SI unit for a trace: the simulator's declared ``whattype`` if it maps to
     a known SPICE type, else the ``V(``/``I(`` name prefix, else None.
@@ -406,12 +431,9 @@ def trace_unit(raw: RawRead, name: str) -> str | None:
     (e.g. it won't claim ``@m1[gm]`` is siemens unless the simulator typed the
     trace as ``admittance``) — that would be a vendor catalog, not a relay.
     """
-    # A trace this raw doesn't carry has no declared type — fall through to the
-    # name prefix rather than reporting a fault the caller can do nothing with.
-    with contextlib.suppress(*_RAW_ACCESS_ERRORS):
-        unit = whattype_unit(getattr(raw.get_trace(name), "whattype", None))
-        if unit:
-            return unit
+    unit = whattype_unit(declared_type(raw, name))
+    if unit:
+        return unit
     low = name.lstrip().lower()
     if low.startswith("v("):
         return "V"
@@ -507,6 +529,15 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
 # drops the terminal-letter forms, so match the optional letter explicitly.
 _OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
 
+#: Declared trace types that place a trace in a bias-point bucket. A type
+#: outside this map (LTspice's ``transfer``/``impedance``, say) falls through
+#: to the name test, and then to ``other`` rather than being discarded.
+_OP_BUCKET_BY_TYPE = {
+    "voltage": "voltages",
+    "current": "currents",
+    "device_current": "currents",
+}
+
 
 def extract_operating_point(
     raw: RawRead, step: int = 0, point_index: int = 0
@@ -527,9 +558,11 @@ def extract_operating_point(
     """
     trace_names = raw.get_trace_names()
 
-    voltages = {}
-    currents = {}
-    device_op_points = {}
+    voltages: dict[str, float] = {}
+    currents: dict[str, float] = {}
+    device_op_points: dict[str, float] = {}
+    other: dict[str, float] = {}
+    buckets = {"voltages": voltages, "currents": currents, "other": other}
 
     for trace in trace_names:
         wave = raw.get_wave(trace, step=step)
@@ -549,17 +582,23 @@ def extract_operating_point(
             device_op_points[trace] = value
             continue
 
-        # SPICE node names are case-insensitive; spicelib may return either case.
-        trace_upper = trace.upper()
-        if trace_upper.startswith("V("):
-            voltages[trace] = value
-        elif _OP_CURRENT_RE.match(trace):
-            currents[trace] = value
+        # The simulator's declared type first, the name second. LTspice types
+        # every trace it writes; ngspice types the axis and leaves the rest
+        # ``voltage``, where the name carries the same information anyway.
+        bucket = _OP_BUCKET_BY_TYPE.get(declared_type(raw, trace) or "")
+        if bucket is None:
+            # SPICE node names are case-insensitive; spicelib may return either.
+            if trace.upper().startswith("V("):
+                bucket = "voltages"
+            elif _OP_CURRENT_RE.match(trace):
+                bucket = "currents"
+        buckets[bucket or "other"][trace] = value
 
     return {
         "voltages": voltages,
         "currents": currents,
         "device_op_points": device_op_points,
+        "other": other,
     }
 
 

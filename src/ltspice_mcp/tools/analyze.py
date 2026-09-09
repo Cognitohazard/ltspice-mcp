@@ -1647,18 +1647,10 @@ def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _operating_point_flat(value: dict[str, Any]) -> dict[str, Any]:
-    flat: dict[str, Any] = {}
-    for bucket in ("voltages", "currents", "device_op_points"):
-        if isinstance(value.get(bucket), dict):
-            flat.update(value[bucket])
-    return flat
-
-
 # How each keyed metric flattens its value dict into a {name: number} map.
 _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "measurements": _measurements_flat,
-    "operating_point": _operating_point_flat,
+    "operating_point": metrics.operating_point_flat,
 }
 
 
