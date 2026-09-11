@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from spicelib.sim.sim_runner import SimRunner
 
+from ltspice_mcp.lib.deck_staging import resolve_reference
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
@@ -133,7 +134,7 @@ def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
             elif head in _INCLUDE_DIRECTIVES and len(parts) > 1:
                 target = _include_target(parts[1])
                 if target is not None:
-                    scan(path.parent / target, depth + 1)
+                    scan(resolve_reference(path.parent, target), depth + 1)
 
     scan(netlist, 0)
     if has_control:

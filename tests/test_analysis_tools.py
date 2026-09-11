@@ -101,8 +101,10 @@ def _make_raw_mock(
     waves: dict[str, np.ndarray] | None = None,
     axis: np.ndarray | None = None,
     steps: list[int] | None = None,
+    dialect: str = "ltspice",
 ) -> MagicMock:
     raw = MagicMock()
+    raw.dialect = dialect
     trace_names = trace_names or ["time", "V(out)"]
     waves = waves or {
         "time": np.linspace(0, 1, 100),
@@ -113,6 +115,8 @@ def _make_raw_mock(
     raw.get_trace_names.return_value = trace_names
     raw.get_steps.return_value = steps if steps is not None else [0]
     raw.get_axis.return_value = axis
+    # These name-based cases have no declared trace metadata.
+    raw.get_trace.return_value.whattype = None
 
     def get_wave(name, step=0):
         return waves[name]
@@ -1778,13 +1782,12 @@ class TestOperatingPointInternalsHint:
     ):
         # A bare ngspice .op shows no device traces at all (no terminal currents),
         # so active-device detection can't fire — the ngspice dialect gate must.
-        state_no_sim.default_simulator = type("NGspiceSimulator", (), {})
-        assert state_no_sim.raw_dialect == "ngspice"
         p = work_dir / "ng_op.raw"
         _inject_raw_mock(
             state_no_sim,
             p,
             _make_raw_mock(
+                dialect="ngspice",
                 plotname="Operating Point",
                 trace_names=["V(d)"],
                 waves={"V(d)": np.array([0.9])},
@@ -1824,7 +1827,6 @@ class TestOperatingPointInternalsHint:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         # When op-point params ARE present, the note doesn't fire.
-        state_no_sim.default_simulator = type("NGspiceSimulator", (), {})
         p = work_dir / "ng_op_saved.raw"
         _inject_raw_mock(
             state_no_sim,
@@ -1832,6 +1834,7 @@ class TestOperatingPointInternalsHint:
             _make_raw_mock(
                 plotname="Operating Point",
                 trace_names=["V(d)", "@m1[gm]"],
+                dialect="ngspice",
                 waves={"V(d)": np.array([0.9]), "@m1[gm]": np.array([2e-3])},
             ),
         )

@@ -67,6 +67,44 @@ async def _analyze(
     return result.structured_content
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trace", ["V(equivalent)", "equivalent"])
+async def test_declared_types_reach_every_analysis_reader(
+    state_no_sim: SessionState, work_dir: Path, trace: str
+):
+    raw = work_dir / "typed_op.raw"
+    raw.write_text(
+        "Title: * typed operating point\n"
+        "Plotname: Operating Point\nFlags: real\n"
+        "No. Variables: 3\nNo. Points: 1\n"
+        "Command: Linear Technology Corporation LTspice\nVariables:\n"
+        "\t0\tV(out)\tvoltage\n"
+        "\t1\tId(M1)\tdevice_current\n"
+        f"\t2\t{trace}\timpedance\n"
+        "Values:\n0\t1.25\n\t0.001\n\t2000\n",
+        encoding="utf-8",
+    )
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {"key": "all", "metric": "operating_point"},
+            {"key": "device", "metric": "operating_point", "device": "M1"},
+            {"key": "scalar", "metric": "value", "expr": trace},
+        ],
+    )
+    assert data["failures"] == []
+    values = {key: result["values"][0]["value"] for key, result in data["results"].items()}
+    assert values["all"]["other"] == {trace: 2000}
+    assert trace not in values["all"]["voltages"]
+    assert values["all"]["units"][trace] == "Ω"
+    assert values["device"]["currents"] == {"Id(M1)": pytest.approx(0.001)}
+    assert values["device"]["other"] == {}
+    assert trace not in values["device"]["units"]
+    assert values["scalar"]["value"] == 2000
+    assert values["scalar"]["unit"] == "Ω"
+
+
 EXECUTION_CASES = [
     ("summary", "ltspice_tran_rc", {}),
     ("measurements", "ltspice_tran_rc", {}),
@@ -1748,15 +1786,13 @@ def _bare_device_op_raw(work_dir: Path) -> Path:
     return raw
 
 
-def _transfer_function_raw(work_dir: Path) -> Path:
+def _transfer_function_raw(work_dir: Path, impedance_type: str = "voltage") -> Path:
     """A ``.tf`` run: one point, three derived columns.
 
     Plot name and values are transcribed from a live ngspice run of a 1k/1k
     divider — gain 0.5, 2k in, 500R out, the impedances riding in
-    voltage-typed columns because that is the only column type the format
-    offers them. The ``Command`` line is the one addition: ngspice writes no
-    dialect marker, so its own raws are unreadable offline without a job to
-    name the dialect, and every recorded raw here carries one.
+    voltage-typed columns. The ``Command`` line is added to identify the
+    writer; the ngspice version that produced these values omitted it.
     """
     raw = work_dir / "transfer_function.raw"
     raw.write_text(
@@ -1767,10 +1803,10 @@ def _transfer_function_raw(work_dir: Path) -> Path:
         "No. Variables: 3\n"
         "No. Points: 1\n"
         "Offset: 0.0000000000000000e+00\n"
-        "Command: Linear Technology Corporation LTspice\n"
+        "Command: ngspice\n"
         "Variables:\n"
         "\t0\tv(Transfer_function)\tvoltage\n"
-        "\t1\tv(v1#Input_impedance)\tvoltage\n"
+        f"\t1\tv(v1#Input_impedance)\t{impedance_type}\n"
         "\t2\tv(output_impedance_at_V(out))\tvoltage\n"
         "Values:\n"
         "0\t5.0000000000000000e-01\n"
@@ -1781,9 +1817,11 @@ def _transfer_function_raw(work_dir: Path) -> Path:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["", "Command: ngspice\n"])
 async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
     state_no_sim: SessionState,
     work_dir: Path,
+    command: str,
 ):
     """The route the server's own instructions advertise: bring your own raw.
 
@@ -1801,6 +1839,7 @@ async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
         "Flags: real\n"
         "No. Variables: 2\n"
         "No. Points: 1\n"
+        f"{command}"
         "Variables:\n"
         "\t0\tv(in)\tvoltage\n"
         "\t1\tv(out)\tvoltage\n"
@@ -1813,12 +1852,16 @@ async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
 
     assert data["failures"] == []
     assert data["results"]["op"]["values"][0]["value"]["voltages"]["v(out)"] == pytest.approx(0.5)
+    warnings = data["results"]["op"]["values"][0]["value"]["warnings"]
+    assert any(".save all @m1[gm]" in warning for warning in warnings)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("impedance_type", ["voltage", "impedance"])
 async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     state_no_sim: SessionState,
     work_dir: Path,
+    impedance_type: str,
 ):
     """``operating_point`` names what it can read, not what it cannot.
 
@@ -1829,7 +1872,7 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     251-point distortion sweep came back as the bias, with no warning either
     time. The traces stay readable through the recipe that reads traces.
     """
-    raw = _transfer_function_raw(work_dir)
+    raw = _transfer_function_raw(work_dir, impedance_type)
 
     data = await _analyze(
         state_no_sim,
@@ -1837,6 +1880,7 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
         [
             {"key": "op", "metric": "operating_point"},
             {"key": "gain", "metric": "value", "expr": "v(Transfer_function)"},
+            {"key": "impedance", "metric": "value", "expr": "v(v1#Input_impedance)"},
         ],
     )
 
@@ -1844,6 +1888,10 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     assert any("Transfer Function" in message for message in refusals), refusals
     assert "op" not in data["results"]
     assert data["results"]["gain"]["values"][0]["value"]["value"] == pytest.approx(0.5)
+    assert data["results"]["gain"]["values"][0]["value"]["unit"] is None
+    impedance = data["results"]["impedance"]["values"][0]["value"]
+    assert impedance["value"] == pytest.approx(2000)
+    assert impedance["unit"] == ("Ω" if impedance_type == "impedance" else None)
 
 
 @pytest.mark.asyncio

@@ -60,6 +60,7 @@ from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
     dc_axis_name,
+    declared_type,
     detect_sim_type,
     extract_operating_point,
     get_step_count,
@@ -72,6 +73,7 @@ from ltspice_mcp.lib.raw_parser import (
     real_axis,
     safe_magnitude_db,
     trace_unit,
+    whattype_unit,
 )
 from ltspice_mcp.lib.recipes import (
     RECIPE_MODELS,
@@ -620,6 +622,10 @@ def device_matches(owner: str, want: str) -> bool:
     return owner.endswith("." + want)
 
 
+#: Every bucket that filtering, unit reporting and scalar reads must visit.
+OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
+
+
 def filter_operating_point(op_data: dict, device: str) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched. Handles top-level
@@ -628,7 +634,7 @@ def filter_operating_point(op_data: dict, device: str) -> bool:
     semiconductors (``q:q2:1:2`` matches ``q2``)."""
     want = device.strip().lower()
     matched = False
-    for bucket in ("voltages", "currents", "device_op_points"):
+    for bucket in OP_BUCKETS:
         kept = {}
         for name, value in op_data.get(bucket, {}).items():
             owner = trace_device(name)
@@ -640,19 +646,23 @@ def filter_operating_point(op_data: dict, device: str) -> bool:
 
 
 def operating_point_units(raw, op_data: dict) -> dict[str, str]:
-    """SI unit per returned trace name, only where the simulator typed it."""
+    """Units for bias values, or specific types in a derived no-axis result."""
+    sim_type = detect_sim_type(raw)
+    is_bias = is_operating_point(sim_type) or is_dc_analysis(sim_type)
     units: dict[str, str] = {}
-    for bucket in ("voltages", "currents", "device_op_points"):
+    for bucket in OP_BUCKETS:
         for name in op_data.get(bucket, {}):
-            unit = trace_unit(raw, name)
+            if is_bias:
+                unit = trace_unit(raw, name)
+            else:
+                # Derived results can use voltage/current columns for gain,
+                # impedance or poles. Only a specific type establishes a unit.
+                unit = whattype_unit(declared_type(raw, name))
+                if unit in ("V", "A"):
+                    continue
             if unit:
                 units[name] = unit
     return units
-
-
-#: Every bucket an operating-point value can carry. One definition, because a
-#: reader that misses a bucket silently drops the numbers in it.
-OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
 def operating_point_flat(value: dict[str, Any]) -> dict[str, Any]:
@@ -1101,7 +1111,7 @@ async def _value_from_operating_point(
     return {
         "signal": name,
         "value": item,
-        "unit": None,
+        "unit": op.get("units", {}).get(name),
         "warnings": op.get("warnings", []),
     }
 
@@ -1974,7 +1984,7 @@ async def operating_point(
     # ngspice logs never carry the block, so skip the read entirely there.
     # Dialect resolved per raw: a per-run simulator override can differ from
     # the session default. Don't clobber a value the raw gave.
-    raw_dialect = source.dialect or services.raw_dialect_for(source.raw, state)
+    raw_dialect = raw.dialect
     if raw_dialect != "ngspice":
         log_op_points = (
             await asyncio.to_thread(read_device_op_points, source.log)
