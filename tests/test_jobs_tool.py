@@ -1173,17 +1173,20 @@ class TestCancellationAuthority:
                 )
             )
         )
-        # Wait for the case to reach 'running': its submitted/running
-        # checkpoints each re-persist the record under THIS pid, so a foreign
-        # pid written before them is overwritten and the job reads as locally
-        # owned with no live coordinator.
+        # Wait for launch and its durable checkpoints before installing the
+        # foreign record. A running status alone does not finish queued writes.
         await await_until(
             lambda: bool(callbacks) and receipt.job.cases[0].status == "running",
             timeout_s=_CANCEL_PATH_TIMEOUT_S,
             what="the case to start running",
         )
-        receipt.job.owner_pid = _FOREIGN_PID
-        await asyncio.to_thread(experiment_store.save_job, receipt.job)
+        await state_no_sim.job_registry.drain_pending()
+        foreign_job = await asyncio.to_thread(
+            experiment_store.load_job, receipt.job.job_id, work_dir, own_is_alive=True
+        )
+        assert foreign_job is not None
+        foreign_job.owner_pid = _FOREIGN_PID
+        await asyncio.to_thread(experiment_store.save_job, foreign_job)
         foreign_state = SessionState.create(state_no_sim.config, available={})
         monkeypatch.setattr(
             experiment_store,
@@ -1199,6 +1202,7 @@ class TestCancellationAuthority:
         data = _assert_jobs_schema(
             await asyncio.wait_for(handle_jobs(cancel_args, foreign_state), 30)
         )
+        assert "error" not in data, data.get("error")
 
         # The durable barrier is what the contract acknowledges: no further case
         # enters submission. The receipt's own status is whatever the owner had

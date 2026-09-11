@@ -84,11 +84,17 @@ quantities that are not voltages. The review correction suppresses those
 generic units on derived no-axis scalar reads; it does not infer their true
 units or prove that generic complex-value formatting is appropriate for poles.
 
-For the cancellation-test failures, first force the suspected persistence
-interleaving with events and establish the cause. The earlier successful
-rerun establishes intermittency, not which component is at fault. Fix the
-confirmed ordering and audit neighboring tests for the same checkpoint
-assumption. A nonblocking loaded-CI job is secondary to that work.
+The first native Windows 3.12 run failed
+`test_foreign_token_sets_durable_submission_barrier`: no cancellation marker
+was present after the call. Its setup changed the live job's owner PID after
+observing an in-memory running status, while coordinator writes could still
+overwrite the foreign record. The test now drains those writes, loads a
+separate record and changes that copy's owner. It also checks the cancellation
+response for an error before inspecting the marker. No production cancellation
+code changed. This corrects the observed test's setup; it does not establish
+the cause of every earlier intermittent cancellation failure. A deterministic
+interleaving audit of neighboring tests remains useful before adding a loaded
+CI job.
 
 The permanent practice is described in [TESTING.md](TESTING.md): review all
 consumers of a shared rule and test a counterexample through the public path.
@@ -100,4 +106,31 @@ Each of the seven initial defect assertions and both review regressions
 failed before its fix and passed after.
 The full local Linux suite passed with 3,599 tests passed, 21 skipped, and
 90.73% coverage. Ruff lint and format checks, Pyright, and `git diff --check`
-passed. Native Windows validation was not run in this audit.
+passed.
+
+Native Windows validation used a fresh checkout of `953780e2` with
+`core.autocrlf=true`, plus the cancellation-test correction described above.
+The full suite passed on Python 3.12.12 and 3.13.9: 3,540 passed and 80 skipped
+on each interpreter. The first 3.12 run, before that correction, had one
+failure, 3,539 passes and 80 skips.
+The fixture-path correction found during skip review then passed as a
+targeted test on Linux and both Windows interpreters. It removes one of those
+80 skips; the full suites were not repeated for that single-test correction.
+
+### What the Windows skips leave untested
+
+| Count | Reason | Follow-up |
+|---:|---|---|
+| 27 | ngspice not on PATH, including detached-owner tests | Exercise these with native Windows ngspice installed. |
+| 18 | LTspice integration not enabled (15), or real symbols not found (3) | Enable local LTspice integration and configure symbol paths; one integration case is WSL-only. The symbol-test locator currently checks the environment and WSL, so its skip does not establish that Windows lacks a symbol installation. |
+| 6 | PNG rendering dependencies unavailable | Include an environment with the raster extra and native Cairo. |
+| 5 | Symlink creation unavailable | Exercise path containment on a Windows test account with symlink privilege. |
+| 17 | POSIX-specific assertions | Keep OS-specific assertions on their platform, but add Windows worker timeout, cancellation, parent-death and child-cleanup coverage for the six worker-related cases in this group. |
+| 2 | Optional Sky130 PDK unavailable | Retain an optional PDK integration tier. |
+| 3 | A parametrized module does not build an outcome | The outcome-construction rule does not apply. |
+| 1 | Windows Claude scratch directory is not known | Existing Windows support gap. |
+| 1 | Normal-parser deadline test looked in a nonexistent fixture subdirectory | Corrected to use the required recorded fixture directly; a missing required fixture must fail, not skip. |
+
+These results establish the exercised Windows paths, not complete Windows
+feature coverage. Real LTspice execution and Windows worker lifecycle tests
+are the highest-priority additions.

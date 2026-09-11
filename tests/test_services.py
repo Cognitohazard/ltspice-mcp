@@ -306,9 +306,7 @@ class TestLoadRawParseDeadline:
     async def test_normal_parse_unaffected_by_deadline(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        raw = FIXTURES_DIR / "recorded" / "ltspice_tran_rc.raw"
-        if not raw.exists():
-            pytest.skip("recorded fixture missing")
+        raw = FIXTURES_DIR / "ltspice_tran_rc.raw"
         import shutil
 
         local = work_dir / "ok.raw"
