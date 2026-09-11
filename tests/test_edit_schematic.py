@@ -18,6 +18,7 @@ from typing import Any
 import jsonschema
 import pytest
 from pydantic import TypeAdapter, ValidationError
+from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.schematic_ops import (
@@ -1236,3 +1237,138 @@ class TestRenderAndCompareArguments:
     def test_refused_compare_spellings(self, payload: dict[str, Any]):
         with pytest.raises(ValidationError):
             self._edit(**payload)
+
+
+class TestHierarchicalPortPreservation:
+    @staticmethod
+    def _sheet(work_dir: Path) -> Path:
+        path = work_dir / "ports.asc"
+        path.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "FLAG 0 0 IN\nIOPIN 0 0 In\n"
+            "FLAG 160 0 OUT\nIOPIN 160 0 Out\n"
+            "FLAG 320 0 IN\nIOPIN 320 0 BiDir\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return path
+
+    async def test_an_ordinary_edit_keeps_ordered_ports(self, state_no_sim, work_dir):
+        path = self._sheet(work_dir)
+        result = await handle_edit_schematic(
+            _edit_input(
+                target=str(path),
+                expected_sha256=_sha(path),
+                ops=[{"op": "add_directive", "instruction": ".param marker=1"}],
+            ),
+            state_no_sim,
+        )
+        assert _assert_schema(result)["commit_state"] == "committed"
+        reopened = AscEditor(path)
+        assert [(p.text.text, p.text.coord.X, p.direction) for p in reopened.ports] == [
+            ("IN", 0, "In"),
+            ("OUT", 160, "Out"),
+            ("IN", 320, "BiDir"),
+        ]
+        assert ".param marker=1" in path.read_text()
+
+    async def test_removing_a_port_label_refuses_before_write(self, state_no_sim, work_dir):
+        path = self._sheet(work_dir)
+        original = path.read_bytes()
+        with pytest.raises(NetlistError, match="port"):
+            await handle_edit_schematic(
+                _edit_input(
+                    target=str(path),
+                    expected_sha256=_sha(path),
+                    ops=[{"op": "remove_net_label", "x": 0, "y": 0}],
+                ),
+                state_no_sim,
+            )
+        assert path.read_bytes() == original
+
+    def test_ports_follow_their_label_objects(self, work_dir):
+        editor = AscEditor(self._sheet(work_dir))
+        editor.labels[0].text = "RENAMED"
+        editor.labels[0].coord.X = 64
+        before = [(id(p.text), p.text.text, p.text.coord.X, p.direction) for p in editor.ports]
+        rendered = se._render_editor_text(editor)
+        assert "FLAG 64 0 RENAMED\nIOPIN 64 0 In\n" in rendered
+        assert "FLAG 320 0 IN\nIOPIN 320 0 BiDir\n" in rendered
+        assert [
+            (id(p.text), p.text.text, p.text.coord.X, p.direction) for p in editor.ports
+        ] == before
+
+    @pytest.mark.parametrize("invalid", ["duplicate_label", "duplicate_port", "orphan"])
+    def test_ambiguous_port_associations_refuse(self, work_dir, invalid):
+        editor = AscEditor(self._sheet(work_dir))
+        if invalid == "duplicate_label":
+            editor.labels.append(editor.labels[0])
+        elif invalid == "duplicate_port":
+            editor.ports.append(editor.ports[0])
+        else:
+            editor.labels.pop(0)
+        with pytest.raises(NetlistError, match="port"):
+            se._render_editor_text(editor)
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    @pytest.mark.parametrize("pending_level", [None, "child", "grandchild"])
+    async def test_pending_child_changes_never_write_through_parent(
+        self,
+        asc_state,
+        work_dir,
+        dry_run,
+        pending_level,
+    ):
+        child = self._sheet(work_dir)
+        (work_dir / "ports.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -32 -32 32 32\n"
+            "PIN -32 0 LEFT 8\nPINATTR PinName IN\nPINATTR SpiceOrder 1\n"
+            "PIN 32 0 RIGHT 8\nPINATTR PinName OUT\nPINATTR SpiceOrder 2\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        outer = work_dir / "outer.asc"
+        outer.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "FLAG -32 0 IN\nIOPIN -32 0 In\n"
+            "FLAG 32 0 OUT\nIOPIN 32 0 Out\n"
+            "SYMBOL ports 0 0 R0\nSYMATTR InstName X2\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (work_dir / "outer.asy").write_bytes((work_dir / "ports.asy").read_bytes())
+        parent = work_dir / "parent.asc"
+        parent.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL outer 0 0 R0\nSYMATTR InstName X1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        editor = get_asc_editor(parent, asc_state)
+        loaded_child = editor.get_subcircuit("X1")
+        grandchild = loaded_child.get_subcircuit("X2")
+        changed = loaded_child if pending_level == "child" else grandchild
+        if pending_level is not None:
+            changed.set_parameter("child_change", 1)
+            assert changed.updated
+        if pending_level != "child":
+            assert not loaded_child.updated
+        before = {p: p.read_bytes() for p in (parent, outer, child)}
+        request = _edit_input(
+            target=str(parent),
+            expected_sha256=_sha(parent),
+            dry_run=dry_run,
+            ops=[{"op": "add_directive", "instruction": ".param parent_change=1"}],
+        )
+        if pending_level is None:
+            data = _assert_schema(await handle_edit_schematic(request, asc_state))
+            assert data["commit_state"] == ("not_committed" if dry_run else "committed")
+            assert outer.read_bytes() == before[outer]
+            assert child.read_bytes() == before[child]
+            if dry_run:
+                assert parent.read_bytes() == before[parent]
+            assert not loaded_child.updated and not grandchild.updated
+            return
+        with pytest.raises(NetlistError, match=r"child|descendant"):
+            await handle_edit_schematic(request, asc_state)
+        assert {p: p.read_bytes() for p in (parent, outer, child)} == before
+        assert changed.updated

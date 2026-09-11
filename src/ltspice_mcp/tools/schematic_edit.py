@@ -27,6 +27,7 @@ import os
 import shutil
 import stat
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, cast
@@ -1188,11 +1189,65 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
             raise NetlistError(f"invalid view_cursors.{kind}: {exc}") from exc
 
 
-def _render_editor_text(editor) -> str:
-    """Render the editor to .asc text via spicelib's StringIO sink."""
+def _render_editor_text(editor: AscEditor) -> str:
+    """Render this sheet without losing ports or saving loaded child sheets."""
+    _refuse_pending_child_edits(editor)
+    label_counts = Counter(id(label) for label in editor.labels)
+    port_directions: dict[int, str] = {}
+    for port in editor.ports:
+        label_id = id(port.text)
+        if label_counts[label_id] != 1 or label_id in port_directions:
+            raise NetlistError("Each hierarchical port must belong to exactly one unique label.")
+        port_directions[label_id] = port.direction
+
     buf = io.StringIO()
     editor.save_netlist(buf)
-    return buf.getvalue()
+    rendered = buf.getvalue()
+    if not port_directions:
+        return rendered
+
+    # spicelib 1.5.1 emits FLAGs in label order but omits their IOPIN records.
+    # Match occurrences, since different label objects may have identical text.
+    labels = iter(editor.labels)
+    lines: list[str] = []
+    for line in rendered.splitlines(keepends=True):
+        lines.append(line)
+        if not line.startswith("FLAG "):
+            continue
+        label = next(labels, None)
+        if label is None or line.rstrip("\r\n") != (
+            f"FLAG {label.coord.X} {label.coord.Y} {label.text}"
+        ):
+            raise NetlistError("Cannot preserve hierarchical ports: serialized labels changed.")
+        direction = port_directions.get(id(label))
+        if direction is not None:
+            ending = line[len(line.rstrip("\r\n")) :]
+            lines.append(f"IOPIN {label.coord.X} {label.coord.Y} {direction}{ending}")
+    if next(labels, None) is not None:
+        raise NetlistError("Cannot preserve hierarchical ports: serialized labels are missing.")
+    return "".join(lines)
+
+
+def _refuse_pending_child_edits(editor: AscEditor) -> None:
+    """StringIO does not stop spicelib from writing modified descendants."""
+    pending = [editor]
+    visited: set[int] = set()
+    while pending:
+        sheet = pending.pop()
+        if id(sheet) in visited:
+            continue
+        visited.add(id(sheet))
+        for component in sheet.components.values():
+            child = component.attributes.get("_SUBCKT")
+            if child is None:
+                continue
+            if getattr(child, "updated", False):
+                raise NetlistError(
+                    "Cannot save a parent sheet with pending child edits; "
+                    "save or discard those child edits separately."
+                )
+            if isinstance(child, AscEditor):
+                pending.append(child)
 
 
 def _wiring_dict(profile: dict[str, int], label_only_page: dict) -> dict:

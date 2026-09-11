@@ -1220,3 +1220,89 @@ alongside `RuntimeError` at the axis read in `build_simulation_summary`
 (the comment there names this bug). Pinned by
 `tests/test_log_parser.py::test_missing_log_with_invalid_raw`. Delete the
 `TypeError` arm once upstream returns a 1-d empty array.
+
+## Bug 12 — `AscEditor.save_netlist` silently drops hierarchical ports
+
+### Summary and affected version
+
+In spicelib 1.5.1, `editor/asc_editor.py::reset_netlist` parses each `IOPIN`
+into a `Port` referencing its preceding label. `save_netlist` writes labels
+but never writes `self.ports`. Editing an unrelated directive therefore removes
+the hierarchical interface while leaving its net labels behind.
+
+### Reproduction
+
+Load this sheet with `AscEditor`, add an ordinary directive, and save it to
+another ASC file or a `StringIO` sink:
+
+```text
+Version 4
+SHEET 1 880 680
+FLAG 0 0 IN
+IOPIN 0 0 In
+FLAG 160 0 OUT
+IOPIN 160 0 Out
+```
+
+The output contains both `FLAG` lines and neither `IOPIN`. Reproduced through
+our public `edit_schematic` handler by adding `.param marker=1` with a matching
+revision hash: it reported a complete, committed edit and the port count fell
+from two to zero. The native export acceptance uses a parent/child pair to
+check the interface rather than treating retained labels as retained ports.
+
+### Impact, proposed upstream fix and test
+
+An ordinary edit to a reusable child sheet destroys its port declarations.
+Emit each port's `IOPIN` immediately after its associated `FLAG`, preserving
+coordinates, direction and order. Association must use the label object,
+not its text or coordinates, since distinct labels may have identical names.
+Refuse an orphaned or ambiguous association instead of attaching it elsewhere.
+
+An upstream test should round-trip multiple ports, including repeated label
+names, then move/rename a label object and verify that its port follows it.
+Also cover a removed label still referenced by a port.
+
+### Workaround and regression
+
+`tools/schematic_edit.py::_render_editor_text` restores port records alongside
+the corresponding emitted flags and checks their association before staging.
+`tests/test_edit_schematic.py::TestHierarchicalPortPreservation` exercises the
+public edit, refused label removal, reordered/changed label facts and ambiguous
+associations. Remove this workaround when the pinned dependency preserves the
+same cases itself.
+
+## Bug 13 — a `StringIO` schematic save can write modified child files
+
+### Summary and affected version
+
+In spicelib 1.5.1, `AscEditor.save_netlist` accepts a `StringIO` for rendering a
+sheet in memory. While serializing an X component, it also calls
+`save_netlist(child.asc_file_path)` on an updated `_SUBCKT` editor. The sink
+controls only the parent; a child is written directly to its original path.
+
+### Reproduction and impact
+
+Load a parent ASC containing a BLOCK symbol backed by a child ASC. Obtain the
+child with `parent.get_subcircuit("X1")`, call
+`child.set_parameter("changed", 1)`, and render the parent into `StringIO`.
+The child's on-disk file changes. The same branch is reached while our
+`edit_schematic(dry_run=true)` renders its candidate sheet before the dry-run
+return. A parent-only transaction cannot safely commit those child changes.
+
+### Proposed upstream fix and test
+
+Separate rendering one sheet from saving its dependency tree. A `StringIO`
+render should neither write child files nor clear their pending-update state.
+Any recursive save should be explicit and expose its destination/write set.
+An upstream test should modify a loaded child, render its parent to `StringIO`,
+and assert unchanged child bytes and retained pending changes. Include a
+portless parent and a deeper loaded descendant.
+
+### Workaround and regression
+
+`tools/schematic_edit.py::_refuse_pending_child_edits` checks loaded descendants
+before invoking the dependency serializer, including portless sheets. It refuses
+pending child updates without modifying editor flags or child files.
+`TestHierarchicalPortPreservation.test_pending_child_changes_never_write_through_parent`
+covers the public normal-edit and dry-run paths with real loaded child editors.
+The root's existing revision guard and atomic commit remain the write boundary.
