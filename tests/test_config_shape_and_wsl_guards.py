@@ -49,6 +49,10 @@ class TestAllowedPathsShape:
 class TestSymbolPathsShape:
     """[schematic] symbol_paths shares the allowed_paths guard."""
 
+    @pytest.fixture(autouse=True)
+    def no_symbol_path_override(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LTSPICE_MCP_SYMBOL_PATHS", raising=False)
+
     def test_scalar_string_rejected(self, work_dir: Path, caplog: pytest.LogCaptureFixture):
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text('[schematic]\nsymbol_paths = "/lib/sym"\n')

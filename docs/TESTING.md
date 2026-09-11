@@ -286,6 +286,30 @@ on PATH; point `LTSPICE_MCP_WINDOWS_CLONE` at its WSL path. Without it the
 script says SKIP, loudly, rather than passing by omission. The container
 shape clones the local `master`, so it tests the last commit.
 
+The native Windows integration tier also needs:
+
+- LTspice installed, `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`, and
+  `LTSPICE_MCP_SYMBOL_PATHS` pointing to its symbol directory.
+- The console build of ngspice available as `ngspice.exe` on PATH, with its
+  accompanying DLLs available. The GUI executable does not provide the console
+  output these tests inspect.
+- The `raster` extra and native Cairo DLLs with their dependencies. For a
+  portable installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
+
+With those prerequisites configured in the test shell, run
+`uv run --locked --extra raster --python 3.12 pytest tests/ -v -ra` and repeat
+with Python 3.13 in a separate environment. Read the skip reasons: a green run
+without these dependencies does not validate simulation or PNG rendering.
+Worker timeout, cancellation and descendant cleanup tests require no simulator
+and run in the ordinary suite.
+
+Two further tests optionally use an installed Sky130 PDK. Set
+`LTSPICE_MCP_TEST_PDK_ROOT` to its `sky130A` root, containing `libs.ref` and
+`libs.tech`. `TestOpenPdkDevice` in `test_subckt_mismatch.py` checks parameter
+forwarding and an exact per-instance threshold shift against the foundry NMOS
+model; the numeric test also needs ngspice. The PDK is test data for this
+integration tier, not an application dependency.
+
 Two practices follow. A test that depends on a POSIX facility skips on
 Windows with the reason (symlinks need a privilege; `wslpath` does not
 exist), never fails. A fixture that must be byte-exact is written with

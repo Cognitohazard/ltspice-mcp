@@ -9,7 +9,9 @@ record another process can read, or about an owner that is killed.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
 import multiprocessing
 import os
 import shutil
@@ -105,6 +107,21 @@ def _submit_slow(api: Api, work_dir: Path, request_id: str) -> dict:
         circuits=[{"path": _deck(work_dir, "slow.cir", SLOW_DECK), "id": "slow"}],
         variations=SLOW_VARIATIONS,
     )
+
+
+def _pause_simulator(owner_pid: int) -> psutil.Process:
+    """Keep a real simulator from finishing before its owner's cleanup is tested."""
+
+    def pause_child():
+        for child in psutil.Process(owner_pid).children():
+            try:
+                child.suspend()
+                return child
+            except psutil.NoSuchProcess:
+                continue
+        return None
+
+    return wait_until(pause_child, timeout_s=30, what="the owner to start its simulator")
 
 
 def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> None:
@@ -322,9 +339,94 @@ def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
             lambda: _gone(child_pid), timeout_s=30.0, what="the owner's child to be stopped too"
         )
     finally:
-        with contextlib.suppress(OSError):
-            os.killpg(os.getpgid(owner.pid), signal.SIGKILL)
+        if owner.poll() is None:
+            _detach._stop_owner(owner)
         owner.wait(timeout=30)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows uses taskkill for handshake cleanup")
+@pytest.mark.parametrize("owner_exits", [True, False])
+def test_taskkill_failure_preserves_the_handshake_error(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch, owner_exits: bool
+) -> None:
+    monkeypatch.setattr(_detach, "HANDSHAKE_TIMEOUT_S", 0)
+    owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    def failed_taskkill(command, **kwargs):
+        assert command[0] == "taskkill"
+        if owner_exits:
+            owner.kill()
+            owner.wait(timeout=10)
+            raise subprocess.CalledProcessError(128, command)
+        raise subprocess.TimeoutExpired(command, 10)
+
+    monkeypatch.setattr(_detach.subprocess, "run", failed_taskkill)
+    try:
+        with pytest.raises(ApiCallError, match="did not report a submission") as caught:
+            _detach._await_report(
+                owner, work_dir / "missing.receipt.json", "cleanup-error", work_dir / "owner.log"
+            )
+        if owner_exits:
+            assert "were stopped" in str(caught.value)
+        else:
+            assert "Processes may still be running" in str(caught.value)
+        owner.wait(timeout=10)
+    finally:
+        if owner.poll() is None:
+            owner.kill()
+        owner.wait(timeout=10)
+
+
+def test_a_worker_can_detach_an_experiment_that_survives_its_reset(work_dir: Path) -> None:
+    from ltspice_mcp.tools.run_code import CodeWorker
+
+    _deck(work_dir, "slow.cir", SLOW_DECK)
+    code = (
+        "import json\n"
+        "receipt = api.run_experiments(wait=False, detach=True, "
+        "request_id='worker-detach', circuits=[{'path': 'slow.cir'}], "
+        f"variations={SLOW_VARIATIONS!r}, execution={{'max_parallel': 1, 'simulator': 'ngspice'}})\n"
+        "print(json.dumps(receipt))"
+    )
+
+    owner: psutil.Process | None = None
+
+    async def submit_and_reset():
+        nonlocal owner
+        worker = CodeWorker(work_dir, None)
+        try:
+            reply = await worker.run(code, HANDOFF_TIMEOUT_S, False)
+            assert reply["status"] == "ok", reply
+            receipt = json.loads(reply["stdout"])
+            owner_pid = _detached(receipt)["evidence"]["owner_pid"]
+            owner = psutil.Process(owner_pid)
+            child = await asyncio.to_thread(_pause_simulator, owner_pid)
+            try:
+                assert (await worker.run("", 5, True))["status"] == "reset"
+                assert not _gone(owner_pid)
+                assert child.is_running()
+            finally:
+                # A broken breakaway can leave the child already terminating;
+                # the final job-status assertion must report that failure.
+                with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                    child.resume()
+            return receipt
+        finally:
+            await worker.close()
+
+    try:
+        receipt = asyncio.run(submit_and_reset())
+        with _api(work_dir) as fresh:
+            final = fresh.wait(receipt["job_id"], timeout=HANDOFF_TIMEOUT_S)
+            assert final["status"] == "completed", final
+    finally:
+        if owner is not None and owner.is_running():
+            with contextlib.suppress(ProcessLookupError, psutil.NoSuchProcess):
+                if os.name == "nt":
+                    owner.kill()
+                else:
+                    os.killpg(owner.pid, signal.SIGKILL)
+            owner.wait(timeout=10)
 
 
 def _write_handoff_logs(detached_dir: Path, count: int) -> list[Path]:
@@ -458,29 +560,38 @@ def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
 
 
 def test_killing_a_detached_owner_leaves_an_interrupted_job(work_dir: Path) -> None:
-    api = _api(work_dir)
-    receipt = _submit_slow(api, work_dir, "detach-kill")
-    job_id = receipt["job_id"]
-    owner_pid = _detached(receipt)["evidence"]["owner_pid"]
+    with _api(work_dir) as api:
+        receipt = _submit_slow(api, work_dir, "detach-kill")
+        job_id = receipt["job_id"]
+        owner_pid = _detached(receipt)["evidence"]["owner_pid"]
 
-    # The owner runs in its own session, so this takes its simulator with it —
-    # the shape of a machine losing the whole process group, not a tidy exit.
-    os.killpg(os.getpgid(owner_pid), signal.SIGKILL)
+        child = _pause_simulator(owner_pid)
 
-    # Read it back from the session that spawned the owner and has not
-    # collected it. Its pid is still in the process table, and a job whose
-    # owner is gone must not read as one that is still running.
-    interrupted = wait_until(
-        lambda: (
-            status
-            if (status := api.jobs(action="status", job_id=job_id))["status"] != "running"
-            else None
-        ),
-        timeout_s=RECLASSIFY_TIMEOUT_S,
-        what="the killed owner's job to stop reporting as running",
-    )
-    assert interrupted["status"] == "interrupted", interrupted
-    api.close()
+        try:
+            # A Windows owner owns a Job Object; POSIX uses a session process group.
+            # Either way its simulator must not be left behind after a forced exit.
+            if os.name == "nt":
+                psutil.Process(owner_pid).kill()
+            else:
+                os.killpg(os.getpgid(owner_pid), signal.SIGKILL)
+
+            # Read it back from the session that spawned the owner and has not
+            # collected it. Its pid is still in the process table, and a job whose
+            # owner is gone must not read as one that is still running.
+            interrupted = wait_until(
+                lambda: (
+                    status
+                    if (status := api.jobs(action="status", job_id=job_id))["status"] != "running"
+                    else None
+                ),
+                timeout_s=RECLASSIFY_TIMEOUT_S,
+                what="the killed owner's job to stop reporting as running",
+            )
+            assert interrupted["status"] == "interrupted", interrupted
+            child.wait(timeout=10)
+        finally:
+            if child.is_running():
+                child.kill()
 
     with _api(work_dir) as fresh:
         assert fresh.jobs(action="status", job_id=job_id)["status"] == "interrupted"

@@ -5,6 +5,8 @@ LTspice is available on the system.
 They exercise the full simulation pipeline: create netlist → run sim → parse results.
 """
 
+import asyncio
+import math
 import os
 import shutil
 from pathlib import Path
@@ -230,20 +232,31 @@ class TestMeasExtraction:
     async def test_ac_measurement_extracted(self, ltspice_state: SessionState, rc_netlist: Path):
         receipt = await _run_deck(ltspice_state, "lt-meas-ac", rc_netlist.name)
         data = await _recipe(
-            ltspice_state, receipt["job_id"], {"key": "meas", "metric": "measurements"}
+            ltspice_state,
+            receipt["job_id"],
+            {"key": "meas", "metric": "measurements"},
+            include={"per_run": {"limit": 1}},
         )
-        stats = data["results"]["meas"]["stats"]
-        assert any(name.lower() == "fc" for name in stats), stats
+        stats = data["results"]["meas"]["per_run"]["items"][0]["value"]["stats"]
+        fc = stats["fc"]
+        assert fc["valid_count"] == 1
+        assert fc.get("at", fc["mean"]) == pytest.approx(
+            1 / (2 * math.pi * 1e3 * 100e-9), rel=0.005
+        )
 
     async def test_transient_measurement_extracted(
         self, ltspice_state: SessionState, tran_netlist: Path
     ):
         receipt = await _run_deck(ltspice_state, "lt-meas-tran", tran_netlist.name)
         data = await _recipe(
-            ltspice_state, receipt["job_id"], {"key": "meas", "metric": "measurements"}
+            ltspice_state,
+            receipt["job_id"],
+            {"key": "meas", "metric": "measurements"},
+            include={"per_run": {"limit": 1}},
         )
-        stats = data["results"]["meas"]["stats"]
-        assert any(name.lower() == "vout_max" for name in stats), stats
+        stats = data["results"]["meas"]["per_run"]["items"][0]["value"]["stats"]
+        assert stats["vout_max"]["valid_count"] == 1
+        assert stats["vout_max"]["mean"] == pytest.approx(1 - math.exp(-5), abs=0.002)
 
 
 @pytest.mark.asyncio
@@ -324,9 +337,10 @@ class TestManagedExport:
         self, ltspice_state: SessionState, asc_in_workdir: Path
     ):
         data = await self._export(ltspice_state, asc_in_workdir)
-        export = data["checks"]["export"]
+        export = data["export"]
         assert export["ok"] is True, export
-        assert "R1" in export["netlist"]
+        netlist = await asyncio.to_thread(Path(export["netlist"]).read_text, encoding="utf-8")
+        assert "R1" in netlist
 
     async def test_sidecar_export_writes_the_net_file(
         self, ltspice_state: SessionState, asc_in_workdir: Path

@@ -25,6 +25,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
 from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
+from tests.conftest import await_until, wait_until
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -121,6 +122,21 @@ class TestSurface:
 
 @ASYNC
 class TestExecution:
+    async def test_reported_worker_pid_is_the_executing_process(self, state: SessionState):
+        reply = await run(
+            state,
+            "import json, os, sys\n"
+            "print(json.dumps({'pid': os.getpid(), 'prefix': sys.prefix, "
+            "'executable': sys.executable}))",
+        )
+        assert reply["status"] == "ok", reply
+        reported = json.loads(reply["stdout"])
+        assert reported == {
+            "pid": reply["worker_pid"],
+            "prefix": sys.prefix,
+            "executable": sys.executable,
+        }
+
     async def test_print_and_trailing_expression(self, state: SessionState):
         reply = await run(state, "print('hi')\n40 + 2")
         assert reply["status"] == "ok"
@@ -201,6 +217,30 @@ class TestExecution:
 
 @ASYNC
 class TestLifetime:
+    @pytest.mark.skipif(POSIX, reason="Windows kills and replaces a timed-out worker")
+    async def test_windows_timeout_reports_timeout_and_restarts(self, state: SessionState):
+        before = (await run(state, "1"))["worker_pid"]
+        reply = await run(state, "import time\ntime.sleep(60)", timeout_s=1)
+        assert reply["status"] == "timeout", reply
+        after = await run(state, "'ready'")
+        assert after["status"] == "ok"
+        assert after["worker_pid"] != before
+        assert not psutil.pid_exists(before)
+
+    @pytest.mark.skipif(POSIX, reason="Windows kills and replaces a cancelled worker")
+    async def test_windows_cancellation_restarts_worker(self, state: SessionState):
+        before = (await run(state, "1"))["worker_pid"]
+        task = asyncio.create_task(run(state, "import time\ntime.sleep(60)"))
+        await await_until(lambda: worker_for(state).running is not None)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await await_until(lambda: worker_for(state).running is None)
+        after = await run(state, "'ready'")
+        assert after["status"] == "ok"
+        assert after["worker_pid"] != before
+        assert not psutil.pid_exists(before)
+
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
     async def test_timeout_interrupts_and_keeps_the_worker(self, state: SessionState):
         before = (await run(state, "1"))["worker_pid"]
@@ -238,17 +278,27 @@ class TestLifetime:
         }
         assert not psutil.pid_exists(before)
 
-    @pytest.mark.skipif(not POSIX, reason="process groups are POSIX")
-    async def test_killing_the_worker_takes_its_children_with_it(self, state: SessionState):
-        reply = await run(state, "import subprocess\nsubprocess.Popen(['sleep', '1000']).pid")
+    @pytest.mark.parametrize("stop", ["reset", "exit"])
+    async def test_killing_the_worker_takes_its_children_with_it(
+        self, state: SessionState, stop: str
+    ):
+        reply = await run(
+            state,
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid",
+        )
         assert reply["status"] == "ok", reply
-        child = int(reply["result"])
-        os.kill(child, 0)  # alive while the worker is
-        reset = await run(state, "", reset=True)
-        assert reset["status"] == "reset"
-        await asyncio.sleep(0.5)
-        with pytest.raises(ProcessLookupError):
-            os.kill(child, 0)
+        child = psutil.Process(int(reply["result"]))
+        try:
+            if stop == "reset":
+                assert (await run(state, "", reset=True))["status"] == "reset"
+            else:
+                assert (await run(state, "import os; os._exit(3)"))["status"] == "error"
+            await asyncio.to_thread(child.wait, timeout=10)
+        finally:
+            if child.is_running():
+                child.kill()
 
     async def test_a_second_call_while_one_runs_is_busy(self, state: SessionState):
         first = asyncio.ensure_future(run(state, "import time\ntime.sleep(2)\n'first'"))
@@ -335,7 +385,46 @@ class TestLifetime:
 
 
 class TestWorkerProcess:
-    @pytest.mark.skipif(not POSIX, reason="the EOF watchdog interrupts with a signal on POSIX")
+    @pytest.mark.skipif(POSIX, reason="Windows closes the supervisor's Job Object handle")
+    def test_supervisor_death_stops_worker_and_child(self, tmp_path: Path):
+        pid_file = tmp_path / "owned-processes.json"
+        snippet = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid"
+        )
+        program = (
+            "import asyncio, json, sys\n"
+            "from pathlib import Path\n"
+            "from ltspice_mcp.tools.run_code import CodeWorker\n"
+            "async def main():\n"
+            "    worker = CodeWorker(Path(sys.argv[1]), None)\n"
+            f"    reply = await worker.run({snippet!r}, 30, False)\n"
+            "    assert reply['status'] == 'ok', reply\n"
+            "    Path(sys.argv[2]).write_text(json.dumps([worker.pid, int(reply['result'])]))\n"
+            "    await asyncio.Event().wait()\n"
+            "asyncio.run(main())\n"
+        )
+        parent = subprocess.Popen(
+            [sys.executable, "-c", program, str(tmp_path), str(pid_file)],
+            env={**os.environ, "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1"},
+        )
+        owned = []
+        try:
+            wait_until(pid_file.is_file, timeout_s=30, what="the worker and child to start")
+            owned = [psutil.Process(pid) for pid in json.loads(pid_file.read_text())]
+            parent.kill()
+            parent.wait(timeout=10)
+            for process in owned:
+                process.wait(timeout=10)
+        finally:
+            if parent.poll() is None:
+                parent.kill()
+            parent.wait(timeout=10)
+            for process in owned:
+                if process.is_running():
+                    process.kill()
+
     def test_parent_death_exits_a_worker_mid_snippet(self, tmp_path: Path):
         env = {**os.environ, "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1"}
         proc = subprocess.Popen(

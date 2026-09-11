@@ -459,6 +459,17 @@ to a handshake file, then blocks in `api.wait(job_id)` until the job is
 terminal and exits. The parent polls for the handshake, annotates the receipt
 and returns it.
 
+On Windows, each owner holds a Job Object containing itself and its simulator
+descendants. Windows closes that handle when the owner exits, including a
+forced exit, and terminates the remaining descendants. An owner spawned from
+`run_code` explicitly leaves the worker's Job Object, so resetting the worker
+does not cancel a detached experiment. Breakaway is requested only when the
+enclosing job permits it; an externally imposed job can still constrain the
+process's lifetime. Windows virtual-environment launches use the underlying
+interpreter with `__PYVENV_LAUNCHER__`, following CPython multiprocessing. This
+preserves the environment without the redirector's additional process and
+restrictive Job Object.
+
 **The record is written by the process that owns it.** This is the ordering
 choice, and it is the reason the API prepares nothing on disk beyond the
 request file: staging and submission both happen in the child, so the job

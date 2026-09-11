@@ -71,6 +71,7 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("LTSPICE_MCP_SYMBOL_PATHS", raising=False)
     working_dir = tmp_path / "project"
     symbol_dir = working_dir / "symbols"
     symbol_dir.mkdir(parents=True)

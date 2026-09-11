@@ -10,6 +10,7 @@ only gets exercised when someone happens not to have cairosvg installed.
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from mcp import types
@@ -71,6 +72,22 @@ def test_scale_is_the_cost_lever() -> None:
     assert (small.width, small.height) == (20, 10)
     assert (large.width, large.height) == (60, 30)
     assert large.scale == 3.0
+
+
+@needs_raster
+def test_text_rendering_survives_caller_thread_exit() -> None:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+        '<text x="10" y="30" font-family="Georgia" font-size="14">R1 10k</text>'
+        "</svg>"
+    )
+    # Per-request executor threads may exit between calls. Native font caches
+    # must not retain resources owned by those now-dead threads.
+    for scale in (3.0, 0.1):
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            image = caller.submit(render_image, svg, image_format=PNG, scale=scale).result()
+        assert (image.width, image.height) == (int(200 * scale), int(100 * scale))
+        assert image.data.startswith(_PNG_MAGIC)
 
 
 def test_scale_is_validated_without_the_extra(no_raster: None) -> None:

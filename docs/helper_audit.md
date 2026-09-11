@@ -117,7 +117,7 @@ The fixture-path correction found during skip review then passed as a
 targeted test on Linux and both Windows interpreters. It removes one of those
 80 skips; the full suites were not repeated for that single-test correction.
 
-### What the Windows skips leave untested
+### Initial Windows skip inventory
 
 | Count | Reason | Follow-up |
 |---:|---|---|
@@ -131,6 +131,83 @@ targeted test on Linux and both Windows interpreters. It removes one of those
 | 1 | Windows Claude scratch directory is not known | Existing Windows support gap. |
 | 1 | Normal-parser deadline test looked in a nonexistent fixture subdirectory | Corrected to use the required recorded fixture directly; a missing required fixture must fail, not skip. |
 
-These results establish the exercised Windows paths, not complete Windows
-feature coverage. Real LTspice execution and Windows worker lifecycle tests
-are the highest-priority additions.
+### Expanded native Windows validation
+
+The follow-up enabled installed LTspice and its real symbols, a portable
+ngspice console build, and the raster extra with native Cairo. Dependencies
+were confined to the validation environment; no system installation or
+symlink privilege change was made.
+
+This exposed production defects that the skipped tests had hidden:
+
+- Windows worker timeouts returned `WorkerDied` instead of `timeout`, and
+  killing a worker left its subprocesses alive. The supervisor now holds a
+  Windows Job Object so worker reset, exit and supervisor death terminate
+  ordinary descendants. Timeout reporting follows the deadline and measures
+  actual elapsed time. A further PID regression found that Windows virtual
+  environments inserted a launcher process with a restrictive child job.
+  Worker and detached-owner launches now use the same base-interpreter plus
+  environment-marker approach as CPython multiprocessing, preserving the
+  virtual environment while supervising the executing process directly.
+- A timed-out detached owner left its child processes running. Windows cleanup
+  now uses a PID-scoped tree kill; each real owner also holds its own Job
+  Object. An owner launched from `run_code` explicitly breaks away from the
+  worker's job. The regression pauses a real ngspice process, resets the
+  worker, resumes the simulator and requires the detached job to complete.
+- Native Cairo crashed when text was rendered from successive short-lived
+  threads. A two-thread regression reproduced the access violation and passed
+  after Windows rasterization moved to one persistent renderer thread.
+
+The live LTspice tests also had stale measurement/export response assertions.
+They now check current response fields, physical RC values and exported file
+contents. Three configuration tests now clear the symbol-path environment
+variable before asserting TOML-only behavior.
+
+Independent review strengthened descendant-cleanup assertions and replaced a
+helper-only breakaway test with the actual detached-experiment API. Removing
+the corresponding ownership fixes made those tests fail. Deterministic
+injection at the taskkill boundary also exposed cleanup exceptions escaping
+the API contract; owner-exit races are tolerated, and unresolved cleanup
+failures are included in the structured handshake error.
+
+The expanded 3.13 run also reported a completed concurrent detached job as
+`interrupted`. Its owner logs showed normal completion. A deterministic
+registry regression reproduced an ordering that explains this: read a running
+record, let the owner persist completion and exit during the liveness probe,
+then reconcile the stale snapshot and persist it over the final record. The
+loader now rereads and validates the record after confirming owner death. If
+the recorded owner changed, it does not apply the earlier owner's liveness
+answer. The regression failed before this change and passed after.
+
+The Linux run also exposed a flaw in the cancellation test's simulated
+foreign owner: changing one saved record's PID did not change later writes
+from the real coordinator. A subsequent read could therefore see a local
+owner in a session with no coordinator and return `cancel_unavailable`. The
+test now changes the owner only at the persistence boundary, consistently
+across all checkpoints, and drains the terminal write before checking the
+foreign receipt. It preserves the live coordinator's actual ownership; no
+production cancellation code changed.
+
+The remaining coverage limits are privilege-dependent symlink tests, the
+optional Sky130 integration tier, and the unknown Windows Claude scratch
+location. OS-specific assertions and non-applicable outcome-rule cases still
+skip deliberately. This does not establish complete Windows feature coverage.
+
+
+The expanded Windows Python 3.12 suite passed: **3,602 passed, 27 skipped**.
+After the reconciliation fix and final test cleanup, its full experiment-store
+and detached-owner modules passed: **68 passed, 1 skipped**. Windows Python
+3.13 passed the full suite with that fix: **3,603 passed, 27 skipped**.
+The final cancellation-test setup correction then passed separately on both
+Windows interpreters.
+The final Linux suite passed: **3,605 passed, 25 skipped**, with **90.49%**
+coverage. Ruff lint/format, Pyright and `git diff --check` passed. The native
+checkout's source and test files matched the final working tree byte for byte.
+
+| Remaining Windows skips | Count |
+|---|---:|
+| POSIX or WSL-specific assertions | 16 |
+| Symlink privilege unavailable | 5 |
+| Optional Sky130 PDK unavailable | 2 |
+| Outcome rule does not apply to the parametrized module | 3 |
+| Windows Claude scratch directory is not known | 1 |

@@ -18,6 +18,8 @@ has to infer what it received from what it asked for.
 
 from __future__ import annotations
 
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
 
@@ -57,6 +59,14 @@ SVG = "svg"
 IMAGE_FORMATS = (PNG, SVG)
 
 _MIME = {PNG: "image/png", SVG: "image/svg+xml"}
+
+# Keep Cairo's Windows font resources on a thread that stays alive between
+# renders. The executor starts that thread on first use.
+_renderer = (
+    ThreadPoolExecutor(max_workers=1, thread_name_prefix="cairo")
+    if sys.platform == "win32"
+    else None
+)
 
 
 @dataclass(frozen=True)
@@ -156,6 +166,12 @@ def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "
     # bad scale depend on whether the optional package happens to be installed,
     # so the same call raises on one machine and silently degrades on another.
     _check_scale(scale)
+    if _renderer is not None:
+        return _renderer.submit(_rasterize_svg, svg, scale, background).result()
+    return _rasterize_svg(svg, scale, background)
+
+
+def _rasterize_svg(svg: str, scale: float, background: str) -> bytes:
     cairosvg = _load_cairosvg()
     if cairosvg is None:
         raise RasterUnavailableError(
