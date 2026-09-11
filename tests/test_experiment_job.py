@@ -1248,3 +1248,25 @@ class TestOwnerLivenessUnknownOnLoad:
         codes = {item.get("code") for item in loaded.observations}
         assert "server_restarted" in codes
         assert "owner_liveness_unknown" not in codes
+
+    @pytest.mark.asyncio
+    async def test_owner_finishing_during_the_probe_preserves_its_final_record(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        job = self._persisted(work_dir)
+
+        def finishes_then_exits(pid, **kwargs):
+            assert pid == job.owner_pid
+            job.status = "completed"
+            job.cases[0].status = "produced"
+            experiment_store.save_job(job)
+            return store.OwnerLiveness.DEAD
+
+        monkeypatch.setattr(experiment_store, "owner_liveness", finishes_then_exits)
+        registry = JobRegistry(working_dir=work_dir, persist_enabled=True)
+        loaded = await registry.get_or_load_async(job.job_id)
+        assert loaded is not None
+        assert loaded.status == "completed"
+        assert not loaded.restart_reconciled
+        await registry.drain_pending()
+        assert json.loads(job.store_path.read_text(encoding="utf-8"))["status"] == "completed"

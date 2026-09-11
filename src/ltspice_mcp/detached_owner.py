@@ -169,4 +169,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        from ltspice_mcp.lib.windows_job import WindowsJob
+
+        # Keep this handle until process exit. A forced owner death must also
+        # stop its simulators, while the submitting process may exit freely.
+        _process_job = WindowsJob(os.getpid())
     raise SystemExit(main(sys.argv[1:]))

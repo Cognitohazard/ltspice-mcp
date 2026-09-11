@@ -8,6 +8,10 @@ as a fresh call. One snippet runs at a time — a second call while one runs is
 answered ``busy``, never queued, because in a chat client a second send is
 usually a correction.
 
+Windows workers belong to a Job Object held by their supervisor. Reset,
+timeout, worker exit and supervisor death stop ordinary descendants too;
+explicitly detached experiment owners leave that job before supervising work.
+
 Advertised only when ``[tools] run_code = true``: the snippet runs with the
 server process's own file and process authority, not inside
 ``allowed_paths``, and turning that on is the operator's decision.
@@ -20,7 +24,6 @@ import contextlib
 import json
 import os
 import signal
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +40,7 @@ from ltspice_mcp.code_worker import (
     empty_reply,
 )
 from ltspice_mcp.lib.proc_kill import kill_process_group
+from ltspice_mcp.lib.windows_job import WindowsJob, python_launch
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import ToolInput, format_response, registry
 
@@ -198,6 +202,7 @@ class CodeWorker:
         #: Why the previous worker went, reported once on the next reply.
         self.restarted: dict[str, Any] | None = None
         self._drain: asyncio.Task[None] | None = None
+        self._windows_job: WindowsJob | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -210,8 +215,9 @@ class CodeWorker:
         return process if process is not None and process.returncode is None else None
 
     async def _spawn(self) -> None:
+        executable, env = python_launch()
         self.process = await asyncio.create_subprocess_exec(
-            sys.executable,
+            executable,
             "-m",
             "ltspice_mcp.code_worker",
             str(self.working_dir),
@@ -220,9 +226,16 @@ class CodeWorker:
             stdout=asyncio.subprocess.PIPE,
             stderr=None,
             cwd=self.working_dir,
+            env=env,
             start_new_session=os.name != "nt",
             limit=_PIPE_LINE_LIMIT,
         )
+        if os.name == "nt":
+            try:
+                self._windows_job = WindowsJob(self.process.pid)
+            except OSError:
+                await self._kill()
+                raise
         ready = await self._read_message(BOOT_TIMEOUT_S)
         if ready is None or ready.get("op") != "ready":
             error = (ready or {}).get("error", "the worker did not report ready in time")
@@ -242,6 +255,9 @@ class CodeWorker:
             return
         if reason is not None:
             self.restarted = {"previous_pid": process.pid, "reason": reason}
+        if self._windows_job is not None:
+            self._windows_job.close()
+            self._windows_job = None
         if process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
@@ -371,7 +387,11 @@ class CodeWorker:
         if reply is None:
             self._interrupt()
             reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
-            if reply is not None and reply is not _EOF:
+            if reply is _EOF:
+                # The deadline caused the exit; Windows terminates the worker
+                # instead of delivering the POSIX graceful interrupt.
+                return None
+            if reply is not None:
                 reply["status"] = "timeout"
         return reply
 
@@ -409,7 +429,7 @@ class CodeWorker:
             ),
         )
 
-    async def _lost(self, died: bool, timeout_s: float) -> dict[str, Any]:
+    async def _lost(self, died: bool, elapsed_s: float) -> dict[str, Any]:
         """No answer: the worker exited, or it ignored the interrupt. The
         reply is built first, so the restart it causes is reported where the
         contract puts it: on the next call."""
@@ -426,7 +446,7 @@ class CodeWorker:
         else:
             reply = self._reply(
                 "timeout",
-                elapsed_s=round(timeout_s + INTERRUPT_GRACE_S, 3),
+                elapsed_s=round(elapsed_s, 3),
                 hint=f"{_TIMEOUT_HINT} {_RESTART_HINT}",
             )
         await self._kill("the worker exited" if died else "killed after a timeout")
@@ -449,7 +469,8 @@ class CodeWorker:
             )
         self.exec_seq += 1
         seq = self.exec_seq
-        self.running = _Running(seq, code, time.monotonic())
+        started = time.monotonic()
+        self.running = _Running(seq, code, started)
         try:
             reply = await self._exchange(seq, code, timeout_s)
         except asyncio.CancelledError:
@@ -463,7 +484,7 @@ class CodeWorker:
             if self._drain is None:
                 self.running = None
         if reply is None or reply is _EOF:
-            return await self._lost(reply is _EOF, timeout_s)
+            return await self._lost(reply is _EOF, time.monotonic() - started)
         if reply["status"] == "interrupted":
             reply["status"] = "timeout"
         fields = {key: reply[key] for key in empty_reply("ok") if key != "status"}

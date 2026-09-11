@@ -18,7 +18,6 @@ import os
 import secrets
 import signal
 import subprocess
-import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -35,6 +34,7 @@ from ltspice_mcp.lib.store import (
     accept,
     envelope,
 )
+from ltspice_mcp.lib.windows_job import detached_creation_flags, python_launch
 from ltspice_mcp.state import SessionState
 
 #: What the owner gets on top of its own longest legitimate wait: a cold
@@ -234,12 +234,14 @@ def submit(
     )
 
     prune(children)
+    executable, env = python_launch()
     try:
         with log_path.open("ab") as log:
             # Fixed argv, no shell: the only caller-derived element is the
             # request path this module just wrote.
             process = subprocess.Popen(
-                [sys.executable, "-m", "ltspice_mcp.detached_owner", str(request_path)],
+                [executable, "-m", "ltspice_mcp.detached_owner", str(request_path)],
+                env=env,
                 cwd=boot.cwd,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
@@ -248,6 +250,7 @@ def submit(
                 # that ends the script — do not reach the process the script
                 # detached precisely so it would survive.
                 start_new_session=True,
+                creationflags=detached_creation_flags(),
             )
     except OSError as exc:
         request_path.unlink(missing_ok=True)
@@ -290,13 +293,29 @@ def submit(
 def _stop_owner(process: subprocess.Popen[bytes]) -> None:
     """Stop one owner and the simulators it started.
 
-    The owner is spawned with ``start_new_session=True``, so it leads its own
-    process group and every simulator it launched is in that group. A signal
-    to the owner alone leaves those running with nothing supervising them —
-    and the message the caller gets says the owner "was stopped", which would
-    then be true only of the supervisor. Windows has no process group to
-    signal, so there the single terminate is all there is.
+    POSIX owners lead their own process group. Windows uses a PID-scoped tree
+    kill; terminating the owner alone is the fallback if that command fails.
     """
+    if os.name == "nt":
+        if process.poll() is not None:
+            return
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            if process.poll() is not None:
+                return
+            # Closing the real owner's self-owned Job Object also stops its
+            # children. Preserve the tree-kill error for the caller's report.
+            process.terminate()
+            raise
+        return
     if kill_process_group(process.pid, signal.SIGTERM):
         return
     # Windows, or the group is already gone: a plain terminate is still the
@@ -351,14 +370,20 @@ def _await_report(
                 log_path,
             )
         if time.monotonic() >= deadline:
-            _stop_owner(process)
+            try:
+                _stop_owner(process)
+                process.wait(timeout=10)
+                cleanup = "It and the processes it started were stopped."
+            except (OSError, subprocess.SubprocessError) as exc:
+                cleanup = (
+                    f"Stopping its process tree failed: {exc}. Processes may still be running."
+                )
             raise _failure(
                 request_id,
                 "detached_owner_timeout",
                 (
                     f"The detached owner did not report a submission within "
-                    f"{HANDSHAKE_TIMEOUT_S:.0f}s, and it and the processes it started "
-                    f"were stopped. If it had already submitted, request_id "
+                    f"{HANDSHAKE_TIMEOUT_S:.0f}s. {cleanup} If it had already submitted, request_id "
                     f"{request_id!r} still names that job: ask for it again to "
                     "replay it."
                 ),

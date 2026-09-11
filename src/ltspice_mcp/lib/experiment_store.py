@@ -536,7 +536,7 @@ def _deserialize_job(
     data: dict[str, Any],
     store_path: Path,
     *,
-    own_is_alive: bool,
+    liveness: OwnerLiveness,
 ) -> ExperimentJob:
     started_at = parse_iso_datetime(data.get("started_at")) or now()
     completeness_data = data.get("completeness") or {}
@@ -573,10 +573,7 @@ def _deserialize_job(
         analysis=_analysis_stage(data.get("analysis")),
         owner_pid=pid_of(data) or 0,
     )
-    _reconcile_restart(
-        job,
-        liveness=owner_liveness(pid_of(data), own_is_alive=own_is_alive),
-    )
+    _reconcile_restart(job, liveness=liveness)
     if all(case.status in TERMINAL_CASE_STATUSES for case in job.cases):
         job.runs_done_event.set()
     if job.status in _TERMINAL_STATUSES:
@@ -596,24 +593,43 @@ def load_job_from_path(
     if resolved.parent != store.experiments_dir:
         raise ValueError(f"Experiment record is outside the working store: {path}")
     validate_job_id(resolved.stem)
+    data = _read_job_record(resolved)
+    if data is None:
+        return None
     try:
-        with resolved.open("r", encoding="utf-8") as handle:
+        liveness = OwnerLiveness.UNKNOWN
+        if data.get("status") in _LIVE_STATUSES:
+            pid = pid_of(data)
+            liveness = owner_liveness(pid, own_is_alive=own_is_alive)
+            if liveness.is_dead:
+                # The owner may have saved its final state and exited after
+                # our first read. Reconcile only a snapshot read after death.
+                data = _read_job_record(resolved)
+                if data is None:
+                    return None
+                if pid_of(data) != pid:
+                    liveness = OwnerLiveness.UNKNOWN
+        return _deserialize_job(data, resolved, liveness=liveness)
+    except Exception as exc:
+        logger.warning("Skipping malformed experiment job %s: %s", resolved, exc)
+        return None
+
+
+def _read_job_record(path: Path) -> dict[str, Any] | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Skipping unreadable experiment job %s: %s", resolved, exc)
+        logger.warning("Skipping unreadable experiment job %s: %s", path, exc)
         return None
-    if not accept(data, resolved, kind=KIND_EXPERIMENT, log=logger):
+    if not accept(data, path, kind=KIND_EXPERIMENT, log=logger):
         return None
-    if data.get("job_id") != resolved.stem:
-        logger.warning("Skipping experiment record %s: job id does not match filename", resolved)
+    if data.get("job_id") != path.stem:
+        logger.warning("Skipping experiment record %s: job id does not match filename", path)
         return None
-    try:
-        return _deserialize_job(data, resolved, own_is_alive=own_is_alive)
-    except Exception as exc:
-        logger.warning("Skipping malformed experiment job %s: %s", resolved, exc)
-        return None
+    return data
 
 
 def load_job(

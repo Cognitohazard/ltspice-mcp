@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -1142,6 +1142,19 @@ class TestCancellationAuthority:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        save_job = experiment_store.save_job
+
+        def save_as_foreign(job: ExperimentJob) -> Path:
+            # The coordinator is real but runs in this test process. Keep its
+            # simulated foreign identity on every durable checkpoint.
+            return save_job(replace(job, owner_pid=_FOREIGN_PID))
+
+        monkeypatch.setattr(experiment_store, "save_job", save_as_foreign)
+        monkeypatch.setattr(
+            experiment_store,
+            "owner_liveness",
+            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
+        )
         circuit = _circuit(work_dir)
         template = _experiment(work_dir, circuit, count=2, status="queued")
         runner = state_no_sim.runners.get_experiment_runner(
@@ -1173,26 +1186,14 @@ class TestCancellationAuthority:
                 )
             )
         )
-        # Wait for launch and its durable checkpoints before installing the
-        # foreign record. A running status alone does not finish queued writes.
+        # The foreign session reads disk, so wait for the launch checkpoint.
         await await_until(
             lambda: bool(callbacks) and receipt.job.cases[0].status == "running",
             timeout_s=_CANCEL_PATH_TIMEOUT_S,
             what="the case to start running",
         )
         await state_no_sim.job_registry.drain_pending()
-        foreign_job = await asyncio.to_thread(
-            experiment_store.load_job, receipt.job.job_id, work_dir, own_is_alive=True
-        )
-        assert foreign_job is not None
-        foreign_job.owner_pid = _FOREIGN_PID
-        await asyncio.to_thread(experiment_store.save_job, foreign_job)
         foreign_state = SessionState.create(state_no_sim.config, available={})
-        monkeypatch.setattr(
-            experiment_store,
-            "owner_liveness",
-            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
-        )
 
         cancel_args = _args(
             "cancel",
@@ -1214,6 +1215,7 @@ class TestCancellationAuthority:
         assert experiment_store.cancellation_requested(receipt.job.job_id, work_dir)
 
         await asyncio.wait_for(receipt.job.done_event.wait(), 30)
+        await state_no_sim.job_registry.drain_pending()
         assert receipt.job.status == "cancelled"
         assert receipt.job.completeness.submitted == 1
 
@@ -1222,6 +1224,7 @@ class TestCancellationAuthority:
         settled = _assert_jobs_schema(
             await asyncio.wait_for(handle_jobs(cancel_args, foreign_state), 30)
         )
+        assert "error" not in settled, settled.get("error")
         assert settled["status"] == "cancelled"
         callback = next(iter(callbacks.values()))
         callback(RunOutcome("", str(work_dir / "cancelled.fail"), 0, "killed"))
