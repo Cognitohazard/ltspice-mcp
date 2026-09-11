@@ -40,6 +40,7 @@ def _make_raw_mock(
     raw = MagicMock()
     raw.get_raw_property.return_value = plotname
     raw.get_trace_names.return_value = trace_names
+    raw.get_trace.return_value.whattype = None
     raw.get_steps.return_value = steps if steps is not None else [0]
     raw.get_axis.return_value = axis
 

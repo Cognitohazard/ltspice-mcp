@@ -124,6 +124,7 @@ class TestExtractOperatingPointEmpty:
         # A trace with no data points should be silently skipped
         raw = MagicMock()
         raw.get_trace_names.return_value = ["V(out)", "I(R1)"]
+        raw.get_trace.return_value.whattype = None
         waves = {"V(out)": np.array([]), "I(R1)": np.array([0.001])}
         raw.get_wave = lambda name, step=0: waves[name]
         result = extract_operating_point(raw)
@@ -627,6 +628,7 @@ class TestExtractOperatingPointCaseInsensitive:
 
         raw = MagicMock()
         raw.get_trace_names.return_value = ["v(out)", "i(r1)"]
+        raw.get_trace.return_value.whattype = None
         waves = {"v(out)": np.array([3.3]), "i(r1)": np.array([0.001])}
         raw.get_wave = lambda n, step=0: waves[n]
         r = extract_operating_point(raw)

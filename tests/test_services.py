@@ -315,3 +315,15 @@ class TestLoadRawParseDeadline:
         shutil.copy2(raw, local)
         loaded = await services.load_raw(local, state_no_sim)
         assert loaded.get_trace_names()
+
+
+@pytest.mark.asyncio
+async def test_raw_writer_header_wins_over_session_default(state_no_sim: SessionState):
+    from spicelib.simulators.qspice_simulator import Qspice
+
+    state_no_sim.default_simulator = Qspice
+    path = FIXTURES_DIR / "ngspice_noise_2plot.raw"
+
+    raw = await services.load_raw(path, state_no_sim)
+
+    assert raw.dialect == "ngspice"

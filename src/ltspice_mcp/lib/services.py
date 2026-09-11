@@ -436,16 +436,13 @@ def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
     simulator override parses with that simulator's dialect rather than the
     session default's.
 
-    A path with no recorded producer is the caller's own raw, and the session
-    default is the wrong thing to guess with: it is ``None`` whenever LTspice
-    is the default, which is what an ngspice raw written before version 44
-    needs least — it has no ``Command:`` header either, so spicelib has
-    nothing to detect from and refuses the file. Ask the bytes instead, and
-    fall back to the default only when they do not answer.
+    A caller-supplied raw takes its dialect from its own bytes. The sniffer's
+    ``None`` leaves detection to spicelib, including the file's ``Command:``
+    header; replacing it with the session default would override that header.
     """
     if raw_path in state.raw_dialect_hints:
         return state.raw_dialect_hints[raw_path]
-    return sniff_raw_dialect(raw_path) or state.raw_dialect
+    return sniff_raw_dialect(raw_path)
 
 
 # Hard wall-clock bound on one raw parse. A raw is an untrusted simulator

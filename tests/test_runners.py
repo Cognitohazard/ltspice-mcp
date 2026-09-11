@@ -19,6 +19,7 @@ from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import (
     RunnerBase,
     collect_run_outcome,
+    deck_requests_raw,
     discard_generated_netlist,
 )
 from ltspice_mcp.lib.spice_lex import lex
@@ -935,3 +936,19 @@ class TestRawLocationClassification:
             "a raw under a file-shaped parent read as a clean run that produced nothing"
         )
         assert "not a directory" in outcome.error.lower()
+
+
+def test_missing_raw_detection_follows_windows_include_separators(tmp_path: Path):
+    library = tmp_path / "models"
+    library.mkdir()
+    (library / "analysis.inc").write_text(".tran 1u 1m\n", encoding="utf-8")
+    deck = tmp_path / "main.cir"
+    deck.write_text('* circuit\n.include "models\\analysis.inc"\n.end\n', encoding="utf-8")
+    log = tmp_path / "main.log"
+    log.write_text("Circuit: test\nTotal elapsed time: 0.01 seconds.\n", encoding="utf-8")
+
+    outcome = collect_run_outcome(
+        str(tmp_path / "main.raw"), str(log), requirements=deck_requests_raw(deck), exit_code=0
+    )
+
+    assert outcome.error is not None, "the included transient analysis requires a raw"

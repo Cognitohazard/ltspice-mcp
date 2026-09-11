@@ -16,6 +16,10 @@ wheels/
 # Claude Code
 .claude/
 
+# Local agent configuration and skills
+.codex/
+.agents/
+
 # Codex reads the local AGENTS.md symlink to CLAUDE.md.
 AGENTS.md
 

@@ -60,10 +60,10 @@ def _parse_failure(what: str, exc: BaseException) -> str:
     return f"{what} unavailable: {type(exc).__name__}: {exc}"
 
 
-# LTspice .raw header magic. Classic files start with ASCII ``Title:``; newer
-# LTspice writes a UTF-16 LE BOM followed by the same ``Title:``.
+# Header prefixes shared by restart recovery and dialect sniffing.
 _RAW_HEADER_ASCII = b"Title:"
-_RAW_HEADER_UTF16 = b"\xff\xfeT\x00i\x00t\x00l\x00e\x00:\x00"
+_RAW_TITLE_UTF16 = "Title:".encode("utf-16-le")
+_RAW_HEADER_UTF16 = (b"\xff\xfe" + _RAW_TITLE_UTF16, _RAW_TITLE_UTF16)
 
 
 def has_valid_raw_header(path: Path | None) -> bool:
@@ -78,7 +78,7 @@ def has_valid_raw_header(path: Path | None) -> bool:
         return False
     try:
         with path.open("rb") as handle:
-            header = handle.read(len(_RAW_HEADER_UTF16))
+            header = handle.read(max(map(len, _RAW_HEADER_UTF16)))
     except OSError:
         return False
     return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
@@ -407,10 +407,8 @@ def whattype_unit(whattype: str | None) -> str | None:
 def declared_type(raw: RawRead, name: str) -> str | None:
     """The simulator's own word for what a trace holds, lowercased, or None.
 
-    LTspice types a ``.tf`` result ``transfer`` and ``impedance``; ngspice
-    types the same quantities ``voltage``, because it builds them as voltage
-    vectors. So this is authoritative where it is specific and merely
-    unhelpful where it is not — never wrong in a way that needs overriding.
+    This relays metadata, not physical meaning: some ngspice analyses label
+    derived quantities as voltage even when they represent an impedance.
 
     A trace the raw does not carry, or one the reader cannot type, answers
     None so the caller falls back rather than reporting a fault it can do
@@ -530,8 +528,8 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
 _OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
 
 #: Declared trace types that place a trace in a bias-point bucket. A type
-#: outside this map (LTspice's ``transfer``/``impedance``, say) falls through
-#: to the name test, and then to ``other`` rather than being discarded.
+#: outside this map belongs in ``other``. Only an absent type falls back to
+#: the name, so a declared impedance cannot become a voltage from its spelling.
 _OP_BUCKET_BY_TYPE = {
     "voltage": "voltages",
     "current": "currents",
@@ -553,16 +551,17 @@ def extract_operating_point(
         step: Step index for stepped .OP / .DC runs.
 
     Returns:
-        Dictionary with 'voltages', 'currents', and 'device_op_points' dicts
+        Dictionary with 'voltages', 'currents', 'device_op_points' and 'other' dicts
         mapping trace names to values. All values are Python float.
     """
     trace_names = raw.get_trace_names()
 
-    voltages: dict[str, float] = {}
-    currents: dict[str, float] = {}
-    device_op_points: dict[str, float] = {}
-    other: dict[str, float] = {}
-    buckets = {"voltages": voltages, "currents": currents, "other": other}
+    buckets: OperatingPointOutput = {
+        "voltages": {},
+        "currents": {},
+        "device_op_points": {},
+        "other": {},
+    }
 
     for trace in trace_names:
         wave = raw.get_wave(trace, step=step)
@@ -579,14 +578,12 @@ def extract_operating_point(
         # otherwise v(@m1[vth]) is mislabeled a node voltage and bare @m1[gm]
         # falls through both buckets and is dropped entirely.
         if "@" in trace:
-            device_op_points[trace] = value
+            buckets["device_op_points"][trace] = value
             continue
 
-        # The simulator's declared type first, the name second. LTspice types
-        # every trace it writes; ngspice types the axis and leaves the rest
-        # ``voltage``, where the name carries the same information anyway.
-        bucket = _OP_BUCKET_BY_TYPE.get(declared_type(raw, trace) or "")
-        if bucket is None:
+        whattype = declared_type(raw, trace)
+        bucket = _OP_BUCKET_BY_TYPE.get(whattype or "")
+        if not whattype:
             # SPICE node names are case-insensitive; spicelib may return either.
             if trace.upper().startswith("V("):
                 bucket = "voltages"
@@ -594,12 +591,7 @@ def extract_operating_point(
                 bucket = "currents"
         buckets[bucket or "other"][trace] = value
 
-    return {
-        "voltages": voltages,
-        "currents": currents,
-        "device_op_points": device_op_points,
-        "other": other,
-    }
+    return buckets
 
 
 def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:
@@ -1007,7 +999,6 @@ def build_simulation_summary(
 #: How much of a raw header to read when naming its writer. Every header field
 #: that matters (``Command`` last among them) precedes the variables block.
 _SNIFF_BYTES = 8192
-_TITLE_UTF16 = "Title:".encode("utf-16-le")
 
 
 def sniff_raw_dialect(path: Path) -> str | None:
@@ -1034,9 +1025,9 @@ def sniff_raw_dialect(path: Path) -> str | None:
             head = handle.read(_SNIFF_BYTES)
     except OSError:
         return None
-    if head.startswith(_TITLE_UTF16):
+    if head.startswith(_RAW_HEADER_UTF16):
         return "ltspice"
-    if not head.startswith(b"Title:"):
+    if not head.startswith(_RAW_HEADER_ASCII):
         return None
     if b"Command:" in head:
         return None

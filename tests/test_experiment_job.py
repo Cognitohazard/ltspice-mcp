@@ -47,7 +47,7 @@ from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import staged_decks, symlink_or_skip
+from tests.conftest import FIXTURES_DIR, staged_decks, symlink_or_skip
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -437,9 +437,11 @@ class TestExperimentLifecycle:
         assert loaded.runs_done_event.is_set()
         assert loaded.done_event.is_set()
 
+    @pytest.mark.parametrize("recorded", [False, True])
     def test_restart_promotes_a_case_whose_results_outlived_its_checkpoint(
         self,
         work_dir: Path,
+        recorded: bool,
     ):
         """A produced run must not be reported as a failure because a crash beat
         its checkpoint.
@@ -458,7 +460,10 @@ class TestExperimentLifecycle:
         # On disk from the run that finished; never recorded on the case.
         job.cases[0].run_token = f"{job.job_id}_case_0"
         job.cases[0].status = "running"
-        (runs / f"{job.cases[0].run_token}.raw").write_bytes(b"Title: result")
+        raw_bytes = (
+            (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes() if recorded else b"Title: result"
+        )
+        (runs / f"{job.cases[0].run_token}.raw").write_bytes(raw_bytes)
         (runs / f"{job.cases[0].run_token}.log").write_text("ok\n")
         experiment_store.save_job(job)
 

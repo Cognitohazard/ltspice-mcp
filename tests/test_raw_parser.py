@@ -45,8 +45,7 @@ class _FakeRaw:
 
     ``get_trace`` answers an untyped trace on purpose: a real raw declares a
     type for every variable, and these cases are about what the *name* decides
-    when the type says nothing — which is what ngspice leaves behind for
-    everything but its axis.
+    when no type is available. Recorded fixtures cover declared types.
     """
 
     def __init__(self, waves: dict[str, float]):
@@ -510,6 +509,16 @@ class TestSniffRawDialect:
     def test_an_ltspice_raw_is_named_from_its_utf16_header(self) -> None:
         assert raw_parser.sniff_raw_dialect(FIXTURES_DIR / "ltspice_tran_rc.raw") == "ltspice"
 
+    @pytest.mark.parametrize("bom", [b"", b"\xff\xfe"])
+    def test_recovery_and_sniffing_accept_the_same_utf16_headers(
+        self, tmp_path: Path, bom: bytes
+    ) -> None:
+        path = tmp_path / "recorded.raw"
+        path.write_bytes(bom + (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes())
+
+        assert raw_parser.has_valid_raw_header(path)
+        assert raw_parser.sniff_raw_dialect(path) == "ltspice"
+
     def test_a_raw_that_names_its_own_writer_is_left_to_spicelib(self) -> None:
         """ngspice 44 and later, qspice and xyce all write ``Command:``.
 
@@ -589,12 +598,8 @@ class TestBiasPointBucketing:
         assert raw_parser.trace_unit(raw, "V1#input_impedance") == "Ω"
         assert raw_parser.trace_unit(raw, "transfer_function") is None
 
-    def test_a_bias_point_still_sorts_by_name_when_the_type_says_nothing(self) -> None:
-        """ngspice types every ``.op`` trace ``voltage``; LTspice types currents.
-
-        Both must land in the same buckets, which is what the recorded fixture
-        with its real device_current traces pins.
-        """
+    def test_recorded_voltage_and_device_current_types_keep_their_buckets(self) -> None:
+        """The recorded LTspice fixture declares both voltage and device_current."""
         raw = RawRead(str(FIXTURES_DIR / "op_extreme_node.raw"))
 
         op = extract_operating_point(raw)

@@ -139,6 +139,28 @@ mechanism 1 or 2.
 
 ## The practice that was already working
 
+### Shared rules and asynchronous checkpoints
+
+When changing a shared rule, search for the behavior as well as the helper's
+name. Call references cannot find a copied bucket list, a hand-written path
+join, or a second header check. Identify every consumer before editing, and
+exercise the changed case through each distinct output path. A parser test
+does not establish that filtering, unit reporting and scalar reads preserve
+what the parser returned. Include a counterexample where a fallback would
+disagree with explicit metadata, such as a voltage-shaped name typed as an
+impedance.
+
+For asynchronous tests, wait for the checkpoint the assertion needs.
+An in-memory status change does not establish that its disk write completed.
+Do not mutate an object still owned by a running coordinator to simulate a
+different process. Use a separately loaded record, and control the relevant
+write or completion boundary with events when testing an interleaving. Test
+both orders deliberately; extending sleeps or accepting a successful rerun
+does not fix the race. A load test can reveal additional failures, but it is
+not a substitute for a deterministic regression of a known interleaving.
+
+### Existing coverage
+
 The following practices were already sound. They are kept, and everything
 above assumes them:
 
