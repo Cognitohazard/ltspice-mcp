@@ -1,7 +1,7 @@
 """inspect — the consolidated read-only UNDERSTAND surface.
 
 One tool answers a batch of independent read-only ``queries`` about the server
-and the circuits it can reach. Each query is one of seven kinds:
+and the circuits it can reach. Each query is one of eight kinds:
 
 * ``capabilities`` — detected simulators + dialects, exporter presence, job
   persistence, allowed roots, the active profile and which of the two tool
@@ -21,6 +21,9 @@ and the circuits it can reach. Each query is one of seven kinds:
   reference the node — carrying **no geometry** at all.
 * ``components`` — the component list (``detail:"list"``) or full per-component
   detail (``detail:"full"``) of any circuit file.
+* ``hierarchy`` — bounded netlist instance expansion, scoped ports, numeric
+  facts and backend addresses from captured active dependencies. See
+  ``lib/hierarchy.py`` for supported grammar and explicit refusal boundaries.
 
 On a netlist, ``net`` and ``components`` add ``warnings`` when the lexer had to
 guess about the deck (an unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a
@@ -88,6 +91,7 @@ from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
@@ -107,6 +111,7 @@ from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
     dialect_for_simulator_name,
+    simulator_library_roots,
     simulator_remediation,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
@@ -482,6 +487,40 @@ class ComponentsQuery(StrictModel):
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
 
 
+class HierarchyQuery(StrictModel):
+    """Resolve repeated netlist instances, ports, parameters and backend device addresses."""
+
+    kind: Literal["hierarchy"]
+    path: str = Field(description="Netlist .cir/.net/.sp; explicitly export a schematic first.")
+    simulator: Literal["ltspice", "ngspice"] = Field(
+        description="Offline semantic backend; installation is not required."
+    )
+    ngbehavior: str | None = Field(
+        default=None,
+        max_length=32,
+        description="ngspice compatibility mode; defaults to the configured effective mode.",
+    )
+    instance: list[Annotated[str, Field(min_length=1, max_length=256)]] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=33,
+        description="Exact reference segments selecting a subtree, matched case-insensitively.",
+    )
+    prefix: str | None = Field(
+        default=None, pattern="^[A-Za-z]$", description="Single element letter to retain."
+    )
+    cursor: str | None = Field(
+        default=None,
+        description="Resume token bound to captured dependency content, profile and filters.",
+    )
+
+    @model_validator(mode="after")
+    def _profile(self) -> HierarchyQuery:
+        if self.simulator == "ltspice" and self.ngbehavior is not None:
+            raise ValueError("ngbehavior is only valid for ngspice")
+        return self
+
+
 class ModelQuery(StrictModel):
     """Find a .model or .subckt definition — by fuzzy name match, or by listing
     everything the given libraries define. Ask it when a run failed on a model
@@ -557,6 +596,7 @@ Query: TypeAlias = Annotated[
     | SymbolQuery
     | NetQuery
     | ComponentsQuery
+    | HierarchyQuery
     | ModelQuery
     | ReferenceQuery,
     Field(discriminator="kind"),
@@ -713,6 +753,7 @@ COLLECTION_COUNTERS: dict[str, tuple[str, str, str | None]] = {
     "pins": ("total_pins", "returned", None),
     "coordinates": ("total_coordinates", "returned_coordinates", "coordinates_truncated"),
     "components": ("total", "returned", None),
+    "instances": ("total", "returned", None),
     "results": ("total", "returned", None),
 }
 
@@ -1539,6 +1580,52 @@ def _resolve_path(q: Any, user_path: str, state: SessionState) -> Path:
         raise _QueryError("path_denied", str(exc)) from exc
 
 
+def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
+    profile = SemanticProfile(
+        q.simulator,
+        (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
+        if q.simulator == "ngspice"
+        else None,
+    )
+    hierarchy = load_hierarchy(
+        q.path,
+        state.config.allowed_paths,
+        profile,
+        simulator_roots=simulator_library_roots(state.available_simulators.get(q.simulator)),
+    )
+    selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
+    if selected and not any(
+        tuple(p.casefold() for p in row.instance) == selected for row in hierarchy.instances
+    ):
+        raise NetlistError(f"instance segments not found: {q.instance}")
+    rows = [
+        row
+        for row in hierarchy.instances
+        if tuple(p.casefold() for p in row.instance[: len(selected)]) == selected
+        and (q.prefix is None or row.element == q.prefix.upper())
+    ]
+    identity = {
+        **hierarchy.binding(),
+        "instance": selected,
+        "prefix": q.prefix.upper() if q.prefix else None,
+    }
+    page = _paginate(rows, "hierarchy", identity, q.cursor, (), view)
+    metadata = _page_meta(page, "instances")
+    # The complete Python collector identifies rows through named collections.
+    metadata["collections"] = {"instances": dict(metadata)}
+    return {
+        "data": {
+            "instances": [row.row() for row in page["items"]],
+            "profile": identity["profile"],
+            "inputs": identity["inputs"],
+            "total": page["total"],
+            "returned": page["returned"],
+        },
+        "next_cursor": page["next_cursor"],
+        "page": metadata,
+    }
+
+
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
         return {"data": _do_capabilities(state)}
@@ -1550,6 +1637,8 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return await _do_net(query, state, view)
     if isinstance(query, ComponentsQuery):
         return await _do_components(query, state, view)
+    if isinstance(query, HierarchyQuery):
+        return await asyncio.to_thread(_hierarchy_page, query, state, view)
     if isinstance(query, ReferenceQuery):
         return _do_reference(query, view, frozenset(state.tool_dispatch))
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
@@ -1746,7 +1835,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'model', 'reference' — each with its own arguments, described "
+    "'components', 'hierarchy', 'model', 'reference' — each with its own arguments, described "
     "on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). A "
     "denied path, a stale cursor, an unknown kind, or a malformed query fails "

@@ -635,7 +635,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
-    "inspect": 7150,
+    "inspect": 8300,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

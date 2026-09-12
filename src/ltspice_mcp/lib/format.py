@@ -30,6 +30,7 @@ def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
 # Both 'm' and 'M' mean milli per SPICE convention; mega is spelled 'Meg'.
 _SCALE_FACTORS: list[tuple[str, float]] = [
     ("meg", 1e6),
+    ("mil", 25.4e-6),
     ("t", 1e12),
     ("g", 1e9),
     ("k", 1e3),
@@ -60,7 +61,8 @@ def fold_micro_sign(text: str) -> str:
 def parse_spice_value(s: str) -> float:
     """Parse a SPICE notation value to float.
 
-    Handles scale factors (case-insensitive): T, G, Meg, k, m, u, n, p, f.
+    Handles scale factors (case-insensitive): T, G, Meg, k, mil, m, u, n, p, f.
+    'mil' is 25.4e-6 (one thousandth of an inch in metres).
     Per SPICE convention, both 'm' and 'M' mean milli (1e-3); mega is 'Meg'.
     Trailing unit annotations after a recognised suffix are ignored, so
     '1ms', '1uF', '10MegHz', '1mV' all parse — '1ms' is treated as 1e-3

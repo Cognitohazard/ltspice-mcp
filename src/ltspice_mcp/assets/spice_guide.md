@@ -27,6 +27,7 @@ same response), follow a receipt with `jobs`, measure a finished job with
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
 | symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
+| nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
@@ -1196,3 +1197,46 @@ prefix — available in stock builds, above); `.func` cannot be recursive
 an LTspice-only directive — ngspice rejects it ("unimplemented dot command
 '.backanno'") and aborts the run; ngspice current probing uses `.options
 savecurrents` / `.probe` instead.
+
+## Discovering nested instances
+
+Use `inspect(queries=[{"kind":"hierarchy", "path":"amp.cir",
+"simulator":"ltspice", "instance":["XA","Xleaf"], "prefix":"M"}])`
+to find devices inside a repeated block. `instance` contains exact reference
+segments, matched without case sensitivity; keep that list for identity.
+The source file/line/section identifies the declaration, while the instance
+list identifies one runtime device. `components` remains a flat source read.
+Hierarchy reads netlists only; export a schematic explicitly first.
+
+Rows carry structural scoped nodes and port mappings, model source, raw/resolved
+values and parameters, MOS W/L in metres, and backend addresses. A numeric fact
+with `status: "unresolved"` has no effective value: read its `reason`.
+Discovery supports static arithmetic, defaults and caller overrides, with
+backend-specific parameter precedence. Ngspice sibling-dependent X-call overrides and
+expressions with multiple powers remain unresolved. LTspice caret expressions
+are unsupported; caret is not interpreted as exponentiation. Explicit LTspice `scale`
+is refused; use SI dimensions. The `mil` suffix is 25.4 micrometres.
+Functions, missing parameters, cycles
+and simulator steps can leave numeric facts unknown. Conditional structure,
+opaque control scripts, local definitions, recursion, missing dependencies,
+ambiguous declarations and resource-limit overruns are refused. Discovery does
+not implement selective per-instance variation.
+
+Declare the simulator even for offline inspection. For ngspice, `ngbehavior`
+defaults to the configured effective mode; sectioned libraries need a mode
+without `lt`/`ps` reinterpretation, such as `hsa`. An explicit inspection mode
+does not reconfigure subsequent runs. Cursor tokens bind captured dependency
+content, the declared profile and filters; after an edit, start a new query.
+The initial supported ngspice profiles are `hsa`, `kiltpsa`, and the empty
+string (native SPICE mode); other profiles are refused explicitly.
+
+To measure a selected device, put its `address.save` guidance in the deck,
+run it through `run_experiments`, and pass `address.device` to the existing
+`analyze_results` recipe `{"key":"chosen", "metric":"operating_point",
+"device":"..."}`. For example, a MOS at `["XA","Xleaf","M0"]` uses
+`m.xa.xleaf.m0` and `.save @m.xa.xleaf.m0[gm]` on ngspice. LTspice uses
+`xa:xleaf:m0` and `.options logopinfo`: gm is read from the log, not a guessed
+raw signal. A nested resistor uses `.save @r.xa.xleaf.r1[i]` on ngspice or
+`.save I(xa:xleaf:r1)` on LTspice. Full ancestral names distinguish the repeated
+peer. If an address is unavailable, use the explicit reason; do not shorten or
+guess a selector. Node voltage spellings do not guarantee a run saved the trace.

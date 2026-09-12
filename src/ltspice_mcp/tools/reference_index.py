@@ -360,6 +360,12 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
     ("inspect", "symbol"): ("pin positions", "bounding box", "rotation", "geometry"),
     ("inspect", "net"): ("trace a net", "what is connected", "shorts", "connectivity"),
     ("inspect", "components"): ("list parts", "bill of materials", "what is on the sheet"),
+    ("inspect", "hierarchy"): (
+        "nested devices",
+        "instance path",
+        "effective parameters",
+        "subcircuit ports",
+    ),
     ("inspect", "model"): ("find a part", "subckt", "transistor model", "library search"),
     ("inspect", "reference"): (
         "what arguments",
