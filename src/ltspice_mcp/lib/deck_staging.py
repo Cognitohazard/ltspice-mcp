@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -554,6 +554,7 @@ def scan_include_references(
     source: Path,
     *,
     depth: int = 0,
+    exists: Callable[[Path], bool] | None = None,
 ) -> list[IncludeReference]:
     """Return quote-aware include/library references from parsed cards.
 
@@ -574,7 +575,11 @@ def scan_include_references(
             continue
         is_lib = tokens[0].text.casefold() == ".lib"
         section = unquote(tokens[2].text) if is_lib and len(tokens) > 2 else None
-        if is_lib and section is None and looks_like_section_declaration(raw_path, source, depth):
+        if (
+            is_lib
+            and section is None
+            and looks_like_section_declaration(raw_path, source, depth, exists=exists)
+        ):
             continue
         references.append(
             IncludeReference(
@@ -599,7 +604,13 @@ def closure_depth(index: int) -> int:
     return 0 if index == 0 else 1
 
 
-def card_sections(cards: list[SpiceCard], source: Path, depth: int = 0) -> list[str | None]:
+def card_sections(
+    cards: list[SpiceCard],
+    source: Path,
+    depth: int = 0,
+    *,
+    exists: Callable[[Path], bool] | None = None,
+) -> list[str | None]:
     """Name the ``.lib``/``.endl`` section each card sits in, or ``None``.
 
     The lexer tracks ``.SUBCKT`` nesting but not library sections, so this walks
@@ -630,12 +641,18 @@ def card_sections(cards: list[SpiceCard], source: Path, depth: int = 0) -> list[
             stack.pop()
         elif head == ".lib" and len(tokens) == 2:
             name = unquote(tokens[1].text)
-            if name and looks_like_section_declaration(name, source, depth):
+            if name and looks_like_section_declaration(name, source, depth, exists=exists):
                 stack.append(name)
     return sections
 
 
-def looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0) -> bool:
+def looks_like_section_declaration(
+    raw_path: str,
+    source: Path,
+    depth: int = 0,
+    *,
+    exists: Callable[[Path], bool] | None = None,
+) -> bool:
     """True when a single-token ``.lib X`` declares a section rather than
     naming a file to include.
 
@@ -649,12 +666,15 @@ def looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0) 
     Public because it is the *only* answer to this question: a second one
     written elsewhere can disagree, and then one caller reads a file the other
     reads as a section.
+
+    ``exists`` may supply captured existence facts for immutable readers.
+    Omitting it retains the live filesystem classification used by staging.
     """
     if depth == 0 and not any(suffix.casefold() in {".lib", ".sub"} for suffix in source.suffixes):
         return False
     if any(char in raw_path for char in ("/", "\\", ".")):
         return False
-    return not (source.parent / raw_path).exists()
+    return not (exists or Path.exists)(source.parent / raw_path)
 
 
 def unquote(value: str) -> str:

@@ -789,6 +789,9 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
     .asc gives a geometric trace; a netlist gives card membership and makes
     no geometry claims
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
+{kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
+    expanded netlist instances; `instance` is an exact reference-segment list
+    selecting a subtree, and `prefix` is a single element letter
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query; enumerate requires libs
 {kind: "reference", query?, limit? (default 5, cap 20)}
@@ -1093,3 +1096,114 @@ Recorded so they are not mistaken for oversights:
 - Re-running an attached analysis stage after a server restart.
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
+
+## Hierarchy discovery contract
+
+`inspect(queries=[{"kind":"hierarchy", "path":"amplifier.cir",
+"simulator":"ltspice", "instance":["XA","Xleaf"], "prefix":"M"}])`
+expands runtime instances from the active netlist dependencies. Existing
+`components` and `net` queries continue to describe source cards. Hierarchy is
+read-only and accepts `.cir`, `.net`, and `.sp`; explicitly export `.asc` first.
+It neither stages a deck nor changes a library. Per-instance variation is a
+separate operation and is not supplied by discovery.
+
+Identity is a list of reference segments, matched case-insensitively with
+original spelling preserved. A punctuation-joined display name is not a
+selector. Each `data.instances` row contains:
+
+| Field | Meaning |
+|-|-|
+| `instance`, `reference`, `element` | Runtime path, local reference, element letter |
+| `source` | Physical path and line, library section, enclosing definition |
+| `raw` | Original logical element card |
+| `nodes`, `ports` | Structural node scope/name and ordinal formal-to-actual mapping |
+| `model` | Declared model name, selected definition source, or unavailable reason |
+| `value` | Element value, separate from named parameters |
+| `parameters`, `environment` | Raw expressions and numeric facts in the applicable environment |
+| `geometry` | Explicit MOS W/L scaled into metres |
+| `address` | Existing `operating_point.device` selector and backend save guidance, or reason unavailable |
+
+Numeric facts carry `expression`, `value`, `unit`, `status`, and `reason`.
+An unresolved value is null, never a guessed zero. The static expression subset
+supports finite SPICE numbers and suffixes, identifiers, outer braces/single
+quotes, parentheses, unary signs, arithmetic `+ - * /`, and one bounded power operator per expression.
+LTspice caret expressions are unsupported, even with one operator.
+Functions, missing names, cyclic dependencies and unsupported expressions remain
+unresolved. MOS geometry does not infer finger or multiplier semantics. Missing
+or unresolved ngspice `.option scale` expressions cannot silently become unity.
+Explicit LTspice `scale` is refused for both `.option` and `.options`; use
+explicit SI dimensions. The `mil` suffix means 25.4 micrometres.
+
+Independent caller overrides and self-references use the caller environment.
+LTspice sibling assignments also use the caller environment. For ngspice,
+references to sibling X-call assignments remain explicitly unresolved; discovery
+does not claim a complete simulator parameter evaluator. The supported
+ngspice precedence is override, body-local parameter, formal default; LTspice
+uses override, formal default, conflicting body-local parameter. Dependent
+parameters see the final selected value. Duplicate declarations within one
+parameter scope and duplicate keyed assignments are refused.
+
+`data.profile` records the declared simulator, effective `ngbehavior`, and
+`evaluation_context: "initial_deck"`. No installed executable is required.
+For ngspice, omit `ngbehavior` to use `current_ngbehavior()`; specifying it
+changes inspection semantics only, so configure simulation to use the same
+mode. The supported profiles are `hsa`, `kiltpsa`, and the empty string (native
+SPICE mode); others are explicitly refused. Sectioned libraries require a mode
+without `lt`/`ps` reinterpretation (`hsa` or native mode).
+The root deck's first physical line is its title; included fragments retain
+all cards. In ngspice native and `hsa` modes, `gnd` is canonical ground before
+port mapping and scope assignment, like `0`. Discovery refuses `gnd` in
+`kiltpsa` mode because its ground-alias behavior differs across supported
+ngspice versions; use explicit node `0` for portable connectivity.
+LTspice rejects the ngspice-only field. `.step` makes
+numeric facts context-dependent: discovery has no selected simulator step.
+Opaque control programs, runtime circuit alterations, and conditional structure
+are explicitly unsupported.
+
+Authoritative connectivity initially covers X calls (including `PARAMS:`),
+four-terminal MOS with a model token and keyed parameters, simple two-terminal
+R/C/L, and fixed two-terminal V/I sources. Other element forms retain raw facts
+and explicit unsupported-connectivity/model reasons; controlling device
+references are never reported as nets. Top-level definitions may nest at
+runtime, but lexical nested/local model or subcircuit declarations are refused.
+Recursive instances, missing includes/sections/children, active include cycles,
+malformed boundaries and duplicate active definitions/references fail the query.
+Model bins are reported as unresolved selection rather than one selected model.
+Cards following the root `.end` are ignored.
+
+Discovery is bounded to 16 MiB of captured file bytes, 100,000 cards visited,
+include depth 8, 20,000 runtime instances and runtime depth 32. Expressions have
+limits of 2,048 characters, 128 syntax nodes, 32 dependent parameters and power
+exponent magnitude 64. Exceeding structural limits fails the whole query;
+expression limits make the affected numeric fact unresolved.
+
+`data.inputs` identifies the captured files, SHA-256 of the exact bytes parsed,
+include targets and captured existence facts used to classify library sections.
+These are a collection of per-file revisions, not an atomic multi-file snapshot.
+Cursors bind that collection, semantic profile and filters; even a same-size,
+same-timestamp included-file rewrite invalidates a cursor. All file work runs
+off the event loop. The Python API collects all pages with the same evaluator:
+
+```python
+with Api(working_dir=project) as api:
+    discovered = api.inspect(queries=[{
+        "kind": "hierarchy", "path": "amplifier.cir",
+        "simulator": "ngspice", "ngbehavior": "hsa",
+        "instance": ["XA", "Xleaf", "M0"],
+    }])
+    device = discovered["results"][0]["data"]["instances"][0]
+```
+
+For a supported nested MOS, ngspice gives `device: "m.xa.xleaf.m0"`
+and `.save @m.xa.xleaf.m0[gm]`; LTspice gives
+`device: "xa:xleaf:m0"` and `.options logopinfo`. Put the supplied guidance
+in the deck before `run_experiments`, then pass `address.device` to the existing
+`analyze_results` `operating_point` recipe. The full ancestral selector excludes
+repeated peers; a selector that would also match another instance is unavailable.
+ngspice gm comes from saved raw traces; LTspice gm comes from its log through the
+existing log reader. Nested resistor guidance is `.save @r.xa.xleaf.r1[i]` on
+ngspice and `.save I(xa:xleaf:r1)` on LTspice. Backend addresses are currently
+supplied for proven resistor/MOS forms with simple identifier spellings.
+Other legal source names retain structural identity with an unavailable-address
+reason. Node `voltage_trace` is a backend trace spelling, not a claim that a run
+saved that signal.
