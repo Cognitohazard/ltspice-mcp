@@ -22,6 +22,7 @@ from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.cursor_codec import canonical_hash, canonical_json
 from ltspice_mcp.lib.deck_staging import INCLUDE_HEADS, sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
+from ltspice_mcp.lib.projection import KeepPlan, project_row
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
 
 PROFILE = "sky130-e6f9c887-ngspice-v1"
@@ -31,7 +32,17 @@ WRAPPER = "sky130_fd_pr__nfet_01v8"
 MODEL = WRAPPER + "__model"
 DERIVATION_VERSION = "pdk-native-sha256-v1"
 ADAPTER_VERSION = "ngspice-preload-v1"
-NGBEHAVIOR = "hsa"
+
+
+@dataclass(frozen=True)
+class NativeLaunchPolicy:
+    switches: tuple[str, ...] = ("-n",)
+    ngbehavior: str = "hsa"
+    ng_nomodcheck: bool = True
+
+
+LAUNCH_POLICY = NativeLaunchPolicy()
+NGBEHAVIOR = LAUNCH_POLICY.ngbehavior
 SEED_MAX = 2147483646
 Mode = Literal["nominal", "mismatch", "process", "combined"]
 _MODES: dict[str, tuple[str, int, int]] = {
@@ -229,15 +240,10 @@ class PreparedLaunch:
     dependencies: tuple[ArtifactDigest, ...]
     sample_key: str
     effective_seed: int
-    analysis: str
 
     @property
-    def switches(self) -> tuple[str, ...]:
-        return ("-n",)
-
-    @property
-    def ngbehavior(self) -> str:
-        return NGBEHAVIOR
+    def policy(self) -> NativeLaunchPolicy:
+        return LAUNCH_POLICY
 
 
 @dataclass(frozen=True)
@@ -342,6 +348,18 @@ def _original_cards(captures: dict[str, OriginalCapture]) -> dict[tuple[str, int
         for identity, capture in captures.items()
         for card in lex(decode_spice_bytes(capture.content)).cards
     }
+
+
+@dataclass(frozen=True)
+class VerifiedOriginals:
+    capture_set: tuple[OriginalCapture, ...]
+    captures: dict[str, OriginalCapture]
+    cards: dict[tuple[str, int], SpiceCard]
+
+
+def verify_originals(captures: tuple[OriginalCapture, ...]) -> VerifiedOriginals:
+    verified = validate_captures(captures)
+    return VerifiedOriginals(captures, verified, _original_cards(verified))
 
 
 def _original(source: Occurrence, cards: dict[tuple[str, int], SpiceCard]) -> SpiceCard:
@@ -547,7 +565,9 @@ def _assignment_keys(
     return sorted(rows, key=canonical_json)
 
 
-def validate_sample(request: NativeRequest, inputs: CaseInputs) -> ValidatedSample:
+def validate_sample(
+    request: NativeRequest, inputs: CaseInputs, *, originals: VerifiedOriginals | None = None
+) -> ValidatedSample:
     """Validate final parent facts and derive a seed only from complete inputs."""
     validate_request(request)
     if request.sample_index is None:
@@ -556,12 +576,16 @@ def validate_sample(request: NativeRequest, inputs: CaseInputs) -> ValidatedSamp
         raise NativeCaseError(
             "closure", "native closure must be complete, captured and staged; no live includes"
         )
-    captures = validate_captures(inputs.captures)
+    if originals is None:
+        originals = verify_originals(inputs.captures)
+    elif originals.capture_set != inputs.captures:
+        raise NativeCaseError("source_identity", "verified originals differ from active captures")
+    captures = originals.captures
     if inputs.root_capture not in captures or not inputs.hierarchy_revision:
         raise NativeCaseError(
             "input", "original electrical input or hierarchy revision is unavailable"
         )
-    cards = _original_cards(captures)
+    cards = originals.cards
     bindings = inputs.library_bindings
     if len(bindings) != 1:
         raise NativeCaseError(
@@ -589,15 +613,17 @@ def validate_sample(request: NativeRequest, inputs: CaseInputs) -> ValidatedSamp
     owned_parameters = _owned_parameters(inputs, captures)
     analysis = _validate_controls(request, inputs, captures, owned_parameters)
     _validate_coverage(inputs, captures, cards)
-    originals = sorted(
+    original_rows = sorted(
         [
             {"identity": c.identity, "sha256": c.sha256, "pdk_relative": c.pdk_relative}
             for c in captures.values()
         ],
         key=lambda row: row["identity"] or "",
     )
-    input_digest = canonical_hash({"root": inputs.root_capture, "captures": originals})
-    model_digest = canonical_hash([row for row in originals if row["pdk_relative"] is not None])
+    input_digest = canonical_hash({"root": inputs.root_capture, "captures": original_rows})
+    model_digest = canonical_hash(
+        [row for row in original_rows if row["pdk_relative"] is not None]
+    )
     key = canonical_json(
         {
             "version": DERIVATION_VERSION,
@@ -680,8 +706,9 @@ def driver_bytes(seed: int, paths: NativePaths, token: str) -> bytes:
     if type(seed) is not int or not 1 <= seed <= SEED_MAX:
         raise NativeCaseError("seed", "effective ngspice seed is outside the verified domain")
     return (
-        "Native PDK initialization\n.control\nset ngbehavior=hsa\nset ng_nomodcheck\n"
-        f"setseed {seed}\nsource {paths.electrical_input.name}\nrun\nwrite {paths.raw.name}\n"
+        f"Native PDK initialization\n.control\nset ngbehavior={LAUNCH_POLICY.ngbehavior}\n"
+        + ("set ng_nomodcheck\n" if LAUNCH_POLICY.ng_nomodcheck else "")
+        + f"setseed {seed}\nsource {paths.electrical_input.name}\nrun\nwrite {paths.raw.name}\n"
         "quit\n.endc\n.end\n"
     ).encode("ascii")
 
@@ -737,8 +764,7 @@ def prepare_launch(
     token: str,
     electrical_bytes: bytes,
     dependencies: tuple[ArtifactDigest, ...],
-    skipped: bool = False,
-) -> PreparedLaunch | None:
+) -> PreparedLaunch:
     """Write exact bytes only at supplied paths; expected failures stay case-local.
 
     Parent must supply bytes with include references already valid from cwd and
@@ -748,8 +774,6 @@ def prepare_launch(
     checking an already-existing copy does not guarantee prelaunch ordering.
     Partial preparation is preserved on failure and never silently reused.
     """
-    if skipped:
-        return None
     driver = driver_bytes(sample.effective_seed, paths, token)
     if not all(isinstance(p, Path) for p in (paths.cwd, *paths.artifacts)):
         raise NativeCaseError("paths", "preparation requires host-native concrete Paths")
@@ -781,7 +805,6 @@ def prepare_launch(
         dependencies,
         sample.sample_key,
         sample.effective_seed,
-        sample.analysis,
     )
 
 
@@ -811,7 +834,9 @@ def verify_launch(prepared: PreparedLaunch, *, executed_copy: bool = False) -> N
         _unused([Path(paths.executed_driver)])
 
 
-def _dependency_summary(dependencies: Sequence[ArtifactDigest]) -> dict[str, str | int]:
+def _dependency_summary(
+    dependencies: Sequence[ArtifactDigest], *, include_digest: bool = True
+) -> dict[str, str | int]:
     """Bind the multiset of captured-source identities and rewritten hashes.
 
     This compact digest preserves multiplicity but excludes local path spelling.
@@ -822,15 +847,35 @@ def _dependency_summary(dependencies: Sequence[ArtifactDigest]) -> dict[str, str
     newlines, so records remain unambiguous without serializing a full list.
     """
     version = "pdk-native-staged-dependencies-sha256-v1"
-    digest = hashlib.sha256((version + "\n").encode("ascii"))
-    for dependency in sorted(dependencies, key=lambda d: (d.original_capture, d.sha256)):
-        digest.update(canonical_json((dependency.original_capture, dependency.sha256)))
-        digest.update(b"\n")
-    return {
+    summary: dict[str, str | int] = {
         "dependency_count": len(dependencies),
-        "dependency_digest": digest.hexdigest(),
         "dependency_digest_version": version,
     }
+    if include_digest:
+        digest = hashlib.sha256((version + "\n").encode("ascii"))
+        for dependency in sorted(dependencies, key=lambda d: (d.original_capture, d.sha256)):
+            digest.update(canonical_json((dependency.original_capture, dependency.sha256)))
+            digest.update(b"\n")
+        summary["dependency_digest"] = digest.hexdigest()
+    return summary
+
+
+def validate_native_identity(
+    request: NativeRequest,
+    sample: ValidatedSample | None,
+    prepared: PreparedLaunch | None,
+) -> None:
+    validate_request(request)
+    if sample is not None and request.sample_index is None:
+        raise NativeRequestError("validated sample requires a logical sample index")
+    if sample is not None and sample.request != request:
+        raise NativeRequestError("provenance request and validated sample disagree")
+    if prepared is not None and (
+        sample is None
+        or prepared.sample_key != sample.sample_key
+        or prepared.effective_seed != sample.effective_seed
+    ):
+        raise NativeRequestError("prepared artifacts and validated sample disagree")
 
 
 def provenance(
@@ -842,6 +887,7 @@ def provenance(
     unavailable_reason: str = "not validated",
     error: NativeCaseError | None = None,
     detailed: bool = True,
+    projection: KeepPlan | None = None,
 ) -> dict[str, Any]:
     """JSON-ready facts; detailed=False replaces large lists with counts/digests.
 
@@ -851,7 +897,14 @@ def provenance(
     available through the existing jobs run-field projection. Submission and
     the persisted NativeCaseRecord remain parent-owned.
     """
-    validate_request(request)
+    validate_native_identity(request, sample, prepared)
+
+    def selected(branch: KeepPlan | None, key: str) -> bool:
+        return branch is None or key in branch
+
+    def child(key: str) -> KeepPlan | None:
+        return None if projection is None else projection.get(key, {})
+
     requested = asdict(request)
     if request.sample_index is None:
         requested.pop("sample_index")
@@ -864,8 +917,6 @@ def provenance(
     if request.sample_index is None:
         missing["sample_index"] = unavailable_reason
     if sample is not None:
-        if sample.request != request:
-            raise NativeRequestError("provenance request and validated sample disagree")
         section, mm, pr = _MODES[request.mode]
         result["validated"] = {
             "sample_key": sample.sample_key,
@@ -876,11 +927,6 @@ def provenance(
             "input_digest": sample.input_digest,
             "model_digest": sample.model_digest,
             "population_digest": sample.population_digest,
-            **(
-                {"coverage": [asdict(leaf) for leaf in sample.coverage]}
-                if detailed
-                else {"coverage_count": len(sample.coverage)}
-            ),
             "hierarchy_revision": sample.hierarchy_revision,
             "analysis": sample.analysis,
             "pin_manifest_sha256": PIN_MANIFEST_SHA256,
@@ -893,44 +939,49 @@ def provenance(
                 "compatibility": NGBEHAVIOR,
             },
         }
+        details = child("validated")
+        if detailed and selected(details, "coverage"):
+            result["validated"]["coverage"] = [asdict(leaf) for leaf in sample.coverage]
+        if not detailed or (details is not None and "coverage_count" in details):
+            result["validated"]["coverage_count"] = len(sample.coverage)
     else:
         for fact in ("sample_key", "effective_seed", "input_digest", "model_digest", "coverage"):
             missing[fact] = unavailable_reason
     if prepared is not None:
-        if (
-            sample is None
-            or prepared.sample_key != sample.sample_key
-            or prepared.effective_seed != sample.effective_seed
-        ):
-            raise NativeRequestError("prepared artifacts and validated sample disagree")
-        result["prepared"] = {
+        details = child("prepared")
+        prepared_result = {
             "adapter_version": ADAPTER_VERSION,
-            **(
-                {"paths": {key: str(value) for key, value in asdict(prepared.paths).items()}}
-                if detailed
-                else {}
-            ),
             "input_sha256": prepared.input_sha256,
             "prepared_driver_sha256": prepared.driver_sha256,
             "expected_executed_driver_sha256": prepared.driver_sha256,
-            **(
-                {
-                    "dependencies": [
-                        {
-                            "path": str(d.path),
-                            "sha256": d.sha256,
-                            "original_capture": d.original_capture,
-                        }
-                        for d in prepared.dependencies
-                    ]
-                }
-                if detailed
-                else _dependency_summary(prepared.dependencies)
-            ),
-            "switches": list(prepared.switches),
-            "ngbehavior": prepared.ngbehavior,
-            "ng_nomodcheck": True,
+            "switches": list(prepared.policy.switches),
+            "ngbehavior": prepared.policy.ngbehavior,
+            "ng_nomodcheck": prepared.policy.ng_nomodcheck,
         }
+        if detailed:
+            if selected(details, "paths"):
+                prepared_result["paths"] = {
+                    key: str(value) for key, value in asdict(prepared.paths).items()
+                }
+            if selected(details, "dependencies"):
+                prepared_result["dependencies"] = [
+                    {
+                        "path": str(dependency.path),
+                        "sha256": dependency.sha256,
+                        "original_capture": dependency.original_capture,
+                    }
+                    for dependency in prepared.dependencies
+                ]
+        if (not detailed or details is not None) and any(
+            selected(details, key)
+            for key in ("dependency_count", "dependency_digest", "dependency_digest_version")
+        ):
+            prepared_result.update(
+                _dependency_summary(
+                    prepared.dependencies, include_digest=selected(details, "dependency_digest")
+                )
+            )
+        result["prepared"] = prepared_result
     else:
         missing["artifacts"] = unavailable_reason
     facts = asdict(simulator or SimulatorFacts())
@@ -945,4 +996,4 @@ def provenance(
             "Full coverage, dependency manifest and artifact paths are available using "
             "jobs(runs, run_fields=['native_statistics']) for this case."
         )
-    return result
+    return project_row(result, projection) if projection is not None else result

@@ -2372,7 +2372,7 @@ def _validate_write_sets(
                 [
                     c
                     for c in cards[target.file.index]
-                    if c.kind == "instance" and c.name in target.refs
+                    if c.kind == "instance" and c.name and c.name.casefold() in target.refs
                 ]
                 if isinstance(rule, ComponentRule)
                 else [
@@ -2421,6 +2421,10 @@ def _validate_write_sets(
                 or other.instance is None
                 or claim.instance == other.instance
             )
+            # Ordinary writes were checked before random rules ran. Only
+            # structured claims can conflict at this stage.
+            if hierarchy is not None and claim.instance is None and other.instance is None:
+                continue
             if same and claim.fields & other.fields:
                 raise VariationError(
                     "overlapping_assignment",

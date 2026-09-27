@@ -148,7 +148,19 @@ async def test_native_modes_use_pinned_models_and_match_direct_run(native_state,
     )
 
 
-async def test_native_sample_replay_is_independent_of_parallelism(native_state, work_dir):
+async def test_native_sample_replay_is_independent_of_parallelism(
+    native_state, work_dir, monkeypatch
+):
+    from ltspice_mcp.lib import pdk_native
+
+    original_cards = pdk_native._original_cards
+    parsed = []
+
+    def counted_originals(captures):
+        parsed.append(len(captures))
+        return original_cards(captures)
+
+    monkeypatch.setattr(pdk_native, "_original_cards", counted_originals)
     state, root = native_state
     (work_dir / "bench.cir").write_text(_deck(root, "combined"), encoding="utf-8")
     snapshots = []
@@ -172,6 +184,7 @@ async def test_native_sample_replay_is_independent_of_parallelism(native_state, 
                 _values(case.raw_file),
             )
         snapshots.append(rows)
+        assert len(parsed) == len(snapshots), "each circuit parses its original captures once"
     assert snapshots[0] == snapshots[1]
     assert snapshots[2] == {5: snapshots[0][5]}
     assert snapshots[0][4][1] != snapshots[0][5][1]

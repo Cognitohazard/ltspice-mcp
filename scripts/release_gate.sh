@@ -19,13 +19,22 @@
 #
 # Shape 6 needs docker; the image tag must match the SHA pinned on the publish
 # step in .github/workflows/publish.yml.
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/.."
 PUBLISH_IMAGE=ghcr.io/pypa/gh-action-pypi-publish:dc37677b2e1c63e2034f94d8a5b11f265b73ba33
 scratch=$(mktemp -d)
 status=0
 report() { printf '%-4s %s\n' "$1" "$2"; [ "$1" = FAIL ] && status=1; return 0; }
 summary() { grep -E "^[0-9]+ (passed|failed)|[0-9]+ passed" "$1" | tail -1; }
+
+# Check the working tree and every commit absent from remote tracking refs.
+# The pre-push hook checks the exact updates supplied by Git as well.
+if uv run python scripts/privacy_scan.py tracked > "$scratch/privacy.txt" 2>&1 \
+  && uv run python scripts/privacy_scan.py local >> "$scratch/privacy.txt" 2>&1; then
+  report PASS "privacy: tracked files and local commit range"
+else
+  report FAIL "privacy: see $scratch/privacy.txt"
+fi
 
 # 1. Linux serial
 if uv run pytest tests/ -q -p no:cacheprovider --no-header > "$scratch/linux.txt" 2>&1; then

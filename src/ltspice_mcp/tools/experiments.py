@@ -1217,7 +1217,6 @@ async def _dwell_and_respond(
         None,
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
-        run_fields=run_fields,
     )
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "

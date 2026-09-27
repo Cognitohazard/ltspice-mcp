@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Git supplies each local/remote ref update on stdin. Check all commits and
+# file revisions those updates would introduce before any network push.
+set -euo pipefail
+repo=$(git rev-parse --show-toplevel)
+exec uv run --no-sync python "$repo/scripts/privacy_scan.py" pre-push "${1:-origin}" "${2:-}"

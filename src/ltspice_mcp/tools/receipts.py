@@ -30,6 +30,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
+from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.projection import keep_plan, project_row
@@ -486,6 +487,7 @@ class ReceiptSnapshot:
     sources: tuple[SourceRecord | dict[str, Any], ...]
     lint: tuple[dict[str, Any], ...]
     runs_by_key: dict[tuple[str, int], dict[str, Any]]
+    native_by_key: dict[tuple[str, int], NativeCaseRecord]
     completeness: Completeness
     failures: tuple[dict[str, Any], ...]
     observations: tuple[dict[str, Any], ...]
@@ -669,8 +671,8 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
-def _run_item(case: ExperimentCase, *, native_details: bool = False) -> dict[str, Any]:
-    row = {
+def _run_item(case: ExperimentCase) -> dict[str, Any]:
+    return {
         "case_id": case.case_id,
         "run_index": case.run_index,
         "circuit": case.circuit,
@@ -679,34 +681,30 @@ def _run_item(case: ExperimentCase, *, native_details: bool = False) -> dict[str
         "raw": str(case.raw_file) if case.raw_file else None,
         "log": str(case.log_file) if case.log_file else None,
     }
-    if case.native_statistics is not None:
-        row["native_statistics"] = case.native_statistics.public(detailed=native_details)
-    return row
-
-
-def _native_details(run_fields: list[str] | None) -> bool:
-    return any(
-        name == "native_statistics" or name.startswith("native_statistics.")
-        for name in run_fields or ()
-    )
 
 
 def _project_run_rows(
     rows: list[dict[str, Any]],
     run_fields: list[str] | None,
     *,
+    native_by_key: dict[tuple[str, int], NativeCaseRecord],
     lean_default: bool,
 ) -> list[dict[str, Any]]:
-    """Apply one request's run-row projection policy to rows the caller owns."""
-    if run_fields:
-        plan = keep_plan(run_fields)
+    """Render native evidence and project only the rows this page carries."""
+    plan = keep_plan(run_fields) if run_fields else None
+    if plan is None or "native_statistics" in plan:
+        for row in rows:
+            native = native_by_key.get((row["case_id"], row["run_index"]))
+            if native is not None:
+                row["native_statistics"] = native.public(
+                    detailed=plan is not None,
+                    projection=plan.get("native_statistics") if plan is not None else None,
+                )
+    if plan is not None:
         return [project_row(row, plan) for row in rows]
     if lean_default:
-        # Lean default: a produced row's artifact paths are provenance the
-        # analysis tools resolve by id (fetch them via jobs(runs) or
-        # run_fields). Every other status keeps them — failures entries
-        # carry only {case_id, code, message}, so the failed row's log path
-        # is its diagnostic.
+        # Produced artifacts can be resolved by job/case identity. Failed runs
+        # keep their log paths so the caller can inspect the failure.
         for row in rows:
             if row["status"] == "produced":
                 del row["raw"], row["log"]
@@ -724,12 +722,16 @@ def runs_page(
     # floored at one row for the same reason ``page`` floors its limit — a page
     # of none would report itself truncated with a cursor back at the same
     # offset, which is a pagination loop that never advances.
+    selected = cases[: max(1, cap)]
+    native_by_key = {}
+    for case in selected:
+        if case.native_statistics is not None:
+            case.native_statistics.validate()
+            native_by_key[(case.case_id, case.run_index)] = case.native_statistics
     rows = _project_run_rows(
-        [
-            _run_item(case, native_details=_native_details(run_fields))
-            for case in cases[: max(1, cap)]
-        ],
+        [_run_item(case) for case in selected],
         run_fields,
+        native_by_key=native_by_key,
         lean_default=True,
     )
     return page_of(rows, offset=0, total=len(cases))
@@ -752,13 +754,16 @@ def project_receipt_runs(
     ``offset`` is already decoded from the caller's cursor — a malformed one is
     that tool's error to raise, not this renderer's.
     """
-    rows = _project_run_rows(
-        [dict(row) for row in snapshot.runs_by_key.values()],
+    rows = list(snapshot.runs_by_key.values())
+    page_limit = max(1, len(rows)) if limit is None else limit
+    page = _page(rows, offset=offset, limit=page_limit)
+    page["items"] = _project_run_rows(
+        [dict(row) for row in page["items"]],
         run_fields,
+        native_by_key=snapshot.native_by_key,
         lean_default=lean_default,
     )
-    page_limit = max(1, len(rows)) if limit is None else limit
-    return _page(rows, offset=offset, limit=page_limit)
+    return page
 
 
 def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
@@ -865,13 +870,14 @@ def snapshot_receipt(
     *,
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
-    run_fields: list[str] | None = None,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
     The first job read through the last mutable copy occur in this synchronous
     call.  Outcome and guidance are intentionally absent from that live-read
     interval; renderers derive them only from the returned detached value.
+    Native record holders are copied, sharing only their frozen nested facts;
+    large evidence lists are serialized after the renderer selects a page.
     """
     lint_map: dict[str, list[dict[str, Any]]]
     if lint_by_circuit is None:
@@ -886,9 +892,13 @@ def snapshot_receipt(
     observations = copy.deepcopy(job.observations)
     seen_observations = {(item.get("code"), item.get("detail")) for item in observations}
     runs_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    native_by_key: dict[tuple[str, int], NativeCaseRecord] = {}
     for case in job.cases:
-        row = copy.deepcopy(_run_item(case, native_details=_native_details(run_fields)))
-        runs_by_key[(case.case_id, case.run_index)] = row
+        run_key = (case.case_id, case.run_index)
+        runs_by_key[run_key] = copy.deepcopy(_run_item(case))
+        if case.native_statistics is not None:
+            case.native_statistics.validate()
+            native_by_key[run_key] = copy.copy(case.native_statistics)
         for observation in case.observations:
             copied = copy.deepcopy(observation)
             key = (copied.get("code"), copied.get("detail"))
@@ -914,6 +924,7 @@ def snapshot_receipt(
             )
         ),
         runs_by_key=runs_by_key,
+        native_by_key=native_by_key,
         completeness=copy.deepcopy(job.completeness),
         failures=tuple(copy.deepcopy(job.failures)),
         observations=tuple(observations),

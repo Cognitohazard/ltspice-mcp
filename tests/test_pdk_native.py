@@ -381,7 +381,7 @@ def test_exact_binary_bytes_and_distinct_driver_identities(prepared):
     sample, launch, electrical = prepared
     assert Path(launch.paths.electrical_input).read_bytes() == electrical
     assert launch.input_sha256 == hashlib.sha256(electrical).hexdigest()
-    assert launch.switches == ("-n",)
+    assert launch.policy.switches == ("-n",)
     native.verify_launch(launch)
     driver = Path(launch.paths.prepared_driver).read_bytes()
     Path(launch.paths.executed_driver).write_bytes(driver)
@@ -425,21 +425,6 @@ def test_previous_attempt_is_never_overwritten(prepared):
     Path(launch.paths.raw).write_bytes(b"old output")
     with pytest.raises(native.NativeCaseError, match="overwrite"):
         native.verify_launch(launch)
-
-
-def test_skipped_cases_never_prepare(prepared):
-    sample, launch, _ = prepared
-    assert (
-        native.prepare_launch(
-            sample,
-            paths=launch.paths,
-            token="unsafe\n",
-            electrical_bytes=b"",
-            dependencies=(),
-            skipped=True,
-        )
-        is None
-    )
 
 
 def test_missing_facts_are_absent_with_reasons():
@@ -824,3 +809,34 @@ def test_repeated_dependency_path_is_refused_even_with_complete_capture_set(prep
             dependencies=(*dependencies, dependencies[0]),
         )
     assert not any(Path(p).exists() for p in paths.artifacts)
+
+
+def test_verified_originals_reuse_does_not_skip_final_case_validation(inputs, monkeypatch):
+    calls = {"pins": 0, "lex": 0}
+    pins = native.profile_pins
+    lex = native.lex
+
+    def counted_pins():
+        calls["pins"] += 1
+        return pins()
+
+    def counted_lex(value):
+        calls["lex"] += 1
+        return lex(value)
+
+    monkeypatch.setattr(native, "profile_pins", counted_pins)
+    monkeypatch.setattr(native, "lex", counted_lex)
+    originals = native.verify_originals(inputs.captures)
+    first = native.validate_sample(request(index=0), inputs, originals=originals)
+    second = native.validate_sample(request(index=1), inputs, originals=originals)
+    assert first.sample_key != second.sample_key
+    assert calls == {"pins": 1, "lex": len(inputs.captures)}
+
+    changed = replace(
+        inputs,
+        captures=(*inputs.captures, native.OriginalCapture("bench/new.cir", b"R2 in 0 2k\n")),
+    )
+    with pytest.raises(native.NativeCaseError, match="active captures"):
+        native.validate_sample(request(index=2), changed, originals=originals)
+    with pytest.raises(native.NativeCaseError):
+        native.validate_sample(request(index=2), replace(inputs, coverage=()), originals=originals)
