@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +25,7 @@ from ltspice_mcp.lib.deck_staging import (
     unquote,
 )
 from ltspice_mcp.lib.encoding import decode_spice_bytes
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import (
     Environment,
     NumericFact,
@@ -104,6 +105,14 @@ class Node:
 
 
 @dataclass(frozen=True)
+class ModelDefinition:
+    name: str
+    source: Source
+    raw: str
+    level: float | None
+
+
+@dataclass(frozen=True)
 class ResolvedInstance:
     instance: tuple[str, ...]
     reference: str
@@ -123,6 +132,7 @@ class ResolvedInstance:
     device: str | None
     save: str | None
     address_reason: str | None
+    model_family: tuple[ModelDefinition, ...] = ()
 
     def row(self) -> dict[str, Any]:
         return {
@@ -137,6 +147,10 @@ class ResolvedInstance:
                 "name": self.model_name,
                 "source": asdict(self.model_source) if self.model_source else None,
                 "reason": self.model_reason,
+                "family": [
+                    {"name": model.name, "source": asdict(model.source), "level": model.level}
+                    for model in self.model_family
+                ],
             },
             "value": asdict(self.value),
             "parameters": {k: asdict(v) for k, v in self.parameters},
@@ -152,6 +166,11 @@ class Hierarchy:
     profile: SemanticProfile
     instances: tuple[ResolvedInstance, ...]
     inputs: tuple[CapturedFile, ...]
+    definitions: tuple[_Definition, ...] = ()
+    occurrences: tuple[ActiveOccurrence, ...] = ()
+    library_bindings: tuple[LibraryBinding, ...] = ()
+    scale: NumericFact = field(default_factory=lambda: NumericFact("1", 1.0, status="resolved"))
+    include_bindings: tuple[IncludeBinding, ...] = ()
 
     def binding(self) -> dict[str, Any]:
         return {
@@ -169,9 +188,26 @@ class Hierarchy:
 
 
 @dataclass(frozen=True)
-class _Occurrence:
+class ActiveOccurrence:
     card: SpiceCard
     source: Source
+
+
+_Occurrence = ActiveOccurrence
+
+
+@dataclass(frozen=True)
+class LibraryBinding:
+    source: Source
+    target: Path
+    section: str
+
+
+@dataclass(frozen=True)
+class IncludeBinding:
+    source: Source
+    target: Path
+    section: str | None
 
 
 @dataclass(frozen=True)
@@ -179,6 +215,7 @@ class _Definition:
     view: SubcktCard
     source: Source
     body: tuple[_Occurrence, ...]
+    closer: Source
 
 
 def _tokens(card: SpiceCard) -> list[Token]:
@@ -204,11 +241,16 @@ def _assignments(card: SpiceCard, *, only: bool = False) -> dict[str, str]:
                 raise NetlistError(f"duplicate assignment {token.key} at line {card.line_start}")
             result[key] = token.value
         elif only:
-            raise NetlistError(f"unsupported parameter assignment at line {card.line_start}")
+            if not result or token.kind not in {TokenKind.BARE, TokenKind.PARENED}:
+                raise NetlistError(f"unsupported parameter assignment at line {card.line_start}")
+            # Foundry .param expressions can be unbraced and spaced. Keep the
+            # whole expression as a fact; unsupported functions remain unresolved.
+            last_key = next(reversed(result))
+            result[last_key] += " " + token.text
     return result
 
 
-def _cards(content: bytes, *, root: bool) -> list[SpiceCard]:
+def parse_hierarchy_cards(content: bytes, *, root: bool) -> list[SpiceCard]:
     text = decode_spice_bytes(content)
     if root:
         # Root decks begin with a title; included fragments begin with a card.
@@ -221,11 +263,16 @@ def _cards(content: bytes, *, root: bool) -> list[SpiceCard]:
     return [card for card in parsed.cards if not card.trailing]
 
 
-def _walk(
-    root: Path, get_file: Callable[[Path, int], CapturedFile], profile: SemanticProfile
+def walk_active(
+    root: Path,
+    get_file: Callable[[Path, int], CapturedFile],
+    profile: SemanticProfile,
+    library_bindings: list[LibraryBinding] | None = None,
+    include_bindings: list[IncludeBinding] | None = None,
 ) -> tuple[_Occurrence, ...]:
     result: list[_Occurrence] = []
     count = 0
+    lexical_scope: list[str] = []
 
     def visit(path: Path, section: str | None, stack: tuple[tuple[Path, str | None], ...]) -> None:
         nonlocal count
@@ -235,7 +282,7 @@ def _walk(
         if len(stack) > DEFAULT_INCLUDE_DEPTH:
             raise NetlistError(f"include depth exceeds {DEFAULT_INCLUDE_DEPTH}")
         captured = get_file(path, len(stack))
-        cards = _cards(captured.content, root=not stack)
+        cards = parse_hierarchy_cards(captured.content, root=not stack)
         count += len(cards)
         if count > MAX_CARDS:
             raise NetlistError(f"hierarchy exceeds {MAX_CARDS} cards")
@@ -296,9 +343,31 @@ def _walk(
                 target = targets.get(ref.raw_path)
                 if target is None:
                     raise NetlistError(f"missing include {ref.raw_path!r} from {path}")
+                source = Source(
+                    str(path), card.line_start, owner, lexical_scope[-1] if lexical_scope else None
+                )
+                result.append(_Occurrence(card, source))
+                if include_bindings is not None:
+                    include_bindings.append(IncludeBinding(source, target, ref.section))
+                if ref.section is not None and library_bindings is not None:
+                    library_bindings.append(LibraryBinding(source, target, ref.section))
                 visit(target, ref.section, (*stack, key))
             else:
-                result.append(_Occurrence(card, Source(str(path), card.line_start, owner)))
+                if card.kind == "ends" and lexical_scope:
+                    lexical_scope.pop()
+                result.append(
+                    _Occurrence(
+                        card,
+                        Source(
+                            str(path),
+                            card.line_start,
+                            owner,
+                            lexical_scope[-1] if lexical_scope else None,
+                        ),
+                    )
+                )
+                if card.kind == "subckt":
+                    lexical_scope.append(card.name or "")
         if opened is not None:
             raise NetlistError(f"unclosed library section {opened} in {path}")
         if section is not None and section.casefold() not in declared:
@@ -334,7 +403,7 @@ def load_hierarchy(
         total += len(content)
         if total > MAX_BYTES:
             raise NetlistError(f"hierarchy exceeds aggregate input limit of {MAX_BYTES} bytes")
-        cards = _cards(content, root=depth == 0)
+        cards = parse_hierarchy_cards(content, root=depth == 0)
         if len(cards) > MAX_CARDS:
             raise NetlistError(f"hierarchy exceeds {MAX_CARDS} cards")
         existence: dict[Path, bool] = {}
@@ -354,19 +423,41 @@ def load_hierarchy(
         files[source] = captured
         return captured
 
-    _walk(root, capture, profile)
+    walk_active(root, capture, profile)
     return resolve_hierarchy(root, files, profile)
 
 
-def _parameters(body: Sequence[_Occurrence]) -> dict[str, str]:
+def _parameters(body: Sequence[_Occurrence], profile: SemanticProfile) -> dict[str, str]:
     params: dict[str, str] = {}
     for item in body:
         if item.card.kind == "param":
             values = _assignments(item.card, only=True)
-            if params.keys() & values.keys():
+            if params.keys() & values.keys() and not (
+                profile.simulator == "ngspice" and profile.ngbehavior == "hsa"
+            ):
                 raise NetlistError(f"duplicate parameter declaration at {item.source}")
             params.update(values)
     return params
+
+
+def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, ModelDefinition]:
+    models: dict[str, ModelDefinition] = {}
+    for item in body:
+        if item.card.kind != "model":
+            continue
+        params = _assignments(item.card)
+        model = ModelCard.from_card(item.card)
+        key = model.name.casefold()
+        if key in models:
+            raise NetlistError(f"duplicate active model {model.name}")
+        try:
+            level = parse_spice_value(params["level"]) if "level" in params else None
+        except ValueError:
+            level = None
+        models[key] = ModelDefinition(
+            model.name, replace(item.source, definition=enclosing), item.card.body, level
+        )
+    return models
 
 
 def _shape(card: SpiceCard) -> tuple[InstanceLine, bool]:
@@ -421,11 +512,24 @@ def resolve_hierarchy(
     root: Path, files: Mapping[Path, CapturedFile], profile: SemanticProfile
 ) -> Hierarchy:
     """Resolve immutable captured inputs without live path, content or stat reads."""
-    if sum(len(f.content) for f in files.values()) > MAX_BYTES:
-        raise NetlistError(f"hierarchy exceeds aggregate input limit of {MAX_BYTES} bytes")
-    occurrences = _walk(root, lambda path, depth: files[path], profile)
+    active: dict[Path, CapturedFile] = {}
+    active_bytes = 0
+
+    def active_file(path: Path, _depth: int) -> CapturedFile:
+        nonlocal active_bytes
+        captured = files[path]
+        if path not in active:
+            active_bytes += len(captured.content)
+            if active_bytes > MAX_BYTES:
+                raise NetlistError(f"hierarchy exceeds aggregate input limit of {MAX_BYTES} bytes")
+            active[path] = captured
+        return captured
+
+    library_bindings: list[LibraryBinding] = []
+    include_bindings: list[IncludeBinding] = []
+    occurrences = walk_active(root, active_file, profile, library_bindings, include_bindings)
     definitions: dict[str, _Definition] = {}
-    models: dict[str, Source] = {}
+    models: dict[str | None, dict[str, ModelDefinition]] = {None: {}}
     top: list[_Occurrence] = []
     cards = [o.card for o in occurrences]
     i = 0
@@ -454,21 +558,23 @@ def resolve_hierarchy(
             if len({p.casefold() for p in view.ports}) != len(view.ports):
                 raise NetlistError(f"duplicate ports in {view.name}")
             body = occurrences[i + 1 : end]
-            if any(o.card.kind in {"subckt", "model", "ends"} for o in body):
+            if any(o.card.kind in {"subckt", "ends"} for o in body):
                 raise NetlistError(
                     "local/nested definitions are unsupported by hierarchy discovery"
                 )
-            definitions[view.name.casefold()] = _Definition(view, item.source, body)
+            definitions[view.name.casefold()] = _Definition(
+                view, item.source, body, occurrences[end].source
+            )
+            models[view.name.casefold()] = _models(body, view.name)
             i = end + 1
             continue
         if card.kind == "ends":
             raise NetlistError(f"unmatched .ends at {item.source}")
         if card.kind == "model":
-            _assignments(card)
-            model = ModelCard.from_card(card)
-            if model.name.casefold() in models:
-                raise NetlistError(f"duplicate active model {model.name}")
-            models[model.name.casefold()] = item.source
+            entry = _models((item,), None)
+            if models[None].keys() & entry.keys():
+                raise NetlistError(f"duplicate active model {card.name}")
+            models[None].update(entry)
         top.append(item)
         i += 1
 
@@ -502,7 +608,7 @@ def resolve_hierarchy(
                     raise NetlistError("local .option scale is unsupported")
                 scale_expression = values["scale"]
     global_env = Environment(
-        _parameters(top), simulator=profile.simulator, dynamic_reason=dynamic_reason
+        _parameters(top, profile), simulator=profile.simulator, dynamic_reason=dynamic_reason
     )
     scale = global_env.fact(scale_expression)
     rows: list[ResolvedInstance] = []
@@ -572,6 +678,7 @@ def resolve_hierarchy(
             mapped: tuple[tuple[str, Node], ...] = ()
             model_source = None
             model_reason = None
+            model_family: tuple[ModelDefinition, ...] = ()
             if kind == "X":
                 child = definitions.get((view.model or "").casefold())
                 if child is None:
@@ -582,7 +689,7 @@ def resolve_hierarchy(
                     raise NetlistError(f"port arity mismatch at {path}")
                 model_source = child.source
                 defaults = {k.casefold(): v for k, v in child.view.param_defaults.items()}
-                local = _parameters(child.body)
+                local = _parameters(child.body, profile)
                 expressions = (
                     {**defaults, **local}
                     if profile.simulator == "ngspice"
@@ -597,14 +704,21 @@ def resolve_hierarchy(
                 )
                 mapped = tuple(zip(child.view.ports, nodes, strict=True))
             elif kind == "M" and supported:
-                model_source = models.get((view.model or "").casefold())
-                bins = [
-                    name for name in models if name.startswith((view.model or "").casefold() + ".")
-                ]
-                if bins:
-                    model_source = None
+                name = (view.model or "").casefold()
+                for owner in (*reversed(stack), None):
+                    candidates = models.get(owner, {})
+                    model_family = tuple(
+                        m
+                        for key, m in candidates.items()
+                        if key == name or key.startswith(name + ".")
+                    )
+                    if model_family:
+                        break
+                if any(m.name.casefold() != name for m in model_family):
                     model_reason = "binned model selection is unresolved"
-                elif model_source is None:
+                elif model_family:
+                    model_source = model_family[0].source
+                else:
                     model_reason = "model definition is unavailable in active inputs"
             elif view.model is not None or not supported:
                 model_reason = "model binding unsupported for this element form"
@@ -647,6 +761,7 @@ def resolve_hierarchy(
                     device,
                     save,
                     reason,
+                    model_family,
                 )
             )
             if len(rows) > MAX_INSTANCES:
@@ -679,4 +794,13 @@ def resolve_hierarchy(
             for row in rows
         ]
     rows.sort(key=lambda row: tuple(p.casefold() for p in row.instance))
-    return Hierarchy(profile, tuple(rows), tuple(files[p] for p in sorted(files, key=str)))
+    return Hierarchy(
+        profile,
+        tuple(rows),
+        tuple(active[p] for p in sorted(active, key=str)),
+        tuple(definitions.values()),
+        occurrences,
+        tuple(library_bindings),
+        scale,
+        tuple(include_bindings),
+    )

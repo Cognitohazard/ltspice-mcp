@@ -368,6 +368,8 @@ def experiment_run_context(
         "step_index": case.step_index,
         "step_values": dict(case.step_values),
     }
+    if case.native_statistics is not None:
+        identity["native_statistics"] = case.native_statistics.public()
     dialect = dialect_for_job(job, state)
     state.raw_dialect_hints[case.raw_file] = dialect
     return RunContext(

@@ -1407,3 +1407,40 @@ class TestIterators:
         # R1 is at scope ("OUTER","INNER") — excluded.
         refs = [c.name for c in body if c.kind == "instance"]
         assert refs == ["R2"]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_continuation_across_trivia_preserves_later_token_span(newline: str) -> None:
+    text = newline.join(
+        [
+            "M1 d g 0 0 n w=1u",
+            "* interposed model comment",
+            "",
+            "  + l=2u",
+            "* another comment",
+            "+ delvto=0",
+            "* trailing trivia",
+            "",
+            "R1 d 0 1k",
+            "",
+        ]
+    )
+    parsed = lex(text)
+    assert not parsed.warnings
+    assert emit(parsed.cards) == text
+    card = parsed.cards[0]
+    assert len(card.raw_lines) == 6
+    view = InstanceLine.from_card(card)
+    assert view.params["l"] == "2u"
+    view.set_param("l", "3u")
+    view.set_param("delvto", "0.01")
+    assert emit(parsed.cards) == text.replace("l=2u", "l=3u").replace("delvto=0", "delvto=0.01")
+    assert [c.kind for c in parsed.cards[1:]] == ["comment", "blank", "instance"]
+
+
+def test_continuation_trivia_does_not_cross_control_or_new_card() -> None:
+    text = "R1 a 0 1k\n* trailing\n.control\n+ opaque\n.endc\n* orphan\n+ bad=1\nR2 b 0 2k\n"
+    parsed = lex(text)
+    assert emit(parsed.cards) == text
+    assert len(parsed.cards[0].raw_lines) == 1
+    assert any("no preceding card" in warning for warning in parsed.warnings)

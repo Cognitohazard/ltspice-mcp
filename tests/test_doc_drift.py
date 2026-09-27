@@ -283,13 +283,13 @@ class TestRemovedToolNamesInClientReachingStrings:
     )
 
     # Removed tool names that are also ordinary English, so a word-shaped
-    # match over prose cannot tell a tool reference from a sentence. Both are
-    # single common words with no call syntax anywhere in the scanned tree;
+    # match over prose cannot tell a tool reference from a sentence. "recent"
+    # is a common word with no call syntax anywhere in the scanned tree;
     # keeping them in would make the gate unusable rather than strict. Dead
     # names that survive as live surface vocabulary (the ``signal_stats``
     # recipe, the ``wire_pins`` op) are already subtracted upstream by
     # REMOVED_TOOL_NAMES — those are exempt by derivation, not by this list.
-    _ENGLISH_HOMONYMS: ClassVar[frozenset[str]] = frozenset({"parameter", "recent"})
+    _ENGLISH_HOMONYMS: ClassVar[frozenset[str]] = frozenset({"recent"})
 
     def test_exemptions_are_subsets_of_what_they_exempt(self) -> None:
         assert set(REMOVED_TOOL_NAMES) >= self._ENGLISH_HOMONYMS

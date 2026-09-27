@@ -55,6 +55,7 @@ class _LintContext:
     # re-read from the Linux side, so the snapshots are the authoritative
     # source for declarations the deck reaches through an include.
     includes: tuple[tuple[Path, str], ...] = ()
+    ngbehavior: str | None = None
 
     @property
     def ngspice(self) -> bool:
@@ -185,7 +186,9 @@ def _lib_section_ngspice(
 ) -> list[LintFinding]:
     if not context.ngspice:
         return []
-    mode = (current_ngbehavior() or "").casefold()
+    mode = (
+        context.ngbehavior if context.ngbehavior is not None else current_ngbehavior() or ""
+    ).casefold()
     if "lt" not in mode and "ps" not in mode:
         return []
     findings = []
@@ -450,6 +453,7 @@ def lint_deck(
     *,
     suppress: list[str] | set[str] | tuple[str, ...] = (),
     includes: Sequence[tuple[Path, str]] = (),
+    ngbehavior: str | None = None,
 ) -> list[LintFinding]:
     """Run all unsuppressed rules and return fixable findings only.
 
@@ -472,6 +476,7 @@ def lint_deck(
         dialect=dialect,
         simulator_name=simulator_name,
         includes=tuple(includes),
+        ngbehavior=ngbehavior,
     )
     findings: list[LintFinding] = []
     for rule in RULES:

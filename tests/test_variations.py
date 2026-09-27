@@ -247,6 +247,87 @@ class TestCrossCircuitValidation:
             expand_variations([circuit], [variation])
 
 
+class TestPdkNativeExpansion:
+    def test_native_samples_follow_assignments_and_keep_logical_indices(self, tmp_path: Path):
+        circuit = _deck(tmp_path / "dut.cir")
+        native = TypeAdapter(Variation).validate_python(
+            {
+                "kind": "pdk_native",
+                "id": "foundry",
+                "runs": 2,
+                "seed": 17,
+                "profile": "sky130-e6f9c887-ngspice-v1",
+                "mode": "combined",
+                "sample_start": 8,
+            }
+        )
+        assign = AssignVariation(kind="assign", assign={"R1": ["1k", "2k"]})
+        cases = expand_variations([circuit], [assign, native])
+        assert [(case.case_index, case.assignments, case.native_index) for case in cases] == [
+            (0, {"R1": "1k"}, 8),
+            (1, {"R1": "1k"}, 9),
+            (2, {"R1": "2k"}, 8),
+            (3, {"R1": "2k"}, 9),
+        ]
+        assert all(case.native == native and case.random is None for case in cases)
+        assert [case.case_id for case in cases] == [f"dut-case-{i:04d}" for i in range(4)]
+        with pytest.raises(VariationError, match="configured maximum"):
+            expand_variations([circuit], [assign, native], max_cases=3)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("id", ""),
+            ("id", "bad id"),
+            ("runs", 0),
+            ("seed", -1),
+            ("seed", 2**63),
+            ("seed", True),
+            ("sample_start", -1),
+            ("sample_start", 1.5),
+            ("mode", "unknown"),
+        ],
+    )
+    def test_native_contract_rejects_invalid_fields(self, field, value):
+        data = {
+            "kind": "pdk_native",
+            "id": "foundry",
+            "runs": 1,
+            "seed": 17,
+            "profile": "sky130-e6f9c887-ngspice-v1",
+            "mode": "nominal",
+        }
+        data[field] = value
+        with pytest.raises(ValidationError):
+            TypeAdapter(Variation).validate_python(data)
+
+    def test_native_and_caller_random_are_exclusive_per_circuit(self, tmp_path: Path):
+        first = _deck(tmp_path / "a.cir", "a")
+        second = _deck(tmp_path / "b.cir", "b")
+
+        def native(applies_to):
+            return TypeAdapter(Variation).validate_python(
+                {
+                    "kind": "pdk_native",
+                    "id": "foundry",
+                    "runs": 1,
+                    "seed": 17,
+                    "profile": "sky130-e6f9c887-ngspice-v1",
+                    "mode": "nominal",
+                    "applies_to": applies_to,
+                }
+            )
+
+        assert (
+            len(expand_variations([first, second], [native(["a"]), _random(applies_to=["b"])]))
+            == 3
+        )
+        with pytest.raises(VariationError, match=r"stochastic|native|random"):
+            expand_variations([first], [native(["a"]), _random(applies_to=["a"])])
+        with pytest.raises(VariationError, match="native"):
+            expand_variations([first], [native(["a"]), native(["a"])])
+
+
 class TestRandomExpansion:
     def test_only_one_random_entry_is_allowed(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")
@@ -353,6 +434,68 @@ def _random_rule(rule: dict[str, object], *, runs: int = 1, seed: int = 3) -> Ra
 
 def _case_copy(tmp_path: Path, name: str, index: int = 0) -> str:
     return (tmp_path / "staged" / f"case-{index:04d}__{name}").read_text()
+
+
+@pytest.mark.parametrize("captured_hash", [False, True])
+@pytest.mark.parametrize("drift_before_materialization", [False, True])
+def test_final_file_digests_freeze_unedited_captured_bytes(
+    tmp_path, captured_hash, drift_before_materialization
+):
+    include = tmp_path / "body.inc"
+    original = "* coût\r\nR1 a 0 1k\r\n"
+    data = original.encode("cp1252" if captured_hash else "utf-8")
+    include.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    kwargs = {"sha256": digest} if captured_hash else {}
+    circuit = CircuitDeck(
+        "bench",
+        tmp_path / "bench.cir",
+        '* bench\n.include "body.inc"\n.end\n',
+        (DeckFile(include, original, **kwargs),),
+    )
+    changed = b"* changed\nR1 a 0 2k\n"
+    if drift_before_materialization:
+        include.write_bytes(changed)
+    (case,) = materialize_variants(circuit, expand_variations([circuit], []), tmp_path)
+    if not drift_before_materialization:
+        include.write_bytes(changed)
+    assert dict(case.file_digests) == {
+        case.path: hashlib.sha256(case.path.read_bytes()).hexdigest(),
+        include: digest,
+    }
+    assert dict(case.file_digests)[include] != hashlib.sha256(include.read_bytes()).hexdigest()
+    assert case.sha256 == dict(case.file_digests)[case.path]
+
+
+def test_final_file_digests_cover_rewritten_include_bytes(tmp_path):
+    leaf = tmp_path / "leaf.inc"
+    leaf_text = "* coût\r\nR1 a 0 1k\r\n"
+    leaf.write_bytes(leaf_text.encode("cp1252"))
+    branch = tmp_path / "branch.inc"
+    branch_text = '.include "leaf.inc"\r\n'
+    branch.write_bytes(branch_text.encode())
+    root_text = '* bench\n.include "branch.inc"\n.end\n'
+    circuit = CircuitDeck(
+        "bench",
+        tmp_path / "bench.cir",
+        root_text,
+        tuple(
+            DeckFile(path, text, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path, text in ((branch, branch_text), (leaf, leaf_text))
+        ),
+    )
+    variation = AssignVariation(kind="assign", assign={"R1": ["2k"]})
+    (case,) = materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path)
+    branch_copy = tmp_path / "case-0000__branch.inc"
+    leaf_copy = tmp_path / "case-0000__leaf.inc"
+    assert str(leaf_copy.name) in branch_copy.read_text()
+    assert "R1 a 0 2k" in leaf_copy.read_text()
+    assert dict(case.file_digests) == {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (case.path, branch_copy, leaf_copy)
+    }
+    assert leaf.read_bytes() == leaf_text.encode("cp1252")
+    assert branch.read_bytes() == branch_text.encode()
 
 
 class TestIncludeClosureTargets:

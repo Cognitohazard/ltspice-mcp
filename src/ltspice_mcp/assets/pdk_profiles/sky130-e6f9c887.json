@@ -1,0 +1,4107 @@
+[
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_mim_m3_1.model.spice",
+    "sha256": "5cb086313d55341351305d30500ca39571d689b692d2be525c4b3b8b4db86e6f",
+    "size": 1262
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_mim_m3_2.model.spice",
+    "sha256": "a2e9ed5568b23debce5ac002f15df8c675010bac34d05b0c4e8a8dcca916260f",
+    "size": 1262
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_var_hvt.model.spice",
+    "sha256": "450b49b213811b230d3f3b2e066fd37291f8d76588ecfb9d0d181e016e6e5132",
+    "size": 5321
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_var_lvt.model.spice",
+    "sha256": "ef07259bd556443e004118ffbfab8f8844f225ecfffb29252e3d1550afeee0d1",
+    "size": 4495
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_01p8x01p8_m1m2_noshield.model.spice",
+    "sha256": "3079a1da04c3322c291ca317879b57bbceb007367f43872c4743b69673f45e77",
+    "size": 1627
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_02p4x04p6_m1m2_noshield.model.spice",
+    "sha256": "8da031c615fd062578e09bcafa67ae13b07ebb21825d3114d4979c9d3019ebca",
+    "size": 1466
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_02p7x06p1_m1m2m3m4_shieldl1_fingercap.model.spice",
+    "sha256": "5667de3f9d1771024ebbfdc55ba83c2e2deee1c9b92e50b10a1906ab38d12b08",
+    "size": 2233
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_02p7x11p1_m1m2m3m4_shieldl1_fingercap.model.spice",
+    "sha256": "abbb086fefd679db27fa222577e8cfaaf4dac52dcd719fc191c3200a8fa9bdc5",
+    "size": 2239
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_02p7x21p1_m1m2m3m4_shieldl1_fingercap.model.spice",
+    "sha256": "bc58e1d87fabfbe1f7c85b576b8d88e8d429a5198c7fedf31ae74c7f1a336add",
+    "size": 2239
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_02p7x41p1_m1m2m3m4_shieldl1_fingercap.model.spice",
+    "sha256": "8b52d11be1c6a4dead8b1112fc9e889f0ef0b350cfdbeef6eab76f2e0fa39745",
+    "size": 2239
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_02p9x06p1_m1m2m3m4_shieldl1_fingercap2.model.spice",
+    "sha256": "34c73f5dc0b25e7e911a64f119513264629dca0857449efcb20ee92ea4a0c30c",
+    "size": 2238
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_03p9x03p9_m1m2_shieldl1_floatm3.model.spice",
+    "sha256": "42bc823332dada9ae8d6fcf923ae508158aa40b595997deb2e56b07689dbbf69",
+    "size": 1805
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_l1m1m2_noshield.model.spice",
+    "sha256": "4419ce9327ac26a2b4eac435d8713effbc16598979d102d8408f5c37673042e2",
+    "size": 1930
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_l1m1m2_noshield_o1.model.spice",
+    "sha256": "4b8b28558d2e252730ba207f4e282cc91d76aceb9344a71ab67e045440f05243",
+    "size": 1725
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_l1m1m2_noshield_o2subcell.spice",
+    "sha256": "0f0740f6cb092a2c4aa6ee3c6953b316335b8112bf174129ceadfee79cc0ecef",
+    "size": 714
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_l1m1m2_shieldpo_floatm3.model.spice",
+    "sha256": "260eeb727b15e58b4eeeb84f6c4e69edfabf04d33063c1509ac550769450d48b",
+    "size": 2190
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2_noshield.model.spice",
+    "sha256": "64c8f3e0ece003160acec5b6becf805cfdfb5713d4b1b68815daeb70ebed12ec",
+    "size": 1564
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2_noshield_o1nhv.model.spice",
+    "sha256": "474aab67df14122e62ecfb615ece7b255d52bc72962b1f43d5531c4dfd1a835a",
+    "size": 1773
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2_noshield_o1phv.model.spice",
+    "sha256": "8629b1e04b740f2838372ba2d41a98595af2f2d9b1800330097e0cf87339edb3",
+    "size": 1745
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2_noshield_o2.model.spice",
+    "sha256": "2a4e70d5f4ab4ff7ad73531c19c2581fe92b26490aedb21e33e2d87aaea9670a",
+    "size": 1415
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2_shieldl1.model.spice",
+    "sha256": "d8670c0b698ee908c1514aa8102596a0ad1c956bff70af3638775e1b5eafc239",
+    "size": 1767
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2m3_shieldl1.model.spice",
+    "sha256": "2d1e422a3b27e6e370afed35014493e9fb6b28e9389aaa464885ad081cf0800b",
+    "size": 2041
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2m3_shieldl1m5_floatm4.model.spice",
+    "sha256": "9cd50eec5de2cbcb01ec1b6c1505d406a82d1acc4be011a979ade0e0cbcabe4f",
+    "size": 2296
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_04p4x04p6_m1m2m3_shieldl1m5_floatm4_top.spice",
+    "sha256": "8ddb951c58d125c22a727dacd0d0b72a8f7fb73c0e6553564141e673c7b232a8",
+    "size": 1268
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_05p9x05p9_m1m2m3m4_shieldl1_wafflecap.model.spice",
+    "sha256": "739e25d9942e190540d725711a45058e0dc5e80d77e7a3cad9f4df81c56a6db8",
+    "size": 2230
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_06p8x06p1_l1m1m2m3_shieldpom4.model.spice",
+    "sha256": "98c8daf1285647e2f17af847cfcc143a580c2851d117da687faa75ee1874de65",
+    "size": 2286
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_06p8x06p1_l1m1m2m3_shieldpom4_top.spice",
+    "sha256": "e9cc6162ea72fc6c688315ac998d17c87279cd4914050f627ef3126227ab4b56",
+    "size": 1214
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_06p8x06p1_m1m2m3_shieldl1m4.model.spice",
+    "sha256": "d2e90cfd8356e33b52d0ad761a0aa1d0f0712082244d10fb4139664837889779",
+    "size": 2036
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_06p8x06p1_m1m2m3_shieldl1m4_top.spice",
+    "sha256": "24362fb78a99094243303cd19ce36ff2d2f2ec6a3be1ff4a472234ed842d16a1",
+    "size": 1196
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_l1m1m2_noshield.model.spice",
+    "sha256": "5af5f0302518ab1b0b256a8e74fda6d7083305399b26ba703bb606809f10467a",
+    "size": 1938
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_l1m1m2_noshield_o1.model.spice",
+    "sha256": "3afb5693f065a18b28492c9f9e57edb4843ed3e731f36ad851f67ab12716b895",
+    "size": 1722
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_l1m1m2_noshield_o2subcell.spice",
+    "sha256": "7ca66295276733cd3aa80cef32b28767ee378faea4e4fd1054034fb756a1b590",
+    "size": 714
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_l1m1m2_shieldpo_floatm3.model.spice",
+    "sha256": "0c497a4d0b6f42a52a8df93b2509521bbc76087dc23f517803ed51626b960f36",
+    "size": 2194
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_m1m2_noshield.model.spice",
+    "sha256": "7df04baf729a050a5759475c69f13b13bef2710ce0bc9f2e02d7578fa9b6d3c0",
+    "size": 1409
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_m1m2_shieldl1.model.spice",
+    "sha256": "268a4e7b9fbda0535e84a5beb45a02989497565d026ddd53d60bd3af13598601",
+    "size": 1771
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_m1m2m3_shieldl1.model.spice",
+    "sha256": "c031ec3a42e4d9675131f84232ba73d7203748a062500a5f36c50875acdbea2c",
+    "size": 2038
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_m1m2m3_shieldl1m5_floatm4.model.spice",
+    "sha256": "be4d8281ed86aaf1b1be60084f02dbf7b121d59ba0a24acb72d66c3a3abf61c8",
+    "size": 2316
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_m1m2m3_shieldl1m5_floatm4_top.spice",
+    "sha256": "75a0e2c2378c805701ba10371320445fced5d5839067504ac001be8c6b09f7f8",
+    "size": 1268
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p3x11p3_m1m2m3m4_shieldl1_wafflecap.model.spice",
+    "sha256": "294eaa8326f3338f14cda90a3a39e2ab34ef9ccf4c1c1f914ab2ac10e715ed0e",
+    "size": 2245
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p3x11p8_l1m1m2m3m4_shieldm5_nhv.model.spice",
+    "sha256": "356505bb281f7cb2ec5df0fa2b7b3a209bd16ae93392adee1d4493dffde7f4be",
+    "size": 2248
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p3x11p8_l1m1m2m3m4_shieldm5_nhv__base.model.spice",
+    "sha256": "64ea406efdc8dfa768a35c9bc573d12cb1e3aee43fcd361783e552dfa4ead7e2",
+    "size": 8114
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p3x11p8_l1m1m2m3m4_shieldm5_nhvtop.spice",
+    "sha256": "5eca2cb926082b895209e31626e918ab8451b97942f6c65b7779dc1065fed4e3",
+    "size": 1235
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2_noshield.model.spice",
+    "sha256": "90a8c4cedb71ab427bd3a2485b22251635c00e45df3b75b41eb99d7cfd3a253d",
+    "size": 1941
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2_shieldpom3.model.spice",
+    "sha256": "4c16ef5b913089fcefa144851ee125e7d24fd84d55ca23527e0062cf6e8e674e",
+    "size": 2161
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3_shieldm4.model.spice",
+    "sha256": "b1666dbeb1ae6f4937900524d3b620815fc0cdeb19782536b4ff0e2c06e3df0d",
+    "size": 2220
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3_shieldm4_top.spice",
+    "sha256": "8557485aadcd95ba144266133c8ad782cae0b44679545aa008eb4f1eb8e9a438",
+    "size": 1196
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3_shieldpom4.model.spice",
+    "sha256": "676a1549d0bf83ece26162dd9a37a58136f07682e122d0c785ae8b7bdc0653f2",
+    "size": 2304
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3_shieldpom4_top.spice",
+    "sha256": "193ba76e50daee699886a2f6da4acc6120b2558cc5165cb6880a25618d67f7a7",
+    "size": 1214
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldm5.model.spice",
+    "sha256": "7710a12e99c750841df77b352eb240e818a995e20474ebad70021e4a739adab2",
+    "size": 2619
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldm5_top.spice",
+    "sha256": "bd911cf484f707862e9f63884b8045076b312b6c4c4f06c1a0fcc625024ce0d6",
+    "size": 1214
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5.model.spice",
+    "sha256": "80722d5749c3c2644342f7fee626f60cfcdd15c1867e6d4bb42dd788f7be9070",
+    "size": 2801
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_top.spice",
+    "sha256": "7ce27a59841fb0360afc80521974a60b0dfc183a2d2c80463f8832c0d8973609",
+    "size": 1232
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_x.model.spice",
+    "sha256": "f89d47926dc338b522bb9b22ea42a0af65ab9f3f88e33bea6ba8b6903f0ff603",
+    "size": 2902
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_x6.spice",
+    "sha256": "14272be6e326321f4671680376f2a26cf594f06fd7f79b4497d276617ad11b97",
+    "size": 845
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_x7.spice",
+    "sha256": "9d9a6bcc862478a0e3b298d2ba1e0f29a92dc9a8bd55bebd0625c34f8a4ec722",
+    "size": 845
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_x8.spice",
+    "sha256": "6967ac820a2dce1ba62d9040d96b7719326908f717c2e96800bf9a8457a07222",
+    "size": 845
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_x9.spice",
+    "sha256": "81f811758892a53acb6cd3f5e2daec21b2605e36bf12d23b88d3d47f04626b14",
+    "size": 845
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_l1m1m2m3m4_shieldpom5_xtop.spice",
+    "sha256": "4c5216ef63ab9800867c67c8a04981ca0067f44ec16baace4024eaaa474711b4",
+    "size": 1233
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2_noshield.model.spice",
+    "sha256": "fec13fcb4c07421e1716e746e6cea3961b05f253ca476848c2d929f0461a94bb",
+    "size": 1567
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2_shieldl1.model.spice",
+    "sha256": "e98b9ad359ec0e8b0da10e8461fa0a82caec1fbe9bf768dd0113e81165052b5d",
+    "size": 1773
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2m3_shieldl1.model.spice",
+    "sha256": "592b670a1504c5659f01aa68816ebbe8cd72d53ae6b490956c64976ec9c43a90",
+    "size": 2045
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2m3_shieldl1m5_floatm4.model.spice",
+    "sha256": "b4f0e48b187334a1d043a79ef4e08a4bfb35870748521e54906a63ed5730eebc",
+    "size": 2302
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2m3_shieldl1m5_floatm4_top.spice",
+    "sha256": "c3a030e8f8384b2ada21cd34663efbeede336253e6f19ada471d32c75cc3aae8",
+    "size": 1268
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2m3m4_shieldl1m5.model.spice",
+    "sha256": "6b59f00cb7050984f65dd5bd4d4df8b656c0e790804c5196eaeae64d18c88e8b",
+    "size": 2535
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2m3m4_shieldl1m5_top.spice",
+    "sha256": "4785fbca82d49c0a3786d3a0ddbb993960cf5cb183cde8c8153c1b604b4a1ecc",
+    "size": 1214
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m2m3m4_shieldm5.model.spice",
+    "sha256": "f0458f3115849e70e25e3fbcbe84917c5a96cf28e94c5e73738705d809c90c04",
+    "size": 2481
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_m1m4_noshield.model.spice",
+    "sha256": "304a49a678160f5cad186bbd8f75d24ca051209876d33e2ecc0e2fda2df52815",
+    "size": 2321
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x11p7_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "b639dfca47ce5f4fc48534acb6bee0192a57028bdf1b5b4d0a73f44756fe02b4",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_11p5x23p1_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "f488278a9fff68b788296003d6134202e60ec6cf5e1666f317af6dfa606c08c5",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_22p5x11p7_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "ef99913d78f80aefff2823aee3d0ff1709a5d945fa7b8a4a3faee7cbf1073853",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_22p5x23p1_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "327e9a52e5352695743a3e027fe35037b512c031d8bf4ec6ebaa4528328004b0",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_33p6x11p7_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "d6d1e8d14524c52d52a772a89f50e4489013ca1d53d6c11101e2302b6bcef183",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_33p6x23p1_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "bddd745d1ab29e8e77cc257f9b96f6f57213d58ff0e53662d757483cea1b670b",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_44p7x11p7_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "09dd8fd55f46a10929345443a12fd084ef6c49ca39511ca4e2999b68da07e17d",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_44p7x23p1_pol1m1m2m3m4m5_noshield.model.spice",
+    "sha256": "9c51ae7a30dc108b6bfe05847199fb94d4e38d8f8ba3bdaad0bca47d4cf30c69",
+    "size": 2649
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_55p8x11p7_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "37a2148a86dca923dc5cf3ea4c54e3dde4dd41381c4c0d92154782c96e963f09",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_55p8x11p7_pol1m1m2m3m4m5_noshield_m5pullin.spice",
+    "sha256": "ec288f78c11999821eb31161e597c32a9723912d5e81f40b86a6d9eb74326145",
+    "size": 721
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_55p8x23p1_pol1m1m2m3m4m5_noshield.spice",
+    "sha256": "a9e0b59cf2ebb86da4ad56fa9d7d6a599582f1748925302222270f09f968422d",
+    "size": 712
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_55p8x23p1_pol1m1m2m3m4m5_noshield_m5pullin.spice",
+    "sha256": "a309a99d2c6b45b93e5e7da2ac9df183931e31d2b740226911c3291d9077a306",
+    "size": 721
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_55p8x23p1_pol1m1m2m3m4m5_noshield_test.spice",
+    "sha256": "f410999f89d654d7b3a510d7cb3e090fc9d0d869fe2a2d7e2ab85145291cd043",
+    "size": 717
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pd2nw_05v5.model.spice",
+    "sha256": "96eb213bbdd589ab8c999d68bc5995c7652a12e1078a2f64a686b4c7a22a5e11",
+    "size": 2025
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pd2nw_05v5_hvt.model.spice",
+    "sha256": "5fe041b387749f190147300880d9dcaf8b0341955f0f7787849297f52b2c2b46",
+    "size": 2028
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pd2nw_05v5_lvt.model.spice",
+    "sha256": "1cf2a1684a8ca01efb693e81de65c6d3b29178033b3e8d4b6f10fc299e117c14",
+    "size": 2035
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pd2nw_11v0.model.spice",
+    "sha256": "d4b2fcb507fcb90e2e8eb528fe93a1a119dc88a162c5982fde8d2bfe5efce31e",
+    "size": 2019
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pd2nw_11v0_no_rs.model.spice",
+    "sha256": "60aee293b9896cdce5bd7d62051cb42d6a1c08ed7be915b637617c70d933f310",
+    "size": 2024
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pw2nd_05v5.model.spice",
+    "sha256": "cc66453d703afd9e8f11372821f9f22f3c7faca7d1cecba6da79a11063dbf11a",
+    "size": 1999
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pw2nd_05v5__extended_drain.model.spice",
+    "sha256": "5fc8bf3e2e7e0b75318cb3d61b2c0f3a6f3cb963f2c3894a8a95fd8dceb102a8",
+    "size": 2092
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pw2nd_05v5_lvt.model.spice",
+    "sha256": "0261106b2209576947af3ca5411e4ce3d3cbde832d434affaebfe77a9781aff6",
+    "size": 2013
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pw2nd_05v5_nvt.model.spice",
+    "sha256": "7344f249b0d9be19e06abd12549815f3610f4d1b758077ddae3f66f79dfdde15",
+    "size": 2021
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pw2nd_11v0.model.spice",
+    "sha256": "ea86ffcfd4bcf7d99e61741850ec1387c4f2af7a90e789d909ba9ec7df3540a1",
+    "size": 2037
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__diode_pw2nd_11v0_no_rs.model.spice",
+    "sha256": "9f121df17ea4a4185302a8c0b74f278e488179ad8b25602241f19ce552f1dcce",
+    "size": 2042
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8.pm3.spice",
+    "sha256": "b00978da581468871971827a5d635440c7df9b7648ee52ba3dd8b8f26da64d80",
+    "size": 18259
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__ff.corner.spice",
+    "sha256": "0206cc43047aaa9fbdf2162f70efc716b33e4149362009f1cb8b76ed6e66ff35",
+    "size": 4516
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__fs.corner.spice",
+    "sha256": "b2da31294d07c4ce093c3daef05915467b3fcbc1acc30b56f957258194b3303a",
+    "size": 4510
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__leak.corner.spice",
+    "sha256": "0e8fd11c8482424fbf126b6f5965c7ab0770a0b0a3df2e0ed2f87cdbdf9e17ac",
+    "size": 4549
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__sf.corner.spice",
+    "sha256": "95fa572dc223518cd236d0905e40390a6a6a30e3994881afdc9b16ab4cbe1065",
+    "size": 4516
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__ss.corner.spice",
+    "sha256": "e68650b0bd8e376525fda37bc03e88452d4eaa2790b7823729c8540c6d24fcc0",
+    "size": 4510
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__tt.corner.spice",
+    "sha256": "2fe2461e85a325fc5856da7b47cfd98333af4c7a8c1efa036c7af414e568d77d",
+    "size": 4497
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__tt_leak.corner.spice",
+    "sha256": "25654936e4c67849f611ca1fbd22bd9ac994eff32ba51e4f69a6ed6623e0423e",
+    "size": 4525
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_01v8__wafer.corner.spice",
+    "sha256": "1885507cbdefe439cab13edc980da414d8fb976ec17b2eaab80b7252d4ff90e5",
+    "size": 4346
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_05v0_nvt.pm3.spice",
+    "sha256": "193309d359815e58da62c0be614b8d9734e27110216de22e21b60216d65155a3",
+    "size": 22153
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5.pm3.spice",
+    "sha256": "167d3a824f9402a1c75ce96b2e393d7e044578a488fcd5e5155b59ddeabace04",
+    "size": 68376
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__ff.corner.spice",
+    "sha256": "b5cc17d0ccaced826597dfeb00dd78227b1f54f085788570a77cb56557dea4a1",
+    "size": 16442
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__fs.corner.spice",
+    "sha256": "979da8a91772e6d2421f9e9e2ccbdd79505fbd2ad8c4755589ae5cf1ce2fd538",
+    "size": 16402
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__leak.corner.spice",
+    "sha256": "751ca48fa8f5ef04df6b8c5172753f4be89f6b1fe132ee3515ee7ee3550884e2",
+    "size": 16551
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__sf.corner.spice",
+    "sha256": "e2c0ccda525494a8ff28eac403a15e285e7ef0216fe6ad3c2d6c61b3420e527c",
+    "size": 16468
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__ss.corner.spice",
+    "sha256": "92ca30e89fb3873a7994a632bafd97820e6cc9ad1505628402f55a6bed04d0a3",
+    "size": 16405
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__tt.corner.spice",
+    "sha256": "61500e742b5dd0eb4eda5721dba5f1567f36c940b950484e50ce7078d73fa315",
+    "size": 16392
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__tt_leak.corner.spice",
+    "sha256": "b1135aeda809554fc41ac56a7c3709b9eb8505ab233184f26ac7ce1ac731983f",
+    "size": 16464
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_nfet_g5v0d10v5__wafer.corner.spice",
+    "sha256": "990b474eea9b9745d883881837116755cfaed5ab1bd98604a5bb4cf38f171cbe",
+    "size": 15937
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5.pm3.spice",
+    "sha256": "a1dfbac415cd5b8f0a69f0de4a9bf53b8920e264d3a07783b8d9dd2bf511072f",
+    "size": 49985
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__ff.corner.spice",
+    "sha256": "5a21d27681490ef97667eb3210d1258853f4d8246ef0564c50064a05f916feb2",
+    "size": 12323
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__fs.corner.spice",
+    "sha256": "386d64641dcc97da2968ddd5cd19b532858807ed9fbc301fdc22890d76c6f43b",
+    "size": 12323
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__leak.corner.spice",
+    "sha256": "051359a57eccef4b08301f1e401e6aab1eb9e9c913c704499ede5784bbf2f22e",
+    "size": 12385
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__sf.corner.spice",
+    "sha256": "4fd874922e81055ea5a2508e97fe35ccfa90d5eefa1820368a6189916486141e",
+    "size": 12314
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__ss.corner.spice",
+    "sha256": "5913c622d254d677a437ec13d8c850445a1cc842b614eb4d65e38a0d3ade96d7",
+    "size": 12308
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__tt.corner.spice",
+    "sha256": "ceed8cc24d9ec0291dbdd74adad28178b2e5c1730021ae6757354b71d1f70683",
+    "size": 12283
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__tt_leak.corner.spice",
+    "sha256": "3ba72f44bce49b53760ebb1749f415910e4fb75a4e1688e19613349a40043bac",
+    "size": 12344
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_pfet_g5v0d10v5__wafer.corner.spice",
+    "sha256": "bed91f59232c465911c31500a43c4bfad05c25a4fbf7a44b00e4d81a92defd8f",
+    "size": 11891
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pd2nw_11v0_100.model.spice",
+    "sha256": "81949e8a3832577373fe5889135ef412655d8c9b66e7778f4b57e5db6ae83ffb",
+    "size": 858
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pd2nw_11v0_200.model.spice",
+    "sha256": "ac2d2c6c781eb31bae49ec1bc26816c6181f59e861e0f83c087eec2a0ba37894",
+    "size": 860
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pd2nw_11v0_300.model.spice",
+    "sha256": "16674f438a0df89c527c34b97ee83be575edf283e200bb14f2b4769f75a78cb6",
+    "size": 860
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pw2nd_11v0_100.model.spice",
+    "sha256": "5f622b163456209f0257634ae856e54187692096c06bed8713e09ef36d6e24c2",
+    "size": 852
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pw2nd_11v0_100__parasitic__diode_pw2dn.model.spice",
+    "sha256": "9e4115c3bb67aa99a12007f4de0405d2f6bb399e451fcbace6ab150754631a97",
+    "size": 928
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pw2nd_11v0_200.model.spice",
+    "sha256": "5e06256cf70877d885f077161b646c54de8bfe4ed63b1bec1f7f7b79ae95ab07",
+    "size": 853
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pw2nd_11v0_200__parasitic__diode_pw2dn.model.spice",
+    "sha256": "95e2e08f759264d321eedfd96b21fbf6fc98410b3173e58253583a989affe6da",
+    "size": 927
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pw2nd_11v0_300.model.spice",
+    "sha256": "a69c18728274760f35d64e0553bff48de8008c3b8935289bdd86a254582c2160",
+    "size": 853
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_diode_pw2nd_11v0_300__parasitic__diode_pw2dn.model.spice",
+    "sha256": "162ee26460125e2f1b09a10ebe2af6a8d93d702f9a1acbfdb54d4a6c25b1392b",
+    "size": 926
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_nfet_20v0_hbm_21vW60p00.spice",
+    "sha256": "953ee066a98415b7ca9f71353c47251a7220ee1e88bba49d4c95028476dae99e",
+    "size": 853
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_nfet_20v0_hbm_32vW60p00.spice",
+    "sha256": "4fa8f4f1272c98d468ad9ce46906fd14d56d2aeb772c9ecc99857a7cc8ede617",
+    "size": 853
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_nfet_20v0_iec_21vW60p00.spice",
+    "sha256": "60d3d9da1b0cede5b9c845b3696d414c451a43ff4bc0bc27cdc0760a6f8ef1b2",
+    "size": 853
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__esd_rf_nfet_20v0_iec_32vW60p00.spice",
+    "sha256": "75afc4f28abd06a517fd0ee39d1ea1ceafa34d79b70db5e2ddaf7c1aa91f803f",
+    "size": 853
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__ind_03_90.model.spice",
+    "sha256": "311ef0a69a307ad34063bef89182279470fe0a7a8804e8375699c3ccd3e3e92c",
+    "size": 993
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__ind_05_125.model.spice",
+    "sha256": "130d7e94b045d0bfeb68111451f03312abcfad9368c8cafba5554ef494f31e74",
+    "size": 995
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__ind_05_220.model.spice",
+    "sha256": "bd925e52ae0e8c89bbe395a039ffdf12d04c9dd79e6d5c055fe163856ec920df",
+    "size": 995
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8.pm3.spice",
+    "sha256": "ac079da21b911049c48b1ff38690454be9fa251d6f718ce5f02675373e3c7428",
+    "size": 403987
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__ff.corner.spice",
+    "sha256": "440a5b78e0aa92f9cae53a7fc750493211c9e08dbdf0169de8396de0a53e7c55",
+    "size": 67078
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__ff.pm3.spice",
+    "sha256": "38ece51086f7740ee8cdbab29e10887b6fa9e1d3f97732623e6e720ac771aca8",
+    "size": 1105756
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__fs.corner.spice",
+    "sha256": "d87e32075fa5b2616fd07e3f6309ef43eebe866e14c3404ea3928ee3631d6664",
+    "size": 67330
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__fs.pm3.spice",
+    "sha256": "7b5547207fd9dd6176860a162af7061704e0b8a786fa0884965ec3a532e451c0",
+    "size": 1105342
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__leak.corner.spice",
+    "sha256": "348e7eccc9992735ad0ebabc751fcb8e69a045ffa82aa1e0d54e48b305890f44",
+    "size": 67910
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__leak.pm3.spice",
+    "sha256": "503a7298f4d7e2920906387bc2fab2d4aabbf852ddeaa016853ed0be438e4623",
+    "size": 1117498
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__mismatch.corner.spice",
+    "sha256": "24a3b29d7d7f26f99098811c31eb5497950a3aed520ab83768a96f35467fe818",
+    "size": 962
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__sf.corner.spice",
+    "sha256": "304ad8f1cb845c4e9f638d07a04bb1c7a350a6e04084f858c45af7ac3a4d294c",
+    "size": 67280
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__sf.pm3.spice",
+    "sha256": "84a21fb8e24df7207d69d5c3f953914f5935fad5434aecab5eda276672a87702",
+    "size": 1107229
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__ss.corner.spice",
+    "sha256": "896cd2d75e86826556819d92048c99a14bab6b9e4ae9d9295519a1bd64a3210f",
+    "size": 67129
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__ss.pm3.spice",
+    "sha256": "cca2afb8f98b6ae2d0e1d40a8cf7528ddda1f35de0ee25604572626b76af2034",
+    "size": 1103958
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__subvt_mismatch.corner.spice",
+    "sha256": "24a3b29d7d7f26f99098811c31eb5497950a3aed520ab83768a96f35467fe818",
+    "size": 962
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt.corner.spice",
+    "sha256": "0c03b2e5727c414942f1d2b27e19a68724fb84be90b2c73b361ad41779311130",
+    "size": 66384
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt.pm3.spice",
+    "sha256": "fda72fe5717ce354d61887bef1432478be431121f70896b39f653eacc6f8eafa",
+    "size": 1101207
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt_correln.corner.spice",
+    "sha256": "6d7658697add7bb96aeac759695d80af0b5351a7afa25d1b37984ee503458045",
+    "size": 69336
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt_correlp.corner.spice",
+    "sha256": "af27709f708e0edba59d513446c57bc97d2477a1643f2432d2e0dd1c9609aa93",
+    "size": 69335
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt_leak.corner.spice",
+    "sha256": "912e658e7d9db82dae7ae011c67d0e29d7070bab30fe298a92e3a284f842aafd",
+    "size": 67350
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt_leak.pm3.spice",
+    "sha256": "8755ec0b1d079afa0f4d95f3ed294ac94904696781ad999835b8b51986a19c72",
+    "size": 1112341
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__wafer.corner.spice",
+    "sha256": "247f284fbbfaaa128f40ce2a8e57e2ac6e16044b98e13b28e2a10860cab92956",
+    "size": 64034
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt.pm3.spice",
+    "sha256": "7d55d41a6c781626c2cd4ef116ec3e26c71ef1dd06a0862ec57c8922b8291028",
+    "size": 271763
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__ff.corner.spice",
+    "sha256": "e84da569821a546bb7d59834543d680b1bd09523f5951ff5be0c67ff32370601",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__ff.pm3.spice",
+    "sha256": "23fff2dcbf88bad2740409a1c9ab9fffa19f88bdc05a6c813ded73be1d834357",
+    "size": 588837
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__ff_discrete.corner.spice",
+    "sha256": "2ad96c3e19487caa26bcd6f6e01091a5116b3ad048c4b6f58bd6da1a39cc2841",
+    "size": 43947
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__fs.corner.spice",
+    "sha256": "b44b14281fb42ca617e81d2f7c4c837e4cfddc6ec6a340871029a253860640d6",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__fs.pm3.spice",
+    "sha256": "671691652d6bc66bd3a98a0177ba8eadb95c70b5ccbb732b529ff9f69fac4f05",
+    "size": 588613
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__fs_discrete.corner.spice",
+    "sha256": "2714f54b1e42d2f2f0128b4d83ffe93842f3512d85044bf9b9e04813f45585c9",
+    "size": 43928
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__leak.corner.spice",
+    "sha256": "f1cf379d116d123f207a4bc1ef71d847c2824ecf1fd25d7487313335081171c9",
+    "size": 803
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__leak.pm3.spice",
+    "sha256": "8ed8a24d84bac949ec70f32c1771f24e3372777d3d888145cbae29857cf320ff",
+    "size": 592746
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__leak_discrete.corner.spice",
+    "sha256": "fa8096b68fb6d8d7f23008dba11e55eb012b88f408274e5e2ec013470f97f12e",
+    "size": 44426
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__mismatch.corner.spice",
+    "sha256": "1855038a2ad2fe3989b64a17128d47daaa3dbc15d0f4db2c4526988923daa311",
+    "size": 1105
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__sf.corner.spice",
+    "sha256": "5e4122da6a18aca51d6158fb326c2e27238564bdbc4d23da4cff66e22633603f",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__sf.pm3.spice",
+    "sha256": "c877b6983f1f6e0149aedcdec42c5bf5ba251d0696b13978715949d3e25a7871",
+    "size": 587774
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__sf_discrete.corner.spice",
+    "sha256": "8290da740af80e3022c6e15e4403981147630e672aa9bc5c6ccea32da84f9b9d",
+    "size": 43923
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__ss.corner.spice",
+    "sha256": "23eb2d35ada169b393a334d4ada4dcb587f074f993315b8f23ccd241429819aa",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__ss.pm3.spice",
+    "sha256": "ceae7955d0f9109c781c895be24314e10d2dc53d0a72cdb1c45f7befb24483aa",
+    "size": 587581
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__ss_discrete.corner.spice",
+    "sha256": "d966b1814ca754cdc1421b0c386d131b8efde98a50c56656f10f6a3c6b68a1f2",
+    "size": 43924
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__subvt_mismatch.corner.spice",
+    "sha256": "b66b6f0607d6b5619c3462200ba31cdcbcddb5798734439f20109542fe5de6d8",
+    "size": 1106
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt.corner.spice",
+    "sha256": "716b48c11275bb1edbb228807f1b8849453884adf498ac7c57a31b9295335f2b",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt.pm3.spice",
+    "sha256": "848471966a7f41daaa44b2f03636d0652136714e0b9a365bb0e537651640ddcf",
+    "size": 587957
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt_correln.corner.spice",
+    "sha256": "5ab51c728a74d31335050ef543cac793be0f6e675c3a625f93d934ccf6f5e9c4",
+    "size": 45884
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt_correlp.corner.spice",
+    "sha256": "87bf5897367e2bb0d710f7283d4de8c55e266b169a8aacf8ea35e6bc68887e44",
+    "size": 45883
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt_discrete.corner.spice",
+    "sha256": "5dce457b6f3f541f9c7d29115cb2d4e037cd0a495945311b646e118b0db25daa",
+    "size": 45011
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt_leak.corner.spice",
+    "sha256": "e0f171ad2ad380cf8a8f3c9df30ffd3a3e2bbaf9d8d82356472eab3ae860867b",
+    "size": 808
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt_leak.pm3.spice",
+    "sha256": "c1401e4dfd961b34ffe8561d6083bc3a27de8a698bbe4a8dc82f1f1d8be17acf",
+    "size": 592957
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__tt_leak_discrete.corner.spice",
+    "sha256": "313deccfc080def3921c484bba12643cd424a593ab487f142c02d183cb4861b8",
+    "size": 44398
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__wafer.corner.spice",
+    "sha256": "d626db33307d73d267260120b84194d3bef58bf689f75e3c2dec0296bf1d9e39",
+    "size": 42252
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt.pm3.spice",
+    "sha256": "042730a5b254b5508e4ef366784d972a8e10ed133f23ec7fdfc4ef9b3e545932",
+    "size": 63044
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__ff.corner.spice",
+    "sha256": "0fdaf141f890121d6f67e9dfdd942d1afd8d97065b30405c803712168c308e73",
+    "size": 11173
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__fs.corner.spice",
+    "sha256": "8925259365575206f468e2288924aae14e4e72484b484b248cc11ae3f628c7c7",
+    "size": 11147
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__mismatch.corner.spice",
+    "sha256": "fd3813731a14eb0c987b0ce58a3ed26c0a76a8a4eb152ecd7260ba15d34936c2",
+    "size": 978
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__sf.corner.spice",
+    "sha256": "cd6e52b931d54b3dde4c89b7825ccf82c683612aac0b74a11881c3fd82ce28e2",
+    "size": 11201
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__ss.corner.spice",
+    "sha256": "a7e9ecf9dad2a681c9a11ee6d46812261836121b6d09e7d4a4dc6f99724cf59c",
+    "size": 11165
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__tt.corner.spice",
+    "sha256": "6ac550dbda38845d879cb665dbbf3a2acc874e833fa53abf1e2d3b8bb7d331b4",
+    "size": 11153
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__tt_correln.corner.spice",
+    "sha256": "31917d684fd774f7dfafa71694e69376179fdff84c4128491ca2f043f4e57d1a",
+    "size": 11665
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__tt_correlp.corner.spice",
+    "sha256": "4877d8306768c21b6e266364aea2180a94c6363c584f0ea0c3c3d9a4c1760fdd",
+    "size": 11664
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_03v3_nvt__wafer.corner.spice",
+    "sha256": "d5744b8322cbfaf619bcf7de68526f85a4a6a718c65fb38a849c58ec40828dc7",
+    "size": 10750
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt.pm3.spice",
+    "sha256": "c023cbfd9a518a3f9f87c45f85f7690324e23e5d1125bce37c84d2e3f9cc164c",
+    "size": 76835
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__ff.corner.spice",
+    "sha256": "2adc32d1c5f38df8dd6ba496d5aa92cd2e0b573bc59ea837819d1f43e5e5e131",
+    "size": 13512
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__fs.corner.spice",
+    "sha256": "e5d71444f619711837f9334dc49cbde9ca840dc3b7a9bfe136975e6f4c3b5dcd",
+    "size": 13471
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__leak.corner.spice",
+    "sha256": "f068c948edba179323ed0e7c717cb1add513d27008acfba13706b8d8fcc03a83",
+    "size": 13505
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__mismatch.corner.spice",
+    "sha256": "4c1ce4d79656afd5087dc73417740c506c8465bb361ece5db8835ad3d9b362df",
+    "size": 1097
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__sf.corner.spice",
+    "sha256": "070556259bde129f85b5520d1962c50593ac884b8a04a40dac4badd76fdecbb2",
+    "size": 13506
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__ss.corner.spice",
+    "sha256": "47dcdf2c517f75df8a76b7b292f1a4f31276262058d4b20a3028b14a14d950e1",
+    "size": 13476
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__tt.corner.spice",
+    "sha256": "ad6f98b01ba312f9817a9154d12bb73bcf1e323c2a8a599fd26bafda54397b28",
+    "size": 13498
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__tt_correln.corner.spice",
+    "sha256": "dcf69d06c0d6009a131c44ff9db7afa201899676a18ce762dc542e55ade72581",
+    "size": 14109
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__tt_correlp.corner.spice",
+    "sha256": "ef3c48cf92340d58774cf6b54e5f134386c1014ce15767fc5d641e160c9b1d93",
+    "size": 14108
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__tt_leak.corner.spice",
+    "sha256": "5f537131fc4dd29be16802ce98acfaa83d4dcb29287d95776e0325d42c4678f5",
+    "size": 13799
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_05v0_nvt__wafer.corner.spice",
+    "sha256": "3def2a4c0b3934ce04f3cb9c99913711d13bc9b2b3d3ae6bc72c4bb5363012c3",
+    "size": 12913
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0__fs_discrete.corner.spice",
+    "sha256": "6f8acc38821304a85341972c34a5d6bd5599228c502c491301172cc80008cf50",
+    "size": 1643
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0__leak_discrete.corner.spice",
+    "sha256": "216973faeb1442c27ce7d8f9919fe6a48a33cb2a22349e3107c86198804cac38",
+    "size": 1670
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0__sf_discrete.corner.spice",
+    "sha256": "86c6b605f6748542400029ac41b264c929e973ea4fb277b634aadfbafc7dc932",
+    "size": 1668
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0__subcircuit.pm3.spice",
+    "sha256": "64b63a8bd76ca1a5f7f14849d80399e99dd85ed39534c452ae65c4a3fa19e270",
+    "size": 8994
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0__tt_discrete.corner.spice",
+    "sha256": "437039ebf2762d9f1124f05c68743a9dde63c58e541666913ce0931faf900a24",
+    "size": 1836
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0__wafer_discrete.corner.spice",
+    "sha256": "b6ef91d0761ec9b4015d977ae2dd72ef00ac56d54a7bf3682f7be01d83510ac9",
+    "size": 1590
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_iso__subcircuit.pm3.spice",
+    "sha256": "0ba6101d75c9ca9271c9e0254901804a33f2981d6a7b60e35d3a71e311e9fc56",
+    "size": 9121
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt__fs_discrete.corner.spice",
+    "sha256": "23e9c408698a7632746b668a5016529e36abb15d92485ab467bcba6535fce5bb",
+    "size": 973
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt__parasitic__diode_ps2dn.model.spice",
+    "sha256": "51d9ab53a7dc1e1d8ca0e500a5e2ca72f3c74c1cf712d833e7b4b73daa48dcf2",
+    "size": 2438
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt__sf_discrete.corner.spice",
+    "sha256": "9a7208e7fcba94cd06dcc7d9a50c93a709ee5679f0d35f25fb9dfbff3364faaa",
+    "size": 974
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt__subcircuit.pm3.spice",
+    "sha256": "1b3c68a09794e92515d24ff596f92e087b527f68eb696df63dfadb3a78cb9c04",
+    "size": 9181
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt__tt_discrete.corner.spice",
+    "sha256": "8a4e88bcbce811f316a21c21842fe87afdd2d7abf82a26449082652a536adfaf",
+    "size": 973
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt_iso__fs_discrete.corner.spice",
+    "sha256": "c8f9c82f0bfe947497b4e94a91e0cf97a503caebc5ffdc1a1232b09819eeaaa8",
+    "size": 993
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt_iso__sf_discrete.corner.spice",
+    "sha256": "d8a3eb016d731a23b88d1ca15588d57c3bcd57e3d76c18270ee1e8765ae67245",
+    "size": 994
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt_iso__subcircuit.pm3.spice",
+    "sha256": "fcdf3169ba6a10affe47ba05ede00eab7d47c1d473e66f71c0656d91f102afc7",
+    "size": 9243
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_nvt_iso__tt_discrete.corner.spice",
+    "sha256": "8ee9596e32540421b6c8d3b8283e829b74a3ee1e4d45fabad6c3cc3bc9be04e4",
+    "size": 993
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_reverse_iso__subcircuit.pm3.spice",
+    "sha256": "062eab05dff385bd35c8505351b7a15c38e47cbdb723aa7a056018bc0834c742",
+    "size": 8979
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_zvt__fs_discrete.corner.spice",
+    "sha256": "d9e116bbf8c2ff0db28fa472e33f7130c54c5bd5841317b4059fef45ecc5e1c3",
+    "size": 1289
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_zvt__leak_discrete.corner.spice",
+    "sha256": "cd9aee0129c4230f24560415054d0d2986bf80f943ffb938e6b9b075e4b36d5f",
+    "size": 1292
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_zvt__parasitic__diode_ps2dn__extended_drain.model.spice",
+    "sha256": "aeb7644d07be39d330e9aa8af89827ffcf1d1b43f964d7770ce432437b02c0ac",
+    "size": 2829
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_zvt__sf_discrete.corner.spice",
+    "sha256": "2366432b5213e267e85cb63b0d3444ef89985955763a5a54e5eba70ff9be1c1c",
+    "size": 1292
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_zvt__subcircuit.pm3.spice",
+    "sha256": "a2173e3b3d601fc070e8c2babad25c01f6d0c61df8b3432d25245c800d51389d",
+    "size": 9346
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_20v0_zvt__tt_discrete.corner.spice",
+    "sha256": "c7d5cfef6e9cd1e742e9e97da0e823ee81f2fa087a1ba8d1e9517f70335167f5",
+    "size": 1262
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5.pm3.spice",
+    "sha256": "ea52c1dd85e6085994e7b6546b9b6616a3d8009f9b3294219c1018807f462257",
+    "size": 348031
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__ff.corner.spice",
+    "sha256": "23e17fb740ff03ff47f0c5cddfbcfa3af5c16465f388d521520d7ea057935bc2",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__ff.pm3.spice",
+    "sha256": "428586d705476db3ea171657814cfa8bfcfde4368f4c8b89dd1929c65a2be1a4",
+    "size": 562914
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__ff_discrete.corner.spice",
+    "sha256": "9c1f5e5fe0ec7a58d736b946618517bba8ef779b19d89e15776eeb840947a996",
+    "size": 65017
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__fs.corner.spice",
+    "sha256": "00c599d50c81e8a5c8c6423ebcd22c07f714a119c867d1465eb39664ee4f1e8a",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__fs.pm3.spice",
+    "sha256": "38e02576099d9d0461fed0edfab06672c69df1e8cf4ef0657b9c84b131523347",
+    "size": 561218
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__fs_discrete.corner.spice",
+    "sha256": "a3ed4d98aa7632dc67393791c2a6a540c17900aeac603d9a0eaf3d32ededb87d",
+    "size": 64911
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__leak.corner.spice",
+    "sha256": "1fdacfb803fb4ed9fc0ebbf54be3996272046d9b54ce1bfa5f499bab9f58de5b",
+    "size": 809
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__leak.pm3.spice",
+    "sha256": "1921fad7a712ef0b81d999d1398ad651e1ea1aac57d212eb720fbfe1c80f8e13",
+    "size": 574106
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__leak_discrete.corner.spice",
+    "sha256": "501f40a6ce1ff573663f172ef4cce5b2cc43edad0f75368aa66d3a0bb27d8cec",
+    "size": 65609
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__mismatch.corner.spice",
+    "sha256": "e4124d91feee11f97c53b40752c711bb4293d94cd22c2778291a163c8abf3e9c",
+    "size": 1267
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__sf.corner.spice",
+    "sha256": "93fdae80469c761f3bd3bfbaa8f2d5bf091d035e004ebdb5a947a51f292f15c1",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__sf.pm3.spice",
+    "sha256": "4f9379cc54afbac5497e7c808a7abb853a27281c297359e15b35e6c659d0ebb5",
+    "size": 562211
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__sf_discrete.corner.spice",
+    "sha256": "e2b4b289d5d6d8aa795fe68e94958744f95e77608dd69a85cea831f5cacfd6fe",
+    "size": 64991
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__ss.corner.spice",
+    "sha256": "5b2ef445a9fa6f8686eba7a2bfcbca327c35fde17ae8a8f60eb4f4b9f03942ab",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__ss.pm3.spice",
+    "sha256": "d485bb13757a5ce2888bc11eed0bd8ba1c03e993004a6080926f54923866c966",
+    "size": 562437
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__ss_discrete.corner.spice",
+    "sha256": "4fb980f0f89fbbd117ea3a30743cbca1ba44224c413686be78d7f0cd5cb73ed6",
+    "size": 64942
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt.corner.spice",
+    "sha256": "c6220fd1b3ed009078cc3bfe66f6fabccddd5b33653c8efd8c9c4b344253cd25",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt.pm3.spice",
+    "sha256": "c685365ea7b4678a05ea2eb70d4ba6081a507b6337279f58301e846a39d80ef4",
+    "size": 561138
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt_correln.corner.spice",
+    "sha256": "653554fce785b92b9c62165820e7c6b8388fa1e134d53670e3dd51e1b79e4bb1",
+    "size": 67549
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt_correlp.corner.spice",
+    "sha256": "19967b7762a7061935d249fda3e42359299978a5f5eb5f77389a46af18108e41",
+    "size": 67548
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt_discrete.corner.spice",
+    "sha256": "37046f5584250059c2f8e4a2070d701461821326cf126a008b561120358b89de",
+    "size": 64988
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt_leak.corner.spice",
+    "sha256": "da93ff83c7a7b0894b5d4976cd729ddc7794946decf40960c4b6bd55f56d227e",
+    "size": 811
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt_leak.pm3.spice",
+    "sha256": "d8224b97e16f158c61360931cd0783e205198ec02da19dd280cdc02776c82e7e",
+    "size": 570303
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__tt_leak_discrete.corner.spice",
+    "sha256": "b42176206b59d007eac03e17ea3d359b0bfe2f9deabcd969b874fbc4b46ca998",
+    "size": 65631
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d10v5__wafer.corner.spice",
+    "sha256": "673ca3622f67e68fc438e78f22fa7ae470973b0fce0efeba50b17c08711f5007",
+    "size": 62680
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0.pm3.spice",
+    "sha256": "cc1977b2ce418e5a3df9a2e0ee328c0ea61c074d7489dbfa89206fca25c01169",
+    "size": 36901
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__ff_discrete.corner.spice",
+    "sha256": "7e258c446bbdcac9021b7500b0eafc5a5e5f4fa06dd50962b02097a0e2d55361",
+    "size": 7225
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__fs_discrete.corner.spice",
+    "sha256": "6ded3c7b9b92e8d8bca353e8a71b454ef7bcaf038fb0c69090b24ad22b4fec31",
+    "size": 7204
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__leak_discrete.corner.spice",
+    "sha256": "d5400ecdcaaba4c06e1b0cbc861f96f21e5149f81ee7355b831caa48779c1331",
+    "size": 7288
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__sf_discrete.corner.spice",
+    "sha256": "40d2f37f470698e01fce033dfec45943ec4924e772e629ddc3edb19bc5d709b7",
+    "size": 7272
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__ss_discrete.corner.spice",
+    "sha256": "d17242811260b674e7234eaef341e92a4f6c21e2bc090176f8f671e45eb52192",
+    "size": 7221
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__subcircuit.pm3.spice",
+    "sha256": "8da026795a287790d5ad324f90ceae2130eaf2fe38ce4f70648c984141fa5f63",
+    "size": 1532
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__tt_discrete.corner.spice",
+    "sha256": "4345c8cad35b7e1b703d73db2d727a5c490ca60c9082546224a304f7cfd6a646",
+    "size": 7629
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__tt_leak_discrete.corner.spice",
+    "sha256": "955d15600a96353ace7c7f1bfd549108144018f376bd0ab4bb50c4ceeeaa7255",
+    "size": 7634
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_g5v0d16v0__wafer.corner.spice",
+    "sha256": "f93a430565e0550dd43af8192f7ea504185ac86e7fa9139b2acab41308c480eb",
+    "size": 7550
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_05v5_W1p00L1p00.model.spice",
+    "sha256": "5a7e3319330ce9c3be9d4f43616e57f964ad4a0b5ddc2236961adb2dd9c4d443",
+    "size": 2961
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_05v5_W1p00L2p00.model.spice",
+    "sha256": "82488580473c62809bc20ac4a0c31c27e1d65cb7c01493482d6f13645c99a478",
+    "size": 2965
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_05v5__f.corner.spice",
+    "sha256": "b5ea1683eae8389880cf8568034e78c9ae997d596eae43ae013c0f711d28b064",
+    "size": 942
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_05v5__s.corner.spice",
+    "sha256": "67245fd815dfb837807706caeb7b5d6a5997c712fb29a4bfc31853d944eec581",
+    "size": 942
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_05v5__t.corner.spice",
+    "sha256": "4750a4ed664a8ea211700ced73eb88181f0a7ebc12e6ca0f158fa949b5f66bd8",
+    "size": 941
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_05v5__wafer.corner.spice",
+    "sha256": "816fd13b4786709caeaaaa81d751fc1b3a66152ada99f34837fc3d4d1a7a7cd8",
+    "size": 913
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_11v0_W1p00L1p00.model.spice",
+    "sha256": "a5c926ff567f5fcb60f762dd28f5ddba3627c3aa10c112427cd541814bec2efd",
+    "size": 4578
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__npn_11v0_W1p00L1p00.spice",
+    "sha256": "e5e04a1a813e07cc63f40885cf9eac371a95ec0ee42aaeb7f5646f8abc68ae78",
+    "size": 745
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nwdiode_top.model.spice",
+    "sha256": "b370d12defd21a26570f665c3f10da6c0cde5ff967272718ef91457f1bc1b7e0",
+    "size": 940
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8.pm3.spice",
+    "sha256": "35f42b163d113582dcc14b8a1448dca92a492c6c1993180f3000f53bd917832b",
+    "size": 454353
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__ff.corner.spice",
+    "sha256": "30ba71bde4024ff291a68352930bf2fc3e07f627efb090e1575b9dbd7b6e75da",
+    "size": 792
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__ff.pm3.spice",
+    "sha256": "d0ca6799661ef2aa45947a03ece0e696f0fdb5017903c0014e2ed827c207554b",
+    "size": 783832
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__ff_discrete.corner.spice",
+    "sha256": "791cacc6214d5945ed2a91f228e4ff353020727105f4f3d82e61fbc9e9399e50",
+    "size": 63104
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__fs.corner.spice",
+    "sha256": "b3dc4e47f87a780ed7de8126839ca4620454b6de85307341672c903b0c164d01",
+    "size": 792
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__fs.pm3.spice",
+    "sha256": "a28c02dff415e3b237bf64b6a197a6c9a3847916fad83dbaa370aebd3c173ced",
+    "size": 782113
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__fs_discrete.corner.spice",
+    "sha256": "e08fd0ed22f94e5ad1092d1faffc361da8a59bbd9af114cdf0e65bedcc030bf2",
+    "size": 63064
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__leak.corner.spice",
+    "sha256": "4f4290308a9d01aed6b6086b686a09c0d6cce4c23e129888c39e126ccdb29e42",
+    "size": 794
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__leak.pm3.spice",
+    "sha256": "5de3daba41471c1abf38fa0a98d308488f7648cd449fbf44177141d0546425a9",
+    "size": 785536
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__leak_discrete.corner.spice",
+    "sha256": "8ed8ff5637aa9fc9a74357cc1d67f2b2e5f844ddc86a7f74f8fafd3fefa211b4",
+    "size": 63451
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__mismatch.corner.spice",
+    "sha256": "f4d560668712678ea60641de923fce7691e64acda951949f840986837c31741a",
+    "size": 1322
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__sf.corner.spice",
+    "sha256": "857ce650534be04b5663787f03302f580624d6a6a477d27e293cf6ae93fc7d2f",
+    "size": 789
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__sf.pm3.spice",
+    "sha256": "28338a867b726f33de5c8ebc22fd5a6eb2b445c9e290ac5b14a18a0cd2bcdbe0",
+    "size": 781300
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__sf_discrete.corner.spice",
+    "sha256": "82337de247f563278a614576ef1eb5ffefb34de3973074739574fdd5bf1ff246",
+    "size": 63183
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__ss.corner.spice",
+    "sha256": "8d8b59726b48aa7a435b8f9bf0d0ecce0cef9f6359d4bb206f0a31306712e310",
+    "size": 790
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__ss.pm3.spice",
+    "sha256": "097313db47f3d46a4fb4ed4bf810c6b530a16af5c3e2308284061caa60365fd2",
+    "size": 782131
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__ss_discrete.corner.spice",
+    "sha256": "f64255ff14aa21bd5557e64e1d7996659aa1765d54a3cec1fa4bf6b007ab5050",
+    "size": 63168
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__subvt_mismatch.corner.spice",
+    "sha256": "e88a8f0d477363a8e9c4ca3bfbc6c1f1a1e4bf2d7180be3f87cfb4faf5013277",
+    "size": 1327
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt.corner.spice",
+    "sha256": "641d251a08bf9ddcfc67ba4bd4698ae1978d09447eb6ebf90055fdf3d21917ab",
+    "size": 796
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt.pm3.spice",
+    "sha256": "06b8e3f4b3d8a40c248adae022a4d8ebdd3c6499633deab6615b9794878f997f",
+    "size": 780717
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt_correln.corner.spice",
+    "sha256": "c06742f5ed8feafe62408e21e294f3dbc1b7e37c7c07a838a1ca0a91c2ec4933",
+    "size": 65586
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt_correlp.corner.spice",
+    "sha256": "521a22d70537eb4b479e7d93ffceb15d608be03024a30a4ae000c8fc593172a0",
+    "size": 65585
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt_discrete.corner.spice",
+    "sha256": "c241c484e04f7cbf2212204f9e3102932188a1567c91c71ecf24cb82e671703d",
+    "size": 63947
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt_leak.corner.spice",
+    "sha256": "eed6239d417bbf2437ca7431555e962fa7d9453b40b627bb97b090135c75e6ab",
+    "size": 796
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt_leak.pm3.spice",
+    "sha256": "9253f7d786ca4ce7ab18d70bb2c839d5c3219463ec4f88dcd8003edf6b7613d6",
+    "size": 781863
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__tt_leak_discrete.corner.spice",
+    "sha256": "c09ecaae17620a8d87884bb8db1f9bb58d3f285c2fd2d157a9f357195bca072b",
+    "size": 63482
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8__wafer.corner.spice",
+    "sha256": "d2bcbedbe95afa5d6db72c0d038ce0f27603e700c0fcdfcdd2d9dfa88e859f19",
+    "size": 60370
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt.pm3.spice",
+    "sha256": "22050fa2cc2f573ff2f390878bcecac2849e5f6ba1f3e2d8de70658c939dcffd",
+    "size": 462459
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__ff.corner.spice",
+    "sha256": "209003cb03ec551cd1dfe51259a1e795fef8d6ef1bde697f74d62db28c51ae79",
+    "size": 89002
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__ff.pm3.spice",
+    "sha256": "a121bff44b57e86fdd0004b2fc1c6ed301dd9c232571a2f3b20c2ddba1ebc616",
+    "size": 1303018
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__fs.corner.spice",
+    "sha256": "36c47bc06665932ede54f4fa5badad0d767c0987d996e2250b605140985cdbd0",
+    "size": 88963
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__fs.pm3.spice",
+    "sha256": "ed230da1309928328d6bf2813776afed315b398dca9793237a29454b6b3e812f",
+    "size": 1302519
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__leak.corner.spice",
+    "sha256": "0c3bcc3be012e02b9b8a5d67cf15da1793735635aed8a8844dc3fd37268681d8",
+    "size": 89340
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__leak.pm3.spice",
+    "sha256": "f5d114a1f5c4738ee4d402b8844f623f75715b3bc8a8eb42c0933ba3c56bd6ab",
+    "size": 1303277
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__mismatch.corner.spice",
+    "sha256": "05e258ab6724c8276cc058f6dba732e8024c5f0bb79ff3131ca219143491d631",
+    "size": 1039
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__sf.corner.spice",
+    "sha256": "c9d9d52c83e0079572c0d80b4b8afd3cb8ca7ff078c2b1a1f3bc24289b6cff9b",
+    "size": 89287
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__sf.pm3.spice",
+    "sha256": "8873002beecd4e6ca6987bf05134c8209570ab8b3b4ba8fe4198c870b0f089db",
+    "size": 1305303
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__ss.corner.spice",
+    "sha256": "514f2133d1a022a7956374c69bb66fe549ab5977669ae284159916d75e1324dc",
+    "size": 89097
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__ss.pm3.spice",
+    "sha256": "b209f4b8e77be0f4ce8a095247aff6ff21e073bb5528935b0f68367d77b13d25",
+    "size": 1302837
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__subvt_mismatch.corner.spice",
+    "sha256": "97938519e185e539a0e1a6abcc4604e276eb951b3727bce0f6fc16e9001b7ec3",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__tt.corner.spice",
+    "sha256": "69401f9b657f9ebb20d201d39e3fbf36b68628307d6fa982168fa51db3e77b03",
+    "size": 88134
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__tt.pm3.spice",
+    "sha256": "9ee2827efa84cdb6d3c8c2110b0b8b3665973d4da5032b63bb78e0a1ee20d983",
+    "size": 1298640
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__tt_correln.corner.spice",
+    "sha256": "4133a1d851c171af0df75355186f952d8284be4fe737c998e8cd9e6c6b6b94ed",
+    "size": 91591
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__tt_correlp.corner.spice",
+    "sha256": "3e596ceadda3a638e882940cd3ed337e0956e78eb61bb0e30b805f966abce995",
+    "size": 91590
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__tt_leak.corner.spice",
+    "sha256": "1ee9255260cc47ea7f0f1bf60504991fd46d68cc73e9543e161cdfc4dc26b791",
+    "size": 88895
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__tt_leak.pm3.spice",
+    "sha256": "2faf01ec26ca6d5d26612b83b7ea01e5c1b56cd0e8241f47158a9a8225cf4d7a",
+    "size": 1299540
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_hvt__wafer.corner.spice",
+    "sha256": "402cb4ca63e618422e081492de9b6fb78a57eda63550c84f0f4b51121a05ddc0",
+    "size": 85250
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt.pm3.spice",
+    "sha256": "26d67431c929be2c03cb1c31567251c5aa11107f14a7b7b5a945a5756b44d293",
+    "size": 280842
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__ff.corner.spice",
+    "sha256": "4be6d4c6ee9e4ffcef6f438bbd1b83a1436b896c33a4061b9563500943eeb3d7",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__ff.pm3.spice",
+    "sha256": "2ec379937bbb6c2f0aeec4deef3a433272c631afc4ab01c772cc3c626b7c1e40",
+    "size": 305930
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__ff_discrete.corner.spice",
+    "sha256": "7f9c4ebaddbe7d17bf89c41322fa46540d0b24d3c866c50deab6f5bfd669429d",
+    "size": 51783
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__fs.corner.spice",
+    "sha256": "53eefa3929c612891ceb52c7bf3f7e3214611f899b2a2c629df823cbbdc6439b",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__fs.pm3.spice",
+    "sha256": "5ac54504eb0eb4b9832a7a0e09430b9e27f5bf4ca7cde3675b6a699a23fcdbfa",
+    "size": 305729
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__fs_discrete.corner.spice",
+    "sha256": "39a893223b81cc93e0ba4bf5bcc0707830ca84e1a7bad923c42cee8e61db4b84",
+    "size": 51790
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__leak.corner.spice",
+    "sha256": "01e09d9bbb44e70cc8381d7336466c53c86d5751502bde6e59307dbc3e849fd6",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__leak.pm3.spice",
+    "sha256": "b6a86be651080fb86b84a87f161382c9484a0be29ed73713e69d5ffb102c2872",
+    "size": 311908
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__leak_discrete.corner.spice",
+    "sha256": "ff625b8c8e5cbbd63bcf487d8b63a0e73064784f908d023688de9c0dca7ac15f",
+    "size": 52335
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__mismatch.corner.spice",
+    "sha256": "6fa9be51a32f2f66d8d0858159e1db7b72e37adca31020af8b1a0c2df6e72cb9",
+    "size": 1218
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__sf.corner.spice",
+    "sha256": "96f4ed1667765219d2c07434f9d87b76f63f02c4fbe11596bb3cc3d6e759c06a",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__sf.pm3.spice",
+    "sha256": "43d05b6d9b35e2e3970baafe371028678863c4ce8c3df6cc7a02e2b92def8450",
+    "size": 305558
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__sf_discrete.corner.spice",
+    "sha256": "094d17778c0d5ce63100ea0951c497964defb7e77cee6152a052e5fd80364c78",
+    "size": 51798
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__ss.corner.spice",
+    "sha256": "838e42d3bd0394b05f248b53c2a54a6a3012c897aafaa730faf35d665b9cd14a",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__ss.pm3.spice",
+    "sha256": "d4ac6476c3c3012bd2e84f17a558392099a5e9fa5f79cffbd6e88508dbc3255a",
+    "size": 305504
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__ss_discrete.corner.spice",
+    "sha256": "efb35e03216a84ca2c9a6b316a29c9ce2fa84498d7a7a49cc82124be9248e757",
+    "size": 51797
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__subvt_mismatch.corner.spice",
+    "sha256": "bccbb1f7ac3f4a60ec80421c8b84e0b18946d151d80b73866e367089c030e128",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt.corner.spice",
+    "sha256": "ddb3ddcd4ccb85c1f68c51e41fd1d999d04de5d2836b43217841efd79912888a",
+    "size": 787
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt.pm3.spice",
+    "sha256": "3148bdcac99f8f4efefb49882ac81fab817a581c3e0b54df09ee14f0482f6e71",
+    "size": 304681
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt_correln.corner.spice",
+    "sha256": "7ade826aa47ef66b1bd41820d3c494ac9977265d2db90f0250cc2c4fc7c0c790",
+    "size": 53892
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt_correlp.corner.spice",
+    "sha256": "79cba49be49b294d09583fe622f69927c80fb2bf4f15499d4a1f351322fb51f5",
+    "size": 53891
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt_discrete.corner.spice",
+    "sha256": "961c653f7ec22ec2271f33fa20409766891984967fa9312059033630332b23f3",
+    "size": 52863
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt_leak.corner.spice",
+    "sha256": "b90f4f5e9ff2d17b327b93d99e28f2e2629bdc70eaed90206cbc1950792fe7a1",
+    "size": 808
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt_leak.pm3.spice",
+    "sha256": "464b204487b5b4791a1f57d968f04ecf354e260e1f6d0694cfdac113c0ba03f2",
+    "size": 308630
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__tt_leak_discrete.corner.spice",
+    "sha256": "b3ec3ee0f8a51242595e5954fded414094a7e769db5f37722f4bf87b4a1cf590",
+    "size": 52175
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__wafer.corner.spice",
+    "sha256": "64988a63f2d54c29a64656fa8dfb9f9e56dd645892038261a4cbd5c19ccd2920",
+    "size": 50635
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_mvt.pm3.spice",
+    "sha256": "0e6af23d79945a77cd14dafadf16dbadd993a981e99f8c92c698c187f976dcc0",
+    "size": 14674
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_20v0__fs_discrete.corner.spice",
+    "sha256": "835aa506b3d5e671fd73742472ac4157bf6c923d896f478349a88246ea41bb07",
+    "size": 1447
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_20v0__leak_discrete.corner.spice",
+    "sha256": "2c89135b289e2704418de24764654b36fa02ed778c5ec871134e6526e7da43fd",
+    "size": 1453
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_20v0__parasitic__diode_pw2dn.model.spice",
+    "sha256": "f7b859e1776ead72594b227dc4677cde974e448c7e652cf13c3b7a6a20f0719e",
+    "size": 3527
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_20v0__sf_discrete.corner.spice",
+    "sha256": "c22b2c86558d22e75a6d3844c2e25b7af2cbc86cbbcad03f5e94202242a6a57a",
+    "size": 1443
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_20v0__subcircuit.pm3.spice",
+    "sha256": "5ac0449e927e098e43b89b7ad84c506e59aca864fd8d1dae8e1f15b1dece9660",
+    "size": 7476
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_20v0__tt_discrete.corner.spice",
+    "sha256": "3027fce9091c0cdd8f097dabe70a7bad076e991054ad746de49831ae7cc798eb",
+    "size": 1407
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5.pm3.spice",
+    "sha256": "54798d6479ca546fb10a3e004e017e30e5cb46a70f53c37988e5705846e80f9a",
+    "size": 348483
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__ff.corner.spice",
+    "sha256": "70c2630c319f9856b6ef8bdf671d7ed0813ee3d07bcc4734dff5ec3beef4dfe8",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__ff.pm3.spice",
+    "sha256": "a646aa9c8ca36c44a3168b0cd4263ccc740aeb28224d79d09d9a2c88a92b256b",
+    "size": 644526
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__ff_discrete.corner.spice",
+    "sha256": "a36ec234c046e60ac6f31148aaaef12f8cd319a60395df465e126d162f2b3b77",
+    "size": 65005
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__fs.corner.spice",
+    "sha256": "914a77dd766de318c7c6ca08f72c2dd730433f52021507310b1456e8dcf84cae",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__fs.pm3.spice",
+    "sha256": "0c4b61239fd0feb3b55dfc1253b10440ca1c6cca9daa59ddde6e4c8056465da9",
+    "size": 640286
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__fs_discrete.corner.spice",
+    "sha256": "5cf85400d8e671cbdefad414676c59573f7bd1d8a25c3002a529ee79fddbb01c",
+    "size": 64965
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__leak.corner.spice",
+    "sha256": "08dc0c050abb3f900e9237fd84836be593bbfdeb4b2d7ae0f7a7b71aaf80af92",
+    "size": 809
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__leak.pm3.spice",
+    "sha256": "07edadf43b754b1dda55f48529ce0878f64c84b356ac9bbf409847c451146571",
+    "size": 620390
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__leak_discrete.corner.spice",
+    "sha256": "349812c054720d7e36e38ffb8ea7d066cee97df41075b18dc7663a390ee1dba4",
+    "size": 65581
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__mismatch.corner.spice",
+    "sha256": "7564bd6e8ba2e7a19d594970b1db2b37202a8117cb49fc22861d2579d77d0339",
+    "size": 1187
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__sf.corner.spice",
+    "sha256": "64d84750c79144bc455621c536d6eaba5e6dd4569202a2229fd02949f1a8107e",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__sf.pm3.spice",
+    "sha256": "dc334fd64ddddc0d0a14a86203cc62a4419a473700750e7e8e794a59ea0bd1e5",
+    "size": 640257
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__sf_discrete.corner.spice",
+    "sha256": "8099af9051356f11cf3d7a46aac0f9624e8575a8a3a7c74525976f88e8f33c59",
+    "size": 64968
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__ss.corner.spice",
+    "sha256": "171fe57846f7562cde7f32ef5012a7a21ec20c2e843f80bbfcbf91a1a13184a8",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__ss.pm3.spice",
+    "sha256": "c50b45b542209f65ceec8fec06fe3acc180da4cfc4dcd892e8ee78222e9ab54d",
+    "size": 643076
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__ss_discrete.corner.spice",
+    "sha256": "af5f29e560daeb5eb8cfbde6c25540be5a72b3900c5077df268f9c1fd0510d3a",
+    "size": 64970
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__subvt_mismatch.corner.spice",
+    "sha256": "6946224d4df4ee703b95c37fd33d27dc0c0d2ec134919e7bc085c56cf1fde9c8",
+    "size": 1187
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__tt.corner.spice",
+    "sha256": "52707b93246551402e9467132ce3d9cb4939d810cd910aa9968dbd534e3f7907",
+    "size": 810
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__tt.pm3.spice",
+    "sha256": "48512e0cc4ae95fc8030db3c86d2e33cd27db5d392aa5e09627368a9684e24be",
+    "size": 641562
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__tt_discrete.corner.spice",
+    "sha256": "5f101ec5d594e159bc46afdaf6daa7af39b419e0d7337fed88fb2ba99daaa9b0",
+    "size": 64994
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__tt_leak.corner.spice",
+    "sha256": "634e066a0a7090cefc5f6d753e387abe8c951d9c005dfddcbe49efbeee66e52b",
+    "size": 808
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__tt_leak.pm3.spice",
+    "sha256": "9082acbacc06a41f694916cb1964e7ef51b9635c4d2ac24eecc238bf6987c0bb",
+    "size": 641908
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__tt_leak_discrete.corner.spice",
+    "sha256": "7eb47e8aa4247deaae4171a2f10a27f8aca301bfc60d19423d24098763326d0e",
+    "size": 65504
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d10v5__wafer.corner.spice",
+    "sha256": "3c3f72722ddc23ece8383deb675c5c9f67c5a3c2ee860e3e3eac0beedc1d130d",
+    "size": 62680
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0.pm3.spice",
+    "sha256": "e0bf3e15caf27abddd5980aba2d2f0152579307d5e966ed8c75a0fc9a82bfd8e",
+    "size": 19573
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__ff.corner.spice",
+    "sha256": "be86f65df228255832bddeb9d9527d019f729691cac383fcc16c59880bcd96c3",
+    "size": 5000
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__fs.corner.spice",
+    "sha256": "79c2d084e6cc9db66b680355274a4a8e63548e089b4a5a63c76969a4a6bef9fa",
+    "size": 4998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__leak.corner.spice",
+    "sha256": "bd1afda58ce42a50ca863114d178ef6378af5a254cf0fe73dbbf96f690425f56",
+    "size": 4996
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__parasitic__diode_pw2dn.model.spice",
+    "sha256": "620dad5d04f140231377c637b156a5ecde0ee9b16c62f12ca425752d6a6f8236",
+    "size": 2085
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__sf.corner.spice",
+    "sha256": "5f7ce22905a1aff0143821c7b54f84d3897959d32b411d1272f1f6a96b598e1b",
+    "size": 4994
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__ss.corner.spice",
+    "sha256": "7ae02c1c3aaf0c09ebf112d7e7465df3a749b2ef1f74e0f3f744670f8b2954ee",
+    "size": 4995
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__subcircuit.pm3.spice",
+    "sha256": "1e0c19100db1bb3f78b2faf59d8e5a12d890fba53866da570302f7cc4605c9f5",
+    "size": 1438
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__tt.corner.spice",
+    "sha256": "a4d9c6839b8668a058a325a8c6f510d8c041396a8500295dd1febbcd61bc99c0",
+    "size": 5120
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__tt_leak.corner.spice",
+    "sha256": "66e90066d0e55437ea4c1f9aba51360bfec71adf4d0b63abff712104dbd39e29",
+    "size": 5134
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_g5v0d16v0__wafer.corner.spice",
+    "sha256": "02b85c11ea9831bfa3049f9258a01eca8b786cd1fe4257b232bb4f7a3ce43118",
+    "size": 4933
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pnp_05v5_W0p68L0p68.model.spice",
+    "sha256": "3b14a30b304d6c5dae8917d73f3d664678e008b35985ca894d6d021d3820b3fc",
+    "size": 2264
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pnp_05v5_W3p40L3p40.model.spice",
+    "sha256": "2cee6ecea0c60e7a5a9d7d6329b89aac0a84c80e7443d426206906196b4cae9e",
+    "size": 2832
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pnp_05v5_W3p40L3p40.spice",
+    "sha256": "8668827a03fe5e450a8148489fb89102c444f5568da9dde730a607feabf94283",
+    "size": 759
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_generic_nd.model.spice",
+    "sha256": "69ac9426c1e2dd1abb3cdefb77b7a813fd6c23272b7bcf5e77a730f533a8e692",
+    "size": 890
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_generic_pd.model.spice",
+    "sha256": "c953cb9b1158ceb37684bfa4a587692e4f884fa8a4fcfcf89f6584898d6c8ada",
+    "size": 916
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_high_po.model.spice",
+    "sha256": "5d5f46fc322ff3aa83222a588c712b758a3863b8aed3eea6ca637b120ddf411f",
+    "size": 2352
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_high_po_0p35.model.spice",
+    "sha256": "b734c53d9317e2b9397c4322bfba943c15c8fad6450164dd8205b537344f0d2a",
+    "size": 2324
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_high_po_0p69.model.spice",
+    "sha256": "cdc156f6d1f0009d7e7783fe692395a27568e29fbf3acc2f493233d0ee43a0d3",
+    "size": 2296
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_high_po_1p41.model.spice",
+    "sha256": "10e284a92450c4e6f7cb0662d3580f156bf8f037aa99991a7f04ba24399aad1d",
+    "size": 2261
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_high_po_2p85.model.spice",
+    "sha256": "dc066401f00c16ae38ed9946163e9d1ba480dd6d88cb5edd45bffef55474cd4a",
+    "size": 2279
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_high_po_5p73.model.spice",
+    "sha256": "7474ba669a8144316c2e4a79523a99643ea331bbc7e53b9efc3cb33a03fb254d",
+    "size": 2271
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_iso_pw.model.spice",
+    "sha256": "9cce1db3f8aba6fbe02f237430143799314130cf0949d8429f1384ce159f2a27",
+    "size": 986
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po.model.spice",
+    "sha256": "de3ce358904404dc3aa11f8dc84500638557dd5fe4b5988e07c9e280fc9d6e78",
+    "size": 2322
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po_0p35.model.spice",
+    "sha256": "940ed59e4935e9f8bda6fe493bf0e5a33f7d7a6961f73fdb15e666637fa50f83",
+    "size": 1047
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po_0p69.model.spice",
+    "sha256": "d35a4b6371a9bd678f7fa1dabfbcfdbd3f29059ab5073516b4e55b6f92cb6b32",
+    "size": 1047
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po_1p41.model.spice",
+    "sha256": "c5993a674226d7878ac8a7400db00a26bfd25db3bd35c7b9a9da29db8ca11c14",
+    "size": 1047
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po_2p85.model.spice",
+    "sha256": "ecce036dde19fe4f0404652375a0ef549df115f393696f4c55639fde33cd9a47",
+    "size": 1047
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po_5p73.model.spice",
+    "sha256": "d4e13ad468f778656baf3438a3a2e7c5a6f64644678995f6ab6ec7e2e1636e3b",
+    "size": 1047
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__res_xhigh_po__base.model.spice",
+    "sha256": "b757b1ff2e14fe28d3380a173b29235b7db5ec12a7298c55dc87a7807d07e884",
+    "size": 2416
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_aura_blocking.spice",
+    "sha256": "75342359e892e39be0830b7bb1b8b7dba0386ac7014812a1223df962be116d38",
+    "size": 1191
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_aura_drc_flag_check.spice",
+    "sha256": "364d3e3b5592811994325cf6f90e15d8576eae30a47683601a21927b710cdd8f",
+    "size": 6379
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_aura_lvs_drc.spice",
+    "sha256": "821b7155e9a8e9debccca839781bcc21fb0932613b943409832ac2d3f6990f6e",
+    "size": 2026
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8.pm3.spice",
+    "sha256": "dd1d04c190d31692e149c9a59f0901a6e9ea2666e43f842178d329ec840ccb8d",
+    "size": 9653
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8__mismatch.corner.spice",
+    "sha256": "ca52edda038b4cf56f39c9a6335d91bccabb4a3b12b6f98895060c4b37d68a98",
+    "size": 1169
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W1p65L0p15.spice",
+    "sha256": "28b85e95c344564e4974cc6328ca017bf3f34af267b4053ce0d81774b58f2164",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W1p65L0p18.spice",
+    "sha256": "5468e3d7b606b3e010e8d9d62b263b03de66235f18504b766f3eb02420bb2402",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W1p65L0p25.spice",
+    "sha256": "50cc4570898d6669f52413d2161ef3d38e15b82dd61d8a131f9f3092df56b06e",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W3p00L0p15.spice",
+    "sha256": "505e912d11a7e11954001d0d6accc7d90796cd35d957d6d5f43f8a186307ca59",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W3p00L0p18.spice",
+    "sha256": "8fab7710417d3f0981784f4c6d72324f912ef9b82ad1f24038c09baafb59eb31",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W3p00L0p25.spice",
+    "sha256": "4cc2b8166b698501eb7f8241ac6cb2d6d32fadcbcd90ca5d08c9f14187bbe561",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W5p00L0p15.spice",
+    "sha256": "15c0f60a287a891d838dfc2efebe95ff2ffdb1d4f73a0342efd88070c325f8ae",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W5p00L0p18.spice",
+    "sha256": "5d438f4afd69c9d269eeb9c84f0dbe146ce03a91520e1dfeff8833faaf92c15d",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM02W5p00L0p25.spice",
+    "sha256": "a2a116616d06793eef85ea5e15f571cdf034e3d5c057d8b3ef1836c6b41cd447",
+    "size": 869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W1p65L0p15.spice",
+    "sha256": "6adc72db707a66730ec8c0cad432a82dcedde3a2374271001ce7960cf03e8f6e",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W1p65L0p18.spice",
+    "sha256": "789687635580b8713776a0fd27046a0b13b43fd236c070f5f94655be560dfa60",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W1p65L0p25.spice",
+    "sha256": "382a3c8907dbda8c17606507a1939f9f68c566ab2b5bda6d09826ee5eda2244d",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W3p00L0p15.spice",
+    "sha256": "96acf9b11c58dce4257fc94976f36f327f92dfd5d1f449fb7a5f997970f296ab",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W3p00L0p18.spice",
+    "sha256": "9c816fd150d2e62bdee097d412d3d40df86d3e410889b52df93d1e36e98833db",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W3p00L0p25.spice",
+    "sha256": "672b45d2d3e51daf098a4380425b4f96fdb21e0f51a4b2ef7309bce28c618b17",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W5p00L0p15.spice",
+    "sha256": "1119fc65cb46840610befff6a0ce660b275293ffc87390275a2f572fbcc28877",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W5p00L0p18.spice",
+    "sha256": "334acb5952dec60ab00c2ea308170709dcbf95527923e3b32c3de7c89fd917cb",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_aM04W5p00L0p25.spice",
+    "sha256": "3c77b002a89eaa7f3fb00225fe156c68552775acc91b7c6ffac68bb0b591536f",
+    "size": 1023
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b.pm3.spice",
+    "sha256": "9bb3d6b17540dbcf9c60964effc0645eb928a4639521da1ae3e6eb37056e56d7",
+    "size": 110268
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__ff.corner.spice",
+    "sha256": "b0d63e167d520cf29ca61039c4de84c43a678ada8ce73c4678d81fee7dcc553b",
+    "size": 16883
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__fs.corner.spice",
+    "sha256": "bf63eefa1cd2facd2b1b3a1395589949231dbc5bbc678179aabe2381cc0c6dc6",
+    "size": 16863
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__leak.corner.spice",
+    "sha256": "bd16770fa8ad675bccc92aeddda0ec2126014d9dc1614cb127f6313d41bd0b07",
+    "size": 17039
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__sf.corner.spice",
+    "sha256": "f90e8bacff05b2caf4cd60357bc31a7d7c149289b47ce711986d564bcfb8a457",
+    "size": 16884
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__ss.corner.spice",
+    "sha256": "1f26d2444234120c2b2399d182fa55d456e9fd7e528db21709f0ea37781c6236",
+    "size": 16865
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__tt.corner.spice",
+    "sha256": "0cdef6b84f4779b97623b2dab53f5a51b97128e46906bb088fcc1960bfbc5ac2",
+    "size": 16855
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__tt_correln.corner.spice",
+    "sha256": "36a916c3375ad14300ac681b75c7f4b91c4d1ad668bf60ec56dcbf38cf52084f",
+    "size": 17836
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__tt_correlp.corner.spice",
+    "sha256": "0f911d47def88bb5f8ec79c104e02acb53b76f9e6bc1a17e28cc03d743526fd8",
+    "size": 17835
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__tt_leak.corner.spice",
+    "sha256": "645ffd389d79e0cbc1caf92b0d379a3e1c196e8ec34771269d493b0560f0b339",
+    "size": 17017
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_b__wafer.corner.spice",
+    "sha256": "003aa539bc5b2dad3889536ddd279c805b735023233fb46e63982fcb88e1e49c",
+    "size": 16437
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_hcM04W3p00L0p15.spice",
+    "sha256": "9d10fabc2e02ab71c46a607c041a82bdf4893774ed1aff58beb40909d885c42c",
+    "size": 1024
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_hcM04W5p00L0p15.spice",
+    "sha256": "c478ab097bf5c5b2834accf22b5033c76e860c59aaa497fbada21814b606882c",
+    "size": 1024
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt.pm3.spice",
+    "sha256": "0bb1e7a3df76f120ba9b3afaaf125eab8c7c112d9fe0f62e0759ac0cd0c4626f",
+    "size": 8326
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt__mismatch.corner.spice",
+    "sha256": "f199d4f4e906ba3939aebe2a06752fd24bc749b61332fcdc5f69d7954b5372b4",
+    "size": 856
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF02W1p65L0p15.spice",
+    "sha256": "c87d6e68600610a6f91340a08bc38dd90271615c27e4ec0397734a8aaaa9c59a",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF04W0p42L0p15.spice",
+    "sha256": "6ed8dd9004c7aea9feaa3affda67b49b01ae525df7b2b8a833c1b7f43ae90ee8",
+    "size": 1035
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF04W1p65L0p15.spice",
+    "sha256": "8244abf6daf635131f8750638cb9457ea07bb32bd6c82a6f4aaae556e32b999b",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF06W0p42L0p15.spice",
+    "sha256": "9c360c10d649eab51c8c891ec2f43bed4c37248e9c39c7b773db5f29a926b618",
+    "size": 1193
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF06W0p84L0p15.spice",
+    "sha256": "34ea219284858b72163e108cf80d41e39298595fb247c2cb61000f9b81b0be7a",
+    "size": 1193
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF06W1p65L0p15.spice",
+    "sha256": "c24fed212d167667fbba243bfdf76e141d8a4536cdff15709e7e36b4ce36aff8",
+    "size": 1205
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF06W3p00L0p15.spice",
+    "sha256": "0a777179a189c2944f8c83de1ca0358a8eeccdc2a3f8c1a9d270542b9d7e69cb",
+    "size": 1187
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF08W0p42L0p15.spice",
+    "sha256": "9d6aa75d1cda9c8f9133497d9f5382858081358fd05213d148aa16b4475948a3",
+    "size": 1351
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aF08W1p65L0p15.spice",
+    "sha256": "c7ba99a0e9a9f91a7901ba1d54f1bf77f3ff2fd266806a10841461d0d5a47245",
+    "size": 1367
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W1p65L0p15.spice",
+    "sha256": "0c04702cac865d3adb5790dcff4f9e2d89f6592a0315499316ae3c2f8f6fcd0f",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W1p65L0p18.spice",
+    "sha256": "151c958abd315f40abb52267d0066cc43e5c910b61bfb160a0d2ee2cca29338c",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W1p65L0p25.spice",
+    "sha256": "9ac041e26fffd4e39eec015155dc4aec5c3f5dbc82a8d0880126d70766b0d39f",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W3p00L0p15.spice",
+    "sha256": "bac3501fbfe3e2e2b5bd3f74b1ffda131c33689c6c31d3ea07786d58d6176680",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W3p00L0p18.spice",
+    "sha256": "0a6035d41f810486fb5e2dd7164443fde6761ae0dcbe008574dde4cc965244eb",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W3p00L0p25.spice",
+    "sha256": "c34bb0d3ba3ae6d33601eb218b44749dbfe06c402508c0f26f1113ddb5904287",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W5p00L0p15.spice",
+    "sha256": "19de5eafb9614eec48af1d65caa852b36ac4d1f44be4a9726e6097b6b0009a7e",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W5p00L0p18.spice",
+    "sha256": "12d18dfed97a37e1f1c046ea34f2d873bba2cdaeab6db78d7ec605756cb7dc67",
+    "size": 881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM02W5p00L0p25.spice",
+    "sha256": "043d8ba428278359f968b9302a313a529f0add006ba7ff3cccd5503fc3c7ebc2",
+    "size": 866
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W1p65L0p15.spice",
+    "sha256": "5665753ad0f113977f595ed85e689b518cf70085c3c065088d20874080b2fc70",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W1p65L0p18.spice",
+    "sha256": "29a9e8ef4e83cc3189b49f81fed88f5b7a5ad4a71e1c609bf9cd09915a086889",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W1p65L0p25.spice",
+    "sha256": "97efacf7b31269a651fe953dfa16b4b5c048d2c6b50c42d07f7544bdcc3a2fc9",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W3p00L0p15.spice",
+    "sha256": "6354087f43c2adb9b56764438059fc888ccb9b24fe64c07146abba58d07b21a4",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W3p00L0p18.spice",
+    "sha256": "5e5b1d173e3d094cd06d0f08da6afec8353e2c2b0a6692196431324a37c1a937",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W3p00L0p25.spice",
+    "sha256": "0a81252b90701d17f6ce3515650472b49439a10946ce07317737542f1177a598",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W5p00L0p15.spice",
+    "sha256": "605ba9432f8e71e98cc7956d13ef8463b67faaae73868a5fa9c4a4080b9e6be1",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W5p00L0p18.spice",
+    "sha256": "9b1b65184e3a0e7ebe9a06d8ee4ec0d0b8853755efc5d43558363a4370a1a5f0",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_aM04W5p00L0p25.spice",
+    "sha256": "b603684c03111de2227e5df29431a55dae298e7fdf5716499b16a3bdc2862e11",
+    "size": 1043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b.pm3.spice",
+    "sha256": "fa4875ad1d8da101a73d8319251ebf5b56f700403086772bb709823da586c888",
+    "size": 113984
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W1p65L0p15.spice",
+    "sha256": "1d2efecf1c15be8d4263d4b2108030c4aeddab75b45411703d0332902d36c4be",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W1p65L0p18.spice",
+    "sha256": "3b445f1992357abb82fa8314e886860f30714777c522fa8bd79fed215586d580",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W1p65L0p25.spice",
+    "sha256": "2473f2a6201dbafe2d45ab35271204982a9beb7d6f7a1049c43758cb0ec3f347",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W3p00L0p15.spice",
+    "sha256": "8cfc24b93485585abc56a6cf0c0ef3b6619cefc2d57d8b34f34d9e80a10f1918",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W3p00L0p18.spice",
+    "sha256": "c9bdea6ac44cdb84d78f23acc725b94cd89f6174c05bbddf1b56b28c3d96a07a",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W3p00L0p25.spice",
+    "sha256": "0b4504aefd1c1ac56829e2f1e4420cb655a8f5b2d3be3444245422c1306a3f70",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM02W5p00L0p15.spice",
+    "sha256": "c0e9a91ac3ac59fcc67b45258610ddfbe58ce486fae00dfb4a9af6080743f2b2",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W1p65L0p15.spice",
+    "sha256": "9a13ce2ef1ffb62b0e5b5c9dd7ebec084b20bf64841d83c48001941314a440bd",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W1p65L0p18.spice",
+    "sha256": "30b35ccc30e98b6986c2df0bd2470657b99bc3ba353f6b7afed7d945ff0b02e1",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W1p65L0p25.spice",
+    "sha256": "bbb57a042cace0bca4ede4904bde9efa74573a8b13958de153365f18da424ee2",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W3p00L0p15.spice",
+    "sha256": "51d74e863502eeed4b585a1e05001d4dbc29d1967bb3ce68a7ab1bb2fb7c06a9",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W3p00L0p18.spice",
+    "sha256": "c06e467675fb12789f1f0f177e76b1037da84528b5f344300f3fe786a9ef83bd",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W3p00L0p25.spice",
+    "sha256": "73ed509d19d79ca0f1de42566153a88932a7ff6bf18322ab3377c33df9e3b058",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_bM04W5p00L0p15.spice",
+    "sha256": "f2335bc06f3af70443c3b1d3f5d7d7589274fa5eb9c0ad9e29841026e111e068",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__ff.corner.spice",
+    "sha256": "57a43c568eb7a35c8ffe4fa32a22c9cb0a266318d36d700a675efd820256fe05",
+    "size": 19535
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__fs.corner.spice",
+    "sha256": "e4e57542f3d65f1c3fb25aa4eac1278238c31c58bd36e08bd28454d8b7ed85b8",
+    "size": 19499
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__leak.corner.spice",
+    "sha256": "4a0b35d53bd7ddd73fde5db9c47565663c341365c9b9378a72c956169f6a18ac",
+    "size": 19679
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__sf.corner.spice",
+    "sha256": "20cbbd6c2e6fc2ca96c2e6255939bb2eb847f54ec664b34b04923e03f5aced63",
+    "size": 19523
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__ss.corner.spice",
+    "sha256": "c04e981d19d05d8eb9b694f982202a2c7e7e8e260b048a5db2a8ffdb299a839e",
+    "size": 19513
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__tt.corner.spice",
+    "sha256": "d48d5b1be4fe96b97e80115b25e38d1a5d324cb5b817faceabe2f364df9e4b77",
+    "size": 19491
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__tt_correln.corner.spice",
+    "sha256": "cee548750d9c7597970c3f0ae458730dec6bd4aed3413a48e49309179bc4dcec",
+    "size": 20548
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__tt_correlp.corner.spice",
+    "sha256": "ca0313c1cbae2b63e5f87757ce35108d91575bd4e43f0dd92b25448997337ba2",
+    "size": 20547
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__tt_leak.corner.spice",
+    "sha256": "c89770fc853bc9512209a2d5bf1c51485a0bec585b38a4b22ce9863390f031d5",
+    "size": 19656
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_b__wafer.corner.spice",
+    "sha256": "8f268663c50ec8c8393fe7f3975d3f9fa5ec87f1f9671c43cee430acb04bddf8",
+    "size": 19045
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W1p65L0p15.spice",
+    "sha256": "6d6177435f57ca62cf11740e879ed24ab2835725b5ddf40364c1475364dee6df",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W1p65L0p18.spice",
+    "sha256": "d5f3887029c2582e28bab332953cd446339a87d921be93cf6a495b3f39420521",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W1p65L0p25.spice",
+    "sha256": "3c99611aee08f9a0efb81f81eff5397e7faa4e03b344df2b12b1707c011721bf",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W3p00L0p15.spice",
+    "sha256": "980648f640a6e1edbe00265786ea53a5d8639a9cb3d008d50338ba93cce0ce34",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W3p00L0p18.spice",
+    "sha256": "7cc88abd33e49e4a4df98dcd656772c81bccaf8dd641025ef271a730b2775830",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W3p00L0p25.spice",
+    "sha256": "4b86cd40c567446a1fa0debfd17b25c12c5daa67905fa716a03c4502401ad458",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W5p00L0p15.spice",
+    "sha256": "2dbe9dce1667b2606f9a34d401a4839f099eec57ad711932acf72537b3564bc0",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W5p00L0p18.spice",
+    "sha256": "f93b2c2a0b201ab84f1bbd7cb1263c19112ba2f2e0562f0be60d604f721e39da",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM02W5p00L0p25.spice",
+    "sha256": "fefb7f74f4650a48c7c4080864172880caac1a4f93ee9777730a3055ceeedac5",
+    "size": 1061
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W1p65L0p15.spice",
+    "sha256": "c9bed5d9d85bbf3c6d309ac40d40abcd25143a1e32df23085f2b16f151ee11f5",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W1p65L0p18.spice",
+    "sha256": "d665a2fb38cacf39ac403cf71b6d8dc84c2a70ffddb697331416a3d8f19db5bc",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W1p65L0p25.spice",
+    "sha256": "dcf4c8ae0779e8bec7c60e81f6893f22c9c087f51fee9caddf43c7614baf7e5f",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W3p00L0p15.spice",
+    "sha256": "6369d84af1a7928aea199318fd514820858be8f1251a31260f2cfddfd018f093",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W3p00L0p18.spice",
+    "sha256": "aab27bd02da1e00978ea4ffff9c51a168d245e3683b19ee497d496e082aaf828",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W3p00L0p25.spice",
+    "sha256": "8b7d1705ab389e7f43be58ab8791243e5fd099ada027e3d482e2fbc75153f4fa",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W5p00L0p15.spice",
+    "sha256": "810489454cd0aa9f4d0032195959f37536cf907934e735b1a05b53ff2a863b15",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W5p00L0p18.spice",
+    "sha256": "458617a901833b1b67d4c76eeff22342ed8e8e220d55d0a3e24e360535683283",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_lvt_cM04W5p00L0p25.spice",
+    "sha256": "e781404a1d907028360ed71e7b6ce0254285c1a20da575771320107110147fe0",
+    "size": 1223
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_mcM04W3p00L0p15.spice",
+    "sha256": "b5a5938aae7f4965389070155995f2303fc11336e1a0dc5d41f05f467748e336",
+    "size": 1024
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_01v8_mcM04W5p00L0p15.spice",
+    "sha256": "57ac9db23162f3c6e47d4631b4d4316d545d18bdff409bc61589500d42f4a038",
+    "size": 1024
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_aup.spice",
+    "sha256": "4ac2a67cb44cb5579f4c76154bbeb3fe409481a2a2fc1a4bc6ec84bd7882985e",
+    "size": 867
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_noptap_iso.spice",
+    "sha256": "f31c9cbeb074d18abbc1d97166ee4b9b232b3fab2e660154bb6e392fbb776e8b",
+    "size": 876
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_nvt_aup.spice",
+    "sha256": "64a219193e37c8b4861d87b916ceb43ed7ef769fe0f0e760278c183549f5e15c",
+    "size": 837
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_nvt_noptap_iso.spice",
+    "sha256": "6e3a3c38e1911d84a7a7f673b1112f44f32dc512cd02904d372f47180ca65284",
+    "size": 888
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_nvt_withptap.spice",
+    "sha256": "b34b9ef19fdad4f2e78dcecad438a7b967fdcfa4146da8de54e1e9b0eb268079",
+    "size": 820
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_nvt_withptap_iso.spice",
+    "sha256": "0306cb1acf5ee9b30b2695f52a4277f3831620f82e9b96795f2df78d1d72c9fe",
+    "size": 890
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_withptap.spice",
+    "sha256": "6855b4d32921f86279bc0a989e5ca318c3a43d09cce3774427d8dfd9aa6cf466",
+    "size": 872
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_withptap_iso.spice",
+    "sha256": "52eee83d5c3701804448fa21b401d16c7a864b0e328840bdbd054ad6fc99f75d",
+    "size": 878
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_20v0_zvt_withptap.spice",
+    "sha256": "439abfe3b3ad1c06a603198390645304166eb43a51068bd3747a3d9f7f90546f",
+    "size": 838
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5.pm3.spice",
+    "sha256": "cc1cd3b324345059e5d21abf48c731ba740ad1d5b7ac073ec015ba2817b8ae1c",
+    "size": 4885
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5__mismatch.corner.spice",
+    "sha256": "29cf2ce6e1910f3c58dd74300ff330ea918053384a29652db134367c110584bb",
+    "size": 2067
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_aM04W3p00L0p50.spice",
+    "sha256": "9481ca8e6201f5f2df904723c9305f17307b612428ebd304448e7fe2911c2a72",
+    "size": 1048
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_aM04W5p00L0p50.spice",
+    "sha256": "0df2524bc485e5ba4e8b1f8c7afc7b854948c3d2af9c7f703bcb1c4b25729d9d",
+    "size": 1048
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_aM04W7p00L0p50.spice",
+    "sha256": "c807e692a484b447d21ccee6a42795d65f70dc0fffe4db6200bce1ec8df6cef5",
+    "size": 1048
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_aM10W3p00L0p50.spice",
+    "sha256": "5a73e2f5894b9a2bbd60f1cc7a8f4bc6a047420d8d1d3ddc844083a4aa15cbc8",
+    "size": 1540
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_aM10W5p00L0p50.spice",
+    "sha256": "261160ccfdaf2cc94f92857d8ac366b7a84a0419cc2d7e33ed01cd59f2b01695",
+    "size": 1540
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_aM10W7p00L0p50.spice",
+    "sha256": "6c4dfff70f1f23eac584630377a4c07159cf22df6851914b2db308a6a2bab648",
+    "size": 1540
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b.pm3.spice",
+    "sha256": "42993ce4ee9380e9500bda06fb63d29db410e4cd11e93a07f9a252b259dd6841",
+    "size": 54154
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__ff.corner.spice",
+    "sha256": "57f151000b60dc65cfeab38fd8929dc4db983a94534b7c524a1f1009bb007de6",
+    "size": 9305
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__fs.corner.spice",
+    "sha256": "95b9700e0a64fad6a355cb9ac80f4584493812b8b4e0dd3c6093d4969f6224cf",
+    "size": 9279
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__leak.corner.spice",
+    "sha256": "faadf9380a4e5b135399a64c83d76c7e719facd457bbdc114c5cff73a4f0960d",
+    "size": 9383
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__sf.corner.spice",
+    "sha256": "0b8e9ed968e99e8115404cbe648fba8c9f93f605d614487751e30caf7ae2bb17",
+    "size": 9310
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__ss.corner.spice",
+    "sha256": "cec1fc1e8d0b0377d821d1c8f80c1117963b34d954c0e8d11c479e7b9dc435b6",
+    "size": 9284
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__tt.corner.spice",
+    "sha256": "120c2c096ff8702947b7f8593a0591cb66cd2a7228f97d97068e68c9ded393d3",
+    "size": 9277
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__tt_correln.corner.spice",
+    "sha256": "db67e1f0223e72fc3028f8d573af7150a12b1a9f46fb9130329febbf1a003e51",
+    "size": 9792
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__tt_correlp.corner.spice",
+    "sha256": "f4b041660a401166f4ffd5f58b0c600e20efde3156ae5773f15b52e646336061",
+    "size": 9791
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__tt_leak.corner.spice",
+    "sha256": "5e767c5c5f3e41bb04724a09fe1d8b95f871b2f8391e74d55e48cb5c40cf5939",
+    "size": 9354
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_nfet_g5v0d10v5_b__wafer.corner.spice",
+    "sha256": "19f3dfe0ee6746178d3a0136d7650b3cb9c157a40b40dba8cf2dbff218913c12",
+    "size": 9073
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W1p00L1p00.spice",
+    "sha256": "db929b9194a94c514b995a8b537509a72d0e989910cb53e496b520b9c7e6a7a9",
+    "size": 768
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W1p00L2p00.spice",
+    "sha256": "2efe85bfa8fef3e1ddf0a8fb9059dad6e4fd3b1e4ee013d2bb8c1721dbff9503",
+    "size": 768
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W1p00L4p00.spice",
+    "sha256": "295b9854ba173a6c2b9ed2036db6e03a09f440bc50bc2dec1de26555ddd1f246",
+    "size": 693
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W1p00L8p00.spice",
+    "sha256": "2398065b8ab8c6db4ff82edd82ab3a0aa5f34d32ab8b9fbe12c994cc7d4f5139",
+    "size": 693
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W2p00L2p00.spice",
+    "sha256": "44403d67eaf6063d124611160da1e0e610ff7beb5bb4ec38dfeb0d2e967087de",
+    "size": 693
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W2p00L4p00.spice",
+    "sha256": "96e2a03dae9732c8d4d8b4e27a18c777d334f9293161281ee6f1b6ca186bcfdb",
+    "size": 693
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W2p00L8p00.spice",
+    "sha256": "6dbf0db95ef7016486fd6e38c6226f7e353808a14a4b643f049949bf4fcb1608",
+    "size": 693
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_05v5_W5p00L5p00.spice",
+    "sha256": "fdeafea62dc8606d37891ce8fa1571cdf6b1a5987b96aceadcfe1745a8d40b35",
+    "size": 693
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_npn_11v0_W1p00L1p00.spice",
+    "sha256": "26f576621ea0ab3146cc0725ba53b40c36a79a5f3c3ae521e5ab9f2056418bc7",
+    "size": 215
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8.pm3.spice",
+    "sha256": "089d6c9a4cc5fc7aa4cc2da6ed62fe843cdc4e387faa92efb59f7681c5d785b7",
+    "size": 14970
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8__mismatch.corner.spice",
+    "sha256": "329b992466fa736b42ee32d5f15fc163410f7745bc57a9aa57a77bb732dfaaab",
+    "size": 1520
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF02W2p00L0p15.spice",
+    "sha256": "ac2996bb2b8880d4b032f139ef230257a26f0ecfbb3f7c38fe500f059dc1f0c1",
+    "size": 848
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF04W0p84L0p15.spice",
+    "sha256": "efedfa895833982b0b3b575565aeeaa660d14c967dc48154e303bf3cd5d4c070",
+    "size": 990
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF04W2p00L0p15.spice",
+    "sha256": "4eac48fbfb09d81d46727c893b65cd829d550f3a56fb6d4c736451d25a521226",
+    "size": 986
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF04W3p00L0p15.spice",
+    "sha256": "631f14e094b94630d7a38de3c242aedabd6a0af8a458047b6140e11547cdef1d",
+    "size": 986
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF04W5p00L0p15.spice",
+    "sha256": "a8106753dc284e4851e8601571efe639cdd59b2db98d254637608db6babd8bf4",
+    "size": 986
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF06W0p84L0p15.spice",
+    "sha256": "2b2a25337ac72d990cbc035daff59dda073cdb5a931ecfbd88901fd178acb764",
+    "size": 1130
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF06W1p68L0p15.spice",
+    "sha256": "54c4a8f33c9cec73aa58d625030fb51372f660672fa3dab9f0db78e8be154503",
+    "size": 1142
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF06W2p00L0p15.spice",
+    "sha256": "4bb91ca51c0ea3946141ee5981ef4eaae862f718dadd99c9e46299c86a2ed151",
+    "size": 1124
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF06W3p00L0p15.spice",
+    "sha256": "dc22c21b87c77d9f641a949797ac9fc22e922e6670f6acf475c1e42041d7aab1",
+    "size": 1124
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF08W0p84L0p15.spice",
+    "sha256": "9a61c82fa8aed95f4fc9d4bf57903c2964947ff75d86d3333d3d52d40f75e5ab",
+    "size": 1270
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aF08W1p68L0p15.spice",
+    "sha256": "80f816e0cf3176eec7154f9b6f80ba8f089b6a9b3141e81bc495d3546e1265c0",
+    "size": 1286
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W1p65L0p15.spice",
+    "sha256": "b14d8905d882f86dbe3d69e18bc32eb25eaa2c1ddb86e05770cdc823aacccc64",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W1p65L0p18.spice",
+    "sha256": "bd9b150b65a8a17e6b6133ef8f369158582c663dce0bef13a3718b02750a318a",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W1p65L0p25.spice",
+    "sha256": "c0f38c5d85b99e8ad557ed77caac4143423535777893393376cabecfaf1e0276",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W3p00L0p15.spice",
+    "sha256": "9d46c38648a35d9b0cc5498b3e8099fef68746c1365e50def0f9ba602fcf5cef",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W3p00L0p18.spice",
+    "sha256": "b6e5162bbdb92cb3463f4e61504bbaf58876d2b43fc98ab1606cbf79913cb4b1",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W3p00L0p25.spice",
+    "sha256": "40fe17ef9d959b3f3752d3f554f74e22be14b8f243daea56064765e55734a123",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W5p00L0p15.spice",
+    "sha256": "35c15fbb81e4395163fa24745647c9d8031aab1bf9ea666dedba2f97dc6f8442",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W5p00L0p18.spice",
+    "sha256": "ea646d084e53483eb84cb222dac88fb62dd9c0e5446749522624ce45acc4520e",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM02W5p00L0p25.spice",
+    "sha256": "11f177e165a2f82e3f58fdc3ee4065f6a257588b01302113a81de184507040bf",
+    "size": 854
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W1p65L0p15.spice",
+    "sha256": "a80c307756fc475bf3f414c54b46e12a471e26ce025391ddb887fe61059a6bc0",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W1p65L0p18.spice",
+    "sha256": "1ba6f6f456825719b17203a9fbc5645b6c97a85d378737aeb1440296729c368e",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W1p65L0p25.spice",
+    "sha256": "a8da7e5c5b96c4de421b85f15acc470ea95c5797ce22bf04323e54849e4ef3ef",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W3p00L0p15.spice",
+    "sha256": "f867233e6224b1f5f1ceb0e9e6b99dd1749b7a2f59b545bede2b12c968693b4f",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W3p00L0p18.spice",
+    "sha256": "2579e0141e93fd26c18cf4f8f14da7f66e4939804bc8922af5ad8770d8efe303",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W3p00L0p25.spice",
+    "sha256": "43a114b27b03e595eab2a4494a8019d233801fc7ff5b93934d6d8b5c01788131",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W5p00L0p15.spice",
+    "sha256": "0e0c8e3c9c88e15a90ecc23e426ddff13d2112fd24b6988643bfe7b96c73191a",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W5p00L0p18.spice",
+    "sha256": "0d3502a8946e8173e7438634c9c9f572567322bfbe25bf809e667efc6bea5493",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_aM04W5p00L0p25.spice",
+    "sha256": "13ba61de9d8de45221c32808759874169149b31bebaeef81065e99d4e392edfa",
+    "size": 998
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b.pm3.spice",
+    "sha256": "6295377aaad087a864cf2b26986f9fc1f79cc5da30dad8191f95f996874f9812",
+    "size": 110029
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__ff.corner.spice",
+    "sha256": "41c98373171935548b2e28c548d63a0e68aa79761956b2e388dcfba7e164652b",
+    "size": 17329
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__fs.corner.spice",
+    "sha256": "0c7a88b0eb5afe5b2fa8b18f62d1b1259c70c3a9631f97208145947eb5d13787",
+    "size": 17339
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__leak.corner.spice",
+    "sha256": "cd03e4ac7dab951d638f6a976101ba4a834de29b5478133796268a9bd593f563",
+    "size": 17566
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__sf.corner.spice",
+    "sha256": "8659d8ff6e78a8230aa75d74b986a660cb47ea89e8ae46a92dbaff29fd78ae02",
+    "size": 17313
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__ss.corner.spice",
+    "sha256": "e6170a98263edd3cf7718944b3c767397da94951794d4b30638e488c5de427de",
+    "size": 17322
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__tt.corner.spice",
+    "sha256": "06457396b67c95ffa49b13984171e9d4c3ac58b0f31a329d5f936a9f4a6052ee",
+    "size": 17280
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__tt_correln.corner.spice",
+    "sha256": "c0344964142d2c001203450413fbbb643ca1361d1122a14dfc5f21b9b8f25780",
+    "size": 18259
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__tt_correlp.corner.spice",
+    "sha256": "ad37b937fd73dc860085b741c7623bb1432d934b9892d7b41fe20e615e8e211e",
+    "size": 18258
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__tt_leak.corner.spice",
+    "sha256": "2617230a54c82b9791accd28cce9c052d9964a564db24c48b670978dfdb11e4f",
+    "size": 17369
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_b__wafer.corner.spice",
+    "sha256": "a1485f6caf1ac63132a9a8c489fe9a97fffc588bbae1ad4842d4cc31c9c10681",
+    "size": 16852
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_hcM04W3p00L0p15.spice",
+    "sha256": "134657d4526440b4104a1c22edd11dee0af4675304477f8225d65415f503566f",
+    "size": 999
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_hcM04W5p00L0p15.spice",
+    "sha256": "0742b8b8f094be65b37404793b889bce31e8b827df03a2918ad418b391ffff6f",
+    "size": 999
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM02W3p00L0p35.spice",
+    "sha256": "0f3af3d5abd79ee2d7ad6eb289c2b9524aafe33596c392ad223d36ca198fde38",
+    "size": 866
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM02W3p00L0p50.spice",
+    "sha256": "b3ed352d2fafead44f5aaf8d35b72e18f8cd5b8abd43c95e647927845ef809ed",
+    "size": 866
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM02W5p00L0p35.spice",
+    "sha256": "a27cee9102f00b83f2ac1479bce48eb4e5632af5fed3d05be05f411dde6900f2",
+    "size": 866
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM02W5p00L0p50.spice",
+    "sha256": "de63bfad93e51219687452b1c4ef990f641c1fe8d77a73e8a7a85ab86a7a866a",
+    "size": 866
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM04W3p00L0p35.spice",
+    "sha256": "5aaed3ff819dd5c2b2325f2c4312931e70c60ea95aafe10c30fc634ab48cb962",
+    "size": 1018
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM04W3p00L0p50.spice",
+    "sha256": "dcccfd6fcef5a1404f2a4e4c4c2db1de53f6582e446e379b2017b4977dbc2679",
+    "size": 1018
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM04W5p00L0p35.spice",
+    "sha256": "4f228c30fbecc384e6a0362a5ab7f661b039f1db87a088d72ec9606492f622c5",
+    "size": 1018
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_lvt_aM04W5p00L0p50.spice",
+    "sha256": "116a525287171ba1544361773ee4073953fe7a22bf6e43fe58501c4368f6978b",
+    "size": 1018
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mcM04W3p00L0p15.spice",
+    "sha256": "99a7c128d299e7103e44c1ecd5a9b27dec6bd3d36e759cfcdeff78609180be33",
+    "size": 999
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mcM04W5p00L0p15.spice",
+    "sha256": "c25db65d0445586cc2875d5f28114fc24e3d2b470ec5d61668215013fffbd20f",
+    "size": 1015
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt.pm3.spice",
+    "sha256": "c1994983307665666126446655157fc4cf458a5e43b464bd74e1a12e6e9b790c",
+    "size": 3906
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__ff_discrete.corner.spice",
+    "sha256": "98813f397c0c0a4b77fa8c238051cb22521ea3a062c16720af844efcec54b74f",
+    "size": 4053
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__fs_discrete.corner.spice",
+    "sha256": "46d50c031a15a866a993f3909a2e32c8f6c3badda0a7021bdf168c59a5efa381",
+    "size": 4043
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__leak_discrete.corner.spice",
+    "sha256": "1260531c1053ca189fa847ce14ecce9c42b7454ded2f891800b37d5de7436dfd",
+    "size": 4024
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__mismatch.corner.spice",
+    "sha256": "4be07e841b5c0e6534c25b823133aaa1b9f9689afdd780b66305e82a4460f636",
+    "size": 826
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__sf_discrete.corner.spice",
+    "sha256": "076f6a5297330254b303325fbea7eb92e87826f313ddec2fd0acfff36c2cedc9",
+    "size": 4040
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__ss_discrete.corner.spice",
+    "sha256": "a85aa19e3ffadb05f5f5154cc21371a0783313f2d3ae7a55f8bf0f41acec1f19",
+    "size": 4050
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__tt_discrete.corner.spice",
+    "sha256": "cf21900fade43a2e9040d15c69d07a2e5705a87b5909894ff3f9673c5dc99bf5",
+    "size": 3972
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__tt_leak_discrete.corner.spice",
+    "sha256": "cf21900fade43a2e9040d15c69d07a2e5705a87b5909894ff3f9673c5dc99bf5",
+    "size": 3972
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_01v8_mvt__wafer_discrete.corner.spice",
+    "sha256": "67aea41691b34c851874be8b3d1e54cecb58ff916dc3fb0121085cb862fa1519",
+    "size": 3957
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pfet_20v0_withptap.spice",
+    "sha256": "dbad4e3666023352af57b3e972a0414da1aa7681f206522239b4e3b7294e6973",
+    "size": 871
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pnp_05v5_W0p68L0p68.spice",
+    "sha256": "ffa8b1a80e16c052112709447df87acdc80c2daea7b94505f4b3406dab487931",
+    "size": 224
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_pnp_05v5_W3p40L3p40.spice",
+    "sha256": "054468dee3ac2dcde3e432917d140bcc87acdf609285cf26682b303238dd888b",
+    "size": 224
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_test_coil1.spice",
+    "sha256": "d093970b69823e1896803165cdb4a4a0a84d9b502ccb46bfac1294b08faef243",
+    "size": 684
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_test_coil2.spice",
+    "sha256": "bb611911363cff96a8f1d292b6019690b00cf2725a4a91d53e9defe3447a3982",
+    "size": 684
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__rf_test_coil3.spice",
+    "sha256": "5bb841a4f1a2a8854b84beed0f239dc63cdd62ffd60d47d054950155ac71ffe4",
+    "size": 684
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_latch.pm3.spice",
+    "sha256": "7236d469160e3145eb1c0a89e83e3536c362a43225c0b784a41a4383d19a86b3",
+    "size": 5883
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_latch__mismatch.corner.spice",
+    "sha256": "2fa340dc33350ac2aefedccc380019570a23ac0ad03d269817f8c8ac21cf9749",
+    "size": 958
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass.pm3.spice",
+    "sha256": "6eff84cc53c1fc0f356cb275d637a6fdc4c3de85f684e98a1cc52f79fb09e84d",
+    "size": 5857
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass__mismatch.corner.spice",
+    "sha256": "6211325195acde110081a7ebe0485df31921a5185a9d2147f5e616e1985aec55",
+    "size": 953
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_flash.pm3.spice",
+    "sha256": "922f25ed9ce2a5e2ade8ec7883d6eb9e1522ca9a361ce8a04120418889705de9",
+    "size": 9930
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_flash__mismatch.corner.spice",
+    "sha256": "3e1ac9dc32bad9a21b4ca34bc3c9d3d3f63f0458feed4b74a3ee30126c5faebc",
+    "size": 991
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_lvt.pm3.spice",
+    "sha256": "ec421b428adf26bc4e9f4f7c010c809f2fa7b6e9167b8ca8e310df5f69a9981c",
+    "size": 7005
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_lvt__ff.corner.spice",
+    "sha256": "c4e3d962522f9e96a75dd18bf19b8622d4d97f28868fc4a3f58bf96ffa42289d",
+    "size": 1884
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_lvt__leak.corner.spice",
+    "sha256": "e43a14f2f6dffe7eb75435f71da5aa6efe3d8f75d9561dba7c684e71802adf64",
+    "size": 1883
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_lvt__ss.corner.spice",
+    "sha256": "d1aad00138019e9a74faa229977802536aade2333e845818c819a550c9bde2b3",
+    "size": 1881
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_lvt__tt.corner.spice",
+    "sha256": "9f736cd439c64f0a1b49348e54fb6f023ecaab4708d97f8475c8a0e74cd4672e",
+    "size": 1869
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_nfet_pass_lvt__wafer.corner.spice",
+    "sha256": "0af6fd2af150e35a96ac40930b50635dc21c6aa9943112e066633c48bb5bdd3e",
+    "size": 1819
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_pfet_pass.pm3.spice",
+    "sha256": "870772ef31ed3d28faf8c59ee49c02ecfebb72a2c7c0195b9a093ad46edd83bb",
+    "size": 9603
+  },
+  {
+    "path": "libs.ref/sky130_fd_pr/spice/sky130_fd_pr__special_pfet_pass__mismatch.corner.spice",
+    "sha256": "bb99a70b955889fed57f81f0eb63a935c4a969a9d71c8386f407099a9c914b65",
+    "size": 955
+  },
+  {
+    "path": "libs.tech/ngspice/all.spice",
+    "sha256": "b06904c952ea8c16b11da7f4f0cd24414645dc5af38c381c52cbef5b55282875",
+    "size": 5264
+  },
+  {
+    "path": "libs.tech/ngspice/capacitors/sky130_fd_pr__model__cap_mim.model.spice",
+    "sha256": "7e4802d7047f0f116a3e4c7e49118962cfe248dc9cbb6d626d49196d30cb273a",
+    "size": 785
+  },
+  {
+    "path": "libs.tech/ngspice/capacitors/sky130_fd_pr__model__cap_var.model.spice",
+    "sha256": "636562f3cc312701265578d375514881ef304249519778ebd273f7dcf63bea51",
+    "size": 783
+  },
+  {
+    "path": "libs.tech/ngspice/capacitors/sky130_fd_pr__model__cap_vpp.model.spice",
+    "sha256": "818e82fe6cd34020f2871fc527a9b1b264633ea9d77a03a98e78325acba8ba02",
+    "size": 2786
+  },
+  {
+    "path": "libs.tech/ngspice/capacitors/sky130_fd_pr__model__cap_vpp_only_mos.model.spice",
+    "sha256": "7daca9f9743d93a489160eaba60c56bae4bd943a11f2cb08126459cdaea42972",
+    "size": 875
+  },
+  {
+    "path": "libs.tech/ngspice/capacitors/sky130_fd_pr__model__cap_vpp_only_p.model.spice",
+    "sha256": "80cf9e98c6d05ff23f90312be6cd93c0ad3f83035ec685949ff70d0ad008f371",
+    "size": 3078
+  },
+  {
+    "path": "libs.tech/ngspice/capacitors/sky130_fd_pr__model__cap_vpp_only_pq.model.spice",
+    "sha256": "ec9f9f3796d17696cff4867e62b9d83c2be6564b94f2a62ca4cece1684949cef",
+    "size": 1731
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff/discrete.spice",
+    "sha256": "e828ff770a30660dad2ac1fc17fb90358f3a5e5b23e94e031617667f05188ef1",
+    "size": 2715
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff/nonfet.spice",
+    "sha256": "d03e3604898888b64c71a6ddba5f03dd8a05b298ac6a10a5dc2ae1c01ab73a74",
+    "size": 1821
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff/rf.spice",
+    "sha256": "393419a64b47329dcfc74d6c4a3fb40a477777266828b45274772dcc735480f8",
+    "size": 1064
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff/specialized_cells.bin.csv",
+    "sha256": "bc6e670d2d5e12262a0a4607473a9fe28da2bb9b227bbc5a9ee8ec612862ca39",
+    "size": 248
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff/specialized_cells.spice",
+    "sha256": "cf5bbfab1a56e2a7915854b4367162691c3ed548d0b270af4984d25f1660aedc",
+    "size": 7139
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff/subvtmm.spice",
+    "sha256": "926efc03dc6749fa7d4e4136259092e3ef5c236e3038cae99e981c2759a85ce4",
+    "size": 2706
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ff.spice",
+    "sha256": "e40df24649746964345334b33e0f04e7d4775e9e454b018945f5b2fb0847259d",
+    "size": 2589
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs/discrete.spice",
+    "sha256": "da8a11a12ab2a5cee26734b8425db60d8131062acb515f625adfae98d62c6d2d",
+    "size": 2715
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs/nonfet.spice",
+    "sha256": "739c7e8da3ef68d2452f8f5e7a0f9d6696b8ee22cf58c4904e3bfa637fc23014",
+    "size": 1813
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs/rf.spice",
+    "sha256": "98e15ab2e4df9c4599263fc851980fb0356774fa0efe496229e68edfc76e0775",
+    "size": 1064
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs/specialized_cells.bin.csv",
+    "sha256": "bc6e670d2d5e12262a0a4607473a9fe28da2bb9b227bbc5a9ee8ec612862ca39",
+    "size": 248
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs/specialized_cells.spice",
+    "sha256": "2585f62eb77ed36f7d4b83e09b4fe30f9134d49780495e31cbeade2dfee6e79b",
+    "size": 6931
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs/subvtmm.spice",
+    "sha256": "119a93c2dcfd5113eda1a2b747904e0fa4339257b6342303655b3049d9d29500",
+    "size": 2706
+  },
+  {
+    "path": "libs.tech/ngspice/corners/fs.spice",
+    "sha256": "196a269f4544e463cd7c74f7cadb42f9552a05804eba971006479c90c23b0d23",
+    "size": 2589
+  },
+  {
+    "path": "libs.tech/ngspice/corners/leak/discrete.spice",
+    "sha256": "ea218314dd26faab95c98378b122325648f764c13f90c104b081f15f84a128fb",
+    "size": 2745
+  },
+  {
+    "path": "libs.tech/ngspice/corners/leak/nonfet.spice",
+    "sha256": "1e19ccf22af938e22593dc54f510f4fbc4a00f3ffe66587cc8c4fa4e873e5fc3",
+    "size": 1816
+  },
+  {
+    "path": "libs.tech/ngspice/corners/leak/rf.spice",
+    "sha256": "81afcba6422ff55d34fda7777180ea570b2fdec2d76d898413f8fad4fdd5fe14",
+    "size": 1074
+  },
+  {
+    "path": "libs.tech/ngspice/corners/leak/specialized_cells.bin.csv",
+    "sha256": "bc6e670d2d5e12262a0a4607473a9fe28da2bb9b227bbc5a9ee8ec612862ca39",
+    "size": 248
+  },
+  {
+    "path": "libs.tech/ngspice/corners/leak/specialized_cells.spice",
+    "sha256": "076a40a464828082ce1e210a6c4294eecc69462b81f8545c180df97ee9e49a68",
+    "size": 7181
+  },
+  {
+    "path": "libs.tech/ngspice/corners/leak.spice",
+    "sha256": "90defde979ec8cdc1d0e1ab71d7bf25c78914e82ed4e507fde538035a120cebf",
+    "size": 2623
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf/discrete.spice",
+    "sha256": "4cbf2d41a652cb9c007e9dbe5bdbf15a5274b01f43489895a96efd5e1d10a2bd",
+    "size": 2715
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf/nonfet.spice",
+    "sha256": "4f790eb5083d1e202820839b58099c423fc5aa83e6ede764b14e5eb70c8397f8",
+    "size": 1815
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf/rf.spice",
+    "sha256": "98b843ee3f6d0bd725089a9fd481876e37e4934724778a67d2b7a7b6744cefc9",
+    "size": 1064
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf/specialized_cells.bin.csv",
+    "sha256": "bc6e670d2d5e12262a0a4607473a9fe28da2bb9b227bbc5a9ee8ec612862ca39",
+    "size": 248
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf/specialized_cells.spice",
+    "sha256": "652e32479f2bbeffc4cba1a06332da58133e49766ae844b288cf0d681a7cb202",
+    "size": 6952
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf/subvtmm.spice",
+    "sha256": "247fab19c5cd33fb3ea736f026795acf58a33b9c508dc8579d4b6e3e1b895237",
+    "size": 2706
+  },
+  {
+    "path": "libs.tech/ngspice/corners/sf.spice",
+    "sha256": "24c5853f6db423104d001a618c05a80417e0426039e1e39f2b977c7addad825c",
+    "size": 2589
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss/discrete.spice",
+    "sha256": "b052bb05ea69881526a9b612c610bfc806109563b6d833b4e36dc3681bf6971b",
+    "size": 2715
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss/nonfet.spice",
+    "sha256": "7aa4c20bf9cc7d8e16239ccc750e435433f959123a2e6c2214a549f0f76395b1",
+    "size": 1819
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss/rf.spice",
+    "sha256": "a84b63c6204a7b9e4d847c6c1a66466d11a20a84eb94e5f3f0724f7475208965",
+    "size": 1064
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss/specialized_cells.bin.csv",
+    "sha256": "bc6e670d2d5e12262a0a4607473a9fe28da2bb9b227bbc5a9ee8ec612862ca39",
+    "size": 248
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss/specialized_cells.spice",
+    "sha256": "1ef5eca4e15c4d4e59649fe9cf6c4da16102fae9e5d25a7b5404f15de66e07df",
+    "size": 7118
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss/subvtmm.spice",
+    "sha256": "adc09a29a5fb1823cf6d156b3aeb631e07dfb359ef6baab14641eab88fc4f50b",
+    "size": 2706
+  },
+  {
+    "path": "libs.tech/ngspice/corners/ss.spice",
+    "sha256": "d1ca6a78fdfe867dc31a239abd99c36f53a65391b1b23724790128a9f63f3cf4",
+    "size": 2589
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/discrete.spice",
+    "sha256": "b3081ae468d05a673241ee414286dc0fa3e0734c8eb895262d1e6b079c19331c",
+    "size": 2715
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/leak.spice",
+    "sha256": "9ae4350664febb310bc4720a3ce2baa9288eb02b0736ef6fcfbd95d68cdbc89d",
+    "size": 2733
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/leak_discrete.spice",
+    "sha256": "187331b6579780e97e4d9b8697a3eab5b89f94ec1a5aa8daed6bff61c8d114cf",
+    "size": 2477
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/leakrf.spice",
+    "sha256": "2ec9e03377a5b7b96492a5fbd71dc463e0ba9b1ecdb225460954460b71386ba3",
+    "size": 1089
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/nonfet.spice",
+    "sha256": "9e442b3828f29c8cf0a4d030c37b913fae11a23b00b58a4622d8bdf6909b56dd",
+    "size": 1745
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/rf.spice",
+    "sha256": "9bba9a4521426fb265d6f403e8c2ac8afd0673ffbcbde66003d19679f3f589e0",
+    "size": 1064
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/specialized_cells.bin.csv",
+    "sha256": "bc6e670d2d5e12262a0a4607473a9fe28da2bb9b227bbc5a9ee8ec612862ca39",
+    "size": 248
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/specialized_cells.spice",
+    "sha256": "d05daea0ab4040860de53628efdfae191fb156dea60fa28c36ed75153a3931ac",
+    "size": 7006
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt/subvtmm.spice",
+    "sha256": "508f9a56000836b0185744556946eead669ecb831c15a69f17123506e3e76b4c",
+    "size": 2706
+  },
+  {
+    "path": "libs.tech/ngspice/corners/tt.spice",
+    "sha256": "7b65f59a9fd2936d354663e04e76e725765439b85c53b0d9ff7c0822515322be",
+    "size": 2589
+  },
+  {
+    "path": "libs.tech/ngspice/corners/wafer/nonfet.spice",
+    "sha256": "4099a090af7e35e7e62072e54b628148419a1cf48c529fe961f225b701f9f211",
+    "size": 1669
+  },
+  {
+    "path": "libs.tech/ngspice/corners/wafer/rf.spice",
+    "sha256": "6e91764f471592ad8cb1be2bcff0a844081850205fcc27f6a1336fcd0a8ace0c",
+    "size": 1079
+  },
+  {
+    "path": "libs.tech/ngspice/corners/wafer/specialized_cells.spice",
+    "sha256": "9bf955373b214bc438aa15f2359c17009af64972506791aceb569c3d2085b67c",
+    "size": 7925
+  },
+  {
+    "path": "libs.tech/ngspice/corners/wafer.spice",
+    "sha256": "c623b1c93a189f9dccf9e4704f2232ef6e1609d294f62db172f3530f67a3a0ba",
+    "size": 2634
+  },
+  {
+    "path": "libs.tech/ngspice/correl1.spice",
+    "sha256": "4e7c4bb00fef41e58cec76b8e32c97d0d757c1a28340e44795b4021fd56aaf58",
+    "size": 3633
+  },
+  {
+    "path": "libs.tech/ngspice/correl2.spice",
+    "sha256": "0d89fc619769d96fd719b47cce0277ba388646aa7c99c1165531ab7b344229be",
+    "size": 3633
+  },
+  {
+    "path": "libs.tech/ngspice/correl3.spice",
+    "sha256": "dc06ad28e10ac2a9c0be96d0b36c24aee864d8d6a19cc58f48f026fd69de79e0",
+    "size": 3633
+  },
+  {
+    "path": "libs.tech/ngspice/correl4.spice",
+    "sha256": "7200e6f56c074153ab50ee05a639608c8c709112c62e335f42f0be4e0a0e56f9",
+    "size": 3633
+  },
+  {
+    "path": "libs.tech/ngspice/custom.spice",
+    "sha256": "b4171c953d5be6fa5d774556ed50e849d70cb7df89a12fcfac4ce06c4fe21852",
+    "size": 2530
+  },
+  {
+    "path": "libs.tech/ngspice/head.spice",
+    "sha256": "0c2499173f578cf0084df58a03872072e76f34c25a085cfbd24cca8c23bcb1ef",
+    "size": 21
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/critical.spice",
+    "sha256": "94ba392849ae3466798d7cfd29d53a31336204730e895dabfbc0c39ade8d6a28",
+    "size": 6811
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/fast.spice",
+    "sha256": "283dd86a353fc872c3bbfe7c276d959faa11f91450103185af7407d1017f93c9",
+    "size": 348053
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/fast_70p.spice",
+    "sha256": "6eb7f5e84f7d0676e2a4b35decd2ce27fa98bb54e5ee71544a4992a5068ada5c",
+    "size": 348053
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/invariant.spice",
+    "sha256": "9f47fd02e7d4010fc3eccc59420bf8f2ec86aa8b5ee68d677d150a6ff405f12e",
+    "size": 371970
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/lod.spice",
+    "sha256": "6200b50c14eebb68d8009ca68e452d4c045e2d25d7438ee417c155883527fd7c",
+    "size": 3597
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/montecarlo.spice",
+    "sha256": "6560d54b3d4514b36abd792ba962f0d4911d25b83fe4cb92dd383a8b264a73d0",
+    "size": 1279149
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/slow.spice",
+    "sha256": "24dac3370bdb0923c4fe02c86885c5e4d74f781a82c897b474c67517a61a4e31",
+    "size": 348053
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/slow_70p.spice",
+    "sha256": "53371d7af355c863891d95a0b69604f93bb1633414d1c57c1ccc7b9d10816af0",
+    "size": 348053
+  },
+  {
+    "path": "libs.tech/ngspice/parameters/typical.spice",
+    "sha256": "315e71e2896bfbfad4f2ed0d86ff28cc1e44f56eb12eaf2371fb672de1507c6d",
+    "size": 348053
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_ps2dn.model.spice",
+    "sha256": "1f48152931c00fd65801224eb2592356ac642cc70210c57e51e4667938f7eed0",
+    "size": 2076
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_ps2dn__extended_drain.model.spice",
+    "sha256": "64cd583e3dee0938088df18d2495ee57c36495b914622205ba7f03df294fc426",
+    "size": 2653
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_ps2nw.model.spice",
+    "sha256": "c024f7cfb07888f299e5942e2763d3d7548c47dc78bdd33f34cac68c4d2b9d4c",
+    "size": 2069
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_ps2nw_noresistor.model.spice",
+    "sha256": "19785f71f95e5aa54d27a3437f4abedc14d9091ac06f1fa967c81496b2095005",
+    "size": 2054
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_pw2dn.model.spice",
+    "sha256": "ca4fc71b0096e54de47a5633f5f561ddffd8ba6043f3165f4f6d94ff0c79d64b",
+    "size": 2076
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_pw2dn__extended_drain.model.spice",
+    "sha256": "600c04b989fb96f9749242c70159e172bc91703bdda1dc568b55c04c0d946d7d",
+    "size": 2816
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diode_pw2dn_noresistor.model.spice",
+    "sha256": "a7cc96211d4ec4d1fe3364dd82c51a521258c378ad1df8a88b94320f47f0a358",
+    "size": 2085
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__diodes_pw2dn.model.spice",
+    "sha256": "2cd15e54f69c6ea906c4e5426bc712b765067aac0b74022b8430b2e84c0d0c46",
+    "size": 1204
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__res_po.model.spice",
+    "sha256": "5e65d93416a1bdf22ac2b876d43c03de9ced5f0f7bd7686afeb132cc78e429e4",
+    "size": 1124
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__rf_diode_ps2nw.model.spice",
+    "sha256": "9162840af01b56ca3b36556ee7a5d996cf41f0ec63e65430337f624d7dfa358c",
+    "size": 1300
+  },
+  {
+    "path": "libs.tech/ngspice/parasitics/sky130_fd_pr__model__parasitic__rf_diode_pw2dn.model.spice",
+    "sha256": "e50e34a0a7fc44b30095258717e2ed394e7dc614af2d18402c0765d196ef3906",
+    "size": 1305
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_high__cap_high.spice",
+    "sha256": "38ec47a4a5fa0d5a23dcab8dee6c43086503204c71ea956e0d78471cadc909a4",
+    "size": 1022
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_high__cap_high__lin.spice",
+    "sha256": "a7e7c905ed3c7857fb72a6c55046f335caaa9eb2e09dc725c5bbed6d52a03a09",
+    "size": 2091
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_high__cap_low.spice",
+    "sha256": "fa31c9c9a72f46cd4666428ff3c338a2e912578914f77049d7d15980fb546b85",
+    "size": 976
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_high__cap_low__lin.spice",
+    "sha256": "c602a648587cab46b5db98a994656bdfad8b8970d658bab404890f65504be20e",
+    "size": 2088
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_low__cap_high.spice",
+    "sha256": "30bf08f792bb9c569f76b3fe3c81825551f5a0750a65208b49a2010ad9b765c3",
+    "size": 977
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_low__cap_high__lin.spice",
+    "sha256": "459dde9efbf35abed0554d5203fc2ed4e8a10a25422a6794bf7662a71517dc75",
+    "size": 2094
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_low__cap_low.spice",
+    "sha256": "8d8f19bfd7d9728508b0a45bfbfae293fed168b902cb2fc820fb40a7c2627ac0",
+    "size": 1003
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_low__cap_low__lin.spice",
+    "sha256": "3b09fb3584bdc4f8992f651c3137eaacb8c513bbbc04b71318a7e1e67868f7c6",
+    "size": 2091
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_typical__cap_typical.spice",
+    "sha256": "7c29723076a22fe5b080d245adb97451de5ad0812f0344f6bfe31c9697b71f0d",
+    "size": 937
+  },
+  {
+    "path": "libs.tech/ngspice/r+c/res_typical__cap_typical__lin.spice",
+    "sha256": "4deedaa4be27f2e1f083567a945cbaed02027e018fcd09431e57a02c08a117b1",
+    "size": 2029
+  },
+  {
+    "path": "libs.tech/ngspice/r+c.mrp1monte.spice",
+    "sha256": "38f7ab4542c55f3e11d0b2d0fbb3d4ab7f3d6423f0801f6515d17ada62bd3d85",
+    "size": 1638
+  },
+  {
+    "path": "libs.tech/ngspice/sky130.lib.spice",
+    "sha256": "5efa041a988893c1a3580d0ecd57870ea3146b27741c7d42b56baaa336b9549e",
+    "size": 6349
+  },
+  {
+    "path": "libs.tech/ngspice/sky130_fd_pr__model__diode_pd2nw_11v0.model.spice",
+    "sha256": "43554c332802bcb2314bfddc2e620c73d0b3f47cb574fd5db536451be064d7ac",
+    "size": 1090
+  },
+  {
+    "path": "libs.tech/ngspice/sky130_fd_pr__model__diode_pw2nd_11v0.model.spice",
+    "sha256": "7a224fa7a30afcfc0869796f90901109a7b5fa628fc4e214bcccc2244e41ef3a",
+    "size": 1090
+  },
+  {
+    "path": "libs.tech/ngspice/sky130_fd_pr__model__inductors.model.spice",
+    "sha256": "c27a160a3f4072568f3782236e96fe6d1171d650a7e81a5a3cf878736a0fcc21",
+    "size": 856
+  },
+  {
+    "path": "libs.tech/ngspice/sky130_fd_pr__model__linear.model.spice",
+    "sha256": "881a81256ed63b136e126ccf25fa1aeb5829ed4f5de50835fed2315c7ab55da7",
+    "size": 2292
+  },
+  {
+    "path": "libs.tech/ngspice/sky130_fd_pr__model__pnp.model.spice",
+    "sha256": "1fcca22b2308d2374350675d762f24c6fa78244d53d06919ce854dc97ae034a3",
+    "size": 833
+  },
+  {
+    "path": "libs.tech/ngspice/sky130_fd_pr__model__r+c.model.spice",
+    "sha256": "277930447149f1b40ffda6959a990e473bbda7bdf97ce6180f5e563fe5957eea",
+    "size": 9789
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/begin_of_life/typical.spice",
+    "sha256": "a5d376d1426eb08a2d221472a2ec09de9e06b5abfbf7f848bf36f36beec67fad",
+    "size": 225
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/begin_of_life/worst.spice",
+    "sha256": "56f920061db3bebdc0ef96d3b72a05a4a2342a4b8a1b235db705f235b25c3435",
+    "size": 221
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/begin_of_life.spice",
+    "sha256": "0738379a911abfcfec0193ee79ead64f5e5c5f9009073c0f360a05601c5051b7",
+    "size": 197
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/end_of_life/ff.spice",
+    "sha256": "1f209f618518925d35ea87988eac2b1f7437359f55bd2bd45a7eb340591f8676",
+    "size": 211
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/end_of_life/ss.spice",
+    "sha256": "62ea4980f0a58f1b035dc667c5c22a50c2c0ef49b1d5a13218aa570076aadc69",
+    "size": 211
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/end_of_life/tt.spice",
+    "sha256": "7b6dfda65a5e251cc6952c089fd200be6d82215e0b816b96e8243c9d30e8ab0a",
+    "size": 211
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/end_of_life/typical/ff.spice",
+    "sha256": "1c98becebde73dd09cc6accb6cd17bd1ec2e31d505a70b991725b0e8d814b87f",
+    "size": 239
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/end_of_life/typical/ss.spice",
+    "sha256": "6ec7de7ebdec0fe8a3fa34248241affc705b59400c294bdf8f25009e315579d9",
+    "size": 239
+  },
+  {
+    "path": "libs.tech/ngspice/sonos/end_of_life/typical/tt.spice",
+    "sha256": "a87b6a0586503a9d6f95809ddb91c82964286fbacda66cdcc60d0c3b44e7d9ca",
+    "size": 239
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life/mm.spice",
+    "sha256": "8a4c2d8b90947a09aa671c7336345c3d26f72d668991ef9034e7c003a34d8873",
+    "size": 292
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life/typical.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life/typical.spice",
+    "sha256": "7f18af8c9c407f6b4a27820d4585bd77f4799b118894513f0935cd24e41c2d69",
+    "size": 2470
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life/worst.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life/worst.spice",
+    "sha256": "245c19c159fca954fdca6e8206b51bd305a3b070fe2ebe678af5c219b31f985b",
+    "size": 2464
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life.pm3.spice",
+    "sha256": "6814fe12581b5ee34023b29e7d4b82f73162cd57c39e223368d81bb2dec9b548",
+    "size": 12702
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/begin_of_life.spice",
+    "sha256": "49fec3f6aa0654aabe51d70896d8295ea7cf858944659825e46e8e0916305e70",
+    "size": 2465
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/ff.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/ff.spice",
+    "sha256": "11769b59b26198d0b41fddd882f23677fd50b9e6e3303078c2d733b0e6b6ca63",
+    "size": 2468
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/ss.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/ss.spice",
+    "sha256": "a26fb26b25aa4e5ceb511eba241b97eb11dacf7b31a38e10062f3808c97b623d",
+    "size": 2466
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/tt.spice",
+    "sha256": "b96abf09c4b10d2526bb212a10b396254e82653265cfd88d4d64297a09d3ff69",
+    "size": 2465
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/typical/ff.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/typical/ff.spice",
+    "sha256": "f64adf987ed221a111293eadac8e85ee05501f1b186dc97fde13a19a74736704",
+    "size": 2470
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/typical/ss.bins.csv",
+    "sha256": "0e055e4a2c09f6dfa0c5019aaf12b9a2325a5e0f2eb806813926df21202e4a68",
+    "size": 175
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/typical/ss.spice",
+    "sha256": "d8c56efb77b998bd4f54f6dd0ef973f79657d4f2263121badf607fe04a5c9724",
+    "size": 2469
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_e/end_of_life/typical/tt.spice",
+    "sha256": "2b9c2ff9d34baf911439d4caac4f2231f0032fc416a9130d4e4836bc54116f45",
+    "size": 2469
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life/mm.spice",
+    "sha256": "051c18598854776f43ec7194503d4d8046e768ac78d3a0012c6ef697e6de0a8b",
+    "size": 161
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life/typical.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life/typical.spice",
+    "sha256": "431ad00a4aa04e7ac38a4387e77a49c62ca2b29b47eed2cd4b6148bac5bc1679",
+    "size": 2603
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life/worst.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life/worst.spice",
+    "sha256": "aa7eb682a4b092a97cd96909d323b87f3d5094422ee64d885567aa09f993703f",
+    "size": 2595
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life.pm3.spice",
+    "sha256": "6a4eadb0edcec9be2638d07bd8249e29e5b13713c9523cb00f82aa5a38ba4bba",
+    "size": 13064
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/begin_of_life.spice",
+    "sha256": "f5e40e24284b65d97f9c2b938b5f1caf42e1915dea6bdaf5f9084809b30fba5c",
+    "size": 2610
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/ff.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/ff.spice",
+    "sha256": "2e1052f7d0116d054a06f5c671df1e2ea8cc0776a1b366be4fc18348dbb79455",
+    "size": 2605
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/ss.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/ss.spice",
+    "sha256": "b3a69534548e4020a61254fe0a6b3b22b60ed89ab1c00b0810ff22fe0a9d43fc",
+    "size": 2622
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/tt.spice",
+    "sha256": "59a6eb351d4c871f698ab947e63546903a688498a03fb0aad66710078e1d326c",
+    "size": 2605
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/typical/ff.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/typical/ff.spice",
+    "sha256": "0e82c1640f349d99d475f8c71dcfc92fe4fdb3e06b42815ec9a24a9240e4eec6",
+    "size": 2615
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/typical/ss.bins.csv",
+    "sha256": "c740120a616e1628798ad5b1f607993a640ba693c92de51f090978dbf5d7aa03",
+    "size": 187
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/typical/ss.spice",
+    "sha256": "7234d0db7bad76b5c08629db1b78e6f1622d266644bef83dcfde7f97f5f5b4e0",
+    "size": 2617
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_p/end_of_life/typical/tt.spice",
+    "sha256": "df70877cf1587b612dcd26eb47e7c5ca1e37dcce842713eeb1718d6a069d8aff",
+    "size": 2622
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/begin_of_life/typical.spice",
+    "sha256": "bd2ef43eff9a994bdd79f8ff73e225857acdad7d0a9da3a1c46b6b5c9374755f",
+    "size": 241
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/begin_of_life/worst.spice",
+    "sha256": "32d5ac8de30560715d7d233258218ffa0a986c57d5c26abdeff26aa89a18b8f6",
+    "size": 237
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/begin_of_life.spice",
+    "sha256": "c42997f69e27be3d59835f7e9baa829b20100df56eecf9159ea356ab0c61fc1f",
+    "size": 213
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/end_of_life/ff.spice",
+    "sha256": "21871a235a1842c1cf9561c740983f32e12b733f908e6294bc59e5792d3016e4",
+    "size": 227
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/end_of_life/typical/ff.spice",
+    "sha256": "335a235c0982e4217bdfc4ddc296402be73b8b50e7e2313eed739f7e0b7606ef",
+    "size": 255
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/end_of_life/typical.spice",
+    "sha256": "4da0880fcef9a2c867108cba0b300684c154821257ab32bdb1585919e6888a0e",
+    "size": 237
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see/end_of_life.spice",
+    "sha256": "7e7a8e6c1532c6d07343b64b2f347d7c01318816cb535f593468df8f65289994",
+    "size": 209
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life/typical.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life/typical.spice",
+    "sha256": "39f0c33d51ec9837e90e99f4723ae39d5167c91d2cad4e17c24fd5492aeff27c",
+    "size": 1196
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life/worst.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life/worst.spice",
+    "sha256": "5cdf2753aee1dc0f18cf4a90befe905f82caf0ff29ed986e1133326be17cb5ad",
+    "size": 1197
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life.pm3.spice",
+    "sha256": "3363d47a94181a5801fb4d7f60643f5e3825177b9d5e135ade9f20cfec9d9fd8",
+    "size": 5157
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/begin_of_life.spice",
+    "sha256": "f6ad4a074f1b1dee694d8748980ae729e39e92816c3e192a59aeeb84ae32a2f7",
+    "size": 1197
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life/ff.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life/ff.spice",
+    "sha256": "a9545758aeeb3a9016b5353c1d43c674231eb36a0bbbe2d70ae8dac7f2dd5d5f",
+    "size": 1196
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life/typical/ff.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life/typical/ff.spice",
+    "sha256": "992dc1c496501164f70a18d6aab8f5d2c0c592928a0b4720a53fce5853f68722",
+    "size": 1197
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life/typical.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life/typical.spice",
+    "sha256": "b55e03cf8e65114513c6289b90826a83db52ded96fd342d8750f1e86c5d8bde0",
+    "size": 1196
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life.bins.csv",
+    "sha256": "63e205b782a56ea4791487359824e213bfbb70e6083e43f646c03ac87ad79921",
+    "size": 69
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_e/end_of_life.spice",
+    "sha256": "b054f877aa6d2ff45faad998c98911faed6828dc3e4ff7626444c5a5d5385ab0",
+    "size": 1197
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life/typical.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life/typical.spice",
+    "sha256": "a85bd9f23d56063e8f84cd77a0fc8f5f6f30f5961cd85e9763d004dbe55e9042",
+    "size": 1259
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life/worst.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life/worst.spice",
+    "sha256": "834a2cd9be4a9800b5cfdb2d24296dffd330987fd8a69d555bf2686829d535e1",
+    "size": 1258
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life.pm3.spice",
+    "sha256": "70993c05ddac8a939e93d3aaefcf753168e32ca51a2c0fcaadee8919b01b3b60",
+    "size": 5301
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/begin_of_life.spice",
+    "sha256": "18ac2efb5a5797ebd46a70961dc01db8096c034d9841a19c66a31e32859dc921",
+    "size": 1270
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life/ff.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life/ff.spice",
+    "sha256": "eafc193d8a4fdc18e97d2d7df94881d9de32f969b04a6ea2cd8b407779e044c8",
+    "size": 1262
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life/typical/ff.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life/typical/ff.spice",
+    "sha256": "6e481ff5f3532cce9bfcd763dcf59af447c7083364ed354de3189418e06053dc",
+    "size": 1263
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life/typical.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life/typical.spice",
+    "sha256": "87daeb729391efc588f545c1c97f228a969d1da4e40c588db354ca4fa3a8f6bd",
+    "size": 1270
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life.bins.csv",
+    "sha256": "e7d676d6038aaa9f374a716f1a030a178908067bc77596a8c8fda518bea7c843",
+    "size": 73
+  },
+  {
+    "path": "libs.tech/ngspice/sonos_see_p/end_of_life.spice",
+    "sha256": "a28e2a11bc06425328e6a73c0d7a303fb505c48c0ecea532be31a2d568850e69",
+    "size": 1263
+  },
+  {
+    "path": "libs.tech/ngspice/spinit",
+    "sha256": "8a5526ab6e56216fbf28a50999bc8e233437556212cc28b4649a6a61481eb914",
+    "size": 162
+  }
+]

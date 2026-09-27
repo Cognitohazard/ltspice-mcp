@@ -29,6 +29,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
+from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
 from ltspice_mcp.lib.store import (
     KIND_CANCELLATION,
@@ -86,7 +87,7 @@ def replace_code(observations: list[Any], code: str, observation: dict[str, Any]
     observations.append(observation)
 
 
-CANONICALIZER_VERSION = 4
+CANONICALIZER_VERSION = 5
 # How a request's identity was computed — NOT a storage schema version. It says
 # which fields the canonical fingerprint covers, so a reused ``request_id``
 # whose record was hashed under an older definition raises the loud idempotency
@@ -99,6 +100,8 @@ CANONICALIZER_VERSION = 4
 #   4: .step selection moved off the recipes onto the attached analyze block,
 #      which now carries step/all_steps of its own — so every attached request
 #      hashes two more keys than it did before the move.
+#   5: assignment variations include an instances list, and mismatch rules
+#      carry an optional exact instance selector in their normalized payload.
 
 _LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
 _TERMINAL_STATUSES = frozenset(
@@ -187,6 +190,9 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 "run_token": case.run_token,
                 "step_index": case.step_index,
                 "step_values": case.step_values,
+                "native_statistics": (
+                    case.native_statistics.to_record() if case.native_statistics else None
+                ),
             }
         )
 
@@ -387,6 +393,11 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         run_token=str(data.get("run_token", "")),
         step_index=data.get("step_index"),
         step_values=dict(data.get("step_values") or {}),
+        native_statistics=(
+            NativeCaseRecord.from_record(data["native_statistics"])
+            if data.get("native_statistics") is not None
+            else None
+        ),
     )
 
 

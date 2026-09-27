@@ -161,6 +161,7 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "run_index": {"type": "integer"},
         "circuit": {"type": "string"},
         "assignments": {"type": "object"},
+        "native_statistics": {"type": "object"},
         "status": {"type": "string"},
         "raw": {"type": ["string", "null"]},
         "log": {"type": ["string", "null"]},
@@ -668,8 +669,8 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
-def _run_item(case: ExperimentCase) -> dict[str, Any]:
-    return {
+def _run_item(case: ExperimentCase, *, native_details: bool = False) -> dict[str, Any]:
+    row = {
         "case_id": case.case_id,
         "run_index": case.run_index,
         "circuit": case.circuit,
@@ -678,6 +679,16 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         "raw": str(case.raw_file) if case.raw_file else None,
         "log": str(case.log_file) if case.log_file else None,
     }
+    if case.native_statistics is not None:
+        row["native_statistics"] = case.native_statistics.public(detailed=native_details)
+    return row
+
+
+def _native_details(run_fields: list[str] | None) -> bool:
+    return any(
+        name == "native_statistics" or name.startswith("native_statistics.")
+        for name in run_fields or ()
+    )
 
 
 def _project_run_rows(
@@ -714,7 +725,10 @@ def runs_page(
     # of none would report itself truncated with a cursor back at the same
     # offset, which is a pagination loop that never advances.
     rows = _project_run_rows(
-        [_run_item(case) for case in cases[: max(1, cap)]],
+        [
+            _run_item(case, native_details=_native_details(run_fields))
+            for case in cases[: max(1, cap)]
+        ],
         run_fields,
         lean_default=True,
     )
@@ -851,6 +865,7 @@ def snapshot_receipt(
     *,
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+    run_fields: list[str] | None = None,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
@@ -872,7 +887,7 @@ def snapshot_receipt(
     seen_observations = {(item.get("code"), item.get("detail")) for item in observations}
     runs_by_key: dict[tuple[str, int], dict[str, Any]] = {}
     for case in job.cases:
-        row = copy.deepcopy(_run_item(case))
+        row = copy.deepcopy(_run_item(case, native_details=_native_details(run_fields)))
         runs_by_key[(case.case_id, case.run_index)] = row
         for observation in case.observations:
             copied = copy.deepcopy(observation)
@@ -969,6 +984,7 @@ def render_runs_envelope(
     *,
     offset: int = 0,
     limit: int | None = None,
+    run_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Render one jobs(runs) envelope over a snapshot's full run records.
 
@@ -978,7 +994,7 @@ def render_runs_envelope(
     """
     page = project_receipt_runs(
         snapshot,
-        None,
+        run_fields,
         lean_default=False,
         offset=offset,
         limit=limit,

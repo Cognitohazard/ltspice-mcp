@@ -1,13 +1,8 @@
-"""Shared scaffolding for simulation/sweep/Monte-Carlo runners.
+"""Simulator submission, outcome classification and process ownership.
 
-The three runners all wrap spicelib's SimRunner with the same asyncio
-integration pattern: a blocking submit runs in ``asyncio.to_thread``;
-per-run callbacks fire in worker threads and bridge back to the event
-loop via ``call_soon_threadsafe``; cancel sets an event + kills
-spice processes. This module factors that shared machinery out so each
-subclass only implements what's genuinely different — stepper setup
-for sweeps, tolerance configuration for Monte Carlo, single-job
-tracking for sim.
+The experiment coordinator submits through this job-independent primitive.
+Blocking launch and completion work runs on worker threads; callbacks return
+to the event loop. Retained simulator handles support scoped cancellation.
 """
 
 from __future__ import annotations
@@ -18,6 +13,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -39,7 +35,7 @@ from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
 if TYPE_CHECKING:
-    pass
+    from spicelib.editor.base_editor import BaseEditor
 
 # Trailing `_<digits>` in spicelib-generated raw/log filenames. spicelib's
 # SimRunner._run_file_name produces "<stem>_<runno><suffix>" (1-based runno).
@@ -62,6 +58,15 @@ _GENERATED_NETLIST_MARKERS = (LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER)
 # applies to direct runner construction (mostly tests). Every runner
 # constructor and the RunnerManager factory methods share this one value.
 DEFAULT_MAX_PARALLEL = 4
+
+
+@dataclass(frozen=True)
+class NativeLaunchContext:
+    """A prepared ngspice setup, with its separate electrical input."""
+
+    input_deck: Path
+    cwd: Path
+    verify_execution: Callable[[], None] | None = None
 
 
 class RunOutcome(NamedTuple):
@@ -209,7 +214,9 @@ def _deck_has_sectioned_lib(netlist: Path) -> bool:
     return False
 
 
-def _is_ngspice_lib_section_failure(netlist: Path | None, simulator: type | None) -> str | None:
+def _is_ngspice_lib_section_failure(
+    netlist: Path | None, simulator: type | None, ngbehavior: str | None = None
+) -> str | None:
     """The active ``ngbehavior`` when it is what broke a sectioned ``.lib``.
 
     ngspice's LTspice/PSPICE compatibility modes read ``.lib <file> <section>``
@@ -221,7 +228,7 @@ def _is_ngspice_lib_section_failure(netlist: Path | None, simulator: type | None
     """
     if netlist is None or not is_ngspice(simulator):
         return None
-    mode = (current_ngbehavior() or "").lower()
+    mode = (ngbehavior if ngbehavior is not None else current_ngbehavior() or "").lower()
     if "lt" not in mode and "ps" not in mode:
         return None
     if not _deck_has_sectioned_lib(netlist):
@@ -237,6 +244,7 @@ def collect_run_outcome(
     *,
     netlist: Path | None = None,
     simulator: type | None = None,
+    ngbehavior: str | None = None,
 ) -> RunOutcome:
     """Collect and classify completion artifacts on a worker thread.
 
@@ -312,7 +320,7 @@ def collect_run_outcome(
     # turns it into a code a caller can branch on instead of prose it must read.
     code, evidence = classify_failure_code(errors)
     if code == "missing_include":
-        mode = _is_ngspice_lib_section_failure(netlist, simulator)
+        mode = _is_ngspice_lib_section_failure(netlist, simulator, ngbehavior)
         if mode is not None:
             code = "ngspice_lib_section"
             evidence = {**(evidence or {}), "ngbehavior": mode}
@@ -545,6 +553,10 @@ _CANCEL_KILL_RESCAN_DELAY = 0.5
 process to become visible to the next scan."""
 
 
+class NativePrelaunchRefused(Exception):
+    """The copied native setup was refused before a simulator task existed."""
+
+
 class _NonBlockingSimRunner(SimRunner):
     """A SimRunner whose destructor cannot pin the thread that drops it.
 
@@ -562,6 +574,19 @@ class _NonBlockingSimRunner(SimRunner):
     this project deliberately never uses, because it would reach another
     session's simulator. See ``docs/spicelib_bugs.md`` Bug 10.
     """
+
+    prelaunch_check: Callable[[], None] | None = None
+
+    def _prepare_sim(self, netlist: str | Path | BaseEditor, run_filename: str | None) -> Path:
+        copied = super()._prepare_sim(netlist, run_filename)
+        # SimRunner calls this before constructing or starting the RunTask.
+        # Check the copied deck while no simulator can have consumed it yet.
+        if self.prelaunch_check is not None:
+            try:
+                self.prelaunch_check()
+            except Exception as exc:
+                raise NativePrelaunchRefused(str(exc)) from exc
+        return copied
 
     def __del__(self) -> None:
         return
@@ -617,14 +642,19 @@ class RunnerBase:
         self._launch_slots.release()
         self._slots_out -= 1
 
-    def _build_sim_runner(self) -> SimRunner:
+    def _build_sim_runner(
+        self, *, cwd: Path | None = None, prelaunch_check: Callable[[], None] | None = None
+    ) -> SimRunner:
         """Construct a spicelib SimRunner with this runner's settings."""
-        return _NonBlockingSimRunner(
+        runner = _NonBlockingSimRunner(
             simulator=self.simulator_class,
             output_folder=str(self.output_folder),
             parallel_sims=self.max_parallel,
             timeout=_SIMRUNNER_TIMEOUT,
+            cwd=cwd,
         )
+        runner.prelaunch_check = prelaunch_check
+        return runner
 
     def _kill_by_token(self, token: str, context_label: str = "") -> None:
         """Best-effort blocking termination scoped to a command-line token."""
@@ -650,6 +680,8 @@ class RunnerBase:
         netlist: Path,
         run_filename: str,
         callback: Callable[[Any], Any],
+        *,
+        native: NativeLaunchContext | None = None,
     ) -> SimRunner:
         """Submit one deck and bridge its filesystem-derived outcome to the loop.
 
@@ -668,7 +700,10 @@ class RunnerBase:
         dangerous in itself: ``_NonBlockingSimRunner`` removes the destructor
         that used to pin the dropping thread for the whole simulation.)
         """
-        requirements = deck_requests_raw(netlist)
+        if native is not None and not is_ngspice(self.simulator_class):
+            raise ValueError("native statistical setup requires ngspice")
+        electrical_deck = native.input_deck if native else netlist
+        requirements = deck_requests_raw(electrical_deck)
 
         def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
             # This runner is fresh per submission, so active_tasks holds
@@ -679,8 +714,9 @@ class RunnerBase:
                     str(raw_file) if raw_file else "",
                     str(log_file) if log_file else "",
                     requirements,
-                    netlist=netlist,
+                    netlist=electrical_deck,
                     simulator=self.simulator_class,
+                    ngbehavior="hsa" if native else None,
                     # spicelib invokes the callback from the RunTask's own
                     # thread, and the task IS a Thread subclass carrying its
                     # retcode — so the current thread is the exact task,
@@ -697,13 +733,18 @@ class RunnerBase:
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
         self._retire_finished_runners()
-        runner = self._build_sim_runner()
+        runner = (
+            self._build_sim_runner(cwd=native.cwd, prelaunch_check=native.verify_execution)
+            if native
+            else self._build_sim_runner()
+        )
         runner.run(
             str(netlist),
             run_filename=run_filename,
             callback=completion_callback,
             callback_on_error=True,
             exe_log=True,
+            switches=["-n"] if native else None,
         )
         self._inflight_runners[run_filename] = runner
         return runner

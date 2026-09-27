@@ -47,6 +47,7 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.hierarchy import ResolvedInstance, SemanticProfile
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -90,6 +91,21 @@ _REFUSING_LEVELS: frozenset[int] = frozenset({1, 2, 3})
 # Verbatim ngspice diagnostic for a delvto on a non-BSIM device, quoted back so
 # a refusal here reads as the failure it is standing in for.
 NGSPICE_UNKNOWN_PARAMETER = "unknown parameter (delvto)"
+
+
+def require_scoped_bsim(instance: ResolvedInstance, profile: SemanticProfile) -> None:
+    """Gate caller injection on the exact resolved family, never a name-only lookup."""
+    if profile.simulator != "ngspice":
+        raise MismatchPlanError(
+            "unsupported_backend", "caller nested BSIM mismatch requires ngspice"
+        )
+    if not instance.model_family or any(
+        model.level not in BSIM_LEVELS for model in instance.model_family
+    ):
+        raise MismatchPlanError(
+            "unsupported_model",
+            f"{instance.instance}: exact model family does not prove BSIM delvto/mulu0 capability",
+        )
 
 
 class MismatchPlanError(ValueError):

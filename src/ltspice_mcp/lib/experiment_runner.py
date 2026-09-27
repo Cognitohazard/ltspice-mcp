@@ -29,8 +29,12 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import transition
+from ltspice_mcp.lib.native_execution import prepare_native_cases
+from ltspice_mcp.lib.pdk_native import NativeCaseError, verify_launch
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
+    NativeLaunchContext,
+    NativePrelaunchRefused,
     RunnerBase,
     RunOutcome,
     discard_generated_netlist,
@@ -557,6 +561,10 @@ class ExperimentRunner(RunnerBase):
             try:
                 staged = await request.stage()
                 candidate = self._materialize_job(request, staged)
+                if any(case.native_statistics is not None for case in candidate.cases):
+                    await asyncio.to_thread(
+                        prepare_native_cases, candidate, working_dir, self.simulator_class
+                    )
                 if lookup.dangling:
                     candidate.observations.append(
                         {
@@ -890,6 +898,18 @@ class ExperimentRunner(RunnerBase):
         """
         working_dir = execution.request.state.working_dir
         job_id = execution.job.job_id
+        native = None
+        prepared = case.native_statistics.prepared if case.native_statistics else None
+        if case.native_statistics is not None:
+            if prepared is None:
+                raise NativeCaseError("preparation", "native setup was not prepared")
+            verify_launch(prepared)
+            native = NativeLaunchContext(
+                input_deck=Path(prepared.paths.electrical_input),
+                cwd=Path(prepared.paths.cwd),
+                verify_execution=lambda: verify_launch(prepared, executed_copy=True),
+            )
+            suffix = ".cir"
         with file_lock(Store(working_dir).cancellation_lock(job_id)):
             if experiment_store.cancellation_requested(job_id, working_dir):
                 return False
@@ -898,43 +918,47 @@ class ExperimentRunner(RunnerBase):
                 return False
             case.status = "submitted"
             case.submitted_at = now()
-        # On LTspice .op cases, hand the simulator a sibling copy carrying
-        # '.options logopinfo' — without it the log has no per-device
-        # small-signal block and analysis reads back no gm/vth/vdsat. Injecting
-        # here rather than at staging is what keeps the staged deck and the
-        # deck_sha256 the record pins byte-identical: those are what a replay
-        # and every provenance check compare against. No-op for ngspice and for
-        # decks with no .op. The run_token stamp keeps concurrent cases sharing
-        # one staged deck from clobbering each other's copy.
-        run_deck = inject_logopinfo(case.staged_deck, self.simulator_class, case.run_token)
-        # On ngspice, a `.control` script replaces the raw the simulator would
-        # otherwise write, so a scripted deck that never calls write/wrdata
-        # produces no rawfile at all and every recipe over the case reads
-        # nothing. Give it one at the path this case's artifacts already use.
-        # Mutually exclusive with the LTspice injection above by simulator, so
-        # chaining on run_deck is safe. The injection is a fact about the run,
-        # not about the deck the record pins: the staged deck and its digest
-        # stay byte-identical either way.
-        run_dir = run_dir_in(self.output_folder, job_id)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        scripted_deck = inject_ngspice_control_write(
-            run_deck, self.simulator_class, case.run_token, run_dir
-        )
-        if scripted_deck != run_deck:
-            run_deck = scripted_deck
-            case.observations.append(
-                {
-                    "code": "control_write_injected",
-                    "kind": "execution",
-                    "detail": (
-                        "The deck's .control script wrote no rawfile of its own, so a "
-                        "'write <this case's raw path>' was added before .endc for this "
-                        "run. A script that runs several analyses, or writes per "
-                        "iteration, still needs its own writes: 'write' captures the "
-                        "current plot only."
-                    ),
-                }
+        if prepared is not None:
+            run_deck = Path(prepared.paths.prepared_driver)
+        else:
+            # On LTspice .op cases, hand the simulator a sibling copy carrying
+            # '.options logopinfo' — without it the log has no per-device
+            # small-signal block and analysis reads back no gm/vth/vdsat. Injecting
+            # here rather than at staging is what keeps the staged deck and the
+            # deck_sha256 the record pins byte-identical: those are what a replay
+            # and every provenance check compare against. No-op for ngspice and for
+            # decks with no .op. The run_token stamp keeps concurrent cases sharing
+            # one staged deck from clobbering each other's copy.
+            run_deck = inject_logopinfo(case.staged_deck, self.simulator_class, case.run_token)
+            # On ngspice, a `.control` script replaces the raw the simulator would
+            # otherwise write, so a scripted deck that never calls write/wrdata
+            # produces no rawfile at all and every recipe over the case reads
+            # nothing. Give it one at the path this case's artifacts already use.
+            # Mutually exclusive with the LTspice injection above by simulator, so
+            # chaining on run_deck is safe. The injection is a fact about the run,
+            # not about the deck the record pins: the staged deck and its digest
+            # stay byte-identical either way.
+            run_dir = run_dir_in(self.output_folder, job_id)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            scripted_deck = inject_ngspice_control_write(
+                run_deck, self.simulator_class, case.run_token, run_dir
             )
+            if scripted_deck != run_deck:
+                run_deck = scripted_deck
+                case.observations.append(
+                    {
+                        "code": "control_write_injected",
+                        "kind": "execution",
+                        "detail": (
+                            "The deck's .control script wrote no rawfile of its own, so a "
+                            "'write <this case's raw path>' was added before .endc for this "
+                            "run. A script that runs several analyses, or writes per "
+                            "iteration, still needs its own writes: 'write' captures the "
+                            "current plot only."
+                        ),
+                    }
+                )
+        native_args = {"native": native} if native is not None else {}
         try:
             self.submit_netlist(
                 run_deck,
@@ -948,13 +972,21 @@ class ExperimentRunner(RunnerBase):
                     case.case_id,
                     outcome,
                 ),
+                **native_args,
             )
+        except NativePrelaunchRefused:
+            # The stamp guarded cancellation while launch was in progress, but
+            # this refusal happened before spicelib could create a RunTask.
+            with execution.launch_lock:
+                case.submitted_at = None
+            raise
         finally:
             # spicelib stages the deck synchronously inside run(), so the copy
             # has done its job by the time submit returns — and on a submit that
             # raised, nothing will ever read it. The marker guard inside the
             # helper makes this incapable of touching the staged deck itself.
-            discard_generated_netlist(run_deck)
+            if native is None:
+                discard_generated_netlist(run_deck)
         return True
 
     async def _run_case(self, execution: _Execution, case: ExperimentCase) -> None:
@@ -1440,7 +1472,7 @@ class ExperimentRunner(RunnerBase):
     def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
         """Best-effort removal of a killed case's exact heavy-artifact paths."""
         raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
-        run_suffix = case.staged_deck.suffix or ".net"
+        run_suffix = ".cir" if case.native_statistics else case.staged_deck.suffix or ".net"
         # The job's own run directory, which is also what the record persists —
         # the same reconstruction the crash reconciliation uses to FIND these.
         run_dir = job.output_folder or run_dir_in(self.output_folder, job.job_id)
