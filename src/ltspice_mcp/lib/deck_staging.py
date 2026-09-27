@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -64,6 +64,7 @@ class StagedFile:
     source: Path
     staged_path: Path
     text: str
+    sha256: str = ""
 
 
 @dataclass
@@ -86,6 +87,10 @@ class StagedDeck:
     # staged copy says, which is what a variation has to read to find a
     # component that the root deck only reaches through an include.
     includes: list[StagedFile] = field(default_factory=list)
+    # Original bytes from the same reads that established the manifest hashes.
+    # Profile validation must not re-read possibly edited authoring files or
+    # mistake rewritten include paths for changes to the original model.
+    source_contents: dict[Path, bytes] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -150,8 +155,13 @@ def stage_deck(
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
     windows_paths: bool = False,
     simulator_roots: Sequence[Path] = (),
+    compact_digests: Collection[str] = (),
 ) -> StagedDeck:
     """Copy a primary deck and its include/lib closure into ``staging_root``.
+
+    ``compact_digests`` identifies audited model contents whose only external
+    references use the include/lib grammar below. Those dependencies receive
+    short filenames; all other sources retain their original relative layout.
 
     Relative dependencies retain their topology within the allowed root. An
     absolute or cross-root reference is rewritten only in the staged copy so
@@ -206,9 +216,12 @@ def stage_deck(
     manifest: list[ManifestEntry] = []
     manifest_keys: set[tuple[Path, str | None]] = set()
     source_destinations: dict[Path, Path] = {}
+    destination_owners: dict[str, Path] = {}
+    compact_digests = frozenset(compact_digests)
     source_bytes: dict[Path, bytes] = {}
     source_digests: dict[Path, str] = {}
     staged_texts: dict[Path, str] = {}
+    staged_digests: dict[Path, str] = {}
     processed_depths: dict[Path, int] = {}
     processing: set[Path] = set()
     observations: list[dict[str, Any]] = []
@@ -233,11 +246,18 @@ def stage_deck(
         resolved = path.resolve(strict=True)
         prior = source_destinations.get(resolved)
         if prior is None:
-            source_destinations[resolved] = destination
             data = resolved.read_bytes()
             source_bytes[resolved] = data
             source_digest = hashlib.sha256(data).hexdigest()
             source_digests[resolved] = source_digest
+            if walk and depth > 0 and source_digest in compact_digests:
+                destination = _compact_destination(resolved, staging_root)
+            owner = destination_owners.setdefault(str(destination).casefold(), resolved)
+            if owner != resolved:
+                raise DeckStagingError(
+                    "staging_collision", "Two captured sources resolve to the same staged filename"
+                )
+            source_destinations[resolved] = destination
             add_manifest(
                 ManifestEntry(
                     path=resolved,
@@ -382,6 +402,9 @@ def stage_deck(
                 staged_text = text
                 atomic_write_bytes(destination, data, durable=True)
             staged_texts[resolved] = staged_text
+            staged_digests[resolved] = hashlib.sha256(
+                staged_text.encode("utf-8") if changed else data
+            ).hexdigest()
         finally:
             processing.discard(resolved)
         processed_depths[resolved] = depth
@@ -427,8 +450,14 @@ def stage_deck(
         origin_sha256=origin_sha,
         manifest=manifest,
         observations=observations,
+        source_contents=source_bytes,
         includes=[
-            StagedFile(source=path, staged_path=source_destinations[path], text=text)
+            StagedFile(
+                source=path,
+                staged_path=source_destinations[path],
+                text=text,
+                sha256=staged_digests[path],
+            )
             for path, text in staged_texts.items()
             if path != source
         ],
@@ -537,6 +566,18 @@ def _containing_root(path: Path, roots: list[Path]) -> int | None:
         if path == root or path.is_relative_to(root):
             return index
     return None
+
+
+def _compact_destination(source: Path, staging_root: Path) -> Path:
+    """Short, source-specific names in a namespace disjoint from case clones."""
+    suffixes = [suffix.casefold() for suffix in source.suffixes]
+    suffix = source.suffix.casefold()
+    for marker in (".lib", ".sub"):
+        if marker in suffixes[:-1]:
+            suffix = marker + suffix
+            break
+    identity = hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:32]
+    return staging_root / f"model-{identity}{suffix}"
 
 
 def _destination_for(

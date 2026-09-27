@@ -24,6 +24,7 @@ but ``LexResult.warnings`` carries diagnostics.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -670,7 +671,7 @@ def _build_body_with_layout(
 ) -> tuple[str, list[BodySegment]]:
     """Construct the merged body and the body→raw layout map.
 
-    Each raw line contributes exactly one ``BodySegment``. Whitespace
+    Each non-trivia raw line contributes one ``BodySegment``. Whitespace
     is preserved verbatim per line so a body offset within a segment
     maps 1:1 to a raw-line column. The ``+`` continuation marker is
     replaced with a space in the body so the tokenizer doesn't see it;
@@ -682,6 +683,8 @@ def _build_body_with_layout(
     segments: list[BodySegment] = []
     body_offset = 0
     for j, raw_line in enumerate(raw_group):
+        if j and _classify_line(raw_line.lstrip()) in ("comment", "blank"):
+            continue
         # Strip line ending for body purposes. Raw line itself stays untouched.
         if raw_line.endswith("\r\n"):
             line_text = raw_line[:-2]
@@ -841,8 +844,14 @@ def _extract_ends_name(body: str) -> str | None:
     return parts[1]
 
 
+_PLAIN_MODEL_NAME = re.compile(r"(?i:\s*\.model)\s+([^\s={}(),\"';$]+)(?=\s|$)")
+
+
 def _extract_model_name(body: str) -> str | None:
     """Pull the model name from a ``.MODEL NAME TYPE(...)`` body."""
+    plain = _PLAIN_MODEL_NAME.match(body)
+    if plain is not None:
+        return plain.group(1)
     token = _extract_token_text(body, 1)
     if token is not None:
         return token
@@ -1020,9 +1029,18 @@ def lex(netlist_text: str) -> LexResult:
         # Collect this line plus any following continuation lines.
         raw_group = [raw_line]
         i += 1
-        while i < n and _is_continuation(lines[i].lstrip()):
-            raw_group.append(lines[i])
-            i += 1
+        while i < n:
+            following = i
+            while (
+                following < n
+                and _classify_line(lines[following].lstrip()) in ("comment", "blank")
+                and not _is_continuation(lines[following].lstrip())
+            ):
+                following += 1
+            if following == n or not _is_continuation(lines[following].lstrip()):
+                break
+            raw_group.extend(lines[i : following + 1])
+            i = following + 1
 
         # Build the merged body and a body→raw layout map. Whitespace
         # is preserved verbatim per line so token offsets in body are

@@ -610,11 +610,15 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 430 characters to say what a random rule's tolerance,
     # scale and distribution mean: the 3-sigma convention was stated nowhere
     # an agent reads, and one grepped the installed package to find it.
-    "run_experiments": 14020,
+    # Nested instance assignments and the native PDK family add their field
+    # grammar and replay guidance: measured 15,352 characters.
+    "run_experiments": 15400,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
-    "jobs": 5030,
+    # Run-field projection exposes full native provenance on explicit request:
+    # measured 5,187 characters.
+    "jobs": 5200,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route

@@ -126,6 +126,17 @@ def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
     assert "save-meas-coverage" not in _ids(deck, tmp_path)
 
 
+@pytest.mark.parametrize("mode", ["hsa", ""])
+def test_explicit_launch_mode_overrides_session_lint_mode(tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
+    text = '.lib "models.lib" tt\n.op\n.end\n'
+    findings = lint_deck(
+        text, tmp_path / "deck.cir", "ngspice", "NGspiceSimulator", ngbehavior=mode
+    )
+    assert "lib-section-ngspice" not in {row["rule_id"] for row in findings}
+    assert "lib-section-ngspice" in _ids(text, tmp_path, dialect="ngspice")
+
+
 def test_save_meas_coverage_distinguishes_voltage_and_current(tmp_path: Path):
     deck = "V1 out 0 1\n.save V(out)\n.meas tran peak MAX I(out)\n.tran 1u 1m\n.end\n"
 

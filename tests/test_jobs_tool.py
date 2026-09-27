@@ -354,7 +354,7 @@ class TestAdvertisedActionBranches:
             ("wait", {"action", "job_id", "request_id", "timeout_s", "wait_for", "budget"}),
             ("cancel", {"action", "job_id", "request_id", "control_token", "budget"}),
             ("list", {"action", "circuit", "limit", "cursor", "budget"}),
-            ("runs", {"action", "job_id", "request_id", "cursor", "budget"}),
+            ("runs", {"action", "job_id", "request_id", "cursor", "budget", "run_fields"}),
         ],
     )
     def test_each_action_advertises_its_own_fields(self, action: str, expected: set[str]):

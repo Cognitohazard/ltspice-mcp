@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import fnmatch
 import hashlib
+import math
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import product
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
@@ -30,6 +32,19 @@ from ltspice_mcp.lib.deck_staging import (
     staged_reference_targets,
 )
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
+from ltspice_mcp.lib.instance_targeting import (
+    InstanceEdit,
+    SourceLineage,
+    TargetEditor,
+    apply_edit,
+    canonical_target,
+    select,
+    source_lineage,
+    source_origins,
+    validate_payload,
+    validate_segments,
+)
 from ltspice_mcp.lib.montecarlo import (
     MCSampler,
     ToleranceSpec,
@@ -94,7 +109,23 @@ class VariationModel(BaseModel):
 def _validate_scalar(value: ScalarValue) -> ScalarValue:
     if isinstance(value, str) and not value:
         raise ValueError("SPICE assignment values cannot be empty")
+    if isinstance(value, (float, int)) and not math.isfinite(value):
+        raise ValueError("SPICE assignment values must be finite")
     return value
+
+
+class InstanceAssignment(VariationModel):
+    instance: list[str]
+    attribute: Literal["value", "model", "parameter"]
+    parameter: str | None = None
+    values: list[ScalarValue] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate(self) -> InstanceAssignment:
+        validate_segments(self.instance)
+        for value in self.values:
+            validate_payload(self.attribute, self.parameter, value)
+        return self
 
 
 class AssignVariation(VariationModel):
@@ -119,21 +150,21 @@ class AssignVariation(VariationModel):
     )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     assign: dict[str, list[ScalarValue]] = Field(
+        default_factory=dict,
         description=(
             "Target → value list, resolved in order as a 'REF@model' (glob "
             "allowed) model swap, an 'X1:delvto'/'X1:mulu0' per-instance "
             "mismatch delta, a declared .param, then a component reference — "
             "forms in spice://guide."
-        )
+        ),
     )
+    instances: list[InstanceAssignment] = Field(default_factory=list)
 
     @field_validator("assign")
     @classmethod
     def _validate_assignments(
         cls, assignments: dict[str, list[ScalarValue]]
     ) -> dict[str, list[ScalarValue]]:
-        if not assignments:
-            raise ValueError("assign must contain at least one target")
         for target, values in assignments.items():
             if not target.strip():
                 raise ValueError("assignment targets cannot be empty")
@@ -144,9 +175,13 @@ class AssignVariation(VariationModel):
 
     @model_validator(mode="after")
     def _validate_zip_lengths(self) -> AssignVariation:
+        if not self.assign and not self.instances:
+            raise ValueError("assign or instances must contain at least one target")
         if self.combine != "zip":
             return self
-        lengths = {len(values) for values in self.assign.values()}
+        lengths = {len(values) for values in self.assign.values()} | {
+            len(item.values) for item in self.instances
+        }
         if len(lengths) > 1:
             detail = ", ".join(f"{target}={len(values)}" for target, values in self.assign.items())
             raise ValueError(f"zip assignment lists must have equal lengths ({detail})")
@@ -204,6 +239,16 @@ class MismatchRule(VariationModel):
     conventions and BSIM parameter names: spice://guide."""
 
     rule: Literal["mismatch"]
+    instance: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_instance(self) -> MismatchRule:
+        if self.instance is not None:
+            validate_segments(self.instance)
+            if "prefix" in self.model_fields_set:
+                raise ValueError("mismatch instance and prefix are mutually exclusive")
+        return self
+
     prefix: str = Field(
         default="M",
         description=(
@@ -280,8 +325,39 @@ class RandomVariation(VariationModel):
         return value
 
 
+class PdkNativeVariation(VariationModel):
+    """One indexed native statistical family prepared by the backend adapter."""
+
+    kind: Literal["pdk_native"]
+    id: str = Field(description="Stable stochastic family name.")
+    runs: StrictInt = Field(ge=1)
+    seed: StrictInt = Field(
+        ge=0, le=2**63 - 1, description="Root seed used with the logical case identity."
+    )
+    profile: str = Field(description="Supported profile: sky130-e6f9c887-ngspice-v1 for ngspice.")
+    mode: Literal["nominal", "mismatch", "process", "combined"]
+    sample_start: StrictInt = Field(
+        default=0, ge=0, description="Nonnegative logical index for replaying a subset."
+    )
+    applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        if _CIRCUIT_ID_RE.fullmatch(value) is None:
+            raise ValueError("native family id must be a valid identifier")
+        return value
+
+    @field_validator("profile")
+    @classmethod
+    def _profile_not_empty(cls, value: str) -> str:
+        if not value:
+            raise ValueError("native profile cannot be empty")
+        return value
+
+
 Variation: TypeAlias = Annotated[
-    AssignVariation | RandomVariation,
+    AssignVariation | RandomVariation | PdkNativeVariation,
     Field(discriminator="kind"),
 ]
 
@@ -292,6 +368,8 @@ class DeckFile:
 
     path: Path
     text: str
+    # Digest of exact staged bytes, which may use an encoding other than UTF-8.
+    sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -310,6 +388,8 @@ class CircuitDeck:
     # rejected id came from: the rule is about the id, but the fix is about the
     # argument, and a caller who never wrote an id cannot see the connection.
     id_from_file_stem: bool = False
+    semantic_profile: SemanticProfile | None = None
+    record_source_lineage: bool = False
 
 
 @dataclass(frozen=True)
@@ -317,7 +397,7 @@ class ResolvedAssignment:
     """One assignment bound to a concrete deck edit."""
 
     target: str
-    kind: Literal["param", "component", "model", "instance_param"]
+    kind: Literal["param", "component", "model", "instance_param", "structured"]
     value: ScalarValue
     refs: tuple[str, ...] = ()
     # Which of the two per-instance mismatch parameters an ``instance_param``
@@ -333,6 +413,7 @@ class ResolvedAssignment:
     # ``_select_site``, and no second copy of it to drift. ``None`` only for a
     # model-swap glob, which is a set query and edits every match it finds.
     site: _Site | None = None
+    instance_edit: InstanceEdit | None = None
 
 
 @dataclass
@@ -345,6 +426,8 @@ class ExpandedCase:
     edits: tuple[ResolvedAssignment, ...] = ()
     random: RandomVariation | None = None
     random_index: int | None = None
+    native: PdkNativeVariation | None = None
+    native_index: int | None = None
 
     @property
     def case_id(self) -> str:
@@ -362,6 +445,8 @@ class MaterializedCase:
     text: str
     sha256: str
     assignments: dict[str, Any]
+    source_lineage: tuple[SourceLineage, ...] = ()
+    file_digests: tuple[tuple[Path, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -424,6 +509,7 @@ class _DeckClosure:
 
     circuit_id: str
     files: tuple[_ClosureFile, ...]
+    semantic_profile: SemanticProfile | None = None
     # Mismatch plans built over the UNEDITED closure, keyed by what was
     # selected. One circuit's cases select the same devices and differ only in
     # the values written, and a plan costs a lex of every file in the closure —
@@ -506,7 +592,9 @@ def validate_variation_circuit_ids(
 
 def assignment_family_size(variation: AssignVariation) -> int:
     """Return one assign entry's expansion size without reading a deck."""
-    sizes = [len(values) for values in variation.assign.values()]
+    sizes = [len(values) for values in variation.assign.values()] + [
+        len(item.values) for item in variation.instances
+    ]
     if variation.combine == "zip":
         return sizes[0]
     count = 1
@@ -556,6 +644,9 @@ def expand_variations(
     if validate_applies_to:
         validate_variation_circuit_ids(circuits, variations)
     random_entries = [item for item in variations if isinstance(item, RandomVariation)]
+    native_entries = [item for item in variations if isinstance(item, PdkNativeVariation)]
+    if len({item.id.casefold() for item in native_entries}) != len(native_entries):
+        raise VariationError("duplicate_native_family", "native family ids must be unique")
     if len(random_entries) > 1:
         raise VariationError(
             "multiple_random_variations",
@@ -569,10 +660,24 @@ def expand_variations(
         closure = _build_closure(circuit)
         families: list[list[tuple[dict[str, Any], tuple[ResolvedAssignment, ...]]]] = []
         random_variation: RandomVariation | None = None
+        native_variation: PdkNativeVariation | None = None
         for variation in variations:
             if not _applies(variation, circuit.circuit_id):
                 continue
+            if isinstance(variation, PdkNativeVariation):
+                if native_variation is not None or random_variation is not None:
+                    raise VariationError(
+                        "multiple_stochastic_families",
+                        f"Circuit {circuit.circuit_id!r} accepts only one native or random family",
+                    )
+                native_variation = variation
+                continue
             if isinstance(variation, RandomVariation):
+                if native_variation is not None:
+                    raise VariationError(
+                        "multiple_stochastic_families",
+                        f"Circuit {circuit.circuit_id!r} accepts only one native or random family",
+                    )
                 random_variation = variation
                 head = _mismatch_head(variation.rules)
                 mismatch_rules = [
@@ -583,7 +688,12 @@ def expand_variations(
                         # Validated as a set, at the position of the first of
                         # them, so a rule is reported in declaration order the
                         # way it is applied.
-                        if rule is head:
+                        if rule is head and closure.semantic_profile is None:
+                            if any(r.instance is not None for r in mismatch_rules):
+                                raise VariationError(
+                                    "semantic_profile_required",
+                                    "nested mismatch requires an explicit semantic_profile",
+                                )
                             _validate_mismatch_rules(closure, mismatch_rules)
                         continue
                     _resolve_random_rule_targets(closure, rule)
@@ -612,12 +722,15 @@ def expand_variations(
                     )
             combinations = next_combinations
 
-        random_indices: tuple[int | None, ...] = (
-            tuple(range(random_variation.runs)) if random_variation is not None else (None,)
-        )
+        if random_variation is not None:
+            sample_indices: tuple[int | None, ...] = tuple(range(random_variation.runs))
+        elif native_variation is not None:
+            sample_indices = tuple(range(native_variation.runs))
+        else:
+            sample_indices = (None,)
         circuit_index = 0
         for assignments, edits in combinations:
-            for random_index in random_indices:
+            for sample_index in sample_indices:
                 expanded.append(
                     ExpandedCase(
                         circuit_id=circuit.circuit_id,
@@ -625,7 +738,13 @@ def expand_variations(
                         assignments=dict(assignments),
                         edits=edits,
                         random=random_variation,
-                        random_index=random_index,
+                        random_index=sample_index if random_variation is not None else None,
+                        native=native_variation,
+                        native_index=(
+                            native_variation.sample_start + sample_index
+                            if native_variation is not None and sample_index is not None
+                            else None
+                        ),
                     )
                 )
                 circuit_index += 1
@@ -644,24 +763,148 @@ def materialize_variants(
         circuit.path.suffix if circuit.path.suffix.lower() in {".cir", ".net", ".sp"} else ".cir"
     )
     closure = _build_closure(circuit)
-    referrers = _include_referrers(closure)
+    captured_digests = {
+        file.path.resolve(): file.sha256 or hashlib.sha256(file.text.encode("utf-8")).hexdigest()
+        for file in circuit.includes
+    }
     materialized: list[MaterializedCase] = []
+    zero_edit_lineage: tuple[SourceLineage, ...] | None = None
     for case in cases:
         if case.circuit_id != circuit.circuit_id:
             continue
         texts = closure.texts()
-        _apply_assignments(closure, texts, case.edits)
+        unchanged_case = not case.edits and case.random is None
         assignments = dict(case.assignments)
-        if case.random is not None and case.random_index is not None:
-            sampler = MCSampler(case.random.seed).derive(
-                f"{case.circuit_id}:case{case.case_index}:run{case.random_index + 1}"
+        structured = [edit.instance_edit for edit in case.edits if edit.instance_edit is not None]
+        ordinary = tuple(
+            edit for edit in case.edits if edit.kind not in {"structured", "instance_param"}
+        )
+        aliases = tuple(edit for edit in case.edits if edit.kind == "instance_param")
+        rules = case.random.rules if case.random is not None else []
+        sampler = (
+            MCSampler(case.random.seed).derive(
+                f"{case.circuit_id}:case{case.case_index}:run{(case.random_index or 0) + 1}"
             )
-            assignments.update(_apply_random_rules(closure, texts, case.random.rules, sampler))
+            if case.random is not None
+            else None
+        )
+        if not unchanged_case:
+            _validate_write_sets(closure, ordinary, ())
+            _apply_assignments(closure, texts, ordinary)
+        ordinary_rules = [rule for rule in rules if not isinstance(rule, MismatchRule)]
+        if ordinary_rules:
+            assert sampler is not None
+            assignments.update(_apply_random_rules(closure, texts, ordinary_rules, sampler))
+        case_closure = closure
+        lineage: tuple[SourceLineage, ...] = ()
+        mismatch_rules = [rule for rule in rules if isinstance(rule, MismatchRule)]
+        needs_editor = closure.semantic_profile is not None and bool(
+            structured or aliases or mismatch_rules
+        )
+        if needs_editor:
+            assert closure.semantic_profile is not None
+            inputs = _closure_files(closure, texts)
+            origins = source_origins(
+                _closure_files(closure, closure.texts()), inputs, closure.semantic_profile
+            )
+            editor = TargetEditor(inputs, closure.semantic_profile, origins=origins)
+            structured.extend(_legacy_instance_edits(editor.hierarchy, aliases))
+            _validate_write_sets(closure, ordinary, structured, editor.hierarchy, rules, origins)
+            editor.apply(structured)
+            final_files = editor.result()
+            if mismatch_rules:
+                assert sampler is not None
+                final_editor = TargetEditor(
+                    final_files, closure.semantic_profile, editor.cloned, editor.output_origins()
+                )
+                mismatch, draws = _nested_mismatch_edits(
+                    final_editor.hierarchy, mismatch_rules, sampler, final_editor
+                )
+                final_editor.apply(mismatch)
+                final_files = final_editor.result()
+                editor = final_editor
+            else:
+                draws = {}
+            lineage = editor.lineage()
+            assignments.update(draws)
+            base_files = [
+                ClosureFile(
+                    file.index,
+                    file.path,
+                    closure.files[file.index].text if file.index < len(closure.files) else "",
+                )
+                for file in final_files
+            ]
+            case_closure = _case_closure(closure, base_files)
+            texts = {file.index: file.text for file in final_files}
+        else:
+            if structured:
+                raise VariationError(
+                    "semantic_profile_required",
+                    "structured targeting requires an explicit semantic_profile",
+                )
+            if aliases:
+                _apply_instance_params(closure, texts, list(aliases))
+            if mismatch_rules:
+                assert sampler is not None
+                assignments.update(_apply_random_rules(closure, texts, mismatch_rules, sampler))
+            if circuit.record_source_lineage:
+                if closure.semantic_profile is None:
+                    raise VariationError(
+                        "semantic_profile_required",
+                        "source lineage requires an explicit semantic_profile",
+                    )
+                if unchanged_case and zero_edit_lineage is not None:
+                    lineage = zero_edit_lineage
+                else:
+                    lineage = source_lineage(
+                        _closure_files(closure, closure.texts()),
+                        _closure_files(closure, texts),
+                        closure.semantic_profile,
+                    )
+                    if unchanged_case:
+                        zero_edit_lineage = lineage
+        if case.random is not None and case.random_index is not None:
             assignments["_random_run"] = case.random_index
             if case.random.id is not None:
                 assignments["_random_id"] = case.random.id
-        text = _write_case_includes(closure, referrers, texts, case.case_index)
+        if unchanged_case:
+            referrers: dict[int, set[int]] = {}
+        else:
+            current = _case_closure(case_closure, _closure_files(case_closure, texts))
+            referrers = _include_referrers(current)
+        destinations: dict[Path, Path] = {}
+        text = _write_case_includes(
+            case_closure,
+            referrers,
+            texts,
+            case.case_index,
+            destinations=destinations,
+        )
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
+        destinations[circuit.path.resolve()] = path.resolve()
+        file_digests: list[tuple[Path, str]] = []
+        for file in case_closure.files:
+            source = file.path.resolve()
+            destination = destinations.get(source)
+            if destination is None:
+                destination = source
+                digest = captured_digests[source]
+            else:
+                digest = hashlib.sha256(texts[file.index].encode("utf-8")).hexdigest()
+            file_digests.append((destination, digest))
+        lineage = tuple(
+            SourceLineage(
+                replace(
+                    item.case_source,
+                    path=str(
+                        destinations.get(Path(item.case_source.path), Path(item.case_source.path))
+                    ),
+                ),
+                item.staged_source,
+            )
+            for item in lineage
+        )
         atomic_write_text(path, text, durable=True)
         materialized.append(
             MaterializedCase(
@@ -670,14 +913,18 @@ def materialize_variants(
                 case_index=case.case_index,
                 path=path,
                 text=text,
-                sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                sha256=file_digests[0][1],
                 assignments=assignments,
+                source_lineage=lineage,
+                file_digests=tuple(file_digests),
             )
         )
     return materialized
 
 
-def _applies(variation: AssignVariation | RandomVariation, circuit_id: str) -> bool:
+def _applies(
+    variation: AssignVariation | RandomVariation | PdkNativeVariation, circuit_id: str
+) -> bool:
     return variation.applies_to is None or circuit_id.casefold() in {
         item.casefold() for item in variation.applies_to
     }
@@ -732,7 +979,11 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
             + [(include.path, include.text) for include in circuit.includes]
         )
     ]
-    return _DeckClosure(circuit_id=circuit.circuit_id, files=tuple(files))
+    return _DeckClosure(
+        circuit_id=circuit.circuit_id,
+        files=tuple(files),
+        semantic_profile=circuit.semantic_profile,
+    )
 
 
 def _select_target_file(
@@ -817,6 +1068,18 @@ def _resolve_assign_family(
     variation: AssignVariation,
 ) -> list[tuple[dict[str, Any], tuple[ResolvedAssignment, ...]]]:
     target_values = list(variation.assign.items())
+    structured = {
+        canonical_target(item.instance, item.attribute, item.parameter): item
+        for item in variation.instances
+    }
+    if len(structured) != len(variation.instances):
+        raise VariationError("duplicate_assignment_target", "duplicate structured assignment")
+    if structured and closure.semantic_profile is None:
+        raise VariationError(
+            "semantic_profile_required",
+            "structured targeting requires an explicit semantic_profile",
+        )
+    target_values.extend((key, item.values) for key, item in structured.items())
     folded_targets = [target.casefold() for target, _ in target_values]
     if len(set(folded_targets)) != len(folded_targets):
         raise VariationError(
@@ -834,7 +1097,20 @@ def _resolve_assign_family(
         edits: list[ResolvedAssignment] = []
         for (target, _), value in zip(target_values, row, strict=True):
             assignments[target] = value
-            edits.extend(_resolve_assignment(closure, target, value))
+            if target in structured:
+                item = structured[target]
+                edits.append(
+                    ResolvedAssignment(
+                        target,
+                        "structured",
+                        value,
+                        instance_edit=InstanceEdit(
+                            tuple(item.instance), item.attribute, value, item.parameter
+                        ),
+                    )
+                )
+            else:
+                edits.extend(_resolve_assignment(closure, target, value))
         family.append((assignments, tuple(edits)))
     return family
 
@@ -1407,7 +1683,7 @@ def _set_instance_model(
 def _apply_random_rules(
     closure: _DeckClosure,
     texts: dict[int, str],
-    rules: list[RandomRule],
+    rules: Sequence[RandomRule],
     sampler: MCSampler,
 ) -> dict[str, float]:
     draws: dict[str, float] = {}
@@ -1544,6 +1820,8 @@ def _write_case_includes(
     referrers: dict[int, set[int]],
     texts: dict[int, str],
     case_index: int,
+    *,
+    destinations: dict[Path, Path] | None = None,
 ) -> str:
     """Write this case's private copies of the includes it edited.
 
@@ -1569,6 +1847,8 @@ def _write_case_includes(
         for index in copies
         if index != 0
     }
+    if destinations is not None:
+        destinations.update({path: path.with_name(name) for path, name in renames.items()})
     for index in sorted(copies):
         file = closure.files[index]
         texts[index] = rewrite_staged_references(
@@ -1761,7 +2041,7 @@ def _flat_mismatch_files(
     return tuple(tuple(indexes) for indexes in hits)
 
 
-def _mismatch_head(rules: list[RandomRule]) -> MismatchRule | None:
+def _mismatch_head(rules: Sequence[RandomRule]) -> MismatchRule | None:
     """The mismatch rule that carries the whole set, or None if there is none."""
     return next((rule for rule in rules if isinstance(rule, MismatchRule)), None)
 
@@ -1832,7 +2112,7 @@ def _validate_mismatch_rules(closure: _DeckClosure, rules: list[MismatchRule]) -
 def _apply_mismatch_rules(
     closure: _DeckClosure,
     texts: dict[int, str],
-    rules: list[RandomRule],
+    rules: Sequence[RandomRule],
     sampler: MCSampler,
     model_card: Callable[[str], str | None],
 ) -> dict[str, float]:
@@ -1996,3 +2276,311 @@ def _apply_mismatch_rule(
         )
         text = rewrite_instance_model(text, instance.ref, variant)
     return text, draws
+
+
+def _legacy_instance_edits(
+    hierarchy: Hierarchy, edits: Sequence[ResolvedAssignment]
+) -> list[InstanceEdit]:
+    result = []
+    for edit in edits:
+        if edit.kind != "instance_param":
+            continue
+        alias = edit.refs[0].casefold()
+        matches = [
+            row for row in hierarchy.instances if ".".join(row.instance).casefold() == alias
+        ]
+        if len(matches) != 1:
+            raise VariationError(
+                "ambiguous_target",
+                f"legacy instance alias {edit.refs[0]!r} is ambiguous or absent; use segment-list instances",
+            )
+        row = matches[0]
+        if row.element == "X":
+            children = [
+                child
+                for child in hierarchy.instances
+                if child.element == "M" and child.instance[:-1] == row.instance
+            ]
+            if len(children) != 1:
+                raise VariationError(
+                    "ambiguous_target",
+                    "legacy wrapper alias requires exactly one direct MOS; use segment-list instances",
+                )
+            row = children[0]
+        if row.element != "M":
+            raise VariationError("ambiguous_target", "mismatch alias must select a MOS")
+        result.append(InstanceEdit(row.instance, "parameter", edit.value, edit.instance_param))
+    return result
+
+
+@dataclass(frozen=True)
+class _WriteClaim:
+    source: tuple[str, int]
+    instance: tuple[str, ...] | None
+    fields: set[str]
+    label: str
+
+
+def _original_source_key(
+    row: ResolvedInstance, origins: dict[tuple[str, int], Source] | None
+) -> tuple[str, int]:
+    source = (origins or {}).get((row.source.path, row.source.line), row.source)
+    return source.path, source.line
+
+
+def _validate_write_sets(
+    closure: _DeckClosure,
+    edits: Sequence[ResolvedAssignment],
+    structured: Sequence[InstanceEdit],
+    hierarchy: Hierarchy | None = None,
+    random_rules: Sequence[RandomRule] = (),
+    origins: dict[tuple[str, int], Source] | None = None,
+) -> None:
+    claims: list[_WriteClaim] = []
+    cards = {file.index: lex(file.text).cards for file in closure.files}
+    for edit in edits:
+        if edit.kind in {"structured", "instance_param"}:
+            continue
+        file = closure.files[edit.file_index]
+        selected = (
+            [
+                c
+                for c in cards[file.index]
+                if c.kind == "instance"
+                and c.name
+                and c.name.casefold() in {r.casefold() for r in edit.refs}
+            ]
+            if edit.kind == "model"
+            else [_claim_card(cards[file.index], edit.site, file, parameter=edit.kind == "param")]
+        )
+        for card in selected:
+            if edit.kind == "param":
+                fields = {"parameter:" + edit.refs[0].casefold()}
+            else:
+                attribute = "model" if edit.kind == "model" else "value"
+                fields = apply_edit(
+                    copy.deepcopy(card), InstanceEdit((card.name or "",), attribute, edit.value)
+                )
+            claims.append(
+                _WriteClaim((str(file.path.resolve()), card.line_start), None, fields, edit.target)
+            )
+    for rule in random_rules:
+        if isinstance(rule, MismatchRule):
+            continue
+        for target in _resolve_random_rule_targets(closure, rule):
+            selected = (
+                [
+                    c
+                    for c in cards[target.file.index]
+                    if c.kind == "instance" and c.name in target.refs
+                ]
+                if isinstance(rule, ComponentRule)
+                else [
+                    _claim_card(
+                        cards[target.file.index],
+                        target.site,
+                        target.file,
+                        parameter=isinstance(rule, ParamRule),
+                    )
+                ]
+            )
+            for card in selected:
+                fields = (
+                    {"value"}
+                    if isinstance(rule, ComponentRule)
+                    else {
+                        "parameter:"
+                        + (rule.target if isinstance(rule, ParamRule) else rule.param).casefold()
+                    }
+                )
+                claims.append(
+                    _WriteClaim(
+                        (str(target.file.path.resolve()), card.line_start),
+                        None,
+                        fields,
+                        f"random:{rule.target}",
+                    )
+                )
+    if hierarchy is not None:
+        for edit in structured:
+            row = select(hierarchy, edit.instance)
+            card = lex(row.raw + "\n").cards[0]
+            fields = apply_edit(card, edit)
+            claims.append(
+                _WriteClaim(
+                    _original_source_key(row, origins),
+                    tuple(p.casefold() for p in row.instance),
+                    fields,
+                    edit.target,
+                )
+            )
+    for index, claim in enumerate(claims):
+        for other in claims[:index]:
+            same = claim.source == other.source and (
+                claim.instance is None
+                or other.instance is None
+                or claim.instance == other.instance
+            )
+            if same and claim.fields & other.fields:
+                raise VariationError(
+                    "overlapping_assignment",
+                    f"overlapping writes {claim.label!r} and {other.label!r}: {sorted(claim.fields & other.fields)}",
+                )
+    if hierarchy is not None:
+        runtime_claims = [claim for claim in claims if claim.instance is not None]
+        for claim in claims:
+            ancestors = (
+                [select(hierarchy, claim.instance)]
+                if claim.instance is not None
+                else [
+                    row
+                    for row in hierarchy.instances
+                    if _original_source_key(row, origins) == claim.source
+                ]
+            )
+            for ancestor in ancestors:
+                if ancestor.element != "X":
+                    continue
+                path = tuple(p.casefold() for p in ancestor.instance)
+                for child in runtime_claims:
+                    assert child.instance is not None
+                    if len(child.instance) > len(path) and child.instance[: len(path)] == path:
+                        raise VariationError(
+                            "hierarchy_write_conflict",
+                            f"ancestor write {claim.label!r} conflicts with descendant {child.label!r}",
+                        )
+
+
+def _nested_mismatch_edits(
+    hierarchy: Hierarchy, rules: Sequence[MismatchRule], sampler: MCSampler, editor: TargetEditor
+) -> tuple[list[InstanceEdit], dict[str, float]]:
+    from ltspice_mcp.lib.montecarlo import InstanceGeometry
+    from ltspice_mcp.lib.subckt_mismatch import require_scoped_bsim
+
+    edits: list[InstanceEdit] = []
+    draws: dict[str, float] = {}
+    claimed: set[tuple[str, ...]] = set()
+    for rule in rules:
+        if rule.instance is not None:
+            selected = select(hierarchy, rule.instance)
+            rows = [
+                row
+                for row in hierarchy.instances
+                if row.element == "M"
+                and (
+                    row.instance == selected.instance
+                    or row.instance[: len(selected.instance)] == selected.instance
+                )
+            ]
+        else:
+            roots = [
+                row.instance
+                for row in hierarchy.instances
+                if matches_prefix(row.reference, rule.prefix)
+            ]
+            rows = [
+                row
+                for row in hierarchy.instances
+                if row.element == "M" and any(row.instance[: len(root)] == root for root in roots)
+            ]
+        if not rows:
+            raise VariationError(
+                "mismatch_target_missing", "mismatch rule reaches no MOS instances"
+            )
+        for row in rows:
+            if row.instance in claimed:
+                raise VariationError(
+                    "overlapping_mismatch_rules", f"multiple mismatch rules claim {row.instance}"
+                )
+            claimed.add(row.instance)
+            if len(row.instance) > 1:
+                require_scoped_bsim(row, hierarchy.profile)
+            geometry = dict(row.geometry)
+            width, length = geometry["w"].value, geometry["l"].value
+            if width is None or length is None:
+                raise VariationError(
+                    "mismatch_geometry_unresolved", f"final W/L unresolved for {row.instance}"
+                )
+            parameters = dict(row.parameters)
+            if any(name in parameters for name in (VTH_PARAM, MOBILITY_PARAM)):
+                raise VariationError(
+                    "preexisting_mismatch", f"{row.instance} already has mismatch parameters"
+                )
+            delta = sample_instance_mismatch(
+                sampler,
+                InstanceGeometry(
+                    canonical_target(row.instance, "mismatch"), row.model_name or "", width, length
+                ),
+                _engine_rule(rule),
+            )
+            if len(row.instance) == 1:
+                if row.model_source is None or len(row.model_family) != 1:
+                    raise VariationError(
+                        "model_missing", "flat mismatch needs one exact model definition"
+                    )
+                nominals = parse_model_params(row.model_family[0].raw)
+                overrides = {}
+                for parameter, enabled, additive in (
+                    (rule.vth_param, rule.AVT > 0, True),
+                    (rule.k_param, rule.AK > 0, False),
+                ):
+                    if not enabled:
+                        continue
+                    nominal = nominals.get(parameter.upper())
+                    if nominal is None:
+                        raise VariationError(
+                            "random_nominal_unavailable",
+                            f"Mismatch model lacks numeric {parameter}",
+                        )
+                    value = (
+                        nominal + delta["dvth"] if additive else nominal * (1 + delta["dk_over_k"])
+                    )
+                    overrides[parameter] = value
+                    draws[canonical_target(row.instance, "model_parameter", parameter)] = value
+                if overrides:
+                    name = editor.clone_flat_model(row.model_source, row.instance, overrides)
+                    edits.append(InstanceEdit(row.instance, "model", name))
+                continue
+            for parameter, value, enabled in (
+                (VTH_PARAM, delta["dvth"], rule.AVT > 0),
+                (MOBILITY_PARAM, 1 + delta["dk_over_k"], rule.AK > 0),
+            ):
+                if enabled:
+                    edit = InstanceEdit(row.instance, "parameter", value, parameter)
+                    edits.append(edit)
+                    draws[edit.target] = value
+    return edits, draws
+
+
+def _case_closure(closure: _DeckClosure, files: Sequence[ClosureFile]) -> _DeckClosure:
+    return replace(
+        closure,
+        files=tuple(
+            _ClosureFile(
+                file.index, file.path, file.text, _deck_targets(file.text, file.path, file.depth)
+            )
+            for file in files
+        ),
+    )
+
+
+def _claim_card(
+    cards: list[SpiceCard], site: _Site | None, file: _ClosureFile, *, parameter: bool = False
+) -> SpiceCard:
+    assert site is not None
+    matches = [
+        i
+        for i, card in enumerate(cards)
+        if (
+            (not parameter and card.name and card.name.casefold() == site.name.casefold())
+            or (
+                parameter
+                and card.kind == "param"
+                and any(
+                    t.key and t.key.casefold() == site.name.casefold()
+                    for t in tokenize_body(card.body)
+                )
+            )
+        )
+    ]
+    return cards[_card_at_site(cards, matches, site, file=file, what="write claim")]

@@ -11,9 +11,12 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib import now
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.native_records import NativeCaseRecord
 
 ExperimentStatus = Literal[
     "queued",
@@ -71,6 +74,7 @@ class ExperimentCase:
     run_token: str = ""
     step_index: int | None = None
     step_values: dict[str, Any] = field(default_factory=dict)
+    native_statistics: NativeCaseRecord | None = None
 
 
 def failure_row(case: ExperimentCase) -> dict[str, Any]:

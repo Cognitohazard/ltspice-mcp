@@ -696,16 +696,19 @@ and the mismatch lands on the model card's `VTO`/`KP`:
  "rules": [{"rule": "mismatch", "prefix": "M", "AVT": 2.24e-2, "AK": 0.01}]}
 ```
 
-Scope it to one pair by naming the rule per device (`prefix` matches leading
-characters, so `"M1"` also matches M10/M11 — use the full reference when the
-pair must be exact). On BSIM model cards set `vth_param:"VTH0"` and
+To select an exact pair, use one rule per device with `instance`, such as
+`instance: ["XA", "M1"]`. A wrapper path selects all its descendant MOS devices.
+`prefix` matches leading characters, so `"M1"` also matches M10/M11.
+`instance` and `prefix` are mutually exclusive. On BSIM model cards set `vth_param:"VTH0"` and
 `k_param:"U0"`; the `VTO`/`KP` defaults are Level-1 names. Other letter
 prefixes (`"Q"` for BJTs) are accepted, but the Pelgrom law and those
 parameter defaults are for MOSFETs.
 
 A `prefix` that matches subckt instances (e.g. sky130 `X`-wrapped FETs)
-descends into the wrapper; that descent supports ngspice-compatible BSIM3/4
-devices through exactly one X→M level. Flat devices have no such constraint.
+descends into supported ngspice-compatible BSIM3/4 wrappers. For nested
+blocks, inspect the hierarchy and use the physical MOS instance list. Sampling
+uses its final effective W/L after deterministic assignments. Caller-provided
+coefficients remain caller assumptions; they are not PDK statistical models.
 
 **Explicit per-instance values** — when the offsets themselves are chosen
 (worst-case corners, a specific measured die), use `assign` + `combine:"zip"`
@@ -1219,8 +1222,8 @@ is refused; use SI dimensions. The `mil` suffix is 25.4 micrometres.
 Functions, missing parameters, cycles
 and simulator steps can leave numeric facts unknown. Conditional structure,
 opaque control scripts, local definitions, recursion, missing dependencies,
-ambiguous declarations and resource-limit overruns are refused. Discovery does
-not implement selective per-instance variation.
+ambiguous declarations and resource-limit overruns are refused. Discovery is
+read-only; pass its instance list to an experiment variation to edit that instance.
 
 Declare the simulator even for offline inspection. For ngspice, `ngbehavior`
 defaults to the configured effective mode; sectioned libraries need a mode
@@ -1240,3 +1243,60 @@ raw signal. A nested resistor uses `.save @r.xa.xleaf.r1[i]` on ngspice or
 `.save I(xa:xleaf:r1)` on LTspice. Full ancestral names distinguish the repeated
 peer. If an address is unavailable, use the explicit reason; do not shorten or
 guess a selector. Node voltage spellings do not guarantee a run saved the trace.
+
+
+## Varying one nested instance
+
+Use the exact reference-segment list from hierarchy discovery:
+
+```json
+{"kind": "assign", "instances": [
+  {"instance": ["XA", "Xdev"], "attribute": "parameter",
+   "parameter": "w", "values": [1, 2]},
+  {"instance": ["XA", "R1"], "attribute": "value", "values": ["100k"]}
+]}
+```
+
+This changes only the selected runtime instances in private case files. Peers
+and original authoring files stay unchanged. Values use the deck's units:
+Sky130 widths above are micrometres because its scale is `1e-6`; a typical
+LTspice MOS width would instead use a value such as `"2u"`. Use `combine: "zip"`
+for paired target lists of equal length. Conflicting fields and overlapping
+ancestor/descendant edits are refused. For caller-defined mismatch, a random
+rule may instead name the exact physical MOS with `instance`; do not also give
+that rule a `prefix`.
+
+## Native Sky130 statistical samples
+
+The `pdk_native` variation runs the statistical models supplied by a specific
+PDK installation. The initial profile supports the generated Sky130A model set
+at open_pdks revision `e6f9c8876da77220403014b116761b0b2d79aab4` and its
+`sky130_fd_pr__nfet_01v8` devices. The PDK is installed separately and must be
+inside allowed paths. Every active protected file is checked against the profile's
+hashes; a similarly named or edited installation does not qualify.
+
+Author the bench with `.lib "path/to/sky130A/libs.tech/ngspice/sky130.lib.spice"`
+and the appropriate section: `tt` for nominal, `tt_mm` for mismatch, `mc` for
+process. Combined mode uses `mc` followed by root `.param mc_mm_switch=1`.
+Use one `.op`, `.tran` or `.ac`, unit `m`/`mult`/`nf`, and positive resolved W/L.
+Omit custom `.control`, `.step`, seed commands and other profile overrides;
+the server owns initialization. Unsupported coverage fails explicitly.
+
+```json
+{"kind": "pdk_native", "id": "samples", "profile": "sky130-e6f9c887-ngspice-v1",
+ "mode": "combined", "runs": 20, "seed": 1947}
+```
+
+Add that entry to `run_experiments.variations` with `execution.simulator` set to
+`ngspice`. Deterministic bench assignments can accompany it. Each sample has a
+fresh process and sets its derived seed before models load. For sample 7 alone,
+keep the inputs, ids, assignments and seed, then set `runs: 1, sample_start: 7`.
+Parallel limits and job ids do not affect sample identity. Exact reproducibility
+is tied to the recorded simulator build and platform.
+
+Inspect `native_statistics` in run receipts, or request full details with
+`jobs(action="runs", job_id=..., run_fields=["native_statistics"])`. Missing
+facts carry reasons, including on failed/skipped cases. Full provenance records
+covered devices, original model hashes, effective seed, simulator identity and
+exact prepared files. Internal PDK draws are unavailable. Use the existing
+analysis/API primitives for your measurements and statistical conclusions.

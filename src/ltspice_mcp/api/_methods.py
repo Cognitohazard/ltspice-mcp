@@ -283,6 +283,7 @@ async def _complete_run_receipt(
         job,
         state,
         control_token=control_token if isinstance(control_token, str) else None,
+        run_fields=request.run_fields,
     )
     analysis_fields = (
         request.analyze.include.fields

@@ -161,6 +161,8 @@ _PATH_MEMBERS: dict[str, Any] = {
     "runs_root": (),
     "run_dir": ("exp_1",),
     "staged_deck_root": ("exp_1", "dut"),
+    "native_input": ("exp_1", "exp_1_case_0"),
+    "native_driver": ("exp_1", "exp_1_case_0"),
     "detached_dir": (),
     "detached_request": ("some-request-id", "0123abcd"),
     "detached_receipt": ("some-request-id", "0123abcd"),

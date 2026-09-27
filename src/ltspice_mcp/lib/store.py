@@ -86,7 +86,7 @@ STORE_SCHEMA = "ltspice-mcp/store"
 
 #: The one version for the whole store. Bump it when ANY record's shape
 #: changes; the manifest at the store root records which version wrote it.
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 #: Versions this build can read. Older entries appear here only once this build
 #: can actually decode them.
@@ -582,6 +582,18 @@ class Store:
         """Where one circuit's staged deck closure lands for one job."""
         return (
             self.run_dir(job_id, simulator) / "staged" / _validate_name(circuit_id, "circuit_id")
+        )
+
+    def native_input(self, job_id: str, run_token: str, simulator: type | None = None) -> Path:
+        """Electrical input sourced by a native statistical setup."""
+        return (
+            self.run_dir(job_id, simulator) / f"{_validate_name(run_token, 'run_token')}.input.cir"
+        )
+
+    def native_driver(self, job_id: str, run_token: str, simulator: type | None = None) -> Path:
+        """Prepared setup retained separately from the simulator's deck copy."""
+        return (
+            self.run_dir(job_id, simulator) / f"{_validate_name(run_token, 'run_token')}.setup.cir"
         )
 
     # -- analysis results ---------------------------------------------------

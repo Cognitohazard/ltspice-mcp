@@ -206,6 +206,8 @@ class TestManifestWalk:
         root = tmp_path / "root"
         deck = _write(root / "deck.cir", '.include "value.inc"\n.op\n.end\n')
         included = _write(root / "value.inc", ".param x=1\n")
+        original_deck = deck.read_bytes()
+        original_include = included.read_bytes()
         staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
         staged_include = next(
             entry.staged_path for entry in staged.manifest if entry.path == included.resolve()
@@ -216,6 +218,9 @@ class TestManifestWalk:
 
         assert staged_include is not None
         assert staged_include.read_text() == ".param x=1\n"
+        assert staged.source_contents[deck.resolve()] == original_deck
+        assert staged.source_contents[included.resolve()] == original_include
+        assert staged.staged_deck.read_bytes() != original_deck
         assert any(item["code"] == "source_modified_after_staging" for item in observations)
 
 
@@ -544,3 +549,84 @@ class TestSimulatorLibraryRoots:
 
     def test_no_simulator_has_no_roots(self):
         assert simulator_library_roots(None) == []
+
+
+@pytest.mark.parametrize("rewrite", [False, True])
+def test_staged_include_digest_describes_exact_written_bytes(tmp_path, rewrite):
+    root = tmp_path / "source"
+    root.mkdir()
+    leaf = root / "leaf.inc"
+    leaf.write_bytes(b"* resistance in \xb5ohm\r\nR1 a 0 10\r\n")
+    include = leaf
+    if rewrite:
+        include = root / "parent.inc"
+        include.write_text(f'.include "{leaf.as_posix()}"\n', encoding="utf-8")
+    deck = _write(root / "bench.cir", f'* bench\n.include "{include.name}"\n.op\n.end\n')
+    staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+    for item in staged.includes:
+        assert item.sha256 == deck_staging.sha256_file(item.staged_path)
+    staged_leaf = next(item for item in staged.includes if item.source == leaf)
+    assert staged_leaf.staged_path.read_bytes() == leaf.read_bytes()
+
+
+def test_compact_staging_keeps_colliding_names_and_library_sections(tmp_path):
+    from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+
+    source = tmp_path / "source"
+    first = _write(source / "first" / "models.lib", ".lib tt\nR1 a 0 1k\n.endl tt\n")
+    second = _write(source / "second" / "models.lib", ".lib tt\nR2 b 0 2k\n.endl tt\n")
+    branch = _write(
+        source / "branch.inc", '.lib "first/models.lib" tt\n.lib "second/models.lib" tt\n'
+    )
+    bench = _write(source / "bench.cir", '* bench\n.include "branch.inc"\n.op\n.end\n')
+    originals = {path: path.read_bytes() for path in (first, second, branch, bench)}
+    staging_root = tmp_path / "stage"
+    staged = stage_deck(
+        bench,
+        staging_root,
+        [source],
+        origin=bench,
+        compact_digests={deck_staging.sha256_file(first), deck_staging.sha256_file(second)},
+    )
+    assert all(
+        item.staged_path.parent == staging_root
+        for item in staged.includes
+        if item.source in {first, second}
+    )
+    preserved = next(item for item in staged.includes if item.source == branch)
+    assert preserved.staged_path == staging_root / "root-0" / "branch.inc"
+    assert len({item.staged_path for item in staged.includes}) == 3
+    assert all(len(item.staged_path.name) <= 50 for item in staged.includes)
+    assert {path: path.read_bytes() for path in originals} == originals
+    assert staged.source_contents == originals
+    for item in staged.includes:
+        assert item.sha256 == deck_staging.sha256_file(item.staged_path)
+    hierarchy = load_hierarchy(
+        str(staged.staged_deck), [staging_root], SemanticProfile("ngspice", "hsa")
+    )
+    assert {row.reference: row.value.value for row in hierarchy.instances} == {
+        "R1": 1000,
+        "R2": 2000,
+    }
+    assert all(binding.section == "tt" for binding in hierarchy.library_bindings)
+
+
+def test_compact_filename_collision_refuses_overwrite(tmp_path, monkeypatch):
+    first = _write(tmp_path / "source" / "first.inc", "R1 a 0 1k\n")
+    second = _write(tmp_path / "source" / "second.inc", "R2 b 0 2k\n")
+    bench = _write(
+        tmp_path / "source" / "bench.cir",
+        '* bench\n.include "first.inc"\n.include "second.inc"\n.end\n',
+    )
+    destination = tmp_path / "stage" / "model-collision.inc"
+    monkeypatch.setattr(deck_staging, "_compact_destination", lambda *_: destination)
+    with pytest.raises(DeckStagingError) as caught:
+        stage_deck(
+            bench,
+            tmp_path / "stage",
+            [tmp_path / "source"],
+            origin=bench,
+            compact_digests={deck_staging.sha256_file(first), deck_staging.sha256_file(second)},
+        )
+    assert caught.value.code == "staging_collision"
+    assert destination.read_bytes() == first.read_bytes()

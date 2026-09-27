@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
@@ -21,12 +22,13 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import (
+    NetlistError,
     PathSecurityError,
     ResultError,
     SimulationError,
     raise_site_code,
 )
-from ltspice_mcp.lib import experiment_store, response_budget
+from ltspice_mcp.lib import experiment_store, now, response_budget
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -53,19 +55,36 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
+from ltspice_mcp.lib.native_inputs import NativeCaseValidator
+from ltspice_mcp.lib.native_records import NativeCaseRecord
+from ltspice_mcp.lib.pdk_native import (
+    NGBEHAVIOR,
+    NativeCaseError,
+    NativeRequest,
+    NativeRequestError,
+    profile_pins,
+    validate_family_ownership,
+    validate_request,
+)
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
     Recipe,
     StepSelectionFields,
     validate_recipe,
 )
-from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
+from ltspice_mcp.lib.simulator import (
+    current_ngbehavior,
+    simulator_dialect,
+    simulator_library_roots,
+)
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
     DeckFile,
     ExpandedCase,
+    PdkNativeVariation,
     RandomVariation,
     Variation,
     VariationError,
@@ -550,6 +569,18 @@ async def handle_run_experiments(
         circuit_inputs = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
+        native_ids = [
+            item.id.casefold() for item in args.variations if isinstance(item, PdkNativeVariation)
+        ]
+        if len(set(native_ids)) != len(native_ids):
+            raise NativeRequestError("native family ids must be unique")
+        for circuit in circuit_inputs:
+            native = _native_family(circuit.circuit_id, args.variations)
+            if native is not None:
+                validate_request(
+                    _native_request(native, circuit.circuit_id, native.sample_start),
+                    backend=simulator_dialect(simulator) or "",
+                )
         if sum(isinstance(item, RandomVariation) for item in args.variations) > 1:
             raise VariationError(
                 "multiple_random_variations",
@@ -706,6 +737,16 @@ async def handle_run_experiments(
             commit_state="not_started",
             budget=budget,
         )
+    except NativeRequestError as exc:
+        return await _error_response(
+            args.request_id,
+            code="pdk_native_request",
+            message=str(exc),
+            stage="variation",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+        )
     except VariationError as exc:
         return await _error_response(
             args.request_id,
@@ -762,6 +803,7 @@ async def _prepare_circuit(
 ) -> _CircuitPreparation:
     """Stage, lint, and materialize one circuit with isolated failures."""
     circuit_id = circuit_input.circuit_id
+    native = _native_family(circuit_id, args.variations)
     expected_count = projected_case_count(circuit_id, args.variations)
     source_path: Path | None = None
     runnable: Path | None = None
@@ -793,6 +835,12 @@ async def _prepare_circuit(
             circuit_id,
             simulator,
         )
+        dialect = simulator_dialect(simulator)
+        compact_digests: frozenset[str] = frozenset()
+        if native is not None and sys.platform == "win32" and dialect == "ngspice":
+            # ngspice's Windows file reader cannot open the long paths produced
+            # by the full PDK layout. Compact only the audited pinned models.
+            compact_digests = frozenset((await asyncio.to_thread(profile_pins)).values())
         staged = await asyncio.to_thread(
             stage_deck,
             runnable,
@@ -805,13 +853,13 @@ async def _prepare_circuit(
             origin=source_path,
             allow_live_includes=args.allow_live_includes,
             windows_paths=paths.windows_native,
+            compact_digests=compact_digests,
             # LTspice's own .asc netlister appends a .lib pointing into the
             # install's model library on every schematic with a MOSFET on it,
             # so without this no transistor sheet stages under a default
             # sandbox. Resolved per run from the simulator this job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
         )
-        dialect = simulator_dialect(simulator)
         findings = (
             []
             if args.lint == "off"
@@ -827,6 +875,7 @@ async def _prepare_circuit(
                 # re-read from the Linux side, and a model defined in an
                 # include must not lint as missing.
                 includes=[(included.staged_path, included.text) for included in staged.includes],
+                ngbehavior=NGBEHAVIOR if native is not None else None,
             )
         )
         source = SourceRecord(
@@ -852,9 +901,20 @@ async def _prepare_circuit(
             path=staged.staged_deck,
             text=staged.text,
             includes=tuple(
-                DeckFile(path=included.staged_path, text=included.text)
+                DeckFile(path=included.staged_path, text=included.text, sha256=included.sha256)
                 for included in staged.includes
             ),
+            semantic_profile=(
+                SemanticProfile(
+                    "ngspice" if dialect == "ngspice" else "ltspice",
+                    (NGBEHAVIOR if native is not None else current_ngbehavior() or "")
+                    if dialect == "ngspice"
+                    else None,
+                )
+                if dialect in {"ltspice", "ngspice"}
+                else None
+            ),
+            record_source_lineage=native is not None,
         )
         expanded = await asyncio.to_thread(
             expand_variations,
@@ -890,8 +950,11 @@ async def _prepare_circuit(
                 expanded,
                 staged.staged_deck.parent,
             )
-            cases.extend(
-                ExperimentCase(
+            native_validator = NativeCaseValidator(staged, paths.staging_root)
+            for offset, (variant, descriptor) in enumerate(
+                zip(materialized, expanded, strict=True)
+            ):
+                case = ExperimentCase(
                     case_id=variant.case_id,
                     run_index=offset,
                     circuit=circuit_id,
@@ -901,10 +964,29 @@ async def _prepare_circuit(
                     assignments=variant.assignments,
                     observations=list(observations),
                 )
-                for offset, variant in enumerate(materialized)
-            )
+                if native is not None:
+                    request = _native_request(native, circuit_id, descriptor.native_index)
+                    case.native_statistics = NativeCaseRecord(request)
+                    try:
+                        case.native_statistics = await asyncio.to_thread(
+                            native_validator.validate,
+                            request,
+                            variant,
+                            descriptor,
+                        )
+                    except NativeCaseError as exc:
+                        case.status = "failed"
+                        case.failure_code = "pdk_native_validation"
+                        case.failure_evidence = {"reason": exc.code}
+                        case.error = str(exc)
+                        case.completed_at = now()
+                        case.native_statistics.unavailable_reason = str(exc)
+                cases.append(case)
+    except NativeRequestError:
+        raise
     except (
         PathSecurityError,
+        NetlistError,
         VariationError,
         DeckStagingError,
         SimulationError,
@@ -923,12 +1005,40 @@ async def _prepare_circuit(
             message=message,
             expanded_cases=expanded,
         )
+    if native is not None:
+        for index, case in enumerate(cases):
+            if case.native_statistics is None:
+                case.native_statistics = NativeCaseRecord(
+                    _native_request(native, circuit_id, native.sample_start + index % native.runs),
+                    unavailable_reason=case.error or case.status,
+                )
     return _CircuitPreparation(
         circuit_id=circuit_id,
         cases=cases,
         source=source,
         lint_findings=findings,
     )
+
+
+def _native_family(circuit_id: str, variations: list[Variation]) -> PdkNativeVariation | None:
+    applicable = [
+        item
+        for item in variations
+        if item.applies_to is None
+        or circuit_id.casefold() in {name.casefold() for name in item.applies_to}
+    ]
+    native = [item for item in applicable if isinstance(item, PdkNativeVariation)]
+    validate_family_ownership(
+        [item.id for item in native],
+        caller_random=any(isinstance(item, RandomVariation) for item in applicable),
+    )
+    return native[0] if native else None
+
+
+def _native_request(
+    family: PdkNativeVariation, circuit_id: str, index: int | None
+) -> NativeRequest:
+    return NativeRequest(circuit_id, family.id, family.profile, family.mode, family.seed, index)
 
 
 def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -1107,6 +1217,7 @@ async def _dwell_and_respond(
         None,
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
+        run_fields=run_fields,
     )
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "

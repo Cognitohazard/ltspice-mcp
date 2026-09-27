@@ -240,6 +240,13 @@ class JobsRunsInput(_AddressedJobsInput):
         default=None,
         description="next_cursor from the previous page. Absent means the first page.",
     )
+    run_fields: list[str] | None = Field(
+        default=None,
+        description=(
+            "Keep these dotted fields on each run. Select native_statistics for its "
+            "full coverage and artifact manifest; the default reports counts and digests."
+        ),
+    )
 
 
 #: One jobs call: the action models, told apart by ``action``. Discriminated
@@ -1040,7 +1047,9 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 timeout_s=args.timeout_s,
                 wait_for=args.wait_for,
             )
-        snapshot = snapshot_receipt(job, state)
+        snapshot = snapshot_receipt(
+            job, state, run_fields=args.run_fields if isinstance(args, JobsRunsInput) else None
+        )
         return JobsEvaluation(
             args=args,
             snapshot=snapshot,
@@ -1143,7 +1152,12 @@ def render_jobs_data(
     assert snapshot is not None  # every remaining action snapshots its job
 
     if isinstance(args, JobsRunsInput):
-        data = render_runs_envelope(snapshot, offset=_decode_jobs_cursor(args.cursor), limit=limit)
+        data = render_runs_envelope(
+            snapshot,
+            offset=_decode_jobs_cursor(args.cursor),
+            limit=limit,
+            run_fields=args.run_fields,
+        )
         text = f"Returned {data['returned']} of {data['total']} run record(s)"
         return _without_control_tokens(data), text
 

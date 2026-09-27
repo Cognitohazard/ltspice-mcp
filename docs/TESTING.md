@@ -303,12 +303,17 @@ without these dependencies does not validate simulation or PNG rendering.
 Worker timeout, cancellation and descendant cleanup tests require no simulator
 and run in the ordinary suite.
 
-Two further tests optionally use an installed Sky130 PDK. Set
-`LTSPICE_MCP_TEST_PDK_ROOT` to its `sky130A` root, containing `libs.ref` and
-`libs.tech`. `TestOpenPdkDevice` in `test_subckt_mismatch.py` checks parameter
-forwarding and an exact per-instance threshold shift against the foundry NMOS
-model; the numeric test also needs ngspice. The PDK is test data for this
-integration tier, not an application dependency.
+The optional Sky130 integration tests use `LTSPICE_MCP_TEST_PDK_ROOT` to
+locate a `sky130A` root containing `libs.ref` and `libs.tech`.
+`TestOpenPdkDevice` in `test_subckt_mismatch.py` checks parameter forwarding and
+an exact per-instance threshold shift. `test_nested_targeting.py` exercises
+nested edits and operating-point reads against real devices.
+`test_native_experiments.py` requires the pinned model acquisition named by
+`sky130-e6f9c887-ngspice-v1`; it checks all four statistical modes against direct
+ngspice runs, sample replay, included-device edits, input drift, cancellation
+and persisted provenance. These numerical tests need console ngspice. The model
+files are supplied separately; they are not bundled with the server. Native
+experiments require the matching profile's model files at runtime too.
 
 Two practices follow. A test that depends on a POSIX facility skips on
 Windows with the reason (symlinks need a privilege; `wslpath` does not

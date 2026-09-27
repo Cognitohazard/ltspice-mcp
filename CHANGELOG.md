@@ -6,6 +6,24 @@ project will adopt [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches `1.0.0`. Until then, minor versions may contain breaking
 tool-surface changes.
 
+## [Unreleased]
+
+### Fixed
+
+- Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+
+### Added
+
+- Exact nested-instance assignments and caller-defined mismatch, preserving
+  untouched peers and original files through private case copies.
+- Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
+  model profile, independently replayable samples and persisted provenance.
+
+### Changed
+
+- Job run listings accept field projection, including explicit full native
+  statistical provenance. The store format is version 2.
+
 ## [0.6.1] - 2026-09-08
 
 ### Fixed

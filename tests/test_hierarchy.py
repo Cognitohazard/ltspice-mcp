@@ -100,7 +100,7 @@ async def test_backend_default_body_precedence(state_no_sim, hierarchy_deck, sim
         ("R1 a 0 1k\nr1 b 0 2k", "duplicate active reference"),
         (".param a=1 A=2\nR1 a 0 {a}", "duplicate assignment"),
         (".subckt a p r=1 r=2\n.ends a", "duplicate assignment"),
-        (".subckt a p\n.model n NMOS\n.ends a", "local/nested"),
+        (".subckt a p\n.subckt local q\n.ends local\n.ends a", "local/nested"),
         (".if 1\nR1 a 0 1\n.endif", "conditional"),
         (".control\nalter R1 2\n.endc", "opaque control"),
         (".subckt a p q\n.ends a\nX0 n a", "port arity"),

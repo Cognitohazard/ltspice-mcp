@@ -126,18 +126,21 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():
-    """Schemas keep $defs instead of inlining: the assign/random discriminated
+    """Schemas keep $defs instead of inlining: the variation discriminated
     union must stay fully resolvable through local refs, so a client sees the
     same composition contract inlining used to spell out."""
     schema = build_input_schema(RunExperimentsInput)
     variations = resolve_local_ref(schema, schema["properties"]["variations"]["items"])
 
     assert variations["discriminator"]["propertyName"] == "kind"
-    assert len(variations["oneOf"]) == 2
+    assert len(variations["oneOf"]) == 3
     branches = {}
     for ref in variations["oneOf"]:
         branch = resolve_local_ref(schema, ref)
         branches[branch["properties"]["kind"]["const"]] = branch
+    assert set(branches) == {"assign", "random", "pdk_native"}
+    assert branches["pdk_native"]["additionalProperties"] is False
+    assert {"id", "runs", "seed", "profile", "mode"} <= set(branches["pdk_native"]["required"])
     assert branches["assign"]["additionalProperties"] is False
     assert branches["assign"]["properties"]["combine"]["default"] == "grid"
     random_rules = resolve_local_ref(schema, branches["random"]["properties"]["rules"]["items"])
@@ -1037,7 +1040,8 @@ class TestOptionalRequestId:
         serialized request: had that serialization started filling in recipe
         defaults or reordering keys, every stored request index would point at
         a fingerprint no retry could reproduce, and every replay would come
-        back a conflict. The value below was taken before the change.
+        back a conflict. The pin includes the empty nested-instance selector introduced with
+        the variation grammar; the recipe dictionaries remain exactly authored.
         """
         from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
 
@@ -1068,7 +1072,7 @@ class TestOptionalRequestId:
         ]
         assert (
             canonical_fingerprint(args)
-            == "3c5ed6e7b435eea3c31bf88c1128a54e44e0c3281158929154822a4a15938743"
+            == "4ae01640e26aa8fadf3c2c5f272de7c5f9de61d1b42238c7af3f498586b117e5"
         )
 
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
@@ -2920,9 +2924,9 @@ class TestReceiptWeight:
     def test_day_one_presentation_fields_leave_old_canonical_bytes_unchanged(self):
         # A tripwire, not the subject: whoever bumps the version has to come
         # back here and confirm the presentation exclusions still change no
-        # bytes. Version 4 was the .step selection moving onto the attached
-        # analyze block, which is an execution field and does change them.
-        assert experiment_store.CANONICALIZER_VERSION == 4
+        # bytes. Version 5 added nested variation selectors, which choose
+        # execution and participate in the fingerprint; presentation does not.
+        assert experiment_store.CANONICALIZER_VERSION == 5
         model = RunExperimentsInput.model_validate(
             {
                 "request_id": "stable-bytes",

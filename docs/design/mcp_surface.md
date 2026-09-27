@@ -984,7 +984,9 @@ what produced the only measured argument failures.
 ```
 {kind: "assign", id?, combine: "grid"|"zip" (default grid),
  applies_to?: [circuit id],
- assign: dict[target -> list[number | SI-suffix string]]}
+ assign?: dict[target -> list[number | SI-suffix string]],
+ instances?: [{instance: [reference segment], attribute: "value"|"model"|"parameter",
+               parameter?: name, values: [number | string]}]}
 
   Target resolution is deterministic, with no silent precedence.
   Syntactically explicit forms are selected before bare-target resolution:
@@ -994,12 +996,27 @@ what produced the only measured argument failures.
        value; "X1:delvto" for a single-FET body, or the qualified
        "X1.M0:delvto" for a multi-FET body. Supported only on
        ngspice-compatible BSIM3/4 devices through exactly one X -> M wrapper
-       level, and only as a target key in this mapping.
+       level as this convenience spelling. Use an ordered `instances` selector
+       for arbitrary supported depth; never construct a selector by joining
+       segments with punctuation.
   Otherwise, a declared .param name -> parameter substitution;
   else a component reference        -> value substitution;
   else                              -> ambiguous_target.
 
-  combine: "zip" requires equal list lengths.
+  At least one assign or instances target is required. `parameter` is required
+  only for attribute "parameter". Structured targets select one runtime instance;
+  the engine clones its ancestry so peers and original inputs remain unchanged.
+  Conflicting fields and ancestor/descendant writes are refused.
+  combine: "zip" requires equal list lengths across both target forms.
+
+{kind: "pdk_native", id, runs: int >= 1, seed: int >= 0,
+ profile, mode: "nominal"|"mismatch"|"process"|"combined",
+ sample_start: int >= 0 (default 0), applies_to?: [circuit id]}
+
+  One applicable native or caller-random family per circuit. Native family ids
+  are unique; seed is a required strict integer no greater than 2**63-1.
+  The logical sample index is sample_start + i, independent of case ordering.
+  See the native PDK contract below for the supported profile and authored deck.
 
 {kind: "random", id?, runs: int >= 1, seed?: int, applies_to?: [circuit id],
  rules: [RandomRule]}          at most ONE random entry per call
@@ -1013,14 +1030,19 @@ RandomRule:
      engine does not have one.
   {rule: "param",  target: param, same fields}
   {rule: "model",  target: model, param: model-param, same fields}
-  {rule: "mismatch", ...}   the Pelgrom-form mismatch rule: prefix, avt, ak,
-                            params, area floor. Not a pair glob.
+  {rule: "mismatch", instance?: [reference segment], ...}
+                            exact instance selection, or prefix, never both.
+                            A MOS path selects one device; a wrapper path
+                            selects its descendant MOS devices. Pelgrom coefficients and area floor remain
+                            caller assumptions, separate from native PDK models.
 ```
 
 The `INSTANCE:{delvto|mulu0}` assignment form is never a random-rule target.
 Random mismatch on flat devices follows the ordinary flat-device path; a
-`rule: "mismatch"` prefix that descends into an X-wrapped PDK device inherits
-the ngspice-compatible BSIM3/4 and one-level `X -> M` constraints above. Draws
+`rule: "mismatch"` can select a nested physical MOS by its exact instance list,
+or all descendant MOS devices by a wrapper's instance list.
+Nested wrapper injection requires a resolved ngspice-compatible BSIM3/4 family
+and uses final effective geometry after deterministic assignments. Draws
 across circuits are independent — correlated Monte Carlo across decks is out of
 scope.
 
@@ -1089,8 +1111,8 @@ matching with `regex:` as an opt-in prefix. `wire_pins` was once also spelled
 
 Recorded so they are not mistaken for oversights:
 
-- Foundry-PDK subcircuit mismatch Monte Carlo. Wanted for bandgap statistics;
-  a large separate project.
+- Native statistical profiles beyond the pinned Sky130 NMOS profile below,
+  including broader device families and multiplicity/finger conventions.
 - Correlated Monte Carlo draws across two decks.
 - Canned loop-gain probe templates.
 - Re-running an attached analysis stage after a server restart.
@@ -1207,3 +1229,50 @@ supplied for proven resistor/MOS forms with simple identifier spellings.
 Other legal source names retain structural identity with an unavailable-address
 reason. Node `voltage_trace` is a backend trace spelling, not a claim that a run
 saved that signal.
+
+
+## Native PDK experiment contract
+
+The initial profile is `sky130-e6f9c887-ngspice-v1`: the generated Sky130A model
+set at open_pdks revision `e6f9c8876da77220403014b116761b0b2d79aab4`, with
+`sky130_fd_pr__nfet_01v8` physical MOS coverage. The profile checks original
+captured bytes against its packaged acquisition hashes. Install the matching
+PDK separately and include its location in the server's allowed paths.
+
+The caller authors one `.lib` binding to `libs.tech/ngspice/sky130.lib.spice`:
+
+| Mode | Authored section and control |
+|---|---|
+| `nominal` | `tt` |
+| `mismatch` | `tt_mm` |
+| `process` | `mc` |
+| `combined` | `mc`, followed by root `.param mc_mm_switch=1` |
+
+The server verifies that binding and every physical MOS, with resolved positive
+W/L, scale `1e-6`, and unit device/call multiplicity, wrapper `mult` and `nf`.
+Unsupported or ambiguous coverage fails explicitly. Deterministic assignments
+may change bench geometry; changes to protected PDK cards or owned controls are
+refused. Caller mismatch coefficients belong in `random`, not this profile.
+
+Use one `.op`, `.tran` or `.ac`. Native experiments require captured dependencies
+and exclude `.control`, `.step`, `.alter`, live includes and conflicting seed or
+profile controls. Each sample starts a fresh ngspice process with startup files
+disabled, sets `hsa` and the effective seed before reading models, then runs the
+analysis. The existing launch permits, cancellation and timeouts still apply.
+
+For an independent replay, keep circuit/family ids, captured input bytes,
+assignments, profile/mode and root seed; use `runs: 1` and the original
+`sample_start`. Changing parallelism or job ids does not change the sample.
+Exact replay is scoped to the recorded simulator/build/platform, not promised
+across simulator releases. A conflicting effective-seed collision in one request
+is refused before launch.
+
+Each case has `native_statistics`: requested facts survive failures and skips;
+validated seeds/coverage and prepared artifact hashes appear only when available.
+Default receipts contain compact facts. `jobs(action="runs", ...,
+run_fields=["native_statistics"])` exposes full coverage and dependency paths;
+normal run-field projection also applies there. Full provenance persists through
+restart and follows result source identities. Its compact dependency digest binds
+a multiset of original-capture/content-hash pairs; the full stored manifest
+retains every final file, including several clones of one original. Preparation
+is distinct from submission, and internal PDK random draws are not exposed.
