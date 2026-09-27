@@ -102,7 +102,6 @@ async def test_copied_native_setup_rejection_has_no_submission_stamp(
         (),
         "sample",
         1,
-        ".op",
     )
     case.native_statistics = NativeCaseRecord(
         NativeRequest("bench", "native", PROFILE, "nominal", 1, 0), prepared=prepared
@@ -134,3 +133,62 @@ async def test_copied_native_setup_rejection_has_no_submission_stamp(
     assert case.submitted_at is None
     assert job.completeness.submitted == 0
     assert not await asyncio.to_thread(Path(paths.raw).exists)
+
+
+def test_skipped_native_case_does_not_prepare_or_observe_simulator(work_dir, monkeypatch):
+    from ltspice_mcp.lib import native_execution
+
+    circuit = work_dir / "bench.cir"
+    circuit.write_text(".op\n.end\n", encoding="utf-8")
+    job = _job(work_dir, circuit)
+    case = job.cases[0]
+    case.status = "skipped"
+    case.native_statistics = NativeCaseRecord(
+        NativeRequest("bench", "native", PROFILE, "nominal", 1, 0)
+    )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("skipped case reached native preparation")
+
+    monkeypatch.setattr(native_execution, "observe_simulator", unexpected)
+    monkeypatch.setattr(native_execution, "prepare_launch", unexpected)
+    native_execution.prepare_native_cases(job, work_dir, NGspiceSimulator)
+    assert case.status == "skipped"
+    assert case.native_statistics.prepared is None
+    assert case.native_statistics.unavailable_reason == "skipped"
+
+
+async def test_native_policy_reaches_runner_and_diagnostics(tmp_path, monkeypatch):
+    from ltspice_mcp.lib import runner_base
+    from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY
+
+    electrical = tmp_path / "input.cir"
+    electrical.write_text("V1 in 0 1\n.op\n.end\n", encoding="utf-8")
+    seen = {}
+
+    class FakeRunner:
+        active_tasks = ()
+
+        def run(self, netlist, **kwargs):
+            seen["switches"] = kwargs["switches"]
+            kwargs["callback"](None, None)
+
+    def collect(*args, **kwargs):
+        seen["ngbehavior"] = kwargs["ngbehavior"]
+        return runner_base.RunOutcome("", "", 0, None)
+
+    monkeypatch.setattr(runner_base, "collect_run_outcome", collect)
+    runner = RunnerBase(asyncio.get_running_loop(), NGspiceSimulator, tmp_path)
+    monkeypatch.setattr(runner, "_build_sim_runner", lambda **kwargs: FakeRunner())
+    done = asyncio.get_running_loop().create_future()
+    runner.submit_netlist(
+        electrical,
+        "case.cir",
+        done.set_result,
+        native=NativeLaunchContext(electrical, tmp_path),
+    )
+    await done
+    assert seen == {
+        "switches": list(LAUNCH_POLICY.switches),
+        "ngbehavior": LAUNCH_POLICY.ngbehavior,
+    }

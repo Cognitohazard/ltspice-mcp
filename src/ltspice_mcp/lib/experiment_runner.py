@@ -908,6 +908,7 @@ class ExperimentRunner(RunnerBase):
                 input_deck=Path(prepared.paths.electrical_input),
                 cwd=Path(prepared.paths.cwd),
                 verify_execution=lambda: verify_launch(prepared, executed_copy=True),
+                policy=prepared.policy,
             )
             suffix = ".cir"
         with file_lock(Store(working_dir).cancellation_lock(job_id)):

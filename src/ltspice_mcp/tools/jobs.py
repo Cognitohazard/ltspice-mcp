@@ -1047,9 +1047,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 timeout_s=args.timeout_s,
                 wait_for=args.wait_for,
             )
-        snapshot = snapshot_receipt(
-            job, state, run_fields=args.run_fields if isinstance(args, JobsRunsInput) else None
-        )
+        snapshot = snapshot_receipt(job, state)
         return JobsEvaluation(
             args=args,
             snapshot=snapshot,

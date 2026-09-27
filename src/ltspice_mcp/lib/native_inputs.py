@@ -25,7 +25,9 @@ from ltspice_mcp.lib.pdk_native import (
     NativeRequestError,
     Occurrence,
     OriginalCapture,
+    VerifiedOriginals,
     validate_sample,
+    verify_originals,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.variations import ExpandedCase, MaterializedCase
@@ -239,6 +241,14 @@ class NativeCaseValidator:
         self.staged = staged
         self.staging_root = staging_root
         self.cards: dict[Path, dict[int, SpiceCard]] = {}
+        self._originals: dict[tuple[OriginalCapture, ...], VerifiedOriginals] = {}
+
+    def _verified_originals(self, captures: tuple[OriginalCapture, ...]) -> VerifiedOriginals:
+        originals = self._originals.get(captures)
+        if originals is None:
+            originals = verify_originals(captures)
+            self._originals[captures] = originals
+        return originals
 
     def validate(
         self, request: NativeRequest, variant: MaterializedCase, expanded: ExpandedCase
@@ -317,7 +327,9 @@ class NativeCaseValidator:
             True,
             True,
         )
-        sample = validate_sample(request, inputs)
+        sample = validate_sample(
+            request, inputs, originals=self._verified_originals(inputs.captures)
+        )
         dependencies = []
         for item in hierarchy.inputs:
             if item.path == variant.path.resolve():

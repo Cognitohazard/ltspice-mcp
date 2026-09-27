@@ -28,6 +28,7 @@ from ltspice_mcp.lib.log_parser import (
     is_op_stepping_failure,
     op_ladder_exhausted,
 )
+from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
 from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
@@ -67,6 +68,7 @@ class NativeLaunchContext:
     input_deck: Path
     cwd: Path
     verify_execution: Callable[[], None] | None = None
+    policy: NativeLaunchPolicy = LAUNCH_POLICY
 
 
 class RunOutcome(NamedTuple):
@@ -716,7 +718,7 @@ class RunnerBase:
                     requirements,
                     netlist=electrical_deck,
                     simulator=self.simulator_class,
-                    ngbehavior="hsa" if native else None,
+                    ngbehavior=native.policy.ngbehavior if native else None,
                     # spicelib invokes the callback from the RunTask's own
                     # thread, and the task IS a Thread subclass carrying its
                     # retcode — so the current thread is the exact task,
@@ -744,7 +746,7 @@ class RunnerBase:
             callback=completion_callback,
             callback_on_error=True,
             exe_log=True,
-            switches=["-n"] if native else None,
+            switches=list(native.policy.switches) if native else None,
         )
         self._inflight_runners[run_filename] = runner
         return runner

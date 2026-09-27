@@ -253,6 +253,23 @@ and holds the thinking plane constant; it does not represent authoring from
 a blank sheet, topology choice, or long-horizon context growth, which need
 the instruments above.
 
+## Privacy checks before pushing
+
+Enable the repository hooks once per clone with
+`git config core.hooksPath .githooks`. The pre-push hook checks commit messages,
+annotated tag messages, filenames and each file revision being introduced,
+including content added in one commit and removed in a later one. It checks
+the receiving remote's current refs for new branches and refuses to proceed
+when the required history cannot be inspected. Findings name their category
+and location without printing the matched private value.
+
+Run `uv run python scripts/privacy_scan.py tracked` to check the tracked working
+tree, or `uv run python scripts/privacy_scan.py local` to preview unpublished
+history against local remote-tracking refs. The release gate runs both checks.
+The local preview uses the last fetched refs; the pre-push check verifies the
+actual destination. The tracked-file test uses the same scanner, including
+both UTF-16 byte orders for simulator artifacts.
+
 ## Platforms and the release gate
 
 The suite is developed on WSL2 and gated on Linux CI, but the users run

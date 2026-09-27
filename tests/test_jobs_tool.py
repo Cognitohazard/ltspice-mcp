@@ -23,6 +23,8 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
+from ltspice_mcp.lib.native_records import NativeCaseRecord
+from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -47,6 +49,7 @@ from ltspice_mcp.tools.receipts import (
     snapshot_receipt,
 )
 from tests.conftest import await_until, fake_simulator, staged_decks
+from tests.test_native_records import _record
 
 
 class MockSimulator:
@@ -642,6 +645,148 @@ class TestActionShapesAndTokenSecrecy:
 
 @pytest.mark.asyncio
 class TestReceiptSnapshotCoherence:
+    @pytest.mark.parametrize(
+        ("fields", "digest_calls"),
+        [
+            (["native_statistics.validated.coverage_count"], 0),
+            (["native_statistics.prepared.dependency_count"], 0),
+            (["native_statistics.prepared.dependency_digest"], 1),
+            (["native_statistics.prepared.dependency_digest_version"], 0),
+            (
+                [
+                    "native_statistics.prepared.dependency_count",
+                    "native_statistics.prepared.dependencies",
+                ],
+                0,
+            ),
+        ],
+    )
+    async def test_explicit_native_summary_fields_survive_every_run_surface(
+        self, state_no_sim, work_dir, monkeypatch, fields, digest_calls
+    ):
+        from ltspice_mcp.lib import pdk_native
+        from ltspice_mcp.tools.receipts import runs_page
+
+        job = _experiment(
+            work_dir, _circuit(work_dir), status="completed_with_failures", case_status="failed"
+        )
+        record = _record(work_dir, prepared=True)
+        job.cases[0].native_statistics = record
+        state_no_sim.all_jobs[job.job_id] = job
+        compact = record.public()
+        full = record.public(detailed=True)
+        for branch in ("validated", "prepared"):
+            full[branch].update(compact[branch])
+        expected = [project_row({"native_statistics": full}, keep_plan(fields))]
+        calls = []
+        original = pdk_native.canonical_json
+
+        def counted(value):
+            calls.append(value)
+            return original(value)
+
+        monkeypatch.setattr(pdk_native, "canonical_json", counted)
+
+        def check(rows):
+            assert rows == expected
+            assert len(calls) == digest_calls
+            calls.clear()
+
+        result = _assert_jobs_schema(
+            await handle_jobs(_args("runs", job_id=job.job_id, run_fields=fields), state_no_sim)
+        )
+        check(result["items"])
+        receipt = render_receipt_snapshot(snapshot_receipt(job, state_no_sim), run_fields=fields)
+        check(receipt["runs"]["items"])
+        check(runs_page(job.cases, fields)["items"])
+
+    @pytest.mark.parametrize(
+        "fields",
+        [None, ["case_id"], ["native_statistics"], ["native_statistics.validated.effective_seed"]],
+    )
+    async def test_native_evidence_is_rendered_only_for_the_returned_page(
+        self, state_no_sim, work_dir, monkeypatch, fields
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(
+            work_dir, circuit, count=201, status="completed_with_failures", case_status="failed"
+        )
+        record = _record(work_dir, prepared=True)
+        for case in job.cases:
+            case.native_statistics = replace(record)
+        state_no_sim.all_jobs[job.job_id] = job
+        expected = {"native_statistics": record.public(detailed=bool(fields))}
+        if fields:
+            expected = project_row(
+                {"case_id": job.cases[-1].case_id, **expected}, keep_plan(fields)
+            )
+
+        calls = []
+        original = NativeCaseRecord.public
+
+        def observed(self, **kwargs):
+            calls.append(self)
+            return original(self, **kwargs)
+
+        monkeypatch.setattr(NativeCaseRecord, "public", observed)
+        data = _assert_jobs_schema(
+            await handle_jobs(
+                _args("runs", job_id=job.job_id, cursor="o:200", run_fields=fields), state_no_sim
+            )
+        )
+
+        assert data["returned"] == 1 and data["total"] == 201
+        assert data["next_cursor"] is None
+        assert all(data["items"][0][key] == value for key, value in expected.items())
+        assert len(calls) == (0 if fields == ["case_id"] else 1)
+
+    async def test_native_snapshot_keeps_its_facts_after_live_record_changes(
+        self, state_no_sim, work_dir
+    ):
+        job = _experiment(work_dir, _circuit(work_dir), status="running")
+        record = _record(work_dir, prepared=False)
+        job.cases[0].native_statistics = record
+        before = snapshot_receipt(job, state_no_sim)
+        expected = record.public(detailed=True)
+
+        ready = _record(work_dir, prepared=True)
+        record.sample = ready.sample
+        record.prepared = ready.prepared
+        record.simulator = ready.simulator
+        record.unavailable_reason = "later generation"
+        after = snapshot_receipt(job, state_no_sim)
+
+        fields = ["native_statistics"]
+        original = project_receipt_runs(before, fields, lean_default=False)
+        current = project_receipt_runs(after, fields, lean_default=False)
+        assert original["items"] == [{"native_statistics": expected}]
+        assert current["items"] == [{"native_statistics": ready.public(detailed=True)}]
+        assert project_receipt_runs(before, fields, lean_default=False) == original
+
+    async def test_seed_projection_refuses_inconsistent_native_identity(
+        self, state_no_sim, work_dir
+    ):
+        job = _experiment(work_dir, _circuit(work_dir), status="failed", case_status="failed")
+        record = _record(work_dir, prepared=True)
+        assert record.prepared is not None
+        record.prepared = replace(
+            record.prepared, effective_seed=record.prepared.effective_seed + 1
+        )
+        job.cases[0].native_statistics = record
+        state_no_sim.all_jobs[job.job_id] = job
+
+        result = await handle_jobs(
+            _args(
+                "runs",
+                job_id=job.job_id,
+                run_fields=["native_statistics.validated.effective_seed"],
+            ),
+            state_no_sim,
+        )
+        assert result.is_error
+        assert result.structured_content is not None
+        assert "disagree" in str(result.structured_content)
+
     async def test_mutation_after_snapshot_cannot_mix_receipt_generations(
         self,
         state_no_sim: SessionState,

@@ -10,6 +10,9 @@ tool-surface changes.
 
 ### Fixed
 
+- Variation conflict checks treat component references case-insensitively and
+  preserve parameter assignment followed by random variation when an unrelated
+  nested-device edit is also requested.
 - Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
 
 ### Added
@@ -21,6 +24,9 @@ tool-surface changes.
 
 ### Changed
 
+- Native statistical run listings expand only the requested evidence on the
+  returned page. Sample validation reuses unchanged original model parsing
+  within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
   statistical provenance. The store format is version 2.
 

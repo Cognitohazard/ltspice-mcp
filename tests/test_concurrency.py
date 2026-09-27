@@ -105,7 +105,7 @@ class TestFileLock:
         def hold_lock() -> None:
             with file_lock(target):
                 held.set()
-                release.wait(timeout=5)
+                release.wait()
 
         holder = threading.Thread(target=hold_lock)
         holder.start()

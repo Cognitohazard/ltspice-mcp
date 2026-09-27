@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from ltspice_mcp.lib.hierarchy import SemanticProfile
+from ltspice_mcp.lib.instance_targeting import canonical_target
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
@@ -930,6 +932,126 @@ class TestRulesReadWhatEarlierRulesWrote:
 
         assert excinfo.value.code == "ambiguous_target"
         assert "could not be read" in str(excinfo.value)
+
+
+class TestStructuredWriteConflicts:
+    @pytest.mark.parametrize("reference", ["R1", "r1"])
+    def test_component_draw_cannot_be_overwritten_by_structured_edit(
+        self, tmp_path: Path, reference: str
+    ):
+        text = f"* bench\n{reference} a 0 1k\n.end\n"
+        circuit = CircuitDeck(
+            "bench",
+            tmp_path / "bench.cir",
+            text,
+            semantic_profile=SemanticProfile("ngspice", "hsa"),
+        )
+        variations = TypeAdapter(list[Variation]).validate_python(
+            [
+                {
+                    "kind": "assign",
+                    "instances": [{"instance": ["R1"], "attribute": "value", "values": ["2k"]}],
+                },
+                {
+                    "kind": "random",
+                    "runs": 1,
+                    "seed": 4,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                },
+            ]
+        )
+
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(
+                circuit, expand_variations([circuit], variations), tmp_path / "out"
+            )
+        assert exc.value.code == "overlapping_assignment"
+        assert not list((tmp_path / "out").glob("case-*"))
+
+    @pytest.mark.parametrize("with_disjoint_edit", [False, True])
+    def test_disjoint_structured_edit_preserves_ordinary_then_random(
+        self, tmp_path: Path, with_disjoint_edit: bool
+    ):
+        text = "* bench\n.param p=1k\nR1 a 0 {p}\nR2 b 0 2k\n.end\n"
+        circuit = CircuitDeck(
+            "bench",
+            tmp_path / "bench.cir",
+            text,
+            semantic_profile=SemanticProfile("ngspice", "hsa"),
+        )
+        assign: dict[str, object] = {"kind": "assign", "assign": {"p": ["2k"]}}
+        if with_disjoint_edit:
+            assign["instances"] = [{"instance": ["R2"], "attribute": "value", "values": ["3k"]}]
+        variations = TypeAdapter(list[Variation]).validate_python(
+            [
+                assign,
+                {
+                    "kind": "random",
+                    "runs": 1,
+                    "seed": 4,
+                    "rules": [{"rule": "param", "target": "p", "tolerance": 0.1}],
+                },
+            ]
+        )
+
+        case = materialize_variants(
+            circuit, expand_variations([circuit], variations), tmp_path / "out"
+        )[0]
+        draw = case.assignments["random:param:p"]
+        param_line = next(
+            line for line in case.text.splitlines() if line.lower().startswith(".param p=")
+        )
+        assert float(param_line.split("=", 1)[1]) == pytest.approx(draw)
+        assert draw == pytest.approx(1896.62575638)
+        assert case.assignments["p"] == "2k"
+        assert ("R2 b 0 3k" in case.text) == with_disjoint_edit
+
+    def test_ordered_random_rules_still_compose_with_disjoint_structured_edit(
+        self, tmp_path: Path
+    ):
+        text = "* bench\nR1 a 0 1k\nR2 b 0 2k\n.end\n"
+        circuit = CircuitDeck(
+            "bench",
+            tmp_path / "bench.cir",
+            text,
+            semantic_profile=SemanticProfile("ngspice", "hsa"),
+        )
+        variations = TypeAdapter(list[Variation]).validate_python(
+            [
+                {
+                    "kind": "assign",
+                    "instances": [{"instance": ["R2"], "attribute": "value", "values": ["3k"]}],
+                },
+                {
+                    "kind": "random",
+                    "runs": 1,
+                    "seed": 4,
+                    "rules": [
+                        {"rule": "component", "target": "R1", "tolerance": 0.1},
+                        {"rule": "component", "target": "R1", "tolerance": 0.1},
+                    ],
+                },
+            ]
+        )
+
+        case = materialize_variants(
+            circuit, expand_variations([circuit], variations), tmp_path / "out"
+        )[0]
+        draw = case.assignments["random:component:R1"]
+        component_line = next(line for line in case.text.splitlines() if line.startswith("R1 "))
+        assert float(component_line.split()[-1]) == pytest.approx(draw)
+        assert draw != pytest.approx(1000)
+        assert case.assignments[canonical_target(("R2",), "value")] == "3k"
+
+        rules = variations[1]
+        assert isinstance(rules, RandomVariation)
+        first_rule = rules.model_copy(update={"rules": rules.rules[:1]})
+        first_case = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variations[0], first_rule]),
+            tmp_path / "first",
+        )[0]
+        assert first_case.assignments["random:component:R1"] != pytest.approx(draw)
 
 
 class TestSeedStability:

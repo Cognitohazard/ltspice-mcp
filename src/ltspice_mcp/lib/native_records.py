@@ -16,7 +16,9 @@ from ltspice_mcp.lib.pdk_native import (
     SimulatorFacts,
     ValidatedSample,
     provenance,
+    validate_native_identity,
 )
+from ltspice_mcp.lib.projection import KeepPlan
 
 
 @dataclass
@@ -30,7 +32,12 @@ class NativeCaseRecord:
     # Successful preparation carries these hashes in PreparedLaunch instead.
     pending_dependencies: tuple[ArtifactDigest, ...] = field(default=(), repr=False)
 
-    def public(self, *, detailed: bool = False) -> dict[str, Any]:
+    def validate(self) -> None:
+        validate_native_identity(self.request, self.sample, self.prepared)
+
+    def public(
+        self, *, detailed: bool = False, projection: KeepPlan | None = None
+    ) -> dict[str, Any]:
         return provenance(
             self.request,
             sample=self.sample,
@@ -38,6 +45,7 @@ class NativeCaseRecord:
             simulator=self.simulator,
             unavailable_reason=self.unavailable_reason,
             detailed=detailed,
+            projection=projection,
         )
 
     def to_record(self) -> dict[str, Any]:
@@ -53,7 +61,7 @@ class NativeCaseRecord:
         sample = None
         if raw := data.get("sample"):
             sample = ValidatedSample(
-                request=request,
+                request=NativeRequest(**raw["request"]),
                 sample_key=raw["sample_key"],
                 effective_seed=raw["effective_seed"],
                 input_digest=raw["input_digest"],
@@ -76,7 +84,6 @@ class NativeCaseRecord:
                 ),
                 sample_key=raw["sample_key"],
                 effective_seed=raw["effective_seed"],
-                analysis=raw["analysis"],
             )
         facts = data.get("simulator")
         result = cls(
@@ -86,7 +93,7 @@ class NativeCaseRecord:
             simulator=SimulatorFacts(**facts) if facts is not None else None,
             unavailable_reason=data.get("unavailable_reason", "not validated"),
         )
-        result.public()  # Refuse inconsistent request/sample/preparation identities.
+        result.validate()
         return result
 
 

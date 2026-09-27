@@ -1,117 +1,305 @@
-"""No tracked file carries a real person's path, address, or session link.
-
-A recorded simulator artifact keeps whatever path it was produced from, and
-the sdist ships ``tests/``, so a fixture's bytes travel with every release.
-Neither is a reason to stop recording real artifacts — a hand-written one
-tests our idea of a format rather than the format — but it does decide how
-they have to be checked.
-
-LTspice writes its raw header in UTF-16LE, which a plain text search reads
-as interleaved NUL bytes and never matches. So the question worth asking is
-not "is the pattern absent from this file's text" but "is it absent from
-every encoding this file could be in". These tests decode each tracked file
-both ways before looking.
-"""
+"""The checkout and push-range guards share one privacy scanner."""
 
 from __future__ import annotations
 
-import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from tests import privacy_scan
+
 ROOT = Path(__file__).resolve().parent.parent
 
-#: Stand-in user names a fixture or doc is allowed to contain. A real name
-#: reaching this list is the bug the module exists to prevent, so add to it
-#: only for something that is plainly not a person.
-PLACEHOLDER_NAMES = frozenset({"user", "me", "dev", "test", "u", "...", "youruser"})
 
-_HOME_PATTERNS = (
-    ("Windows home", re.compile(r"C:\\Users\\([A-Za-z0-9_.-]+)", re.IGNORECASE)),
-    ("POSIX home", re.compile(r"/home/([A-Za-z0-9_.-]+)")),
-    ("root home", re.compile(r"/root/([A-Za-z0-9_.-]+)")),
+def _run(repo: Path, *args: str) -> bytes:
+    return subprocess.run(list(args), cwd=repo, capture_output=True, check=True).stdout
+
+
+def _commit(repo: Path, message: str) -> str:
+    _run(repo, "git", "add", "-A")
+    _run(
+        repo,
+        "git",
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test" + "@" + "example.invalid",
+        "commit",
+        "-qm",
+        message,
+    )
+    return _run(repo, "git", "rev-parse", "HEAD").decode().strip()
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run(repo, "git", "init", "-q")
+    (repo / "scripts").mkdir()
+    (repo / ".githooks").mkdir()
+    if not (ROOT / "scripts/privacy_scan.py").exists():
+        pytest.skip("maintainer scripts are absent from the sdist")
+    (repo / "tests").mkdir()
+    shutil.copy2(ROOT / "tests/__init__.py", repo / "tests/__init__.py")
+    shutil.copy2(ROOT / "tests/privacy_scan.py", repo / "tests/privacy_scan.py")
+    shutil.copy2(ROOT / "scripts/privacy_scan.py", repo / "scripts/privacy_scan.py")
+    shutil.copy2(ROOT / ".githooks/pre-push", repo / ".githooks/pre-push")
+    _run(repo, "git", "config", "core.hooksPath", ".githooks")
+    monkeypatch.setattr(privacy_scan, "ROOT", repo)
+    return repo
+
+
+def _bare_remote(repo: Path, base: str) -> Path:
+    remote = repo.parent / "remote.git"
+    _run(repo, "git", "init", "--bare", "-q", str(remote))
+    _run(repo, "git", "remote", "add", "origin", str(remote))
+    _run(repo, "git", "push", "-q", "origin", f"{base}:refs/heads/main")
+    return remote
+
+
+def _push(repo: Path, refspec: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", "push", "-q", "origin", refspec], cwd=repo, capture_output=True)
+
+
+def _cli(repo: Path, remote: Path, update: bytes) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, "scripts/privacy_scan.py", "pre-push", "origin", str(remote)],
+        cwd=repo,
+        input=update,
+        capture_output=True,
+    )
+
+
+def _categories(data: bytes) -> set[str]:
+    return {finding.category for finding in privacy_scan.scan_bytes(data)}
+
+
+def test_current_tracked_tree_is_private() -> None:
+    try:
+        top = _run(ROOT, "git", "rev-parse", "--show-toplevel").decode().strip()
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("Git tracked files are unavailable in this source tree")
+    if Path(top).resolve() != ROOT.resolve():
+        pytest.skip("source tree is outside its Git checkout")
+    assert privacy_scan.tracked_findings() == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        lambda n: "D:" + "\\" + "Users" + "\\" + n + "\\file.cir",
+        lambda n: "E:" + "//Users/" + n + "/file.cir",
+        lambda n: "F:" + "\\\\Users\\\\" + n + "\\\\file.cir",
+        lambda n: "/mnt/c/Users/" + n + "/file.cir",
+        lambda n: "/Users/" + n + "/file.cir",
+        lambda n: "/home/" + n + "/file.cir",
+        lambda n: "/root/" + n + "/file.cir",
+    ],
 )
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_SESSION_LINK = re.compile(r"claude\.ai/code/session|Claude-Session:", re.IGNORECASE)
-
-#: The encodings a tracked file can plausibly be in. UTF-16LE is the one that
-#: matters: it is what LTspice writes, and it is invisible to a plain search.
-_ENCODINGS = ("utf-8", "utf-16-le")
+def test_home_paths_and_both_utf16_orders(path) -> None:
+    value = path("syntheticperson")
+    for encoding in privacy_scan.ENCODINGS:
+        assert any("home" in category for category in _categories(value.encode(encoding)))
 
 
-#: This module is the one tracked file that must contain the strings it hunts
-#: for, because it defines them. Excluding it is derived, never a list anyone
-#: can add to: the test below asserts the scan skipped exactly this file.
-_PATTERN_SOURCE = Path(__file__).resolve()
+@pytest.mark.parametrize("name", ["user", "me", "dev", "test", "u", "youruser"])
+def test_neutral_home_placeholders_are_allowed(name: str) -> None:
+    value = "/home/" + name + "/fixture.cir"
+    assert not _categories(value.encode())
 
 
-def _tracked_files() -> list[Path]:
-    try:
-        listed = subprocess.run(
-            ["git", "ls-files", "-z"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError) as exc:  # pragma: no cover
-        pytest.skip(f"git is not usable here, so the tracked set is unknown: {exc}")
-    return [ROOT / name for name in listed.split("\0") if name]
+def test_common_token_shapes_and_safe_findings() -> None:
+    values = (
+        "ghp_" + "A" * 36,
+        "github_pat_" + "B" * 24,
+        "sk-" + "C" * 32,
+        "sk-ant-" + "D" * 32,
+        "AKIA" + "E" * 16,
+        "xoxb-" + "F" * 24,
+        "AIza" + "G" * 35,
+    )
+    for value in values:
+        findings = privacy_scan.scan_bytes(value.encode("utf-16-be"))
+        assert findings
+        assert value not in repr(findings)
 
 
-def _readings(path: Path) -> list[str]:
-    """The file's bytes decoded every way it could have been written."""
-    try:
-        data = path.read_bytes()
-    except OSError:  # pragma: no cover - a tracked path that cannot be read
-        return []
-    return [data.decode(encoding, errors="ignore") for encoding in _ENCODINGS]
+def test_ai_attribution_requires_proper_trailer() -> None:
+    address = "noreply" + "@" + "anthropic.com"
+    valid = "Change behavior\n\nCo-Authored-By: Claude <" + address + ">\n"
+    assert not privacy_scan.scan_message(valid.encode())
+    assert privacy_scan.scan_message(("Change behavior " + address).encode())
+    for encoding in ("utf-16-le", "utf-16-be"):
+        assert privacy_scan.scan_message(("Change behavior " + address).encode(encoding))
+    assert privacy_scan.scan_message(
+        ("Change behavior\n\nSigned-off-by: Claude <" + address + ">\n").encode()
+    )
+    assert privacy_scan.scan_message(
+        ("Change behavior\nCo-Authored-By: Claude <" + address + ">\n").encode()
+    )
 
 
-def _findings(text: str) -> list[str]:
-    found = []
-    for label, pattern in _HOME_PATTERNS:
-        for name in pattern.findall(text):
-            if name.lower() not in PLACEHOLDER_NAMES:
-                found.append(f"{label} of {name!r}")
-    found.extend(f"e-mail address {address!r}" for address in set(_EMAIL.findall(text)))
-    if _SESSION_LINK.search(text):
-        found.append("session link")
-    return found
+def test_intermediate_revision_and_filename_are_checked(repo: Path) -> None:
+    safe = repo / "safe.txt"
+    safe.write_text("ordinary text")
+    base = _commit(repo, "Base")
+    _bare_remote(repo, base)
+
+    secret = "sk-" + "Z" * 32
+    unsafe_name = "syntheticperson" + "@" + "example.invalid.raw"
+    unsafe = repo / unsafe_name
+    unsafe.write_bytes(secret.encode("utf-16-be"))
+    introduced = _commit(repo, "Introduce artifact")
+    unsafe.unlink()
+    safe.write_text("ordinary revision")
+    final = _commit(repo, "Remove artifact")
+
+    findings = privacy_scan.range_findings(privacy_scan.new_commits(final, [base]))
+    assert any(
+        "email address" in finding and introduced in finding and "filename" in finding
+        for finding in findings
+    )
+    assert any("OpenAI token" in finding and introduced in finding for finding in findings)
+    assert secret not in repr(findings)
+    assert unsafe_name not in repr(findings)
+    assert privacy_scan.new_commits(final, [base]) == [introduced, final]
+    result = _push(repo, "HEAD:refs/heads/main")
+    assert result.returncode == 1
+    assert introduced.encode() in result.stderr
+    assert unsafe_name.encode() not in result.stderr
+    assert secret.encode() not in result.stderr
 
 
-class TestTrackedFilesCarryNoPrivateInformation:
-    def test_no_tracked_file_names_a_real_person(self) -> None:
-        offenders: dict[str, list[str]] = {}
-        skipped: list[Path] = []
-        for path in _tracked_files():
-            if path.resolve() == _PATTERN_SOURCE:
-                skipped.append(path)
-                continue
-            found = sorted({item for text in _readings(path) for item in _findings(text)})
-            if found:
-                offenders[str(path.relative_to(ROOT))] = found
+def test_push_cli_checks_range_and_fails_closed(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    (repo / "safe.txt").write_text("updated")
+    new = _commit(repo, "Change\n\nReviewed-by: Someone")
+    update = f"refs/heads/main {new} refs/heads/main {base}\n".encode()
+    result = _cli(repo, remote, update)
+    assert result.returncode == 1
+    assert b"disallowed trailer" in result.stderr
+    assert b"Someone" not in result.stderr
 
-        assert skipped == [_PATTERN_SOURCE], (
-            "the scan must skip this module and nothing else; "
-            f"it skipped {[str(p) for p in skipped]}"
+    missing = f"refs/heads/main {new} refs/heads/main {'a' * 40}\n".encode()
+    result = _cli(repo, remote, missing)
+    assert result.returncode == 2
+    assert b"range error" in result.stderr
+
+    deleted = f"refs/heads/main {'0' * 40} refs/heads/main {base}\n".encode()
+    unavailable = repo / "missing-remote"
+    result = _cli(repo, unavailable, update)
+    assert result.returncode == 2
+    assert str(unavailable).encode() not in result.stderr
+
+    result = _cli(repo, unavailable, deleted)
+    assert result.returncode == 0
+
+
+def test_pre_push_new_branch_checks_introduced_revision(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    _bare_remote(repo, base)
+    (repo / "safe.txt").write_text("sk-" + "Q" * 32)
+    _commit(repo, "Add data")
+    result = _push(repo, "HEAD:refs/heads/topic")
+    assert result.returncode == 1
+    assert b"OpenAI token" in result.stderr
+    assert b"sk-" not in result.stderr
+
+
+def test_push_ignores_stale_tracking_ref(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    _bare_remote(repo, base)
+    (repo / "safe.txt").write_text("sk-" + "S" * 32)
+    new = _commit(repo, "Add data")
+    _run(repo, "git", "update-ref", "refs/remotes/origin/stale", new)
+
+    result = _push(repo, "HEAD:refs/heads/new-branch")
+    assert result.returncode != 0
+    assert b"OpenAI token" in result.stderr
+
+
+def test_ai_trailer_does_not_hide_secret() -> None:
+    token = "ghp_" + "X" * 36
+    address = "noreply" + "@" + "anthropic.com"
+    message = "Change\n\nCo-Authored-By: Claude " + token + " <" + address + ">\n"
+    findings = privacy_scan.scan_message(message.encode())
+    assert "GitHub token" in {finding.category for finding in findings}
+    assert token not in repr(findings)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_push_scans_annotated_tag_messages(repo: Path, nested: bool) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    _bare_remote(repo, base)
+    token = "ghp_" + "Y" * 36
+    identity = ["-c", "user.name=Test", "-c", "user.email=test" + "@" + "example.invalid"]
+    _run(repo, "git", *identity, "tag", "-am", "Release " + token, "inner")
+    tag = "inner"
+    if nested:
+        _run(repo, "git", *identity, "tag", "-am", "Release", "outer", "inner")
+        tag = "outer"
+
+    result = _push(repo, f"refs/tags/{tag}:refs/tags/{tag}")
+    assert result.returncode != 0
+    assert b"GitHub token" in result.stderr
+    assert token.encode() not in result.stderr
+
+
+def test_push_rejects_unavailable_advertised_object(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    remote_only = (
+        _run(
+            remote,
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test" + "@" + "example.invalid",
+            "commit-tree",
+            f"{base}^{{tree}}",
+            "-p",
+            base,
+            "-m",
+            "Remote update",
         )
+        .decode()
+        .strip()
+    )
+    _run(remote, "git", "update-ref", "refs/heads/other", remote_only)
+    update = f"refs/heads/topic {base} refs/heads/topic {'0' * 40}\n".encode()
+    result = _cli(repo, remote, update)
+    assert result.returncode == 2
+    assert b"range error" in result.stderr
 
-        assert not offenders, "private information in tracked files: " + "; ".join(
-            f"{name}: {', '.join(items)}" for name, items in sorted(offenders.items())
-        )
 
-    def test_the_scan_reads_utf16_and_not_only_text(self, tmp_path: Path) -> None:
-        """The instrument's own blind spot, pinned.
-
-        A text-only version of this scan passes on the file that started all
-        this, so the guard is worth no more than its ability to decode.
-        """
-        planted = tmp_path / "ltspice_shaped.raw"
-        planted.write_bytes("Title: C:\\Users\\realname\\sim.cir\n".encode("utf-16-le"))
-
-        assert "Windows home of 'realname'" in _findings(planted.read_bytes().decode("utf-16-le"))
-        assert not _findings(planted.read_bytes().decode("utf-8", errors="ignore"))
-        assert _findings(_readings(planted)[1])
+def test_push_accepts_clean_annotated_tag(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    _bare_remote(repo, base)
+    address = "noreply" + "@" + "openai.com"
+    message = "Release\n\nCo-Authored-By: Codex <" + address + ">"
+    _run(
+        repo,
+        "git",
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test" + "@" + "example.invalid",
+        "tag",
+        "-am",
+        message,
+        "clean",
+    )
+    result = _push(repo, "refs/tags/clean:refs/tags/clean")
+    assert result.returncode == 0
