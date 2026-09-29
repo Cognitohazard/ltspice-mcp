@@ -633,9 +633,10 @@ class TestSecurity:
         assert data["coverage"]["runs_analyzed"] == 0
         missing = data["coverage"]["missing_cases"]["items"][0]
         assert missing["label"] == "outside"
-        assert missing["code"] == "source_unavailable"
+        assert missing["code"] == "path_denied"
         assert "outside allowed directories" in missing["detail"]
         assert str(shared_work_dir) in missing["detail"]
+        assert "[security] allowed_paths" in missing["hint"]
 
     async def test_verify_nonexistent_file_errors(self, shared_session: ClientSession):
         result = await _call(shared_session, "verify_circuit", {"path": "does_not_exist.cir"})

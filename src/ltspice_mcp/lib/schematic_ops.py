@@ -988,14 +988,10 @@ def netlist_card_value(card: SpiceCard) -> str:
     display value. Shared by the netlist ``list_components`` path and the
     ``inspect`` component queries so the two agree on what a value is.
     """
-    from ltspice_mcp.lib.spice_lex_views import InstanceLine, body_has_stray_kv_remnant
+    from ltspice_mcp.lib.spice_lex_views import read_instance
 
-    if body_has_stray_kv_remnant(card.body):
-        return "<unparseable>"
-    try:
-        return InstanceLine.from_card(card).display_value()
-    except Exception:
-        return "<unparseable>"
+    inst = read_instance(card)
+    return "<unparseable>" if inst is None else inst.display_value()
 
 
 _ASC_TEXT_DEFAULT_SIZE = 2
@@ -1793,8 +1789,8 @@ _RotationLiteral = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M2
 # coordinate convention is stated once on the ``ops`` field instead of on the
 # dozen x/y pairs below.
 _ROTATION_DESCRIPTION = (
-    "'R<deg>' rotates clockwise by that many degrees, 'M<deg>' mirrors "
-    "horizontally and then rotates; pins move with the body."
+    "'R<deg>' rotates clockwise by that many degrees, 'M<deg>' rotates the same "
+    "way and then mirrors horizontally; pins move with the body."
 )
 _REFERENCE_DESCRIPTION = "Reference designator of an existing component, e.g. 'R1', 'M3'."
 COORDINATE_DESCRIPTION = (

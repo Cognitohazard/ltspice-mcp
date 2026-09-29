@@ -278,9 +278,9 @@ class TestOrientationMatrix:
         "R180": (-32, -8),
         "R270": (8, -32),
         "M0": (-32, 8),
-        "M90": (-8, -32),
+        "M90": (8, 32),
         "M180": (32, -8),
-        "M270": (8, 32),
+        "M270": (-8, -32),
     }
 
     @pytest.mark.parametrize("rotation", list(EXPECTED_PIN_B))
@@ -457,9 +457,9 @@ class TestAscParsing:
             # Sideways: text turns with the symbol, and the run follows the
             # symbol's own +x axis so it leaves the body the way it did upright.
             ("R90", (-90, "end")),
-            ("M270", (-90, "end")),
+            ("M90", (-90, "end")),
             ("R270", (-90, "start")),
-            ("M90", (-90, "start")),
+            ("M270", (-90, "start")),
         ],
     )
     def test_attr_text_turns_with_the_symbol(

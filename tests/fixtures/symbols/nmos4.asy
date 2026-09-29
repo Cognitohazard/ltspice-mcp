@@ -1,0 +1,29 @@
+Version 4
+SymbolType CELL
+LINE Normal 48 0 48 16
+LINE Normal 48 16 40 16
+LINE Normal 48 96 48 80
+LINE Normal 48 80 40 80
+LINE Normal 48 48 40 48
+LINE Normal 40 8 40 24
+LINE Normal 40 40 40 56
+LINE Normal 40 72 40 88
+LINE Normal 32 16 32 80
+LINE Normal 0 80 32 80
+WINDOW 0 56 32 Left 2
+WINDOW 3 56 72 Left 2
+SYMATTR Value NMOS
+SYMATTR Prefix MN
+SYMATTR Description N-Channel MOSFET transistor with a separate bulk pin
+PIN 48 0 NONE 0
+PINATTR PinName D
+PINATTR SpiceOrder 1
+PIN 0 80 NONE 0
+PINATTR PinName G
+PINATTR SpiceOrder 2
+PIN 48 96 NONE 0
+PINATTR PinName S
+PINATTR SpiceOrder 3
+PIN 48 48 NONE 0
+PINATTR PinName B
+PINATTR SpiceOrder 4

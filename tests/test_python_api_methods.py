@@ -955,10 +955,10 @@ def elsewhere(tmp_path_factory, monkeypatch) -> Path:
 
 @pytest.fixture
 def state_relative_sandbox(work_dir: Path, elsewhere: Path) -> SessionState:
-    """A session configured the way the generated TOML configures one.
+    """A session whose config names its sandbox root relatively.
 
-    ``[security] allowed_paths = ["."]`` is what the server writes on first
-    run, so the sandbox root is itself relative — and left anchored on the
+    With ``[security] allowed_paths = ["."]`` (the example the generated TOML
+    gives) the sandbox root is itself relative — and left anchored on the
     process cwd it sent every bare filename to the wrong directory.
     """
     config = ServerConfig(

@@ -92,6 +92,39 @@ documented here (every other recipe field — `key`, `sources`, `reduce`,
   `reflection_coefficient` vs frequency (reducible) from an `.AC` impedance
   trace.
 
+### Naming a signal, and trace math
+
+A recipe's `signal`, `signals` or `expr` names one trace as the raw holds it
+— `V(out)`, `I(R1)`, `@m1[gm]` — matched without regard to case. Two spellings
+read a quantity the simulator did not write as a trace of its own:
+
+- `V(a,b)` is `V(a) - V(b)`, both read from the same run, step and axis
+  (complex on an AC run); `V(a,0)` and `V(a,gnd)` are `V(a)`. The raw must hold
+  both node voltages, and ngspice keeps only what `.save` names. A `.noise` run
+  holds spectral densities, which do not subtract: name the pair in the
+  directive (`.noise V(a,b) ...`) and read `V(onoise)`.
+- On the AC recipes (`bode_*`, `stability`, `ac_structure`, `resonance`,
+  `return_loss`), `A/B` divides two complex responses and a leading `-` flips
+  the sign: `V(out)/V(inp,inn)` is an open-loop gain.
+
+`value` reads the sample nearest `at` on the run's axis, without
+interpolation, and needs `at` whenever that axis has more than one sample.
+
+Any other trace math — a sum, a product, a function of a trace — is numpy on
+the traces. `run_code` runs Python with `api` in scope; where it is turned off,
+`from ltspice_mcp.api import Api; api = Api(working_dir=...)` gives the same
+`api` in your own Python:
+
+```python
+r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
+k = 0  # one step at a time
+t = r.axis(step=k)
+p_load = r.trace("V(out)", step=k) * r.trace("I(Rload)", step=k)
+```
+
+A step's traces share that step's axis. The steps of a `.step` run each have
+an axis of their own, so never combine traces across steps.
+
 ### Reading a deck that carries `.step`
 
 A `.step` directive puts several sweeps inside one `.raw`, and by default
@@ -426,8 +459,9 @@ CFB  inn 0 1T
 For balanced drive, give `VIP` `AC 0.5 0`, replace `CFB inn 0 1T` with
 `CFB inn ndrive 1T`, and add `VIM ndrive 0 DC 0 AC 0.5 180`; keep the inductor
 as the only DC feedback path. Always compute gain and phase from
-`V(out)/V(inp,inn)`, unwrap phase, inspect every 0 dB crossing, and repeat at
-twice the point density.
+`V(out)/V(inp,inn)` (the `signal` of `stability` or a `bode_*` recipe, as
+written), unwrap phase, inspect every 0 dB crossing, and repeat at twice the
+point density.
 
 #### Closed-loop transient and load-step archetype
 
@@ -815,7 +849,7 @@ C1 out 0 {C}
 | res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `inspect(kind="symbol")` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M90→(y,x), M180→(x,-y), M270→(-y,-x). Use `inspect(kind="symbol")` for exact positions.
 
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols are 3-terminal — a MOSFET's bulk ties internally to its source, and a BJT has no separate substrate pin. When you need the body/substrate on its own net (e.g. a non-source bulk bias), use the 4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
 
@@ -880,7 +914,7 @@ section, require it to build with `edit_schematic` (never by hand-writing the
 
 ### Other LTspice Quirks
 
-- **Unicode mu**: LTspice replaces `u` with Unicode mu (µ) in saved files. Can corrupt netlists on copy/paste.
+- **Unicode mu**: LTspice writes the `u` suffix as the micro sign (µ) in saved files and exported netlists. LTspice 24 and later write it as UTF-8 (bytes `C2 B5`); LTspice XVII reads a deck as cp1252, sees `Âµ`, and silently drops the scale, so `23µ` runs as 23. Decks `run_experiments` stages and the case decks it writes spell it `u`; a deck you run elsewhere, or hand-write, should use `u`. `verify_circuit` flags a µ suffix (`value_suffix_micro_sign`) and any other non-ASCII character where a suffix goes (`value_suffix_nonascii`), in a netlist and in an `.asc`'s exported netlist.
 - **`startup` keyword**: LTspice-only in `.tran`. Ramps sources from zero. Not portable.
 - **A-devices** (mixed-signal primitives like `SRflop`, `Counter`, `OTA`): LTspice-proprietary.
 - **`*!LTspice: <directive>`**: Treated as a directive, not a comment — despite `*` prefix.

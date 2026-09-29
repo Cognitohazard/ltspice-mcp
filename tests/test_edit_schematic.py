@@ -34,6 +34,7 @@ from ltspice_mcp.tools.schematic_edit import (
     evaluate_edit_schematic,
     handle_edit_schematic,
 )
+from tests import _fake_netlister as fake_netlister
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -1007,6 +1008,92 @@ async def test_rejected_reference_path_refuses_before_committing(asc_state, work
     # Nothing was written: the rejection lands before the commit protocol runs.
     assert not (work_dir / "denied_ref.asc").exists()
     assert not list(work_dir.glob("denied_ref.asc.staging-*"))
+
+
+_ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400, "y": 96}]
+
+
+@pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
+async def test_asc_reference_is_exported_like_the_committed_sheet(
+    asc_state, work_dir, monkeypatch, mode
+):
+    """An additive edit compared with the sheet it started from reports the
+    addition and nothing else.
+
+    The committed sheet reaches the comparison as its LTspice export, so the
+    reference .asc has to as well: read through the schematic editor instead,
+    every SpiceLine read as a changed component and the exporter's boilerplate
+    as added directives, and the graph engine lexed the schematic as SPICE.
+    """
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
+    sheet = work_dir / "amp.asc"
+    sheet.write_text(fake_netlister.amp_asc(), newline="\n")
+    original = work_dir / "amp_orig.asc"
+    original.write_text(fake_netlister.amp_asc(), newline="\n")
+
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="amp.asc",
+                expected_sha256=_sha(sheet),
+                ops=_ADD_R2,
+                compare={"reference": "amp_orig.asc", "mode": mode},
+            ),
+            asc_state,
+        )
+    )
+
+    assert data["commit_state"] == "committed"
+    verification = data["verification"]
+    assert verification.get("compare_error") is None
+    comparison = verification["comparison"]
+    if mode == "structural_diff":
+        assert comparison["components_added"] == ["R2"]
+        assert comparison["components_removed"] == []
+        assert comparison["components_changed"] == []
+        assert comparison["directives_added"] == []
+        assert comparison["directives_removed"] == []
+    else:
+        assert [c["ref"] for c in comparison["added"]] == ["R2"]
+        assert comparison["removed"] == []
+        assert comparison["value_mismatches"] == []
+    assert verification["equivalent"] is False
+    # The reference was exported from a copy; nothing was written beside it.
+    assert not (work_dir / "amp_orig.net").exists()
+
+
+async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir, monkeypatch):
+    """The committed sheet exported, the reference did not: nothing to compare
+    against, so no verdict — and the sheet stays committed."""
+    sheet = work_dir / "amp.asc"
+    sheet.write_text(fake_netlister.amp_asc(), newline="\n")
+    (work_dir / "amp_orig.asc").write_text(fake_netlister.amp_asc(), newline="\n")
+
+    async def export_only_the_committed_sheet(asc_copy: Path, state: SessionState) -> str:
+        netlist = await fake_netlister.export_asc_to_netlist(asc_copy, state)
+        if "R2" not in netlist:  # the reference: the sheet before R2 was added
+            raise RuntimeError("injected reference export failure")
+        return netlist
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", export_only_the_committed_sheet)
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="amp.asc",
+                expected_sha256=_sha(sheet),
+                ops=_ADD_R2,
+                compare={"reference": "amp_orig.asc", "mode": "structural_diff"},
+            ),
+            asc_state,
+        )
+    )
+
+    assert data["commit_state"] == "committed"
+    verification = data["verification"]
+    assert verification.get("export_error") is None
+    assert "injected reference export failure" in verification["compare_error"]
+    assert verification["equivalent"] is None
+    assert data["outcome"] == "partial"
 
 
 # ---------------------------------------------------------------------------

@@ -230,7 +230,7 @@ class TestTableOfContents:
 RECIPE_SEARCH_PHRASES: dict[str, str] = {
     "summary": "what is in this run",
     "measurements": "read the .meas results",
-    "value": "evaluate an expression",
+    "value": "differential voltage at one point",
     "signal_stats": "output ripple rms",
     "edges": "rise time",
     "timing": "propagation delay",

@@ -635,7 +635,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # names the bare list takes and that the row projection is the object
     # form only: the old sentence listed 'fields' among the names, and two
     # sessions in one day wrote include: ["fields"] and lost a turn each.
-    "analyze_results": 19100,
+    # Raised by about 160 characters so value's 'expr' and 'at' say what they
+    # take: a field named for an expression, with no description, was read as
+    # one, and 'at' being required on a multi-sample axis was stated nowhere.
+    "analyze_results": 19260,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

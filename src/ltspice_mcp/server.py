@@ -31,6 +31,7 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import path_denied_text
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
@@ -129,24 +130,6 @@ def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
     return _ERROR_HINTS.get(err_type)
 
 
-def _path_reject_guidance(state: SessionState) -> str:
-    """Recovery guidance appended to a PathSecurityError at every agent-facing
-    boundary — tool calls AND resource reads. The agent can't widen the sandbox
-    itself, so name the knob and the human-escalation/move-the-file fallback or
-    it dead-ends. One builder so the two boundaries can't drift."""
-    allowed = ", ".join(str(p) for p in state.allowed_paths())
-    return (
-        f"Allowed paths: {allowed}\n"
-        "To work on this file: pass its content inline where the argument takes "
-        "text (a compare reference), copy it into one of those directories, or "
-        "add its directory to [security] allowed_paths in "
-        f"{state.config.config_path} — that file is re-read on the next call, no "
-        "restart. LTSPICE_MCP_ALLOWED_PATHS sets the same list (restart "
-        "required). An inspect capabilities query shows the full sandbox "
-        "configuration."
-    )
-
-
 def _configure_server_logging(config: ServerConfig) -> None:
     """Install the server process's stderr logging configuration."""
     configure_stderr_logging(config.log_level)
@@ -234,7 +217,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
                 logger.warning(f"  - {diag}")
 
         logger.info("Allowed paths (sandbox):")
-        for allowed_path in config.allowed_paths:
+        for allowed_path in state.allowed_paths():
             logger.info(f"  - {allowed_path.resolve()}")
 
         if boot.preloaded_circuits:
@@ -359,16 +342,19 @@ def get_client_capabilities() -> types.ClientCapabilities | None:
     return _client_capabilities.get()
 
 
-def _tool_error(text: str) -> types.CallToolResult:
+def _tool_error(text: str, structured: dict[str, Any] | None = None) -> types.CallToolResult:
     """A failed tool call: the message on the text channel, ``is_error`` set.
 
     A tool that fails reports it in its result rather than as a JSON-RPC error,
     which is what lets the calling model read the message and correct itself.
     The SDK turned an exception into this shape for us until MCP SDK 2, which
     raises handler exceptions to the wire instead, so we build it here.
+    ``structured`` mirrors what the caller needs to act on into
+    structuredContent, which a structured-aware client reads instead of text.
     """
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
+        structured_content=structured,
         is_error=True,
     )
 
@@ -441,12 +427,17 @@ async def call_tool(
         # The caller reads the refusal in the result; the operator reads it on
         # the server's stderr, which is the only channel left for it.
         logger.warning("Path security violation in %s: %s", name, e)
-        return _tool_error(f"{e}\n\n{_path_reject_guidance(state)}")
+        # The guidance is the whole recovery, so it rides structuredContent too.
+        return _tool_error(
+            path_denied_text(e, state),
+            {"error": str(e), "code": e.code, "hint": state.sandbox_guidance()},
+        )
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
         hint = _get_error_hint(type(e)) if e.show_hint else None
-        text = f"{e}\n\n{hint}" if hint else str(e)
+        message = _err.caller_message(e, state.tool_dispatch)
+        text = f"{message}\n\n{hint}" if hint else message
         # When the error carries structured suggestions (e.g. fuzzy model
         # matches), return them as structuredContent with is_error=True so
         # clients can parse them without regex'ing the text message.
@@ -454,14 +445,10 @@ async def call_tool(
             # Mirror the hint into structuredContent (self-sufficiency
             # contract): structured-aware clients drop the text channel, so a
             # text-only hint would be invisible exactly where it's needed.
-            structured: dict[str, Any] = {"error": str(e), "suggestions": e.suggestions}
+            structured: dict[str, Any] = {"error": message, "suggestions": e.suggestions}
             if hint:
                 structured["hint"] = hint
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text=text)],
-                structured_content=structured,
-                is_error=True,
-            )
+            return _tool_error(text, structured)
         return _tool_error(text)
     except Exception as e:
         # Surface the actual exception type + message in the response. A bare
@@ -529,7 +516,7 @@ async def read_resource(
     except PathSecurityError as e:
         # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
         # enrich it here so every resource route gets the recovery guidance.
-        raise _resource_error(f"{e}\n\n{_path_reject_guidance(state)}") from None
+        raise _resource_error(path_denied_text(e, state)) from None
     except (LTSpiceMCPError, ValueError) as e:
         raise _resource_error(str(e)) from None
     except Exception as e:

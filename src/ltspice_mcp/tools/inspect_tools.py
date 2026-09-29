@@ -888,7 +888,7 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         "diagnostics": list(state.diagnostics),
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
-        "allowed_paths": [str(p) for p in state.config.allowed_paths],
+        "allowed_paths": [str(p) for p in state.allowed_paths()],
         # One surface, and no setting selects it; the key stays because a
         # client reads it to know which one it is talking to.
         "tool_profile": "consolidated",
@@ -1003,7 +1003,7 @@ def _symbols_payload(
 async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     asc_dir: Path | None = None
     if q.path is not None:
-        asc_dir = _resolve_path(q, q.path, state).parent
+        asc_dir = safe_path(q.path, state).parent
 
     precedence = _symbol_precedence(asc_dir, state)
     prec_report, names = await asyncio.to_thread(_symbols_payload, precedence, q.filter)
@@ -1066,7 +1066,7 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
 async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
     asc_path: Path | None = None
     if q.path is not None:
-        asc_path = _resolve_path(q, q.path, state)
+        asc_path = safe_path(q.path, state)
     resolver = symbol_resolver_for(asc_path, state)
     payload = await asyncio.to_thread(_symbol_geometry, resolver, q.name)
     if payload is None:
@@ -1197,7 +1197,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
 
 
 async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    path = _resolve_path(q, q.path, state)
+    path = safe_path(q.path, state)
     identity = {"path": str(path), "at": q.at}
 
     if _route_circuit_kind(path, "net") == "netlist":
@@ -1356,7 +1356,7 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     _check_prefix(q.prefix)
-    path = _resolve_path(q, q.path, state)
+    path = safe_path(q.path, state)
     # The answer rung revokes detail='full' — the one payload-growing opt-in
     # inspect has. The cursor binds the detail it actually rendered, so a page
     # taken under a budget cannot resume as an unbudgeted one at the same offset.
@@ -1461,7 +1461,7 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
     # re-parsed list at the old offset.
     sources: list[Path] = []
     if q.mode == "enumerate":
-        sources = [_resolve_path(q, lib, state) for lib in (q.libs or [])]
+        sources = [safe_path(lib, state) for lib in (q.libs or [])]
         try:
             rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
@@ -1470,7 +1470,7 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
     else:
         assert q.query is not None  # guaranteed by the model validator
         if q.libs:
-            sources = [_resolve_path(q, lib, state) for lib in q.libs]
+            sources = [safe_path(lib, state) for lib in q.libs]
             try:
                 rows = await asyncio.to_thread(_search_libs, sources, q.query)
             except OSError as exc:
@@ -1574,14 +1574,6 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 # ---------------------------------------------------------------------------
 
 
-def _resolve_path(q: Any, user_path: str, state: SessionState) -> Path:
-    """safe_path with the denial mapped to a per-item ``path_denied`` failure."""
-    try:
-        return safe_path(user_path, state)
-    except PathSecurityError as exc:
-        raise _QueryError("path_denied", str(exc)) from exc
-
-
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
     profile = SemanticProfile(
         q.simulator,
@@ -1591,7 +1583,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     )
     hierarchy = load_hierarchy(
         q.path,
-        state.config.allowed_paths,
+        state.allowed_paths(),
         profile,
         simulator_roots=simulator_library_roots(state.available_simulators.get(q.simulator)),
     )
@@ -1653,6 +1645,7 @@ _ERROR_SCHEMA: dict[str, Any] = {
         "code": {"type": "string"},
         "message": {"type": "string"},
         "supported": {"type": "array", "items": {"type": "string"}},
+        "hint": HINT_SCHEMA,
     },
     "required": ["code", "message"],
 }
@@ -1873,6 +1866,13 @@ async def _run_queries(
         try:
             query = _validate_query(raw)
             outcome = await _dispatch(query, state, view)
+        except PathSecurityError as exc:
+            # Every kind's refusal lands here, whichever resolver raised it (the
+            # hierarchy loader checks each file it opens), so all report one code
+            # and one remedy.
+            error = {"code": exc.code, "message": str(exc), "hint": state.sandbox_guidance()}
+            results.append(_failure_item(index, raw, error))
+            continue
         except _QueryError as exc:
             error = {"code": exc.code, "message": exc.message}
             if exc.supported is not None:
@@ -2043,4 +2043,6 @@ def _summary_text(results: list[dict[str, Any]]) -> str:
             lines.append(
                 f"[{r['index']}] {r.get('kind')}: {r['error']['code']} — {r['error']['message']}"
             )
+            if r["error"].get("hint"):
+                lines.append(r["error"]["hint"])
     return "\n".join(lines) if lines else "(no queries)"

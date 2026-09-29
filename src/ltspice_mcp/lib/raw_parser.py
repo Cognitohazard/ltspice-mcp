@@ -17,6 +17,7 @@ import math
 import os
 import re
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -490,7 +491,14 @@ def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
     return {"value": float(np.real(sample))}
 
 
-def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int = 0) -> dict:
+def query_point_value(
+    raw: RawRead,
+    trace_name: str,
+    target_x: float,
+    step: int = 0,
+    *,
+    read_wave: Callable[[], np.ndarray] | None = None,
+) -> dict:
     """Query signal value at a specific time/frequency (nearest neighbor).
 
     Uses binary search for O(log n) lookup. No interpolation - returns
@@ -501,6 +509,9 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
         trace_name: Name of trace to query
         target_x: Time or frequency value to query
         step: Step index (default 0)
+        read_wave: Reads the step's samples, for a signal that is not a
+            stored trace (a node-pair difference); called only once the axis
+            is known to exist. ``trace_name`` is read when omitted
 
     Returns:
         Dictionary with trace name, requested/actual x values, and signal value.
@@ -519,7 +530,7 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
         # so len() inside it raises TypeError.
         raise NoAxisError(f"Result has no sweep axis to query at step {step}.") from exc
     axis = real_axis(np.asarray(raw_axis))
-    wave = raw.get_wave(trace_name, step=step)
+    wave = read_wave() if read_wave is not None else raw.get_wave(trace_name, step=step)
 
     if axis.size == 0 or len(wave) == 0:
         raise ValueError(

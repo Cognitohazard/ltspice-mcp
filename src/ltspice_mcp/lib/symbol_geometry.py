@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 # Rotation transforms applied to (x, y) relative to symbol origin.
 # LTspice coordinate system: x increases right, y increases down.
+# A mirrored placement 'M<deg>' is the rotation 'R<deg>' followed by negating x,
+# which is the order LTspice applies them in: M90 takes (x, y) to (y, x). The
+# opposite order agrees for M0 and M180 but swaps M90 with M270.
 _TRANSFORMS: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     # (x', y') = (a*x + b*y, c*x + d*y)  →  stored as ((a, b), (c, d))
     "R0": ((1, 0), (0, 1)),
@@ -26,9 +29,9 @@ _TRANSFORMS: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "R180": ((-1, 0), (0, -1)),
     "R270": ((0, 1), (-1, 0)),
     "M0": ((-1, 0), (0, 1)),
-    "M90": ((0, -1), (-1, 0)),
+    "M90": ((0, 1), (1, 0)),
     "M180": ((1, 0), (0, -1)),
-    "M270": ((0, 1), (1, 0)),
+    "M270": ((0, -1), (-1, 0)),
 }
 
 
