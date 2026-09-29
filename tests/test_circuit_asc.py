@@ -488,18 +488,21 @@ def _flag_records(asc_path: Path) -> list[tuple[tuple[int, int], str]]:
 # Absolute pin positions expected for the fixture nmos symbol (pin offsets
 # D=(0,-96), G=(-48,0), S=(0,96)) placed at (400, 200), hand-computed from the
 # LTspice orientation transforms (y axis points down; R90 maps (x, y) to
-# (-y, x); M0 negates x before rotating). The G pin sits off the symbol's
-# vertical axis, so each mirror produces a pin map distinct from its rotation
-# counterpart — a sign error in any transform entry changes at least one pin.
+# (-y, x); M<deg> rotates by <deg> first and then negates x, so M90 maps (x, y)
+# to (y, x)). The G pin sits off the symbol's vertical axis, so each mirror
+# produces a pin map distinct from its rotation counterpart — a sign error in
+# any transform entry changes at least one pin. These are still our own
+# arithmetic; TestMirroredQuarterTurnsMatchLTspice below checks the mirrored
+# quarter turns against a sheet LTspice itself wired.
 NMOS_PIN_POSITIONS: dict[str, dict[str, tuple[int, int]]] = {
     "R0": {"D": (400, 104), "G": (352, 200), "S": (400, 296)},
     "R90": {"D": (496, 200), "G": (400, 152), "S": (304, 200)},
     "R180": {"D": (400, 296), "G": (448, 200), "S": (400, 104)},
     "R270": {"D": (304, 200), "G": (400, 248), "S": (496, 200)},
     "M0": {"D": (400, 104), "G": (448, 200), "S": (400, 296)},
-    "M90": {"D": (496, 200), "G": (400, 248), "S": (304, 200)},
+    "M90": {"D": (304, 200), "G": (400, 152), "S": (496, 200)},
     "M180": {"D": (400, 296), "G": (352, 200), "S": (400, 104)},
-    "M270": {"D": (304, 200), "G": (400, 152), "S": (496, 200)},
+    "M270": {"D": (496, 200), "G": (400, 248), "S": (304, 200)},
 }
 
 
@@ -545,6 +548,78 @@ class TestOrientationPlacementAndRouting:
         segments = _wire_segments(asc)
         assert _has_segment(segments, (gx, gy), (gx, 452)), segments
         assert _has_segment(segments, (gx, 452), (700, 452)), segments
+
+
+# The pin positions a mirrored quarter-turn placement really has, taken from
+# LTspice rather than from our own transform math. M3 is copied from a sheet
+# LTspice saved: an nmos4 (stock pins D=(48,0), G=(0,80), S=(48,96),
+# B=(48,48)) at M90 whose wires end exactly where listed here, and which
+# LTspice's own export connects as `M3 VSWB 0 VMIN VMIN`. M4 is the same device
+# at M270, which is M90 turned a further 180 degrees. Both composition orders
+# (mirror then rotate, rotate then mirror) agree on that relationship, so the
+# M90 evidence pins M270 as well.
+_MIRRORED_QUARTER_TURN_SHEET = (
+    Path(__file__).parent / "fixtures" / "nmos4_mirrored_quarter_turns.asc"
+)
+_MIRRORED_QUARTER_TURN_PINS: dict[str, dict[str, tuple[int, int]]] = {
+    "M3": {"D": (-960, -48), "G": (-880, -96), "S": (-864, -48), "B": (-912, -48)},
+    "M4": {"D": (-608, -48), "G": (-688, 0), "S": (-704, -48), "B": (-656, -48)},
+}
+
+
+@pytest.mark.asyncio
+class TestMirroredQuarterTurnsMatchLTspice:
+    """M90 and M270 pins land where LTspice draws them.
+
+    LTspice rotates a mirrored placement first and then negates x, so M90 maps
+    a symbol point (x, y) to (y, x). If the order is flipped, M90 and M270 swap:
+    every pin of a sheet LTspice wired correctly then reads as floating, every
+    wire end at those pins as dangling, and a sheet the server builds at either
+    orientation is miswired once LTspice opens it.
+    """
+
+    @pytest.fixture
+    def sheet(self, asc_state: SessionState, work_dir: Path) -> Path:
+        dest = work_dir / _MIRRORED_QUARTER_TURN_SHEET.name
+        dest.write_bytes(_MIRRORED_QUARTER_TURN_SHEET.read_bytes())
+        return dest
+
+    async def test_resolved_pins_are_the_wire_ends_ltspice_drew(
+        self, asc_state: SessionState, sheet: Path
+    ):
+        data = await components_of(asc_state, sheet)
+        resolved = {
+            row["reference"]: {p["name"]: (p["x"], p["y"]) for p in row["pins"]}
+            for row in data["components"]
+        }
+        assert resolved == _MIRRORED_QUARTER_TURN_PINS
+
+        wire_ends = {end for segment in _wire_segments(sheet) for end in segment}
+        for pins in resolved.values():
+            assert set(pins.values()) <= wire_ends
+
+    async def test_verify_circuit_finds_nothing_floating_or_dangling(
+        self, asc_state: SessionState, sheet: Path
+    ):
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        result = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate(
+                {"path": str(sheet), "checks": ["symbols", "layout"], "render": False}
+            ),
+            asc_state,
+        )
+        data = result.structured_content
+        assert data is not None
+        assert data["checks_run"] == ["symbols", "layout"]
+        assert data["findings"] == []
+
+    async def test_post_op_warnings_find_no_floating_pin(
+        self, asc_state: SessionState, sheet: Path
+    ):
+        from ltspice_mcp.lib.schematic_ops import get_asc_editor, post_op_warnings
+
+        assert post_op_warnings(get_asc_editor(sheet, asc_state)) == []
 
 
 # Canonical device archetypes the schematic-build path MUST handle, beyond the
@@ -2102,6 +2177,13 @@ class TestAddComponentRealSymbols:
         # Guards against the suite silently drifting onto fabricated geometry.
         data = await inspect_one(real_state, {"kind": "symbol", "name": "res"})
         assert {p["name"] for p in data["pins_by_rotation"]["R0"]} == {"A", "B"}
+
+    async def test_real_nmos4_pins_match_the_fixture(self, real_state: SessionState):
+        # The mirrored quarter-turn sheet is checked against the fixture nmos4,
+        # whose pins claim to be the stock symbol's. Hold the claim to it.
+        data = await inspect_one(real_state, {"kind": "symbol", "name": "nmos4"})
+        pins = {p["name"]: (p["x"], p["y"]) for p in data["pins_by_rotation"]["R0"]}
+        assert pins == {"D": (48, 0), "G": (0, 80), "S": (48, 96), "B": (48, 48)}
 
     async def test_batch_adds_a_real_symbol(self, real_state: SessionState):
         blank_sheet_file(real_state, "real2")
