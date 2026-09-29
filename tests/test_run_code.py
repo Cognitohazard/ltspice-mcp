@@ -158,6 +158,23 @@ class TestExecution:
         assert reply["stdout"] == "numpy True True\n"
         assert reply["result"].startswith("(6, ")
 
+    async def test_the_signal_primitives_weight_by_time(self, state: SessionState):
+        # A derived trace's statistics are the natural next step after trace
+        # math, and the step plain numpy gets wrong on a variable timestep: the
+        # trace ramps from 0 to 1 V over the first 0.9 s and holds 1 V for the
+        # last 0.1 s, where five of the six samples sit. np.mean reads 0.833;
+        # the time average is 0.55. The helpers are in scope unimported.
+        code = (
+            "t = np.array([0.0, 0.9, 0.95, 0.97, 0.99, 1.0])\n"
+            "y = np.array([0.0, 1.0, 1.0, 1.0, 1.0, 1.0])\n"
+            "t_w, y_w, dropped = window_and_clean(t, y, None, None)\n"
+            "stats = compute_signal_stats(t_w, y_w)\n"
+            "(round(stats['mean'], 3), round(float(np.mean(y)), 3), dropped)"
+        )
+        reply = await run(state, code)
+        assert reply["status"] == "ok", reply
+        assert reply["result"] == "(0.55, 0.833, 0)"
+
     async def test_each_call_is_a_fresh_namespace(self, state: SessionState):
         await run(state, "leftover = 1")
         reply = await run(state, "leftover")

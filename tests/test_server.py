@@ -83,6 +83,15 @@ class TestServerInstructions:
         for dead in ("run_simulation", "check_job", "bode_metrics", "create_netlist"):
             assert dead not in text
 
+    @pytest.mark.parametrize("served", [{"run_code"}, set()])
+    def test_instructions_route_trace_math_to_code(self, served: set[str]):
+        # A recipe reads one trace or a node pair. An agent that is not told
+        # up front where a product or function of traces goes adds behavioral
+        # sources to its deck and re-runs, so both editions name it.
+        text = build_instructions({"ltspice": _LT}, _LT, served=served)
+        assert "trace math" in text
+        assert ("run_code" in text) == ("run_code" in served)
+
 
 class _LT:
     pass

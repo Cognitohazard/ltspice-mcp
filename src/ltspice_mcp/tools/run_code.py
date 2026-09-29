@@ -62,7 +62,8 @@ class RunCodeInput(ToolInput):
         description=(
             "Python source. In scope: api (the engine on this working directory: the "
             "same six ops as methods, complete results), np, load_raw, measurements, "
-            "reference. The repr of a trailing expression comes back as result."
+            "reference, window_and_clean, compute_signal_stats. The repr of a "
+            "trailing expression comes back as result."
         ),
     )
     timeout_s: float = Field(
@@ -536,10 +537,15 @@ def worker_for(state: SessionState) -> CodeWorker:
         "`api`. The snippet has the server process's own file and process "
         "authority, not the sandbox, so permission this tool like a shell. For "
         "loops over many runs, numpy on samples, and compute-decide-compute; a "
-        "single run or measurement is a tool call. In scope: api (the same six ops "
-        "as methods on this working directory, complete results, no paging), np, "
-        "load_raw, measurements, reference — reference('run_experiments') lists an "
-        "op's arguments, so read it before guessing them. Every call is a fresh "
+        "single run or measurement is a tool call. Trace math is numpy here: a "
+        "recipe signal names one trace or V(a,b), so combine r = load_raw(...) "
+        "traces taken at one step on r.axis(step=k), and take statistics of the "
+        "result with compute_signal_stats(t, y), which weights by time (np.mean "
+        "over-weights the dense samples a variable timestep puts at edges). In "
+        "scope: api (the same six ops as methods on this working directory, "
+        "complete results, no paging), np, load_raw, measurements, reference, "
+        "window_and_clean, compute_signal_stats — reference('run_experiments') "
+        "lists an op's arguments, so read it before guessing them. Every call is a fresh "
         "namespace around the same live engine; keep state on disk (a job by "
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
