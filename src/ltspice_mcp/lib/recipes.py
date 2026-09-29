@@ -344,8 +344,16 @@ class MeasurementsRecipe(KeyedRecipe):
 
 class ValueRecipe(ScalarRecipe):
     metric: Literal["value"]
-    expr: str
-    at: float | str | None = None
+    expr: str = Field(
+        description="One trace, or a node pair 'V(a,b)'; trace math: spice://guide.",
+    )
+    at: float | str | None = Field(
+        default=None,
+        description=(
+            "Axis point (s, Hz or swept value), read at the nearest sample; "
+            "required if the axis has more than one sample."
+        ),
+    )
 
 
 class SignalStatsRecipe(MultiRecipe):
