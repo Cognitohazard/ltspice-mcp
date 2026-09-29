@@ -170,11 +170,13 @@ def configure_asc_editor(
 async def _bootstrap(
     config: ServerConfig,
     target_logger: logging.Logger | None,
+    *,
+    sandbox_pinned: bool = False,
 ) -> BootstrapResult:
     """The initialization every host shares, once its config is resolved."""
     diagnostics: list[str] = []
     available = detect_simulators(config, diagnostics)
-    state = SessionState.create(config, available, diagnostics)
+    state = SessionState.create(config, available, diagnostics, sandbox_pinned=sandbox_pinned)
     configure_asc_editor(config, available, target_logger=target_logger)
     await asyncio.to_thread(result_store.cleanup, state.working_dir)
 
@@ -212,6 +214,9 @@ async def bootstrap_library_engine(
     must be a ``ServerConfig`` field the library exposes. Supplying
     ``working_dir`` makes the directory the default sandbox root and selects
     its TOML unless ``config_path`` is explicit.
+
+    An explicit ``allowed_paths`` pins the sandbox for the session: it outranks
+    the TOML here, so an edit to the TOML later must not replace it.
     """
     config = _library_config(working_dir, config_path, overrides)
-    return await _bootstrap(config, None)
+    return await _bootstrap(config, None, sandbox_pinned="allowed_paths" in overrides)

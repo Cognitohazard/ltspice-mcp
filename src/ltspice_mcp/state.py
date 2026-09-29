@@ -82,6 +82,10 @@ class SessionState:
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
     sandbox_stamp: tuple[int, int] | None = None
     """(mtime_ns, size) of the config file as last read for the sandbox."""
+    sandbox_pinned: bool = False
+    """The sandbox was given explicitly when the session was opened
+    (``Api(allowed_paths=...)``). That outranks the file at startup, so it keeps
+    outranking it: the sandbox does not follow the file for this session."""
     _sandbox_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     """Serializes the sandbox reload: resource reads and some path resolutions
     run on worker threads, and a reader must never see the new stamp paired
@@ -174,13 +178,16 @@ class SessionState:
         The refusal an agent gets names the config line that widens the sandbox;
         picking the edit up on the next call is what makes that line the agent's
         own to act on. Only ``[security] allowed_paths`` follows the file: the
-        rest of it is startup state (detected simulators, runners, caches).
+        rest of it is startup state (detected simulators, runners, caches). A
+        pinned sandbox does not follow it at all; see ``sandbox_pinned``.
 
         Every reader of the sandbox calls this rather than reading
         ``config.allowed_paths``, which holds only what the last call loaded: a
         report or a resolution made right after an edit must see the edit even
         when nothing else has reloaded it yet.
         """
+        if self.sandbox_pinned:
+            return self.config.allowed_paths
         with self._sandbox_lock:
             stamp = _file_stamp(self.config.config_path)
             if stamp != self.sandbox_stamp:
@@ -196,13 +203,16 @@ class SessionState:
         config: ServerConfig,
         available: dict[str, type],
         diagnostics: list[str] | None = None,
+        *,
+        sandbox_pinned: bool = False,
     ) -> "SessionState":
         """Factory method to create session state at server startup.
 
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session and logged at startup.
+        on the session and logged at startup. ``sandbox_pinned`` says the
+        caller gave ``allowed_paths`` explicitly (see the field).
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
 
@@ -228,6 +238,7 @@ class SessionState:
             working_dir=config.working_dir,
             job_registry=registry,
             diagnostics=diagnostics,
+            sandbox_pinned=sandbox_pinned,
         )
 
     # ------------------------------------------------------------------

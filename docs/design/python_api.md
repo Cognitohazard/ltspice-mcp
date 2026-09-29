@@ -52,6 +52,13 @@ defaults follow it. An unknown or irrelevant constructor override raises
 `TypeError` rather than being silently ignored (a wire-only or server-only name
 such as `tool_profile` is rejected here rather than quietly accepted).
 
+The precedence holds for the life of the session. The engine re-reads
+`[security] allowed_paths` when the config file changes, so an agent can widen
+the sandbox without a restart, but an explicit `Api(allowed_paths=...)` pins
+the sandbox: a TOML written or edited later (a server session in the same
+directory writes its default config on its first tool call) does not replace
+it, and a refusal in that session names the argument rather than the file.
+
 Library mode never calls `logging.basicConfig`. The server's `force=True`
 logging setup stays in server startup; the library uses module loggers only.
 

@@ -28,6 +28,12 @@ tool-surface changes.
   reports, which now returns it in structuredContent as well as text. With
   `LTSPICE_MCP_ALLOWED_PATHS` set, the guidance names that variable instead,
   since it overrides the file.
+- A Python API session opened with an explicit `Api(allowed_paths=...)` keeps
+  that sandbox. It used to be replaced by the config file's list, or by the
+  default sandbox, as soon as the working directory's `ltspice-mcp.toml`
+  appeared or changed, which a server session in the same directory causes by
+  writing its default config on its first tool call. A refusal in such a
+  session names the argument rather than the file.
 - On Windows the default sandbox includes Claude Code's scratch directory,
   `%TEMP%\claude`, as it already did on Linux and macOS
   (`<tempdir>/claude-<uid>`).
