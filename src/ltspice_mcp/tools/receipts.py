@@ -142,6 +142,26 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
         "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add "
         "'set ngbehavior=hsa' to a .spiceinit in the run directory."
     ),
+    "run_timeout": (
+        "The simulator ran past the per-case run timeout and was stopped. evidence "
+        "names the bound and whether it was the request's or the server default; "
+        "the partial_progress observation says how far the run got. If it needs "
+        "longer, resubmit with a larger execution.run_timeout_s (the default is "
+        '[simulation] timeout, limits.default_timeout_s in inspect(kind="capabilities")). '
+        "If it should have been quick, read evidence.log_excerpt for a collapsing timestep."
+    ),
+    "job_deadline": (
+        "The job's execution.job_deadline_s elapsed before this case finished; "
+        "results already produced are kept. Resubmit the unfinished cases with a "
+        "larger job_deadline_s, or split them across jobs."
+    ),
+    "kill_unconfirmed": (
+        "The simulator was told to stop but did not report exit within the kill "
+        "grace period, so it may still be running, and its concurrency slot stays "
+        "reserved until it exits (the job then gains a late_simulator_exit "
+        "observation). If it never does, end the simulator process whose command "
+        "line carries this job_id, or restart the server."
+    ),
 }
 
 _ARTIFACT_SCHEMA: dict[str, Any] = {

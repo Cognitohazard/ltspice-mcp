@@ -200,7 +200,7 @@ class ExperimentExecution(StrictModel):
         gt=0.0,
         description=(
             "Kill any single case whose simulator exceeds this and mark it failed; "
-            "the other cases continue."
+            "the other cases continue. Defaults to [simulation] timeout."
         ),
     )
     job_deadline_s: float | None = Field(

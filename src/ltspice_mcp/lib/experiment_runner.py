@@ -31,6 +31,7 @@ from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.native_execution import prepare_native_cases
 from ltspice_mcp.lib.pdk_native import NativeCaseError, verify_launch
+from ltspice_mcp.lib.raw_parser import read_partial_raw_progress
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     NativeLaunchContext,
@@ -41,6 +42,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
+from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.store import Store, run_dir_in, run_filename_in, validate_job_id
 from ltspice_mcp.lib.sweep_utils import generate_id
 
@@ -51,6 +53,19 @@ logger = logging.getLogger(__name__)
 
 CANONICALIZER_VERSION = experiment_store.CANONICALIZER_VERSION
 DEFAULT_KILL_GRACE_S = 10.0
+
+#: How far past a case's own run timeout and kill grace spicelib's subprocess
+#: bound is set. The coordinator's timer is the one that decides a timeout, and
+#: it starts a little after the process does, so spicelib's must not fire
+#: first: a run it ends reports exit code -2 as an ordinary failure rather
+#: than as ``run_timeout``. What it is for is the case the coordinator could
+#: not finish: after a token-scoped kill nobody confirmed (a WSL interop query
+#: alone may take 45s), it ends the process spicelib holds a handle to, so a
+#: retained permit comes back through the late-exit path.
+SPICELIB_TIMEOUT_MARGIN_S = 60.0
+
+RunTimeoutSource = Literal["request", "server_default"]
+StopReason = Literal["cancelled", "job_deadline", "run_timeout"]
 
 AnalysisCallback = Callable[[ExperimentJob], Awaitable[dict[str, Any]]]
 
@@ -306,6 +321,25 @@ class ExperimentRunRequest:
     kill_grace_s: float = DEFAULT_KILL_GRACE_S
     analysis_request: dict[str, Any] | None = None
     analysis_callback: AnalysisCallback | None = None
+
+
+def effective_run_timeout(
+    request: ExperimentRunRequest,
+) -> tuple[float | None, RunTimeoutSource | None]:
+    """The per-case run timeout a request runs under, and where it came from.
+
+    The request's own ``run_timeout_s`` when it sets one, else the server's
+    ``[simulation] timeout``: every case has a bound unless the server was
+    configured without one. The source is part of the answer because the
+    remedy differs: a request can raise its own value, while the default is
+    the operator's.
+    """
+    if request.run_timeout_s is not None:
+        return request.run_timeout_s, "request"
+    default = getattr(request.state.config, "default_timeout", None)
+    if default:
+        return float(default), "server_default"
+    return None, None
 
 
 @dataclass(frozen=True)
@@ -960,6 +994,7 @@ class ExperimentRunner(RunnerBase):
                     }
                 )
         native_args = {"native": native} if native is not None else {}
+        run_timeout, _source = effective_run_timeout(execution.request)
         try:
             self.submit_netlist(
                 run_deck,
@@ -972,6 +1007,11 @@ class ExperimentRunner(RunnerBase):
                     execution.job.job_id,
                     case.case_id,
                     outcome,
+                ),
+                timeout_s=(
+                    run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
+                    if run_timeout is not None
+                    else None
                 ),
                 **native_args,
             )
@@ -1069,13 +1109,13 @@ class ExperimentRunner(RunnerBase):
         self,
         execution: _Execution,
         future: asyncio.Future[RunOutcome],
-    ) -> tuple[RunOutcome | None, Literal["cancelled", "job_deadline", "run_timeout"] | None]:
+    ) -> tuple[RunOutcome | None, StopReason | None]:
         stop_wait = self.loop.create_task(execution.cancel_event.wait())
         completion_wait = asyncio.shield(future)
         try:
             done, _ = await asyncio.wait(
                 {completion_wait, stop_wait},
-                timeout=execution.request.run_timeout_s,
+                timeout=effective_run_timeout(execution.request)[0],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if completion_wait in done:
@@ -1094,7 +1134,7 @@ class ExperimentRunner(RunnerBase):
         execution: _Execution,
         case: ExperimentCase,
         future: asyncio.Future[RunOutcome],
-        reason: Literal["cancelled", "job_deadline", "run_timeout"],
+        reason: StopReason,
     ) -> None:
         try:
             await self._kill_case(case.run_token)
@@ -1119,9 +1159,15 @@ class ExperimentRunner(RunnerBase):
                 terminal_status,
                 code="kill_unconfirmed",
                 error=(
-                    f"{reason.replace('_', ' ')} elapsed and simulator exit was not "
-                    f"confirmed within {execution.request.kill_grace_s:g}s"
+                    f"Case stopped because {_stop_cause(execution.request, reason)}; "
+                    "simulator exit was not confirmed within "
+                    f"{execution.request.kill_grace_s:g}s"
                 ),
+                evidence={
+                    "stop_reason": reason,
+                    **_stop_limits(execution.request, reason),
+                    "kill_grace_s": execution.request.kill_grace_s,
+                },
             )
             case.observations.append(
                 {
@@ -1139,13 +1185,15 @@ class ExperimentRunner(RunnerBase):
             return
 
         self._apply_stopped_outcome(case, outcome)
+        await self._note_partial_progress(execution, case, outcome)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
             execution,
             case,
             terminal_status,
             code=reason,
-            error=f"Case stopped because {reason.replace('_', ' ')} elapsed",
+            error=f"Case stopped because {_stop_cause(execution.request, reason)}",
+            evidence=_stopped_run_evidence(execution.request, reason, outcome),
         )
         await asyncio.to_thread(self._remove_case_artifacts, execution.job, case)
         self._release_slot(execution, case.case_id)
@@ -1186,10 +1234,66 @@ class ExperimentRunner(RunnerBase):
             }
         )
         execution.request.state.persist_job(execution.job)
-        self.loop.run_in_executor(None, self._remove_case_artifacts, execution.job, case)
+        # The permit is free the moment the process is gone; what is left is
+        # reading the partial raw before it is deleted, off the loop.
+        task = self.loop.create_task(self._retire_late_exit(execution, case, outcome))
+        self._pipeline_tasks.add(task)
+        task.add_done_callback(self._pipeline_tasks.discard)
         self._release_slot(execution, case_id)
         if execution.job.done_event.is_set() and not execution.retained_slots:
             self._executions.pop(job_id, None)
+
+    async def _retire_late_exit(
+        self,
+        execution: _Execution,
+        case: ExperimentCase,
+        outcome: RunOutcome,
+    ) -> None:
+        """Record how far a late-exiting case got, then remove its heavy artifacts."""
+        try:
+            if await self._note_partial_progress(execution, case, outcome):
+                execution.request.state.persist_job(execution.job)
+        finally:
+            await asyncio.to_thread(self._remove_case_artifacts, execution.job, case)
+
+    async def _note_partial_progress(
+        self,
+        execution: _Execution,
+        case: ExperimentCase,
+        outcome: RunOutcome,
+    ) -> bool:
+        """Append how far a stopped case's simulator got, read before cleanup.
+
+        The partial raw is deleted with the case's other heavy artifacts, so
+        this is the last moment anything can say how far the run got. Neither
+        simulator writes progress anywhere else a stopped run keeps: LTspice's
+        log carries only its preamble until the run ends, and ngspice prints
+        its ``Reference value`` progress to stdout only when it has no ``-o``
+        log, which spicelib always passes — so the ``.log`` and ``.exe.log`` of
+        a killed ngspice run hold none either (observed on ngspice 42 killed
+        with SIGKILL, and on LTspice 26.1 killed the same way under Wine).
+
+        Returns whether an observation was added. A read that fails is logged
+        and adds nothing: the case's own outcome must not depend on it.
+        """
+        raw = self._case_raw_path(execution.job, case, outcome)
+        try:
+            observation = await asyncio.to_thread(
+                _partial_progress_observation,
+                case,
+                raw,
+                simulator_dialect(self.simulator_class),
+            )
+        except Exception:
+            logger.warning(
+                "could not read the partial raw of %s case %s",
+                execution.job.job_id,
+                case.case_id,
+                exc_info=True,
+            )
+            return False
+        case.observations.append(observation)
+        return True
 
     @staticmethod
     def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
@@ -1470,14 +1574,31 @@ class ExperimentRunner(RunnerBase):
     async def _kill_case(self, token: str) -> None:
         await asyncio.to_thread(self._kill_by_token, token, "experiment case")
 
-    def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
-        """Best-effort removal of a killed case's exact heavy-artifact paths."""
-        raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
+    def _case_run_netlist(self, job: ExperimentJob, case: ExperimentCase) -> Path:
+        """The deck copy spicelib ran for ``case``; its raw and log sit beside it."""
         run_suffix = ".cir" if case.native_statistics else case.staged_deck.suffix or ".net"
         # The job's own run directory, which is also what the record persists —
         # the same reconstruction the crash reconciliation uses to FIND these.
         run_dir = job.output_folder or run_dir_in(self.output_folder, job.job_id)
-        run_netlist = run_dir / f"{case.run_token}{run_suffix}"
+        return run_dir / f"{case.run_token}{run_suffix}"
+
+    def _case_raw_path(
+        self, job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome
+    ) -> Path:
+        """Where a stopped case's raw is: as reported, else beside its deck copy.
+
+        spicelib reports no raw for a run that exited nonzero, which is every
+        killed run, even when the simulator wrote most of one.
+        """
+        if outcome.raw_file:
+            return Path(outcome.raw_file)
+        raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
+        return self._case_run_netlist(job, case).with_suffix(raw_extension)
+
+    def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
+        """Best-effort removal of a killed case's exact heavy-artifact paths."""
+        raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
+        run_netlist = self._case_run_netlist(job, case)
         paths = {
             run_netlist,
             run_netlist.with_suffix(raw_extension),
@@ -1489,3 +1610,107 @@ class ExperimentRunner(RunnerBase):
         for path in paths:
             with contextlib.suppress(OSError):
                 path.unlink()
+
+
+def _stop_cause(request: ExperimentRunRequest, reason: StopReason) -> str:
+    """Why the coordinator stopped a case, with the bound that applied."""
+    if reason == "run_timeout":
+        run_timeout, source = effective_run_timeout(request)
+        origin = " (the server default)" if source == "server_default" else ""
+        return f"the run timeout of {run_timeout:g}s{origin} elapsed"
+    if reason == "job_deadline":
+        return f"the job deadline of {request.job_deadline_s:g}s elapsed"
+    return "the job was cancelled"
+
+
+def _stop_limits(request: ExperimentRunRequest, reason: StopReason) -> dict[str, Any]:
+    """The configured bound behind a stop, as evidence fields."""
+    if reason == "run_timeout":
+        run_timeout, source = effective_run_timeout(request)
+        return {"run_timeout_s": run_timeout, "run_timeout_source": source}
+    if reason == "job_deadline":
+        return {"job_deadline_s": request.job_deadline_s}
+    return {}
+
+
+def _stopped_run_evidence(
+    request: ExperimentRunRequest,
+    reason: StopReason,
+    outcome: RunOutcome,
+) -> dict[str, Any] | None:
+    """What a stopped case keeps from the run the coordinator killed.
+
+    The limit that applied, then whatever the outcome collector read off the
+    killed run: its exit code, a cause the log names (``log_failure_code``,
+    omitted when the collector fell back to ``execution_failed`` because the
+    log named nothing), that cause's own evidence, and the log excerpt. The
+    collector's ``error`` text is not kept: it describes a run that ended on
+    its own ("no output generated"), which a killed run did not.
+    """
+    evidence: dict[str, Any] = dict(_stop_limits(request, reason))
+    if outcome.failure_evidence:
+        evidence.update(outcome.failure_evidence)
+    if outcome.failure_code and outcome.failure_code != "execution_failed":
+        evidence["log_failure_code"] = outcome.failure_code
+    if outcome.log_excerpt:
+        evidence["log_excerpt"] = outcome.log_excerpt
+    return evidence or None
+
+
+def _partial_progress_observation(
+    case: ExperimentCase,
+    raw: Path,
+    dialect: str | None,
+) -> dict[str, Any]:
+    """The ``partial_progress`` fact for a stopped case, read from its raw.
+
+    Always one observation per stopped case, so a case with no raw on disk
+    says so rather than going quiet. The detail names the case because a
+    receipt merges every case's observations into one job-level list.
+    """
+    progress = read_partial_raw_progress(raw, dialect)
+    evidence: dict[str, Any] = {"case_id": case.case_id, "run_index": case.run_index}
+    if progress is None:
+        present = raw.exists()
+        evidence.update(
+            {"raw_present": present, "points": 0 if not present else None, "last_axis_value": None}
+        )
+        detail = (
+            f"Case {case.case_id} was stopped before its simulator wrote a raw file."
+            if not present
+            else f"Case {case.case_id} was stopped; the file at its raw path is not a readable raw."
+        )
+        return {
+            "code": "partial_progress",
+            "kind": "execution",
+            "detail": detail,
+            "evidence": evidence,
+        }
+    evidence.update(
+        {
+            "raw_present": True,
+            "raw_bytes": progress.raw_bytes,
+            "header_complete": progress.header_complete,
+            "plot": progress.plot,
+            "axis": progress.axis,
+            "points": progress.points,
+            "last_axis_value": progress.last_axis_value,
+        }
+    )
+    if progress.stepped:
+        evidence["stepped"] = True
+    if progress.points is None:
+        reached = "a number of points that could not be counted"
+    else:
+        reached = f"{progress.points} point{'s' if progress.points != 1 else ''}"
+    if progress.axis is not None and progress.last_axis_value is not None:
+        reached += f", the last at {progress.axis} = {progress.last_axis_value:g}"
+        if progress.stepped:
+            reached += " within the current .step"
+    plot = f" of its {progress.plot}" if progress.plot else ""
+    return {
+        "code": "partial_progress",
+        "kind": "execution",
+        "detail": f"Case {case.case_id} was stopped after its simulator wrote {reached}{plot}.",
+        "evidence": evidence,
+    }

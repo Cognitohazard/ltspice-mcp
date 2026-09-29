@@ -1310,7 +1310,7 @@ class TestCancellationAuthority:
         )
         callbacks = {}
 
-        def submit(_netlist: Path, run_filename: str, callback):
+        def submit(_netlist: Path, run_filename: str, callback, **_kwargs):
             callbacks[Path(run_filename).stem] = callback
             return object()
 

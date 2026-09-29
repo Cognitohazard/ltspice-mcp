@@ -519,7 +519,9 @@ class ServerConfig:
     """Maximum expanded cases accepted by one ``run_experiments`` call."""
 
     default_timeout: float = 300.0
-    """Simulation timeout in seconds."""
+    """Per-case simulation timeout in seconds, for a ``run_experiments`` request
+    that sets no ``execution.run_timeout_s``; also bounds schematic netlist
+    export. ``[simulation] timeout``."""
 
     max_estimated_points: int = 20_000_000
     """Preflight WARN threshold: a .tran/.ac/.dc whose estimated point count
@@ -764,7 +766,11 @@ def generate_default_config(path: Path) -> None:
     sim_conf.add(comment("Maximum cases after run_experiments variation expansion."))
     sim_conf.add("max_experiment_cases", 1024)
     sim_conf.add(nl())
-    sim_conf.add(comment("Default simulation timeout in seconds"))
+    sim_conf.add(
+        comment(
+            "Default per-case simulation timeout in seconds (execution.run_timeout_s overrides)"
+        )
+    )
     sim_conf.add("timeout", 300.0)
     sim_conf.add(nl())
     sim_conf.add(comment("Preflight size guard, estimated from .tran/.ac/.dc directives."))

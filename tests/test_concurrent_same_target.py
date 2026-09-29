@@ -533,7 +533,7 @@ async def test_simultaneous_cancels_of_one_job_report_one_outcome(
     # state under test: a case stopped while queued never reaches a simulator.
     permit_granted = asyncio.Event()
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         callbacks[run_filename] = callback
         return object()
 
@@ -600,7 +600,7 @@ async def test_two_jobs_share_the_single_launch_permit(
     in_flight = 0
     peak = 0
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)

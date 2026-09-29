@@ -10,6 +10,7 @@ cannot reach, where the six live-found defects (and the phantom-measurement bug)
 lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 """
 
+import asyncio
 import shutil
 from pathlib import Path
 
@@ -582,3 +583,46 @@ async def test_tran_meas_is_refused_before_submission_in_batch_mode(
     assert finding["subject"] == "vfinal"
     assert "batch mode" in finding["evidence"]["reason"]
     assert [f["code"] for f in receipt["failures"]] == ["lint_blocked"]
+
+
+async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """A real ngspice run stopped at its run timeout says what it left behind.
+
+    The deck asks for 10^8 steps, so it is still solving when the two-second
+    run timeout kills it. The killed process leaves a raw whose ``No. Points``
+    is still 0 and a log with no progress in it, so the only record of how
+    far it got is the raw's own length, read before cleanup deletes it.
+    """
+    net = _write(
+        work_dir,
+        "slow.cir",
+        "* slow rc\nV1 in 0 SIN(0 1 1k)\nR1 in out 1k\nC1 out 0 1u\n.tran 10n 1 0 10n\n.end\n",
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "ng-run-timeout",
+            "circuits": [{"path": net, "id": "dut"}],
+            "execution": {"wait_s": 90, "simulator": "ngspice", "run_timeout_s": 2},
+        },
+    )
+
+    assert receipt["status"] == "completed_with_failures", receipt
+    [failure] = receipt["failures"]
+    assert failure["code"] == "run_timeout"
+    assert failure["hint"]
+    evidence = failure["evidence"]
+    assert evidence["run_timeout_s"] == 2
+    assert evidence["run_timeout_source"] == "request"
+    assert evidence["exit_code"] != 0
+    assert "Circuit" in evidence["log_excerpt"]
+
+    [progress] = [item for item in receipt["observations"] if item["code"] == "partial_progress"]
+    reached = progress["evidence"]
+    assert (reached["plot"], reached["axis"]) == ("Transient Analysis", "time")
+    assert reached["points"] > 0
+    assert 0 < reached["last_axis_value"] < 1
+    leftovers = await asyncio.to_thread(lambda: list(work_dir.rglob("*.raw")))
+    assert not leftovers, "the killed run's raw was left on disk"

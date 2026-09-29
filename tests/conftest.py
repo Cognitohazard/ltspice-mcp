@@ -249,7 +249,7 @@ def fake_simulator(
     """
     recorded = [] if submissions is None else submissions
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         recorded.append(run_filename)
         if delay_s is None:
             return object()
@@ -281,7 +281,7 @@ def recorded_fixture_simulator(
     simulator artifacts rather than a mock byte string. Name a different
     *fixture* to run a job over stepped artifacts."""
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
         shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)

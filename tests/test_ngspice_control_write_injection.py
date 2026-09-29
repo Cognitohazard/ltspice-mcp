@@ -202,9 +202,9 @@ class TestControlWriteThroughRunExperiments:
         accepted = ExperimentRunner.submit_netlist
         decks: list[str] = []
 
-        def spy(self, netlist: Path, run_filename: str, callback):
+        def spy(self, netlist: Path, run_filename: str, callback, **kwargs):
             decks.append(Path(netlist).read_text())
-            return accepted(self, netlist, run_filename, callback)
+            return accepted(self, netlist, run_filename, callback, **kwargs)
 
         monkeypatch.setattr(ExperimentRunner, "submit_netlist", spy)
         deck = work_dir / f"{request_id}.cir"
