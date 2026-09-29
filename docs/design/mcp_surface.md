@@ -457,6 +457,12 @@ killed run left:
   (`convergence_failed`, `singular_matrix`, ...), with that cause's own evidence;
 - `log_excerpt`, the end of the log or the lines around its errors.
 
+The kill matches the case's run token in a process's command line, and
+either the simulator's executable name or, for a process this server
+launched, an argument naming the case's run deck, so a wrapper or launcher
+script and the simulator it starts are reached too. It is repeated up to five
+times, half a second apart, inside the kill grace (10 s by default), because
+a stop landing between launch and spawn finds no process on its first scan.
 A kill whose exit is not confirmed within the grace period is a
 `kill_unconfirmed` row instead, with evidence `{stop_reason, run_timeout_s |
 job_deadline_s, kill_grace_s}`, and its permit stays reserved until the process

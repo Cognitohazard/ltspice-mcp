@@ -1215,6 +1215,46 @@ class TestStoppedCaseRecord:
         assert await runner.wait(receipt.job, 1)
         assert receipt.job.cases[0].status == "produced"
 
+    async def test_a_simulator_the_first_kill_missed_is_killed_by_the_next(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A stop landing between launch and spawn finds no process on its first scan."""
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        kills: list[str] = []
+        run_dirs: list[Path] = []
+
+        async def kill(token: str) -> None:
+            kills.append(token)
+            if len(kills) == 2:
+                # The simulator exists by the second scan, and this kill ends it.
+                _deliver_killed_run(callbacks[token], run_dirs[0], token)
+
+        monkeypatch.setattr(runner, "_kill_case", kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="kill-rescan",
+                    run_timeout_s=0.01,
+                    kill_grace_s=5.0,
+                )
+            )
+        )
+        assert receipt.job.output_folder is not None
+        run_dirs.append(receipt.job.output_folder)
+
+        assert await runner.wait(receipt.job, 5)
+        case = receipt.job.cases[0]
+        assert kills == [submissions[0], submissions[0]]
+        assert case.failure_code == "run_timeout"
+        # Exit confirmed, so no permit is held back for it.
+        await await_until(lambda: runner._executions.get(receipt.job.job_id) is None)
+
     async def test_late_exit_records_progress_and_the_bound_that_applied(
         self,
         state_no_sim: SessionState,

@@ -567,13 +567,6 @@ express more than about 49.7 days. spicelib cannot run without a number
 either: its ``SimRunner.run`` computes ``timeout + 1`` before launching, so
 ``None`` raises ``TypeError`` (``docs/spicelib_bugs.md`` Bug 14)."""
 
-_CANCEL_KILL_MAX_PASSES = 5
-"""Upper bound on cancel's kill/re-scan passes (see ``BatchRunnerBase.cancel``)."""
-
-_CANCEL_KILL_RESCAN_DELAY = 0.5
-"""Seconds between cancel kill passes — long enough for a resumed submission's
-process to become visible to the next scan."""
-
 
 class NativePrelaunchRefused(Exception):
     """The copied native setup was refused before a simulator task existed."""
