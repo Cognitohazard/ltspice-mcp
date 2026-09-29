@@ -112,7 +112,7 @@ class TestBuildAndWriteWorker:
         facts = build_waveform_csv(
             _MockRaw(),
             work_dir / "mock.raw",
-            ["V(out)"],
+            [services.Signal("V(out)", "V(out)")],
             1,
             "transient",
             None,
@@ -146,7 +146,7 @@ class TestBuildAndWriteWorker:
         facts = build_waveform_csv(
             _StepMock(),
             work_dir / "m.raw",
-            ["V(o)"],
+            [services.Signal("V(o)", "V(o)")],
             2,
             "transient",
             3.0,
@@ -177,7 +177,7 @@ class TestBuildAndWriteWorker:
         facts = build_waveform_csv(
             _StepMock(),
             work_dir / "nolog.raw",
-            ["V(o)"],
+            [services.Signal("V(o)", "V(o)")],
             2,
             "transient",
             None,
@@ -200,7 +200,7 @@ class TestBuildAndWriteWorker:
         build_waveform_csv(
             raw,
             raw_path,
-            ["V(out)"],
+            [services.Signal("V(out)", "V(out)")],
             1,
             analysis_type,
             None,

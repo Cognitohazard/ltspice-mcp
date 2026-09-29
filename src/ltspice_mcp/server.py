@@ -436,7 +436,8 @@ async def call_tool(
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
         hint = _get_error_hint(type(e)) if e.show_hint else None
-        text = f"{e}\n\n{hint}" if hint else str(e)
+        message = _err.caller_message(e, state.tool_dispatch)
+        text = f"{message}\n\n{hint}" if hint else message
         # When the error carries structured suggestions (e.g. fuzzy model
         # matches), return them as structuredContent with is_error=True so
         # clients can parse them without regex'ing the text message.
@@ -444,7 +445,7 @@ async def call_tool(
             # Mirror the hint into structuredContent (self-sufficiency
             # contract): structured-aware clients drop the text channel, so a
             # text-only hint would be invisible exactly where it's needed.
-            structured: dict[str, Any] = {"error": str(e), "suggestions": e.suggestions}
+            structured: dict[str, Any] = {"error": message, "suggestions": e.suggestions}
             if hint:
                 structured["hint"] = hint
             return _tool_error(text, structured)

@@ -139,7 +139,7 @@ class TestAttachSuggestionsToFailure:
 
 
 class TestValidateSignal:
-    """``validate_signal`` is case-insensitive — LTspice writes ``v(onoise)``
+    """``resolve_signal`` is case-insensitive — LTspice writes ``v(onoise)``
     in lowercase for ``.NOISE`` raws but ``V(out)`` everywhere else, and we
     don't want to reject a user's ``V(onoise)`` just because the raw used a
     different case."""
@@ -151,73 +151,73 @@ class TestValidateSignal:
 
     def test_exact_match_returns_same_string(self):
         raw = self._raw(["V(out)", "I(R1)"])
-        assert services.validate_signal(raw, "V(out)") == "V(out)"
+        assert services.resolve_signal(raw, "V(out)").name == "V(out)"
 
     def test_case_insensitive_returns_canonical_name(self):
         # spicelib preserves the case the simulator wrote — for noise raws
         # that's lowercase. Caller must use the canonical name to read traces.
         raw = self._raw(["v(onoise)", "v(inoise)"])
-        assert services.validate_signal(raw, "V(onoise)") == "v(onoise)"
-        assert services.validate_signal(raw, "V(INOISE)") == "v(inoise)"
+        assert services.resolve_signal(raw, "V(onoise)").name == "v(onoise)"
+        assert services.resolve_signal(raw, "V(INOISE)").name == "v(inoise)"
 
     def test_unknown_signal_lists_available(self):
         raw = self._raw(["V(a)", "V(b)"])
         with pytest.raises(ResultError, match="Signal 'V\\(missing\\)' not found"):
-            services.validate_signal(raw, "V(missing)")
+            services.resolve_signal(raw, "V(missing)")
 
     def test_noise_alias_ltspice_form_to_ngspice(self):
         # Resolve the alias, don't just hint.
         raw = self._raw(["frequency", "onoise_spectrum", "inoise_spectrum"])
-        assert services.validate_signal(raw, "V(onoise)") == "onoise_spectrum"
-        assert services.validate_signal(raw, "V(inoise)") == "inoise_spectrum"
+        assert services.resolve_signal(raw, "V(onoise)").name == "onoise_spectrum"
+        assert services.resolve_signal(raw, "V(inoise)").name == "inoise_spectrum"
 
     def test_noise_alias_bare_shorthand(self):
         raw = self._raw(["frequency", "onoise_spectrum", "inoise_spectrum"])
-        assert services.validate_signal(raw, "onoise") == "onoise_spectrum"
-        assert services.validate_signal(raw, "inoise") == "inoise_spectrum"
+        assert services.resolve_signal(raw, "onoise").name == "onoise_spectrum"
+        assert services.resolve_signal(raw, "inoise").name == "inoise_spectrum"
 
     def test_noise_alias_ngspice_form_to_ltspice(self):
         raw = self._raw(["frequency", "v(onoise)", "v(inoise)"])
-        assert services.validate_signal(raw, "onoise_spectrum") == "v(onoise)"
+        assert services.resolve_signal(raw, "onoise_spectrum").name == "v(onoise)"
 
     def test_dev_param_hierarchical_multi_dot(self):
         # A subckt-flattened device path: m.x1.mn.gm -> @m.x1.mn[gm], including
         # the v()/i() wrapped forms.
         raw = self._raw(["@m.x1.mn[gm]", "v(@m.x1.mn[vth])", "i(@m.x1.mn[id])"])
-        assert services.validate_signal(raw, "m.x1.mn.gm") == "@m.x1.mn[gm]"
-        assert services.validate_signal(raw, "m.x1.mn.vth") == "v(@m.x1.mn[vth])"
-        assert services.validate_signal(raw, "m.x1.mn.id") == "i(@m.x1.mn[id])"
+        assert services.resolve_signal(raw, "m.x1.mn.gm").name == "@m.x1.mn[gm]"
+        assert services.resolve_signal(raw, "m.x1.mn.vth").name == "v(@m.x1.mn[vth])"
+        assert services.resolve_signal(raw, "m.x1.mn.id").name == "i(@m.x1.mn[id])"
 
     def test_dev_param_hierarchical_without_device_letter_unique(self):
         # Dropping the leading device-type letter (x1.mn.gm) resolves when the
         # suffix is unique.
         raw = self._raw(["@m.x1.mn[gm]"])
-        assert services.validate_signal(raw, "x1.mn.gm") == "@m.x1.mn[gm]"
+        assert services.resolve_signal(raw, "x1.mn.gm").name == "@m.x1.mn[gm]"
 
     def test_dev_param_hierarchical_ambiguous_refused(self):
         # Two devices share the .mn suffix — refuse rather than guess.
         raw = self._raw(["@m.x1.mn[gm]", "@m.x2.mn[gm]"])
         with pytest.raises(ResultError, match="not found"):
-            services.validate_signal(raw, "mn.gm")
+            services.resolve_signal(raw, "mn.gm")
 
     def test_hierarchical_colon_resolves_to_dot(self):
         # LTspice V(X1:mid) <-> ngspice v(x1.mid)
         raw = self._raw(["time", "v(x1.mid)", "v(out)"])
-        assert services.validate_signal(raw, "V(X1:mid)") == "v(x1.mid)"
+        assert services.resolve_signal(raw, "V(X1:mid)").name == "v(x1.mid)"
 
     def test_device_param_shorthand_resolves_each_wrap(self):
         # 'dev.param' resolves to whichever form ngspice actually wrote:
         # bare @m1[gm], v-wrapped v(@m1[vth]), or i-wrapped i(@m1[id]).
         raw = self._raw(["@m1[gm]", "v(@m1[vth])", "i(@m1[id])"])
-        assert services.validate_signal(raw, "m1.gm") == "@m1[gm]"
-        assert services.validate_signal(raw, "M1.VTH") == "v(@m1[vth])"
-        assert services.validate_signal(raw, "m1.id") == "i(@m1[id])"
+        assert services.resolve_signal(raw, "m1.gm").name == "@m1[gm]"
+        assert services.resolve_signal(raw, "M1.VTH").name == "v(@m1[vth])"
+        assert services.resolve_signal(raw, "m1.id").name == "i(@m1[id])"
 
     def test_device_param_not_saved_hints_save(self):
         # A dev.param that isn't in the raw points at the missing .save.
         raw = self._raw(["@m1[gm]"])
         with pytest.raises(ResultError, match=r"\.save @m1\[gds\]"):
-            services.validate_signal(raw, "m1.gds")
+            services.resolve_signal(raw, "m1.gds")
 
 
 # Real ngspice log shapes for the per-run convergence walk. The clean preamble

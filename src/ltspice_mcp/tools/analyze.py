@@ -9,7 +9,7 @@ import math
 import os
 import statistics
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -24,6 +24,7 @@ from ltspice_mcp.errors import (
     LTSpiceMCPError,
     PathSecurityError,
     ResultError,
+    python_route_text,
 )
 from ltspice_mcp.lib import (
     O_BINARY,
@@ -229,19 +230,27 @@ class Record:
 
 @dataclass(frozen=True)
 class Failure:
-    """One item that did not produce a value, and what stage lost it."""
+    """One item that did not produce a value, and what stage lost it.
+
+    ``python_route`` marks a message ending in an ``api`` snippet; only an MCP
+    page, which knows the session's tools, says where the snippet runs.
+    """
 
     code: str
     stage: str
     where: str
     message: str
+    python_route: bool = False
 
-    def wire(self) -> dict[str, Any]:
+    def wire(self, served: Collection[str] | None = None) -> dict[str, Any]:
+        message = self.message
+        if self.python_route and served is not None:
+            message = f"{message} {python_route_text(served)}"
         return {
             "code": self.code,
             "stage": self.stage,
             "where": self.where,
-            "message": self.message,
+            "message": message,
         }
 
 
@@ -1399,9 +1408,9 @@ async def _waveform(
         total_max = 0
         point_limit = min(recipe.max_points, state.config.max_points_returned)
         for signal_input in recipe.signals:
-            signal = services.validate_signal(raw, signal_input)
+            signal = services.resolve_signal(raw, signal_input)
             axis = metrics.guarded_axis(raw, step, run.source.raw)
-            wave = np.asarray(raw.get_wave(signal, step=step))
+            wave = signal.wave(raw, step)
             if start is not None or end is not None:
                 lo, hi = metrics.window_indices(
                     axis,
@@ -1438,7 +1447,7 @@ async def _waveform(
                 }
             else:
                 series = {"x": axis.tolist(), "y": wave.tolist()}
-            values.append({"signal": signal, **series})
+            values.append({"signal": signal.name, **series})
         return (
             {
                 "format": "inline",
@@ -1455,10 +1464,10 @@ async def _waveform(
 
     trace_names = raw.get_trace_names()
     axis_name = trace_names[0]
-    cols: list[str] = []
+    cols: list[services.Signal] = []
     for requested in recipe.signals:
-        signal = services.validate_signal(raw, requested)
-        if signal == axis_name:
+        signal = services.resolve_signal(raw, requested)
+        if signal.name == axis_name:
             raise ResultError(f"{requested!r} is the sweep axis, not a signal")
         if signal not in cols:
             cols.append(signal)
@@ -1520,8 +1529,8 @@ async def _plot(
     raw = await services.load_raw(run.source.raw, state)
     trace_names = raw.get_trace_names()
     axis_name = trace_names[0]
-    cols = [services.validate_signal(raw, signal) for signal in recipe.signals]
-    if axis_name in cols:
+    cols = [services.resolve_signal(raw, signal) for signal in recipe.signals]
+    if axis_name in (col.name for col in cols):
         raise ResultError("The sweep axis cannot be plotted as a signal")
     _, analysis_type, _, x_is_log = metrics.classify_analysis(raw)
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
@@ -1946,6 +1955,7 @@ async def _evaluate_item(
                     stage="analyze",
                     where=run.manifest_id,
                     message=str(exc),
+                    python_route=getattr(exc, "python_route", False),
                 )
             )
     return records, failures, pending
@@ -2440,6 +2450,9 @@ class AnalysisEvaluation:
     natural_intra: int
     deferred: bool
     signals: dict[str, list[str]] | None
+    #: The session's tools, set only when rendering an MCP page, so a failure
+    #: can say where its Python snippet runs; the neutral evaluation has none.
+    served: frozenset[str] | None = None
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
@@ -2605,7 +2618,7 @@ def _assemble(
         "coverage": coverage,
         "results": results,
         "observations": [observation.wire() for observation in observations],
-        "failures": [failure.wire() for failure in failures],
+        "failures": [failure.wire(a.served) for failure in failures],
         "source_hashes": _source_hashes(item, provenance=provenance),
         "result_set_id": item.result_set_id,
         "cursor": next_value["cursor"] if next_value is not None else None,
@@ -3650,9 +3663,9 @@ async def capture_attached_analysis(
         "ripple, peak-to-peak), edges (rise/fall time), timing (propagation "
         "delay), periodic (duty cycle), transient_response (overshoot, settling, "
         "load step), operating_point (bias point, gm/gds/vth), measurements "
-        "(.meas), value (one expression), summary, waveform (samples, CSV), plot "
-        "(chart). inspect(kind='reference', query=...) searches these by plain "
-        "words and returns a recipe's fields."
+        "(.meas), value (one trace at one axis point), summary, waveform "
+        "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
+        "searches these by plain words and returns a recipe's fields."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(
@@ -3666,7 +3679,10 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
-    assembly = await _evaluate_analysis_drive(args, state, page_stop=_PageStop())
+    assembly = replace(
+        await _evaluate_analysis_drive(args, state, page_stop=_PageStop()),
+        served=frozenset(state.tool_dispatch),
+    )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
         data, text = _assemble(assembly, None, _Limits.of(assembly.include))

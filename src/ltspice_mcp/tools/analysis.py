@@ -234,7 +234,7 @@ def _complex_columns(
 def build_waveform_csv(
     raw,
     raw_path: Path,
-    cols: list[str],
+    cols: list[services.Signal],
     n_steps: int,
     analysis_type: str,
     ts: float | None,
@@ -289,8 +289,9 @@ def build_waveform_csv(
             axis_w = axis[lo:hi]
             col_names: list[str] = []
             col_arrays: list[np.ndarray] = []
-            for name in cols:
-                wave = np.asarray(raw.get_wave(name, step=step))
+            for sig in cols:
+                name = sig.name
+                wave = sig.wave(raw, step)
                 if wave.size == 0:
                     raise ResultError(f"Signal {name!r} has no data points at step {step}.")
                 wave_w = wave[lo:hi]
@@ -573,7 +574,7 @@ def _ac_annotations(freq: np.ndarray, h: np.ndarray) -> tuple[list[dict], bool]:
 
 def _compute_plot_spec(
     raw,
-    cols: list[str],
+    cols: list[services.Signal],
     steps_to_plot: list[int],
     step_dicts: list[dict[str, float]],
     analysis_type: str,
@@ -633,7 +634,7 @@ def _compute_plot_spec(
                 empty_steps.append(step)
                 continue
             for col in cols:
-                wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
+                wave = col.wave(raw, step)[lo:hi]
                 freq, h = prepare_ac_arrays(axis[lo:hi], wave)
                 if single_trace:
                     annotate_freq, annotate_h = freq, h
@@ -649,7 +650,7 @@ def _compute_plot_spec(
                     freq = f_ds
                 _track_window(freq)
                 points_per_series.append(len(freq))
-                label = _label(col, step)
+                label = _label(col.name, step)
                 mag_series.append((freq, mag, label))
                 phase_series.append((freq, phase, label))
         if not mag_series:
@@ -676,7 +677,7 @@ def _compute_plot_spec(
                         empty_steps.append(step)
                     continue
                 axis_w = axis[lo:hi]
-                wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
+                wave = col.wave(raw, step)[lo:hi]
                 if np.iscomplexobj(wave):
                     # Defensive: a stray complex trace in a non-AC raw.
                     wave = np.real(wave)
@@ -687,13 +688,13 @@ def _compute_plot_spec(
                     x_arr, y_arr = downsample_minmax(axis_w, wave, max_points)
                 _track_window(x_arr)
                 points_per_series.append(len(y_arr))
-                plot_series.append((x_arr, y_arr, _label(col, step)))
+                plot_series.append((x_arr, y_arr, _label(col.name, step)))
         if not plot_series:
             raise ResultError(
                 "The [t_start, t_end] window selects no samples"
                 + (f" in any of the {len(steps_to_plot)} steps." if multi else ".")
             )
-        y_label = ", ".join(cols) if len(cols) <= 3 else f"{len(cols)} signals"
+        y_label = ", ".join(col.name for col in cols) if len(cols) <= 3 else f"{len(cols)} signals"
         panel, unioned = _union_panel(
             plot_series, "log" if x_is_log else "linear", x_label, y_label
         )
@@ -719,7 +720,7 @@ def _compute_plot_spec(
 def build_plot_file(
     raw,
     raw_path: Path,
-    cols: list[str],
+    cols: list[services.Signal],
     steps_to_plot: list[int],
     step_dicts: list[dict[str, float]],
     analysis_type: str,
@@ -749,7 +750,7 @@ def build_plot_file(
 
 def _compute_widget_spec_json(
     raw,
-    cols: list[str],
+    cols: list[services.Signal],
     steps_to_plot: list[int],
     step_dicts: list[dict[str, float]],
     analysis_type: str,
@@ -798,7 +799,10 @@ class PlotWaveformInput(ToolInput):
     )
     signals: list[str] | Literal["all"] = Field(
         default="all",
-        description="Trace names to plot (e.g. ['V(out)', 'I(R1)']) or 'all' for every non-axis trace.",
+        description=(
+            "Trace names or node pairs to plot (e.g. ['V(out)', 'V(inp,inn)']), or "
+            "'all' for every non-axis trace."
+        ),
     )
     step: int | None = Field(
         default=None,
@@ -915,18 +919,19 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     trace_names = raw.get_trace_names()
     axis_name = trace_names[0]
+    cols: list[services.Signal]
     if args.signals == "all":
-        cols = list(trace_names[1:])
+        cols = [services.Signal(name, name) for name in trace_names[1:]]
     else:
         seen: set[str] = set()
         cols = []
         for s in args.signals:
-            canon = services.validate_signal(raw, s)
-            if canon == axis_name:
+            sig = services.resolve_signal(raw, s)
+            if sig.name == axis_name:
                 raise ResultError(f"{s!r} is the sweep axis, not a signal column.")
-            if canon not in seen:
-                seen.add(canon)
-                cols.append(canon)
+            if sig.name not in seen:
+                seen.add(sig.name)
+                cols.append(sig)
     if not cols:
         raise ResultError("No signal traces to plot (the result has only an axis).")
 
@@ -1151,7 +1156,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     data = {
         "path": str(out_path),
         "analysis_type": analysis_type,
-        "signals": cols,
+        "signals": [sig.name for sig in cols],
         "n_steps": n_steps,
         "steps_plotted": len(steps_to_plot),
         "panels": facts["panels"],

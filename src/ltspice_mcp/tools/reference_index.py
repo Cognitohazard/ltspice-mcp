@@ -144,7 +144,9 @@ _SUMMARIES: dict[tuple[str, str], str] = {
         "over a Monte Carlo spread."
     ),
     ("analyze_results", "value"): (
-        "One SPICE expression evaluated on the result, optionally at one point on the axis."
+        "One trace, or a node-pair voltage V(a,b), read at the sample nearest 'at' "
+        "on the run's axis, without interpolation. 'at' is required unless the axis "
+        "has a single sample; a bias-point run is read by name."
     ),
     ("analyze_results", "signal_stats"): (
         "Amplitude statistics of a transient signal: min, max, mean, RMS, "
@@ -258,7 +260,13 @@ _SUMMARIES: dict[tuple[str, str], str] = {
 _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
     ("analyze_results", "summary"): ("overview", "what is in this run", "signals available"),
     ("analyze_results", "measurements"): (".meas", "meas", "measure statement"),
-    ("analyze_results", "value"): ("expression", "evaluate", "node voltage", "current"),
+    ("analyze_results", "value"): (
+        "value at",
+        "sample",
+        "node voltage",
+        "differential voltage",
+        "current",
+    ),
     ("analyze_results", "signal_stats"): ("rms", "peak to peak", "ripple", "amplitude", "mean"),
     ("analyze_results", "edges"): ("rise time", "fall time", "slew", "transition time"),
     ("analyze_results", "timing"): ("propagation delay", "delay", "skew", "setup"),

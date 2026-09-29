@@ -1089,7 +1089,7 @@ recipe takes none, having one number.
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
-| `value` | any | `expr` | `at?`; step-aware |
+| `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?` |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
@@ -1108,6 +1108,17 @@ recipe takes none, having one number.
 | `operating_point` | op | — | `device?` — scoping to one device is the difference between a few hundred bytes and tens of KB on a real opamp |
 | `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
+
+A `signal`, `signals` entry or `expr` names one trace as the raw holds it, or a
+node-pair voltage `V(a,b)`. No simulator writes a pair as a trace, so the one
+resolver every reader shares (`services.resolve_signal`) builds it as
+`V(a) - V(b)` from the same raw, step and axis, complex on an AC run; `V(a,0)`
+and `V(a,gnd)` are `V(a)`, a missing node is named, and a `.noise` run refuses
+a pair because spectral densities do not subtract. The AC recipes also take a
+ratio `A/B` of two such signals and a leading `-`. Any other trace math is
+Python on `RawResult.trace`: a not-found error on an input that reads as an
+expression carries that snippet and names where it runs, `run_code` when the
+session serves it and the library otherwise.
 
 ### A.3 Edit ops
 
