@@ -132,6 +132,12 @@ tool-surface changes.
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
   model profile, independently replayable samples and persisted provenance.
+- `inspect(kind="capabilities")` takes an optional `fields` list naming the
+  top-level keys to return, such as `["allowed_paths", "config_path"]` after a
+  config edit. Without it the report is unchanged.
+- `edit_schematic` has a `preexisting` view, which lists what an edit counted
+  under `preexisting` (see Changed). Name it in `return_views`, or echo
+  `preexisting.cursor` as `view_cursors.preexisting`.
 
 ### Changed
 
@@ -152,6 +158,19 @@ tool-surface changes.
   server's per-case limit, `null` when unset) and `export_timeout_s`.
   `[simulation] timeout` bounds only LTspice netlist export, which is all it
   ever bounded.
+- An `edit_schematic` call on an existing sheet reports only the sheet findings
+  in `warnings` (floating pins, dangling labels, duplicate wires, a label
+  inside a body, stacked directives) and the `wiring.label_only_pins` rows that
+  the batch introduced, or that name a reference or coordinate one of its ops
+  named. It used to return every one on the sheet, so a one-part edit to a
+  large sheet carried every older finding and label-only pin with it. The rest
+  are counted in a new `preexisting {count, findings, label_only_pins, cursor}`
+  block rather than dropped. `pins_total`, `pins_wired` and `pins_label_only`
+  stay whole-sheet, and `label_only_pins.total + preexisting.label_only_pins`
+  equals `pins_label_only`. A `base: "blank"` build is unchanged, since
+  everything on it is new. A caller that relied on the whole-sheet lists can
+  add `preexisting` to `return_views`. An op-less read (`ops: []`) now counts
+  every finding under `preexisting` too, because nothing on it is new.
 
 ### Security
 

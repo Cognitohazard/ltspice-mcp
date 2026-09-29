@@ -394,12 +394,42 @@ _CURSOR_DESCRIPTION_FILE = (
 )
 
 
+#: The capabilities report's top-level keys, which are what ``fields`` selects.
+#: ``tests/test_inspect_tools.py`` holds it equal to what ``_do_capabilities``
+#: returns, so a key added to one and not the other fails there.
+CapabilityField: TypeAlias = Literal[
+    "config_path",
+    "python",
+    "simulators",
+    "default_simulator",
+    "exporter_available",
+    "dialects",
+    "diagnostics",
+    "ngbehavior",
+    "persist_jobs",
+    "allowed_paths",
+    "tool_profile",
+    "python_api",
+    "tool_listing",
+    "limits",
+    "linter_version",
+]
+
+
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators and their raw dialects,
     whether the .asc exporter is available, job persistence, allowed roots, the
-    configured limits, and the linter version. Takes no arguments."""
+    configured limits, and the linter version."""
 
     kind: Literal["capabilities"]
+    fields: list[CapabilityField] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Return only these keys, e.g. ['allowed_paths', 'config_path'] after "
+            "a config edit. Omit for the whole report."
+        ),
+    )
 
 
 class SymbolsQuery(StrictModel):
@@ -1622,7 +1652,11 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        return {"data": _do_capabilities(state)}
+        report = _do_capabilities(state)
+        if query.fields is not None:
+            wanted = set(query.fields)
+            report = {key: value for key, value in report.items() if key in wanted}
+        return {"data": report}
     if isinstance(query, SymbolsQuery):
         return await _do_symbols(query, state, view)
     if isinstance(query, SymbolQuery):

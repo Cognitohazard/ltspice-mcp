@@ -642,12 +642,19 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
-    "inspect": 8300,
+    # Raised by about 400 characters for the capabilities 'fields' selector: a
+    # caller checking a config edit wanted two keys and was sent the whole
+    # report. Most of it is the enum of report keys, which is also what a
+    # compact-listing client reads in place of the stripped description.
+    "inspect": 8620,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
     # compare is verify_circuit's spec: the mode field rides along.
-    "edit_schematic": 11800,
+    # Raised by about 200 characters for the 'preexisting' view and its cursor:
+    # an edit to an existing sheet reports only what the batch introduced or
+    # named, and those two are how the rest is listed.
+    "edit_schematic": 12000,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
