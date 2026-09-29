@@ -66,7 +66,6 @@ from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     edit_guard,
     get_asc_editor,
-    is_asc,
     make_editor,
     post_op_warnings,
     require_asc,
@@ -82,7 +81,6 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     comparison_mismatch,
     format_response,
-    make_include_resolver,
     outcome_of,
     page_schema,
     registry,
@@ -91,13 +89,10 @@ from ltspice_mcp.tools._base import (
 )
 from ltspice_mcp.tools.verify import (
     COMPARISON_SCHEMA,
-    SCHEMATIC_TEXT_REFERENCE,
-    CompareResult,
+    ReferenceNetlist,
     VerifyCompareSpec,
-    compare_equivalence,
-    compare_structural,
-    is_schematic_text,
-    reference_to_path,
+    compare_netlists,
+    reference_as_given,
 )
 
 # The blank-sheet template — identical to what ``create_schematic`` writes.
@@ -390,7 +385,7 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
     from ltspice_mcp.lib.encoding import read_spice_text
 
     net_path = await resolve_runnable_netlist(str(asc_copy), state)
-    return read_spice_text(net_path)
+    return await asyncio.to_thread(read_spice_text, net_path)
 
 
 # ---------------------------------------------------------------------------
@@ -548,72 +543,19 @@ def _write_export_copy(
     atomic_write_bytes(copy_asc, committed_text.encode(encoding), durable=False)
 
 
-def _compare_committed(
-    ref: str | Path,
-    netlist_text: str,
-    netlist_path: Path,
-    ref_source: Path,
-    spec: VerifyCompareSpec,
-    state: SessionState,
-) -> CompareResult:
-    """verify_circuit's comparison over the exported copy (blocking CPU/IO).
-
-    ``ref`` is a netlist — text, or a path that for an ``.asc`` reference is its
-    export — and ``ref_source`` is where the caller's reference lives.
-    """
-    if spec.mode == "equivalence":
-        return compare_equivalence(
-            ref,
-            netlist_text,
-            ref_source,
-            netlist_path,
-            spec.anchors,
-            spec.rtol,
-            make_include_resolver(state),
-        )
-    return compare_structural(reference_to_path(ref, state), netlist_path)
-
-
-async def _export_copy(asc_copy: Path, state: SessionState) -> tuple[str, Path]:
-    """Export a schematic copy for comparison: its netlist text and a file holding it.
-
-    The committed sheet and an ``.asc`` reference both come through here, so the
-    two sides of a comparison are one exporter's output.
-    """
-    netlist_text = await _export_asc_to_netlist(asc_copy, state)
-    netlist_path = asc_copy.with_suffix(".net")
-    if not netlist_path.exists():  # a seam-provided export leaves no file behind
-        netlist_path.write_text(netlist_text, encoding="utf-8")
-    return netlist_text, netlist_path
-
-
-async def _reference_netlist(
-    ref: str | Path, export_root: Path, state: SessionState
-) -> tuple[str | Path | None, str | None]:
-    """The reference as a netlist, or why it cannot be one: ``(netlist, error)``.
-
-    An ``.asc`` reference is copied beside the committed-sheet copy and exported
-    the same way, so both sides of the comparison are LTspice exports; read
-    through the schematic editor instead, its representation differs from the
-    export's and every difference in representation reads as a change.
-    """
-    if isinstance(ref, str):
-        return (None, SCHEMATIC_TEXT_REFERENCE) if is_schematic_text(ref) else (ref, None)
-    if not is_asc(ref):
-        return ref, None
-    ref_copy = export_root / "reference" / ref.name
-    await asyncio.to_thread(_copy_reference, ref, ref_copy)
+async def _exported_reference(
+    ref: Path, export_root: Path, state: SessionState
+) -> ReferenceNetlist:
+    """An ``.asc`` reference exported the way the committed sheet is: a copy
+    beside the committed-sheet copy, through ``_export_asc_to_netlist``."""
+    ref_copy = export_root / "reference.asc"
+    await asyncio.to_thread(shutil.copyfile, ref, ref_copy)
     try:
-        _text, netlist_path = await _export_copy(ref_copy, state)
+        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state))
     except Exception as exc:  # broad by design — export failure is a reported fact
-        return None, f"the reference {ref.name} could not be exported to a netlist: {exc}"
-    return netlist_path, None
-
-
-def _copy_reference(ref: Path, dest: Path) -> None:
-    """Copy the reference schematic into the export directory (blocking)."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ref, dest)
+        return ReferenceNetlist(
+            None, f"the reference {ref.name} could not be exported to a netlist: {exc}"
+        )
 
 
 async def _run_reference_stage(
@@ -645,20 +587,29 @@ async def _run_reference_stage(
             _write_export_copy, export_root, copy_asc, committed_text, encoding
         )
         try:
-            netlist_text, netlist_path = await _export_copy(copy_asc, state)
+            netlist_text = await _export_asc_to_netlist(copy_asc, state)
         except Exception as exc:  # broad by design — export failure is a reported fact
             verification["export_error"] = str(exc)
             verification["equivalent"] = None
             return verification
         verification["_netlist"] = netlist_text
-        ref_netlist, ref_error = await _reference_netlist(ref, export_root, state)
+        ref_netlist = reference_as_given(ref)
         if ref_netlist is None:
-            verification["compare_error"] = ref_error
+            assert isinstance(ref, Path)  # only an .asc path needs exporting
+            ref_netlist = await _exported_reference(ref, export_root, state)
+        if ref_netlist.source is None:
+            verification["compare_error"] = ref_netlist.error
             verification["equivalent"] = None
             return verification
         ref_source = ref if isinstance(ref, Path) else target
         payload, findings, failure, cmp_warnings = await asyncio.to_thread(
-            _compare_committed, ref_netlist, netlist_text, netlist_path, ref_source, spec, state
+            compare_netlists,
+            spec,
+            ref_netlist.source,
+            netlist_text,
+            ref_source,
+            copy_asc.with_suffix(".net"),
+            state,
         )
         verification["_warnings"] = cmp_warnings + [
             f"{f.get('rule_id')}: {(f.get('evidence') or {}).get('detail') or f.get('subject')}"

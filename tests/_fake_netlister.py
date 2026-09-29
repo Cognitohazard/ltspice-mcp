@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-#: The install directory the exporter writes into its ``.lib`` line.
-INSTALL = r"C:\Users\dev\AppData\Local\LTspice\lib\cmp"
+# The install directory the exporter writes into its ``.lib`` line.
+_INSTALL = r"C:\Users\dev\AppData\Local\LTspice\lib\cmp"
 
 _PIN_COUNT = {"nmos": 4, "pmos": 4}
 
@@ -52,20 +52,43 @@ def netlist_text(asc_path: Path) -> str:
         tail = " ".join(sym[key] for key in ("Value", "SpiceLine") if sym.get(key))
         lines.append(f"{ref} {pins} {tail}".rstrip())
     if any(sym["symbol"] in _PIN_COUNT for sym in symbols):
-        lines += [".model NMOS NMOS", ".model PMOS PMOS", f".lib {INSTALL}\\standard.mos"]
+        lines += [".model NMOS NMOS", ".model PMOS PMOS", f".lib {_INSTALL}\\standard.mos"]
     lines += directives
     lines += [".backanno", ".end"]
     return "\n".join(lines) + "\n"
 
 
-def create_netlist(_simulator_cls, asc_path, timeout: float = 0, **_kw) -> Path:
+def create_netlist(_simulator_cls, asc_path: Path, _timeout: float) -> Path:
     """Drop-in for ``verify._create_netlist``: writes the sibling ``.net``."""
-    asc = Path(asc_path)
-    net = asc.with_suffix(".net")
-    net.write_text(netlist_text(asc), encoding="utf-8")
+    net = asc_path.with_suffix(".net")
+    net.write_text(netlist_text(asc_path), encoding="utf-8")
     return net
 
 
 async def export_asc_to_netlist(asc_copy: Path, _state) -> str:
     """Drop-in for ``schematic_edit._export_asc_to_netlist``."""
     return netlist_text(asc_copy)
+
+
+# An amplifier sheet with what makes a schematic and its export differ in
+# representation: a MOSFET whose SpiceLine the exporter appends, and one TEXT
+# block holding a .model split over a continuation line plus a .param, which the
+# exporter writes as three lines.
+_AMP_PARTS = (
+    "SYMBOL voltage 64 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\n"
+    "SYMBOL res 256 96 R0\nSYMATTR InstName R1\nSYMATTR Value 10k\n"
+    "SYMBOL nmos 208 224 R0\nSYMATTR InstName M1\nSYMATTR Value NMOS\n"
+    "SYMATTR SpiceLine l=1u w=10u\n"
+)
+_AMP_TEXT = (
+    "TEXT 40 400 Left 2 !.model MYN NMOS(VTO=0.7\\n+ KP=100u)\\n.param rload=10k\n"
+    "TEXT 40 440 Left 2 !.tran 1m\n"
+)
+
+#: A second resistor, placed clear of the amp's parts.
+R2_PART = "SYMBOL res 400 96 R0\nSYMATTR InstName R2\nSYMATTR Value 1k\n"
+
+
+def amp_asc(extra_parts: str = "") -> str:
+    """The amp sheet's text, with ``extra_parts`` placed among its symbols."""
+    return "Version 4.1\nSHEET 1 880 680\n" + _AMP_PARTS + extra_parts + _AMP_TEXT
