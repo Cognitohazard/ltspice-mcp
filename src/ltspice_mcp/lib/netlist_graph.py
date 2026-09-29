@@ -507,18 +507,30 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
     raw netlist text when it spans multiple lines or is long; otherwise, if it
     names an existing file, it is read — else it is lexed as text. The second
     element is the directory includes resolve against (``None`` for bare text).
+
+    An ``.asc`` schematic is refused: lexed as SPICE, its ``SYMBOL``/``WIRE``
+    lines read as element cards and the graph describes nothing. Its LTspice
+    export is the netlist to compare.
     """
     if isinstance(path_or_text, Path):
-        return cards_from_path(path_or_text), path_or_text.parent
+        return _cards_from_netlist_path(path_or_text), path_or_text.parent
     text = path_or_text
     if "\n" not in text and len(text) <= 400:
         try:
             candidate = Path(text)
             if candidate.is_file():
-                return cards_from_path(candidate), candidate.parent
+                return _cards_from_netlist_path(candidate), candidate.parent
         except OSError:
             pass
     return lex(text), None
+
+
+def _cards_from_netlist_path(path: Path) -> LexResult:
+    if path.suffix.lower() == ".asc":
+        raise NetlistGraphError(
+            f"{path.name} is an .asc schematic, not a netlist; compare its LTspice export"
+        )
+    return cards_from_path(path)
 
 
 # Lex warnings that indicate the netlist structure itself is broken (as opposed
