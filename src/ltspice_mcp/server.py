@@ -272,10 +272,16 @@ _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", 
 
 
 #: The code-loop clause, in its two editions: the library alone, or the tool
-#: in front of it when the operator turned run_code on.
-_CODE_LOOPS_LIBRARY = "Code loops: from ltspice_mcp.api import Api, the same ops in-process."
+#: in front of it when the operator turned run_code on. It names trace math
+#: because a recipe reads one trace or a node pair and nothing else: a sum, a
+#: product or a function of traces is numpy on the samples, and an agent that
+#: does not know that reaches for a behavioral source and a re-run instead.
+_CODE_LOOPS_LIBRARY = (
+    "Loops, trace math: from ltspice_mcp.api import Api, the same ops in-process."
+)
 _CODE_LOOPS_TOOL = (
-    "Code loops: run_code runs Python with api in scope, or from ltspice_mcp.api import Api."
+    "Loops, trace math: run_code runs Python with api in scope, "
+    "or from ltspice_mcp.api import Api."
 )
 
 #: The guide as the default configuration serves it (run_code on) — the static
