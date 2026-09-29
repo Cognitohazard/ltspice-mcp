@@ -245,7 +245,10 @@ inherits the anchoring; `_call`'s contract is unchanged.
 
 ## 6. Errors
 
-- A typed engine exception that *escapes* a handler propagates unchanged.
+- A typed engine exception that *escapes* a handler propagates unchanged. A
+  `PathSecurityError` gains one note (PEP 678) carrying the sandbox guidance a
+  tool call's `hint` carries, so a traceback names the setting that widens the
+  sandbox; its type and message are untouched.
 - `result.isError=True` raises `ApiCallError`, carrying the complete structured
   payload plus convenience attributes `code`, `commit_state`, `job_id` and
   `control_token` — a post-submit or post-commit payload preserves every

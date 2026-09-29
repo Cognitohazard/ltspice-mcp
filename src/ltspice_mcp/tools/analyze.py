@@ -75,7 +75,6 @@ from ltspice_mcp.tools._base import (
     format_response,
     outcome_of,
     page_schema,
-    path_denied_guidance,
     registry,
     resolve_response_budget,
     safe_path,
@@ -822,30 +821,19 @@ async def _resolve_sources(
             try:
                 raw = safe_path(source_input.raw_path, state)
                 resolved = services.source_for_raw_path(raw, state)
-            except PathSecurityError as exc:
-                # Refused, not unavailable: the file may be perfectly readable,
-                # and the remedy is the sandbox's config line, not the run.
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": None,
-                        "run_index": 0,
-                        "code": exc.code,
-                        "detail": str(exc),
-                        "hint": path_denied_guidance(state),
-                    }
-                )
-                continue
             except (LTSpiceMCPError, OSError) as exc:
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": None,
-                        "run_index": 0,
-                        "code": "source_unavailable",
-                        "detail": str(exc),
-                    }
-                )
+                row = {
+                    "label": source_input.label,
+                    "case_id": None,
+                    "run_index": 0,
+                    "code": "source_unavailable",
+                    "detail": str(exc),
+                }
+                if isinstance(exc, PathSecurityError):
+                    # Refused, not unavailable: the file may be perfectly
+                    # readable, and the remedy is the sandbox's setting.
+                    row.update(code=exc.code, hint=state.sandbox_guidance())
+                missing.append(row)
                 continue
             # Preserve the expected sibling-log path even while it is absent:
             # an absent→present transition changes the composite manifest.

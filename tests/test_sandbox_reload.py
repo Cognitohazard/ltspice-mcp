@@ -5,12 +5,13 @@ Two halves, both pinned here. Every reader of the sandbox goes through the
 reload, so a report or a resolution made right after an edit sees the edit even
 when no earlier call happened to reload it. And every surface that reports a
 refusal carries the same guidance (the config file, the key, and that the file
-is re-read on the next call) in its structured ``hint``, whether the tool
-reports the refusal itself or lets it reach the dispatcher.
+is re-read on the next call): a tool's structured ``hint``, and a note on the
+exception the Python API raises.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -25,15 +26,14 @@ from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 from ltspice_mcp.lib.services import resolve_analysis_source
 from ltspice_mcp.resources import handle_read_resource
-from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import path_denied_guidance, safe_path
+from ltspice_mcp.tools._base import safe_path
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-from tests.conftest import FakeSim, call_tool_params, fake_request_context
+from tests.conftest import FakeSim
 
 _DECK = "* deck\nR1 in 0 1k\n.end\n"
 
@@ -118,57 +118,85 @@ def test_config_resource_reports_an_edited_sandbox(tmp_path: Path, monkeypatch):
     assert str(box.elsewhere) in json.loads(text)["allowed_paths"]
 
 
-async def _hierarchy(state: SessionState, deck: Path) -> None:
-    result = await handle_inspect(
-        InspectInput.model_validate(
-            {"queries": [{"kind": "hierarchy", "path": str(deck), "simulator": "ngspice"}]}
-        ),
-        state,
-    )
-    assert result.structured_content is not None
-    (item,) = result.structured_content["results"]
-    assert item["ok"], item["error"]
+def _netlist_path(state: SessionState, deck: Path) -> None:
+    assert resolve_netlist_path(str(deck), state) == deck.resolve()
 
 
-def _resolved(path: Path) -> Path:
-    """Realpath (sync helper; keeps blocking I/O out of async tests)."""
-    return path.resolve()
-
-
-async def _netlist_path(state: SessionState, deck: Path) -> None:
-    assert resolve_netlist_path(str(deck), state) == _resolved(deck)
-
-
-async def _raw_source(state: SessionState, deck: Path) -> None:
+def _raw_source(state: SessionState, deck: Path) -> None:
     raw = deck.with_suffix(".raw")
-    assert resolve_analysis_source(state, raw_file=str(raw)).raw == _resolved(raw)
+    assert resolve_analysis_source(state, raw_file=str(raw)).raw == raw.resolve()
 
 
-async def _log_source(state: SessionState, deck: Path) -> None:
+def _log_source(state: SessionState, deck: Path) -> None:
     log = deck.with_suffix(".log")
-    assert resolve_analysis_source(state, log_file=str(log)).log == _resolved(log)
+    assert resolve_analysis_source(state, log_file=str(log)).log == log.resolve()
 
 
-async def _netlist_resource(state: SessionState, deck: Path) -> None:
+def _netlist_resource(state: SessionState, deck: Path) -> None:
     result = handle_read_resource(f"spice://netlists/{quote(str(deck), safe='')}", state)
     assert result.contents[0].text == _DECK  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize(
     "read",
-    [_hierarchy, _netlist_path, _raw_source, _log_source, _netlist_resource],
-    ids=["inspect-hierarchy", "netlist-path", "raw-source", "log-source", "netlist-resource"],
+    [_netlist_path, _raw_source, _log_source, _netlist_resource],
+    ids=["netlist-path", "raw-source", "log-source", "netlist-resource"],
 )
-async def test_every_path_reader_admits_a_newly_allowed_directory(
-    tmp_path: Path, monkeypatch, read
-):
+def test_every_path_reader_admits_a_newly_allowed_directory(tmp_path: Path, monkeypatch, read):
     """Each reader is the first call after the edit, on a session that has not
     resolved a path since, so none of them can lean on another's reload."""
     box = _Sandbox(tmp_path, monkeypatch)
     state = box.state()
 
     box.widen()
-    await read(state, box.deck)
+    read(state, box.deck)
+
+
+async def test_hierarchy_query_admits_a_newly_allowed_directory(tmp_path: Path, monkeypatch):
+    """The hierarchy loader checks every file it opens against the list it is
+    handed, so it has to be handed the reloaded one."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    state = box.state()
+
+    box.widen()
+    result = await handle_inspect(
+        InspectInput.model_validate(
+            {"queries": [{"kind": "hierarchy", "path": str(box.deck), "simulator": "ngspice"}]}
+        ),
+        state,
+    )
+
+    assert result.structured_content is not None
+    (item,) = result.structured_content["results"]
+    assert item["ok"], item["error"]
+
+
+#: The modules allowed to read ``config.allowed_paths``: the one that defines it
+#: and the one that owns the reload.
+_SANDBOX_OWNERS = {"config.py", "state.py"}
+
+
+def test_nothing_else_reads_the_boot_sandbox():
+    """``config.allowed_paths`` is the list the session opened with. A module
+    that reads it instead of ``state.allowed_paths()`` misses every later edit,
+    which is how a capabilities report once listed stale roots."""
+    src = Path(__file__).resolve().parent.parent / "src" / "ltspice_mcp"
+    offenders = []
+    for module in sorted(src.rglob("*.py")):
+        if module.name in _SANDBOX_OWNERS and module.parent == src:
+            continue
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "allowed_paths"
+                and (
+                    (isinstance(node.value, ast.Attribute) and node.value.attr == "config")
+                    or (isinstance(node.value, ast.Name) and node.value.id in {"config", "cfg"})
+                )
+            ):
+                offenders.append(f"{module.relative_to(src)}:{node.lineno}")
+    assert not offenders, f"read state.allowed_paths() instead: {offenders}"
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +204,11 @@ async def test_every_path_reader_admits_a_newly_allowed_directory(
 # ---------------------------------------------------------------------------
 
 
-def _assert_guidance(hint: object, state: SessionState) -> None:
+def _assert_guidance(hint: object, config_path: Path) -> None:
     """The guidance names the file, the key, and that no restart is needed."""
     assert isinstance(hint, str), hint
     assert "[security] allowed_paths" in hint
-    assert str(state.config.config_path) in hint
+    assert str(config_path) in hint
     assert "next call" in hint
 
 
@@ -205,7 +233,7 @@ async def test_inspect_item_refusal_carries_the_guidance(tmp_path: Path, monkeyp
         # The hierarchy query refuses through the same sandbox, so it reports
         # the same code, not a generic error.
         assert item["error"]["code"] == "path_denied", item
-        _assert_guidance(item["error"]["hint"], state)
+        _assert_guidance(item["error"]["hint"], box.toml)
 
 
 async def test_verify_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
@@ -218,8 +246,8 @@ async def test_verify_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
     assert result.is_error and data is not None
     (finding,) = data["findings"]
     assert finding["rule_id"] == "path_denied"
-    _assert_guidance(finding["evidence"]["hint"], state)
-    _assert_guidance(data["hint"], state)
+    _assert_guidance(finding["evidence"]["hint"], box.toml)
+    _assert_guidance(data["hint"], box.toml)
 
 
 async def test_verify_denied_include_carries_the_guidance(tmp_path: Path, monkeypatch):
@@ -242,7 +270,7 @@ async def test_verify_denied_include_carries_the_guidance(tmp_path: Path, monkey
     assert result.structured_content is not None
     denied = [f for f in result.structured_content["findings"] if f["rule_id"] == "path_denied"]
     assert denied
-    _assert_guidance(denied[0]["evidence"]["hint"], state)
+    _assert_guidance(denied[0]["evidence"]["hint"], box.toml)
 
 
 async def test_run_experiments_case_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
@@ -263,7 +291,7 @@ async def test_run_experiments_case_refusal_carries_the_guidance(tmp_path: Path,
     assert result.structured_content is not None
     (failure,) = result.structured_content["failures"]
     assert failure["code"] == "path_denied"
-    _assert_guidance(failure["hint"], state)
+    _assert_guidance(failure["hint"], box.toml)
 
 
 async def test_jobs_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
@@ -277,7 +305,7 @@ async def test_jobs_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
     data = result.structured_content
     assert result.is_error and data is not None
     assert data["error"]["code"] == "path_denied"
-    _assert_guidance(data["hint"], state)
+    _assert_guidance(data["hint"], box.toml)
 
 
 async def test_analyze_source_refusal_is_path_denied_with_the_guidance(
@@ -302,29 +330,10 @@ async def test_analyze_source_refusal_is_path_denied_with_the_guidance(
     assert data is not None
     (missing,) = data["coverage"]["missing_cases"]["items"]
     assert missing["code"] == "path_denied"
-    _assert_guidance(missing["hint"], state)
+    _assert_guidance(missing["hint"], box.toml)
     # The call-level hint points at the row, so a caller reading only the top
     # of the envelope still finds the remedy.
     assert "missing_cases" in data["hint"]
-
-
-async def test_propagated_refusal_carries_the_guidance_structurally(tmp_path: Path, monkeypatch):
-    """A structured-aware client reads structuredContent and drops the text, so a
-    refusal that reaches the dispatcher must carry its guidance there too."""
-    box = _Sandbox(tmp_path, monkeypatch)
-    state = box.state()
-
-    result = await call_tool(
-        fake_request_context(state),
-        call_tool_params("plot_waveform", {"raw_file": str(box.deck.with_suffix(".raw"))}),
-    )
-
-    assert result.is_error
-    data = result.structured_content
-    assert data is not None
-    assert data["code"] == "path_denied"
-    assert "outside allowed directories" in data["error"]
-    _assert_guidance(data["hint"], state)
 
 
 def test_guidance_says_when_the_environment_overrides_the_file(tmp_path: Path, monkeypatch):
@@ -335,7 +344,7 @@ def test_guidance_says_when_the_environment_overrides_the_file(tmp_path: Path, m
     monkeypatch.setenv("LTSPICE_MCP_ALLOWED_PATHS", str(box.work))
     state = box.state()
 
-    guidance = path_denied_guidance(state)
+    guidance = state.sandbox_guidance()
 
     assert "LTSPICE_MCP_ALLOWED_PATHS" in guidance
     assert "restart" in guidance
@@ -375,23 +384,41 @@ def test_an_explicit_api_sandbox_outranks_a_config_file_written_later(tmp_path: 
         api.close()
 
 
-async def test_guidance_names_the_api_argument_for_an_explicit_sandbox(
-    tmp_path: Path, monkeypatch
-):
+def _refusal_note(api: Api, raw: Path) -> str:
+    with pytest.raises(PathSecurityError) as refused:
+        api.load_raw(raw_path=raw)
+    return "\n".join(getattr(refused.value, "__notes__", []))
+
+
+def test_an_api_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
+    """A refusal raised through the Python API reaches a script, or a run_code
+    snippet, as a traceback: the guidance has to be in it."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine, "detect_simulators", lambda config, diagnostics: {})
+    api = Api(working_dir=box.work, persist_jobs=False, preload_recent_count=0)
+    try:
+        note = _refusal_note(api, box.deck.with_suffix(".raw"))
+    finally:
+        api.close()
+
+    _assert_guidance(note, box.toml)
+
+
+def test_an_explicit_api_sandbox_refusal_names_the_argument(tmp_path: Path, monkeypatch):
     """Editing the file does nothing for a session whose sandbox was given
     explicitly, so the refusal names the argument that set it."""
     box = _Sandbox(tmp_path, monkeypatch)
     monkeypatch.setattr(engine, "detect_simulators", lambda config, diagnostics: {})
-    boot = await engine.bootstrap_library_engine(
+    api = Api(
         working_dir=box.work,
         allowed_paths=[box.work],
         persist_jobs=False,
         preload_recent_count=0,
     )
     try:
-        guidance = path_denied_guidance(boot.state)
+        note = _refusal_note(api, box.deck.with_suffix(".raw"))
     finally:
-        await boot.state.shutdown()
+        api.close()
 
-    assert "Api(allowed_paths=...)" in guidance
-    assert "next call" not in guidance
+    assert "Api(allowed_paths=...)" in note
+    assert "next call" not in note

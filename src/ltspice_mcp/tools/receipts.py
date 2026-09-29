@@ -500,8 +500,8 @@ class ReceiptSnapshot:
     analysis_request: dict[str, Any] | None
     path_denied_hint: str | None = None
     """The session's sandbox guidance, which a ``path_denied`` failure row
-    carries as its hint. Not a job fact: the remedy is the config line as it
-    reads now, so the snapshot takes it from the caller rather than the record."""
+    carries as its hint. Not a job fact: the remedy is the sandbox setting as
+    it reads now, so it comes from the session rather than the record."""
 
     @property
     def outcome(self) -> CallOutcome:
@@ -631,9 +631,7 @@ def _render_failures(
             ]
             rendered["count"] = len(group)
         hint = (
-            path_denied_hint
-            if code == PathSecurityError.code and path_denied_hint is not None
-            else _FAILURE_CODE_HINTS.get(code)
+            path_denied_hint if code == PathSecurityError.code else _FAILURE_CODE_HINTS.get(code)
         )
         if hint is not None:
             rendered["hint"] = hint
@@ -880,7 +878,6 @@ def snapshot_receipt(
     *,
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
-    path_denied_hint: Callable[[], str] | None = None,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
@@ -890,9 +887,8 @@ def snapshot_receipt(
     Native record holders are copied, sharing only their frozen nested facts;
     large evidence lists are serialized after the renderer selects a page.
 
-    ``path_denied_hint`` builds the sandbox guidance, and is called only when a
-    failure row needs it, so a receipt with no refused path never reads the
-    config file.
+    The sandbox guidance is built only when a failure row needs it, so a
+    receipt with no refused path never reads the config file.
     """
     lint_map: dict[str, list[dict[str, Any]]]
     if lint_by_circuit is None:
@@ -950,8 +946,8 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         path_denied_hint=(
-            path_denied_hint()
-            if path_denied_hint is not None
+            state.sandbox_guidance()
+            if state is not None
             and any(row.get("code") == PathSecurityError.code for row in job.failures)
             else None
         ),

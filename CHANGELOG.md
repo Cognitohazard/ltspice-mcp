@@ -25,7 +25,9 @@ tool-surface changes.
   re-read on the next call. That covers `inspect` items, `verify_circuit`
   findings (a refused include among them), `run_experiments` case failures,
   `jobs` errors, `analyze_results` sources, and a refusal the dispatcher
-  reports, which now returns it in structuredContent as well as text. With
+  reports, which now returns it in structuredContent as well as text. A
+  refusal raised through the Python API carries it as a note on the
+  `PathSecurityError`, so it shows in the traceback. With
   `LTSPICE_MCP_ALLOWED_PATHS` set, the guidance names that variable instead,
   since it overrides the file.
 - A Python API session opened with an explicit `Api(allowed_paths=...)` keeps

@@ -169,10 +169,8 @@ class TestServerConfig:
         itself would also switch pathlib's flavour and tempfile's candidates. A
         namespace with no ``getuid`` also proves the branch never asks for one,
         which Windows does not have."""
-        with monkeypatch.context() as patched:
-            patched.setattr(config_module, "os", types.SimpleNamespace(name="nt"))
-            root = claude_scratch_root()
-        assert root == Path(tempfile.gettempdir()) / "claude"
+        monkeypatch.setattr(config_module, "os", types.SimpleNamespace(name="nt"))
+        assert claude_scratch_root() == Path(tempfile.gettempdir()) / "claude"
 
     def test_analysis_budget_and_result_ttl_load_from_toml(
         self,

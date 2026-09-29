@@ -763,7 +763,7 @@ def generate_default_config(path: Path) -> None:
     sec.add(comment("%TEMP%\\claude on Windows. Set your own list to replace that default;"))
     sec.add(comment("the server re-reads this list on the next call after you save the file:"))
     sec.add(comment('allowed_paths = ["."]'))
-    doc.add("security", sec)
+    doc.add(SANDBOX_SECTION, sec)
     doc.add(nl())
 
     # Simulation section

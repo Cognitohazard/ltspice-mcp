@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import wraps
@@ -17,7 +16,6 @@ from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
 from mcp import types
 from pydantic import Field
 
-from ltspice_mcp.config import SANDBOX_ENV, SANDBOX_KEY, SANDBOX_SECTION
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
@@ -1093,46 +1091,14 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     return resolve_safe_path(user_path, state.allowed_paths())
 
 
-def path_denied_guidance(state: SessionState) -> str:
-    """What a caller refused by the sandbox can do about it.
+def path_denied_text(exc: PathSecurityError, state: SessionState) -> str:
+    """A refusal's message followed by the sandbox guidance.
 
-    An agent cannot widen the sandbox itself except through the config line, so
-    a refusal that does not name that line (and the move-the-file fallback)
-    dead-ends. Every surface that reports a refusal carries this text in its
-    structured ``hint``: a per-item failure a tool reports itself, the
-    call-level failure the dispatcher reports, and a failed resource read. One
-    builder, so they cannot drift.
+    For a surface with one text that has to say both what was refused and
+    what to do about it; a surface that carries the message in a field of its
+    own puts ``state.sandbox_guidance()`` alone in its ``hint``.
     """
-    allowed = ", ".join(str(p) for p in state.allowed_paths())
-    config_path = state.config.config_path
-    key = f"[{SANDBOX_SECTION}] {SANDBOX_KEY}"
-    # The branches follow the loader's precedence: an explicit argument, then
-    # the environment, then the file.
-    if state.sandbox_pinned:
-        widen = (
-            f"open a new Api with its directory added to {SANDBOX_KEY}: this "
-            f"session's sandbox is the Api({SANDBOX_KEY}=...) it was opened with, "
-            f"which replaces {key} in {config_path} for the whole session."
-        )
-    elif os.environ.get(SANDBOX_ENV):
-        # The loader applies the variable after the file, so an edit to the
-        # file has no effect while it is set.
-        widen = (
-            f"widen {SANDBOX_ENV}, which is set in the server's environment and "
-            f"replaces {key} in {config_path} (restart required)."
-        )
-    else:
-        widen = (
-            f"add its directory to {key} in {config_path} — that file is re-read "
-            f"on the next call, no restart. {SANDBOX_ENV} sets the same list "
-            "and overrides the file (restart required)."
-        )
-    return (
-        f"Allowed paths: {allowed}\n"
-        "To work on this file: pass its content inline where the argument takes "
-        "text (a compare reference), copy it into one of those directories, or "
-        f"{widen} An inspect capabilities query shows the full sandbox configuration."
-    )
+    return f"{exc}\n\n{state.sandbox_guidance()}"
 
 
 def resolve_reference(reference: str, state: SessionState) -> str | Path:

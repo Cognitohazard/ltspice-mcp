@@ -117,7 +117,7 @@ from ltspice_mcp.tools._base import (
     make_include_resolver,
     outcome_of,
     outcome_schema,
-    path_denied_guidance,
+    path_denied_text,
     registry,
     render_scene_artifact,
     resolve_reference,
@@ -1798,17 +1798,16 @@ async def evaluate_verify_circuit(
         path = safe_path(args.path, state)
         reference = resolve_reference(compare.reference, state) if compare else None
     except PathSecurityError as exc:
-        guidance = path_denied_guidance(state)
         data["findings"] = [
             _finding(
                 rule_id="path_denied",
                 severity="error",
                 at={"file": args.path},
                 subject=args.path,
-                evidence={"detail": str(exc), "hint": guidance},
+                evidence={"detail": str(exc), "hint": state.sandbox_guidance()},
             )
         ]
-        return _error_evaluation(data, f"{exc}\n\n{guidance}")
+        return _error_evaluation(data, path_denied_text(exc, state))
 
     data["path"] = str(path)
     if not path.is_file():
@@ -1993,7 +1992,7 @@ async def evaluate_verify_circuit(
                         compare.anchors,
                         compare.rtol,
                         make_include_resolver(state),
-                        denied_hint=path_denied_guidance(state),
+                        denied_hint=state.sandbox_guidance(),
                     )
                 else:
                     ref_path = reference_to_path(reference, state)
