@@ -1458,7 +1458,10 @@ class TestLintModes:
         bare number, a factor of 1e6 off, and says nothing."""
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
-        deck = _deck(work_dir / "mojibake.cir", "* rc\nV1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n")
+        # UTF-8 on purpose: written in the platform default, cp1252 on Windows,
+        # 'Âµ' becomes C2 B5 and reads back as a genuine UTF-8 micro sign.
+        deck = work_dir / "mojibake.cir"
+        deck.write_bytes("* rc\nV1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n".encode())
 
         data = _assert_schema(
             await handle_run_experiments(_args(deck, "mojibake"), state_with_sim)
