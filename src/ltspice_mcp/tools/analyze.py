@@ -19,7 +19,12 @@ import numpy as np
 from mcp import types
 from pydantic import BeforeValidator, Field, SkipValidation, model_validator
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, LTSpiceMCPError, ResultError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    LTSpiceMCPError,
+    ResultError,
+    caller_message,
+)
 from ltspice_mcp.lib import (
     O_BINARY,
     analysis_snapshot,
@@ -1391,9 +1396,10 @@ async def _waveform(
         total_max = 0
         point_limit = min(recipe.max_points, state.config.max_points_returned)
         for signal_input in recipe.signals:
-            signal = services.validate_signal(raw, signal_input)
+            resolved = services.resolve_signal(raw, signal_input)
+            signal = resolved.name
             axis = metrics.guarded_axis(raw, step, run.source.raw)
-            wave = np.asarray(raw.get_wave(signal, step=step))
+            wave = resolved.wave(raw, step)
             if start is not None or end is not None:
                 lo, hi = metrics.window_indices(
                     axis,
@@ -1937,7 +1943,7 @@ async def _evaluate_item(
                     ),
                     stage="analyze",
                     where=run.manifest_id,
-                    message=str(exc),
+                    message=caller_message(exc, state.tool_dispatch),
                 )
             )
     return records, failures, pending
@@ -3637,9 +3643,9 @@ async def capture_attached_analysis(
         "ripple, peak-to-peak), edges (rise/fall time), timing (propagation "
         "delay), periodic (duty cycle), transient_response (overshoot, settling, "
         "load step), operating_point (bias point, gm/gds/vth), measurements "
-        "(.meas), value (one expression), summary, waveform (samples, CSV), plot "
-        "(chart). inspect(kind='reference', query=...) searches these by plain "
-        "words and returns a recipe's fields."
+        "(.meas), value (one trace at one axis point), summary, waveform "
+        "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
+        "searches these by plain words and returns a recipe's fields."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(

@@ -96,10 +96,15 @@ class RawResult:
         return list(self._signals)
 
     def trace(self, name: str, *, step: int = 0) -> np.ndarray:
-        """Return one step of ``name`` as a detached array."""
-        canonical = services.validate_signal(self._raw, name)
+        """Return one step of ``name`` as a detached array.
+
+        ``name`` is one trace, or a node pair ``V(a,b)``, read as
+        ``V(a) - V(b)`` from this step. Other trace math is ordinary numpy on
+        the traces it combines.
+        """
+        signal = services.resolve_signal(self._raw, name)
         self._validate_step(step)
-        return np.array(self._raw.get_wave(canonical, step=step), copy=True)
+        return np.array(signal.wave(self._raw, step), copy=True)
 
     def axis(self, *, step: int = 0) -> np.ndarray:
         """Return one step's real-valued time or frequency axis as a detached array."""

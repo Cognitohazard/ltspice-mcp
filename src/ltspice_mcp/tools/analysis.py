@@ -290,7 +290,7 @@ def build_waveform_csv(
             col_names: list[str] = []
             col_arrays: list[np.ndarray] = []
             for name in cols:
-                wave = np.asarray(raw.get_wave(name, step=step))
+                wave = services.read_signal(raw, name, step)
                 if wave.size == 0:
                     raise ResultError(f"Signal {name!r} has no data points at step {step}.")
                 wave_w = wave[lo:hi]
@@ -633,7 +633,7 @@ def _compute_plot_spec(
                 empty_steps.append(step)
                 continue
             for col in cols:
-                wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
+                wave = services.read_signal(raw, col, step)[lo:hi]
                 freq, h = prepare_ac_arrays(axis[lo:hi], wave)
                 if single_trace:
                     annotate_freq, annotate_h = freq, h
@@ -676,7 +676,7 @@ def _compute_plot_spec(
                         empty_steps.append(step)
                     continue
                 axis_w = axis[lo:hi]
-                wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
+                wave = services.read_signal(raw, col, step)[lo:hi]
                 if np.iscomplexobj(wave):
                     # Defensive: a stray complex trace in a non-AC raw.
                     wave = np.real(wave)
@@ -798,7 +798,10 @@ class PlotWaveformInput(ToolInput):
     )
     signals: list[str] | Literal["all"] = Field(
         default="all",
-        description="Trace names to plot (e.g. ['V(out)', 'I(R1)']) or 'all' for every non-axis trace.",
+        description=(
+            "Trace names or node pairs to plot (e.g. ['V(out)', 'V(inp,inn)']), or "
+            "'all' for every non-axis trace."
+        ),
     )
     step: int | None = Field(
         default=None,

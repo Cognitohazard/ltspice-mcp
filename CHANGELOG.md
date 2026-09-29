@@ -24,9 +24,28 @@ tool-surface changes.
   `wire_pins` at `M90` or `M270` put the wires at the wrong pin positions, so
   those parts are miswired when LTspice opens the sheet.** Rebuild or rewire
   those parts.
+- The `value` recipe was described as evaluating an expression. It reads one
+  trace at the sample nearest `at`, without interpolation, and `at` is
+  required when the run's axis has more than one sample. Its argument
+  descriptions and reference entry now say so.
+- The guide and the bench-craft skill told readers to take open-loop gain
+  from `V(out)/V(inp,inn)`, which no recipe accepted. It now works (see
+  Added).
+- A signal that reads as an expression (`V(a)-V(b)`, `2*V(out)`) now fails
+  with a one-line Python example of the trace math. The error names
+  `run_code` as the place to run it, or the `ltspice_mcp.api` library when
+  `run_code` is turned off. The guide gains a section on naming signals and
+  on trace math.
 
 ### Added
 
+- Signal names accept a node-pair voltage `V(a,b)`, read as `V(a) - V(b)` from
+  the same raw, step and axis. This works in every `analyze_results` recipe,
+  in `plot_waveform` and in `RawResult.trace`. `V(a,0)` and `V(a,gnd)` read
+  as `V(a)`, and a missing node is named in the error. On an AC run the
+  difference is complex, so `V(out)/V(inp,inn)` works as a `stability` or
+  `bode_*` signal. A `.noise` run refuses a pair because spectral densities do
+  not subtract.
 - Exact nested-instance assignments and caller-defined mismatch, preserving
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned

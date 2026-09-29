@@ -127,8 +127,9 @@ CFB  inn 0 1T
 For balanced drive, give `VIP` `AC 0.5 0`, replace `CFB inn 0 1T` with
 `CFB inn ndrive 1T`, and add `VIM ndrive 0 DC 0 AC 0.5 180`; keep the inductor
 as the only DC feedback path. Always compute gain and phase from
-`V(out)/V(inp,inn)`, unwrap phase, inspect every 0 dB crossing, and repeat at
-twice the point density.
+`V(out)/V(inp,inn)` (the `signal` of `stability` or a `bode_*` recipe, as
+written), unwrap phase, inspect every 0 dB crossing, and repeat at twice the
+point density.
 
 ### Closed-loop transient and load-step archetype
 
