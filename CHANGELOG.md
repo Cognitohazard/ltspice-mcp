@@ -24,6 +24,31 @@ tool-surface changes.
   `wire_pins` at `M90` or `M270` put the wires at the wrong pin positions, so
   those parts are miswired when LTspice opens the sheet.** Rebuild or rewire
   those parts.
+- An edit to `[security] allowed_paths` now reaches every reader of the sandbox
+  on the next call. The capabilities report, the `spice://config` resource,
+  netlist resource reads, the hierarchy query, raw and log source resolution
+  and deck staging used to read whatever list the last path check had loaded,
+  so a capabilities query could list the old roots in the same batch that read
+  a newly allowed file.
+- Every sandbox refusal carries the same guidance in its structured `hint`: the
+  allowed paths, the config file and key that widen them, and that the file is
+  re-read on the next call. That covers `inspect` items, `verify_circuit`
+  findings (a refused include among them), `run_experiments` case failures,
+  `jobs` errors, `analyze_results` sources, and a refusal the dispatcher
+  reports, which now returns it in structuredContent as well as text. A
+  refusal raised through the Python API carries it as a note on the
+  `PathSecurityError`, so it shows in the traceback. With
+  `LTSPICE_MCP_ALLOWED_PATHS` set, the guidance names that variable instead,
+  since it overrides the file.
+- A Python API session opened with an explicit `Api(allowed_paths=...)` keeps
+  that sandbox. It used to be replaced by the config file's list, or by the
+  default sandbox, as soon as the working directory's `ltspice-mcp.toml`
+  appeared or changed, which a server session in the same directory causes by
+  writing its default config on its first tool call. A refusal in such a
+  session names the argument rather than the file.
+- On Windows the default sandbox includes Claude Code's scratch directory,
+  `%TEMP%\claude`, as it already did on Linux and macOS
+  (`<tempdir>/claude-<uid>`).
 - A micro-sign scale suffix (`23µ`) no longer changes value depending on the
   LTspice version that reads the deck. Case decks, and staged decks whose
   references were rewritten, are written as UTF-8, so a `µ` reached the
@@ -54,6 +79,9 @@ tool-surface changes.
 
 ### Changed
 
+- `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
+  rather than `source_unavailable`, and the `inspect` hierarchy query reports
+  one as `path_denied` rather than `error`.
 - Native statistical run listings expand only the requested evidence on the
   returned page. Sample validation reuses unchanged original model parsing
   within each circuit while retaining per-case checks.

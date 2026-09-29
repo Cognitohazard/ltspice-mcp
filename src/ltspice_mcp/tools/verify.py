@@ -125,6 +125,7 @@ from ltspice_mcp.tools._base import (
     make_include_resolver,
     outcome_of,
     outcome_schema,
+    path_denied_text,
     registry,
     render_scene_artifact,
     resolve_reference,
@@ -1487,8 +1488,12 @@ def _diff_vs_prior(
 # ---------------------------------------------------------------------------
 
 
-def _denied_include_findings(graph: NetlistGraph, source: Path) -> list[dict[str, Any]]:
-    """path_denied findings for includes the resolver refused (never read)."""
+def _denied_include_findings(graph: NetlistGraph, source: Path, hint: str) -> list[dict[str, Any]]:
+    """path_denied findings for includes the resolver refused (never read).
+
+    ``hint`` is the sandbox guidance: the refusal is the sandbox's, so its
+    remedy is the same config line as any other refused path.
+    """
     findings: list[dict[str, Any]] = []
     for missing in graph.missing_includes:
         if "denied" not in missing.reason.lower():
@@ -1506,6 +1511,7 @@ def _denied_include_findings(graph: NetlistGraph, source: Path) -> list[dict[str
                         f"include '{missing.target}' resolves outside the allowed roots; "
                         "it was denied and never read"
                     ),
+                    "hint": hint,
                 },
             )
         )
@@ -1552,12 +1558,15 @@ def compare_equivalence(
     anchors: list[str] | None,
     rtol: float,
     resolver: IncludeResolver,
+    *,
+    denied_hint: str,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver.
 
     ``candidate`` may be the already-read netlist text (parsed with ``cand_source``
     as the include base dir) or a path; ``cand_source`` is the location reported in
-    findings and failures either way.
+    findings and failures either way. ``denied_hint`` is the sandbox guidance each
+    refused include's finding carries.
     """
     findings: list[dict[str, Any]] = []
     ref_graph, failure = _parse_graph_or_fail(reference, "reference netlist", ref_source, resolver)
@@ -1569,8 +1578,8 @@ def compare_equivalence(
     if failure is not None:
         return None, findings, failure, []
     assert ref_graph is not None and cand_graph is not None  # failure is None ⇒ both parsed
-    findings.extend(_denied_include_findings(ref_graph, ref_source))
-    findings.extend(_denied_include_findings(cand_graph, cand_source))
+    findings.extend(_denied_include_findings(ref_graph, ref_source, denied_hint))
+    findings.extend(_denied_include_findings(cand_graph, cand_source, denied_hint))
     comparison = compare_graphs(ref_graph, cand_graph, anchors=anchors, rtol=rtol)
     payload: dict[str, Any] = {"mode": "equivalence", **comparison.as_dict()}
     return payload, findings, None, []
@@ -1667,6 +1676,7 @@ def compare_netlists(
         spec.anchors,
         spec.rtol,
         make_include_resolver(state),
+        denied_hint=state.sandbox_guidance(),
     )
 
 
@@ -1952,10 +1962,10 @@ async def evaluate_verify_circuit(
                 severity="error",
                 at={"file": args.path},
                 subject=args.path,
-                evidence={"detail": str(exc)},
+                evidence={"detail": str(exc), "hint": state.sandbox_guidance()},
             )
         ]
-        return _error_evaluation(data, str(exc))
+        return _error_evaluation(data, path_denied_text(exc, state))
 
     data["path"] = str(path)
     if not path.is_file():
