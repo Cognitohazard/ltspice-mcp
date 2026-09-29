@@ -442,13 +442,13 @@ async def load_real_signal(
     """Load ``(axis, wave)`` for a transient signal, rejecting AC/complex data."""
     raw = await services.load_raw(source.raw, state)
     reject_non_transient(raw)
-    signal = services.validate_signal(raw, signal)
+    resolved = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
     axis = guarded_axis(raw, step, source.raw)
-    wave = np.asarray(raw.get_wave(signal, step=step))
+    wave = resolved.wave(raw, step)
     if np.iscomplexobj(wave):
         raise ResultError(
-            f"Signal {signal!r} contains complex values; this tool requires "
+            f"Signal {resolved.name!r} contains complex values; this tool requires "
             "real-valued transient data."
         )
     return axis, wave
@@ -482,7 +482,9 @@ async def load_ac_signal(
     ``signal`` may be a single trace (``V(out)``) or a transfer-function ratio
     of two traces (``V(out)/V(mid)``), in which case the two complex AC waves
     are divided element-wise — the way to express an inter-stage gain, loop
-    gain, or PSRR that the simulator never stores as its own trace.
+    gain, or PSRR that the simulator never stores as its own trace. Either
+    side may be a node pair, so an open-loop gain reads as
+    ``V(out)/V(inp,inn)``.
 
     A single leading ``-`` negates the whole expression (``-V(out)/V(vsense)``
     is −(V(out)/V(vsense))): a 180° phase flip, so a loop gain probed with an
@@ -509,10 +511,11 @@ async def load_ac_signal(
 
     ratio = split_ratio(signal)
     if ratio is not None:
-        num_name = services.validate_signal(raw, ratio[0])
-        den_name = services.validate_signal(raw, ratio[1])
-        num = np.asarray(raw.get_wave(num_name, step=step))
-        den = np.asarray(raw.get_wave(den_name, step=step))
+        num_signal = services.resolve_signal(raw, ratio[0])
+        den_signal = services.resolve_signal(raw, ratio[1])
+        den_name = den_signal.name
+        num = num_signal.wave(raw, step)
+        den = den_signal.wave(raw, step)
         with np.errstate(divide="ignore", invalid="ignore"):
             wave = num / den
         # A null (or non-finite) denominator makes the ratio singular at those
@@ -532,7 +535,7 @@ async def load_ac_signal(
                 f"does not cross zero."
             )
     else:
-        wave = np.asarray(raw.get_wave(services.validate_signal(raw, signal), step=step))
+        wave = services.read_signal(raw, signal, step)
     if negate:
         wave = -wave
     try:
@@ -1095,6 +1098,20 @@ async def _value_from_operating_point(
         ),
         None,
     )
+    if match is None and services.is_node_pair(recipe.expr):
+        # The pair resolves like it does on any raw; both node voltages are
+        # then read off this same bias point, as a plain name would be.
+        pair = services.resolve_signal(await services.load_raw(source.raw, state), recipe.expr)
+        traces = [trace for trace in (pair.plus, pair.minus) if trace is not None]
+        if all(trace in flat for trace in traces):
+            plus = flat[pair.plus] if pair.plus is not None else 0.0
+            minus = flat[pair.minus] if pair.minus is not None else 0.0
+            return {
+                "signal": pair.name,
+                "value": plus - minus,
+                "unit": op.get("units", {}).get(traces[0]),
+                "warnings": op.get("warnings", []),
+            }
     if match is None:
         present = ", ".join(sorted(flat)[:8])
         if len(flat) > 8:
@@ -1144,11 +1161,14 @@ async def point_value(
         )
 
     raw = await services.load_raw(source.raw, state)
-    resolved = services.validate_signal(raw, signal)
+    requested = services.resolve_signal(raw, signal)
+    resolved = requested.name
     services.validate_step(raw, step)
 
     try:
-        result_data = query_point_value(raw, resolved, target_x, step)
+        result_data = query_point_value(
+            raw, resolved, target_x, step, read_wave=lambda: requested.wave(raw, step)
+        )
     except NoAxisError as e:
         # Operating-point raws have no time/frequency axis. Give a precise,
         # actionable message instead of the generic failure.
@@ -1190,13 +1210,14 @@ async def signal_stats(
     """Min/max/mean/RMS and window facts for one trace over one window."""
     t_start, t_end = window_bounds(recipe.window)
     raw = await services.load_raw(source.raw, state)
-    signal = services.validate_signal(raw, recipe.signal)
+    resolved = services.resolve_signal(raw, recipe.signal)
+    signal = resolved.name
     services.validate_step(raw, step)
     # A failed-but-completed solve makes every stat below garbage; relay it.
     failures = await solve_failures(source)
 
     try:
-        wave = raw.get_wave(signal, step=step)
+        wave = resolved.wave(raw, step)
     except Exception as e:
         raise ResultError(f"Failed to read signal {signal!r}: {e}") from e
     if len(wave) == 0:
@@ -1434,10 +1455,11 @@ async def transient_response(
     if recipe.mode == "disturbance":
         assert recipe.input is not None
         raw = await services.load_raw(source.raw, state)
-        reference = services.validate_signal(raw, recipe.input)
+        reference_signal = services.resolve_signal(raw, recipe.input)
+        reference = reference_signal.name
         if t_start is None:
             axis = guarded_axis(raw, step, source.raw)
-            wave = np.asarray(raw.get_wave(reference, step=step))
+            wave = reference_signal.wave(raw, step)
             if np.iscomplexobj(wave) or len(wave) < 2:
                 raise ResultError(
                     "The disturbance reference input must be a real trace "
@@ -1470,13 +1492,13 @@ async def timing(
     t_start, t_end = window_bounds(recipe.window)
     raw = await services.load_raw(source.raw, state)
     reject_non_transient(raw)
-    sig_a = services.validate_signal(raw, recipe.from_.signal)
-    sig_b = services.validate_signal(raw, recipe.to.signal)
+    signal_a = services.resolve_signal(raw, recipe.from_.signal)
+    signal_b = services.resolve_signal(raw, recipe.to.signal)
     services.validate_step(raw, step)
 
     axis = guarded_axis(raw, step, source.raw)
-    ya_full = np.asarray(raw.get_wave(sig_a, step=step))
-    yb_full = np.asarray(raw.get_wave(sig_b, step=step))
+    ya_full = signal_a.wave(raw, step)
+    yb_full = signal_b.wave(raw, step)
     if np.iscomplexobj(ya_full) or np.iscomplexobj(yb_full):
         raise ResultError(
             "Signals contain complex values; this tool requires real-valued transient data."
@@ -1853,9 +1875,10 @@ async def noise_integral(
             show_hint=False,
         )
     services.validate_step(raw, step)
-    signal = services.validate_signal(raw, recipe.signal or "onoise")
+    resolved = services.resolve_signal(raw, recipe.signal or "onoise")
+    signal = resolved.name
     freqs = real_axis(np.asarray(raw.get_axis(step=step)))
-    density = np.asarray(raw.get_wave(signal, step=step))
+    density = resolved.wave(raw, step)
     data = await run_metric(
         source,
         integrate_noise,

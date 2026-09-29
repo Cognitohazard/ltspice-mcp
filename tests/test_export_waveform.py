@@ -102,6 +102,9 @@ class TestBuildAndWriteWorker:
         wave = np.array([0.0, np.nan, 2.0, 3.0])
 
         class _MockRaw:
+            def get_trace_names(self):
+                return ["time", "V(out)"]
+
             def get_axis(self, step: int = 0):
                 return axis
 
@@ -136,6 +139,9 @@ class TestBuildAndWriteWorker:
         }
 
         class _StepMock:
+            def get_trace_names(self):
+                return ["time", "V(o)"]
+
             def get_axis(self, step: int = 0):
                 return axes[step]
 
@@ -167,6 +173,9 @@ class TestBuildAndWriteWorker:
         axis = np.array([0.0, 1.0, 2.0])
 
         class _StepMock:
+            def get_trace_names(self):
+                return ["time", "V(o)"]
+
             def get_axis(self, step: int = 0):
                 return axis
 
