@@ -2,6 +2,8 @@
 placed geometry computation, and pin direction inference.
 """
 
+import re
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -51,6 +53,22 @@ class TestApplyRotation:
         """
         rotated = _apply_rotation(self.PX, self.PY, f"R{degrees}")
         assert _apply_rotation(self.PX, self.PY, f"M{degrees}") == (-rotated[0], rotated[1])
+
+    def test_guide_states_the_same_transforms(self):
+        """spice://guide restates this table for callers; hold it to the code."""
+        guide = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
+        line = next(ln for ln in guide.splitlines() if ln.startswith("Rotations transform pin"))
+
+        def term(t: str) -> int:
+            value = {"x": self.PX, "y": self.PY}[t.lstrip("-")]
+            return -value if t.startswith("-") else value
+
+        stated = {
+            rot: tuple(term(t) for t in expr.split(","))
+            for rot, expr in re.findall(r"([RM]\d+)→\(([^)]*)\)", line)
+        }
+        assert set(stated) == {"R90", "R180", "R270", "M0", "M90", "M180", "M270"}
+        assert stated == {rot: _apply_rotation(self.PX, self.PY, rot) for rot in stated}
 
     def test_identity_origin(self):
         """Origin should be invariant under any transform."""
