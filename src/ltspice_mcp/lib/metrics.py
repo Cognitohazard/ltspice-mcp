@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
 import numpy as np
+from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import services
@@ -410,6 +411,7 @@ async def reraise_with_solve_failure(e: ResultError, source: services.AnalysisSo
             f"this: {'; '.join(failures)}",
             suggestions=e.suggestions or None,
             show_hint=False,
+            python_route=e.python_route,
         ) from e
     raise e
 
@@ -511,10 +513,8 @@ async def load_ac_signal(
 
     ratio = split_ratio(signal)
     if ratio is not None:
-        num_signal = services.resolve_signal(raw, ratio[0])
+        num = services.resolve_signal(raw, ratio[0]).wave(raw, step)
         den_signal = services.resolve_signal(raw, ratio[1])
-        den_name = den_signal.name
-        num = num_signal.wave(raw, step)
         den = den_signal.wave(raw, step)
         with np.errstate(divide="ignore", invalid="ignore"):
             wave = num / den
@@ -529,13 +529,13 @@ async def load_ac_signal(
             example = float(axis_real[int(np.argmax(singular))])
             raise ResultError(
                 f"Ratio {ratio[0]}/{ratio[1]} is singular at {int(singular.sum())} of "
-                f"{singular.size} frequencies — the denominator {den_name} is ~0 there "
+                f"{singular.size} frequencies — the denominator {den_signal.name} is ~0 there "
                 f"(e.g. {example:.6g} Hz), so the transfer function has a pole. Narrow "
                 f"the frequency window to exclude the null, or pick a denominator that "
                 f"does not cross zero."
             )
     else:
-        wave = services.read_signal(raw, signal, step)
+        wave = services.resolve_signal(raw, signal).wave(raw, step)
     if negate:
         wave = -wave
     try:
@@ -1059,7 +1059,7 @@ async def value(
         try:
             axis = guarded_axis(raw, step, source.raw)
         except ResultError:
-            return await _value_from_operating_point(source, recipe, step, state)
+            return await _value_from_operating_point(source, recipe, raw, step, state)
         if len(axis) != 1:
             raise ResultError(
                 "value.at is required when the selected run has more than one "
@@ -1072,6 +1072,7 @@ async def value(
 async def _value_from_operating_point(
     source: services.AnalysisSource,
     recipe: ValueRecipe,
+    raw: RawRead,
     step: int,
     state: SessionState,
 ) -> MetricValue:
@@ -1101,7 +1102,7 @@ async def _value_from_operating_point(
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
         # then read off this same bias point, as a plain name would be.
-        pair = services.resolve_signal(await services.load_raw(source.raw, state), recipe.expr)
+        pair = services.resolve_signal(raw, recipe.expr)
         traces = [trace for trace in (pair.plus, pair.minus) if trace is not None]
         if all(trace in flat for trace in traces):
             plus = flat[pair.plus] if pair.plus is not None else 0.0
@@ -1161,13 +1162,12 @@ async def point_value(
         )
 
     raw = await services.load_raw(source.raw, state)
-    requested = services.resolve_signal(raw, signal)
-    resolved = requested.name
+    sig = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
 
     try:
         result_data = query_point_value(
-            raw, resolved, target_x, step, read_wave=lambda: requested.wave(raw, step)
+            raw, sig.name, target_x, step, read_wave=lambda: sig.wave(raw, step)
         )
     except NoAxisError as e:
         # Operating-point raws have no time/frequency axis. Give a precise,
@@ -1182,7 +1182,7 @@ async def point_value(
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
-    value_unit = trace_unit(raw, resolved)
+    value_unit = trace_unit(raw, sig.trace)
     if value_unit and is_noise_analysis(sim_type):
         # .noise traces are amplitude spectral density (V/√Hz, A/√Hz), not the
         # plain V/A the trace's whattype declares — match noise_integral and the
@@ -1194,10 +1194,10 @@ async def point_value(
     # snapping 27 → 25 °C silently biases a tempco measurement.
     exact_match = snap_match(float(result_data["requested_x"]), float(result_data["actual_x"]))
 
-    data: MetricValue = {"signal": resolved, **result_data, "exact_match": exact_match}
+    data: MetricValue = {"signal": sig.name, **result_data, "exact_match": exact_match}
     if value_unit:
         data["unit"] = value_unit
-    data.setdefault("warnings", []).extend(await signal_log_warnings(source, resolved))
+    data.setdefault("warnings", []).extend(await signal_log_warnings(source, sig.name))
     return data
 
 
@@ -1455,11 +1455,10 @@ async def transient_response(
     if recipe.mode == "disturbance":
         assert recipe.input is not None
         raw = await services.load_raw(source.raw, state)
-        reference_signal = services.resolve_signal(raw, recipe.input)
-        reference = reference_signal.name
+        reference = services.resolve_signal(raw, recipe.input)
         if t_start is None:
             axis = guarded_axis(raw, step, source.raw)
-            wave = reference_signal.wave(raw, step)
+            wave = reference.wave(raw, step)
             if np.iscomplexobj(wave) or len(wave) < 2:
                 raise ResultError(
                     "The disturbance reference input must be a real trace "
@@ -1469,7 +1468,7 @@ async def transient_response(
             t_start = spice_text(float(axis[edge_index]))
             reference_observation = (
                 f"Disturbance window starts at {t_start}s, the largest transition "
-                f"in reference input {reference!r}."
+                f"in reference input {reference.name!r}."
             )
     if recipe.mode == "step":
         data = await pulse_response(source, recipe.signal, t_start, t_end, step, state)
@@ -1875,10 +1874,10 @@ async def noise_integral(
             show_hint=False,
         )
     services.validate_step(raw, step)
-    resolved = services.resolve_signal(raw, recipe.signal or "onoise")
-    signal = resolved.name
+    density_signal = services.resolve_signal(raw, recipe.signal or "onoise")
+    signal = density_signal.name
     freqs = real_axis(np.asarray(raw.get_axis(step=step)))
-    density = resolved.wave(raw, step)
+    density = density_signal.wave(raw, step)
     data = await run_metric(
         source,
         integrate_noise,

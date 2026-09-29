@@ -102,9 +102,6 @@ class TestBuildAndWriteWorker:
         wave = np.array([0.0, np.nan, 2.0, 3.0])
 
         class _MockRaw:
-            def get_trace_names(self):
-                return ["time", "V(out)"]
-
             def get_axis(self, step: int = 0):
                 return axis
 
@@ -115,7 +112,7 @@ class TestBuildAndWriteWorker:
         facts = build_waveform_csv(
             _MockRaw(),
             work_dir / "mock.raw",
-            ["V(out)"],
+            [services.Signal("V(out)", "V(out)")],
             1,
             "transient",
             None,
@@ -139,9 +136,6 @@ class TestBuildAndWriteWorker:
         }
 
         class _StepMock:
-            def get_trace_names(self):
-                return ["time", "V(o)"]
-
             def get_axis(self, step: int = 0):
                 return axes[step]
 
@@ -152,7 +146,7 @@ class TestBuildAndWriteWorker:
         facts = build_waveform_csv(
             _StepMock(),
             work_dir / "m.raw",
-            ["V(o)"],
+            [services.Signal("V(o)", "V(o)")],
             2,
             "transient",
             3.0,
@@ -173,9 +167,6 @@ class TestBuildAndWriteWorker:
         axis = np.array([0.0, 1.0, 2.0])
 
         class _StepMock:
-            def get_trace_names(self):
-                return ["time", "V(o)"]
-
             def get_axis(self, step: int = 0):
                 return axis
 
@@ -186,7 +177,7 @@ class TestBuildAndWriteWorker:
         facts = build_waveform_csv(
             _StepMock(),
             work_dir / "nolog.raw",
-            ["V(o)"],
+            [services.Signal("V(o)", "V(o)")],
             2,
             "transient",
             None,
@@ -209,7 +200,7 @@ class TestBuildAndWriteWorker:
         build_waveform_csv(
             raw,
             raw_path,
-            ["V(out)"],
+            [services.Signal("V(out)", "V(out)")],
             1,
             analysis_type,
             None,

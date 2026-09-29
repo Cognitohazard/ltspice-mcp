@@ -32,6 +32,7 @@ from ltspice_mcp.lib.log_parser import (
     extract_missing_refs,
     missing_refs_from_text,
 )
+from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import (
     OffsetAwareRawRead,
@@ -596,7 +597,7 @@ def device_param_forms(signal: str) -> list[str]:
     bare form. Empty when the name is not a shorthand.
 
     Public because two readers resolve the shorthand the docs promise —
-    ``validate_signal`` against a raw's trace list, ``analyze_results``
+    ``resolve_signal`` against a raw's trace list, ``analyze_results``
     against an operating-point result — and a second copy of the rule is how
     one of them ends up rejecting a name the other accepts.
     """
@@ -611,9 +612,6 @@ def device_param_forms(signal: str) -> list[str]:
 #: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
 #: no comma, parenthesis or space, which keeps the split unambiguous.
 _NODE_PAIR_RE = re.compile(r"\s*v\(\s*([^\s(),]+)\s*,\s*([^\s(),]+)\s*\)\s*", re.IGNORECASE)
-
-#: The names SPICE reads as the ground node.
-_GROUND_NODES = frozenset({"0", "gnd"})
 
 _V_TRACE_RE = re.compile(r"v\((.+)\)", re.IGNORECASE)
 
@@ -631,6 +629,11 @@ class Signal:
     name: str
     plus: str | None
     minus: str | None = None
+
+    @property
+    def trace(self) -> str:
+        """A trace this signal is read from; both sides of a pair share its unit."""
+        return self.plus or self.minus or self.name
 
     def wave(self, raw: RawRead, step: int) -> np.ndarray:
         """One step of this signal. Both traces of a pair come from ``raw`` at
@@ -728,18 +731,19 @@ def _looks_like_expression(signal: str) -> bool:
     return False
 
 
-def _not_found(raw: RawRead, signal: str, *, within: str | None = None) -> ResultError:
-    """The error for a ``signal`` no trace answers to (``within`` names the
-    node pair it is one side of)."""
+def _available_signals(raw: RawRead) -> str:
+    """The first traces of ``raw``, for an error that names what is there."""
     trace_names = raw.get_trace_names()
     available = ", ".join(trace_names[:10])
     if len(trace_names) > 10:
         available += f", ... ({len(trace_names)} total)"
-    if within is not None:
-        return ResultError(
-            f"Signal '{within}' reads as a node-pair difference, but node voltage "
-            f"'{signal}' is not in this result. Available signals: {available}"
-        )
+    return available
+
+
+def _not_found(raw: RawRead, signal: str) -> ResultError:
+    """The error for a ``signal`` no trace answers to."""
+    trace_names = raw.get_trace_names()
+    available = _available_signals(raw)
     if _looks_like_expression(signal):
         return ResultError(
             f"Signal '{signal}' not found: it reads as an expression, and a signal "
@@ -776,21 +780,14 @@ def _not_found(raw: RawRead, signal: str, *, within: str | None = None) -> Resul
 def _node_pair(raw: RawRead, signal: str, plus_node: str, minus_node: str) -> Signal:
     """``V(plus_node, minus_node)`` read from the two node voltages of ``raw``.
 
-    A ground node (``0``, or ``gnd`` when the raw carries no ``V(gnd)`` of its
-    own) contributes nothing, so ``V(a,0)`` is ``V(a)``.
+    A ground alias (``0``, ``gnd``) that the raw carries no voltage for is
+    ground and contributes nothing, so ``V(a,0)`` is ``V(a)``.
     """
-    traces: list[str | None] = []
-    for node in (plus_node, minus_node):
-        trace = _find_trace(raw, f"V({node})")
-        if trace is None and node.lower() not in _GROUND_NODES:
-            raise _not_found(raw, f"V({node})", within=signal)
-        traces.append(trace)
-    plus, minus = traces
-    if minus is None:
-        if plus is None:
-            raise ResultError(f"Signal '{signal}' names ground twice; it is zero by definition.")
-        return Signal(plus, plus)
-    if is_noise_analysis(detect_sim_type(raw)):
+    traces = {node: _find_trace(raw, f"V({node})") for node in (plus_node, minus_node)}
+    grounded = {
+        node for node, trace in traces.items() if trace is None and node.lower() in GROUND_ALIASES
+    }
+    if minus_node not in grounded and is_noise_analysis(detect_sim_type(raw)):
         raise ResultError(
             f"Signal '{signal}' is a node-pair difference, and a .noise result holds "
             "spectral densities: the difference of two densities is not the noise "
@@ -798,6 +795,18 @@ def _node_pair(raw: RawRead, signal: str, plus_node: str, minus_node: str) -> Si
             "e.g. .noise V(a,b) <source> ..., and read V(onoise).",
             show_hint=False,
         )
+    for node, trace in traces.items():
+        if trace is None and node not in grounded:
+            raise ResultError(
+                f"Signal '{signal}' reads as a node-pair difference, but node voltage "
+                f"'V({node})' is not in this result. Available signals: "
+                f"{_available_signals(raw)}"
+            )
+    plus, minus = traces[plus_node], traces[minus_node]
+    if minus is None:
+        if plus is None:
+            raise ResultError(f"Signal '{signal}' names ground twice; it is zero by definition.")
+        return Signal(plus, plus)
     name = f"V({_node_spelling(plus, plus_node)},{_node_spelling(minus, minus_node)})"
     return Signal(name, plus, minus)
 
@@ -813,9 +822,8 @@ def resolve_signal(raw: RawRead, signal: str) -> Signal:
 
     A trace the raw actually carries wins, including one literally named
     ``V(a,b)``; otherwise a node pair reads as ``V(a) - V(b)``, each side
-    resolved like any single trace. Resolving a returned ``name`` again gives
-    the same signal, so a name can cross a function boundary and be read with
-    :func:`read_signal` on the far side.
+    resolved like any single trace. Read the data with :meth:`Signal.wave`:
+    a pair's ``name`` is not a trace of the raw.
     """
     trace = _find_trace(raw, signal)
     if trace is not None:
@@ -829,21 +837,6 @@ def resolve_signal(raw: RawRead, signal: str) -> Signal:
 def is_node_pair(signal: str) -> bool:
     """Whether ``signal`` is spelled as a node-pair voltage ``V(a,b)``."""
     return _NODE_PAIR_RE.fullmatch(signal) is not None
-
-
-def validate_signal(raw: RawRead, signal: str) -> str:
-    """Validate that a signal exists in a raw result and return its canonical name.
-
-    The name is what a reply reports. Read the data with :func:`read_signal`
-    (or :meth:`Signal.wave`), not ``raw.get_wave``, because a node pair's name
-    is not a trace of the raw.
-    """
-    return resolve_signal(raw, signal).name
-
-
-def read_signal(raw: RawRead, signal: str, step: int) -> np.ndarray:
-    """One step of ``signal`` — a trace name or a node pair — as an array."""
-    return resolve_signal(raw, signal).wave(raw, step)
 
 
 def validate_step(raw: RawRead, step: int) -> None:

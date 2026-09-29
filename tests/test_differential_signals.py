@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import numpy as np
 import pytest
@@ -21,11 +20,9 @@ import pytest
 from ltspice_mcp.api import RawResult
 from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.recipes import RECIPE_MODELS
+from ltspice_mcp.lib.recipes import RECIPE_MODELS, _discriminant_of
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
-from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests.conftest import (
     SyncApi,
     call_tool_params,
@@ -33,24 +30,25 @@ from tests.conftest import (
     stage_recorded_fixture,
     tool_text,
 )
+from tests.test_analyze_results import EXECUTION_CASES, _analyze
+from tests.test_plot_waveform import _data_blob, _plot, _read
 
 
-async def _analyze(
-    state: SessionState, raw: Path, recipes: list[dict[str, Any]], **extra: Any
-) -> dict[str, Any]:
-    args = AnalyzeResultsInput.model_validate(
-        {"sources": [{"raw_path": str(raw), "label": "dut"}], "recipes": recipes, **extra}
-    )
-    result = await handle_analyze_results(args, state)
-    assert result.structured_content is not None
-    return result.structured_content
+def _raw(state: SessionState, work_dir: Path, fixture: str) -> RawResult:
+    return SyncApi(state).load_raw(stage_recorded_fixture(work_dir, fixture))
 
 
-async def _load(state: SessionState, path: Path) -> RawResult:
-    """The raw as ``api.load_raw`` hands it back, awaited on the test's own loop."""
-    return await load_raw_result(
-        state=state, raw_path=path, job_id=None, run_index=0, case_id=None
-    )
+async def _staged(state: SessionState, work_dir: Path, fixture: str) -> tuple[Path, RawResult]:
+    """A staged fixture and the raw as ``api.load_raw`` hands it back, awaited
+    on the test's own loop."""
+    path = stage_recorded_fixture(work_dir, fixture)
+    raw = await load_raw_result(state=state, raw_path=path, job_id=None, run_index=0, case_id=None)
+    return path, raw
+
+
+def _drop(raw: RawResult, step: int = 0) -> np.ndarray:
+    """V(in) - V(out), read as two traces: the oracle for ``V(in,out)``."""
+    return raw.trace("V(in)", step=step) - raw.trace("V(out)", step=step)
 
 
 def _value(data: dict[str, Any], key: str) -> dict[str, Any]:
@@ -59,7 +57,7 @@ def _value(data: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _failure_message(data: dict[str, Any]) -> str:
-    assert data["results"] == {} or all(not r.get("values") for r in data["results"].values())
+    assert all(not result.get("values") for result in data["results"].values())
     assert len(data["failures"]) == 1
     return data["failures"][0]["message"]
 
@@ -67,13 +65,6 @@ def _failure_message(data: dict[str, Any]) -> str:
 def _csv_rows(path: Path) -> list[list[str]]:
     with path.open(encoding="utf-8", newline="") as f:
         return list(csv.reader(f))
-
-
-def _plot_data(path: Path) -> dict[str, Any]:
-    """The plot spec a rendered page embeds."""
-    html = path.read_text(encoding="utf-8")
-    start = html.index('type="application/json">') + len('type="application/json">')
-    return json.loads(html[start : html.index("</script>", start)].replace("<\\/", "</"))
 
 
 def _nearest(axis: np.ndarray, x: float) -> int:
@@ -89,7 +80,7 @@ class TestRawResultTrace:
     def test_differential_is_the_per_step_difference(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        raw = SyncApi(state_no_sim).load_raw(stage_recorded_fixture(work_dir, "ltspice_step_tran"))
+        raw = _raw(state_no_sim, work_dir, "ltspice_step_tran")
         assert raw.step_count == 3
         for step in range(raw.step_count):
             expected = raw.trace("V(a)", step=step) - raw.trace("V(out)", step=step)
@@ -102,10 +93,10 @@ class TestRawResultTrace:
     def test_ac_differential_subtracts_complex_values(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        raw = SyncApi(state_no_sim).load_raw(stage_recorded_fixture(work_dir, "ltspice_ac_rc"))
+        raw = _raw(state_no_sim, work_dir, "ltspice_ac_rc")
         got = raw.trace("V(in,out)")
         assert np.iscomplexobj(got)
-        np.testing.assert_array_equal(got, raw.trace("V(in)") - raw.trace("V(out)"))
+        np.testing.assert_array_equal(got, _drop(raw))
         # V(in) - V(out) is the drop across R1; its phase is not V(in)'s phase
         # minus a magnitude, which is what a real-part-only subtraction gives.
         assert np.any(np.abs(np.imag(got)) > 0)
@@ -114,20 +105,25 @@ class TestRawResultTrace:
     def test_ground_operand_reads_as_the_node_voltage(
         self, state_no_sim: SessionState, work_dir: Path, spelling: str
     ):
-        raw = SyncApi(state_no_sim).load_raw(stage_recorded_fixture(work_dir, "ltspice_tran_rc"))
+        raw = _raw(state_no_sim, work_dir, "ltspice_tran_rc")
         np.testing.assert_array_equal(raw.trace(spelling), raw.trace("V(out)"))
 
     def test_missing_operand_is_named(self, state_no_sim: SessionState, work_dir: Path):
-        raw = SyncApi(state_no_sim).load_raw(stage_recorded_fixture(work_dir, "ltspice_tran_rc"))
+        raw = _raw(state_no_sim, work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match=r"V\(nowhere\)") as excinfo:
             raw.trace("V(in,nowhere)")
         # The operand that exists is not blamed.
         assert "'V(in)'" not in str(excinfo.value).split("Available")[0]
 
-    def test_noise_densities_do_not_subtract(self, state_no_sim: SessionState, work_dir: Path):
-        raw = SyncApi(state_no_sim).load_raw(stage_recorded_fixture(work_dir, "ltspice_noise_rc"))
+    # A .noise raw holds densities and no node voltages, so a pair of nodes it
+    # lacks is refused for the same reason as a pair of its density traces.
+    @pytest.mark.parametrize("spelling", ["V(onoise,inoise)", "V(a,b)"])
+    def test_noise_densities_do_not_subtract(
+        self, state_no_sim: SessionState, work_dir: Path, spelling: str
+    ):
+        raw = _raw(state_no_sim, work_dir, "ltspice_noise_rc")
         with pytest.raises(ResultError, match="spectral densit"):
-            raw.trace("V(onoise,inoise)")
+            raw.trace(spelling)
 
 
 # ---------------------------------------------------------------------------
@@ -138,11 +134,9 @@ class TestRawResultTrace:
 @pytest.mark.asyncio
 class TestRecipes:
     async def test_value_on_a_transient(self, state_no_sim: SessionState, work_dir: Path):
-        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        raw = await _load(state_no_sim, path)
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
         axis = raw.axis()
         index = _nearest(axis, 900e-6)
-        expected = float(raw.trace("V(in)")[index] - raw.trace("V(out)")[index])
 
         data = await _analyze(
             state_no_sim,
@@ -151,15 +145,14 @@ class TestRecipes:
         )
         value = _value(data, "drop")
         assert value["signal"] == "V(in,out)"
-        assert value["value"] == pytest.approx(expected, rel=1e-12, abs=1e-15)
+        assert value["value"] == pytest.approx(float(_drop(raw)[index]), rel=1e-12, abs=1e-15)
         assert value["actual_x"] == pytest.approx(float(axis[index]))
         assert value["unit"] == "V"
 
     async def test_value_reads_each_step_on_its_own_axis(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        path = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        raw = await _load(state_no_sim, path)
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_step_tran")
         data = await _analyze(
             state_no_sim,
             path,
@@ -172,18 +165,16 @@ class TestRecipes:
         assert [row["step_index"] for row in rows] == [0, 1, 2]
         for row in rows:
             step = row["step_index"]
-            axis = raw.axis(step=step)
-            index = _nearest(axis, 900e-6)
+            index = _nearest(raw.axis(step=step), 900e-6)
             expected = raw.trace("V(a)", step=step)[index] - raw.trace("V(out)", step=step)[index]
             assert row["value"]["value"] == pytest.approx(float(expected), rel=1e-12, abs=1e-15)
 
     async def test_value_on_an_ac_run_is_the_complex_difference(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        raw = await _load(state_no_sim, path)
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_ac_rc")
         freq = float(raw.axis()[40])
-        expected = complex(raw.trace("V(in)")[40] - raw.trace("V(out)")[40])
+        expected = complex(_drop(raw)[40])
 
         data = await _analyze(
             state_no_sim,
@@ -195,15 +186,13 @@ class TestRecipes:
         assert value["phase_deg"] == pytest.approx(np.angle(expected, deg=True), abs=1e-9)
 
     async def test_signal_stats(self, state_no_sim: SessionState, work_dir: Path):
-        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        raw = await _load(state_no_sim, path)
-        diff = raw.trace("V(in)") - raw.trace("V(out)")
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
         data = await _analyze(
             state_no_sim, path, [{"key": "s", "metric": "signal_stats", "signal": "V(in,out)"}]
         )
         stats = _value(data, "s")
-        assert stats["max"] == pytest.approx(float(np.max(diff)))
-        assert stats["min"] == pytest.approx(float(np.min(diff)))
+        assert stats["max"] == pytest.approx(float(np.max(_drop(raw))))
+        assert stats["min"] == pytest.approx(float(np.min(_drop(raw))))
 
     async def test_ratio_over_a_differential_denominator(
         self, state_no_sim: SessionState, work_dir: Path
@@ -211,13 +200,10 @@ class TestRecipes:
         # Across an RC low-pass, V(out)/V(in,out) = 1/(sRC): an integrator whose
         # phase is -90 degrees everywhere and whose unity-gain frequency is the
         # low-pass corner. A wrong subtraction cannot produce both.
-        path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        raw = await _load(state_no_sim, path)
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_ac_rc")
         index = 70  # a decade above the corner, where |H| is far from 0 dB
         freq = float(raw.axis()[index])
-        h = complex(
-            raw.trace("V(out)")[index] / (raw.trace("V(in)")[index] - raw.trace("V(out)")[index])
-        )
+        h = complex(raw.trace("V(out)")[index] / _drop(raw)[index])
 
         data = await _analyze(
             state_no_sim,
@@ -233,10 +219,7 @@ class TestRecipes:
                 },
             ],
         )
-        assert data["failures"] == []
-        corner = data["results"]["corner"]["values"][0]["value"]
-        loop = data["results"]["loop"]["values"][0]["value"]
-        point = data["results"]["point"]["values"][0]["value"]
+        corner, loop, point = (_value(data, key) for key in ("corner", "loop", "point"))
         assert loop["unity_gain_hz"] == pytest.approx(corner["cutoff_high_hz"], rel=0.02)
         assert loop["phase_margin_worst_deg"] == pytest.approx(90.0, abs=0.5)
         assert point["signal"] == "V(out)/V(in,out)"
@@ -244,18 +227,16 @@ class TestRecipes:
         assert point["magnitude_db"] == pytest.approx(20 * np.log10(abs(h)), abs=1e-6)
 
     async def test_inline_waveform(self, state_no_sim: SessionState, work_dir: Path):
-        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        raw = await _load(state_no_sim, path)
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
         data = await _analyze(
             state_no_sim, path, [{"key": "w", "metric": "waveform", "signals": ["V(in,out)"]}]
         )
         series = _value(data, "w")["series"][0]
         assert series["signal"] == "V(in,out)"
-        np.testing.assert_allclose(series["y"], raw.trace("V(in)") - raw.trace("V(out)"))
+        np.testing.assert_allclose(series["y"], _drop(raw))
 
     async def test_csv_waveform(self, state_no_sim: SessionState, work_dir: Path):
-        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        raw = await _load(state_no_sim, path)
+        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
         data = await _analyze(
             state_no_sim,
             path,
@@ -263,8 +244,7 @@ class TestRecipes:
         )
         rows = await asyncio.to_thread(_csv_rows, Path(_value(data, "w")["artifact"]["path"]))
         assert rows[0][-1] == "V(in,out)"
-        column = [float(row[-1]) for row in rows[1:]]
-        np.testing.assert_allclose(column, raw.trace("V(in)") - raw.trace("V(out)"))
+        np.testing.assert_allclose([float(row[-1]) for row in rows[1:]], _drop(raw))
 
     async def test_value_at_a_bias_point(self, state_no_sim: SessionState, work_dir: Path):
         raw = work_dir / "pair_op.raw"
@@ -316,18 +296,13 @@ class TestRecipes:
 
 @pytest.mark.asyncio
 async def test_plot_waveform_draws_the_difference(state_no_sim: SessionState, work_dir: Path):
-    path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    raw = await _load(state_no_sim, path)
-    result = await handle_plot_waveform(
-        PlotWaveformInput(raw_file=str(path), signals=["V(in,out)"], open=False), state_no_sim
-    )
-    data = result.structured_content
-    assert data is not None
+    path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
+    data = await _plot(state_no_sim, raw_file=str(path), signals=["V(in,out)"])
     assert data["signals"] == ["V(in,out)"]
-    blob = await asyncio.to_thread(_plot_data, Path(data["path"]))
+    blob = _data_blob(await asyncio.to_thread(_read, Path(data["path"])))
     (panel,) = blob["panels"]
     assert panel["series"] == [{"label": "V(in,out)"}]
-    np.testing.assert_allclose(panel["data"][1], raw.trace("V(in)") - raw.trace("V(out)"))
+    np.testing.assert_allclose(panel["data"][1], _drop(raw))
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +357,20 @@ class TestExpressionPointer:
         # The generic "check the job" hint would misdirect here.
         assert 'jobs (action:"status")' not in text
 
+    async def test_the_route_survives_a_solve_failure_rewrap(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A log reporting a failed solve makes the AC metrics re-raise their
+        # error with that failure appended; the route must come along.
+        path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        path.with_suffix(".log").write_text("gmin stepping failed\n", encoding="utf-8")
+        data = await _analyze(
+            state_no_sim, path, [{"key": "f", "metric": "bode_filter", "signal": "abs(V(out))"}]
+        )
+        message = _failure_message(data)
+        assert "gmin stepping" in message
+        assert message.endswith("run_code runs it with api in scope.")
+
     @pytest.mark.parametrize("name", ["V(in-)", "V(nowhere)", "I(Q1)"])
     async def test_a_plain_missing_trace_gets_no_pointer(
         self, state_no_sim: SessionState, work_dir: Path, name: str
@@ -396,59 +385,56 @@ class TestExpressionPointer:
         assert "run_code" not in message
         assert "r.trace(" not in message
 
-    async def test_python_api_error_carries_the_snippet(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = await _load(state_no_sim, stage_recorded_fixture(work_dir, "ltspice_tran_rc"))
+
+class TestPythonApiReadsTheMessageAsIs:
+    """A library caller is already in Python; the tool is not named to it."""
+
+    def test_raw_result_trace(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _raw(state_no_sim, work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match=r"r\.trace\(") as excinfo:
             raw.trace("V(in)-V(out)")
-        # A library caller is already in Python; the tool is not named to it.
         assert "run_code" not in str(excinfo.value)
+
+    def test_analyze_results(self, state_no_sim: SessionState, work_dir: Path):
+        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = SyncApi(state_no_sim).analyze_results(
+            sources=[{"raw_path": str(path), "label": "dut"}],
+            recipes=[{"key": "v", "metric": "value", "expr": "V(in)-V(out)", "at": "900u"}],
+        )
+        message = _failure_message(data)
+        assert "r.trace(" in message
+        assert "run_code" not in message
+        assert "from ltspice_mcp.api import Api" not in message
 
 
 # ---------------------------------------------------------------------------
 # Every signal-taking recipe reads through the resolver
 # ---------------------------------------------------------------------------
 
-#: Each recipe that names a signal, on a raw of the run type it reads.
+#: The request fields through which a recipe names a signal.
+_SIGNAL_FIELDS = {"signal", "signals", "expr", "input", "from", "to"}
+
+#: Each recipe that names a signal, on a raw of the run type it reads: the
+#: shared execution cases that name one, plus the forms they do not cover.
 SIGNAL_RECIPES = [
-    ("value", "ltspice_tran_rc", {"expr": "V(out)", "at": "900u"}),
-    ("signal_stats", "ltspice_tran_rc", {"signal": "V(out)"}),
-    ("edges", "ltspice_tran_rc", {"signal": "V(out)"}),
-    ("timing", "ltspice_tran_rc", {"from": {"signal": "V(in)"}, "to": {"signal": "V(out)"}}),
-    ("periodic", "ltspice_step_tran", {"signal": "V(out)"}),
-    ("transient_response", "ltspice_tran_rc", {"signal": "V(out)", "mode": "step"}),
+    *(case for case in EXECUTION_CASES if _SIGNAL_FIELDS & case[2].keys()),
     (
         "transient_response",
         "ltspice_tran_rc",
         {"signal": "V(out)", "mode": "disturbance", "input": "V(in)"},
     ),
-    ("thd", "ltspice_step_tran", {"signal": "V(out)"}),
-    ("bode_filter", "ltspice_ac_rc", {"signal": "V(out)"}),
-    ("bode_point", "ltspice_ac_rc", {"signal": "V(out)", "at_hz": "1k"}),
-    ("bode_crossing", "ltspice_ac_rc", {"signal": "V(out)", "level_db": -3.0}),
-    ("bode_slope", "ltspice_ac_rc", {"signal": "V(out)", "from_hz": "10k", "to_hz": "100k"}),
-    ("stability", "ltspice_ac_rc", {"signal": "V(out)"}),
-    ("ac_structure", "ltspice_ac_rc", {"signal": "V(out)"}),
-    ("resonance", "ltspice_ac_rc", {"signal": "V(out)"}),
-    ("return_loss", "ltspice_ac_rc", {"signal": "V(out)"}),
-    ("waveform", "ltspice_tran_rc", {"signals": ["V(out)"], "max_points": 25}),
     ("waveform", "ltspice_ac_rc", {"signals": ["V(out)"], "max_points": 25}),
-    ("plot", "ltspice_tran_rc", {"signals": ["V(out)"]}),
     ("noise_integral", "ltspice_noise_rc", {"signal": "V(onoise)"}),
 ]
-
-#: The fields through which a recipe names a signal.
-_SIGNAL_FIELDS = {"signal", "signals", "expr", "input", "from_", "to"}
 
 
 def test_the_sweep_names_every_recipe_that_takes_a_signal():
     # A recipe added with a signal field and left out of the list above would
     # never be shown to read a node pair; this is what notices.
     takes_signal = {
-        get_args(model.model_fields["metric"].annotation)[0]
+        _discriminant_of(model)
         for model in RECIPE_MODELS
-        if _SIGNAL_FIELDS & set(model.model_fields)
+        if _SIGNAL_FIELDS & {info.alias or name for name, info in model.model_fields.items()}
     }
     assert takes_signal == {metric for metric, _, _ in SIGNAL_RECIPES}
 
@@ -480,7 +466,6 @@ async def test_a_ground_operand_answers_exactly_like_the_trace(
             {"key": "pair", "metric": metric, **grounded},
         ],
     )
-    assert data["failures"] == []
     # Some metrics echo the signal as it was asked for, and a chart lands at a
     # path of its own; every number agrees.
     echoes = {"signal", "signal_a", "signal_b", "artifact"}

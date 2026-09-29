@@ -69,8 +69,9 @@ class LTSpiceMCPError(Exception):
 
     ``python_route`` — the message ends in a Python snippet written against the
     engine object ``api``. Where that snippet runs depends on which tools the
-    session serves, which the raise site cannot see, so the MCP surfaces add it
-    through :func:`caller_message`. A Python API caller reads the message as is.
+    session serves, which the raise site cannot see, so the MCP surfaces follow
+    the message with :func:`python_route_text`. A Python API caller reads the
+    message as is.
 
     ``code`` — the wire code for this class of failure. Every subclass declares
     its own, and it is the default, not the last word: a handler that knows
@@ -193,21 +194,22 @@ def raise_site_code(exc: BaseException) -> str | None:
     return code if isinstance(code, str) else None
 
 
-def caller_message(exc: BaseException, served: Collection[str]) -> str:
-    """``exc``'s message as an MCP caller reads it.
-
-    A message carrying an ``api`` snippet (``python_route``) is followed by
-    where that snippet runs in this session: ``run_code`` when the session
-    serves it, the ``ltspice_mcp.api`` library when the operator turned it off,
-    so the text never names a tool the client cannot see. ``served`` is the
-    session's tool set.
-    """
-    message = str(exc)
-    if not getattr(exc, "python_route", False):
-        return message
+def python_route_text(served: Collection[str]) -> str:
+    """Where a Python snippet written against ``api`` runs, for a session
+    serving the tools ``served``: ``run_code`` when it is served, the
+    ``ltspice_mcp.api`` library when the operator turned it off, so the text
+    never names a tool the client cannot see."""
     if "run_code" in served:
-        return f"{message} run_code runs it with api in scope."
+        return "run_code runs it with api in scope."
     return (
-        f"{message} Run it in your own Python: "
-        "from ltspice_mcp.api import Api; api = Api(working_dir=...)."
+        "Run it in your own Python: from ltspice_mcp.api import Api; api = Api(working_dir=...)."
     )
+
+
+def caller_message(exc: BaseException, served: Collection[str]) -> str:
+    """``exc``'s message as an MCP caller reads it: followed by
+    :func:`python_route_text` when it carries an ``api`` snippet."""
+    message = str(exc)
+    if getattr(exc, "python_route", False):
+        return f"{message} {python_route_text(served)}"
+    return message
