@@ -52,6 +52,13 @@ defaults follow it. An unknown or irrelevant constructor override raises
 `TypeError` rather than being silently ignored (a wire-only or server-only name
 such as `tool_profile` is rejected here rather than quietly accepted).
 
+The precedence holds for the life of the session. The engine re-reads
+`[security] allowed_paths` when the config file changes, so an agent can widen
+the sandbox without a restart, but an explicit `Api(allowed_paths=...)` pins
+the sandbox: a TOML written or edited later (a server session in the same
+directory writes its default config on its first tool call) does not replace
+it, and a refusal in that session names the argument rather than the file.
+
 Library mode never calls `logging.basicConfig`. The server's `force=True`
 logging setup stays in server startup; the library uses module loggers only.
 
@@ -226,8 +233,8 @@ class-definition time from the same renderer, so `help(api.edit_schematic)` and
 **Relative path arguments are taken from `working_dir`**, not the process CWD.
 The resolve chain carries an optional base directory in a context variable, and
 the `Api` sets it around every marshalled call, anchoring both the user path and
-any relative entry in `allowed_paths` (the generated TOML ships
-`allowed_paths = ["."]`, which is what exposed the CWD behavior). **MCP server
+any relative entry in `allowed_paths` (a config file's
+`allowed_paths = ["."]` is what exposed the CWD behavior). **MCP server
 resolution is unchanged**, and a test pins that; the base is this interface's opt-in
 only.
 
@@ -238,7 +245,10 @@ inherits the anchoring; `_call`'s contract is unchanged.
 
 ## 6. Errors
 
-- A typed engine exception that *escapes* a handler propagates unchanged.
+- A typed engine exception that *escapes* a handler propagates unchanged. A
+  `PathSecurityError` gains one note (PEP 678) carrying the sandbox guidance a
+  tool call's `hint` carries, so a traceback names the setting that widens the
+  sandbox; its type and message are untouched.
 - `result.isError=True` raises `ApiCallError`, carrying the complete structured
   payload plus convenience attributes `code`, `commit_state`, `job_id` and
   `control_token` — a post-submit or post-commit payload preserves every

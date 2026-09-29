@@ -7,12 +7,13 @@ a cluster of import cycles — see ``lib/job_types.py`` for the full story.
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import SANDBOX_ENV, SANDBOX_KEY, SANDBOX_SECTION, ServerConfig
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
@@ -79,8 +80,17 @@ class SessionState:
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
-    sandbox_stamp: tuple[int, int] | None = None
-    """(mtime_ns, size) of the config file as last read for the sandbox."""
+    sandbox_pinned: bool = False
+    """The sandbox was given explicitly when the session was opened
+    (``Api(allowed_paths=...)``). That outranks the file at startup, so it keeps
+    outranking it: the sandbox does not follow the file for this session."""
+    _sandbox: tuple[tuple[int, int] | None, list[Path]] = field(
+        init=False, repr=False, compare=False
+    )
+    """The config file's (mtime_ns, size) stamp and the sandbox read at that
+    stamp. One tuple, replaced in one assignment: resource reads and some path
+    resolutions run on worker threads, and a reader must never pair a new
+    stamp with an old list — nor wait on another thread's reload to find out."""
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
     auto-detection). Logged at startup and carried verbatim on the ``inspect``
@@ -161,7 +171,7 @@ class SessionState:
         return self._surface[2]
 
     def __post_init__(self) -> None:
-        self.sandbox_stamp = _file_stamp(self.config.config_path)
+        self._sandbox = (_file_stamp(self.config.config_path), self.config.allowed_paths)
 
     def allowed_paths(self) -> list[Path]:
         """The sandbox, re-read from the config file whenever that file changed.
@@ -169,15 +179,63 @@ class SessionState:
         The refusal an agent gets names the config line that widens the sandbox;
         picking the edit up on the next call is what makes that line the agent's
         own to act on. Only ``[security] allowed_paths`` follows the file: the
-        rest of it is startup state (detected simulators, runners, caches).
+        rest of it is startup state (detected simulators, runners, caches). A
+        pinned sandbox does not follow it at all; see ``sandbox_pinned``.
+
+        Every reader of the sandbox calls this: ``config.allowed_paths`` is
+        the list the session opened with, and a report or a resolution made
+        after an edit must see the edit. Two threads that notice the same edit
+        both reload it, which is harmless; neither blocks the other.
         """
+        if self.sandbox_pinned:
+            return self.config.allowed_paths
         stamp = _file_stamp(self.config.config_path)
-        if stamp != self.sandbox_stamp:
-            self.sandbox_stamp = stamp
-            self.config.allowed_paths = ServerConfig.load(
+        seen, paths = self._sandbox
+        if stamp != seen:
+            paths = ServerConfig.load(
                 self.config.config_path, overrides={"working_dir": self.config.working_dir}
             ).allowed_paths
-        return self.config.allowed_paths
+            self._sandbox = (stamp, paths)
+        return paths
+
+    def sandbox_guidance(self) -> str:
+        """What a caller refused by the sandbox can do about it.
+
+        An agent cannot widen the sandbox itself except through the setting
+        that holds it, so a refusal that does not name that setting (and the
+        move-the-file fallback) dead-ends. Every surface that reports a refusal
+        carries this text: a tool's structured ``hint``, a failed resource
+        read, and a note on the exception the Python API raises. One builder,
+        so they cannot drift.
+        """
+        allowed = ", ".join(str(p) for p in self.allowed_paths())
+        config_path = self.config.config_path
+        key = f"[{SANDBOX_SECTION}] {SANDBOX_KEY}"
+        # The branches follow the loader's precedence: an explicit argument, then
+        # the environment, then the file.
+        if self.sandbox_pinned:
+            widen = (
+                f"open a new Api with its directory added to {SANDBOX_KEY}: this "
+                f"session's sandbox is the Api({SANDBOX_KEY}=...) it was opened with, "
+                f"which replaces {key} in {config_path} for the whole session."
+            )
+        elif os.environ.get(SANDBOX_ENV):
+            widen = (
+                f"widen {SANDBOX_ENV}, which is set in the server's environment and "
+                f"replaces {key} in {config_path} (restart required)."
+            )
+        else:
+            widen = (
+                f"add its directory to {key} in {config_path} — that file is re-read "
+                f"on the next call, no restart. {SANDBOX_ENV} sets the same list "
+                "and overrides the file (restart required)."
+            )
+        return (
+            f"Allowed paths: {allowed}\n"
+            "To work on this file: pass its content inline where the argument takes "
+            "text (a compare reference), copy it into one of those directories, or "
+            f"{widen} An inspect capabilities query shows the full sandbox configuration."
+        )
 
     @classmethod
     def create(
@@ -185,13 +243,16 @@ class SessionState:
         config: ServerConfig,
         available: dict[str, type],
         diagnostics: list[str] | None = None,
+        *,
+        sandbox_pinned: bool = False,
     ) -> "SessionState":
         """Factory method to create session state at server startup.
 
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session and logged at startup.
+        on the session and logged at startup. ``sandbox_pinned`` says the
+        caller gave ``allowed_paths`` explicitly (see the field).
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
 
@@ -217,6 +278,7 @@ class SessionState:
             working_dir=config.working_dir,
             job_registry=registry,
             diagnostics=diagnostics,
+            sandbox_pinned=sandbox_pinned,
         )
 
     # ------------------------------------------------------------------
