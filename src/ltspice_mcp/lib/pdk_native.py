@@ -20,10 +20,10 @@ from typing import Any, Literal
 
 from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.cursor_codec import canonical_hash, canonical_json
-from ltspice_mcp.lib.deck_staging import INCLUDE_HEADS, sha256_file
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.projection import KeepPlan, project_row
-from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import INCLUDE_HEADS, SpiceCard, TokenKind, lex, tokenize_body
 
 PROFILE = "sky130-e6f9c887-ngspice-v1"
 PIN_MANIFEST_SHA256 = "48f8c0953abca720520bfcc3729579d29b7f501c72dffac6ca564f0b21c2c589"

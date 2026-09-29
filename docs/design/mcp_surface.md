@@ -933,11 +933,11 @@ Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (blocking,
 ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
 `model-missing` (blocking at staging), `directive-arity` (blocking),
 `include-relative` (warning), `suffix-mega-milli` (warning), `temp-as-param`
-(blocking), `value-suffix-micro-sign` (warning: a `µ`/`μ` scale suffix, micro
-only to a reader that decodes the deck in the encoding it was written in),
-`value-suffix-nonascii` (blocking: any other non-ASCII character where a scale
-suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the simulator
-reads the bare number), and `op-degenerate` (a post-run observation with neutral evidence —
+(blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
+scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
+simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
+before the deck is linted, and `verify_circuit` warns about it for a deck run
+elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
 device list, currents, threshold, step — whose hint mentions `.nodeset`).
 
 ---

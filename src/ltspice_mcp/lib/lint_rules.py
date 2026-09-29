@@ -68,24 +68,9 @@ class _LintContext:
         return self.dialect == "ngspice" or "ngspice" in self.simulator_name.casefold()
 
     @functools.cached_property
-    def value_suffix_sites(self) -> tuple[tuple[Path, str | None, ValueSuffixSite], ...]:
-        """Non-ASCII suffix sites in the deck and its staged includes.
-
-        Each comes with the file it is in and the writer that file's header
-        names. The deck's title line is dropped; an include has none. A file
-        that is all ASCII has no site and is not lexed.
-        """
-        found = [
-            (self.path, deck_generator(self.text), site)
-            for site in value_suffix_sites(drop_title_card(self.cards))
-        ]
-        for path, text in self.includes:
-            if not text.isascii():
-                generator = deck_generator(text)
-                found.extend(
-                    (path, generator, site) for site in value_suffix_sites(lex(text).cards)
-                )
-        return tuple(found)
+    def include_cards(self) -> tuple[tuple[Path, str, list[SpiceCard]], ...]:
+        """Each staged include snapshot with its cards, lexed once for every rule."""
+        return tuple((path, text, lex(text).cards) for path, text in self.includes)
 
 
 def _finding(
@@ -300,8 +285,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
     """
     declared: set[str] = set()
     snapshot: dict[Path, list[SpiceCard]] = {}
-    for path, text in context.includes:
-        cards = lex(text).cards
+    for path, _text, cards in context.include_cards:
         declared.update(_declared_models(cards))
         snapshot[path.resolve(strict=False)] = cards
     visited: set[Path] = set(snapshot)
@@ -453,29 +437,26 @@ def deck_generator(text: str) -> str | None:
 
     Only the first lines are read: the exporter writes the header at the top.
     """
-    for line in text.splitlines()[:8]:
+    for line in text.split("\n", 8)[:8]:
         match = _GENERATOR_RE.match(line.strip())
         if match:
             return match.group(1)
     return None
 
 
-def value_suffix_evidence(
-    site: ValueSuffixSite, *, generated_by: str | None = None
-) -> dict[str, Any]:
+def value_suffix_evidence(site: ValueSuffixSite, *, generated_by: str | None) -> dict[str, Any]:
     """What a non-ASCII suffix site means, shared by the linter and verify_circuit.
 
     ``reason`` explains; the other keys are facts: the token, the character's
     code point, and either the ASCII spelling of a micro sign or the number the
     simulator reads in place of a character that is no scale at all.
     """
-    rest = site.token[len(site.number) + 1 :]
     evidence: dict[str, Any] = {
         "token": site.token,
         "suffix": f"U+{ord(site.suffix):04X}",
     }
     if site.micro:
-        spelling = f"{site.number}u{rest}"
+        spelling = f"{site.number}u{site.tail}"
         evidence["ascii_spelling"] = spelling
         evidence["reason"] = (
             f"'{site.suffix}' is a micro suffix only to a reader that decodes this "
@@ -488,10 +469,10 @@ def value_suffix_evidence(
     else:
         evidence["reads_as"] = site.number
         if site.misdecoded_micro:
-            intended = f"{site.number}u{rest[1:]}"
+            intended = f"{site.number}u{site.tail[1:]}"
             evidence["likely_intended"] = intended
             evidence["reason"] = (
-                f"'{site.token[len(site.number) : len(site.number) + 2]}' is a UTF-8 "
+                f"'{site.suffix}{site.tail[:1]}' is a UTF-8 "
                 "micro sign decoded as cp1252. Neither character is a scale "
                 f"suffix, so the simulator reads {site.number}, a factor of 1e6 "
                 f"from {intended}. Write {intended} if micro was meant."
@@ -508,32 +489,29 @@ def value_suffix_evidence(
     return evidence
 
 
-def _value_suffix_findings(
-    context: _LintContext, rule: LintRule, *, micro: bool
-) -> list[LintFinding]:
-    return [
-        _finding(
-            context,
-            rule,
-            line=site.line,
-            subject=site.token,
-            file=path,
-            evidence={
-                **value_suffix_evidence(site, generated_by=generated_by),
-                "directive": site.card.body,
-            },
-        )
-        for path, generated_by, site in context.value_suffix_sites
-        if site.micro is micro
-    ]
-
-
-def _value_suffix_micro_sign(context: _LintContext, rule: LintRule) -> list[LintFinding]:
-    return _value_suffix_findings(context, rule, micro=True)
-
-
 def _value_suffix_nonascii(context: _LintContext, rule: LintRule) -> list[LintFinding]:
-    return _value_suffix_findings(context, rule, micro=False)
+    findings: list[LintFinding] = []
+    files = [(context.path, context.text, drop_title_card(context.cards)), *context.include_cards]
+    for path, text, cards in files:
+        sites = [site for site in value_suffix_sites(cards) if not site.micro]
+        if not sites:
+            continue
+        generated_by = deck_generator(text)
+        findings.extend(
+            _finding(
+                context,
+                rule,
+                line=site.line,
+                subject=site.token,
+                file=path,
+                evidence={
+                    **value_suffix_evidence(site, generated_by=generated_by),
+                    "directive": site.card.body,
+                },
+            )
+            for site in sites
+        )
+    return findings
 
 
 def _normalize_signal(value: str) -> str:
@@ -558,13 +536,11 @@ RULES: tuple[LintRule, ...] = (
     # several. That silent-wrong-answer class is what this linter exists to
     # stop, and a warning under the default lint mode does not stop it.
     LintRule("temp-as-param", "blocking", _temp_as_param),
-    # A warning: a micro sign is micro to a reader that decodes the deck in
-    # the encoding it was written in, and a staged deck spells it 'u' anyway.
-    # The rule is for a deck that will be run somewhere else.
-    LintRule("value-suffix-micro-sign", "warning", _value_suffix_micro_sign),
-    # Blocking: any other non-ASCII character is never a scale suffix, so the
-    # deck runs at the bare number. 'Âµ' — a UTF-8 micro sign decoded as
-    # cp1252 — lands here and is a factor of 1e6 off.
+    # Blocking: a non-ASCII character where a scale suffix goes is never a
+    # scale, so the deck runs at the bare number. 'Âµ' — a UTF-8 micro sign
+    # decoded as cp1252 — lands here and is a factor of 1e6 off. A micro sign
+    # itself never reaches the linter: staging has spelled it 'u' by then, and
+    # verify_circuit reports it for a deck that will run elsewhere.
     LintRule("value-suffix-nonascii", "blocking", _value_suffix_nonascii),
 )
 
