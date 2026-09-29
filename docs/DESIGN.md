@@ -147,8 +147,9 @@ mutation instead:
   batch leaves the sheet unchanged, so recovery is re-reading the file, not
   undoing a partial write.
 - **`verify_circuit` comparison** — a committed sheet is exported on a
-  copy and compared against a reference netlist (equivalence or
-  structural diff), so unintended drift is visible immediately.
+  copy and compared against a reference netlist or schematic (equivalence or
+  structural diff; an `.asc` reference is exported the same way), so
+  unintended drift is visible immediately.
 
 ### Post-op validation pass
 
