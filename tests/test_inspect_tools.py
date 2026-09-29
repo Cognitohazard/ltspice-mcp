@@ -475,8 +475,6 @@ async def test_components_prefix_filter(netlist: Path, state_no_sim: SessionStat
 async def test_components_prefix_filter_asc_ignores_case(
     asc_file: Path, asc_state: SessionState, prefix: str
 ):
-    # The netlist branch compares first letters without regard to case; the
-    # .asc branch handed the prefix to spicelib as given, so 'r' found nothing.
     (res,) = await _run(
         asc_state, [{"kind": "components", "path": str(asc_file), "prefix": prefix}]
     )

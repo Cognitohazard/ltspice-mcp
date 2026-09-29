@@ -100,16 +100,23 @@ def _tail(text: str, cap: int) -> str:
     return text if len(text) <= cap else "..." + text[-cap:]
 
 
-def _namespace(api: Any) -> dict[str, Any]:
-    """The names a snippet starts with, rebuilt around the same live ``Api``.
+#: The names a snippet starts with besides ``__name__``, in the order the
+#: run_code descriptions list them.
+SNIPPET_NAMES: tuple[str, ...] = (
+    "api",
+    "np",
+    "load_raw",
+    "measurements",
+    "reference",
+    "window_and_clean",
+    "compute_signal_stats",
+)
 
-    The two signal primitives ride along because trace math is what a snippet
-    is most often for, and its natural next step, statistics on the derived
-    trace, is where plain numpy goes wrong: LTspice varies its timestep, so
-    ``np.mean`` over the samples over-weights the dense stretches around edges.
-    ``compute_signal_stats`` weights by time; having it in scope is what makes
-    it the obvious call rather than an import the snippet has to know about.
-    """
+
+def _namespace(api: Any) -> dict[str, Any]:
+    """The ``SNIPPET_NAMES``, rebuilt around the same live ``Api``. The signal
+    helpers are in scope so a derived trace's statistics are time-weighted
+    without an import."""
     import numpy as np
 
     from ltspice_mcp.api import compute_signal_stats, window_and_clean

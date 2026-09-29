@@ -83,15 +83,6 @@ class TestServerInstructions:
         for dead in ("run_simulation", "check_job", "bode_metrics", "create_netlist"):
             assert dead not in text
 
-    @pytest.mark.parametrize("served", [{"run_code"}, set()])
-    def test_instructions_route_trace_math_to_code(self, served: set[str]):
-        # A recipe reads one trace or a node pair. An agent that is not told
-        # up front where a product or function of traces goes adds behavioral
-        # sources to its deck and re-runs, so both editions name it.
-        text = build_instructions({"ltspice": _LT}, _LT, served=served)
-        assert "trace math" in text
-        assert ("run_code" in text) == ("run_code" in served)
-
 
 class _LT:
     pass
@@ -191,9 +182,10 @@ class TestBuildInstructions:
         silent = build_instructions({"ltspice": _LT}, _LT, served=())
         assert "run_code runs Python with api in scope" in default
         assert "run_code" not in silent
-        # Neither edition loses the library door.
+        # Neither edition loses the library door, or says trace math goes there.
         assert "from ltspice_mcp.api import Api" in silent
         assert "from ltspice_mcp.api import Api" in default
+        assert "trace math" in silent and "trace math" in default
 
 
 class TestInstructionHints:

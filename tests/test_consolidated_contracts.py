@@ -638,12 +638,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 160 characters so value's 'expr' and 'at' say what they
     # take: a field named for an expression, with no description, was read as
     # one, and 'at' being required on a multi-sample axis was stated nowhere.
-    # Raised by about 150 characters for one sentence in the description: a
-    # recipe's signal is a trace or a node pair, and other trace math is numpy
-    # on the traces. The field-level pointers are read only after a recipe is
-    # chosen, and an agent that passed V(a)-V(b) to signal_stats had already
-    # added behavioral sources to its deck by the time an error told it so.
-    "analyze_results": 19420,
+    # Raised by about 110 characters so the description says a signal is one
+    # trace or V(a,b) and where other trace math goes, before a recipe is
+    # chosen rather than in the error after an expression fails.
+    "analyze_results": 19380,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -1038,10 +1036,7 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
         assert "inspect(kind='reference'" in description
 
     def test_it_says_a_signal_is_not_an_expression(self):
-        """Read before any recipe is chosen, so an agent learns there that a
-        signal is one trace or a node pair and where other trace math goes,
-        rather than from the error after it has already worked around it. The
-        tool it runs in is gated, so the pointer is the guide, never run_code."""
+        """Names V(a,b) and where trace math goes, never the gated run_code."""
         description = _registered()["analyze_results"].description or ""
         assert "V(a,b)" in description
         assert "trace math" in description

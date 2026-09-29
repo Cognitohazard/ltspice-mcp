@@ -104,6 +104,10 @@ tool-surface changes.
 
 ### Added
 
+- `run_code` has `window_and_clean` and `compute_signal_stats` in scope, so a
+  derived trace's statistics are weighted by time; `np.mean` over LTspice's
+  variable timestep over-weights the samples packed around edges. The guide's
+  trace-math example goes on to them.
 - A `partial_progress` observation for every case the coordinator stops and
   whose simulator exit is seen. It gives the plot, its axis, the complete
   points on disk and the last axis value reached, read from the partial raw
@@ -142,17 +146,10 @@ tool-surface changes.
 
 ### Changed
 
-- Where trace math goes is stated where an agent reads first, not only in the
-  error it gets after trying an expression. The server instructions' code
-  clause reads "Loops, trace math", and `analyze_results`' description says a
-  recipe's signal is one trace or a node pair `V(a,b)`, never an expression,
-  with other trace math numpy on the traces. `run_code` now has
-  `window_and_clean` and `compute_signal_stats` in scope, and its description
-  says to take a derived trace's statistics with `compute_signal_stats`, which
-  weights by time: `np.mean` over LTspice's variable timestep over-weights the
-  samples packed around edges. The guide's trace-math example goes on to
-  those statistics, and the expression error's example is a product rather
-  than a difference a node pair already reads.
+- The server instructions and `analyze_results`' description say where trace
+  math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
+  numpy on the traces. Before, only the error after a failed expression said
+  so. That error's example is now a product, not a difference `V(a,b)` reads.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.
