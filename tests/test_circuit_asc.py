@@ -26,8 +26,12 @@ from tests._asc_ops import (
     blank_sheet_file,
     components_of,
     inspect_one,
+    load_editor,
+    structured_warnings,
     wire_pins,
 )
+from tests.conftest import FIXTURES_DIR
+from tests.test_verify_circuit import _run as run_verify_circuit
 
 
 def _result_text(result) -> str:
@@ -558,9 +562,7 @@ class TestOrientationPlacementAndRouting:
 # M270, which is M90 turned a further 180 degrees. Both composition orders
 # (mirror then rotate, rotate then mirror) agree on that relationship, so the
 # M90 evidence pins M270 as well.
-_MIRRORED_QUARTER_TURN_SHEET = (
-    Path(__file__).parent / "fixtures" / "nmos4_mirrored_quarter_turns.asc"
-)
+_MIRRORED_QUARTER_TURN_SHEET = FIXTURES_DIR / "nmos4_mirrored_quarter_turns.asc"
 _MIRRORED_QUARTER_TURN_PINS: dict[str, dict[str, tuple[int, int]]] = {
     "M1": {"D": (144, 112), "G": (224, 64), "S": (240, 112), "B": (192, 112)},
     "M2": {"D": (528, 64), "G": (448, 112), "S": (432, 64), "B": (480, 64)},
@@ -571,17 +573,16 @@ _MIRRORED_QUARTER_TURN_PINS: dict[str, dict[str, tuple[int, int]]] = {
 class TestMirroredQuarterTurnsMatchLTspice:
     """M90 and M270 pins land where LTspice draws them.
 
-    LTspice rotates a mirrored placement first and then negates x, so M90 maps
-    a symbol point (x, y) to (y, x). If the order is flipped, M90 and M270 swap:
-    every pin of a sheet LTspice wired correctly then reads as floating, every
-    wire end at those pins as dangling, and a sheet the server builds at either
-    orientation is miswired once LTspice opens it.
+    With the mirror applied in the wrong order M90 and M270 swap: every pin of a
+    sheet LTspice wired correctly then reads as floating, every wire end at
+    those pins as dangling, and a sheet the server builds at either orientation
+    is miswired once LTspice opens it.
     """
 
     @pytest.fixture
-    def sheet(self, asc_state: SessionState, work_dir: Path) -> Path:
+    def sheet(self, work_dir: Path) -> Path:
         dest = work_dir / _MIRRORED_QUARTER_TURN_SHEET.name
-        dest.write_bytes(_MIRRORED_QUARTER_TURN_SHEET.read_bytes())
+        _copy_file(_MIRRORED_QUARTER_TURN_SHEET, dest)
         return dest
 
     async def test_resolved_pins_are_the_wire_ends_ltspice_drew(
@@ -601,25 +602,16 @@ class TestMirroredQuarterTurnsMatchLTspice:
     async def test_verify_circuit_finds_nothing_floating_or_dangling(
         self, asc_state: SessionState, sheet: Path
     ):
-        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-
-        result = await handle_verify_circuit(
-            VerifyCircuitInput.model_validate(
-                {"path": str(sheet), "checks": ["symbols", "layout"], "render": False}
-            ),
-            asc_state,
+        data = await run_verify_circuit(
+            asc_state, path=str(sheet), checks=["symbols", "layout"], render=False
         )
-        data = result.structured_content
-        assert data is not None
         assert data["checks_run"] == ["symbols", "layout"]
         assert data["findings"] == []
 
     async def test_post_op_warnings_find_no_floating_pin(
         self, asc_state: SessionState, sheet: Path
     ):
-        from ltspice_mcp.lib.schematic_ops import get_asc_editor, post_op_warnings
-
-        assert post_op_warnings(get_asc_editor(sheet, asc_state)) == []
+        assert structured_warnings(load_editor(asc_state, sheet)) == []
 
 
 # Canonical device archetypes the schematic-build path MUST handle, beyond the
