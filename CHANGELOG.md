@@ -94,6 +94,13 @@ tool-surface changes.
   names, quoted strings and include paths are left alone, a file with nothing
   to fold keeps its original bytes, and the schematic is never touched. Each
   folded file is reported as a `micro_sign_folded` observation.
+- `inspect(kind="components")` on an `.asc` compares `prefix` without regard
+  to case, as the netlist branch already did. The prefix went to spicelib as
+  given, so `prefix: "r"` returned no components on a sheet full of resistors.
+- The `wire_pins` op's `waypoints` description no longer tells callers to omit
+  waypoints and "let the router pick the elbow". There is no router: with no
+  waypoints the two ends must share an x or a y, or the route is refused as
+  diagonal.
 
 ### Added
 
@@ -135,6 +142,17 @@ tool-surface changes.
 
 ### Changed
 
+- Where trace math goes is stated where an agent reads first, not only in the
+  error it gets after trying an expression. The server instructions' code
+  clause reads "Loops, trace math", and `analyze_results`' description says a
+  recipe's signal is one trace or a node pair `V(a,b)`, never an expression,
+  with other trace math numpy on the traces. `run_code` now has
+  `window_and_clean` and `compute_signal_stats` in scope, and its description
+  says to take a derived trace's statistics with `compute_signal_stats`, which
+  weights by time: `np.mean` over LTspice's variable timestep over-weights the
+  samples packed around edges. The guide's trace-math example goes on to
+  those statistics, and the expression error's example is a product rather
+  than a difference a node pair already reads.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.

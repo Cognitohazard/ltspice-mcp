@@ -1370,9 +1370,15 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         # Cached editor + component reads stay on the event loop.
         editor = get_asc_editor(path, state)
         try:
-            refs = sorted(editor.get_components(q.prefix) if q.prefix else editor.get_components())
+            refs = sorted(editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
+        # Filtered here, by first letter and without regard to case, the way the
+        # netlist branch does. spicelib's get_components(prefixes) tests the first
+        # character's membership in the string as given, so a lowercase 'r'
+        # matched no 'R1' and the sheet read as having no resistors.
+        if q.prefix:
+            refs = [ref for ref in refs if ref[:1].upper() == q.prefix.upper()]
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
         rows = _components_asc_page(editor, page["items"], detail)
     else:

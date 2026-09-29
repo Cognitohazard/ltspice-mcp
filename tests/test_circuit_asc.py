@@ -13,6 +13,7 @@ from mcp.types import TextContent
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.schematic_ops import (
+    OpWirePins,
     build_on_wire_predicate,
     point_on_segment,
 )
@@ -289,6 +290,16 @@ class TestEditDirectiveCommentKind:
         # contain Latin-1 µ characters, so read raw bytes and replace.
         text = asc_file.read_bytes().decode("utf-8", errors="replace")  # noqa: ASYNC240
         assert "zap me" not in text
+
+
+def test_waypoints_description_promises_no_router():
+    # The route is the endpoints and waypoints joined in order, and a leg that
+    # is neither horizontal nor vertical is refused (test_diagonal_rejected).
+    # The field used to tell callers to omit waypoints and "let the router pick
+    # the elbow"; there is no router, so the advice produced that refusal.
+    text = OpWirePins.model_fields["waypoints"].description or ""
+    assert "router" not in text
+    assert "share an x or a y" in text
 
 
 @pytest.mark.asyncio
