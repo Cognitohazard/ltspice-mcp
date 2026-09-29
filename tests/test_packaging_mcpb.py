@@ -81,3 +81,14 @@ def test_bundle_versions_agree() -> None:
         "mcpb manifest": _manifest()["version"],
     }
     assert len(set(versions.values())) == 1, f"bundle versions disagree: {versions}"
+
+
+def test_uv_bundle_installs_the_raster_extra() -> None:
+    """A Desktop user cannot add an extra to a bundle they did not build, so a
+    bundle without it can never render a PNG, however the host is set up. With
+    it, installing native Cairo is the whole fix, and the server names that
+    library, rather than an extra the user has no way to install, when it is
+    missing."""
+    pyproject = MCPB_DIR / "pyproject.toml"
+    deps = tomllib.loads(pyproject.read_text("utf-8"))["project"]["dependencies"]
+    assert "ltspice-mcp[raster]" in deps

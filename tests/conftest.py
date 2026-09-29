@@ -1,10 +1,12 @@
 """Shared fixtures and helpers for ltspice-mcp tests."""
 
 import asyncio
+import importlib.abc
 import os
 import shutil
 import struct
 import subprocess
+import sys
 import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
@@ -709,6 +711,56 @@ def sample_netlist(work_dir: Path) -> Path:
         ".END\n"
     )
     return p
+
+
+# ---------------------------------------------------------------------------
+# PNG rasterizer absence
+# ---------------------------------------------------------------------------
+#
+# The optional rasterizer is missing in one of two ways, and each must be
+# reported as itself. Both fixtures fail the real `import cairosvg` the way the
+# environment would, so the server's own loader decides which half is missing.
+
+
+class _FailingCairosvgImport(importlib.abc.MetaPathFinder):
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "cairosvg":
+            raise self._error
+        return None
+
+
+def _fail_cairosvg_import(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    monkeypatch.delitem(sys.modules, "cairosvg", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_FailingCairosvgImport(error), *sys.meta_path])
+
+
+@pytest.fixture
+def raster_extra_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 'raster' extra is not installed: importing cairosvg finds no module."""
+    _fail_cairosvg_import(
+        monkeypatch, ModuleNotFoundError("No module named 'cairosvg'", name="cairosvg")
+    )
+
+
+@pytest.fixture
+def raster_native_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The extra is installed but libcairo is not.
+
+    cairocffi opens the native library while it is imported, and reports a
+    library it cannot find as an OSError, not an ImportError. The message is
+    the one it builds on a host with no Cairo at all.
+    """
+    _fail_cairosvg_import(
+        monkeypatch,
+        OSError(
+            'no library called "cairo-2" was found\n'
+            'no library called "cairo" was found\n'
+            'no library called "libcairo-2" was found'
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

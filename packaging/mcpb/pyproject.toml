@@ -6,11 +6,15 @@
 #
 # package = false: this is just a dependency set for `uv run`, not a buildable
 # package, so uv installs the dependencies without trying to build this project.
+#
+# The raster extra is included because a Desktop user cannot add an extra to a
+# bundle afterwards. PNG rendering also needs the native Cairo library, which
+# no wheel ships; without it the server renders SVG and says which is missing.
 [project]
 name = "ltspice-mcp-desktop-extension"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["ltspice-mcp"]
+dependencies = ["ltspice-mcp[raster]"]
 
 [tool.uv]
 package = false
