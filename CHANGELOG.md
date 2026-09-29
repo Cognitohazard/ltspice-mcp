@@ -95,6 +95,24 @@ tool-surface changes.
   to fold keeps its original bytes, and the schematic is never touched. Each
   folded file is reported as a `micro_sign_folded` observation.
 
+- A PNG render that fell back to SVG blamed the optional `raster` extra even
+  when the extra was installed and the native Cairo library it loads was what
+  was missing, so the advice was to install something already installed. The
+  `render` failure, `render.note` and the hint now name which of the two is
+  missing, with the remedy for the server's platform: the install command for
+  the extra, or how to install Cairo on Linux, macOS or Windows. On Windows
+  that includes putting the DLL folder on `PATH` or in
+  `CAIROCFFI_DLL_DIRECTORIES`.
+- A `verify_circuit` render with `delivery: "inline"` or `"both"` that returned
+  no image said only `returned_inline: false`. An agent that cannot read files
+  had no way to tell the drawing existed. The render block now carries
+  `inline_skipped` (`svg_requested` or `png_unavailable`). `render.note` says
+  that inline delivery is PNG only and where the file was written, and when
+  SVG was requested the hint says so too. SVG markup is still not returned
+  inline. It runs about 600 bytes a component, which costs more than the PNG
+  past a handful of parts, and structured-only clients drop the text channel
+  it would ride on.
+
 ### Added
 
 - A `partial_progress` observation for every case the coordinator stops and
@@ -133,6 +151,11 @@ tool-surface changes.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
   model profile, independently replayable samples and persisted provenance.
 
+- `inspect(kind="capabilities")` reports `render: {png, missing, reason,
+  remedy}`. It says whether `verify_circuit` can make the PNG it returns
+  inline and, if not, whether the `raster` extra or the native Cairo library is
+  missing and how to install it, before anything is drawn.
+
 ### Changed
 
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
@@ -152,6 +175,11 @@ tool-surface changes.
   server's per-case limit, `null` when unset) and `export_timeout_s`.
   `[simulation] timeout` bounds only LTspice netlist export, which is all it
   ever bounded.
+
+- The Claude Desktop extension installs `ltspice-mcp[raster]`. A Desktop user
+  cannot add an extra to the bundle, so PNG rendering was impossible there;
+  installing native Cairo is now the only step. The README documents the
+  extra and the per-platform Cairo install.
 
 ### Security
 

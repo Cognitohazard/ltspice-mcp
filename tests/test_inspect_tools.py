@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import sys
 import typing
 from pathlib import Path
 
@@ -23,6 +24,7 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import raster
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
@@ -132,6 +134,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "config_path",
         "python",
         "python_api",
+        "render",
     ):
         assert key in data, f"missing capabilities key {key!r}"
     # The library door, named where an agent already looks for what the
@@ -166,6 +169,35 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+@pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
+async def test_capabilities_reports_png_rendering(cap_state: SessionState):
+    """An agent deciding between an inline PNG and a file path asks here first,
+    rather than rendering to find out."""
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"]["render"] == {"png": True, "missing": None, "reason": None, "remedy": None}
+
+
+async def test_capabilities_reports_a_missing_raster_extra(
+    cap_state: SessionState, raster_extra_missing: None
+):
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    render = res["data"]["render"]
+    assert render["png"] is False
+    assert render["missing"] == "extra"
+    assert "ltspice-mcp[raster]" in render["remedy"]
+
+
+async def test_capabilities_reports_a_missing_native_cairo(
+    cap_state: SessionState, raster_native_missing: None
+):
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    render = res["data"]["render"]
+    assert render["png"] is False
+    assert render["missing"] == "native_library"
+    assert "Cairo" in render["reason"]
+    assert render["remedy"] == raster.native_library_remedy(sys.platform)
 
 
 async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):

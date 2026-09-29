@@ -652,7 +652,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
     # the description does not say it looks at.
-    "verify_circuit": 4850,
+    # Raised by 30 characters so render.format says a PNG also needs native
+    # Cairo and that inspect capabilities reports whether it works here: the
+    # extra was the only requirement it named, and a host with the extra but
+    # no libcairo had no way to find out before a render fell back to SVG.
+    "verify_circuit": 4880,
     # Job/case addressing, windowing, and delivery flags.
     "plot_waveform": 3200,
 }
