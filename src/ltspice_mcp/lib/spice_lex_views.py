@@ -734,6 +734,22 @@ def body_has_stray_kv_remnant(body: str) -> bool:
     return False
 
 
+def read_instance(card: SpiceCard) -> InstanceLine | None:
+    """The typed view of an instance card, or None when it cannot be read.
+
+    A body that lexed but carries a broken ``k=v`` remnant is unreadable too,
+    since its view would describe a truncated card. The one rule behind every
+    ``<unparseable>`` a netlist read reports.
+    """
+    # A remnant follows a KEY=VALUE, so a body with no '=' cannot carry one.
+    if "=" in card.body and body_has_stray_kv_remnant(card.body):
+        return None
+    try:
+        return InstanceLine.from_card(card)
+    except Exception:  # any view fault is an unreadable card
+        return None
+
+
 def instances_by_ref(cards) -> dict[str, SpiceCard]:
     """Lowercased ``ref`` → instance-card lookup. Skips cards with no ref."""
     return {c.name.lower(): c for c in cards if c.kind == "instance" and c.name}

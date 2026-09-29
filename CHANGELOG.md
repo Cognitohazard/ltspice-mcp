@@ -14,6 +14,16 @@ tool-surface changes.
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
 - Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+- Symbols placed at `M90` and `M270` had those two orientations swapped. LTspice
+  rotates a mirrored placement first and then mirrors it, so `M90` takes a
+  symbol point `(x, y)` to `(y, x)`. The server applied the mirror first. On a
+  sheet LTspice wired correctly, `inspect` reported the pins in the wrong place
+  and `verify_circuit` reported floating pins, dangling wire ends, wires through
+  symbol bodies and dropped wires. `M0`, `M180` and every `R` orientation were
+  unaffected. **Sheets built by earlier versions with `add_component` or
+  `wire_pins` at `M90` or `M270` put the wires at the wrong pin positions, so
+  those parts are miswired when LTspice opens the sheet.** Rebuild or rewire
+  those parts.
 - A micro-sign scale suffix (`23µ`) no longer changes value depending on the
   LTspice version that reads the deck. Case decks, and staged decks whose
   references were rewritten, are written as UTF-8, so a `µ` reached the
@@ -49,6 +59,13 @@ tool-surface changes.
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
   statistical provenance. The store format is version 2.
+
+### Security
+
+- Dependency upgrade for a published advisory in the locked runtime set:
+  `pyjwt` 2.13.0 → 2.15.1 (CVE-2026-102274). It arrives transitively via the
+  MCP SDK, whose only use of it is client-side OAuth credentials, which this
+  server does not import.
 
 ## [0.6.1] - 2026-09-08
 

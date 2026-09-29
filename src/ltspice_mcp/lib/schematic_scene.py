@@ -1132,8 +1132,13 @@ def _attr_texts(raw: _RawSymbol, proto: SymbolProto, ox: int, oy: int, rot: str)
 # then points on the sheet. The upright four are absent because their text stays
 # horizontal, so there is no run direction to derive: R180 reverses that axis and
 # M0 mirrors it, but LTspice draws their text left-to-right all the same, so the
-# axis rule below is scoped to the turns listed here.
-_QUARTER_TURNS = {"R90": "down", "R270": "up", "M90": "up", "M270": "down"}
+# axis rule below is scoped to the turns listed here. The direction is read off
+# the shared transform rather than restated, so it cannot disagree with where
+# the same placement puts the pins.
+_QUARTER_TURNS = {
+    rot: "down" if _apply_rotation(1, 0, rot)[1] > 0 else "up"
+    for rot in ("R90", "R270", "M90", "M270")
+}
 
 
 def _attr_text_placement(align: str, rot: str, *, explicit: bool) -> tuple[int, str]:
