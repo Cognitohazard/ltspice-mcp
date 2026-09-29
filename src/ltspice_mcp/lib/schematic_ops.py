@@ -1789,8 +1789,8 @@ _RotationLiteral = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M2
 # coordinate convention is stated once on the ``ops`` field instead of on the
 # dozen x/y pairs below.
 _ROTATION_DESCRIPTION = (
-    "'R<deg>' rotates clockwise by that many degrees, 'M<deg>' mirrors "
-    "horizontally and then rotates; pins move with the body."
+    "'R<deg>' rotates clockwise by that many degrees, 'M<deg>' rotates the same "
+    "way and then mirrors horizontally; pins move with the body."
 )
 _REFERENCE_DESCRIPTION = "Reference designator of an existing component, e.g. 'R1', 'M3'."
 COORDINATE_DESCRIPTION = (
