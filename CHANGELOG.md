@@ -22,6 +22,13 @@ tool-surface changes.
   launched when the scoped kill is not confirmed. It is clamped below Windows'
   32-bit millisecond wait. A run spicelib does end names its `TimeoutExpired`
   in the failure instead of a bare -2.
+- Stopping a case makes up to five scoped kills inside the kill grace rather
+  than one. A stop that landed between launch and the simulator's spawn found
+  no process, and the simulator then ran on with its concurrency slot
+  reserved. The kill also reaches a simulator this server launched under a
+  name it does not know, such as a wrapper or launcher script and its child,
+  matched by the run deck path in its arguments. Unused re-scan constants from
+  the removed batch runner are gone.
 - A case stopped for `run_timeout`, `job_deadline` or `cancelled` keeps the
   killed run's diagnostics again, as the 0.6.0 notes promised but the
   experiment path had dropped. Its failure evidence carries the bound that

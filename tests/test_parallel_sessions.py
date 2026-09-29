@@ -445,6 +445,31 @@ class TestScopedKill:
         self._iter(monkeypatch, [ghost])
         assert kill_simulator_by_token(token, {"ngspice"}) == 0
 
+    def test_a_launched_child_under_another_name_is_killed_by_its_deck_path(self, tmp_path: Path):
+        """A wrapper or launcher the name gate does not know is still our child.
+
+        Real processes, because the route is ancestry: a child of this process
+        whose argument is the case's run deck dies, whatever it is called, and
+        a child that only mentions the token (as the WSL process query and a
+        script named after a case do) is spared.
+        """
+        token = "exp_wrapped_1790000000_ab12cd34_case_0"
+        sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+        launched = subprocess.Popen([*sleeper, str(tmp_path / f"{token}.cir")])
+        bystanders = [
+            subprocess.Popen([*sleeper, str(tmp_path / f"{token}.py")]),
+            subprocess.Popen([*sleeper, f"*{token}.*"]),
+        ]
+        try:
+            assert kill_simulator_by_token(token, {"ngspice"}) == 1
+            assert launched.wait(timeout=10) is not None
+            assert all(proc.poll() is None for proc in bystanders)
+        finally:
+            for proc in (launched, *bystanders):
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+
     def test_empty_inputs_kill_nothing(self, monkeypatch):
         def _must_not_scan(attrs):
             raise AssertionError("process table must not be scanned")

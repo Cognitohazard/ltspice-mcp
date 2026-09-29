@@ -65,6 +65,13 @@ DEFAULT_KILL_GRACE_S = 10.0
 #: retained permit comes back through the late-exit path.
 SPICELIB_TIMEOUT_MARGIN_S = 60.0
 
+#: Scoped kills made for one stopped case, and the pause between them, all
+#: inside its kill grace. One scan can miss: spicelib returns from a launch
+#: before its worker thread has spawned the simulator, so a stop landing in
+#: that gap finds no process yet.
+KILL_MAX_PASSES = 5
+KILL_RESCAN_INTERVAL_S = 0.5
+
 RunTimeoutSource = Literal["request", "server_default"]
 StopReason = Literal["cancelled", "job_deadline", "run_timeout"]
 
@@ -1146,22 +1153,8 @@ class ExperimentRunner(RunnerBase):
         reason: StopReason,
     ) -> None:
         cause, limits = _stop_bound(execution, reason)
-        try:
-            await self._kill_case(case.run_token)
-        except Exception as exc:
-            case.observations.append(
-                {
-                    "code": "kill_attempt_failed",
-                    "kind": "execution",
-                    "detail": f"Scoped simulator termination raised an error: {exc}",
-                }
-            )
-        try:
-            outcome = await asyncio.wait_for(
-                asyncio.shield(future),
-                timeout=execution.request.kill_grace_s,
-            )
-        except TimeoutError:
+        outcome = await self._kill_until_exit(case, future, execution.request.kill_grace_s)
+        if outcome is None:
             terminal_status = "cancelled" if reason == "cancelled" else "failed"
             self._mark_case(
                 execution,
@@ -1207,6 +1200,53 @@ class ExperimentRunner(RunnerBase):
             evidence=_stopped_run_evidence(limits, outcome),
         )
         self._release_slot(execution, case.case_id)
+
+    async def _kill_until_exit(
+        self,
+        case: ExperimentCase,
+        future: asyncio.Future[RunOutcome],
+        grace_s: float,
+    ) -> RunOutcome | None:
+        """Kill the case's simulator until it reports exit; None if it never does.
+
+        The grace period starts once the first kill has returned (on WSL that
+        kill is itself a Windows process query that can take many seconds), and
+        up to ``KILL_MAX_PASSES`` kills are made inside it,
+        ``KILL_RESCAN_INTERVAL_S`` apart. A failing kill is recorded once.
+        """
+        failure_noted = False
+
+        async def kill() -> None:
+            nonlocal failure_noted
+            try:
+                await self._kill_case(case.run_token)
+            except Exception as exc:
+                if not failure_noted:
+                    failure_noted = True
+                    case.observations.append(
+                        {
+                            "code": "kill_attempt_failed",
+                            "kind": "execution",
+                            "detail": f"Scoped simulator termination raised an error: {exc}",
+                        }
+                    )
+
+        await kill()
+        deadline = self.loop.time() + grace_s
+        for kill_pass in range(1, KILL_MAX_PASSES + 1):
+            remaining = max(0.0, deadline - self.loop.time())
+            wait = (
+                remaining
+                if kill_pass == KILL_MAX_PASSES
+                else min(remaining, KILL_RESCAN_INTERVAL_S)
+            )
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), wait)
+            except TimeoutError:
+                if self.loop.time() >= deadline:
+                    return None
+            await kill()
+        return None
 
     def _handle_case_completion(
         self,
