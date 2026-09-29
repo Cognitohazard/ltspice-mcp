@@ -807,7 +807,7 @@ C1 out 0 {C}
 | res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `inspect(kind="symbol")` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M90→(y,x), M180→(x,-y), M270→(-y,-x). Use `inspect(kind="symbol")` for exact positions.
 
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols are 3-terminal — a MOSFET's bulk ties internally to its source, and a BJT has no separate substrate pin. When you need the body/substrate on its own net (e.g. a non-source bulk bias), use the 4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
 
