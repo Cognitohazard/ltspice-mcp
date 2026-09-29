@@ -40,6 +40,13 @@ tool-surface changes.
 - Job run listings accept field projection, including explicit full native
   statistical provenance. The store format is version 2.
 
+### Security
+
+- Dependency upgrade for a published advisory in the locked runtime set:
+  `pyjwt` 2.13.0 → 2.15.1 (CVE-2026-102274). It arrives transitively via the
+  MCP SDK, whose only use of it is client-side OAuth credentials, which this
+  server does not import.
+
 ## [0.6.1] - 2026-09-08
 
 ### Fixed
