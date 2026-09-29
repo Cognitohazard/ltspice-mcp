@@ -644,8 +644,8 @@ class CompareSpec(StrictModel):
 
     reference: str = Field(
         description=(
-            "Reference netlist: a file path, or literal netlist text (anything "
-            "containing a newline is read as text)."
+            "A netlist or .asc path, or netlist text (anything with a newline). "
+            "An .asc is compared as its LTspice export."
         ),
     )
     anchors: list[str] | None = Field(
