@@ -21,7 +21,11 @@ Checks by file kind:
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
 connectivity engine (every include/lib open gated by ``safe_path`` so an in-deck
 include that escapes the allowed roots is denied and never read); ``structural_diff``
-reuses the shipped ``diff_circuit`` internals for an added/removed/changed delta.
+lexes both decks and reports an added/removed/changed delta over the parsed cards,
+leaving out the boilerplate LTspice's netlister adds to every export. Both modes
+compare netlists: an ``.asc`` under test is compared as its export, so an ``.asc``
+reference is exported the same way, and with no exporter the compare fails rather
+than diff a schematic's attributes against a netlist's cards.
 
 The three channels stay separate. ``observations`` are facts about what the checks
 could see — an unresolved symbol drawn as a placeholder, a finding list truncated
@@ -56,21 +60,22 @@ import base64
 import contextlib
 import functools
 import hashlib
+import re
 import shutil
-from collections.abc import Sequence
+import uuid
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
 from mcp import types
 from pydantic import BeforeValidator, Field
-from spicelib import AscEditor
 
 from ltspice_mcp.errors import PathSecurityError
-from ltspice_mcp.lib import services
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.filelock import circuit_file_lock
+from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
     NetlistGraph,
@@ -81,7 +86,6 @@ from ltspice_mcp.lib.netlist_graph import (
 from ltspice_mcp.lib.raster import RenderedImage
 from ltspice_mcp.lib.schematic_ops import (
     is_asc,
-    make_editor,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.schematic_scene import (
@@ -128,67 +132,13 @@ from ltspice_mcp.tools._base import (
 # so a refusal the editor enforces and a finding this tool reports cannot drift.
 
 
-def _norm_micro(s: str) -> str:
-    """Map both micro codepoints (µ U+00B5, μ U+03BC) to ASCII 'u' so a value
-    LTspice renders with the micro sign compares equal to the same value
-    authored as 'u' (e.g. 1µ vs 1u). Used ONLY for diff equality, never on the
-    displayed strings — a real magnitude change like 1u vs 2u still differs."""
-    return s.replace("µ", "u").replace("μ", "u")
-
-
-def _component_signature(comp: dict) -> str:
-    """Comparable string for a component: its Value plus any extra SYMATTR
-    attributes (Value2/SpiceLine/SpiceModel). ``set_component_attribute`` edits
-    land in these attributes and change the exported netlist, so diff_circuit
-    must compare them too — otherwise such an edit reads as 'no differences'."""
-    value = str(comp["value"])
-    attrs = comp.get("attributes") or {}
-    if not attrs:
-        return value
-    attr_str = "; ".join(f"{k}={attrs[k]}" for k in sorted(attrs))
-    return f"{value} | {attr_str}"
-
-
-def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], str | None]:
-    """Return (components, directive_lines, parse_error) for a circuit file.
-
-    Reuses ``services.extract_{asc,netlist}_info`` so unparseable component
-    values, AscEditor dispatch, and directive collection all flow through the
-    canonical path. No second disk read. ``parse_error`` is None on success,
-    or a short message when the file could not be parsed — so the diff can
-    flag an unreadable file rather than treat it as an empty circuit (which
-    would report every component of the other file as a removal).
-    """
-    if is_asc(path):
-        try:
-            ed = make_editor(path)
-        except Exception as e:
-            return {}, set(), f"{path.name} could not be parsed ({e})"
-        assert isinstance(ed, AscEditor)
-        info = services.extract_asc_info(ed, path)
-        components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
-        directives = {d.strip() for d in info.get("directives", []) if d.strip().startswith(".")}
-        return components, directives, None
-    try:
-        info = services.extract_netlist_info(path)
-    except Exception as e:
-        return {}, set(), f"{path.name} could not be parsed ({e})"
-    components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
-    directives = {
-        line.strip()
-        for line in info.get("content", "").splitlines()
-        if line.strip().startswith(".")
-    }
-    return components, directives, None
-
-
 # The added/removed/changed delta both structural comparisons in this codebase
-# produce from ``_components_and_directives``: diff_circuit's own payload and
-# verify_circuit's structural_diff / sidecar-export diff. One payload, one schema
-# — declared here, beside the function whose output it describes.
+# produce from ``netlist_diff.structural_delta``: verify_circuit's structural_diff
+# (which edit_schematic's reference stage runs too) and the sidecar export's
+# diff_vs_prior. One payload, one schema, declared here where it is published.
 #
-# "baseline" is the first deck given (diff_circuit's ``path_a``, verify's
-# reference); "compared" is the second (``path_b``, the circuit under test).
+# "baseline" is the first deck given (verify's reference, the prior sidecar);
+# "compared" is the second (the circuit under test, the fresh export).
 STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     "components_added": {
         "type": "array",
@@ -211,12 +161,17 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
             },
             "required": ["reference", "before", "after"],
         },
-        "description": "References in both decks whose type/value signature differs.",
+        "description": (
+            "References in both decks whose model/value or instance parameters differ."
+        ),
     },
     "directives_added": {
         "type": "array",
         "items": {"type": "string"},
-        "description": "SPICE directives in the compared deck and not the baseline.",
+        "description": (
+            "SPICE directives in the compared deck and not the baseline, each "
+            "with its continuation lines joined."
+        ),
     },
     "directives_removed": {
         "type": "array",
@@ -823,26 +778,112 @@ def _analyze_scene(
     return scene, issues
 
 
-def reference_to_path(reference: str | Path, state: SessionState) -> Path:
-    """A filesystem path for the reference — text references are staged to scratch.
-
-    ``structural_diff`` reuses the editor-based diff internals, which read a file,
-    so literal reference text is materialized under the managed scratch directory.
-    """
-    if isinstance(reference, Path):
-        return reference
-    digest = hashlib.sha256(reference.encode("utf-8")).hexdigest()[:12]
-    dest = _scratch_dir(state, "reference") / f"{digest}.cir"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(reference, encoding="utf-8")
-    return dest
-
-
 def _scratch_dir(state: SessionState, name: str) -> Path:
     """A server-owned scratch subdirectory (created on demand)."""
     path = state.store.verify_artifact(name)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _is_schematic_text(text: str) -> bool:
+    """Whether reference text is an ``.asc`` schematic rather than a netlist.
+
+    An ``.asc`` opens with its ``Version`` line and the ``SHEET`` line after it;
+    a netlist's first line is a free-text title, so both are required.
+    """
+    lines = text.lstrip().split("\n", 3)[:3]
+    return re.match(r"Version\s+\d", lines[0]) is not None and any(
+        line.startswith("SHEET ") for line in lines[1:]
+    )
+
+
+@dataclass(frozen=True)
+class ReferenceNetlist:
+    """A compare reference in the form both comparison modes read.
+
+    ``source`` is netlist text or a netlist path — for an ``.asc`` reference, its
+    LTspice export. It is None when the reference could not be made a netlist,
+    and ``error`` (with ``remedy`` when there is one) says why.
+    """
+
+    source: str | Path | None
+    error: str = ""
+    remedy: str | None = None
+    observations: tuple[str, ...] = ()
+
+
+def reference_as_given(reference: str | Path) -> ReferenceNetlist | None:
+    """The reference when it already is a netlist; None for an ``.asc`` path.
+
+    Both tools compare the circuit under test as its LTspice export, so an
+    ``.asc`` reference has to reach the comparison the same way: read through the
+    schematic editor, its SYMATTRs and TEXT blocks are a different representation
+    of the same circuit, and every difference in representation reads as a
+    change. None tells the caller to export it with the exporter its own circuit
+    under test went through. Schematic *text* has no path to export from, so it
+    is refused.
+    """
+    if isinstance(reference, Path):
+        return None if is_asc(reference) else ReferenceNetlist(reference)
+    if _is_schematic_text(reference):
+        return ReferenceNetlist(
+            None,
+            "compare.reference is .asc schematic text, which has no netlist to compare "
+            "until LTspice exports it; pass the schematic's path instead",
+        )
+    return ReferenceNetlist(reference)
+
+
+@contextlib.asynccontextmanager
+async def reference_netlist(
+    reference: str | Path, state: SessionState
+) -> AsyncIterator[ReferenceNetlist]:
+    """The reference as a netlist; an ``.asc`` is exported the way a managed export is.
+
+    The export runs on a staged copy (with the project-local files a managed
+    export stages), so nothing is written beside the caller's file. The staging
+    directory is this call's alone and is removed on exit.
+    """
+    given = reference_as_given(reference)
+    if given is not None:
+        yield given
+        return
+    assert isinstance(reference, Path)  # only an .asc path needs exporting
+    staging = state.store.verify_artifact("reference-export") / (
+        f"{reference.stem}.{uuid.uuid4().hex[:12]}"
+    )
+    try:
+        yield await _export_reference(reference, staging, state)
+    finally:
+        await asyncio.to_thread(shutil.rmtree, staging, True)
+
+
+async def _export_reference(
+    reference: Path, staging: Path, state: SessionState
+) -> ReferenceNetlist:
+    """Stage an ``.asc`` reference in ``staging`` and export it with LTspice."""
+    simulator_cls = state.available_simulators.get("ltspice")
+    if simulator_cls is None:
+        return ReferenceNetlist(
+            None,
+            f"the reference {reference.name} is an .asc schematic, which is compared "
+            "as its LTspice netlist export, and LTspice is not detected",
+            remedy="pass the reference's exported netlist (.net) or its netlist text",
+        )
+    staged_asc, note = await _stage_for_export(reference, staging)
+    observations = (note,) if note else ()
+    try:
+        async with asc_export_lock(staged_asc):
+            net_path = await asyncio.to_thread(
+                _export_if_written, simulator_cls, staged_asc, state.config.default_timeout
+            )
+    except Exception as exc:  # the simulator is a subprocess; any failure is data
+        error = f"LTspice netlist export of the reference {reference.name} failed: {exc}"
+        return ReferenceNetlist(None, error, observations=observations)
+    if net_path is None:
+        error = f"LTspice exported the reference {reference.name} but produced no .net file"
+        return ReferenceNetlist(None, error, observations=observations)
+    return ReferenceNetlist(net_path, observations=observations)
 
 
 # ---------------------------------------------------------------------------
@@ -1177,9 +1218,32 @@ def _stage_export_inputs(asc_path: Path, dest: Path) -> tuple[Path, int, bool]:
     return staged_asc, copied, truncated
 
 
+async def _stage_for_export(asc_path: Path, dest: Path) -> tuple[Path, str | None]:
+    """Stage ``asc_path`` in ``dest`` under its circuit lock, for a managed export.
+
+    Returns the staged ``.asc`` and, when the file cap was hit, the observation
+    saying so.
+    """
+    async with circuit_file_lock(asc_path):
+        staged_asc, _staged, truncated = await asyncio.to_thread(
+            _stage_export_inputs, asc_path, dest
+        )
+    note = (
+        f"only the first {STAGE_FILE_CAP} project-local symbol/library files were staged "
+        f"for the export of {asc_path.name}, so a symbol beyond that may not resolve"
+    )
+    return staged_asc, note if truncated else None
+
+
 def _create_netlist(simulator_cls: Any, asc_path: Path, timeout: float) -> Path:
     """Drive LTspice to export ``asc_path`` to a sibling ``.net``."""
     return Path(simulator_cls.create_netlist(str(asc_path), timeout=timeout))
+
+
+def _export_if_written(simulator_cls: Any, asc_path: Path, timeout: float) -> Path | None:
+    """``_create_netlist``, or None when LTspice exited without writing the ``.net``."""
+    net_path = _create_netlist(simulator_cls, asc_path, timeout)
+    return net_path if net_path.exists() else None
 
 
 def _netlist_counts(net_path: Path) -> tuple[int | None, int | None]:
@@ -1275,15 +1339,9 @@ async def _run_export(
             scratch = (
                 _scratch_dir(state, "export") / f"{asc_path.stem}.{_file_digest(asc_path, 8)}"
             )
-            async with circuit_file_lock(asc_path):
-                staged_asc, _staged, truncated = await asyncio.to_thread(
-                    _stage_export_inputs, asc_path, scratch
-                )
-            if truncated:
-                observations.append(
-                    f"only the first {STAGE_FILE_CAP} project-local symbol/library files were "
-                    "staged for the export, so a symbol beyond that may not resolve"
-                )
+            staged_asc, note = await _stage_for_export(asc_path, scratch)
+            if note:
+                observations.append(note)
             async with asc_export_lock(staged_asc):
                 net_path = await asyncio.to_thread(
                     _create_netlist, simulator_cls, staged_asc, timeout
@@ -1441,18 +1499,24 @@ def compare_equivalence(
     return payload, findings, None, []
 
 
-def _by_directive_key(directives: set[str]) -> dict[str, list[str]]:
-    """Group directives by a case- and micro-insensitive key, dropping ``.end``."""
-    by_key: dict[str, list[str]] = {}
-    for d in directives:
-        if d.strip().lower() == ".end":
-            continue
-        by_key.setdefault(_norm_micro(d.lower()), []).append(d)
-    return by_key
+def _read_side(source: str | Path, label: str) -> tuple[str, Deck, str | None]:
+    """``(name, deck, parse_error)`` for one side of a structural diff.
+
+    ``label`` names a side given as text. An unreadable side is an empty deck and
+    a short message, so the diff can flag it rather than treat it as an empty
+    circuit (which would report every component of the other side as a removal).
+    """
+    name = source.name if isinstance(source, Path) else label
+    try:
+        return name, read_deck(source), None
+    except Exception as e:  # unreadable for any reason: reported, never raised
+        return name, Deck(), f"{name} could not be parsed ({e})"
 
 
-def _structural_diff(ref_path: Path, cand_path: Path) -> tuple[dict[str, Any], list[str], bool]:
-    """Added/removed/changed component and directive delta (diff_circuit internals).
+def _structural_diff(
+    reference: str | Path, candidate: str | Path
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Added/removed/changed component and directive delta between two netlists.
 
     Returns ``(delta, warnings, both_parsed)``. A deck that could not be parsed is
     diffed as an empty circuit, which makes every component of the other side look
@@ -1463,44 +1527,32 @@ def _structural_diff(ref_path: Path, cand_path: Path) -> tuple[dict[str, Any], l
     ``warnings`` list, so a future warning of some other kind cannot silently be
     read as a parse failure.
     """
-    a, da, err_a = _components_and_directives(ref_path)
-    b, db, err_b = _components_and_directives(cand_path)
-    warnings = parse_failure_warnings([(ref_path.name, err_a), (cand_path.name, err_b)])
-
-    added = sorted(set(b) - set(a))
-    removed = sorted(set(a) - set(b))
-    changed: list[dict[str, str]] = [
-        {"reference": ref, "before": a[ref], "after": b[ref]}
-        for ref in sorted(set(a) & set(b))
-        if _norm_micro(a[ref]) != _norm_micro(b[ref])
-    ]
-
-    da_by = _by_directive_key(da)
-    db_by = _by_directive_key(db)
-    directives_added = sorted(d for k in db_by.keys() - da_by.keys() for d in db_by[k])
-    directives_removed = sorted(d for k in da_by.keys() - db_by.keys() for d in da_by[k])
-
-    delta = {
-        "components_added": added,
-        "components_removed": removed,
-        "components_changed": changed,
-        "directives_added": directives_added,
-        "directives_removed": directives_removed,
-    }
-    return delta, warnings, err_a is None and err_b is None
+    name_a, ref, err_a = _read_side(reference, "the reference netlist text")
+    name_b, cand, err_b = _read_side(candidate, "the netlist under test")
+    warnings = parse_failure_warnings([(name_a, err_a), (name_b, err_b)])
+    return structural_delta(ref, cand), warnings, err_a is None and err_b is None
 
 
-def compare_structural(ref_path: Path, candidate: Path) -> CompareResult:
-    """structural_diff mode: reuse the shipped diff internals."""
+def compare_structural(reference: str | Path, candidate: str | Path) -> CompareResult:
+    """structural_diff mode over two netlists, each given as a path or as text.
+
+    A schematic path is refused rather than read: its attributes and TEXT blocks
+    are not the cards its export holds, so diffing one against a netlist reports
+    the difference in representation as a difference in circuit. The tools export
+    an ``.asc`` before they get here.
+    """
+    for side in (reference, candidate):
+        if isinstance(side, Path) and is_asc(side):
+            error = (
+                f"{side.name} is an .asc schematic; a structural diff compares "
+                "netlists, so compare its LTspice export"
+            )
+            return None, [], _failure("compare", error, where=str(side)), []
     try:
-        diff, warnings, both_parsed = _structural_diff(ref_path, candidate)
+        diff, warnings, both_parsed = _structural_diff(reference, candidate)
     except (OSError, ValueError) as exc:
-        return (
-            None,
-            [],
-            _failure("compare", f"structural diff failed: {exc}", where=str(candidate)),
-            [],
-        )
+        where = str(candidate) if isinstance(candidate, Path) else None
+        return None, [], _failure("compare", f"structural diff failed: {exc}", where=where), []
     # An unparsed deck is diffed as an empty circuit, so the delta describes a
     # circuit nothing read. Two decks that both failed then produce an EMPTY
     # delta, and an empty delta otherwise means "these match" — success reported
@@ -1511,6 +1563,34 @@ def compare_structural(ref_path: Path, candidate: Path) -> CompareResult:
     # a metadata key added to the delta later must not read as a difference.
     equivalent = not any(diff[key] for key in STRUCTURAL_DELTA_PROPS) if both_parsed else None
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
+
+
+def compare_netlists(
+    spec: VerifyCompareSpec,
+    reference: str | Path,
+    candidate: str | Path,
+    ref_source: Path,
+    cand_source: Path,
+    state: SessionState,
+) -> CompareResult:
+    """Compare two netlists the way ``spec`` asks (blocking CPU/IO).
+
+    ``reference`` and ``candidate`` are netlist text or paths; ``ref_source`` and
+    ``cand_source`` are where a finding about each side points (the caller's own
+    file, even when what was compared is its export), and ``cand_source``'s
+    directory is where a text candidate's includes resolve.
+    """
+    if spec.mode == "structural_diff":
+        return compare_structural(reference, candidate)
+    return compare_equivalence(
+        reference,
+        candidate,
+        ref_source,
+        cand_source,
+        spec.anchors,
+        spec.rtol,
+        make_include_resolver(state),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1965,28 +2045,34 @@ async def evaluate_verify_circuit(
             if candidate is None:
                 skip("compare", "the exported netlist is required and the export did not run")
             else:
-                ref_source = reference if isinstance(reference, Path) else path
-                compared: CompareResult
                 assert compare is not None  # guarded by `reference is not None`
-                if compare.mode == "equivalence":
-                    # Reuse the netlist text already read for syntax, so the candidate
-                    # is not read+lexed a second time; the export path has no such text.
-                    cand_input: str | Path = (
-                        text if kind == "netlist" and text is not None else candidate
-                    )
-                    compared = await asyncio.to_thread(
-                        compare_equivalence,
-                        reference,
-                        cand_input,
-                        ref_source,
-                        candidate,
-                        compare.anchors,
-                        compare.rtol,
-                        make_include_resolver(state),
-                    )
-                else:
-                    ref_path = reference_to_path(reference, state)
-                    compared = await asyncio.to_thread(compare_structural, ref_path, candidate)
+                ref_source = reference if isinstance(reference, Path) else path
+                # Reuse the netlist text already read for syntax, so the candidate is
+                # not read+lexed a second time; the export path has no such text.
+                cand_input: str | Path = (
+                    text if kind == "netlist" and text is not None else candidate
+                )
+                compared: CompareResult
+                async with reference_netlist(reference, state) as ref_netlist:
+                    observation_events.extend(ref_netlist.observations)
+                    if ref_netlist.source is None:
+                        failure = _failure(
+                            "compare",
+                            ref_netlist.error,
+                            where=str(ref_source),
+                            remedy=ref_netlist.remedy,
+                        )
+                        compared = None, [], failure, []
+                    else:
+                        compared = await asyncio.to_thread(
+                            compare_netlists,
+                            compare,
+                            ref_netlist.source,
+                            cand_input,
+                            ref_source,
+                            candidate,
+                            state,
+                        )
                 comparison, cmp_findings, cmp_failure, cmp_warnings = compared
                 findings.extend(cmp_findings)
                 warnings.extend(cmp_warnings)
