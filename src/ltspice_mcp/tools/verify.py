@@ -11,9 +11,11 @@ Checks by file kind:
 
 * ``.asc`` — ``symbols`` (resolution against the configured/stock ``.asy``
   paths), ``export`` (the authoritative LTspice netlist export, plus the wires
-  LTspice silently drops), ``layout`` (geometric placement facts), ``quality``
+  LTspice silently drops and the value suffixes the exported netlist spells
+  outside ASCII), ``layout`` (geometric placement facts), ``quality``
   (label-island and text-in-body hygiene), and ``compare``.
-* netlist — ``syntax`` (directive + element arity), ``quality`` (nodes wired to
+* netlist — ``syntax`` (directive + element arity, and a non-ASCII character
+  where a value's scale suffix goes), ``quality`` (nodes wired to
   a single terminal, directives naming something no element declares, nets with
   no DC path to ground), and ``compare``. No layout, symbol, or export claim is
   made on a text deck: it carries no geometry and no symbol library.
@@ -66,15 +68,16 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 
 from mcp import types
 from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib.deck_prep import asc_export_lock
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
+from ltspice_mcp.lib.lint_rules import deck_generator, value_suffix_evidence
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -97,6 +100,7 @@ from ltspice_mcp.lib.schematic_scene import (
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
@@ -747,7 +751,8 @@ VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
     "it checks; with export_to='sidecar' the export check rewrites the .net next "
     "to an .asc. For a "
-    ".cir/.net/.sp: SPICE syntax, directive and element arity, plus connectivity "
+    ".cir/.net/.sp: SPICE syntax, directive and element arity, non-ASCII value "
+    "suffixes such as µ, plus connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
     "declares, nets with no DC path to ground. For an .asc: symbol "
     "and pin resolution, the authoritative LTspice netlist export (which silently "
@@ -953,11 +958,47 @@ def _rule_finding(
     )
 
 
-def _syntax_findings(text: str, path: Path, deck: _LexedDeck) -> list[dict[str, Any]]:
-    """Directive, lex, and element-arity findings in a netlist.
+def _value_suffix_findings(
+    cards: list[SpiceCard], path: Path, text: str, encoding: str
+) -> list[dict[str, Any]]:
+    """Numbers whose scale-suffix position holds a non-ASCII character.
 
-    Everything here breaks the deck for the simulator, so every finding is an
-    error. The facts that are legal-but-notable live in the quality check.
+    One scan and one evidence builder with the ``run_experiments`` linter's
+    ``value-suffix-nonascii`` rule, so both surfaces say the same thing. A micro sign
+    is a warning: it is micro to a reader that decodes the file in the encoding
+    it was written in, which LTspice XVII does not do for a UTF-8 file. Any
+    other character is an error: it is never a scale, so the deck runs at the
+    bare number. ``encoding`` is the codec the file decoded as, which decides
+    which reader misreads it. ``cards`` has its title card dropped already.
+    """
+    sites = value_suffix_sites(cards)
+    generated_by = deck_generator(text) if sites else None
+    findings: list[dict[str, Any]] = []
+    for site in sites:
+        evidence = value_suffix_evidence(site, generated_by=generated_by)
+        evidence["card"] = site.card.body
+        evidence["encoding"] = encoding
+        findings.append(
+            _finding(
+                rule_id="value_suffix_micro_sign" if site.micro else "value_suffix_nonascii",
+                severity="warning" if site.micro else "error",
+                at={"file": str(path), "line": site.line},
+                subject=site.token,
+                evidence=evidence,
+            )
+        )
+    return findings
+
+
+def _syntax_findings(
+    text: str, path: Path, deck: _LexedDeck, encoding: str
+) -> list[dict[str, Any]]:
+    """Directive, lex, element-arity and value-suffix findings in a netlist.
+
+    Everything here changes what the simulator reads, so every finding is an
+    error except a micro-sign suffix, which is a warning because whether it is
+    read as micro depends on the reader (see ``_value_suffix_findings``). The
+    facts that are legal-but-notable live in the quality check.
     """
     findings: list[dict[str, Any]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -992,6 +1033,7 @@ def _syntax_findings(text: str, path: Path, deck: _LexedDeck) -> list[dict[str, 
         _rule_finding(issue, path, rule_id="element_arity", severity="error")
         for issue in validate_netlist_arity(deck.cards)
     )
+    findings.extend(_value_suffix_findings(deck.cards, path, text, encoding))
     return findings
 
 
@@ -1274,8 +1316,31 @@ def _file_digest(path: Path, length: int | None = None) -> str | None:
     return digest[:length] if length is not None else digest
 
 
-def _measure_netlist(net_path: Path) -> tuple[int | None, int | None, str | None] | None:
-    """Component count, net count and digest of a just-exported netlist.
+def _exported_value_suffix_findings(net_path: Path) -> list[dict[str, Any]]:
+    """Value-suffix findings over an exported netlist.
+
+    LTspice 24 and later write the export as UTF-8, a micro sign as C2 B5, and
+    the exported ``.net`` is what gets handed to another LTspice.
+    """
+    try:
+        text, encoding = read_spice_text_with_encoding(net_path)
+    except OSError:
+        return []
+    return _value_suffix_findings(_lex_deck(text).cards, net_path, text, encoding)
+
+
+class _MeasuredNetlist(NamedTuple):
+    """What ``_measure_netlist`` read off a just-exported netlist."""
+
+    components: int | None
+    nets: int | None
+    sha256: str | None
+    findings: list[dict[str, Any]]
+
+
+def _measure_netlist(net_path: Path) -> _MeasuredNetlist | None:
+    """Component count, net count, digest and value-suffix findings of a
+    just-exported netlist.
 
     Returns ``None`` when the exporter wrote no file at all.
 
@@ -1289,15 +1354,28 @@ def _measure_netlist(net_path: Path) -> tuple[int | None, int | None, str | None
     if not net_path.exists():
         return None
     components, nets = _netlist_counts(net_path)
-    return components, nets, _file_digest(net_path)
+    return _MeasuredNetlist(
+        components, nets, _file_digest(net_path), _exported_value_suffix_findings(net_path)
+    )
+
+
+class _ExportOutcome(NamedTuple):
+    """What the export stage hands back to the evaluator."""
+
+    payload: dict[str, Any]
+    failure: dict[str, Any] | None
+    observations: list[str]
+    warnings: list[str]
+    # About the exported netlist's text: value suffixes spelled outside ASCII.
+    findings: Sequence[dict[str, Any]] = ()
 
 
 async def _run_export(
     asc_path: Path, state: SessionState, export_to: str, simulator_cls: Any
-) -> tuple[dict[str, Any], dict[str, Any] | None, list[str], list[str]]:
+) -> _ExportOutcome:
     """Export a schematic to a netlist, managed (scratch copy) or sidecar (in place).
 
-    Returns ``(export_payload, failure_or_none, observations, warnings)``. The
+    The
     ``sidecar`` mode runs under the export lock (it overwrites ``<name>.net``) and
     records a structural ``diff_vs_prior``; ``managed`` stages the schematic with its
     project-local assets and exports there, touching none of the caller's files.
@@ -1320,7 +1398,7 @@ async def _run_export(
         "diff_vs_prior": None,
     }
 
-    measured: tuple[int | None, int | None, str | None] | None = None
+    measured: _MeasuredNetlist | None = None
     try:
         if export_to == "sidecar":
             net_path = asc_path.with_suffix(".net")
@@ -1349,7 +1427,7 @@ async def _run_export(
                 )
                 measured = await asyncio.to_thread(_measure_netlist, net_path)
     except Exception as exc:  # the simulator is a subprocess; any failure is data
-        return (
+        return _ExportOutcome(
             payload,
             _failure(
                 "export",
@@ -1362,7 +1440,7 @@ async def _run_export(
         )
 
     if measured is None:
-        return (
+        return _ExportOutcome(
             payload,
             _failure(
                 "export",
@@ -1373,17 +1451,16 @@ async def _run_export(
             warnings,
         )
 
-    components, nets, digest = measured
     payload.update(
         {
             "ok": True,
             "netlist": str(net_path),
-            "sha256": digest,
-            "components": components,
-            "nets": nets,
+            "sha256": measured.sha256,
+            "components": measured.components,
+            "nets": measured.nets,
         }
     )
-    return payload, None, observations, warnings
+    return _ExportOutcome(payload, None, observations, warnings, measured.findings)
 
 
 def _diff_vs_prior(
@@ -1941,14 +2018,16 @@ async def evaluate_verify_circuit(
         wanted[check] = True
 
     # --- netlist text (syntax, quality) -------------------------------------
-    text: str | None = None
+    # The text and the codec it decoded as, which the syntax check reports.
+    decoded: tuple[str, str] | None = None
     if kind == "netlist" and (
         wanted.get("syntax") or wanted.get("quality") or wanted.get("compare")
     ):
         try:
-            text = await asyncio.to_thread(read_spice_text, path)
+            decoded = await asyncio.to_thread(read_spice_text_with_encoding, path)
         except OSError as exc:
             failures.append(_failure("read", str(exc), where=str(path)))
+    text = decoded[0] if decoded is not None else None
 
     # One lex serves both text-deck checks, and its notes are relayed once
     # whichever of the two asked for it.
@@ -1957,8 +2036,9 @@ async def evaluate_verify_circuit(
         deck = await asyncio.to_thread(_lex_deck, text)
         observation_events.extend(deck.notes)
 
-    if wanted.get("syntax") and text is not None and deck is not None:
-        findings.extend(await asyncio.to_thread(_syntax_findings, text, path, deck))
+    if wanted.get("syntax") and decoded is not None and deck is not None:
+        text, encoding = decoded
+        findings.extend(await asyncio.to_thread(_syntax_findings, text, path, deck, encoding))
         checks_run.append("syntax")
 
     if wanted.get("quality") and deck is not None and kind == "netlist":
@@ -2033,22 +2113,21 @@ async def evaluate_verify_circuit(
             if simulator_cls is None:
                 skip("export", "LTspice not detected")
             else:
-                export_payload, export_failure, export_obs, export_warnings = await _run_export(
-                    path, state, args.export_to, simulator_cls
-                )
-                observation_events.extend(export_obs)
-                warnings.extend(export_warnings)
+                export = await _run_export(path, state, args.export_to, simulator_cls)
+                observation_events.extend(export.observations)
+                warnings.extend(export.warnings)
+                findings.extend(export.findings)
                 if scene is not None:
                     dropped = _dropped_wire_findings(scene, path)
                     findings.extend(dropped)
                     if dropped:
                         capped_rules.add("dropped_wire")
-                data["export"] = export_payload
+                data["export"] = export.payload
                 checks_run.append("export")
-                if export_failure is not None:
-                    failures.append(export_failure)
-                elif export_payload.get("netlist"):
-                    candidate = Path(export_payload["netlist"])
+                if export.failure is not None:
+                    failures.append(export.failure)
+                elif export.payload.get("netlist"):
+                    candidate = Path(export.payload["netlist"])
 
         # --- compare ------------------------------------------------------------
         if wanted.get("compare") and reference is not None:

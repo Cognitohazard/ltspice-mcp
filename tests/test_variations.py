@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.instance_targeting import canonical_target
 from ltspice_mcp.lib.variations import (
@@ -498,6 +499,96 @@ def test_final_file_digests_cover_rewritten_include_bytes(tmp_path):
     }
     assert leaf.read_bytes() == leaf_text.encode("cp1252")
     assert branch.read_bytes() == branch_text.encode()
+
+
+# A deck LTspice exported with micro-sign suffixes, plus a micro sign in a
+# comment and inside a quoted file name, where it is not a value.
+_MICRO_DECK = (
+    "* rc µ bench\n"
+    'V1 in 0 PWL file="steps 10µs.txt"\n'
+    "R1 in out 1k\n"
+    "C1 out 0 23µ\n"
+    ".param tau=4.7µ\n"
+    ".tran 0 {10*tau}\n"
+    ".end\n"
+)
+
+
+class TestMicroSuffixInCaseDecks:
+    """A case deck is always written as UTF-8, so a micro sign in it reaches
+    the simulator as bytes C2 B5 whatever the source used. LTspice XVII
+    decodes a deck as cp1252, reads 'Âµ', and runs 23µ as 23. The case deck
+    must spell the suffix 'u', which no reader or encoding can change."""
+
+    @pytest.mark.parametrize("codec", ["cp1252", "utf-8"])
+    def test_zero_variation_case_spells_micro_as_u(self, tmp_path: Path, codec: str):
+        source = tmp_path / "bench.cir"
+        source.write_bytes(_MICRO_DECK.encode(codec))
+        circuit = CircuitDeck("bench", source, read_spice_text(source))
+
+        (case,) = materialize_variants(circuit, expand_variations([circuit], []), tmp_path / "out")
+
+        data = case.path.read_bytes()
+        assert b"C1 out 0 23u\n" in data
+        assert b".param tau=4.7u\n" in data
+        # Only value positions change: the comment and the quoted file name
+        # keep their micro sign.
+        assert "* rc µ bench\n".encode() in data
+        assert 'file="steps 10µs.txt"'.encode() in data
+        assert case.sha256 == hashlib.sha256(data).hexdigest()
+        assert case.text == data.decode("utf-8")
+
+    def test_greek_mu_folds_like_the_micro_sign(self, tmp_path: Path):
+        source = tmp_path / "bench.cir"
+        source.write_bytes("* t\nC1 out 0 23μ\n.op\n.end\n".encode())
+        circuit = CircuitDeck("bench", source, read_spice_text(source))
+
+        (case,) = materialize_variants(circuit, expand_variations([circuit], []), tmp_path / "out")
+
+        assert case.path.read_bytes() == b"* t\nC1 out 0 23u\n.op\n.end\n"
+
+    def test_assigned_value_with_micro_sign_is_written_as_u(self, tmp_path: Path):
+        source = tmp_path / "bench.cir"
+        source.write_bytes(b"* t\nC1 out 0 1n\n.op\n.end\n")
+        circuit = CircuitDeck("bench", source, read_spice_text(source))
+        variation = AssignVariation(kind="assign", assign={"C1": ["10µ"]})
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+
+        assert b"C1 out 0 10u\n" in case.path.read_bytes()
+
+    def test_edited_include_copy_spells_micro_as_u(self, tmp_path: Path):
+        include = tmp_path / "core.inc"
+        include_text = "R1 in out 1k\nC1 out 0 1n\n"
+        include.write_bytes(include_text.encode())
+        circuit = CircuitDeck(
+            "bench",
+            tmp_path / "bench.cir",
+            '* bench\n.include "core.inc"\n.end\n',
+            (DeckFile(include, include_text),),
+        )
+        variation = AssignVariation(kind="assign", assign={"C1": ["4.7µ"]})
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path
+        )
+
+        copy = tmp_path / "case-0000__core.inc"
+        assert b"C1 out 0 4.7u\n" in copy.read_bytes()
+        assert dict(case.file_digests)[copy] == hashlib.sha256(copy.read_bytes()).hexdigest()
+
+    def test_mis_decoded_micro_is_left_for_the_linter(self, tmp_path: Path):
+        """'Âµ' is not a micro sign at the suffix position: whether it was one
+        is a guess, and a guess must not rewrite a value. The linter blocks it."""
+        source = tmp_path / "bench.cir"
+        source.write_bytes("* t\nC1 out 0 23Âµ\n.op\n.end\n".encode())
+        circuit = CircuitDeck("bench", source, read_spice_text(source))
+
+        (case,) = materialize_variants(circuit, expand_variations([circuit], []), tmp_path / "out")
+
+        assert "C1 out 0 23Âµ\n".encode() in case.path.read_bytes()
 
 
 class TestIncludeClosureTargets:

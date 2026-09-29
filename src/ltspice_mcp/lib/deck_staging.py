@@ -13,7 +13,16 @@ from typing import Any
 from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text, wsl
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ManifestEntry
-from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    INCLUDE_HEADS,
+    SpiceCard,
+    Token,
+    TokenKind,
+    emit,
+    lex,
+    tokenize_body,
+)
+from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, fold_micro_suffix_cards
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -22,7 +31,6 @@ from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, to
 # set, so this bound is a resource guard, not the loop guard.
 DEFAULT_INCLUDE_DEPTH = 8
 
-INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 # The two ways out of a root-escape refusal, named in the refusal itself: a
@@ -101,6 +109,26 @@ class IncludeReference:
     token: Token
     raw_path: str
     section: str | None
+
+
+def _micro_fold_observation(path: Path, folded: Sequence[ValueSuffixSite]) -> dict[str, Any]:
+    """The fact that a staged copy spells a source's micro-sign suffixes ``u``."""
+    return {
+        "code": "micro_sign_folded",
+        "kind": "provenance",
+        "detail": (
+            f"The staged copy of {path.name} spells {len(folded)} micro-sign "
+            "suffix(es) as 'u', which every simulator reads as micro. The source's "
+            "µ reads as micro only when the file is decoded in the encoding it was "
+            "written in: LTspice XVII decodes as cp1252 and reads a UTF-8 µ as "
+            "'Âµ', dropping the scale."
+        ),
+        "evidence": {
+            "file": str(path),
+            "tokens": [site.token for site in folded],
+            "lines": [site.line for site in folded],
+        },
+    }
 
 
 def sha256_file(path: Path) -> str:
@@ -395,6 +423,13 @@ def stage_deck(
                         changed = True
 
             destination.parent.mkdir(parents=True, exist_ok=True)
+            # Every staged SPICE file is a simulator input, and a re-emitted one
+            # is UTF-8, so a micro-sign suffix would reach LTspice XVII as the
+            # two cp1252 characters 'Âµ' and silently lose its scale.
+            folded = fold_micro_suffix_cards(parsed.cards)
+            if folded:
+                changed = True
+                observations.append(_micro_fold_observation(resolved, folded))
             if changed:
                 staged_text = emit(parsed.cards)
                 atomic_write_text(destination, staged_text, durable=True)
@@ -489,6 +524,24 @@ def rewrite_staged_references(
     cannot be addressed this way.
     """
     cards = lex(text).cards
+    return (
+        emit(cards)
+        if rewrite_staged_reference_cards(cards, source, renames, depth=depth)
+        else text
+    )
+
+
+def rewrite_staged_reference_cards(
+    cards: list[SpiceCard],
+    source: Path,
+    renames: dict[Path, str],
+    *,
+    depth: int,
+) -> bool:
+    """``rewrite_staged_references`` over cards already lexed, in place.
+
+    Returns whether any reference was rewritten.
+    """
     changed = False
     for reference in scan_include_references(cards, source, depth=depth):
         target = resolve_reference(source.parent, reference.raw_path).resolve()
@@ -497,7 +550,7 @@ def rewrite_staged_references(
             continue
         _replace_reference(reference, _replace_last_segment(reference.raw_path, name))
         changed = True
-    return emit(cards) if changed else text
+    return changed
 
 
 def _replace_last_segment(raw_path: str, name: str) -> str:

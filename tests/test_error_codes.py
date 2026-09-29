@@ -455,6 +455,7 @@ FROZEN_ERROR_CODES = (
     "meas_batch_abort",
     "meas_parse_error",
     "merged_corners",
+    "micro_sign_folded",
     "mismatch_geometry_unresolved",
     "mismatch_target_missing",
     "missing_circuit_id",

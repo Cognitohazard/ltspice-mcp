@@ -59,17 +59,21 @@ def detect_utf16_endianness(probe: bytes) -> str | None:
     return None
 
 
-def decode_spice_bytes(raw: bytes) -> str:
-    """Decode a SPICE-text byte string with BOM sniffing + UTF-16 heuristic."""
+def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]:
+    """Decode a SPICE-text byte string and name the codec that decoded it.
+
+    The name matters where a character's meaning depends on the reader: a
+    micro sign stored as UTF-8 is two characters to a cp1252 reader.
+    """
     for bom, encoding in _BOM_ENCODINGS:
         if raw.startswith(bom):
-            return raw[len(bom) :].decode(encoding, errors="replace")
+            return raw[len(bom) :].decode(encoding, errors="replace"), encoding
     encoding = detect_utf16_endianness(raw[:256])
     if encoding is not None:
-        return raw.decode(encoding, errors="replace")
+        return raw.decode(encoding, errors="replace"), encoding
     # UTF-8 strict for clean ASCII and well-formed UTF-8 (no replacement).
     try:
-        return raw.decode("utf-8")
+        return raw.decode("utf-8"), "utf-8"
     except UnicodeDecodeError:
         pass
     # CP1252 strict — preserves degree signs / mu / en-dashes that
@@ -77,12 +81,22 @@ def decode_spice_bytes(raw: bytes) -> str:
     # cp1252 is a strict superset of Latin-1 for the printable range,
     # so this also handles ISO-8859-1 inputs.
     try:
-        return raw.decode("cp1252")
+        return raw.decode("cp1252"), "cp1252"
     except UnicodeDecodeError:
         pass
-    return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace"), "utf-8"
+
+
+def decode_spice_bytes(raw: bytes) -> str:
+    """Decode a SPICE-text byte string with BOM sniffing + UTF-16 heuristic."""
+    return decode_spice_bytes_with_encoding(raw)[0]
 
 
 def read_spice_text(path: Path) -> str:
     """Read a SPICE library/netlist file and return its decoded text."""
     return decode_spice_bytes(path.read_bytes())
+
+
+def read_spice_text_with_encoding(path: Path) -> tuple[str, str]:
+    """``read_spice_text`` plus the name of the codec that decoded the file."""
+    return decode_spice_bytes_with_encoding(path.read_bytes())
