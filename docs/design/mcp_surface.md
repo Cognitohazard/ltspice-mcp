@@ -346,6 +346,16 @@ engaged at the trim rung only — empty presentation blocks and the identity
 echo, never facts, never caller opt-ins. An explicit caller budget overrides
 the default entirely and may descend the full ladder.
 
+**Run timeout.** Every case is bounded. `execution.run_timeout_s` sets the
+bound; unset, the server's `[simulation] timeout` applies (`limits.default_timeout_s`
+in `inspect(kind="capabilities")`, default 300 s). The coordinator's timer is
+the one that decides a timeout: it kills the case by its run token and records
+`run_timeout`. spicelib's own `subprocess` bound sits the kill grace plus 60 s
+past it, so it never pre-empts that decision. It exists for a kill nobody
+confirmed: it ends the process spicelib holds a handle to, and the retained
+concurrency permit comes back. It is clamped to 4,000,000 s, inside what a
+Windows process wait can express.
+
 **Job model.** An experiment job is a coordinator spanning multiple circuits.
 Its persistence home is the server working directory's store
 (`{working_dir}/.ltspice-mcp/experiments/`), holding the coordinator record —
@@ -420,6 +430,33 @@ the run-terminal invariant
 `produced + failed + cancelled + skipped == expanded`; every omission names its
 `case_id` and a reason. Lifecycle status is reported separately from
 completeness.
+
+**Stopped cases.** A case the coordinator stops is a failure row whose code
+names why: `run_timeout`, `job_deadline`, or `cancelled` (status `cancelled`).
+Its message names the bound that applied, and its `evidence` keeps what the
+killed run left:
+
+- the bound itself: `run_timeout_s` with `run_timeout_source`
+  (`"request"` or `"server_default"`), or `job_deadline_s`;
+- the simulator's `exit_code`, and `simulator_exception` when spicelib caught
+  one;
+- `log_failure_code` when the log names a cause the outcome classifier knows
+  (`convergence_failed`, `singular_matrix`, ...), with that cause's own evidence;
+- `log_excerpt`, the end of the log or the lines around its errors.
+
+A kill whose exit is not confirmed within the grace period is a
+`kill_unconfirmed` row instead, with evidence `{stop_reason, run_timeout_s |
+job_deadline_s, kill_grace_s}`, and its permit stays reserved until the process
+exits. A kill whose exit is confirmed (in the grace period or later) is
+followed by one `partial_progress` observation for that case. It is read from
+the partial raw before cleanup deletes it, because neither simulator records
+progress anywhere else a killed run keeps. Its evidence is `{case_id, run_index,
+raw_present, points, last_axis_value}` plus, when a raw was read, `{raw_bytes,
+header_complete, plot, axis, stepped?}`. `points` counts complete records from
+the file's length, not from its `No. Points` header: ngspice leaves that header
+at 0 until a plot ends, and LTspice's lags the data. `last_axis_value` is in
+deck coordinates. `run_timeout`, `job_deadline` and `kill_unconfirmed` rows carry
+a recovery `hint`.
 
 `progress` is derived from that durable completeness snapshot and is present on
 receipts through terminal states:

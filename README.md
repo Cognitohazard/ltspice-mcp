@@ -138,7 +138,7 @@ ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" 
 
 [simulation]
 # max_parallel = 4       # default: number of CPU cores, capped at 8
-timeout = 300.0          # seconds
+timeout = 300.0          # seconds per case, unless a request sets execution.run_timeout_s
 
 [tools]
 listing = "compact"      # "full" serves every per-argument description on the wire, about 45% more to load

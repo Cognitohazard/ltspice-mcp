@@ -14,9 +14,34 @@ tool-surface changes.
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
 - Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+- `execution.run_timeout_s` is now the real per-case bound. Every simulator
+  process was also capped at a fixed, undocumented 600 s inside spicelib, so a
+  case given a longer timeout was killed at 600 s and reported as a generic
+  failure with exit code -2. spicelib's bound now sits the kill grace plus 60 s
+  past the case's own timeout, as a backstop that ends the process spicelib
+  launched when the scoped kill is not confirmed. It is clamped below Windows'
+  32-bit millisecond wait. A run spicelib does end names its `TimeoutExpired`
+  in the failure instead of a bare -2.
+- A case stopped for `run_timeout`, `job_deadline` or `cancelled` keeps the
+  killed run's diagnostics again, as the 0.6.0 notes promised but the
+  experiment path had dropped. Its failure evidence carries the bound that
+  applied, the simulator's `exit_code`, the log's classified cause as
+  `log_failure_code` when there is one, and `log_excerpt`. The message names the
+  timeout or deadline value; a cancelled case no longer reads "stopped because
+  cancelled elapsed". `kill_unconfirmed` rows carry the stop reason, bound and
+  kill grace.
 
 ### Added
 
+- A `partial_progress` observation for every case the coordinator stops and
+  whose simulator exit is seen. It gives the plot, its axis, the complete
+  points on disk and the last axis value reached, read from the partial raw
+  before cleanup deletes it. The count comes from the file's length, because
+  ngspice leaves `No. Points` at 0 until a plot ends and LTspice's lags the
+  data. Neither simulator's `.log` or `.exe.log` records progress for a killed
+  run.
+- Recovery hints on `run_timeout`, `job_deadline` and `kill_unconfirmed` failure
+  rows.
 - Exact nested-instance assignments and caller-defined mismatch, preserving
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
@@ -29,6 +54,12 @@ tool-surface changes.
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
   statistical provenance. The store format is version 2.
+- A case whose request sets no `execution.run_timeout_s` is bounded by
+  `[simulation] timeout` (`LTSPICE_MCP_TIMEOUT`, default 300 s), which
+  capabilities already advertised as `limits.default_timeout_s` but which only
+  bounded netlist export. Before, such a case ran until spicelib's hidden 600 s
+  cap. A run that needs longer sets `run_timeout_s` or raises the server
+  setting; the failure evidence says which bound applied.
 
 ## [0.6.1] - 2026-09-08
 

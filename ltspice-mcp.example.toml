@@ -36,7 +36,7 @@ path = ""
 # Maximum cases after run_experiments variation expansion.
 max_experiment_cases = 1024
 
-# Default simulation timeout in seconds
+# Default per-case simulation timeout in seconds (execution.run_timeout_s overrides)
 timeout = 300.0
 
 # Preflight size guard, estimated from .tran/.ac/.dc directives.

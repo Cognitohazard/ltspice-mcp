@@ -480,6 +480,7 @@ FROZEN_ERROR_CODES = (
     "owner_liveness_unknown",
     "param_namespace_collision",
     "parse_error",
+    "partial_progress",
     "path_denied",
     "pdk_native_request",
     "phase_unwrapped",
