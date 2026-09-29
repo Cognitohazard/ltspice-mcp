@@ -247,7 +247,10 @@ async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir)
 
 
 async def test_syntax_blocks_a_mis_decoded_micro_suffix(state_no_sim, work_dir):
-    deck = _write(work_dir, "rc.cir", "* rc\nR1 in out 1k\nC1 out 0 23Âµ\n.end\n")
+    # UTF-8 on purpose: written in the platform default, cp1252 on Windows,
+    # 'Âµ' becomes C2 B5 and reads back as a genuine UTF-8 micro sign.
+    deck = work_dir / "rc.cir"
+    deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23Âµ\n.end\n".encode())
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
