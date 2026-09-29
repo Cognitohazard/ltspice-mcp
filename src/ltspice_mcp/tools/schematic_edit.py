@@ -167,8 +167,8 @@ class EditSchematicInput(ToolInput):
     compare: VerifyCompareSpec | None = Field(
         default=None,
         description=(
-            "Verify the committed sheet against a reference netlist or .asc "
-            "by exporting a copy and comparing it the way verify_circuit does "
+            "Verify the committed sheet against a reference by exporting a "
+            "copy and comparing it the way verify_circuit does "
             "(same modes, anchors and tolerance). It runs after the commit, so "
             "a mismatch is reported but not undone."
         ),
