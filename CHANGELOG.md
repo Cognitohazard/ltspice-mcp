@@ -14,6 +14,23 @@ tool-surface changes.
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
 - Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+- An edit to `[security] allowed_paths` now reaches every reader of the sandbox
+  on the next call. The capabilities report, the `spice://config` resource,
+  netlist resource reads, the hierarchy query, raw and log source resolution
+  and deck staging used to read whatever list the last path check had loaded,
+  so a capabilities query could list the old roots in the same batch that read
+  a newly allowed file.
+- Every sandbox refusal carries the same guidance in its structured `hint`: the
+  allowed paths, the config file and key that widen them, and that the file is
+  re-read on the next call. That covers `inspect` items, `verify_circuit`
+  findings (a refused include among them), `run_experiments` case failures,
+  `jobs` errors, `analyze_results` sources, and a refusal the dispatcher
+  reports, which now returns it in structuredContent as well as text. With
+  `LTSPICE_MCP_ALLOWED_PATHS` set, the guidance names that variable instead,
+  since it overrides the file.
+- On Windows the default sandbox includes Claude Code's scratch directory,
+  `%TEMP%\claude`, as it already did on Linux and macOS
+  (`<tempdir>/claude-<uid>`).
 
 ### Added
 
@@ -24,6 +41,9 @@ tool-surface changes.
 
 ### Changed
 
+- `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
+  rather than `source_unavailable`, and the `inspect` hierarchy query reports
+  one as `path_denied` rather than `error`.
 - Native statistical run listings expand only the requested evidence on the
   returned page. Sample validation reuses unchanged original model parsing
   within each circuit while retaining per-case checks.

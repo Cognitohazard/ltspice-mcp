@@ -3,6 +3,8 @@
 import dataclasses
 import logging
 import os
+import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -137,22 +139,40 @@ class TestServerConfig:
         assert "analysis_budget_s" in content
         assert "result_set_ttl_hours" in content
 
-    @pytest.mark.skipif(
-        os.name == "nt", reason="the Claude Code scratch directory on Windows is not known"
-    )
     def test_default_sandbox_includes_the_claude_scratch_root(self, work_dir: Path):
         """Claude Code tells an agent to write throwaway files to its scratch
         directory, outside the working directory; the default sandbox admits
         it so a deck written there runs without a copy first."""
         root = claude_scratch_root()
-        assert root is not None
+        # Claude Code's layout: <tempdir>/claude-<uid>/... on POSIX, and
+        # %TEMP%\claude\<project>\<session>\scratchpad on Windows, where there
+        # is no uid to key it on.
+        leaf = "claude" if os.name == "nt" else f"claude-{os.getuid()}"
+        assert root == Path(tempfile.gettempdir()) / leaf
         path = work_dir / "generated.toml"
         generate_default_config(path)
         # The generated file documents the default without pinning a machine-
         # specific path, so the same default reaches the file-less library boot.
-        assert "claude-<uid>" in path.read_text()
+        text = path.read_text()
+        assert "claude-<uid>" in text
+        assert "%TEMP%\\claude" in text
         assert root in ServerConfig.load(path).allowed_paths
         assert root in ServerConfig(working_dir=work_dir).allowed_paths
+
+    def test_windows_scratch_root_is_the_claude_folder_in_temp(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The Windows branch, pinned from any platform: a native Windows session
+        keeps its scratchpad under %TEMP%\\claude, with no per-user suffix.
+
+        Only the ``os`` the config module sees is swapped: patching ``os.name``
+        itself would also switch pathlib's flavour and tempfile's candidates. A
+        namespace with no ``getuid`` also proves the branch never asks for one,
+        which Windows does not have."""
+        with monkeypatch.context() as patched:
+            patched.setattr(config_module, "os", types.SimpleNamespace(name="nt"))
+            root = claude_scratch_root()
+        assert root == Path(tempfile.gettempdir()) / "claude"
 
     def test_analysis_budget_and_result_ttl_load_from_toml(
         self,

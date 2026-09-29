@@ -31,6 +31,7 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import path_denied_guidance
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
@@ -127,24 +128,6 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
 def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
     """Get the error hint appended to a failed call's message, if any."""
     return _ERROR_HINTS.get(err_type)
-
-
-def _path_reject_guidance(state: SessionState) -> str:
-    """Recovery guidance appended to a PathSecurityError at every agent-facing
-    boundary — tool calls AND resource reads. The agent can't widen the sandbox
-    itself, so name the knob and the human-escalation/move-the-file fallback or
-    it dead-ends. One builder so the two boundaries can't drift."""
-    allowed = ", ".join(str(p) for p in state.allowed_paths())
-    return (
-        f"Allowed paths: {allowed}\n"
-        "To work on this file: pass its content inline where the argument takes "
-        "text (a compare reference), copy it into one of those directories, or "
-        "add its directory to [security] allowed_paths in "
-        f"{state.config.config_path} — that file is re-read on the next call, no "
-        "restart. LTSPICE_MCP_ALLOWED_PATHS sets the same list (restart "
-        "required). An inspect capabilities query shows the full sandbox "
-        "configuration."
-    )
 
 
 def _configure_server_logging(config: ServerConfig) -> None:
@@ -441,7 +424,14 @@ async def call_tool(
         # The caller reads the refusal in the result; the operator reads it on
         # the server's stderr, which is the only channel left for it.
         logger.warning("Path security violation in %s: %s", name, e)
-        return _tool_error(f"{e}\n\n{_path_reject_guidance(state)}")
+        guidance = path_denied_guidance(state)
+        # Mirrored into structuredContent: a structured-aware client drops the
+        # text channel, and the guidance is the whole recovery.
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"{e}\n\n{guidance}")],
+            structured_content={"error": str(e), "code": e.code, "hint": guidance},
+            is_error=True,
+        )
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
@@ -529,7 +519,7 @@ async def read_resource(
     except PathSecurityError as e:
         # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
         # enrich it here so every resource route gets the recovery guidance.
-        raise _resource_error(f"{e}\n\n{_path_reject_guidance(state)}") from None
+        raise _resource_error(f"{e}\n\n{path_denied_guidance(state)}") from None
     except (LTSpiceMCPError, ValueError) as e:
         raise _resource_error(str(e)) from None
     except Exception as e:

@@ -130,6 +130,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     outcome_of,
     outcome_schema,
+    path_denied_guidance,
     registry,
     resolve_response_budget,
     safe_path,
@@ -613,11 +614,19 @@ _SUPPORTED_KIND_SET = frozenset(SUPPORTED_KINDS)
 class _QueryError(Exception):
     """A per-item failure carrying a structured error code (isolated to one query)."""
 
-    def __init__(self, code: str, message: str, *, supported: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        supported: list[str] | None = None,
+        hint: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.supported = supported
+        self.hint = hint
 
 
 def _validate_query(data: Any) -> Query:
@@ -888,7 +897,7 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         "diagnostics": list(state.diagnostics),
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
-        "allowed_paths": [str(p) for p in state.config.allowed_paths],
+        "allowed_paths": [str(p) for p in state.allowed_paths()],
         # One surface, and no setting selects it; the key stays because a
         # client reads it to know which one it is talking to.
         "tool_profile": "consolidated",
@@ -1572,12 +1581,17 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 # ---------------------------------------------------------------------------
 
 
+def _path_denied(exc: PathSecurityError, state: SessionState) -> _QueryError:
+    """A sandbox refusal as a per-item failure carrying the recovery guidance."""
+    return _QueryError(exc.code, str(exc), hint=path_denied_guidance(state))
+
+
 def _resolve_path(q: Any, user_path: str, state: SessionState) -> Path:
     """safe_path with the denial mapped to a per-item ``path_denied`` failure."""
     try:
         return safe_path(user_path, state)
     except PathSecurityError as exc:
-        raise _QueryError("path_denied", str(exc)) from exc
+        raise _path_denied(exc, state) from exc
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -1589,7 +1603,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     )
     hierarchy = load_hierarchy(
         q.path,
-        state.config.allowed_paths,
+        state.allowed_paths(),
         profile,
         simulator_roots=simulator_library_roots(state.available_simulators.get(q.simulator)),
     )
@@ -1651,6 +1665,7 @@ _ERROR_SCHEMA: dict[str, Any] = {
         "code": {"type": "string"},
         "message": {"type": "string"},
         "supported": {"type": "array", "items": {"type": "string"}},
+        "hint": HINT_SCHEMA,
     },
     "required": ["code", "message"],
 }
@@ -1871,11 +1886,14 @@ async def _run_queries(
         try:
             query = _validate_query(raw)
             outcome = await _dispatch(query, state, view)
+        except PathSecurityError as exc:
+            # A refusal from a resolver that does not go through _resolve_path
+            # (the hierarchy loader checks every file it opens) is the same
+            # refusal, so it reports the same code and guidance.
+            results.append(_failure_item(index, raw, _query_error_row(_path_denied(exc, state))))
+            continue
         except _QueryError as exc:
-            error = {"code": exc.code, "message": exc.message}
-            if exc.supported is not None:
-                error["supported"] = exc.supported  # type: ignore[assignment]
-            results.append(_failure_item(index, raw, error))
+            results.append(_failure_item(index, raw, _query_error_row(exc)))
             continue
         except ValidationError as exc:
             results.append(
@@ -2023,6 +2041,15 @@ async def _negotiate_inspect(
     return format_response(_summary_text(data["results"]), data)
 
 
+def _query_error_row(exc: _QueryError) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": exc.code, "message": exc.message}
+    if exc.supported is not None:
+        error["supported"] = exc.supported
+    if exc.hint is not None:
+        error["hint"] = exc.hint
+    return error
+
+
 def _failure_item(index: int, raw: Any, error: dict[str, Any]) -> dict[str, Any]:
     return {"index": index, "kind": _kind_of(raw), "ok": False, "error": error}
 
@@ -2041,4 +2068,6 @@ def _summary_text(results: list[dict[str, Any]]) -> str:
             lines.append(
                 f"[{r['index']}] {r.get('kind')}: {r['error']['code']} — {r['error']['message']}"
             )
+            if r["error"].get("hint"):
+                lines.append(r["error"]["hint"])
     return "\n".join(lines) if lines else "(no queries)"
