@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-import functools
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
@@ -107,7 +105,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     format_response,
     outcome_of,
-    path_denied_guidance,
+    path_denied_text,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -703,7 +701,7 @@ async def handle_run_experiments(
                 exc,
                 lint_by_circuit or None,
                 budget=budget,
-                path_denied_hint=functools.partial(path_denied_guidance, state),
+                state=state,
             )
     except SubmissionCommitted as exc:
         return await _error_response(
@@ -770,7 +768,7 @@ async def handle_run_experiments(
             retryable=False,
             commit_state="not_started",
             budget=budget,
-            hint=f"{exc}\n\n{path_denied_guidance(state)}",
+            hint=path_denied_text(exc, state),
         )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
@@ -1219,10 +1217,9 @@ async def _dwell_and_respond(
                 await asyncio.wait_for(job.done_event.wait(), wait_s)
     snapshot = snapshot_receipt(
         job,
-        None,
+        state,
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
-        path_denied_hint=functools.partial(path_denied_guidance, state),
     )
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "
@@ -1439,7 +1436,7 @@ async def _post_submit_error_response(
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None,
     *,
     budget: ResponseBudget,
-    path_denied_hint: Callable[[], str] | None = None,
+    state: SessionState,
 ) -> types.CallToolResult:
     """Envelope for a failure that escaped AFTER the cases were submitted.
 
@@ -1464,10 +1461,9 @@ async def _post_submit_error_response(
     try:
         snapshot = snapshot_receipt(
             job,
-            None,
+            state,
             control_token=receipt.control_token,
             lint_by_circuit=lint_by_circuit,
-            path_denied_hint=path_denied_hint,
         )
         handles = {
             "job_id": snapshot.job_id,

@@ -130,7 +130,6 @@ from ltspice_mcp.tools._base import (
     format_response,
     outcome_of,
     outcome_schema,
-    path_denied_guidance,
     registry,
     resolve_response_budget,
     safe_path,
@@ -614,19 +613,11 @@ _SUPPORTED_KIND_SET = frozenset(SUPPORTED_KINDS)
 class _QueryError(Exception):
     """A per-item failure carrying a structured error code (isolated to one query)."""
 
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        supported: list[str] | None = None,
-        hint: str | None = None,
-    ) -> None:
+    def __init__(self, code: str, message: str, *, supported: list[str] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.supported = supported
-        self.hint = hint
 
 
 def _validate_query(data: Any) -> Query:
@@ -1010,7 +1001,7 @@ def _symbols_payload(
 async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     asc_dir: Path | None = None
     if q.path is not None:
-        asc_dir = _resolve_path(q, q.path, state).parent
+        asc_dir = safe_path(q.path, state).parent
 
     precedence = _symbol_precedence(asc_dir, state)
     prec_report, names = await asyncio.to_thread(_symbols_payload, precedence, q.filter)
@@ -1073,7 +1064,7 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
 async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
     asc_path: Path | None = None
     if q.path is not None:
-        asc_path = _resolve_path(q, q.path, state)
+        asc_path = safe_path(q.path, state)
     resolver = symbol_resolver_for(asc_path, state)
     payload = await asyncio.to_thread(_symbol_geometry, resolver, q.name)
     if payload is None:
@@ -1204,7 +1195,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
 
 
 async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    path = _resolve_path(q, q.path, state)
+    path = safe_path(q.path, state)
     identity = {"path": str(path), "at": q.at}
 
     if _route_circuit_kind(path, "net") == "netlist":
@@ -1363,7 +1354,7 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     _check_prefix(q.prefix)
-    path = _resolve_path(q, q.path, state)
+    path = safe_path(q.path, state)
     # The answer rung revokes detail='full' — the one payload-growing opt-in
     # inspect has. The cursor binds the detail it actually rendered, so a page
     # taken under a budget cannot resume as an unbudgeted one at the same offset.
@@ -1468,7 +1459,7 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
     # re-parsed list at the old offset.
     sources: list[Path] = []
     if q.mode == "enumerate":
-        sources = [_resolve_path(q, lib, state) for lib in (q.libs or [])]
+        sources = [safe_path(lib, state) for lib in (q.libs or [])]
         try:
             rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
@@ -1477,7 +1468,7 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
     else:
         assert q.query is not None  # guaranteed by the model validator
         if q.libs:
-            sources = [_resolve_path(q, lib, state) for lib in q.libs]
+            sources = [safe_path(lib, state) for lib in q.libs]
             try:
                 rows = await asyncio.to_thread(_search_libs, sources, q.query)
             except OSError as exc:
@@ -1579,19 +1570,6 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 # ---------------------------------------------------------------------------
 # Shared per-item helpers + dispatch
 # ---------------------------------------------------------------------------
-
-
-def _path_denied(exc: PathSecurityError, state: SessionState) -> _QueryError:
-    """A sandbox refusal as a per-item failure carrying the recovery guidance."""
-    return _QueryError(exc.code, str(exc), hint=path_denied_guidance(state))
-
-
-def _resolve_path(q: Any, user_path: str, state: SessionState) -> Path:
-    """safe_path with the denial mapped to a per-item ``path_denied`` failure."""
-    try:
-        return safe_path(user_path, state)
-    except PathSecurityError as exc:
-        raise _path_denied(exc, state) from exc
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -1887,13 +1865,17 @@ async def _run_queries(
             query = _validate_query(raw)
             outcome = await _dispatch(query, state, view)
         except PathSecurityError as exc:
-            # A refusal from a resolver that does not go through _resolve_path
-            # (the hierarchy loader checks every file it opens) is the same
-            # refusal, so it reports the same code and guidance.
-            results.append(_failure_item(index, raw, _query_error_row(_path_denied(exc, state))))
+            # Every kind's refusal lands here, whichever resolver raised it (the
+            # hierarchy loader checks each file it opens), so all report one code
+            # and one remedy.
+            error = {"code": exc.code, "message": str(exc), "hint": state.sandbox_guidance()}
+            results.append(_failure_item(index, raw, error))
             continue
         except _QueryError as exc:
-            results.append(_failure_item(index, raw, _query_error_row(exc)))
+            error = {"code": exc.code, "message": exc.message}
+            if exc.supported is not None:
+                error["supported"] = exc.supported  # type: ignore[assignment]
+            results.append(_failure_item(index, raw, error))
             continue
         except ValidationError as exc:
             results.append(
@@ -2039,15 +2021,6 @@ async def _negotiate_inspect(
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)
-
-
-def _query_error_row(exc: _QueryError) -> dict[str, Any]:
-    error: dict[str, Any] = {"code": exc.code, "message": exc.message}
-    if exc.supported is not None:
-        error["supported"] = exc.supported
-    if exc.hint is not None:
-        error["hint"] = exc.hint
-    return error
 
 
 def _failure_item(index: int, raw: Any, error: dict[str, Any]) -> dict[str, Any]:

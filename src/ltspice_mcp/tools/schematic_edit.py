@@ -84,7 +84,6 @@ from ltspice_mcp.tools._base import (
     make_include_resolver,
     outcome_of,
     page_schema,
-    path_denied_guidance,
     registry,
     resolve_reference,
     safe_path,
@@ -564,7 +563,7 @@ def _compare_committed(
             spec.anchors,
             spec.rtol,
             make_include_resolver(state),
-            denied_hint=path_denied_guidance(state),
+            denied_hint=state.sandbox_guidance(),
         )
     return compare_structural(reference_to_path(ref, state), netlist_path)
 

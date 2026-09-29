@@ -31,7 +31,7 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import path_denied_guidance
+from ltspice_mcp.tools._base import path_denied_text
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
@@ -217,7 +217,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
                 logger.warning(f"  - {diag}")
 
         logger.info("Allowed paths (sandbox):")
-        for allowed_path in config.allowed_paths:
+        for allowed_path in state.allowed_paths():
             logger.info(f"  - {allowed_path.resolve()}")
 
         if boot.preloaded_circuits:
@@ -342,16 +342,19 @@ def get_client_capabilities() -> types.ClientCapabilities | None:
     return _client_capabilities.get()
 
 
-def _tool_error(text: str) -> types.CallToolResult:
+def _tool_error(text: str, structured: dict[str, Any] | None = None) -> types.CallToolResult:
     """A failed tool call: the message on the text channel, ``is_error`` set.
 
     A tool that fails reports it in its result rather than as a JSON-RPC error,
     which is what lets the calling model read the message and correct itself.
     The SDK turned an exception into this shape for us until MCP SDK 2, which
     raises handler exceptions to the wire instead, so we build it here.
+    ``structured`` mirrors what the caller needs to act on into
+    structuredContent, which a structured-aware client reads instead of text.
     """
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
+        structured_content=structured,
         is_error=True,
     )
 
@@ -424,13 +427,10 @@ async def call_tool(
         # The caller reads the refusal in the result; the operator reads it on
         # the server's stderr, which is the only channel left for it.
         logger.warning("Path security violation in %s: %s", name, e)
-        guidance = path_denied_guidance(state)
-        # Mirrored into structuredContent: a structured-aware client drops the
-        # text channel, and the guidance is the whole recovery.
-        return types.CallToolResult(
-            content=[types.TextContent(type="text", text=f"{e}\n\n{guidance}")],
-            structured_content={"error": str(e), "code": e.code, "hint": guidance},
-            is_error=True,
+        # The guidance is the whole recovery, so it rides structuredContent too.
+        return _tool_error(
+            path_denied_text(e, state),
+            {"error": str(e), "code": e.code, "hint": state.sandbox_guidance()},
         )
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
@@ -447,11 +447,7 @@ async def call_tool(
             structured: dict[str, Any] = {"error": str(e), "suggestions": e.suggestions}
             if hint:
                 structured["hint"] = hint
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text=text)],
-                structured_content=structured,
-                is_error=True,
-            )
+            return _tool_error(text, structured)
         return _tool_error(text)
     except Exception as e:
         # Surface the actual exception type + message in the response. A bare
@@ -519,7 +515,7 @@ async def read_resource(
     except PathSecurityError as e:
         # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
         # enrich it here so every resource route gets the recovery guidance.
-        raise _resource_error(f"{e}\n\n{path_denied_guidance(state)}") from None
+        raise _resource_error(path_denied_text(e, state)) from None
     except (LTSpiceMCPError, ValueError) as e:
         raise _resource_error(str(e)) from None
     except Exception as e:
