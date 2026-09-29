@@ -94,6 +94,9 @@ tool-surface changes.
   names, quoted strings and include paths are left alone, a file with nothing
   to fold keeps its original bytes, and the schematic is never touched. Each
   folded file is reported as a `micro_sign_folded` observation.
+- `inspect(kind="components", prefix=...)` on a `.asc` matched the prefix
+  case-sensitively, so `"r"` listed no resistors on a schematic while it
+  listed them on a netlist. Both now match case-insensitively.
 
 ### Added
 
@@ -132,6 +135,13 @@ tool-surface changes.
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
   model profile, independently replayable samples and persisted provenance.
+- A `.asc` pin can be addressed by its 1-based SpiceOrder: `X1.2` reaches the
+  second pin of a block whose pins are named `A`/`B`, the same terminal number
+  a netlist `inspect(kind="net")` query takes. Pin names are matched first,
+  because some symbols name their pins `1`/`2` in an order that need not be
+  their SpiceOrder. This works everywhere a pin is taken: `inspect(kind="net")`,
+  the `wire_pins` op, and the `pin` of `add_net_label`, `remove_net_label` and
+  `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
 
@@ -152,6 +162,15 @@ tool-surface changes.
   server's per-case limit, `null` when unset) and `export_timeout_s`.
   `[simulation] timeout` bounds only LTspice netlist export, which is all it
   ever bounded.
+- `prefix` on `inspect(kind="components")` and `inspect(kind="hierarchy")` is
+  a case-insensitive prefix of the reference rather than a single letter:
+  `"LX"` keeps LX1 and LX2 but not L1, and `"MXO"` keeps MXO1. A one-letter
+  prefix still selects an element type. On `hierarchy` it reads each
+  instance's own reference, the last segment of its path. It is plain text:
+  a prefix with a wildcard is refused with the plain spelling to use
+  (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
+  too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
+  `invalid_query`.
 
 ### Security
 

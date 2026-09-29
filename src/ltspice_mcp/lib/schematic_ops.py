@@ -1247,7 +1247,13 @@ def _placed_component_data(
 
 
 def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
-    """Resolve a pin reference ('M1.D' or 'net:VDD') to absolute (x, y) coordinates.
+    """Resolve a pin reference ('M1.D', 'X1.2' or 'net:VDD') to absolute (x, y) coordinates.
+
+    The part after the last dot is matched against the symbol's pin names first,
+    case-insensitively. Only when no pin carries that name, and it is all
+    digits, is it read as the pin's 1-based SpiceOrder — the terminal number a
+    netlist uses. Names win because some symbols name their pins '1', '2' in an
+    order that need not be their SpiceOrder.
 
     Raises NetlistError if the reference cannot be resolved.
     """
@@ -1275,8 +1281,9 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     # Component.Pin format
     if "." not in pin_ref:
         raise NetlistError(
-            f"Invalid pin reference '{pin_ref}'. "
-            "Use 'Reference.Pin' (e.g., 'M1.D') or 'net:name' (e.g., 'net:VDD')."
+            f"Invalid pin reference '{pin_ref}'. Use 'Reference.Pin', the pin by "
+            "name or 1-based SpiceOrder (e.g., 'M1.D', 'X1.2'), or 'net:name' "
+            "(e.g., 'net:VDD')."
         )
 
     ref, pin_name = pin_ref.rsplit(".", 1)
@@ -1296,13 +1303,20 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         raise NetlistError(f"Cannot resolve pins for '{ref}': symbol '{symbol}' not found.")
 
     geometry = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-    for pin in geometry["pins"]:
+    pins = geometry["pins"]
+    for pin in pins:
         if pin["name"].upper() == pin_name.upper():
             return pin["x"], pin["y"]
+    # A pin with no SpiceOrder line parses as order 0, which is no ordinal.
+    if pin_name.isascii() and pin_name.isdigit() and int(pin_name) >= 1:
+        for pin in pins:
+            if pin["order"] == int(pin_name):
+                return pin["x"], pin["y"]
 
-    available = [p["name"] for p in geometry["pins"]]
+    available = [f"{p['name']} ({p['order']})" if p["order"] else p["name"] for p in pins]
     raise NetlistError(
-        f"Pin '{pin_name}' not found on {ref} ({symbol}). Available: {', '.join(available)}"
+        f"Pin '{pin_name}' not found on {ref} ({symbol}). Available: {', '.join(available)} "
+        "(pin name, with its SpiceOrder in parentheses)."
     )
 
 
@@ -1875,7 +1889,7 @@ class OpAddNetLabel(StrictModel):
     net: str = Field(description="Net name the label declares, e.g. 'VDD', 'out'.")
     pin: str | None = Field(
         default=None,
-        description="Place at this pin, e.g. 'M1.D'; give this or x/y, not both.",
+        description="Place at this pin, e.g. 'M1.D' or 'X1.2'; give this or x/y, not both.",
     )
     x: int | None = None
     y: int | None = None
@@ -1887,11 +1901,12 @@ class OpWirePins(StrictModel):
 
     op: Literal["wire_pins"]
     from_pin: str = Field(
-        description="Source pin as 'Reference.Pin', e.g. 'M1.D', or 'net:NAME' for a label."
+        description=(
+            "Source pin as 'REF.PIN', PIN a pin name or else its 1-based "
+            "SpiceOrder ('M1.D', 'X1.2'), or 'net:NAME' for a label."
+        )
     )
-    to_pin: str = Field(
-        description="Target pin as 'Reference.Pin', e.g. 'M4a.D', or 'net:NAME' for a label."
-    )
+    to_pin: str = Field(description="Target pin, in from_pin's forms.")
     waypoints: list[WaypointInput] = Field(
         default_factory=list,
         description=(
