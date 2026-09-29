@@ -14,6 +14,16 @@ tool-surface changes.
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
 - Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+- Symbols placed at `M90` and `M270` had those two orientations swapped. LTspice
+  rotates a mirrored placement first and then mirrors it, so `M90` takes a
+  symbol point `(x, y)` to `(y, x)`. The server applied the mirror first. On a
+  sheet LTspice wired correctly, `inspect` reported the pins in the wrong place
+  and `verify_circuit` reported floating pins, dangling wire ends, wires through
+  symbol bodies and dropped wires. `M0`, `M180` and every `R` orientation were
+  unaffected. **Sheets built by earlier versions with `add_component` or
+  `wire_pins` at `M90` or `M270` put the wires at the wrong pin positions, so
+  those parts are miswired when LTspice opens the sheet.** Rebuild or rewire
+  those parts.
 
 ### Added
 
