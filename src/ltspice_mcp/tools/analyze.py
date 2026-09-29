@@ -3665,9 +3665,9 @@ async def capture_attached_analysis(
         "load step), operating_point (bias point, gm/gds/vth), measurements "
         "(.meas), value (one trace at one axis point), summary, waveform "
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
-        "searches these by plain words and returns a recipe's fields. A recipe's "
-        "signal is one trace or a node pair V(a,b), never an expression: other "
-        "trace math is numpy on the traces (spice://guide, 'trace math')."
+        "searches these by plain words and returns a recipe's fields. A signal is "
+        "one trace or V(a,b), not an expression; other trace math is numpy "
+        "(spice://guide, 'trace math')."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(

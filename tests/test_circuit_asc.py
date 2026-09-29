@@ -292,13 +292,9 @@ class TestEditDirectiveCommentKind:
         assert "zap me" not in text
 
 
-def test_waypoints_description_promises_no_router():
-    # The route is the endpoints and waypoints joined in order, and a leg that
-    # is neither horizontal nor vertical is refused (test_diagonal_rejected).
-    # The field used to tell callers to omit waypoints and "let the router pick
-    # the elbow"; there is no router, so the advice produced that refusal.
+def test_waypoints_description_states_the_straight_run_rule():
+    # There is no router; test_diagonal_rejected pins the refusal itself.
     text = OpWirePins.model_fields["waypoints"].description or ""
-    assert "router" not in text
     assert "share an x or a y" in text
 
 

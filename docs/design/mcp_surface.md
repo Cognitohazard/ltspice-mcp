@@ -794,11 +794,11 @@ export_to     "managed" (default) | "sidecar"
 anchors, rtol, mode}` means the same thing on both tools, and both run either
 comparison through one dispatcher. `render`'s `mode`/`delivery` are here
 because only this tool has checks to skip and an image channel to deliver
-into. A tool never advertises a
-field it cannot honour, which is also why `render` is here and not on
-`edit_schematic`. There is one spelling of each: the flat
-`reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with said nothing
-the object did not, and a call carrying both was refused rather than resolved.
+into. A tool never advertises a field it cannot honour, which is also why
+`render` is here and not on `edit_schematic`. There is one spelling of each:
+the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
+said nothing the object did not, and a call carrying both was refused rather
+than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`

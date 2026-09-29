@@ -1283,30 +1283,36 @@ def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
 # ---------------------------------------------------------------------------
 
 
-def _check_prefix(prefix: str | None) -> None:
-    if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
+def _check_prefix(prefix: str | None) -> str | None:
+    """The validated prefix, upper-cased: references match it without regard to case."""
+    if prefix is None:
+        return None
+    if len(prefix) != 1 or not prefix.isalpha():
         raise _QueryError(
             "invalid_prefix",
             f"component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}",
         )
+    return prefix.upper()
 
 
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """The component rows, plus the lexer's notes about how the deck read."""
+    """The component rows, plus the lexer's notes about how the deck read.
+
+    ``prefix`` is the upper-cased letter :func:`_check_prefix` returns.
+    """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
     lexed = lex(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
-    upper = prefix.upper() if prefix else None
     rows: list[dict[str, Any]] = []
     for card in by_ref.values():
         ref = card.name
         if not ref:
             continue
-        if upper is not None and ref[:1].upper() != upper:
+        if prefix is not None and ref[:1].upper() != prefix:
             continue
         entry: dict[str, Any] = {"reference": ref, "value": netlist_card_value(card)}
         if detail == "full" and not body_has_stray_kv_remnant(card.body):
@@ -1355,13 +1361,13 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
 
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    _check_prefix(q.prefix)
+    prefix = _check_prefix(q.prefix)
     path = safe_path(q.path, state)
     # The answer rung revokes detail='full' — the one payload-growing opt-in
     # inspect has. The cursor binds the detail it actually rendered, so a page
     # taken under a budget cannot resume as an unbudgeted one at the same offset.
     detail = "list" if view.lean else q.detail
-    identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
+    identity = {"path": str(path), "prefix": prefix, "detail": detail}
     digest: str | None = None
     lex_notes: list[str] = []
 
@@ -1373,12 +1379,10 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
             refs = sorted(editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        # Filtered here, by first letter and without regard to case, the way the
-        # netlist branch does. spicelib's get_components(prefixes) tests the first
-        # character's membership in the string as given, so a lowercase 'r'
-        # matched no 'R1' and the sheet read as having no resistors.
-        if q.prefix:
-            refs = [ref for ref in refs if ref[:1].upper() == q.prefix.upper()]
+        # Filtered here as in the netlist branch: spicelib's prefix filter is
+        # case-sensitive (docs/spicelib_bugs.md).
+        if prefix is not None:
+            refs = [ref for ref in refs if ref[:1].upper() == prefix]
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
         rows = _components_asc_page(editor, page["items"], detail)
     else:
@@ -1388,7 +1392,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
             raise _QueryError("read_error", str(exc)) from exc
         try:
             all_rows, lex_notes = await asyncio.to_thread(
-                _components_netlist_payload, text, q.prefix, detail
+                _components_netlist_payload, text, prefix, detail
             )
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc

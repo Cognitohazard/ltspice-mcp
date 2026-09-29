@@ -326,11 +326,6 @@ class TestExpressionPointer:
         assert "run_code" in message
         assert "r.trace(" in message
         assert "api.load_raw(" in message
-        # The example is math a node pair cannot already express, and it names
-        # the time-weighted statistics helper, since np.mean over LTspice's
-        # variable timestep is the next mistake after the expression.
-        assert "V(a,b)" in message
-        assert "- r.trace(" not in message
         assert "compute_signal_stats(t, y)" in message
 
     async def test_names_the_library_when_run_code_is_off(

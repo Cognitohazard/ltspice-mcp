@@ -34,6 +34,7 @@ from pydantic import Field, model_validator
 
 from ltspice_mcp.code_worker import (
     RESULT_CHARS,
+    SNIPPET_NAMES,
     STDERR_TAIL_CHARS,
     STDOUT_HEAD_CHARS,
     STDOUT_TAIL_CHARS,
@@ -56,14 +57,19 @@ CLOSE_GRACE_S = 5.0
 _PIPE_LINE_LIMIT = 1 << 20
 
 
+#: What a snippet starts with, as both descriptions below list it.
+_IN_SCOPE = (
+    "api (the same six ops as methods on this working directory, complete results, "
+    "no paging), " + ", ".join(SNIPPET_NAMES[1:])
+)
+
+
 class RunCodeInput(ToolInput):
     code: str = Field(
         default="",
         description=(
-            "Python source. In scope: api (the engine on this working directory: the "
-            "same six ops as methods, complete results), np, load_raw, measurements, "
-            "reference, window_and_clean, compute_signal_stats. The repr of a "
-            "trailing expression comes back as result."
+            f"Python source. In scope: {_IN_SCOPE}. The repr of a trailing "
+            "expression comes back as result."
         ),
     )
     timeout_s: float = Field(
@@ -537,15 +543,12 @@ def worker_for(state: SessionState) -> CodeWorker:
         "`api`. The snippet has the server process's own file and process "
         "authority, not the sandbox, so permission this tool like a shell. For "
         "loops over many runs, numpy on samples, and compute-decide-compute; a "
-        "single run or measurement is a tool call. Trace math is numpy here: a "
-        "recipe signal names one trace or V(a,b), so combine r = load_raw(...) "
-        "traces taken at one step on r.axis(step=k), and take statistics of the "
-        "result with compute_signal_stats(t, y), which weights by time (np.mean "
-        "over-weights the dense samples a variable timestep puts at edges). In "
-        "scope: api (the same six ops as methods on this working directory, "
-        "complete results, no paging), np, load_raw, measurements, reference, "
-        "window_and_clean, compute_signal_stats — reference('run_experiments') "
-        "lists an op's arguments, so read it before guessing them. Every call is a fresh "
+        "single run or measurement is a tool call. Trace math is numpy on one "
+        "step's traces, r.trace(name, step=k) on r.axis(step=k); "
+        "compute_signal_stats weights a derived trace's statistics by time, "
+        "which np.mean does not (spice://guide, 'trace math'). "
+        f"In scope: {_IN_SCOPE} — reference('run_experiments') lists an op's "
+        "arguments, so read it before guessing them. Every call is a fresh "
         "namespace around the same live engine; keep state on disk (a job by "
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
