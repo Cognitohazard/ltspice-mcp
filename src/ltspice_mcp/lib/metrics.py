@@ -77,6 +77,7 @@ from ltspice_mcp.lib.raw_parser import (
     whattype_unit,
 )
 from ltspice_mcp.lib.recipes import (
+    QUANTILE_SPREAD_FIELD,
     RECIPE_MODELS,
     AcStructureRecipe,
     BodeCrossingRecipe,
@@ -101,6 +102,7 @@ from ltspice_mcp.lib.recipes import (
     ValueRecipe,
     WaveformRecipe,
     Window,
+    quantile_key,
 )
 from ltspice_mcp.lib.result_observations import (
     deck_observation_inputs,
@@ -115,6 +117,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
+    time_weighted_quantiles,
     window_and_clean,
 )
 from ltspice_mcp.state import SessionState
@@ -1201,6 +1204,34 @@ async def point_value(
     return data
 
 
+def _refuse_quantiles_off_transient(recipe: SignalStatsRecipe, run: str) -> None:
+    if recipe.quantiles:
+        raise ResultError(
+            f"quantiles are weighted by time, so they apply to a transient run; this is "
+            f"{run} run. Drop 'quantiles' for this source.",
+            show_hint=False,
+        )
+
+
+async def _quantile_stats(t: np.ndarray, y: np.ndarray, levels: list[float]) -> dict[str, float]:
+    """The q-keyed quantiles of one windowed trace, and their spread.
+
+    The extremes the row already carries stay the sample ``min``/``max``;
+    these are extra fields beside them, never a replacement.
+    """
+    try:
+        # A bisection over every sample per level: long enough on a
+        # million-point trace to stall every other request if run inline.
+        result = await asyncio.to_thread(time_weighted_quantiles, t, y, levels)
+    except ValueError as e:
+        raise ResultError(str(e)) from e
+    by_level = dict(zip(result["levels"], result["values"], strict=True))
+    fields = {quantile_key(level): value for level, value in by_level.items()}
+    if len(by_level) > 1:
+        fields[QUANTILE_SPREAD_FIELD] = by_level[max(by_level)] - by_level[min(by_level)]
+    return fields
+
+
 async def signal_stats(
     source: services.AnalysisSource,
     recipe: SignalStatsRecipe,
@@ -1232,6 +1263,7 @@ async def signal_stats(
                 "Use the bode_point recipe to look up a specific frequency.",
                 show_hint=False,
             )
+        _refuse_quantiles_off_transient(recipe, "an AC")
         magnitude_db = safe_magnitude_db(wave)
         phase_deg = np.angle(wave, deg=True)
         data: MetricValue = {
@@ -1259,6 +1291,8 @@ async def signal_stats(
     is_dc_sweep = is_dc_analysis(sim_type_raw)
     is_noise = is_noise_analysis(sim_type_raw)
 
+    if is_dc_sweep or is_noise:
+        _refuse_quantiles_off_transient(recipe, "a DC sweep" if is_dc_sweep else "a noise")
     if is_noise and (t_start is not None or t_end is not None):
         raise ResultError(
             "t_start/t_end windowing is not supported for Noise analysis (axis is "
@@ -1326,6 +1360,8 @@ async def signal_stats(
             "t_at_min": core["t_at_min"],
             "t_at_max": core["t_at_max"],
         }
+        if recipe.quantiles:
+            stats.update(await _quantile_stats(t_win, y_win, recipe.quantiles))
 
     # Surface a FACT (not a verdict) when the signal never moves across the
     # window. min == max is the tell of a coerced/latched solve (e.g. a

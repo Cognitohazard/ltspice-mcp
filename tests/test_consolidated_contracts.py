@@ -638,7 +638,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 160 characters so value's 'expr' and 'at' say what they
     # take: a field named for an expression, with no description, was read as
     # one, and 'at' being required on a multi-sample axis was stated nowhere.
-    "analyze_results": 19260,
+    # Raised by about 260 characters for signal_stats' 'quantiles': the levels'
+    # bounds and count, and one sentence naming the q-keyed fields they add,
+    # which a 'field' has to spell to reduce or spec one; plus "percentiles"
+    # on the roster, so a host routes that word here. Measured 19,512.
+    "analyze_results": 19520,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
