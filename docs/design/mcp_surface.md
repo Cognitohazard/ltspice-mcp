@@ -83,7 +83,7 @@ From the error hierarchy:
 
 | code | meaning |
 |-|-|
-| `path_denied` | the path resolves outside `allowed_paths` |
+| `path_denied` | the path resolves outside `allowed_paths`; a `hint` names the config file and key that widen it (an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal) |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
 | `symbol_unresolved` | the schematic opened, but a symbol, sub-sheet or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
@@ -818,6 +818,23 @@ read is diffed as empty, so the delta still comes back, `equivalent` is null,
 and a warning names the deck that failed. Either way the call's outcome is
 `partial` and the reason is in the response.
 
+Both modes compare netlists. An `.asc` under test is compared as its LTspice
+export, so an `.asc` reference is exported the same way — on a staged copy,
+never beside the caller's file — and without LTspice the compare fails instead
+of diffing a schematic's attributes against a netlist's cards. Reading the
+reference through the schematic editor while the sheet under test came from
+its export made the representations differ, and every difference in
+representation read as a change: each SpiceLine as a changed component, a
+multi-line TEXT block as one directive removed and several added.
+`structural_diff` lexes both decks, so a `+` continuation belongs to the card
+it continues, and compares directives parsed rather than as text: spacing,
+case, comma separators and assignment order in `.model`/`.param` are spelling.
+It leaves out what the netlister adds to every export — `.backanno`, the
+install-path `.lib …/cmp/standard.*`, and a parameterless default model such as
+`.model NMOS NMOS` while the reference declares no model of that name. A
+component's signature is its model or value plus its instance parameters,
+nodes excluded (equivalence is the mode that compares wiring).
+
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
 summary, `outcome` and `hint`.
@@ -997,7 +1014,11 @@ Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (blocking,
 ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
 `model-missing` (blocking at staging), `directive-arity` (blocking),
 `include-relative` (warning), `suffix-mega-milli` (warning), `temp-as-param`
-(warning), and `op-degenerate` (a post-run observation with neutral evidence —
+(blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
+scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
+simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
+before the deck is linted, and `verify_circuit` warns about it for a deck run
+elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
 device list, currents, threshold, step — whose hint mentions `.nodeset`).
 
 ---
@@ -1132,7 +1153,7 @@ recipe takes none, having one number.
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
-| `value` | any | `expr` | `at?`; step-aware |
+| `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?` |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
@@ -1151,6 +1172,17 @@ recipe takes none, having one number.
 | `operating_point` | op | — | `device?` — scoping to one device is the difference between a few hundred bytes and tens of KB on a real opamp |
 | `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
+
+A `signal`, `signals` entry or `expr` names one trace as the raw holds it, or a
+node-pair voltage `V(a,b)`. No simulator writes a pair as a trace, so the one
+resolver every reader shares (`services.resolve_signal`) builds it as
+`V(a) - V(b)` from the same raw, step and axis, complex on an AC run; `V(a,0)`
+and `V(a,gnd)` are `V(a)`, a missing node is named, and a `.noise` run refuses
+a pair because spectral densities do not subtract. The AC recipes also take a
+ratio `A/B` of two such signals and a leading `-`. Any other trace math is
+Python on `RawResult.trace`: a not-found error on an input that reads as an
+expression carries that snippet and names where it runs, `run_code` when the
+session serves it and the library otherwise.
 
 ### A.3 Edit ops
 

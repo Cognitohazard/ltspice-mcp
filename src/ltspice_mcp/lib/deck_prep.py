@@ -47,15 +47,15 @@ logger = logging.getLogger(__name__)
 def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
     """Resolve and validate a netlist path. Raises SimulationError on failure.
 
-    PathSecurityError propagates unchanged: the dispatch layer has a dedicated
-    branch that appends the sandbox-widening guidance (allowed paths, the TOML
-    knob, the restart requirement) — re-wrapping it as SimulationError would
-    replace that guidance with a misdirecting simulator hint.
+    PathSecurityError propagates unchanged: the caller attaches the sandbox
+    guidance (the allowed paths, and the config line that widens them, which is
+    re-read on the next call) — re-wrapping it as SimulationError would replace
+    that guidance with a misdirecting simulator hint.
     """
     try:
         # ``tools._base.safe_path`` is this same call bound to the session; the
         # tool layer sits above this module, so bind it here instead.
-        netlist_path = resolve_safe_path(netlist_str, state.config.allowed_paths)
+        netlist_path = resolve_safe_path(netlist_str, state.allowed_paths())
     except PathSecurityError:
         raise
     except Exception as e:

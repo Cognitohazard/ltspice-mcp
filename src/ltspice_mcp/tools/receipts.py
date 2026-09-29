@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from mcp import types
 
+from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
@@ -519,6 +520,10 @@ class ReceiptSnapshot:
     analysis_error: str | None
     analysis_observations: tuple[dict[str, Any], ...]
     analysis_request: dict[str, Any] | None
+    path_denied_hint: str | None = None
+    """The session's sandbox guidance, which a ``path_denied`` failure row
+    carries as its hint. Not a job fact: the remedy is the sandbox setting as
+    it reads now, so it comes from the session rather than the record."""
 
     @property
     def outcome(self) -> CallOutcome:
@@ -563,7 +568,7 @@ def render_receipt_snapshot(
         "completeness": snapshot.completeness,
         "lint": list(snapshot.lint),
         "runs": runs,
-        "failures": _render_failures(snapshot.failures),
+        "failures": _render_failures(snapshot.failures, snapshot.path_denied_hint),
         "observations": list(snapshot.observations),
         "warnings": [],
         "artifacts": list(snapshot.artifacts),
@@ -609,6 +614,7 @@ _FAILURE_CASE_ID_CAP = 10
 
 def _render_failures(
     rows: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+    path_denied_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Collapse repeated failures into one counted row and attach recovery hints.
 
@@ -646,7 +652,9 @@ def _render_failures(
                 str(item.get("case_id", "")) for item in group[:_FAILURE_CASE_ID_CAP]
             ]
             rendered["count"] = len(group)
-        hint = _FAILURE_CODE_HINTS.get(code)
+        hint = (
+            path_denied_hint if code == PathSecurityError.code else _FAILURE_CODE_HINTS.get(code)
+        )
         if hint is not None:
             rendered["hint"] = hint
         collapsed.append(rendered)
@@ -906,6 +914,9 @@ def snapshot_receipt(
     before this call (``snapshot_receipt_live`` pairs the two). An entry joins
     the observations only for a case still running here, so a case that
     finished in between is not reported running.
+
+    The sandbox guidance is built only when a failure row needs it, so a
+    receipt with no refused path never reads the config file.
     """
     lint_map: dict[str, list[dict[str, Any]]]
     if lint_by_circuit is None:
@@ -966,6 +977,12 @@ def snapshot_receipt(
         analysis_error=analysis.error,
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
+        path_denied_hint=(
+            state.sandbox_guidance()
+            if state is not None
+            and any(row.get("code") == PathSecurityError.code for row in job.failures)
+            else None
+        ),
     )
 
 

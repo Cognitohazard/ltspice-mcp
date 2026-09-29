@@ -10,9 +10,9 @@ written.
 
 The op models and their in-place applier are reused verbatim from
 ``lib/schematic_ops.py``. Post-commit, an optional compare stage exports the
-committed sheet on a COPY and compares it to a reference netlist through the
-connectivity graph engine; a mismatch or an export failure there is reported
-but never un-commits the sheet.
+committed sheet on a COPY and compares it to a reference — a netlist, or an
+``.asc`` exported the same way — the way verify_circuit does; a mismatch or an
+export failure there is reported but never un-commits the sheet.
 """
 
 # The op models, the in-place applier and the net-partition helpers are the
@@ -81,7 +81,6 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     comparison_mismatch,
     format_response,
-    make_include_resolver,
     outcome_of,
     page_schema,
     registry,
@@ -90,11 +89,10 @@ from ltspice_mcp.tools._base import (
 )
 from ltspice_mcp.tools.verify import (
     COMPARISON_SCHEMA,
-    CompareResult,
+    ReferenceNetlist,
     VerifyCompareSpec,
-    compare_equivalence,
-    compare_structural,
-    reference_to_path,
+    compare_netlists,
+    reference_as_given,
 )
 
 # The blank-sheet template — identical to what ``create_schematic`` writes.
@@ -169,8 +167,8 @@ class EditSchematicInput(ToolInput):
     compare: VerifyCompareSpec | None = Field(
         default=None,
         description=(
-            "Verify the committed sheet against a reference netlist (.cir/.net) "
-            "by exporting a copy and comparing it the way verify_circuit does "
+            "Verify the committed sheet against a reference by exporting a "
+            "copy and comparing it the way verify_circuit does "
             "(same modes, anchors and tolerance). It runs after the commit, so "
             "a mismatch is reported but not undone."
         ),
@@ -387,7 +385,7 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
     from ltspice_mcp.lib.encoding import read_spice_text
 
     net_path = await resolve_runnable_netlist(str(asc_copy), state)
-    return read_spice_text(net_path)
+    return await asyncio.to_thread(read_spice_text, net_path)
 
 
 # ---------------------------------------------------------------------------
@@ -545,26 +543,19 @@ def _write_export_copy(
     atomic_write_bytes(copy_asc, committed_text.encode(encoding), durable=False)
 
 
-def _compare_committed(
-    ref: str | Path,
-    netlist_text: str,
-    netlist_path: Path,
-    ref_source: Path,
-    spec: VerifyCompareSpec,
-    state: SessionState,
-) -> CompareResult:
-    """verify_circuit's comparison over the exported copy (blocking CPU/IO)."""
-    if spec.mode == "equivalence":
-        return compare_equivalence(
-            ref,
-            netlist_text,
-            ref_source,
-            netlist_path,
-            spec.anchors,
-            spec.rtol,
-            make_include_resolver(state),
+async def _exported_reference(
+    ref: Path, export_root: Path, state: SessionState
+) -> ReferenceNetlist:
+    """An ``.asc`` reference exported the way the committed sheet is: a copy
+    beside the committed-sheet copy, through ``_export_asc_to_netlist``."""
+    ref_copy = export_root / "reference.asc"
+    await asyncio.to_thread(shutil.copyfile, ref, ref_copy)
+    try:
+        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state))
+    except Exception as exc:  # broad by design — export failure is a reported fact
+        return ReferenceNetlist(
+            None, f"the reference {ref.name} could not be exported to a netlist: {exc}"
         )
-    return compare_structural(reference_to_path(ref, state), netlist_path)
 
 
 async def _run_reference_stage(
@@ -601,14 +592,25 @@ async def _run_reference_stage(
             verification["export_error"] = str(exc)
             verification["equivalent"] = None
             return verification
-        netlist_path = copy_asc.with_suffix(".net")
-        if not netlist_path.exists():  # a seam-provided export leaves no file behind
-            netlist_path.write_text(netlist_text, encoding="utf-8")
+        verification["_netlist"] = netlist_text
+        ref_netlist = reference_as_given(ref)
+        if ref_netlist is None:
+            assert isinstance(ref, Path)  # only an .asc path needs exporting
+            ref_netlist = await _exported_reference(ref, export_root, state)
+        if ref_netlist.source is None:
+            verification["compare_error"] = ref_netlist.error
+            verification["equivalent"] = None
+            return verification
         ref_source = ref if isinstance(ref, Path) else target
         payload, findings, failure, cmp_warnings = await asyncio.to_thread(
-            _compare_committed, ref, netlist_text, netlist_path, ref_source, spec, state
+            compare_netlists,
+            spec,
+            ref_netlist.source,
+            netlist_text,
+            ref_source,
+            copy_asc.with_suffix(".net"),
+            state,
         )
-        verification["_netlist"] = netlist_text
         verification["_warnings"] = cmp_warnings + [
             f"{f.get('rule_id')}: {(f.get('evidence') or {}).get('detail') or f.get('subject')}"
             for f in findings

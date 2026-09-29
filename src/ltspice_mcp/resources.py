@@ -249,7 +249,7 @@ def _read_config(
     cfg = state.config
     data = {
         "working_dir": str(cfg.working_dir),
-        "allowed_paths": [str(p) for p in cfg.allowed_paths],
+        "allowed_paths": [str(p) for p in state.allowed_paths()],
         "simulator": cfg.simulator,
         "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
         "detected_simulators": list(state.available_simulators.keys()),
@@ -303,7 +303,7 @@ def _read_netlist_content(
     them, diverging from what the tool-side reads show for the same file).
     """
     filename = params["filename"]
-    resolved = resolve_safe_path(filename, state.config.allowed_paths)
+    resolved = resolve_safe_path(filename, state.allowed_paths())
     if resolved.suffix.lower() not in NETLIST_EXTENSIONS:
         allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
         raise ValueError(

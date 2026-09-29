@@ -124,6 +124,10 @@ SIM_PATH_KEY = "path"
 SIM_ENABLED_KEY = "enabled"
 SIM_PATH_ENV = "LTSPICE_MCP_SIMULATOR_EXE"
 SIM_ENABLED_ENV = "LTSPICE_MCP_ENABLED_SIMULATORS"
+# The sandbox keys, named for the same reason: every refusal names them.
+SANDBOX_SECTION = "security"
+SANDBOX_KEY = "allowed_paths"
+SANDBOX_ENV = "LTSPICE_MCP_ALLOWED_PATHS"
 
 
 #: Returned by a coercer that rejected its input: the field keeps whatever the
@@ -331,10 +335,10 @@ _SETTINGS: tuple[_Setting, ...] = (
     ),
     _Setting(
         field="allowed_paths",
-        section="security",
-        key="allowed_paths",
-        from_toml=_toml_path_list("security.allowed_paths"),
-        env="LTSPICE_MCP_ALLOWED_PATHS",
+        section=SANDBOX_SECTION,
+        key=SANDBOX_KEY,
+        from_toml=_toml_path_list(f"{SANDBOX_SECTION}.{SANDBOX_KEY}"),
+        env=SANDBOX_ENV,
         from_env=_env_path_list,
     ),
     _Setting(
@@ -708,8 +712,14 @@ def claude_scratch_root() -> Path | None:
     """Where Claude Code keeps a session's scratch files. Its system prompt tells
     an agent to write throwaway files there rather than in the working
     directory, so a deck an agent authors lands outside a sandbox of ["."] and
-    every run of it costs a copy first. POSIX layout only; on Windows the
-    location is not known, so nothing is added."""
+    every run of it costs a copy first.
+
+    On POSIX the root is ``<tempdir>/claude-<uid>``. On Windows it is
+    ``%TEMP%\\claude``, holding ``<project>\\<session>\\scratchpad`` for each
+    session; the temp directory is already per user there, so there is no uid
+    suffix. Any other platform gets nothing added."""
+    if os.name == "nt":
+        return Path(tempfile.gettempdir()) / "claude"
     if os.name != "posix":
         return None
     return Path(tempfile.gettempdir()) / f"claude-{os.getuid()}"
@@ -764,11 +774,12 @@ def generate_default_config(path: Path) -> None:
     # Security section
     sec = table()
     sec.add(comment("Paths accessible to the server (sandbox). Left unset, the default is the"))
-    sec.add(comment("working directory plus the Claude Code scratch directory"))
-    sec.add(comment("(<tempdir>/claude-<uid>), where an agent writes its throwaway decks."))
-    sec.add(comment("Set your own list to replace that default:"))
+    sec.add(comment("working directory plus the Claude Code scratch directory, where an agent"))
+    sec.add(comment("writes its throwaway decks: <tempdir>/claude-<uid> on Linux and macOS,"))
+    sec.add(comment("%TEMP%\\claude on Windows. Set your own list to replace that default;"))
+    sec.add(comment("the server re-reads this list on the next call after you save the file:"))
     sec.add(comment('allowed_paths = ["."]'))
-    doc.add("security", sec)
+    doc.add(SANDBOX_SECTION, sec)
     doc.add(nl())
 
     # Simulation section
@@ -855,10 +866,9 @@ def generate_default_config(path: Path) -> None:
     # State section
     state_tbl = table()
     state_tbl.add(
-        comment(
-            "Persist simulation/batch job metadata to .ltspice-mcp/jobs/ next to each circuit."
-        )
+        comment("Persist experiment job records to .ltspice-mcp/experiments/ in the working")
     )
+    state_tbl.add(comment("directory."))
     state_tbl.add(
         comment(
             "Lets a restarted server surface prior runs and recent circuits; set to false to disable."

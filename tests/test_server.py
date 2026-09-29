@@ -356,6 +356,14 @@ class TestServerDispatch:
         assert "[security] allowed_paths" in msg
         assert "next call" in msg
         assert "LTSPICE_MCP_ALLOWED_PATHS" in msg
+        # A structured-aware client drops the text channel, so the refusal and
+        # its guidance ride structuredContent too.
+        data = result.structured_content
+        assert data is not None
+        assert data["code"] == "path_denied"
+        assert "outside allowed directories" in data["error"]
+        assert "[security] allowed_paths" in data["hint"]
+        assert str(state_no_sim.config.config_path) in data["hint"]
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         result = await call_tool(
