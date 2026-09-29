@@ -33,7 +33,11 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
-from ltspice_mcp.lib.experiment_runner import ExperimentCancellationError, cancel_receipt_row
+from ltspice_mcp.lib.experiment_runner import (
+    ExperimentCancellationError,
+    cancel_receipt_row,
+    live_run_progress,
+)
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     Completeness,
@@ -1047,7 +1051,9 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 timeout_s=args.timeout_s,
                 wait_for=args.wait_for,
             )
-        snapshot = snapshot_receipt(job, state)
+        # A runs page carries no observations, so it skips the raw reads.
+        live_progress = None if isinstance(args, JobsRunsInput) else await live_run_progress(job)
+        snapshot = snapshot_receipt(job, state, live_progress=live_progress)
         return JobsEvaluation(
             args=args,
             snapshot=snapshot,

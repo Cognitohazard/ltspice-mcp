@@ -414,6 +414,18 @@ def _analysis_stage(data: dict[str, Any] | None) -> AnalysisStage:
     )
 
 
+def case_raw_path(job: ExperimentJob, case: ExperimentCase) -> Path | None:
+    """Where a case's raw is, or is being written: as recorded, else by its run token.
+
+    The runner names every artifact ``{run_token}.{ext}`` inside the job's
+    output folder. None for a record written before that folder was persisted.
+    """
+    if job.output_folder is None or not case.run_token:
+        return None
+    extension = ".qraw" if "qspice" in job.simulator.lower() else ".raw"
+    return case.raw_file or job.output_folder / f"{case.run_token}{extension}"
+
+
 def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path, Path] | None:
     """A non-terminal case's raw/log pair when both verify on disk, else None.
 
@@ -430,10 +442,9 @@ def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path,
     output folder was persisted: the honest direction when the artifacts cannot
     be located at all.
     """
-    if job.output_folder is None or not case.run_token:
+    raw = case_raw_path(job, case)
+    if raw is None or job.output_folder is None:
         return None
-    extension = ".qraw" if "qspice" in job.simulator.lower() else ".raw"
-    raw = case.raw_file or job.output_folder / f"{case.run_token}{extension}"
     log = case.log_file or job.output_folder / f"{case.run_token}.log"
     if not has_valid_raw_header(raw):
         return None

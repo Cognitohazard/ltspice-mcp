@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import struct
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1056,6 +1057,50 @@ class TestDurableProgress:
         counts = middle["progress"]
         assert f"{counts['terminal']}/{counts['expanded']}" in middle["hint"]
         assert f"{counts['remaining']} remaining" in middle["hint"]
+
+    async def test_status_reports_how_far_each_running_case_has_got(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        """Read from the raw the simulator is still writing, for running cases only."""
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, count=2, status="running")
+        job.output_folder = work_dir / "runs" / job.job_id
+        job.output_folder.mkdir(parents=True)
+        running = job.cases[0]
+        running.status = "running"
+        running.run_token = f"{job.job_id}_case_0"
+        running.submitted_at = now()
+        header = (
+            "Title: running\nDate: x\nPlotname: Transient Analysis\nFlags: real\n"
+            "No. Variables: 2\nNo. Points: 0       \nVariables:\n"
+            "\t0\ttime\ttime\n\t1\tv(out)\tvoltage\nBinary:\n"
+        ).encode("ascii")
+        records = b"".join(struct.pack("<2d", t, 1.0) for t in (0.0, 1e-3, 2e-3))
+        (job.output_folder / f"{running.run_token}.raw").write_bytes(header + records + b"\0" * 5)
+        job.completeness.recount(job.cases)
+        state_no_sim.all_jobs[job.job_id] = job
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        [live] = [item for item in data["observations"] if item["code"] == "run_progress"]
+        assert live["evidence"]["case_id"] == running.case_id
+        assert live["evidence"]["points"] == 3
+        assert live["evidence"]["last_axis_value"] == pytest.approx(2e-3)
+        assert live["evidence"]["running_s"] >= 0
+        assert running.case_id in live["detail"]
+
+        running.status = "produced"
+        job.completeness.recount(job.cases)
+        after = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+        assert not [item for item in after["observations"] if item["code"] == "run_progress"]
+        # Read on request only: the job record itself never holds it.
+        assert not [item for item in running.observations if item["code"] == "run_progress"]
 
     async def test_foreign_status_uses_the_persisted_completeness_snapshot(
         self,

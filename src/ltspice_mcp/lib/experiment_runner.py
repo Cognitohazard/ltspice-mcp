@@ -19,6 +19,7 @@ from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib import experiment_store, now
 from ltspice_mcp.lib.deck_staging import verify_staged_manifest
 from ltspice_mcp.lib.experiment_types import (
+    ACTIVE_CASE_STATUSES,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
     Completeness,
@@ -42,7 +43,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
-from ltspice_mcp.lib.simulator import simulator_dialect
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, simulator_dialect
 from ltspice_mcp.lib.store import Store, run_dir_in, run_filename_in, validate_job_id
 from ltspice_mcp.lib.sweep_utils import generate_id
 
@@ -329,14 +330,16 @@ def effective_run_timeout(
     """The per-case run timeout a request runs under, and where it came from.
 
     The request's own ``run_timeout_s`` when it sets one, else the server's
-    ``[simulation] timeout``: every case has a bound unless the server was
-    configured without one. The source is part of the answer because the
-    remedy differs: a request can raise its own value, while the default is
-    the operator's.
+    ``[simulation] run_timeout``, else none: by default a case runs until it
+    ends or is cancelled. A timeout destroys the partial result, and the agent
+    watching the job sees each case's progress, so the bound is the caller's
+    choice rather than a server guess. The source is part of the answer because
+    the remedy differs: a request can raise its own value, while the server's
+    is the operator's.
     """
     if request.run_timeout_s is not None:
         return request.run_timeout_s, "request"
-    default = getattr(request.state.config, "default_timeout", None)
+    default = getattr(request.state.config, "run_timeout", None)
     if default:
         return float(default), "server_default"
     return None, None
@@ -1657,6 +1660,42 @@ def _stopped_run_evidence(
     return evidence or None
 
 
+def _raw_progress(raw: Path | None, dialect: str | None) -> tuple[dict[str, Any], str]:
+    """How far a case's raw has got, as evidence fields and a phrase for a detail."""
+    progress = read_partial_raw_progress(raw, dialect) if raw is not None else None
+    if progress is None:
+        present = raw is not None and raw.exists()
+        fields: dict[str, Any] = {
+            "raw_present": present,
+            "points": None if present else 0,
+            "last_axis_value": None,
+        }
+        phrase = "a file at its raw path that is not a readable raw" if present else "no raw file"
+        return fields, phrase
+    fields = {
+        "raw_present": True,
+        "raw_bytes": progress.raw_bytes,
+        "header_complete": progress.header_complete,
+        "plot": progress.plot,
+        "axis": progress.axis,
+        "points": progress.points,
+        "last_axis_value": progress.last_axis_value,
+    }
+    if progress.stepped:
+        fields["stepped"] = True
+    if progress.points is None:
+        phrase = "a number of points that could not be counted"
+    else:
+        phrase = f"{progress.points} point{'s' if progress.points != 1 else ''}"
+    if progress.axis is not None and progress.last_axis_value is not None:
+        phrase += f", the last at {progress.axis} = {progress.last_axis_value:g}"
+        if progress.stepped:
+            phrase += " within the current .step"
+    if progress.plot:
+        phrase += f" of its {progress.plot}"
+    return fields, phrase
+
+
 def _partial_progress_observation(
     case: ExperimentCase,
     raw: Path,
@@ -1668,49 +1707,70 @@ def _partial_progress_observation(
     says so rather than going quiet. The detail names the case because a
     receipt merges every case's observations into one job-level list.
     """
-    progress = read_partial_raw_progress(raw, dialect)
-    evidence: dict[str, Any] = {"case_id": case.case_id, "run_index": case.run_index}
-    if progress is None:
-        present = raw.exists()
-        evidence.update(
-            {"raw_present": present, "points": 0 if not present else None, "last_axis_value": None}
-        )
-        detail = (
-            f"Case {case.case_id} was stopped before its simulator wrote a raw file."
-            if not present
-            else f"Case {case.case_id} was stopped; the file at its raw path is not a readable raw."
-        )
-        return {
-            "code": "partial_progress",
-            "kind": "execution",
-            "detail": detail,
-            "evidence": evidence,
-        }
-    evidence.update(
-        {
-            "raw_present": True,
-            "raw_bytes": progress.raw_bytes,
-            "header_complete": progress.header_complete,
-            "plot": progress.plot,
-            "axis": progress.axis,
-            "points": progress.points,
-            "last_axis_value": progress.last_axis_value,
-        }
-    )
-    if progress.stepped:
-        evidence["stepped"] = True
-    if progress.points is None:
-        reached = "a number of points that could not be counted"
-    else:
-        reached = f"{progress.points} point{'s' if progress.points != 1 else ''}"
-    if progress.axis is not None and progress.last_axis_value is not None:
-        reached += f", the last at {progress.axis} = {progress.last_axis_value:g}"
-        if progress.stepped:
-            reached += " within the current .step"
-    plot = f" of its {progress.plot}" if progress.plot else ""
+    fields, reached = _raw_progress(raw, dialect)
     return {
         "code": "partial_progress",
         "kind": "execution",
-        "detail": f"Case {case.case_id} was stopped after its simulator wrote {reached}{plot}.",
-        "evidence": evidence,
+        "detail": f"Case {case.case_id} was stopped after its simulator wrote {reached}.",
+        "evidence": {"case_id": case.case_id, "run_index": case.run_index, **fields},
     }
+
+
+async def live_run_progress(job: ExperimentJob) -> dict[str, dict[str, Any]]:
+    """A ``run_progress`` observation for each case of ``job`` still running.
+
+    Keyed by case id, for a receipt to attach to the cases that are still
+    running when it is built. Read when someone asks for the job, never on a
+    timer, so a job nobody watches costs nothing; each read is one raw's header
+    and last record (the tail, for an ASCII raw), off the loop, for at most as
+    many cases as the job has in flight. The raw's path comes from the record,
+    so a job another process owns reads the same way.
+
+    With no default run timeout this is what shows a stuck case: its point
+    count stops moving from one read to the next while ``running_s`` grows.
+    """
+    moment = now()
+    targets = [
+        (
+            case.case_id,
+            case.run_index,
+            (moment - case.submitted_at).total_seconds() if case.submitted_at else None,
+            experiment_store.case_raw_path(job, case),
+        )
+        for case in job.cases
+        if case.status in ACTIVE_CASE_STATUSES
+    ]
+    if not targets:
+        return {}
+    return await asyncio.to_thread(
+        _read_live_progress, targets, dialect_for_simulator_name(job.simulator)
+    )
+
+
+def _read_live_progress(
+    targets: list[tuple[str, int, float | None, Path | None]],
+    dialect: str | None,
+) -> dict[str, dict[str, Any]]:
+    observations: dict[str, dict[str, Any]] = {}
+    for case_id, run_index, running_s, raw in targets:
+        try:
+            fields, reached = _raw_progress(raw, dialect)
+        except Exception:
+            # A progress read must never cost the caller its status.
+            logger.warning("could not read progress of case %s", case_id, exc_info=True)
+            continue
+        elapsed = (
+            f"has been running for {running_s:.0f}s" if running_s is not None else "is running"
+        )
+        observations[case_id] = {
+            "code": "run_progress",
+            "kind": "execution",
+            "detail": f"Case {case_id} {elapsed}; its simulator has written {reached} so far.",
+            "evidence": {
+                "case_id": case_id,
+                "run_index": run_index,
+                "running_s": round(running_s, 1) if running_s is not None else None,
+                **fields,
+            },
+        }
+    return observations

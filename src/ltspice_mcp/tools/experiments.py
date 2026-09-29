@@ -47,6 +47,7 @@ from ltspice_mcp.lib.experiment_runner import (
     StagedDecks,
     SubmissionCommitted,
     canonical_fingerprint,
+    live_run_progress,
     verify_replay_sources,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -200,7 +201,7 @@ class ExperimentExecution(StrictModel):
         gt=0.0,
         description=(
             "Kill any single case whose simulator exceeds this and mark it failed; "
-            "the other cases continue. Defaults to [simulation] timeout."
+            "the other cases continue. Unset: none, or [simulation] run_timeout."
         ),
     )
     job_deadline_s: float | None = Field(
@@ -1212,11 +1213,13 @@ async def _dwell_and_respond(
         else:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(job.done_event.wait(), wait_s)
+    live_progress = await live_run_progress(job)
     snapshot = snapshot_receipt(
         job,
         None,
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
+        live_progress=live_progress,
     )
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "

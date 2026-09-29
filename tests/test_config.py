@@ -569,6 +569,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_MAX_PARALLEL": "9",
     "LTSPICE_MCP_MAX_EXPERIMENT_CASES": "88",
     "LTSPICE_MCP_TIMEOUT": "99.5",
+    "LTSPICE_MCP_RUN_TIMEOUT": "1800",
     "LTSPICE_MCP_MAX_POINTS": "777",
     "LTSPICE_MCP_ANALYSIS_BUDGET_S": "21.5",
     "LTSPICE_MCP_DEFAULT_BUDGET": "3300",
@@ -600,6 +601,7 @@ allowed_paths = ["/tmp/toml-a", "/tmp/toml-b"]
 max_parallel = 6
 max_experiment_cases = 77
 timeout = 45.5
+run_timeout = 900.0
 max_estimated_points = 1234567
 max_raw_mb = 512
 
@@ -659,6 +661,7 @@ class TestLoadCoversEveryKey:
             "max_parallel_sims": 6,
             "max_experiment_cases": 77,
             "default_timeout": 45.5,
+            "run_timeout": 900.0,
             "max_estimated_points": 1234567,
             "max_raw_mb": 512,
             "max_points_returned": 555,
@@ -691,6 +694,7 @@ class TestLoadCoversEveryKey:
             "max_parallel_sims": 9,
             "max_experiment_cases": 88,
             "default_timeout": 99.5,
+            "run_timeout": 1800.0,
             "max_estimated_points": 7654321,
             "max_raw_mb": 256,
             "max_points_returned": 777,
@@ -737,6 +741,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_PARALLEL": "9999",  # above the bound
             "LTSPICE_MCP_MAX_EXPERIMENT_CASES": "0",  # below the bound
             "LTSPICE_MCP_TIMEOUT": "0",  # exclusive minimum
+            "LTSPICE_MCP_RUN_TIMEOUT": "9999999",  # above the bound
             "LTSPICE_MCP_MAX_POINTS": "not-a-number",
             "LTSPICE_MCP_ANALYSIS_BUDGET_S": "0",  # exclusive minimum
             "LTSPICE_MCP_DEFAULT_BUDGET": "-1",
@@ -757,6 +762,7 @@ class TestLoadCoversEveryKey:
         assert snapshot["max_parallel_sims"] == 6
         assert snapshot["max_experiment_cases"] == 77
         assert snapshot["default_timeout"] == 45.5
+        assert snapshot["run_timeout"] == 900.0
         assert snapshot["max_points_returned"] == 555
         assert snapshot["analysis_budget_s"] == 12.5
         assert snapshot["default_budget"] == 2500
@@ -772,6 +778,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_PARALLEL",
             "LTSPICE_MCP_MAX_EXPERIMENT_CASES",
             "LTSPICE_MCP_TIMEOUT",
+            "LTSPICE_MCP_RUN_TIMEOUT",
             "LTSPICE_MCP_MAX_POINTS",
             "LTSPICE_MCP_ANALYSIS_BUDGET_S",
             "LTSPICE_MCP_DEFAULT_BUDGET",
@@ -800,6 +807,7 @@ class TestLoadCoversEveryKey:
             "max_parallel = 0\n"
             "max_experiment_cases = 99999999\n"
             "timeout = 0\n"
+            "run_timeout = -5\n"
             "max_estimated_points = 0\n"
             "max_raw_mb = 0\n"
             "[analysis]\n"
@@ -826,6 +834,7 @@ class TestLoadCoversEveryKey:
         assert config.max_parallel_sims == defaults.max_parallel_sims
         assert config.max_experiment_cases == defaults.max_experiment_cases
         assert config.default_timeout == defaults.default_timeout
+        assert config.run_timeout is None
         assert config.max_estimated_points == defaults.max_estimated_points
         assert config.max_raw_mb == defaults.max_raw_mb
         assert config.max_points_returned == defaults.max_points_returned
