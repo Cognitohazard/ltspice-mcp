@@ -226,8 +226,8 @@ class-definition time from the same renderer, so `help(api.edit_schematic)` and
 **Relative path arguments are taken from `working_dir`**, not the process CWD.
 The resolve chain carries an optional base directory in a context variable, and
 the `Api` sets it around every marshalled call, anchoring both the user path and
-any relative entry in `allowed_paths` (the generated TOML ships
-`allowed_paths = ["."]`, which is what exposed the CWD behavior). **MCP server
+any relative entry in `allowed_paths` (a config file's
+`allowed_paths = ["."]` is what exposed the CWD behavior). **MCP server
 resolution is unchanged**, and a test pins that; the base is this interface's opt-in
 only.
 

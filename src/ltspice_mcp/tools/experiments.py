@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import functools
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
@@ -105,6 +107,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     format_response,
     outcome_of,
+    path_denied_guidance,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -700,6 +703,7 @@ async def handle_run_experiments(
                 exc,
                 lint_by_circuit or None,
                 budget=budget,
+                path_denied_hint=functools.partial(path_denied_guidance, state),
             )
     except SubmissionCommitted as exc:
         return await _error_response(
@@ -766,6 +770,7 @@ async def handle_run_experiments(
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            hint=f"{exc}\n\n{path_denied_guidance(state)}",
         )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
@@ -845,7 +850,7 @@ async def _prepare_circuit(
             stage_deck,
             runnable,
             paths.staging_root,
-            state.config.allowed_paths,
+            state.allowed_paths(),
             # A schematic is simulated through an exported netlist, so without
             # this the manifest describes only that export — and re-exporting is
             # exactly what a replay skips, leaving an edited .asc invisible to
@@ -1217,6 +1222,7 @@ async def _dwell_and_respond(
         None,
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
+        path_denied_hint=functools.partial(path_denied_guidance, state),
     )
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "
@@ -1374,17 +1380,19 @@ def submission_error_payload(
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
+    hint: str | None = None,
 ) -> dict[str, Any]:
     """The receipt-shaped payload for a call that produced no job.
 
     Public because a submission can now fail outside this handler: the Python
     API's detached mode spawns a process to submit, and a failure there has to
-    reach the caller in the same shape as a failure here.
+    reach the caller in the same shape as a failure here. ``hint`` defaults to
+    the message; a failure with a known remedy passes the message with it.
     """
     data = _empty_payload(request_id)
     data.update(
         {
-            "hint": message,
+            "hint": hint if hint is not None else message,
             "error": {
                 "code": code,
                 "message": message,
@@ -1406,6 +1414,7 @@ async def _error_response(
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
     budget: ResponseBudget,
+    hint: str | None = None,
 ) -> types.CallToolResult:
     data = submission_error_payload(
         request_id,
@@ -1414,10 +1423,11 @@ async def _error_response(
         stage=stage,
         retryable=retryable,
         commit_state=commit_state,
+        hint=hint,
     )
     return await _render_static_run_receipt(
         data,
-        message,
+        data["hint"],
         budget,
         is_error=True,
     )
@@ -1429,6 +1439,7 @@ async def _post_submit_error_response(
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None,
     *,
     budget: ResponseBudget,
+    path_denied_hint: Callable[[], str] | None = None,
 ) -> types.CallToolResult:
     """Envelope for a failure that escaped AFTER the cases were submitted.
 
@@ -1456,6 +1467,7 @@ async def _post_submit_error_response(
             None,
             control_token=receipt.control_token,
             lint_by_circuit=lint_by_circuit,
+            path_denied_hint=path_denied_hint,
         )
         handles = {
             "job_id": snapshot.job_id,

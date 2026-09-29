@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from mcp import types
 
+from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -497,6 +498,10 @@ class ReceiptSnapshot:
     analysis_error: str | None
     analysis_observations: tuple[dict[str, Any], ...]
     analysis_request: dict[str, Any] | None
+    path_denied_hint: str | None = None
+    """The session's sandbox guidance, which a ``path_denied`` failure row
+    carries as its hint. Not a job fact: the remedy is the config line as it
+    reads now, so the snapshot takes it from the caller rather than the record."""
 
     @property
     def outcome(self) -> CallOutcome:
@@ -541,7 +546,7 @@ def render_receipt_snapshot(
         "completeness": snapshot.completeness,
         "lint": list(snapshot.lint),
         "runs": runs,
-        "failures": _render_failures(snapshot.failures),
+        "failures": _render_failures(snapshot.failures, snapshot.path_denied_hint),
         "observations": list(snapshot.observations),
         "warnings": [],
         "artifacts": list(snapshot.artifacts),
@@ -587,6 +592,7 @@ _FAILURE_CASE_ID_CAP = 10
 
 def _render_failures(
     rows: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+    path_denied_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Collapse repeated failures into one counted row and attach recovery hints.
 
@@ -624,7 +630,11 @@ def _render_failures(
                 str(item.get("case_id", "")) for item in group[:_FAILURE_CASE_ID_CAP]
             ]
             rendered["count"] = len(group)
-        hint = _FAILURE_CODE_HINTS.get(code)
+        hint = (
+            path_denied_hint
+            if code == PathSecurityError.code and path_denied_hint is not None
+            else _FAILURE_CODE_HINTS.get(code)
+        )
         if hint is not None:
             rendered["hint"] = hint
         collapsed.append(rendered)
@@ -870,6 +880,7 @@ def snapshot_receipt(
     *,
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+    path_denied_hint: Callable[[], str] | None = None,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
@@ -878,6 +889,10 @@ def snapshot_receipt(
     interval; renderers derive them only from the returned detached value.
     Native record holders are copied, sharing only their frozen nested facts;
     large evidence lists are serialized after the renderer selects a page.
+
+    ``path_denied_hint`` builds the sandbox guidance, and is called only when a
+    failure row needs it, so a receipt with no refused path never reads the
+    config file.
     """
     lint_map: dict[str, list[dict[str, Any]]]
     if lint_by_circuit is None:
@@ -934,6 +949,12 @@ def snapshot_receipt(
         analysis_error=analysis.error,
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
+        path_denied_hint=(
+            path_denied_hint()
+            if path_denied_hint is not None
+            and any(row.get("code") == PathSecurityError.code for row in job.failures)
+            else None
+        ),
     )
 
 

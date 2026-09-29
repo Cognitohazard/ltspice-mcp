@@ -7,6 +7,7 @@ a cluster of import cycles — see ``lib/job_types.py`` for the full story.
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -81,6 +82,10 @@ class SessionState:
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
     sandbox_stamp: tuple[int, int] | None = None
     """(mtime_ns, size) of the config file as last read for the sandbox."""
+    _sandbox_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    """Serializes the sandbox reload: resource reads and some path resolutions
+    run on worker threads, and a reader must never see the new stamp paired
+    with the old list."""
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
     auto-detection). Logged at startup and carried verbatim on the ``inspect``
@@ -170,14 +175,20 @@ class SessionState:
         picking the edit up on the next call is what makes that line the agent's
         own to act on. Only ``[security] allowed_paths`` follows the file: the
         rest of it is startup state (detected simulators, runners, caches).
+
+        Every reader of the sandbox calls this rather than reading
+        ``config.allowed_paths``, which holds only what the last call loaded: a
+        report or a resolution made right after an edit must see the edit even
+        when nothing else has reloaded it yet.
         """
-        stamp = _file_stamp(self.config.config_path)
-        if stamp != self.sandbox_stamp:
-            self.sandbox_stamp = stamp
-            self.config.allowed_paths = ServerConfig.load(
-                self.config.config_path, overrides={"working_dir": self.config.working_dir}
-            ).allowed_paths
-        return self.config.allowed_paths
+        with self._sandbox_lock:
+            stamp = _file_stamp(self.config.config_path)
+            if stamp != self.sandbox_stamp:
+                self.sandbox_stamp = stamp
+                self.config.allowed_paths = ServerConfig.load(
+                    self.config.config_path, overrides={"working_dir": self.config.working_dir}
+                ).allowed_paths
+            return self.config.allowed_paths
 
     @classmethod
     def create(

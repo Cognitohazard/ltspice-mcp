@@ -277,12 +277,15 @@ async def _complete_run_receipt(
     job_id = receipt.get("job_id")
     if not isinstance(job_id, str):
         return copy.deepcopy(dict(receipt))
+    from ltspice_mcp.tools._base import path_denied_guidance  # deferred with the tool modules
+
     job = await services.resolve_job_async(job_id, state)
     control_token = receipt.get("control_token")
     snapshot = experiments.snapshot_receipt(
         job,
         state,
         control_token=control_token if isinstance(control_token, str) else None,
+        path_denied_hint=lambda: path_denied_guidance(state),
     )
     analysis_fields = (
         request.analyze.include.fields

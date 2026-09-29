@@ -14,6 +14,7 @@ and renderers live in ``tools/receipts``.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     outcome_of,
     page_schema,
+    path_denied_guidance,
     registry,
     resolve_response_budget,
     safe_path,
@@ -897,7 +899,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
         "observations": [],
         "warnings": [],
         "failures": [],
-        "hint": error.message,
+        "hint": error.hint if error.hint is not None else error.message,
         "error": {
             "code": error.code,
             "message": error.message,
@@ -965,6 +967,8 @@ class _JobsError:
     message: str
     stage: str
     retryable: bool
+    hint: str | None = None
+    """The remedy, where one is known; the envelope's hint is the message otherwise."""
 
 
 @dataclass(frozen=True)
@@ -1047,7 +1051,9 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 timeout_s=args.timeout_s,
                 wait_for=args.wait_for,
             )
-        snapshot = snapshot_receipt(job, state)
+        snapshot = snapshot_receipt(
+            job, state, path_denied_hint=functools.partial(path_denied_guidance, state)
+        )
         return JobsEvaluation(
             args=args,
             snapshot=snapshot,
@@ -1057,15 +1063,20 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             status=snapshot.status,
         )
     except Exception as exc:
-        return _failed_jobs_evaluation(args, exc)
+        return _failed_jobs_evaluation(args, exc, state)
 
 
-def _failed_jobs_evaluation(args: JobsInput, exc: Exception) -> JobsEvaluation:
+def _failed_jobs_evaluation(
+    args: JobsInput, exc: Exception, state: SessionState
+) -> JobsEvaluation:
     """Carry one failure as an evaluation, classified for the error envelope."""
     code, stage, retryable = _jobs_error_details(exc)
+    hint = (
+        f"{exc}\n\n{path_denied_guidance(state)}" if isinstance(exc, PathSecurityError) else None
+    )
     return JobsEvaluation(
         args=args,
-        error=_JobsError(code=code, message=str(exc), stage=stage, retryable=retryable),
+        error=_JobsError(code=code, message=str(exc), stage=stage, retryable=retryable, hint=hint),
     )
 
 
@@ -1085,7 +1096,9 @@ def render_jobs_data(
     """
     args = evaluation.args
     if evaluation.error is not None:
-        return _without_control_tokens(_jobs_error_payload(evaluation)), evaluation.error.message
+        error = evaluation.error
+        text = error.hint if error.hint is not None else error.message
+        return _without_control_tokens(_jobs_error_payload(evaluation)), text
 
     if isinstance(args, JobsListInput):
         groups = list(evaluation.groups)
@@ -1222,7 +1235,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
             # cancel among them. Report it through this tool's own envelope
             # rather than letting it out as a protocol error carrying no
             # structuredContent at all.
-            evaluation = _failed_jobs_evaluation(args, exc)
+            evaluation = _failed_jobs_evaluation(args, exc, state)
     if built is None:
         # A failed call renders once, off the budget ladder: its envelope is
         # already the irreducible floor, and the ladder's trim rung would take
