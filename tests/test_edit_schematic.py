@@ -11,7 +11,6 @@ failure), and an archetype-scale blank build.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -1011,15 +1010,6 @@ async def test_rejected_reference_path_refuses_before_committing(asc_state, work
     assert not list(work_dir.glob("denied_ref.asc.staging-*"))
 
 
-# The sheet a caller starts from, with a MOSFET whose SpiceLine the exporter
-# appends and a multi-line directive TEXT block it splits into lines.
-_AMP_ASC = (
-    "Version 4.1\nSHEET 1 880 680\n"
-    "SYMBOL res 256 96 R0\nSYMATTR InstName R1\nSYMATTR Value 10k\n"
-    "SYMBOL nmos 208 224 R0\nSYMATTR InstName M1\nSYMATTR Value NMOS\n"
-    "SYMATTR SpiceLine l=1u w=10u\n"
-    "TEXT 40 400 Left 2 !.model MYN NMOS(VTO=0.7\\n+ KP=100u)\\n.tran 1m\n"
-)
 _ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400, "y": 96}]
 
 
@@ -1037,9 +1027,9 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     """
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
     sheet = work_dir / "amp.asc"
-    sheet.write_text(_AMP_ASC, newline="\n")
+    sheet.write_text(fake_netlister.amp_asc(), newline="\n")
     original = work_dir / "amp_orig.asc"
-    original.write_text(_AMP_ASC, newline="\n")
+    original.write_text(fake_netlister.amp_asc(), newline="\n")
 
     data = _assert_schema(
         await handle_edit_schematic(
@@ -1076,16 +1066,14 @@ async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir
     """The committed sheet exported, the reference did not: nothing to compare
     against, so no verdict — and the sheet stays committed."""
     sheet = work_dir / "amp.asc"
-    sheet.write_text(_AMP_ASC, newline="\n")
-    (work_dir / "amp_orig.asc").write_text(_AMP_ASC, newline="\n")
+    sheet.write_text(fake_netlister.amp_asc(), newline="\n")
+    (work_dir / "amp_orig.asc").write_text(fake_netlister.amp_asc(), newline="\n")
 
     async def export_only_the_committed_sheet(asc_copy: Path, state: SessionState) -> str:
-        copy, committed = await asyncio.gather(
-            asyncio.to_thread(asc_copy.read_bytes), asyncio.to_thread(sheet.read_bytes)
-        )
-        if copy != committed:
+        netlist = await fake_netlister.export_asc_to_netlist(asc_copy, state)
+        if "R2" not in netlist:  # the reference: the sheet before R2 was added
             raise RuntimeError("injected reference export failure")
-        return await fake_netlister.export_asc_to_netlist(asc_copy, state)
+        return netlist
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", export_only_the_committed_sheet)
     data = _assert_schema(

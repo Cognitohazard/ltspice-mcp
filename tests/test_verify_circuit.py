@@ -522,20 +522,6 @@ async def test_clean_comparison_emits_no_warnings(state_no_sim, work_dir):
 # the exporter's own boilerplate
 # ---------------------------------------------------------------------------
 
-_AMP_PARTS = (
-    "SYMBOL voltage 64 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\n"
-    "SYMBOL res 256 96 R0\nSYMATTR InstName R1\nSYMATTR Value 10k\n"
-    "SYMBOL nmos 208 224 R0\nSYMATTR InstName M1\nSYMATTR Value NMOS\n"
-    "SYMATTR SpiceLine l=1u w=10u\n"
-)
-# One TEXT block holding a .model split over a continuation line plus a .param,
-# the way a sheet carries a model card; the exporter writes it as three lines.
-_AMP_TEXT = (
-    "TEXT 40 400 Left 2 !.model MYN NMOS(VTO=0.7\\n+ KP=100u)\\n.param rload=10k\n"
-    "TEXT 40 440 Left 2 !.tran 1m\n"
-)
-_R2_PART = "SYMBOL res 400 96 R0\nSYMATTR InstName R2\nSYMATTR Value 1k\n"
-
 # The exported amp written by hand: the model on one line with its parameters
 # reordered and comma-separated, the MOSFET's parameters reordered, different
 # case and spacing, and none of the exporter's boilerplate.
@@ -549,10 +535,6 @@ _AMP_BY_HAND = (
     ".tran 1m\n"
     ".end\n"
 )
-
-
-def _amp_asc(extra_parts: str = "") -> str:
-    return "Version 4.1\nSHEET 1 880 680\n" + _AMP_PARTS + extra_parts + _AMP_TEXT
 
 
 def _empty_delta() -> dict[str, list]:
@@ -570,6 +552,17 @@ def exporting_state(config, asc_symbols, monkeypatch) -> SessionState:
     return _with_ltspice(config)
 
 
+async def _diff_exported(state: SessionState, sheet: Path, reference: Path) -> dict:
+    """structural_diff of ``sheet``'s export against ``reference``."""
+    return await _run(
+        state,
+        path=str(sheet),
+        checks=["export", "compare"],
+        reference=str(reference),
+        compare_mode="structural_diff",
+    )
+
+
 async def test_unchanged_sheet_against_its_own_asc_reports_no_changes(exporting_state, work_dir):
     """A sheet compared with itself is the same circuit, so the delta is empty.
 
@@ -580,15 +573,9 @@ async def test_unchanged_sheet_against_its_own_asc_reports_no_changes(exporting_
     added, and the exporter's .backanno / standard.mos / default-model lines read
     as added.
     """
-    sheet = _write(work_dir, "amp.asc", _amp_asc())
+    sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
-    data = await _run(
-        exporting_state,
-        path=str(sheet),
-        checks=["export", "compare"],
-        reference=str(sheet),
-        compare_mode="structural_diff",
-    )
+    data = await _diff_exported(exporting_state, sheet, sheet)
 
     assert data["failures"] == []
     assert _delta(data["comparison"]) == _empty_delta()
@@ -602,16 +589,10 @@ async def test_unchanged_sheet_against_its_own_asc_reports_no_changes(exporting_
 async def test_additive_edit_against_the_original_asc_reports_only_the_addition(
     exporting_state, work_dir
 ):
-    original = _write(work_dir, "amp_orig.asc", _amp_asc())
-    edited = _write(work_dir, "amp.asc", _amp_asc(_R2_PART))
+    original = _write(work_dir, "amp_orig.asc", fake_netlister.amp_asc())
+    edited = _write(work_dir, "amp.asc", fake_netlister.amp_asc(fake_netlister.R2_PART))
 
-    data = await _run(
-        exporting_state,
-        path=str(edited),
-        checks=["export", "compare"],
-        reference=str(original),
-        compare_mode="structural_diff",
-    )
+    data = await _diff_exported(exporting_state, edited, original)
 
     assert _delta(data["comparison"]) == {**_empty_delta(), "components_added": ["R2"]}
     assert data["comparison"]["equivalent"] is False
@@ -620,7 +601,7 @@ async def test_additive_edit_against_the_original_asc_reports_only_the_addition(
 async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
     """The graph engine lexes whatever it is handed as SPICE, so an .asc
     reference has to arrive as its export, not as the schematic text."""
-    sheet = _write(work_dir, "amp.asc", _amp_asc())
+    sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
     data = await _run(
         exporting_state, path=str(sheet), checks=["export", "compare"], reference=str(sheet)
@@ -635,16 +616,10 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
 async def test_hand_written_reference_matches_the_export(exporting_state, work_dir):
     """Continuation lines, spacing, case, parameter order and the exporter's
     boilerplate are spelling, not circuit: none of them is a difference."""
-    sheet = _write(work_dir, "amp.asc", _amp_asc())
+    sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
     ref = _write(work_dir, "amp_ref.cir", _AMP_BY_HAND)
 
-    data = await _run(
-        exporting_state,
-        path=str(sheet),
-        checks=["export", "compare"],
-        reference=str(ref),
-        compare_mode="structural_diff",
-    )
+    data = await _diff_exported(exporting_state, sheet, ref)
 
     assert _delta(data["comparison"]) == _empty_delta()
     assert data["comparison"]["equivalent"] is True
@@ -657,20 +632,14 @@ async def test_default_model_line_counts_when_the_reference_declares_that_model(
     while the reference declares no model of that name. Here the reference
     defines NMOS itself, so the export's default replaces it — a real change.
     PMOS is still undeclared, so its default line stays out of the delta."""
-    sheet = _write(work_dir, "amp.asc", _amp_asc())
+    sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
     ref = _write(
         work_dir,
         "amp_ref.cir",
         _AMP_BY_HAND.replace(".end\n", ".model NMOS NMOS(KP=50u)\n.end\n"),
     )
 
-    data = await _run(
-        exporting_state,
-        path=str(sheet),
-        checks=["export", "compare"],
-        reference=str(ref),
-        compare_mode="structural_diff",
-    )
+    data = await _diff_exported(exporting_state, sheet, ref)
 
     comparison = data["comparison"]
     assert comparison["directives_added"] == [".model NMOS NMOS"]
@@ -741,7 +710,7 @@ async def test_asc_reference_without_ltspice_fails_the_compare(
     stage fails and says why, rather than diffing a schematic's attributes
     against a netlist's cards."""
     deck = _write(work_dir, "cand.cir", _AMP_BY_HAND)
-    ref = _write(work_dir, "amp.asc", _amp_asc())
+    ref = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), compare_mode=mode)
 
@@ -757,7 +726,10 @@ async def test_asc_text_reference_is_refused(exporting_state, work_dir):
     deck = _write(work_dir, "cand.cir", _AMP_BY_HAND)
 
     data = await _run(
-        exporting_state, path=str(deck), reference=_amp_asc(), compare_mode="structural_diff"
+        exporting_state,
+        path=str(deck),
+        reference=fake_netlister.amp_asc(),
+        compare_mode="structural_diff",
     )
 
     assert data["comparison"] is None
@@ -768,7 +740,7 @@ async def test_asc_text_reference_is_refused(exporting_state, work_dir):
 def test_structural_compare_refuses_a_schematic(work_dir):
     """The shared compare entry point takes netlists only; a schematic handed
     to it directly is a failure, never a diff of mismatched representations."""
-    ref = _write(work_dir, "amp.asc", _amp_asc())
+    ref = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
     deck = _write(work_dir, "cand.cir", _AMP_BY_HAND)
 
     comparison, _findings, failure, _warnings = vc.compare_structural(ref, deck)
