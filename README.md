@@ -134,7 +134,7 @@ path = ""                # explicit executable path (required on WSL)
 ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
 
 [security]
-# allowed_paths = ["."]  # sandbox; unset = working dir + the Claude Code scratch dir (<tempdir>/claude-<uid>)
+# allowed_paths = ["."]  # sandbox, re-read on the next call; unset = working dir + the Claude Code scratch dir (<tempdir>/claude-<uid>; %TEMP%\claude on Windows)
 
 [simulation]
 # max_parallel = 4       # default: number of CPU cores, capped at 8
@@ -341,7 +341,7 @@ The `lp` recipe returns these scalar results:
 
 (abridged — the full response also includes passband bounds and transition bandwidth)
 
-If the result is off target, edit the netlist, run it again, and repeat the measurement. Long simulations return a job ID instead of blocking. Use `jobs` with `action="status"`, `action="wait"`, or `action="cancel"` to manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
+If the result is off target, edit the netlist, run it again, and repeat the measurement. Long simulations return a job ID instead of blocking. Use `jobs` with `action="status"`, `action="wait"`, or `action="cancel"` to manage them. Job records persist in the working directory's store (`.ltspice-mcp/experiments/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
 
 <details>
 <summary><strong>The capability vocabulary</strong></summary>

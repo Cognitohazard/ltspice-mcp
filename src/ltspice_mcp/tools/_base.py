@@ -1091,6 +1091,16 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     return resolve_safe_path(user_path, state.allowed_paths())
 
 
+def path_denied_text(exc: PathSecurityError, state: SessionState) -> str:
+    """A refusal's message followed by the sandbox guidance.
+
+    For a surface with one text that has to say both what was refused and
+    what to do about it; a surface that carries the message in a field of its
+    own puts ``state.sandbox_guidance()`` alone in its ``hint``.
+    """
+    return f"{exc}\n\n{state.sandbox_guidance()}"
+
+
 def resolve_reference(reference: str, state: SessionState) -> str | Path:
     """A ``CompareSpec.reference`` is literal netlist text when it spans lines,
     else a path inside the sandbox. A path outside it is refused with the text

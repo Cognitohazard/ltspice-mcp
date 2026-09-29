@@ -23,9 +23,10 @@ path = ""
 
 [security]
 # Paths accessible to the server (sandbox). Left unset, the default is the
-# working directory plus the Claude Code scratch directory
-# (<tempdir>/claude-<uid>), where an agent writes its throwaway decks.
-# Set your own list to replace that default:
+# working directory plus the Claude Code scratch directory, where an agent
+# writes its throwaway decks: <tempdir>/claude-<uid> on Linux and macOS,
+# %TEMP%\claude on Windows. Set your own list to replace that default;
+# the server re-reads this list on the next call after you save the file:
 # allowed_paths = ["."]
 
 [simulation]
@@ -81,7 +82,8 @@ symbol_paths = []
 level = "WARNING"
 
 [state]
-# Persist simulation/batch job metadata to .ltspice-mcp/jobs/ next to each circuit.
+# Persist experiment job records to .ltspice-mcp/experiments/ in the working
+# directory.
 # Lets a restarted server surface prior runs and recent circuits; set to false to disable.
 persist_jobs = true
 # preload_recent_count: at startup, eagerly load persisted jobs for this many recently-touched circuits. 0 disables preload (lazy-only).

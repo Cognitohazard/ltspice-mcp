@@ -83,7 +83,7 @@ From the error hierarchy:
 
 | code | meaning |
 |-|-|
-| `path_denied` | the path resolves outside `allowed_paths` |
+| `path_denied` | the path resolves outside `allowed_paths`; a `hint` names the config file and key that widen it (an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal) |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
 | `symbol_unresolved` | the schematic opened, but a symbol, sub-sheet or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
