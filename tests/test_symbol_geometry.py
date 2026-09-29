@@ -35,13 +35,22 @@ class TestApplyRotation:
             ("R180", (-3, -7)),
             ("R270", (7, -3)),
             ("M0", (-3, 7)),
-            ("M90", (-7, -3)),
+            ("M90", (7, 3)),
             ("M180", (3, -7)),
-            ("M270", (7, 3)),
+            ("M270", (-7, -3)),
         ],
     )
     def test_transform(self, rotation: str, expected: tuple[int, int]):
         assert _apply_rotation(self.PX, self.PY, rotation) == expected
+
+    @pytest.mark.parametrize("degrees", [0, 90, 180, 270])
+    def test_mirror_is_rotation_then_negated_x(self, degrees: int):
+        """LTspice rotates a mirrored placement first and mirrors it second.
+
+        The other order agrees at 0 and 180 degrees and swaps 90 with 270.
+        """
+        rotated = _apply_rotation(self.PX, self.PY, f"R{degrees}")
+        assert _apply_rotation(self.PX, self.PY, f"M{degrees}") == (-rotated[0], rotated[1])
 
     def test_identity_origin(self):
         """Origin should be invariant under any transform."""
