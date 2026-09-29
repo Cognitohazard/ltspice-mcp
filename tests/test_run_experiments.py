@@ -1395,6 +1395,85 @@ class TestLintModes:
             "2k",
         ]
 
+    @pytest.mark.parametrize("codec", ["cp1252", "utf-8"])
+    async def test_micro_sign_reaches_the_simulator_as_u(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        codec: str,
+    ):
+        """The case deck the simulator reads spells a micro-sign suffix 'u'.
+
+        Case decks are written as UTF-8, so before this a cp1252 0xB5 and a
+        UTF-8 C2 B5 alike reached the simulator as C2 B5 — which LTspice XVII
+        decodes as 'Âµ' and runs as no scale, 23µ as 23. The staged include
+        the case deck points at is read by the simulator too.
+        """
+        fake_simulator(monkeypatch)
+        stand_in = ExperimentRunner.submit_netlist
+        submitted: list[bytes] = []
+
+        def capture(self, netlist: Path, run_filename: str, callback):
+            submitted.append(Path(netlist).read_bytes())
+            return stand_in(self, netlist, run_filename, callback)
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", capture)
+        (work_dir / "core.inc").write_bytes("C1 out 0 23µ\n".encode(codec))
+        deck = work_dir / "micro.cir"
+        deck.write_bytes(
+            '* rc\n.include "core.inc"\nV1 in 0 1\nR1 in out 1k\n.param tau=4.7µ\n'
+            ".op\n.end\n".encode(codec)
+        )
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "micro"), state_with_sim))
+
+        (case_deck,) = submitted
+        assert b".param tau=4.7u\n" in case_deck
+        include = next(
+            line.split(None, 1)[1].strip().strip('"')
+            for line in case_deck.decode("utf-8").splitlines()
+            if line.startswith(".include")
+        )
+        assert await asyncio.to_thread(Path(include).read_bytes) == b"C1 out 0 23u\n"
+        folded = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
+        assert {Path(item["evidence"]["file"]).name for item in folded} == {
+            "micro.cir",
+            "core.inc",
+        }
+        assert not [
+            finding
+            for block in data["lint"]
+            for finding in block["findings"]
+            if finding["rule_id"].startswith("value-suffix")
+        ]
+
+    async def test_mis_decoded_micro_blocks_submission(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """'Âµ' is a UTF-8 micro sign read as cp1252: the simulator reads the
+        bare number, a factor of 1e6 off, and says nothing."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "mojibake.cir", "* rc\nV1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "mojibake"), state_with_sim)
+        )
+
+        assert submissions == []
+        assert data["failures"][0]["code"] == "lint_blocked"
+        (finding,) = [
+            finding
+            for block in data["lint"]
+            for finding in block["findings"]
+            if finding["rule_id"] == "value-suffix-nonascii"
+        ]
+        assert finding["evidence"]["likely_intended"] == "23u"
+
     async def test_warn_proceeds_and_preserves_findings(
         self,
         state_with_sim: SessionState,

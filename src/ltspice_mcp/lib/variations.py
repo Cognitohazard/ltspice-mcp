@@ -61,6 +61,7 @@ from ltspice_mcp.lib.montecarlo import (
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffixes
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
     MOBILITY_PARAM,
@@ -1830,6 +1831,9 @@ def _write_case_includes(
     other case reads, so the staged closure a sibling case consumes cannot move
     under it. Every file on the include chain above an edited one is copied too
     — otherwise the copy would be written and nothing would point at it.
+
+    Every copy is UTF-8, so each spells a micro-sign suffix ``u``: staging did
+    so for the files it wrote, but an assigned value can bring the sign back.
     """
     edited = {index for index, text in texts.items() if text != closure.files[index].text}
     copies = {0}
@@ -1851,11 +1855,13 @@ def _write_case_includes(
         destinations.update({path: path.with_name(name) for path, name in renames.items()})
     for index in sorted(copies):
         file = closure.files[index]
-        texts[index] = rewrite_staged_references(
-            texts[index],
-            file.path,
-            renames,
-            depth=file.depth,
+        texts[index], _ = fold_micro_suffixes(
+            rewrite_staged_references(
+                texts[index],
+                file.path,
+                renames,
+                depth=file.depth,
+            )
         )
         if index == 0:
             continue
