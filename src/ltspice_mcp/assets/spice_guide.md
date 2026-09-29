@@ -125,6 +125,25 @@ p_load = r.trace("V(out)", step=k) * r.trace("I(Rload)", step=k)
 A step's traces share that step's axis. The steps of a `.step` run each have
 an axis of their own, so never combine traces across steps.
 
+`signal_stats` reports `min`, `max` and `peak_to_peak` as the sample
+extremes, so a narrow spike or an edge's overshoot is never averaged away. For
+a spread that leaves out the few edges of a switching train, which no single
+window can skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`,
+`q99` and `quantile_peak_to_peak` (highest level minus lowest), each a name
+`field` can reduce or spec. A key is the level as a percentage with `_` for
+the decimal point, so 0.999 is `q99_9`. Quantiles are weighted by time: `q99`
+is the smallest value the signal spends 99% of the window at or below.
+`np.percentile` over the samples is a different number on simulator output:
+the step shortens around every edge, so the samples crowd there and a sample
+percentile reads the edges. For a trace you computed yourself,
+`time_weighted_quantiles` does the same weighting, in `run_code`'s scope and
+in `ltspice_mcp.api`:
+
+```python
+q = time_weighted_quantiles(t, p_load, [0.01, 0.5, 0.99])
+q["values"]  # one per level, in the order given
+```
+
 ### Reading a deck that carries `.step`
 
 A `.step` directive puts several sweeps inside one `.raw`, and by default

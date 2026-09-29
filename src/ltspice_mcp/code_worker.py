@@ -101,8 +101,15 @@ def _tail(text: str, cap: int) -> str:
 
 
 def _namespace(api: Any) -> dict[str, Any]:
-    """The names a snippet starts with, rebuilt around the same live ``Api``."""
+    """The names a snippet starts with, rebuilt around the same live ``Api``.
+
+    ``time_weighted_quantiles`` sits beside ``np`` because ``np.percentile``
+    is the call a snippet reaches for, and over LTspice's adaptive step it
+    weights the densely sampled edges instead of time.
+    """
     import numpy as np
+
+    from ltspice_mcp.lib.signal_analysis import time_weighted_quantiles
 
     return {
         "__name__": "__main__",
@@ -111,6 +118,7 @@ def _namespace(api: Any) -> dict[str, Any]:
         "load_raw": api.load_raw,
         "measurements": api.measurements,
         "reference": api.reference,
+        "time_weighted_quantiles": time_weighted_quantiles,
     }
 
 

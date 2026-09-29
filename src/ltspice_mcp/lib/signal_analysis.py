@@ -162,6 +162,23 @@ class SignalStatsOutput(TypedDict):
     t_at_max: float
 
 
+class TimeWeightedQuantilesOutput(TypedDict):
+    """Return shape of :func:`time_weighted_quantiles`. Transient-only.
+
+    ``values[i]`` is the quantile at ``levels[i]``, in the order the levels
+    were given. ``dropped_nonfinite`` counts the NaN/inf samples removed before
+    weighting; the signal is bridged linearly across each gap they leave.
+    """
+
+    levels: list[float]
+    values: list[float]
+    t_start: float
+    t_end: float
+    duration: float
+    num_samples: int
+    dropped_nonfinite: int
+
+
 class WaveformBucket(TypedDict):
     """One equal-time bucket of a decimated waveform envelope."""
 
@@ -1555,6 +1572,165 @@ def compute_signal_stats(
         "pk_pk": y_max - y_min,
         "t_at_min": t_at_min,
         "t_at_max": t_at_max,
+    }
+
+
+def _unfold_compressed_time(t: np.ndarray) -> np.ndarray:
+    """A stored LTspice time axis in the coordinates every reader uses.
+
+    LTspice may store a compressed transient's time value negated, and
+    spicelib's ``Axis.get_wave`` reads a ``time`` axis through ``abs()`` (so
+    every server raw read, and ``raw_parser._deck_axis_value``, sees the
+    magnitude). An array taken from the stored data directly still carries the
+    signs and reads as out of order. The fold applies only when the axis is
+    out of order and its magnitudes are not, so an increasing axis that is
+    genuinely negative (time shifted to put an edge at 0) is left as it is.
+    """
+    if len(t) < 2 or not np.any(t < 0) or np.all(np.diff(t) >= 0):
+        return t
+    folded = np.abs(t)
+    return folded if np.all(np.diff(folded) >= 0) else t
+
+
+class _TimeMass:
+    """The time a piecewise-linear signal spends at or below a value.
+
+    Built from the positive-duration segments between consecutive samples. A
+    flat segment holds its whole duration at one value, so it is kept as an
+    atom (a sorted cumulative table); a sloped one spreads its duration evenly
+    over ``[lo, hi]``. Every evaluation sums non-negative terms, never a
+    running difference, so a near-flat segment's large density cannot cancel
+    away the mass of its neighbours, and the sum is non-decreasing in the
+    value, which the quantile search below relies on.
+    """
+
+    def __init__(self, t: np.ndarray, y: np.ndarray) -> None:
+        dt = np.diff(t)
+        held = dt > 0  # a repeated time point holds no time
+        dt = dt[held]
+        a = y[:-1][held]
+        b = y[1:][held]
+        lo = np.minimum(a, b)
+        hi = np.maximum(a, b)
+        flat = hi == lo
+        order = np.argsort(lo[flat], kind="stable")
+        self._atom_values = lo[flat][order]
+        self._atom_cumulative = np.concatenate(([0.0], np.cumsum(dt[flat][order])))
+        sloped = ~flat
+        self._ramp_dt = dt[sloped]
+        self._ramp_lo = lo[sloped]
+        self._ramp_span = hi[sloped] - lo[sloped]
+        #: Candidate quantiles: the segment ends, sorted and unique (never
+        #: empty: the caller has refused a window that holds no time).
+        #: Between two neighbours the mass is linear in the value.
+        self.breakpoints = np.unique(np.concatenate((lo, hi)))
+        #: The mass at the top breakpoint, computed the way every other
+        #: evaluation is, so the 1.0 level compares against the exact total.
+        self.total = self.at(float(self.breakpoints[-1]))
+
+    def at(self, v: float, *, inclusive: bool = True) -> float:
+        """Time at or below ``v`` (strictly below for an atom at ``v`` when not inclusive)."""
+        side: Literal["left", "right"] = "right" if inclusive else "left"
+        atoms = float(self._atom_cumulative[np.searchsorted(self._atom_values, v, side=side)])
+        # Division, not a precomputed reciprocal: (hi - lo) / (hi - lo) is
+        # exactly 1, so a value at the top of a ramp counts its whole duration.
+        fraction = np.clip((v - self._ramp_lo) / self._ramp_span, 0.0, 1.0)
+        return atoms + float(np.sum(self._ramp_dt * fraction))
+
+    def quantile(self, level: float) -> float:
+        """The smallest value the signal spends ``level`` of its time at or below.
+
+        Level 0 is the lowest value the signal holds for any time: the
+        smallest ``v`` whose mass is positive rather than merely reached.
+        """
+        values = self.breakpoints
+        target = level * self.total
+
+        def reached(mass: float) -> bool:
+            return mass > target if level == 0.0 else mass >= target
+
+        # Smallest breakpoint index whose mass reaches the target; the top
+        # breakpoint always does (its mass is the total).
+        low, high = 0, len(values) - 1
+        while low < high:
+            mid = (low + high) // 2
+            if reached(self.at(float(values[mid]))):
+                high = mid
+            else:
+                low = mid + 1
+        if low == 0:
+            return float(values[0])
+        below = float(values[low - 1])
+        above = float(values[low])
+        mass_below = self.at(below)
+        # Mass just under `above`: linear from `mass_below` up to here. When it
+        # already passes the target the quantile is on that slope; otherwise
+        # the target is met only by the atom sitting at `above`.
+        mass_under = self.at(above, inclusive=False)
+        if mass_under > target:
+            step = (target - mass_below) / (mass_under - mass_below) * (above - below)
+            return min(max(below + step, below), above)
+        return above
+
+
+def time_weighted_quantiles(
+    t: np.ndarray,
+    y: np.ndarray,
+    levels: Sequence[float],
+    t_start: float | None = None,
+    t_end: float | None = None,
+) -> TimeWeightedQuantilesOutput:
+    """Quantiles of a transient signal weighted by time, not by sample.
+
+    The signal is the straight line between consecutive samples, the same
+    reading the trapezoidal ``mean``/``rms`` of :func:`compute_signal_stats`
+    make. A level ``p`` in ``[0, 1]`` returns the smallest value ``v`` the
+    signal spends at least a fraction ``p`` of ``[t_start, t_end]`` at or
+    below, so ``levels=[0.01, 0.99]`` bound the value everywhere but the 1% of
+    the window at each extreme. ``np.percentile`` over the samples answers a
+    different question on LTspice data: the simulator shortens its step
+    around every edge, so the samples crowd there and a sample percentile
+    reads the edges.
+
+    A segment where the signal is flat holds its duration at one value, so a
+    level can land exactly on a rail rather than between rails. A sample on a
+    repeated time point holds no time and carries no weight, so ``levels=[0,
+    1]`` are the lowest and highest values the signal holds for any time;
+    those equal the sample ``min``/``max`` unless the window has such a
+    sample at an extreme.
+
+    Windowing and cleaning go through :func:`window_and_clean` (non-finite
+    samples are dropped and counted, at least 3 must remain). A time axis
+    carrying LTspice's negated compressed-time markers, taken straight from
+    the stored data, is read through ``abs()`` as spicelib reads it. Raises
+    ``ValueError`` on a level outside ``[0, 1]``, on complex input, and on a
+    window that spans no time.
+    """
+    wanted = [float(level) for level in levels]
+    if not wanted:
+        raise ValueError("No quantile levels given; pass at least one level in [0, 1]")
+    for level in wanted:
+        if not 0.0 <= level <= 1.0:
+            raise ValueError(f"Quantile level {level!r} is outside [0, 1]")
+    if np.iscomplexobj(y):
+        raise ValueError("Time-weighted quantiles need a real-valued signal, not complex data")
+    axis = _unfold_compressed_time(np.asarray(t, dtype=float))
+    t_clean, y_clean, dropped = window_and_clean(axis, np.asarray(y, dtype=float), t_start, t_end)
+    duration = float(t_clean[-1] - t_clean[0])
+    if not duration > 0:
+        raise ValueError(
+            "The window spans no time (every sample shares one instant); a "
+            "time-weighted quantile is undefined there"
+        )
+    mass = _TimeMass(t_clean, y_clean)
+    return {
+        "levels": wanted,
+        "values": [mass.quantile(level) for level in wanted],
+        "t_start": float(t_clean[0]),
+        "t_end": float(t_clean[-1]),
+        "duration": duration,
+        "num_samples": len(t_clean),
+        "dropped_nonfinite": dropped,
     }
 
 

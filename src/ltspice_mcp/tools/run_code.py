@@ -62,7 +62,8 @@ class RunCodeInput(ToolInput):
         description=(
             "Python source. In scope: api (the engine on this working directory: the "
             "same six ops as methods, complete results), np, load_raw, measurements, "
-            "reference. The repr of a trailing expression comes back as result."
+            "reference, time_weighted_quantiles. The repr of a trailing expression "
+            "comes back as result."
         ),
     )
     timeout_s: float = Field(
@@ -539,8 +540,10 @@ def worker_for(state: SessionState) -> CodeWorker:
         "single run or measurement is a tool call. In scope: api (the same six ops "
         "as methods on this working directory, complete results, no paging), np, "
         "load_raw, measurements, reference — reference('run_experiments') lists an "
-        "op's arguments, so read it before guessing them. Every call is a fresh "
-        "namespace around the same live engine; keep state on disk (a job by "
+        "op's arguments, so read it before guessing them — and "
+        "time_weighted_quantiles(t, y, levels), which weights by time where "
+        "np.percentile over samples weights the densely sampled edges. Every call "
+        "is a fresh namespace around the same live engine; keep state on disk (a job by "
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "

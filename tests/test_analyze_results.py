@@ -2668,3 +2668,121 @@ def test_include_field_bare_name_reads_under_value():
     assert include.fields == ["value.phase_margin_worst_deg", "case_id"]
     with pytest.raises(ValidationError, match="unknown row key"):
         AnalyzeInclude.model_validate({"fields": ["node.x"]})
+
+
+def _recorded_trace(raw: Path, name: str) -> tuple[Any, Any]:
+    """The time axis and one trace of a recorded LTspice raw, as stored."""
+    import numpy as np
+    from spicelib import RawRead
+
+    recorded = RawRead(str(raw), verbose=False)
+    return (
+        np.asarray(recorded.get_trace("time").get_wave(0), dtype=float),
+        np.asarray(recorded.get_trace(name).get_wave(0), dtype=float),
+    )
+
+
+@pytest.mark.asyncio
+class TestSignalStatsQuantiles:
+    """signal_stats' time-weighted quantiles, on LTspice's own adaptive step."""
+
+    async def test_quantiles_follow_time_where_the_sample_percentile_follows_the_edge(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        import numpy as np
+
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        t, v_in = _recorded_trace(raw, "V(in)")
+        _, v_out = _recorded_trace(raw, "V(out)")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {
+                    "key": "vin",
+                    "metric": "signal_stats",
+                    "signal": "V(in)",
+                    "quantiles": [0.01, 0.99],
+                },
+                {
+                    "key": "vout",
+                    "metric": "signal_stats",
+                    "signal": "V(out)",
+                    "quantiles": [0.01, 0.5],
+                },
+            ],
+        )
+        assert data["failures"] == []
+        vin = data["results"]["vin"]["values"][0]["value"]
+        vout = data["results"]["vout"]["values"][0]["value"]
+
+        # The input steps to 1 V in its first microsecond and holds it for the
+        # rest of the millisecond, so 99.9% of the window sits at the top. The
+        # simulator packed its smallest steps into that microsecond, and the
+        # sample percentile reads the edge instead.
+        assert vin["q01"] == float(v_in.max())
+        assert vin["q99"] == float(v_in.max())
+        assert vin["quantile_peak_to_peak"] == 0.0
+        assert np.percentile(v_in, 1) < 1e-3
+        # The extremes stay the sample extremes.
+        assert vin["min"] == float(v_in.min())
+        assert vin["peak_to_peak"] == float(v_in.max() - v_in.min())
+
+        # V(out) charges monotonically, so the fraction of the window it spends
+        # at or below its value at time t0 + p*T is p: its p-quantile is the
+        # trace read at that time.
+        assert np.all(np.diff(v_out) >= 0)
+        span = t[-1] - t[0]
+        for level, key in ((0.01, "q01"), (0.5, "q50")):
+            assert vout[key] == pytest.approx(np.interp(t[0] + level * span, t, v_out), rel=1e-9)
+        assert vout["quantile_peak_to_peak"] == pytest.approx(vout["q50"] - vout["q01"])
+        # 10 us into the charge the output is near 0.09 V; the sample 1st
+        # percentile reads the first nanoseconds of it.
+        assert vout["q01"] == pytest.approx(0.0904, abs=1e-3)
+        assert np.percentile(v_out, 1) < 1e-6
+
+    async def test_a_quantile_is_what_a_reduce_and_a_spec_read(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        recipe = {"metric": "signal_stats", "signal": "V(out)", "quantiles": [0.01, 0.99]}
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {"key": "row", **recipe},
+                {"key": "hi", **recipe, "field": "q99", "reduce": ["max"]},
+                {
+                    "key": "spread",
+                    **recipe,
+                    "field": "quantile_peak_to_peak",
+                    "spec": {"max": 0.1},
+                },
+            ],
+        )
+        assert data["failures"] == []
+        row = data["results"]["row"]["values"][0]["value"]
+        (reduced,) = data["results"]["hi"]["reduced"]
+        assert (reduced["field"], reduced["stat"]) == ("q99", "max")
+        assert reduced["value"] == row["q99"]
+        verdict = data["results"]["spread"]["spec"]
+        assert verdict["verdict"] == "fail"
+        assert verdict["field"] == "quantile_peak_to_peak"
+        assert verdict["fail_cases"]["items"][0]["value"] == row["quantile_peak_to_peak"]
+        assert row["quantile_peak_to_peak"] == pytest.approx(row["q99"] - row["q01"])
+
+    async def test_quantiles_on_a_run_that_is_not_transient_fail_their_recipe(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "s", "metric": "signal_stats", "signal": "V(out)", "quantiles": [0.5]}],
+        )
+        message = next(
+            failure["message"]
+            for failure in data["failures"]
+            if failure["code"] == "recipe_failed"
+        )
+        assert "transient" in message

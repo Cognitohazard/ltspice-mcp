@@ -132,6 +132,24 @@ tool-surface changes.
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
   model profile, independently replayable samples and persisted provenance.
+- Time-weighted quantiles. The `signal_stats` recipe takes
+  `quantiles: [0.01, 0.99]` (up to 16 levels in [0, 1]) on a transient run
+  and adds `q01`, `q99` and `quantile_peak_to_peak`, the highest level minus
+  the lowest. Each can be named as the `field` a `reduce` or a `spec` reads, so
+  a robust ripple limit is one recipe. A level `p` is the smallest value the
+  signal spends a fraction `p` of the window at or below, reading the
+  straight line between samples the way `mean` and `rms` already do.
+  `np.percentile` over the samples gives a different answer on simulator
+  output, because the simulator shortens its step around every edge and the
+  samples crowd there. On the recorded RC fixture the input's sample 1st
+  percentile is 0.00012 V, while the input spends 99.9% of the window at 1 V.
+  `min`, `max` and `peak_to_peak` are unchanged and remain the sample
+  extremes. Asking for quantiles on an AC, DC-sweep or noise run fails that
+  recipe with a message. The same function is
+  `ltspice_mcp.api.time_weighted_quantiles`, and `run_code` has it in scope.
+  It drops and counts non-finite samples, and reads a time axis taken from a
+  raw's stored data, with LTspice's negated compressed-time points, through
+  `abs()` as spicelib does.
 
 ### Changed
 

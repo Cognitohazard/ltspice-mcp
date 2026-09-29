@@ -150,12 +150,13 @@ class TestExecution:
         code = (
             "ops = [n for n in ('run_experiments', 'analyze_results', 'jobs', 'inspect',"
             " 'edit_schematic', 'verify_circuit') if callable(getattr(api, n, None))]\n"
-            "print(np.__name__, callable(load_raw), callable(measurements))\n"
+            "print(np.__name__, callable(load_raw), callable(measurements),"
+            " time_weighted_quantiles.__module__)\n"
             "(len(ops), reference('jobs')[:6])"
         )
         reply = await run(state, code)
         assert reply["status"] == "ok", reply
-        assert reply["stdout"] == "numpy True True\n"
+        assert reply["stdout"] == "numpy True True ltspice_mcp.lib.signal_analysis\n"
         assert reply["result"].startswith("(6, ")
 
     async def test_each_call_is_a_fresh_namespace(self, state: SessionState):
