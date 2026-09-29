@@ -401,11 +401,9 @@ def resolve_analysis_source(
     case-addressed, so a caller naming a job resolves the case first.
     """
     if raw_file:
-        return source_for_raw_path(
-            resolve_safe_path(str(raw_file), state.config.allowed_paths), state
-        )
+        return source_for_raw_path(resolve_safe_path(str(raw_file), state.allowed_paths()), state)
     if log_file:
-        log = resolve_safe_path(str(log_file), state.config.allowed_paths)
+        log = resolve_safe_path(str(log_file), state.allowed_paths())
         return AnalysisSource(
             raw=log.with_suffix(".raw"),
             log=log,

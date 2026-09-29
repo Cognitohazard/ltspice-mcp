@@ -94,9 +94,9 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
         raise PathSecurityError(f"Failed to resolve path {user_path}: {e}") from e
 
     # Check if resolved path is within any allowed directory. A relative entry
-    # in that list (``allowed_paths = ["."]``, what the generated TOML ships) is
-    # anchored the same way the user path was, so a declared base moves the
-    # sandbox with it instead of leaving it pinned to the process cwd.
+    # in that list (``allowed_paths = ["."]`` in a config file, say) is anchored
+    # the same way the user path was, so a declared base moves the sandbox with
+    # it instead of leaving it pinned to the process cwd.
     for allowed_dir in allowed_dirs:
         try:
             allowed_resolved = _anchor(allowed_dir, base).resolve()

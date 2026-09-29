@@ -24,6 +24,7 @@ from ltspice_mcp.api._exceptions import (
     ApiValidationError,
 )
 from ltspice_mcp.api._primitives import RawResult, load_measurement_results, load_raw_result
+from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.state import SessionState
@@ -732,13 +733,21 @@ class ApiMethodsMixin(ABC):
         the contract documents — has to look in ``D``. Anchoring here rather
         than per path field means every op, and every path field a future op
         adds, inherits it: they all pass through this one call.
+
+        A sandbox refusal gets the same guidance a tool call's does, as a note
+        on the exception: a script, or a ``run_code`` snippet, sees it in the
+        traceback, and the exception's type and message stay what they were.
         """
-        return self._call(
-            _anchored_on(self._state.config.working_dir, coroutine),
-            cancelable=cancelable,
-            cancel_on_interrupt=cancel_on_interrupt,
-            preserve_interrupt=preserve_interrupt,
-        )
+        try:
+            return self._call(
+                _anchored_on(self._state.config.working_dir, coroutine),
+                cancelable=cancelable,
+                cancel_on_interrupt=cancel_on_interrupt,
+                preserve_interrupt=preserve_interrupt,
+            )
+        except PathSecurityError as exc:
+            exc.add_note(self._state.sandbox_guidance())
+            raise
 
     def _dispatch(
         self,

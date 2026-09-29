@@ -15,6 +15,7 @@ from ltspice_mcp.lib.deck_staging import (
     stage_deck,
     verify_staged_manifest,
 )
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.simulator import simulator_library_roots
 from tests.conftest import symlink_or_skip
 
@@ -549,6 +550,65 @@ class TestSimulatorLibraryRoots:
 
     def test_no_simulator_has_no_roots(self):
         assert simulator_library_roots(None) == []
+
+
+class TestMicroSuffixStaging:
+    """Every staged SPICE file is read by the simulator, and a file whose
+    references were rewritten is re-emitted as UTF-8, so a cp1252 0xB5 reaches
+    the simulator as C2 B5 — which LTspice XVII decodes as 'Âµ' and runs as no
+    scale at all. Staging spells a micro-sign suffix 'u' in every file it
+    writes, and leaves the schematic it snapshots alone."""
+
+    @pytest.mark.parametrize("codec", ["cp1252", "utf-8"])
+    def test_staged_deck_and_include_spell_micro_as_u(self, tmp_path: Path, codec: str):
+        root = tmp_path / "source"
+        root.mkdir()
+        core = root / "core.inc"
+        core.write_bytes("* core µ\r\nC1 out 0 23µ\r\n".encode(codec))
+        deck = root / "bench.cir"
+        deck.write_bytes(
+            '* bench\n.include "core.inc"\nR1 in out 1k\n.param tau=4.7µ\n.op\n.end\n'.encode(
+                codec
+            )
+        )
+        schematic = root / "bench.asc"
+        schematic.write_bytes("Version 4\nSYMATTR Value 23µ\n".encode(codec))
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=schematic)
+
+        assert b".param tau=4.7u\n" in staged.staged_deck.read_bytes()
+        assert ".param tau=4.7u\n" in staged.text
+        (staged_core,) = [item for item in staged.includes if item.source == core.resolve()]
+        core_bytes = staged_core.staged_path.read_bytes()
+        assert b"C1 out 0 23u\r\n" in core_bytes
+        assert staged_core.sha256 == deck_staging.sha256_file(staged_core.staged_path)
+        assert "* core µ\r\n" in read_spice_text(staged_core.staged_path)
+        # The schematic is a provenance snapshot, never a simulator input.
+        origin = next(item for item in staged.manifest if item.path == schematic.resolve())
+        assert origin.staged_path is not None
+        assert origin.staged_path.read_bytes() == schematic.read_bytes()
+        folded = [item for item in staged.observations if item["code"] == "micro_sign_folded"]
+        assert {Path(item["evidence"]["file"]).name for item in folded} == {
+            "bench.cir",
+            "core.inc",
+        }
+        assert {token for item in folded for token in item["evidence"]["tokens"]} == {
+            "23µ",
+            "4.7µ",
+        }
+
+    def test_file_with_micro_only_in_a_comment_keeps_its_bytes(self, tmp_path: Path):
+        root = tmp_path / "source"
+        root.mkdir()
+        core = root / "core.inc"
+        core.write_bytes(b"* 23\xb5 was the old value\r\nC1 out 0 1n\r\n")
+        deck = _write(root / "bench.cir", '* bench\n.include "core.inc"\n.op\n.end\n')
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        (staged_core,) = staged.includes
+        assert staged_core.staged_path.read_bytes() == core.read_bytes()
+        assert not [item for item in staged.observations if item["code"] == "micro_sign_folded"]
 
 
 @pytest.mark.parametrize("rewrite", [False, True])

@@ -54,6 +54,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     outcome_of,
     page_schema,
+    path_denied_text,
     registry,
     resolve_response_budget,
     safe_path,
@@ -897,7 +898,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
         "observations": [],
         "warnings": [],
         "failures": [],
-        "hint": error.message,
+        "hint": error.hint,
         "error": {
             "code": error.code,
             "message": error.message,
@@ -965,6 +966,8 @@ class _JobsError:
     message: str
     stage: str
     retryable: bool
+    hint: str
+    """The envelope's hint: the message, with the remedy after it where one is known."""
 
 
 @dataclass(frozen=True)
@@ -1057,15 +1060,18 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             status=snapshot.status,
         )
     except Exception as exc:
-        return _failed_jobs_evaluation(args, exc)
+        return _failed_jobs_evaluation(args, exc, state)
 
 
-def _failed_jobs_evaluation(args: JobsInput, exc: Exception) -> JobsEvaluation:
+def _failed_jobs_evaluation(
+    args: JobsInput, exc: Exception, state: SessionState
+) -> JobsEvaluation:
     """Carry one failure as an evaluation, classified for the error envelope."""
     code, stage, retryable = _jobs_error_details(exc)
+    hint = path_denied_text(exc, state) if isinstance(exc, PathSecurityError) else str(exc)
     return JobsEvaluation(
         args=args,
-        error=_JobsError(code=code, message=str(exc), stage=stage, retryable=retryable),
+        error=_JobsError(code=code, message=str(exc), stage=stage, retryable=retryable, hint=hint),
     )
 
 
@@ -1085,7 +1091,7 @@ def render_jobs_data(
     """
     args = evaluation.args
     if evaluation.error is not None:
-        return _without_control_tokens(_jobs_error_payload(evaluation)), evaluation.error.message
+        return _without_control_tokens(_jobs_error_payload(evaluation)), evaluation.error.hint
 
     if isinstance(args, JobsListInput):
         groups = list(evaluation.groups)
@@ -1222,7 +1228,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
             # cancel among them. Report it through this tool's own envelope
             # rather than letting it out as a protocol error carrying no
             # structuredContent at all.
-            evaluation = _failed_jobs_evaluation(args, exc)
+            evaluation = _failed_jobs_evaluation(args, exc, state)
     if built is None:
         # A failed call renders once, off the budget ladder: its envelope is
         # already the irreducible floor, and the ladder's trim rung would take

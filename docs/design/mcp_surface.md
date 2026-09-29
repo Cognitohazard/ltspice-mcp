@@ -83,7 +83,7 @@ From the error hierarchy:
 
 | code | meaning |
 |-|-|
-| `path_denied` | the path resolves outside `allowed_paths` |
+| `path_denied` | the path resolves outside `allowed_paths`; a `hint` names the config file and key that widen it (an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal) |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
 | `symbol_unresolved` | the schematic opened, but a symbol, sub-sheet or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
@@ -950,7 +950,11 @@ Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (blocking,
 ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
 `model-missing` (blocking at staging), `directive-arity` (blocking),
 `include-relative` (warning), `suffix-mega-milli` (warning), `temp-as-param`
-(warning), and `op-degenerate` (a post-run observation with neutral evidence —
+(blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
+scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
+simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
+before the deck is linted, and `verify_circuit` warns about it for a deck run
+elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
 device list, currents, threshold, step — whose hint mentions `.nodeset`).
 
 ---
