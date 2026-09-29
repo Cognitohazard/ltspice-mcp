@@ -138,7 +138,8 @@ ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" 
 
 [simulation]
 # max_parallel = 4       # default: number of CPU cores, capped at 8
-timeout = 300.0          # seconds per case, unless a request sets execution.run_timeout_s
+timeout = 300.0          # seconds, for LTspice netlist export
+# run_timeout = 3600     # seconds per case when a request sets no execution.run_timeout_s; default: no limit
 
 [tools]
 listing = "compact"      # "full" serves every per-argument description on the wire, about 45% more to load

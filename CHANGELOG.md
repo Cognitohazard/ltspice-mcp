@@ -40,6 +40,12 @@ tool-surface changes.
   ngspice leaves `No. Points` at 0 until a plot ends and LTspice's lags the
   data. Neither simulator's `.log` or `.exe.log` records progress for a killed
   run.
+- A `run_progress` observation for every case still running, on the receipts
+  `run_experiments`, `jobs(status)` and `jobs(wait)` return: the same progress
+  facts plus the seconds since launch, read from the raw the simulator is
+  writing at that moment. It is read only when a receipt is built, is not
+  stored in the job record, and costs a header and one record per running
+  case.
 - Recovery hints on `run_timeout`, `job_deadline` and `kill_unconfirmed` failure
   rows.
 - Exact nested-instance assignments and caller-defined mismatch, preserving
@@ -54,12 +60,15 @@ tool-surface changes.
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
   statistical provenance. The store format is version 2.
-- A case whose request sets no `execution.run_timeout_s` is bounded by
-  `[simulation] timeout` (`LTSPICE_MCP_TIMEOUT`, default 300 s), which
-  capabilities already advertised as `limits.default_timeout_s` but which only
-  bounded netlist export. Before, such a case ran until spicelib's hidden 600 s
-  cap. A run that needs longer sets `run_timeout_s` or raises the server
-  setting; the failure evidence says which bound applied.
+- A case has no time limit unless one is set. Before, every case was capped
+  at spicelib's hidden 600 s. Now a case runs until it ends or is cancelled,
+  unless the request sets `execution.run_timeout_s` or the operator sets the
+  new `[simulation] run_timeout` (`LTSPICE_MCP_RUN_TIMEOUT`, unset by default).
+  A running job reports each case's progress, which is what shows a stuck one.
+- Capabilities `limits.default_timeout_s` is replaced by `run_timeout_s` (the
+  server's per-case limit, `null` when unset) and `export_timeout_s`.
+  `[simulation] timeout` bounds only LTspice netlist export, which is all it
+  ever bounded.
 
 ## [0.6.1] - 2026-09-08
 

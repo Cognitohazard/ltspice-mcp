@@ -829,6 +829,19 @@ class TestPartialRawProgress:
         assert progress.points == 2
         assert progress.last_axis_value == pytest.approx(1.584893192461113)
 
+    def test_a_following_plot_out_of_reach_is_not_guessed_at(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Past the skip cap, the last plot's lines would be read with the first
+        plot's variable count, so the count is reported as unknown instead."""
+        monkeypatch.setattr(raw_parser, "_ASCII_SKIP_CAP", 64)
+
+        progress = read_partial_raw_progress(FIXTURES_DIR / "ngspice_noise_2plot.raw", "ngspice")
+
+        assert progress is not None
+        assert progress.points is None
+        assert progress.last_axis_value is None
+
     def test_recorded_two_plot_ascii_raw_reports_its_last_plot(self):
         progress = read_partial_raw_progress(FIXTURES_DIR / "ngspice_noise_2plot.raw", "ngspice")
 

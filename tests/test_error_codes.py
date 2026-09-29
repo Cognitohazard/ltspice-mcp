@@ -503,6 +503,7 @@ FROZEN_ERROR_CODES = (
     "review_against_plot",
     "revision_conflict",
     "run_not_found",
+    "run_progress",
     "search_error",
     "semantic_profile_required",
     "server_restarted",

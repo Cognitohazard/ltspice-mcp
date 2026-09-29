@@ -626,3 +626,70 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     assert 0 < reached["last_axis_value"] < 1
     leftovers = await asyncio.to_thread(lambda: list(work_dir.rglob("*.raw")))
     assert not leftovers, "the killed run's raw was left on disk"
+
+
+async def test_an_unbounded_case_reports_progress_while_it_runs(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """No run timeout is set, so the case runs on; every look says how far it got.
+
+    The progress comes from the raw ngspice is writing at that moment, read
+    both at the end of the submission's dwell and by a later status call.
+    """
+    from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+
+    net = _write(
+        work_dir,
+        "slow.cir",
+        "* slow rc\nV1 in 0 SIN(0 1 1k)\nR1 in out 1k\nC1 out 0 1u\n.tran 10n 1 0 10n\n.end\n",
+    )
+    submitted = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": "ng-live-progress",
+                "circuits": [{"path": net, "id": "dut"}],
+                "execution": {"wait_s": 2, "simulator": "ngspice"},
+            }
+        ),
+        ngspice_state,
+    )
+    first = submitted.structured_content
+    assert first is not None
+    assert first["outcome"] == "in_progress", first
+    assert [item for item in first["observations"] if item["code"] == "run_progress"]
+
+    await asyncio.sleep(1)
+    status = await handle_jobs(
+        JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
+        ngspice_state,
+    )
+    data = status.structured_content
+    assert data is not None
+    [live] = [item for item in data["observations"] if item["code"] == "run_progress"]
+    reached = live["evidence"]
+    assert (reached["plot"], reached["axis"]) == ("Transient Analysis", "time")
+    assert reached["points"] > 0
+    assert 0 < reached["last_axis_value"] < 1
+    assert reached["running_s"] >= 1
+
+    await handle_jobs(
+        JobsInput.model_validate(
+            {
+                "action": "cancel",
+                "job_id": first["job_id"],
+                "control_token": first["control_token"],
+            }
+        ),
+        ngspice_state,
+    )
+    waited = await handle_jobs(
+        JobsInput.model_validate({"action": "wait", "job_id": first["job_id"], "timeout_s": 60}),
+        ngspice_state,
+    )
+    final = waited.structured_content
+    assert final is not None
+    assert final["status"] == "cancelled", final
+    codes = [item["code"] for item in final["observations"]]
+    assert "run_progress" not in codes
+    [stopped] = [item for item in final["observations"] if item["code"] == "partial_progress"]
+    assert stopped["evidence"]["points"] >= reached["points"]

@@ -1124,7 +1124,7 @@ class TestStoppedCaseRecord:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        state_no_sim.config.default_timeout = 0.05
+        state_no_sim.config.run_timeout = 0.05
         job, _raw = await self._timed_out(
             state_no_sim,
             work_dir,
@@ -1173,6 +1173,45 @@ class TestStoppedCaseRecord:
         assert await runner.wait(receipt.job, 1)
 
         assert launches[0]["timeout_s"] == 30.0 + 2.0 + SPICELIB_TIMEOUT_MARGIN_S
+
+    async def test_nothing_bounds_a_case_unless_something_sets_a_timeout(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """No request timeout and no [simulation] run_timeout: the case runs on.
+
+        ``[simulation] timeout`` bounds netlist export only; set low here, it
+        must not reach the case.
+        """
+        state_no_sim.config.default_timeout = 0.01
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        launches: list[dict[str, Any]] = []
+        callbacks: dict[str, Any] = {}
+        kills: list[str] = []
+
+        def submit(_netlist: Path, run_filename: str, callback, **kwargs):
+            launches.append(kwargs)
+            callbacks[Path(run_filename).stem] = callback
+            return object()
+
+        async def record_kill(token: str) -> None:
+            kills.append(token)
+
+        monkeypatch.setattr(runner, "submit_netlist", submit)
+        monkeypatch.setattr(runner, "_kill_case", record_kill)
+        receipt = await asyncio.shield(
+            runner.submit(_request(state_no_sim, work_dir, request_id="no-default-timeout"))
+        )
+        await await_until(lambda: bool(launches))
+        await asyncio.sleep(0.2)
+        assert kills == []
+        assert launches[0]["timeout_s"] is None
+        token = next(iter(callbacks))
+        callbacks[token](_success(work_dir, token))
+        assert await runner.wait(receipt.job, 1)
+        assert receipt.job.cases[0].status == "produced"
 
     async def test_late_exit_records_progress_and_the_bound_that_applied(
         self,

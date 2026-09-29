@@ -346,15 +346,22 @@ engaged at the trim rung only — empty presentation blocks and the identity
 echo, never facts, never caller opt-ins. An explicit caller budget overrides
 the default entirely and may descend the full ladder.
 
-**Run timeout.** Every case is bounded. `execution.run_timeout_s` sets the
-bound; unset, the server's `[simulation] timeout` applies (`limits.default_timeout_s`
-in `inspect(kind="capabilities")`, default 300 s). The coordinator's timer is
-the one that decides a timeout: it kills the case by its run token and records
-`run_timeout`. spicelib's own `subprocess` bound sits the kill grace plus 60 s
-past it, so it never pre-empts that decision. It exists for a kill nobody
-confirmed: it ends the process spicelib holds a handle to, and the retained
-concurrency permit comes back. It is clamped to 4,000,000 s, inside what a
-Windows process wait can express.
+**Run timeout.** A case has no time limit unless one is set:
+`execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
+the server (`limits.run_timeout_s` in `inspect(kind="capabilities")`, `null`
+when unset). No default is imposed. A timeout deletes the partial result, and
+no fixed number fits both a millisecond `.op` and an hour-long switching
+transient; the caller knows which it submitted, and a running job reports each
+case's progress (below), which is what shows a stuck one. `[simulation] timeout`
+(`limits.export_timeout_s`) bounds LTspice netlist export only.
+
+When a limit is set, the coordinator's timer is the one that decides a timeout:
+it kills the case by its run token and records `run_timeout`. spicelib's own
+`subprocess` bound sits the kill grace plus 60 s past it, so it never pre-empts
+that decision. It exists for a kill nobody confirmed: it ends the process
+spicelib holds a handle to, and the retained concurrency permit comes back.
+With no limit set it is 4,000,000 s, and every value is clamped to that, inside
+what a Windows process wait can express.
 
 **Job model.** An experiment job is a coordinator spanning multiple circuits.
 Its persistence home is the server working directory's store
@@ -431,6 +438,12 @@ the run-terminal invariant
 `case_id` and a reason. Lifecycle status is reported separately from
 completeness.
 
+`progress` is derived from that durable completeness snapshot and is present on
+receipts through terminal states:
+`{expanded, terminal, remaining, declared, submitted, produced, failed,
+cancelled, skipped}`, where `terminal = produced + failed + cancelled + skipped`
+and `remaining = expanded - terminal`.
+
 **Stopped cases.** A case the coordinator stops is a failure row whose code
 names why: `run_timeout`, `job_deadline`, or `cancelled` (status `cancelled`).
 Its message names the bound that applied, and its `evidence` keeps what the
@@ -458,11 +471,17 @@ at 0 until a plot ends, and LTspice's lags the data. `last_axis_value` is in
 deck coordinates. `run_timeout`, `job_deadline` and `kill_unconfirmed` rows carry
 a recovery `hint`.
 
-`progress` is derived from that durable completeness snapshot and is present on
-receipts through terminal states:
-`{expanded, terminal, remaining, declared, submitted, produced, failed,
-cancelled, skipped}`, where `terminal = produced + failed + cancelled + skipped`
-and `remaining = expanded - terminal`.
+**Running cases.** While a job runs, the receipts `run_experiments`,
+`jobs(status)` and `jobs(wait)` return carry one `run_progress` observation per
+case still running, with the same evidence as `partial_progress` plus
+`running_s`, the seconds since launch. It is read from the raw the simulator is
+writing when the receipt is built, off the event loop, and never stored: the
+job record does not grow, and a job nobody asks about costs nothing. A read is
+the raw's header and last record (the tail, for an ASCII raw), so its cost does
+not grow with the file: under 0.2 ms each on 30-50 MB raws of both simulators.
+It is done for at most as many cases as the job has in flight. A case whose
+`points` stops moving between two reads while `running_s` grows is not
+advancing; that judgment, and whether to cancel, is the caller's.
 
 **RunRecord** is a standalone schema fragment shared by `run_experiments` and
 `jobs`:

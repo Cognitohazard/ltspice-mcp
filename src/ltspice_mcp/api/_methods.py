@@ -279,10 +279,12 @@ async def _complete_run_receipt(
         return copy.deepcopy(dict(receipt))
     job = await services.resolve_job_async(job_id, state)
     control_token = receipt.get("control_token")
+    live_progress = await experiments.live_run_progress(job)
     snapshot = experiments.snapshot_receipt(
         job,
         state,
         control_token=control_token if isinstance(control_token, str) else None,
+        live_progress=live_progress,
     )
     analysis_fields = (
         request.analyze.include.fields

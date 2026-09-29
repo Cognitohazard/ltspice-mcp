@@ -14,6 +14,7 @@ from __future__ import annotations
 import codecs
 import contextlib
 import math
+import os
 import re
 import struct
 from dataclasses import dataclass
@@ -1046,15 +1047,17 @@ def sniff_raw_dialect(path: Path) -> str | None:
 _AXISLESS_PLOTS = frozenset({"operating point", "transfer function", "integrated noise"})
 #: Bytes one plot header may take before the reader stops looking for its end.
 #: A header is a few lines plus one per variable, so this is far past any deck.
+#: Read in small chunks: a running job's cases are read on every status call,
+#: and a typical header ends inside the first one.
 _PARTIAL_HEADER_CAP = 16 * 1024 * 1024
-_PARTIAL_READ_CHUNK = 64 * 1024
+_PARTIAL_READ_CHUNK = 8 * 1024
 #: ASCII data has no fixed record size, so its last point is found by reading
 #: the end of the file. The window grows until it holds one complete point.
-_ASCII_TAIL_START = 256 * 1024
-_ASCII_TAIL_CAP = 64 * 1024 * 1024
+_ASCII_TAIL_START = 64 * 1024
+_ASCII_TAIL_CAP = 16 * 1024 * 1024
 #: Bytes of a finished ASCII plot the reader will step through line by line to
-#: reach the plot after it.
-_ASCII_SKIP_CAP = 64 * 1024 * 1024
+#: reach the plot after it; past this the count is reported as unknown.
+_ASCII_SKIP_CAP = 8 * 1024 * 1024
 _RE_DATA_START = re.compile(r"(?im)^(binary|values):[ \t]*\r?\n")
 
 
@@ -1115,8 +1118,12 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
     Returns None when the path is missing, unreadable, or not a raw file.
     """
     try:
-        size = path.stat().st_size
         with path.open("rb") as handle:
+            # Sized through the open handle rather than by path, so the count
+            # and every read come from one view of a file the simulator may
+            # still be writing.
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(0)
             magic = handle.read(max(map(len, _RAW_HEADER_UTF16)))
             if magic.startswith(_RAW_HEADER_UTF16):
                 codec, width = "utf-16-le", 2
@@ -1246,9 +1253,13 @@ def _progress_of_plot(
 
     if header.data_kind == "values":
         if declared > 0 and width == 1:
-            following = _skip_ascii_plot(handle, header.data_start, size)
+            following, at_end = _skip_ascii_plot(handle, header.data_start, size)
             if following is not None:
                 return following
+            if not at_end:
+                # The plot this file ends in is out of reach; its lines would
+                # be read with this plot's variable count.
+                return progress(None, None)
         tail = _ascii_last_point(handle, header.data_start, size, codec, width, n_vars)
         if tail is None:
             return progress(None, None)
@@ -1295,18 +1306,25 @@ def _plot_starts_at(handle: Any, offset: int, codec: str) -> bool:
     return head.startswith(marker) or head.startswith(b"\xff\xfe" + marker)
 
 
-def _skip_ascii_plot(handle: Any, data_start: int, size: int) -> int | None:
-    """Offset of the plot after a finished ASCII plot, if one follows in reach."""
+def _skip_ascii_plot(handle: Any, data_start: int, size: int) -> tuple[int | None, bool]:
+    """The offset of the plot after a finished ASCII plot, and whether the file ended.
+
+    ``(offset, False)`` when another plot follows, ``(None, True)`` when this
+    plot runs to the end of the file, ``(None, False)`` when the read cap was
+    reached first.
+    """
     handle.seek(data_start)
     position = data_start
-    while position < size and position - data_start < _ASCII_SKIP_CAP:
+    while position - data_start < _ASCII_SKIP_CAP:
+        if position >= size:
+            return None, True
         line = handle.readline()
         if not line:
-            return None
+            return None, True
         if line.startswith(_RAW_HEADER_ASCII):
-            return position
+            return position, False
         position += len(line)
-    return None
+    return None, False
 
 
 def _ascii_last_point(
