@@ -1106,7 +1106,15 @@ def path_denied_guidance(state: SessionState) -> str:
     allowed = ", ".join(str(p) for p in state.allowed_paths())
     config_path = state.config.config_path
     key = f"[{SANDBOX_SECTION}] {SANDBOX_KEY}"
-    if os.environ.get(SANDBOX_ENV):
+    # The branches follow the loader's precedence: an explicit argument, then
+    # the environment, then the file.
+    if state.sandbox_pinned:
+        widen = (
+            f"open a new Api with its directory added to {SANDBOX_KEY}: this "
+            f"session's sandbox is the Api({SANDBOX_KEY}=...) it was opened with, "
+            f"which replaces {key} in {config_path} for the whole session."
+        )
+    elif os.environ.get(SANDBOX_ENV):
         # The loader applies the variable after the file, so an edit to the
         # file has no effect while it is set.
         widen = (

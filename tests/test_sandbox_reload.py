@@ -18,14 +18,16 @@ from urllib.parse import quote
 
 import pytest
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp import engine
+from ltspice_mcp.api import Api
+from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 from ltspice_mcp.lib.services import resolve_analysis_source
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import safe_path
+from ltspice_mcp.tools._base import path_denied_guidance, safe_path
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
@@ -329,8 +331,6 @@ def test_guidance_says_when_the_environment_overrides_the_file(tmp_path: Path, m
     """With LTSPICE_MCP_ALLOWED_PATHS set, the variable replaces the file's list,
     so pointing the agent at the file would send it to edit a line that has no
     effect."""
-    from ltspice_mcp.tools._base import path_denied_guidance
-
     box = _Sandbox(tmp_path, monkeypatch)
     monkeypatch.setenv("LTSPICE_MCP_ALLOWED_PATHS", str(box.work))
     state = box.state()
@@ -339,4 +339,59 @@ def test_guidance_says_when_the_environment_overrides_the_file(tmp_path: Path, m
 
     assert "LTSPICE_MCP_ALLOWED_PATHS" in guidance
     assert "restart" in guidance
+    assert "next call" not in guidance
+
+
+# ---------------------------------------------------------------------------
+# An explicit Api sandbox outranks the file for the whole session
+# ---------------------------------------------------------------------------
+
+
+def test_an_explicit_api_sandbox_outranks_a_config_file_written_later(tmp_path: Path, monkeypatch):
+    """``Api(allowed_paths=...)`` beats the file at boot, and has to keep beating
+    it: a server session in the same directory writes its default config on its
+    first tool call, and the API session's next path check must not trade the
+    caller's list for that file's."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine, "detect_simulators", lambda config, diagnostics: {})
+    box.toml.unlink()
+    api = Api(
+        working_dir=box.work,
+        allowed_paths=[box.work, box.elsewhere],
+        persist_jobs=False,
+        preload_recent_count=0,
+    )
+    try:
+        generate_default_config(box.toml)
+
+        collected = api.inspect(
+            queries=[{"kind": "capabilities"}, {"kind": "components", "path": str(box.deck)}]
+        )
+
+        capabilities, components = collected["results"]
+        assert str(box.elsewhere) in capabilities["data"]["allowed_paths"]
+        assert components["ok"], components["error"]
+    finally:
+        api.close()
+
+
+async def test_guidance_names_the_api_argument_for_an_explicit_sandbox(
+    tmp_path: Path, monkeypatch
+):
+    """Editing the file does nothing for a session whose sandbox was given
+    explicitly, so the refusal names the argument that set it."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine, "detect_simulators", lambda config, diagnostics: {})
+    boot = await engine.bootstrap_library_engine(
+        working_dir=box.work,
+        allowed_paths=[box.work],
+        persist_jobs=False,
+        preload_recent_count=0,
+    )
+    try:
+        guidance = path_denied_guidance(boot.state)
+    finally:
+        await boot.state.shutdown()
+
+    assert "Api(allowed_paths=...)" in guidance
     assert "next call" not in guidance
