@@ -21,8 +21,8 @@ Public surface:
 - ``value_suffix_sites(cards)`` — every number whose scale-suffix
   position holds a non-ASCII character (``23µ``, ``23Âµ``), outside
   comments, ``.control`` blocks, include paths and double-quoted strings.
-- ``fold_micro_suffixes(text)`` — the same scan over a deck's text, with
-  each micro sign found at a suffix position rewritten as ``u``.
+- ``fold_micro_suffix_cards(cards)`` — the same scan, with each micro sign
+  found at a suffix position rewritten as ``u`` in place.
 
 Future cross-card transformations (component rename, subcircuit
 inline/extract, structural diff, atomic change-set commit) will land
@@ -45,11 +45,12 @@ import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
+from ltspice_mcp.lib.format import MICRO_SIGNS
 from ltspice_mcp.lib.spice_lex import (
+    INCLUDE_HEADS,
     SpiceCard,
     SpiceLexError,
     SpiceLexErrorCategory,
-    emit,
     find_matching_ends,
     lex,
 )
@@ -301,22 +302,15 @@ def rename_model(
 # Non-ASCII value suffixes
 # ---------------------------------------------------------------------------
 
-#: The micro sign (U+00B5), which LTspice writes for ``u``, and the Greek mu
-#: (U+03BC), which a keyboard produces.
-MICRO_SIGNS = frozenset("µμ")
-
 # A number at a token boundary followed directly by a non-ASCII character: the
 # character sits where a scale suffix goes. The lookbehind keeps a digit run
 # inside a name (``N001µ``, ``x1µ``) out, and one after a backslash, which is a
-# Windows path separator and never an operator.
+# Windows path separator and never an operator. Group 3 is the rest of the
+# token, up to whitespace, a delimiter or an operator.
 _SUFFIX_SITE_RE = re.compile(
     r"(?<![\w.\\])((?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)([^\x00-\x7f])"
+    r"([^\s=(){}\[\],\"';$*/+\-<>!&|^?:%]*)"
 )
-# The rest of the token after the suffix character, reported with the site.
-_TOKEN_REST_RE = re.compile(r"[^\s=(){}\[\],\"';$*/+\-<>!&|^?:%]*")
-# Directives whose argument is a file path, where a digit-then-µ run is part
-# of a name rather than a value.
-_PATH_DIRECTIVES = frozenset({".include", ".inc", ".lib", ".libfile"})
 
 
 @dataclass(frozen=True)
@@ -324,8 +318,8 @@ class ValueSuffixSite:
     """A number whose scale-suffix position holds a non-ASCII character.
 
     ``offset`` is the body offset of that character in ``card``; ``line`` is
-    the 1-based source line it sits on. ``number`` is the mantissa as written
-    and ``token`` the whole token (``23Âµ``, ``4.7µF``).
+    the 1-based source line it sits on. ``number`` is the mantissa as written,
+    ``suffix`` the character, and ``tail`` the rest of the token after it.
     """
 
     card: SpiceCard = field(compare=False, repr=False)
@@ -333,7 +327,12 @@ class ValueSuffixSite:
     line: int
     number: str
     suffix: str
-    token: str
+    tail: str
+
+    @property
+    def token(self) -> str:
+        """The whole token as written (``23Âµ``, ``4.7µF``)."""
+        return self.number + self.suffix + self.tail
 
     @property
     def micro(self) -> bool:
@@ -343,9 +342,8 @@ class ValueSuffixSite:
     @property
     def misdecoded_micro(self) -> bool:
         """The suffix is a UTF-8 micro sign decoded as cp1252 (``Âµ``, ``Î¼``)."""
-        rest = self.token[len(self.number) :]
         try:
-            return rest[:2].encode("cp1252").decode("utf-8") in MICRO_SIGNS
+            return (self.suffix + self.tail[:1]).encode("cp1252").decode("utf-8") in MICRO_SIGNS
         except UnicodeError:
             return False
 
@@ -369,39 +367,32 @@ def _unquoted_spans(body: str) -> Iterator[tuple[int, int]]:
         start = closing + 1
 
 
-def _source_line(card: SpiceCard, offset: int) -> int:
-    for segment in card.body_layout:
-        if segment.body_start <= offset < segment.body_end:
-            return card.line_start + segment.raw_line_idx
-    return card.line_start
-
-
 def value_suffix_sites(cards: Iterable[SpiceCard]) -> list[ValueSuffixSite]:
     """Every number in ``cards`` whose suffix position holds a non-ASCII character.
 
     Comments never reach a card body, and a ``.control`` block has none, so
-    neither is scanned. Include-family paths and double-quoted strings are
-    skipped. A caller scanning a root deck drops its title card first: line 1
-    is never read as a value.
+    neither is scanned. Include-family paths, where a digit-then-µ run is part
+    of a file name, and double-quoted strings are skipped. A caller scanning a
+    root deck drops its title card first: line 1 is never read as a value.
     """
     sites: list[ValueSuffixSite] = []
     for card in cards:
         body = card.body
         if not body or body.isascii():
             continue
-        if card.kind == "directive" and body.split(None, 1)[0].casefold() in _PATH_DIRECTIVES:
+        if card.kind == "directive" and body.split(None, 1)[0].casefold() in INCLUDE_HEADS:
             continue
         for start, end in _unquoted_spans(body):
             for match in _SUFFIX_SITE_RE.finditer(body, start, end):
-                rest = _TOKEN_REST_RE.match(body, match.end(), end)
+                number, suffix, tail = match.groups()
                 sites.append(
                     ValueSuffixSite(
                         card=card,
                         offset=match.start(2),
-                        line=_source_line(card, match.start(2)),
-                        number=match.group(1),
-                        suffix=match.group(2),
-                        token=match.group(0) + (rest.group(0) if rest else ""),
+                        line=card.line_at(match.start(2)),
+                        number=number,
+                        suffix=suffix,
+                        tail=tail,
                     )
                 )
     return sites
@@ -423,15 +414,3 @@ def fold_micro_suffix_cards(cards: list[SpiceCard]) -> tuple[ValueSuffixSite, ..
     for site in folded:
         site.card.replace_span(site.offset, site.offset + 1, "u")
     return folded
-
-
-def fold_micro_suffixes(text: str) -> tuple[str, tuple[ValueSuffixSite, ...]]:
-    """``fold_micro_suffix_cards`` over a deck's text.
-
-    A deck with nothing to fold comes back as the same string.
-    """
-    if text.isascii():
-        return text, ()
-    cards = lex(text).cards
-    folded = fold_micro_suffix_cards(cards)
-    return (emit(cards) if folded else text), folded

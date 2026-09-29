@@ -28,7 +28,7 @@ from ltspice_mcp.lib import atomic_write_text, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
-    rewrite_staged_references,
+    rewrite_staged_reference_cards,
     staged_reference_targets,
 )
 from ltspice_mcp.lib.format import parse_spice_value
@@ -61,7 +61,7 @@ from ltspice_mcp.lib.montecarlo import (
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
-from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffixes
+from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
     MOBILITY_PARAM,
@@ -1855,14 +1855,10 @@ def _write_case_includes(
         destinations.update({path: path.with_name(name) for path, name in renames.items()})
     for index in sorted(copies):
         file = closure.files[index]
-        texts[index], _ = fold_micro_suffixes(
-            rewrite_staged_references(
-                texts[index],
-                file.path,
-                renames,
-                depth=file.depth,
-            )
-        )
+        cards = lex(texts[index]).cards
+        rewritten = rewrite_staged_reference_cards(cards, file.path, renames, depth=file.depth)
+        if fold_micro_suffix_cards(cards) or rewritten:
+            texts[index] = emit(cards)
         if index == 0:
             continue
         destination = file.path.with_name(renames[file.path.resolve()])

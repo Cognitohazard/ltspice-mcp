@@ -227,9 +227,22 @@ async def test_syntax_flags_a_micro_sign_suffix_with_the_file_encoding(
     assert finding["at"] == {"file": str(deck), "line": 3}
     assert finding["subject"] == "23µ"
     assert finding["evidence"]["ascii_spelling"] == "23u"
+    assert finding["evidence"]["suffix"] == "U+00B5"
+    assert "Âµ" in finding["evidence"]["reason"]
     assert finding["evidence"]["encoding"] == codec
     assert finding["evidence"]["card"] == "C1 out 0 23µ"
     assert data["outcome"] == "partial"
+
+
+async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir):
+    deck = work_dir / "rc.cir"
+    deck.write_bytes("* rc\n.param tau=10μs\n.end\n".encode())
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["evidence"]["suffix"] == "U+03BC"
+    assert finding["evidence"]["ascii_spelling"] == "10us"
 
 
 async def test_syntax_blocks_a_mis_decoded_micro_suffix(state_no_sim, work_dir):
