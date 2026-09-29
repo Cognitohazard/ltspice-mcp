@@ -81,6 +81,11 @@ class RunOutcome(NamedTuple):
     observations: tuple[dict, ...] = ()
     failure_code: str | None = None
     failure_evidence: dict[str, Any] | None = None
+    # The end of the log (or the lines around its errors) as a failed run left
+    # it, apart from the prose ``error`` wraps it in. A run the coordinator
+    # stopped keeps this, not the error: "no output generated" describes a
+    # run that ended on its own.
+    log_excerpt: str | None = None
 
 
 _RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS)
@@ -247,12 +252,18 @@ def collect_run_outcome(
     netlist: Path | None = None,
     simulator: type | None = None,
     ngbehavior: str | None = None,
+    simulator_exception: str | None = None,
 ) -> RunOutcome:
     """Collect and classify completion artifacts on a worker thread.
 
     ``exit_code`` is the simulator process's own exit status, relayed as a
     fact when the run failed — the one signal that separates a process killed
     from outside from a deck the simulator declined.
+
+    ``simulator_exception`` is what spicelib caught around the simulator call.
+    It reports every such exception as exit code -2 and keeps the text on the
+    run task, so without it a missing executable and spicelib's own subprocess
+    timeout read as the same bare number.
 
     ``netlist`` and ``simulator`` are what the deck ran as, and are read only
     to tell one missing include from another: ngspice in a compatibility mode
@@ -313,6 +324,7 @@ def collect_run_outcome(
                 return RunOutcome("", log_file, 0, None)
             return _missing_required_raw_outcome(log_file, log_path, analyses, has_save)
 
+    context: str | None = None
     if log_exists:
         context = extract_error_context(log_path, max_lines=20)
         error = f"Simulation failed (no output generated)\n\nLog excerpt:\n{context}"
@@ -331,6 +343,9 @@ def collect_run_outcome(
         # Copy rather than mutate: classify_failure_code's return is typed
         # narrower than the relayed shape, and this is the cold path.
         evidence = {**(evidence or {}), "exit_code": exit_code}
+    if simulator_exception:
+        error += f"\nThe simulator call raised: {simulator_exception}"
+        evidence = {**(evidence or {}), "simulator_exception": simulator_exception}
     return RunOutcome(
         "" if sim_failed else raw_file,
         log_file,
@@ -338,6 +353,7 @@ def collect_run_outcome(
         error,
         failure_code=code,
         failure_evidence=evidence,
+        log_excerpt=context,
     )
 
 
@@ -543,16 +559,13 @@ def discard_generated_netlist(path: Path | None) -> None:
 
 logger = logging.getLogger(__name__)
 
-_SIMRUNNER_TIMEOUT = 600
-"""Generous spicelib-level fallback timeout; real timeout is enforced at
-the tool layer via ``asyncio.wait_for``."""
-
-_CANCEL_KILL_MAX_PASSES = 5
-"""Upper bound on cancel's kill/re-scan passes (see ``BatchRunnerBase.cancel``)."""
-
-_CANCEL_KILL_RESCAN_DELAY = 0.5
-"""Seconds between cancel kill passes — long enough for a resumed submission's
-process to become visible to the next scan."""
+SUBPROCESS_TIMEOUT_CEILING_S = 4_000_000.0
+"""The largest bound handed to spicelib's ``subprocess.run``, and what "no
+bound" becomes. On Windows ``subprocess`` waits by passing the timeout to
+``WaitForSingleObject`` as whole milliseconds in a 32-bit DWORD, which cannot
+express more than about 49.7 days. spicelib cannot run without a number
+either: its ``SimRunner.run`` computes ``timeout + 1`` before launching, so
+``None`` raises ``TypeError`` (``docs/spicelib_bugs.md`` Bug 14)."""
 
 
 class NativePrelaunchRefused(Exception):
@@ -645,14 +658,27 @@ class RunnerBase:
         self._slots_out -= 1
 
     def _build_sim_runner(
-        self, *, cwd: Path | None = None, prelaunch_check: Callable[[], None] | None = None
+        self,
+        *,
+        timeout_s: float | None = None,
+        cwd: Path | None = None,
+        prelaunch_check: Callable[[], None] | None = None,
     ) -> SimRunner:
-        """Construct a spicelib SimRunner with this runner's settings."""
+        """Construct a spicelib SimRunner with this runner's settings.
+
+        ``timeout_s`` reaches ``subprocess.run`` inside spicelib, which kills
+        the process it started when the time runs out. None, and anything past
+        ``SUBPROCESS_TIMEOUT_CEILING_S``, becomes that ceiling.
+        """
         runner = _NonBlockingSimRunner(
             simulator=self.simulator_class,
             output_folder=str(self.output_folder),
             parallel_sims=self.max_parallel,
-            timeout=_SIMRUNNER_TIMEOUT,
+            timeout=(
+                SUBPROCESS_TIMEOUT_CEILING_S
+                if timeout_s is None
+                else min(timeout_s, SUBPROCESS_TIMEOUT_CEILING_S)
+            ),
             cwd=cwd,
         )
         runner.prelaunch_check = prelaunch_check
@@ -684,6 +710,7 @@ class RunnerBase:
         callback: Callable[[Any], Any],
         *,
         native: NativeLaunchContext | None = None,
+        timeout_s: float | None = None,
     ) -> SimRunner:
         """Submit one deck and bridge its filesystem-derived outcome to the loop.
 
@@ -691,6 +718,11 @@ class RunnerBase:
         runs on. It knows only the deck, the simulator-facing filename, and an
         event-loop callback; registration, lifecycle, persistence, and
         concurrency remain with its callers.
+
+        ``timeout_s`` bounds the simulator process inside spicelib, and is the
+        caller's to choose: this layer adds no bound of its own. A run it ends
+        completes through ``callback`` like any other failure, with exit code
+        -2 and the timeout named in the outcome.
 
         Call from a worker thread. The requirements snapshot and completion
         artifact reads intentionally happen on spicelib's worker threads.
@@ -724,6 +756,9 @@ class RunnerBase:
                     # retcode — so the current thread is the exact task,
                     # race-free. Any other calling thread reads None.
                     exit_code=getattr(threading.current_thread(), "retcode", None),
+                    simulator_exception=getattr(
+                        threading.current_thread(), "exception_text", None
+                    ),
                 )
             except Exception as exc:
                 outcome = RunOutcome(
@@ -735,10 +770,10 @@ class RunnerBase:
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
         self._retire_finished_runners()
-        runner = (
-            self._build_sim_runner(cwd=native.cwd, prelaunch_check=native.verify_execution)
-            if native
-            else self._build_sim_runner()
+        runner = self._build_sim_runner(
+            timeout_s=timeout_s,
+            cwd=native.cwd if native else None,
+            prelaunch_check=native.verify_execution if native else None,
         )
         runner.run(
             str(netlist),

@@ -7,17 +7,21 @@ pure logic operating on BatchJob/SimulationJob state.
 """
 
 import asyncio
+import subprocess
 import threading
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 from spicelib.sim.run_task import RunTask
+from spicelib.sim.simulator import Simulator
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import (
+    SUBPROCESS_TIMEOUT_CEILING_S,
     RunnerBase,
+    RunOutcome,
     collect_run_outcome,
     deck_requests_raw,
     discard_generated_netlist,
@@ -952,3 +956,114 @@ def test_missing_raw_detection_follows_windows_include_separators(tmp_path: Path
     )
 
     assert outcome.error is not None, "the included transient analysis requires a raw"
+
+
+class _RecordingSimulator(Simulator):
+    """A spicelib simulator that records the timeout spicelib runs it with."""
+
+    spice_exe = ["recording-simulator"]  # noqa: RUF012 - spicelib declares it unannotated
+    process_name = "recording-simulator"
+    timeouts: ClassVar[list[float | None]] = []
+
+    @classmethod
+    def run(
+        cls,
+        netlist_file,
+        cmd_line_switches=None,
+        timeout=None,
+        stdout=None,
+        stderr=None,
+        cwd=None,
+        exe_log=False,
+    ) -> int:
+        cls.timeouts.append(timeout)
+        netlist = Path(netlist_file)
+        netlist.with_suffix(".log").write_text("Circuit: recorded\n")
+        netlist.with_suffix(".raw").write_bytes(b"Title: recorded\n")
+        return 0
+
+    @classmethod
+    def valid_switch(cls, switch, switch_param) -> list:
+        return []
+
+
+class _TimedOutSimulator(_RecordingSimulator):
+    """What spicelib's ``subprocess.run`` raises when its own bound runs out."""
+
+    @classmethod
+    def run(
+        cls,
+        netlist_file,
+        cmd_line_switches=None,
+        timeout=None,
+        stdout=None,
+        stderr=None,
+        cwd=None,
+        exe_log=False,
+    ) -> int:
+        Path(netlist_file).with_suffix(".log").write_text("Circuit: recorded\n")
+        raise subprocess.TimeoutExpired(cmd=["recording-simulator"], timeout=timeout or 0)
+
+
+async def _submit_through_spicelib(
+    tmp_path: Path, simulator: type, timeout_s: float | None
+) -> RunOutcome:
+    """One run through spicelib's real SimRunner and RunTask threads."""
+    loop = asyncio.get_running_loop()
+    runner = RunnerBase(loop, simulator, tmp_path, max_parallel=1)
+    deck = tmp_path / "deck.cir"
+    deck.write_text(".op\n.end\n")
+    received: asyncio.Future[RunOutcome] = loop.create_future()
+    await asyncio.to_thread(
+        runner.submit_netlist, deck, "run.cir", received.set_result, timeout_s=timeout_s
+    )
+    return await asyncio.wait_for(received, 10)
+
+
+@pytest.mark.asyncio
+class TestSimulatorProcessBound:
+    """The bound spicelib puts on the simulator process is the caller's.
+
+    It used to be a fixed 600 s whatever the caller asked for, so every run
+    longer than that died as an unexplained exit code -2.
+    """
+
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [
+            (12.5, 12.5),
+            # spicelib cannot launch with None (its launch loop adds 1 to it),
+            # and Windows cannot wait longer than a 32-bit millisecond count.
+            (None, SUBPROCESS_TIMEOUT_CEILING_S),
+            (1e9, SUBPROCESS_TIMEOUT_CEILING_S),
+        ],
+    )
+    async def test_the_simulator_runs_under_the_callers_bound(
+        self, tmp_path: Path, given: float | None, expected: float
+    ):
+        _RecordingSimulator.timeouts.clear()
+
+        outcome = await _submit_through_spicelib(tmp_path, _RecordingSimulator, given)
+
+        assert outcome.error is None
+        assert _RecordingSimulator.timeouts == [expected]
+        assert expected * 1000 < 2**32
+
+    async def test_a_run_spicelib_timed_out_says_so(self, tmp_path: Path):
+        outcome = await _submit_through_spicelib(tmp_path, _TimedOutSimulator, 5.0)
+
+        assert outcome.failure_evidence is not None
+        assert outcome.failure_evidence["exit_code"] == -2
+        assert "TimeoutExpired" in outcome.failure_evidence["simulator_exception"]
+        assert "timed out after 5" in (outcome.error or "")
+
+
+def test_failed_run_keeps_its_log_excerpt_apart_from_the_error(tmp_path: Path):
+    log = tmp_path / "run.fail"
+    log.write_text("Circuit: x\nTime step too small; time = 1.7e-05\n")
+
+    outcome = collect_run_outcome("", str(log), exit_code=-9)
+
+    assert outcome.log_excerpt is not None
+    assert "Time step too small" in outcome.log_excerpt
+    assert outcome.log_excerpt in (outcome.error or "")

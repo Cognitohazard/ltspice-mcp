@@ -14,6 +14,29 @@ tool-surface changes.
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
 - Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+- `execution.run_timeout_s` is now the real per-case bound. Every simulator
+  process was also capped at a fixed, undocumented 600 s inside spicelib, so a
+  case given a longer timeout was killed at 600 s and reported as a generic
+  failure with exit code -2. spicelib's bound now sits the kill grace plus 60 s
+  past the case's own timeout, as a backstop that ends the process spicelib
+  launched when the scoped kill is not confirmed. It is clamped below Windows'
+  32-bit millisecond wait. A run spicelib does end names its `TimeoutExpired`
+  in the failure instead of a bare -2.
+- Stopping a case makes up to five scoped kills inside the kill grace rather
+  than one. A stop that landed between launch and the simulator's spawn found
+  no process, and the simulator then ran on with its concurrency slot
+  reserved. The kill also reaches a simulator this server launched under a
+  name it does not know, such as a wrapper or launcher script and its child,
+  matched by the run deck path in its arguments. Unused re-scan constants from
+  the removed batch runner are gone.
+- A case stopped for `run_timeout`, `job_deadline` or `cancelled` keeps the
+  killed run's diagnostics again, as the 0.6.0 notes promised but the
+  experiment path had dropped. Its failure evidence carries the bound that
+  applied, the simulator's `exit_code`, the log's classified cause as
+  `log_failure_code` when there is one, and `log_excerpt`. The message names the
+  timeout or deadline value; a cancelled case no longer reads "stopped because
+  cancelled elapsed". `kill_unconfirmed` rows carry the stop reason, bound and
+  kill grace.
 - Symbols placed at `M90` and `M270` had those two orientations swapped. LTspice
   rotates a mirrored placement first and then mirrors it, so `M90` takes a
   symbol point `(x, y)` to `(y, x)`. The server applied the mirror first. On a
@@ -74,6 +97,21 @@ tool-surface changes.
 
 ### Added
 
+- A `partial_progress` observation for every case the coordinator stops and
+  whose simulator exit is seen. It gives the plot, its axis, the complete
+  points on disk and the last axis value reached, read from the partial raw
+  before cleanup deletes it. The count comes from the file's length, because
+  ngspice leaves `No. Points` at 0 until a plot ends and LTspice's lags the
+  data. Neither simulator's `.log` or `.exe.log` records progress for a killed
+  run.
+- A `run_progress` observation for every case still running, on the receipts
+  `run_experiments`, `jobs(status)` and `jobs(wait)` return: the same progress
+  facts plus the seconds since launch, read from the raw the simulator is
+  writing at that moment. It is read only when a receipt is built, is not
+  stored in the job record, and costs a header and one record per running
+  case.
+- Recovery hints on `run_timeout`, `job_deadline` and `kill_unconfirmed` failure
+  rows.
 - Signal names accept a node-pair voltage `V(a,b)`, read as `V(a) - V(b)` from
   the same raw, step and axis. This works in every `analyze_results` recipe,
   in `plot_waveform` and in `RawResult.trace`. `V(a,0)` and `V(a,gnd)` read
@@ -105,6 +143,15 @@ tool-surface changes.
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
   statistical provenance. The store format is version 2.
+- A case has no time limit unless one is set. Before, every case was capped
+  at spicelib's hidden 600 s. Now a case runs until it ends or is cancelled,
+  unless the request sets `execution.run_timeout_s` or the operator sets the
+  new `[simulation] run_timeout` (`LTSPICE_MCP_RUN_TIMEOUT`, unset by default).
+  A running job reports each case's progress, which is what shows a stuck one.
+- Capabilities `limits.default_timeout_s` is replaced by `run_timeout_s` (the
+  server's per-case limit, `null` when unset) and `export_timeout_s`.
+  `[simulation] timeout` bounds only LTspice netlist export, which is all it
+  ever bounded.
 
 ### Security
 

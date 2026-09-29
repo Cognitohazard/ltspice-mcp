@@ -28,6 +28,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "max_parallel_sims",
         "max_experiment_cases",
         "default_timeout",
+        "run_timeout",
         "max_estimated_points",
         "max_raw_mb",
         "max_points_returned",

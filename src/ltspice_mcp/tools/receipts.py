@@ -14,7 +14,7 @@ needs, without ever observing a later job transition.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -22,7 +22,9 @@ from mcp import types
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
+    ACTIVE_CASE_STATUSES,
     Completeness,
     ExperimentCase,
     ExperimentJob,
@@ -142,6 +144,26 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
         '[simulator] ngbehavior = "hsa" in ltspice-mcp.toml (or '
         "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add "
         "'set ngbehavior=hsa' to a .spiceinit in the run directory."
+    ),
+    "run_timeout": (
+        "The simulator ran past the per-case run timeout and was stopped. evidence "
+        "names the bound and whether it was the request's or the server default; "
+        "the partial_progress observation says how far the run got. If it needs "
+        "longer, resubmit with a larger execution.run_timeout_s (a server default comes "
+        'from [simulation] run_timeout, limits.run_timeout_s in inspect(kind="capabilities")). '
+        "If it should have been quick, read evidence.log_excerpt for a collapsing timestep."
+    ),
+    "job_deadline": (
+        "The job's execution.job_deadline_s elapsed before this case finished; "
+        "results already produced are kept. Resubmit the unfinished cases with a "
+        "larger job_deadline_s, or split them across jobs."
+    ),
+    "kill_unconfirmed": (
+        "The simulator was told to stop but did not report exit within the kill "
+        "grace period, so it may still be running, and its concurrency slot stays "
+        "reserved until it exits (the job then gains a late_simulator_exit "
+        "observation). If it never does, end the simulator process whose command "
+        "line carries this job_id, or restart the server."
     ),
 }
 
@@ -878,6 +900,7 @@ def snapshot_receipt(
     *,
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+    live_progress: Mapping[str, dict[str, Any]] | None = None,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
@@ -886,6 +909,11 @@ def snapshot_receipt(
     interval; renderers derive them only from the returned detached value.
     Native record holders are copied, sharing only their frozen nested facts;
     large evidence lists are serialized after the renderer selects a page.
+
+    ``live_progress`` is ``live_run_progress``'s read, taken off the loop just
+    before this call (``snapshot_receipt_live`` pairs the two). An entry joins
+    the observations only for a case still running here, so a case that
+    finished in between is not reported running.
 
     The sandbox guidance is built only when a failure row needs it, so a
     receipt with no refused path never reads the config file.
@@ -916,6 +944,10 @@ def snapshot_receipt(
             if key not in seen_observations:
                 observations.append(copied)
                 seen_observations.add(key)
+        if live_progress and case.status in ACTIVE_CASE_STATUSES:
+            live = live_progress.get(case.case_id)
+            if live is not None:
+                observations.append(copy.deepcopy(live))
 
     analysis = job.analysis
     return ReceiptSnapshot(
@@ -951,6 +983,28 @@ def snapshot_receipt(
             and any(row.get("code") == PathSecurityError.code for row in job.failures)
             else None
         ),
+    )
+
+
+async def snapshot_receipt_live(
+    job: ExperimentJob,
+    state: SessionState | None,
+    *,
+    control_token: str | None = None,
+    lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+) -> ReceiptSnapshot:
+    """``snapshot_receipt`` with each running case's progress, read first.
+
+    The read suspends (it is file I/O, off the loop); the snapshot after it
+    does not. Every receipt that reports on a job in flight is taken here.
+    """
+    live_progress = await live_run_progress(job)
+    return snapshot_receipt(
+        job,
+        state,
+        control_token=control_token,
+        lint_by_circuit=lint_by_circuit,
+        live_progress=live_progress,
     )
 
 

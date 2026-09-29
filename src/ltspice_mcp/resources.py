@@ -258,6 +258,7 @@ def _read_config(
         ),
         "max_parallel_sims": cfg.max_parallel_sims,
         "default_timeout": cfg.default_timeout,
+        "run_timeout": cfg.run_timeout,
         "max_points_returned": cfg.max_points_returned,
         "log_level": cfg.log_level,
     }

@@ -1306,3 +1306,183 @@ pending child updates without modifying editor flags or child files.
 `TestHierarchicalPortPreservation.test_pending_child_changes_never_write_through_parent`
 covers the public normal-edit and dry-run paths with real loaded child editors.
 The root's existing revision guard and atomic commit remain the write boundary.
+
+## Bug 14 — `SimRunner.run` cannot run without a timeout, though `None` is documented as "no timeout"
+
+**Status:** draft for an upstream spicelib pull request. Filed 2026-09-29.
+**Affected version:** spicelib 1.5.1 (`spicelib/sim/sim_runner.py`, `SimRunner.run`,
+the resource-wait loop after `_prepare_sim`). 1.4.9 has the same loop.
+**Our workaround:** `src/ltspice_mcp/lib/runner_base.py` —
+`RunnerBase._build_sim_runner` never hands spicelib `None`: an unbounded request
+becomes `SUBPROCESS_TIMEOUT_CEILING_S` (4,000,000 s), and any larger value is
+clamped to it. The ceiling also keeps the bound inside what Windows can wait for
+(below). Remove the `None` half of the substitution once upstream runs with
+`None`; the clamp stays for as long as Windows waits in 32-bit milliseconds.
+
+### Summary
+
+The `SimRunner` constructor documents `timeout` as "Timeout parameter as
+specified on the OS subprocess.run() function. ... For no timeout, set to None."
+`run()` then uses the same value as the deadline of its wait for a free slot,
+and evaluates `timeout + 1` before launching anything:
+
+```python
+if timeout is None:
+    timeout = self.timeout
+t0 = clock()
+while clock() - t0 < timeout + 1:
+```
+
+With `self.timeout = None` that is `None + 1`, so every `run()` raises
+`TypeError` and no simulation starts. The one value documented as "no timeout"
+is the one value that cannot run.
+
+A second consequence of the shared value: the only way to give the simulator
+process a long bound is to give the slot wait the same one. That is harmless for
+us (one fresh runner per submission, so the wait never waits), but it means the
+process bound cannot be set on its own.
+
+### Affected code
+
+`spicelib/sim/sim_runner.py`, `SimRunner.run`: the `while clock() - t0 < timeout + 1`
+loop; `run_now` has the same `t.join(timeout + 1)`. `RunTask.run` passes the same
+`timeout` to `Simulator.run`, which hands it to `subprocess.run`.
+
+### Reproduction
+
+```python
+from spicelib.sim.sim_runner import SimRunner
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+runner = SimRunner(simulator=NGspiceSimulator, output_folder="out", timeout=None)
+runner.run("deck.cir")
+# TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'
+```
+
+Reproduced on spicelib 1.5.1, 2026-09-29, with any deck.
+
+### Impact
+
+A caller that wants the simulator bounded only by its own logic cannot say so.
+Before this was found we passed a fixed 600 s instead, and that fixed value
+became a hidden ceiling on every run: a case given a longer `run_timeout_s` was
+killed at 600 s by `subprocess.run`, and the kill surfaced as spicelib's generic
+exit code -2 rather than as the timeout it was.
+
+The obvious substitute for `None`, a very large number, is not safe on Windows.
+There `subprocess` converts the timeout to integer milliseconds and passes it
+to `WaitForSingleObject`, whose timeout is a 32-bit DWORD, so nothing past
+about 49.7 days can be expressed. This was read from CPython's source, not run
+on Windows. Any substitute has to stay below 4,294,967 s.
+
+### Proposed fix
+
+Treat `None` as no deadline in the slot wait, and keep passing `None` through to
+`RunTask` so `subprocess.run` waits without a timeout:
+
+```python
+deadline = None if timeout is None else clock() + timeout + 1
+while deadline is None or clock() < deadline:
+```
+
+`run_now` should `t.join(None if timeout is None else timeout + 1)`.
+
+### Suggested upstream test
+
+Construct `SimRunner(timeout=None)` with a stub simulator whose `run` records the
+`timeout` it receives and returns 0; call `run()` and assert the stub ran with
+`timeout=None`. Repeat through `run_now`.
+
+### Cross-reference
+
+Workaround: `runner_base.py` `SUBPROCESS_TIMEOUT_CEILING_S` and
+`RunnerBase._build_sim_runner`. Pinned by
+`tests/test_runners.py::TestSimulatorProcessBound::test_the_simulator_runs_under_the_callers_bound`,
+which runs spicelib's real `SimRunner` and `RunTask` with a stub simulator and
+checks the bound it receives for a given value, for `None`, and for a value past
+the ceiling.
+
+## Bug 15 — a stopped run's raw is rejected or silently cut short (limitation)
+
+**Status:** known limitation; a feature request rather than a defect in reading
+finished files. Recorded 2026-09-29.
+**Affected version:** spicelib 1.5.1 (`spicelib/raw/plot_data.py`, `PlotData.__init__`
+and `read_trace_data`; `spicelib/sim/run_task.py`, `RunTask.run`).
+**Our workaround:** `src/ltspice_mcp/lib/raw_parser.py` —
+`read_partial_raw_progress` reads the header itself and counts complete records
+from the file length. The experiment coordinator calls it for every case it
+stops, before the partial raw is deleted, and records the result as a
+`partial_progress` observation. It reads only how far the run got, never the
+values, so no workaround is needed for the waveform parse itself.
+
+### Summary
+
+Both simulators write the raw as they solve and fill in `No. Points` only when a
+plot ends, and they differ in what a killed run leaves in it:
+
+- **ngspice** writes `No. Points: 0` padded with spaces, to patch in place when
+  the plot ends. spicelib raises `SpiceReadException` ("No points or variables
+  found") on the count of 0, so the file cannot be opened at all.
+- **LTspice** rewrites the count now and then while it runs, so a killed run's
+  header holds a count that lags the data. spicelib reads exactly that many
+  points and reports success, silently dropping every complete record after it.
+
+Separately, `RunTask.run` hands the completion callback `raw_file=None` for any
+nonzero exit. A killed run always exits nonzero, so the callback is never told a
+partial raw exists, even when the simulator wrote gigabytes of one; a caller
+has to reconstruct the path (`netlist.with_suffix(raw_extension)`).
+
+### Reproduction
+
+Observed 2026-09-29 on Linux with ngspice 42 and LTspice 26.1.1 under Wine,
+each killed with SIGKILL part way through `.tran 10n 100m 0 10n` (ngspice) or
+`.tran 0 100 0 10n` (LTspice) of an RC driven by a 1 kHz sine:
+
+- ngspice, 2 s in: 32,850,137 bytes, header `No. Points: 0       `, 1,026,560
+  complete 32-byte records (time plus three doubles). `RawRead(path,
+  dialect="ngspice")` raises `SpiceReadException`.
+- LTspice, 8 s in: 51,020,708 bytes, header `No. Points:      1821697`,
+  1,822,135 complete 28-byte records (a double time plus five floats) and a torn
+  one. Every record past the header count holds a valid, rising time.
+  `RawRead(path)` returns 1,821,697 points with no warning.
+
+Neither simulator records progress anywhere else a killed run keeps. LTspice's
+log holds only its preamble until the run ends. ngspice prints `Reference
+value : <time>` progress to stdout only when it has no `-o` log file, and
+spicelib always passes `-o`, so neither the `.log` nor the `.exe.log` carries it.
+
+### Impact
+
+A run stopped for a timeout, a deadline or a cancel can have done almost all of
+its work, and nothing says how much. The ngspice file is unreadable. The
+LTspice one reads as a complete, shorter run, which is the more dangerous of
+the two: a caller who reaches it through spicelib gets a waveform that ends
+early and no sign that it did.
+
+### Proposed fix
+
+An opt-in partial read on `RawRead` (for example `allow_partial=True`) that, for
+a binary plot, takes the point count as `min(declared, complete records on
+disk)` when the declared count is nonzero and the file is short, as the complete
+records on disk when it is 0, and as the complete records on disk when the file
+holds more than the declared count and no following plot starts at the declared
+end. The read should report that it was partial. Separately, `RunTask` could
+pass the expected raw path to the callback on a nonzero exit when the file
+exists, leaving the decision to use it to the caller.
+
+### Suggested upstream test
+
+Truncate a finished binary raw from each dialect to a whole number of records
+plus a torn one; set the ngspice copy's count to 0 and the LTspice copy's count
+below the records present; assert that the partial read returns exactly the
+complete records and marks itself partial, and that the default read of the
+ngspice copy still raises.
+
+### Cross-reference
+
+Workaround: `raw_parser.py` `read_partial_raw_progress`, used by
+`experiment_runner.py` `_note_partial_progress`. Pinned by
+`tests/test_raw_parser.py::TestPartialRawProgress` (the lagging LTspice count in
+`test_a_declared_count_behind_the_records_does_not_cap_them`) and, against a
+real killed ngspice run,
+`tests/test_ngspice_e2e.py::test_run_timeout_reports_the_killed_runs_diagnostics_and_progress`.

@@ -126,6 +126,7 @@ from ltspice_mcp.tools.receipts import (
     render_run_receipt,
     runs_page,
     snapshot_receipt,
+    snapshot_receipt_live,
 )
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
@@ -201,7 +202,7 @@ class ExperimentExecution(StrictModel):
         gt=0.0,
         description=(
             "Kill any single case whose simulator exceeds this and mark it failed; "
-            "the other cases continue."
+            "the other cases continue. Unset: none, or [simulation] run_timeout."
         ),
     )
     job_deadline_s: float | None = Field(
@@ -1215,7 +1216,7 @@ async def _dwell_and_respond(
         else:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(job.done_event.wait(), wait_s)
-    snapshot = snapshot_receipt(
+    snapshot = await snapshot_receipt_live(
         job,
         state,
         control_token=receipt.control_token,

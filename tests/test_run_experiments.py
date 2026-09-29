@@ -339,7 +339,7 @@ class TestReceiptThenDwell:
     ):
         callbacks = {}
 
-        def submit(self, _netlist: Path, run_filename: str, callback):
+        def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
             callbacks[run_filename] = callback
             return object()
 
@@ -387,7 +387,7 @@ class TestReceiptThenDwell:
         """
         callbacks = {}
 
-        def submit(self, _netlist: Path, run_filename: str, callback):
+        def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
             callbacks[run_filename] = callback
             return object()
 
@@ -846,14 +846,15 @@ class TestLeanReceipt:
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / f"{request_id}.cir")
         captured: list[receipts_mod.ReceiptSnapshot] = []
-        snapshot_receipt = experiments_mod.snapshot_receipt
+        snapshot_receipt = receipts_mod.snapshot_receipt
 
         def capture_snapshot(*args: Any, **kwargs: Any) -> receipts_mod.ReceiptSnapshot:
             snapshot = snapshot_receipt(*args, **kwargs)
             captured.append(snapshot)
             return snapshot
 
-        monkeypatch.setattr(experiments_mod, "snapshot_receipt", capture_snapshot)
+        # The dwell takes its snapshot through snapshot_receipt_live.
+        monkeypatch.setattr(receipts_mod, "snapshot_receipt", capture_snapshot)
         request = (
             _args(deck, request_id, run_fields=run_fields)
             if run_fields is not None
@@ -1414,9 +1415,9 @@ class TestLintModes:
         stand_in = ExperimentRunner.submit_netlist
         submitted: list[bytes] = []
 
-        def capture(self, netlist: Path, run_filename: str, callback):
+        def capture(self, netlist: Path, run_filename: str, callback, **kwargs):
             submitted.append(Path(netlist).read_bytes())
-            return stand_in(self, netlist, run_filename, callback)
+            return stand_in(self, netlist, run_filename, callback, **kwargs)
 
         monkeypatch.setattr(ExperimentRunner, "submit_netlist", capture)
         (work_dir / "core.inc").write_bytes("C1 out 0 23µ\n".encode(codec))
@@ -1648,7 +1649,7 @@ class TestPerCircuitFailuresAndAccounting:
     ):
         submitted: list[Path] = []
 
-        def submit(self, netlist: Path, run_filename: str, callback):
+        def submit(self, netlist: Path, run_filename: str, callback, **_kwargs):
             submitted.append(netlist)
             raw, log = fake_artifact_paths(self.output_folder, run_filename)
             raw.write_bytes(b"Title: mock")
@@ -1753,7 +1754,7 @@ def _failing_simulator(
     ``submit_netlist`` does, for the classifications that read them.
     """
 
-    def submit(self, netlist: Path, run_filename: str, callback):
+    def submit(self, netlist: Path, run_filename: str, callback, **_kwargs):
         log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_text)
         extra = {"netlist": netlist, "simulator": self.simulator_class} if pass_deck else {}
@@ -1779,7 +1780,7 @@ def _per_case_failing_simulator(
     """
     counter = itertools.count()
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         stem = Path(run_filename).stem
         match = re.search(r"_case_(\d+)", stem)
         log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
@@ -2506,7 +2507,7 @@ _FACTORED_ROOT = '.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
 def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path]) -> None:
     """Instant simulator that records the case deck it was handed."""
 
-    def submit(self, netlist: Path, run_filename: str, callback):
+    def submit(self, netlist: Path, run_filename: str, callback, **_kwargs):
         submitted.append(Path(netlist))
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
         raw.write_bytes(b"Title: mock")

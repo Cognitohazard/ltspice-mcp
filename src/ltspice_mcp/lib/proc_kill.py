@@ -74,6 +74,26 @@ def _token_in_arg(token: str, arg: str) -> bool:
     return re.search(re.escape(token) + r"(?:[._]|$)", arg) is not None
 
 
+def _names_run_deck(token: str, arg: str) -> bool:
+    """True when ``arg`` is the path of ``token``'s own run deck.
+
+    LTspice runs only ``.cir``/``.net``/``.sp`` decks, and every case's deck is
+    ``{token}`` plus one of them, so a process launched for the case carries
+    that path while one that merely mentions the token does not. The server's
+    WSL process query carries ``*{token}.*``, and a script named after a case
+    carries ``{token}.py``.
+    """
+    return re.search(re.escape(token) + r"\.(?:cir|net|sp)$", arg, re.IGNORECASE) is not None
+
+
+def _own_descendant_pids() -> frozenset[int]:
+    """Every process this server started, directly or through another."""
+    try:
+        return frozenset(child.pid for child in psutil.Process().children(recursive=True))
+    except psutil.Error:
+        return frozenset()
+
+
 def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> int:
     """Kill local simulator processes whose command line carries ``token``.
 
@@ -84,11 +104,16 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
       boundary (see ``_token_in_arg``), and
     - the process is the simulator: its name — or the basename of one of its
       first two argv entries (the Wine case: argv is ``wine …/LTspice.exe``)
-      — is in ``executable_names``.
+      — is in ``executable_names``; or it descends from this server process
+      and names the token's run deck (``_names_run_deck``).
 
     The name gate is what keeps this safe against incidental token matches
     (e.g. the server's own WSL PowerShell interop helpers carry the token in
-    their command line but are never named like a simulator).
+    their command line but are never named like a simulator). The second route
+    is for a simulator this server launched under a name the gate does not
+    know: a configured wrapper or launcher script, and the simulator it starts.
+    It cannot reach another session's processes, which are not this server's
+    descendants, and the deck-path test keeps it off the interop helpers.
 
     Best-effort: per-process psutil errors are skipped. Returns the number
     of processes killed.
@@ -96,6 +121,7 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
     wanted = {n.lower() for n in executable_names if n}
     if not token or not wanted:
         return 0
+    own = _own_descendant_pids()
     killed = 0
     for proc in psutil.process_iter(("name", "cmdline")):
         try:
@@ -104,7 +130,8 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
                 continue
             candidates = {(proc.info.get("name") or "").lower()}
             candidates.update(PurePath(arg).name.lower() for arg in cmdline[:2])
-            if not (candidates & wanted):
+            launched_here = proc.pid in own and any(_names_run_deck(token, arg) for arg in cmdline)
+            if not (candidates & wanted or launched_here):
                 continue
             proc.kill()
             killed += 1

@@ -918,7 +918,9 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
             "result_set_ttl_hours": state.config.result_set_ttl_hours,
             "max_points_returned": state.config.max_points_returned,
             "max_parallel_sims": state.config.max_parallel_sims,
-            "default_timeout_s": state.config.default_timeout,
+            # null: a case with no execution.run_timeout_s runs until it ends.
+            "run_timeout_s": state.config.run_timeout,
+            "export_timeout_s": state.config.default_timeout,
             "inspect_page_size": _PAGE_SIZE,
             "inspect_coordinate_page_size": _COORD_PAGE_SIZE,
             "dwell": {

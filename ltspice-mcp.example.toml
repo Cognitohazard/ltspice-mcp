@@ -37,8 +37,12 @@ path = ""
 # Maximum cases after run_experiments variation expansion.
 max_experiment_cases = 1024
 
-# Default simulation timeout in seconds
+# Bound on one LTspice schematic netlist export, in seconds
 timeout = 300.0
+
+# Per-case simulation timeout in seconds when a request sets none.
+# Default: no limit. execution.run_timeout_s overrides it.
+# run_timeout = 3600
 
 # Preflight size guard, estimated from .tran/.ac/.dc directives.
 # Warn when the estimated point count exceeds this:

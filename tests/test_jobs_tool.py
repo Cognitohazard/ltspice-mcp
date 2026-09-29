@@ -48,7 +48,7 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import await_until, fake_simulator, staged_decks
+from tests.conftest import await_until, fake_simulator, ngspice_binary_raw, staged_decks
 from tests.test_native_records import _record
 
 
@@ -1057,6 +1057,48 @@ class TestDurableProgress:
         assert f"{counts['terminal']}/{counts['expanded']}" in middle["hint"]
         assert f"{counts['remaining']} remaining" in middle["hint"]
 
+    async def test_status_reports_how_far_each_running_case_has_got(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        """Read from the raw the simulator is still writing, for running cases only."""
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, count=2, status="running")
+        job.output_folder = work_dir / "runs" / job.job_id
+        job.output_folder.mkdir(parents=True)
+        running = job.cases[0]
+        running.status = "running"
+        running.run_token = f"{job.job_id}_case_0"
+        running.submitted_at = now()
+        (job.output_folder / f"{running.run_token}.raw").write_bytes(
+            ngspice_binary_raw(
+                [(t, 1.0) for t in (0.0, 1e-3, 2e-3)], ["time", "v(out)"], tail=b"\0" * 5
+            )
+        )
+        job.completeness.recount(job.cases)
+        state_no_sim.all_jobs[job.job_id] = job
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        [live] = [item for item in data["observations"] if item["code"] == "run_progress"]
+        assert live["evidence"]["case_id"] == running.case_id
+        assert live["evidence"]["points"] == 3
+        assert live["evidence"]["last_axis_value"] == pytest.approx(2e-3)
+        assert live["evidence"]["running_s"] >= 0
+        assert running.case_id in live["detail"]
+
+        running.status = "produced"
+        job.completeness.recount(job.cases)
+        after = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+        assert not [item for item in after["observations"] if item["code"] == "run_progress"]
+        # Read on request only: the job record itself never holds it.
+        assert not [item for item in running.observations if item["code"] == "run_progress"]
+
     async def test_foreign_status_uses_the_persisted_completeness_snapshot(
         self,
         state_no_sim: SessionState,
@@ -1310,7 +1352,7 @@ class TestCancellationAuthority:
         )
         callbacks = {}
 
-        def submit(_netlist: Path, run_filename: str, callback):
+        def submit(_netlist: Path, run_filename: str, callback, **_kwargs):
             callbacks[Path(run_filename).stem] = callback
             return object()
 

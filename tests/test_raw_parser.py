@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -14,10 +15,11 @@ from ltspice_mcp.lib import raw_parser
 from ltspice_mcp.lib.raw_parser import (
     extract_operating_point,
     nearest_index,
+    read_partial_raw_progress,
     trace_unit,
     whattype_unit,
 )
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, ngspice_binary_raw
 
 
 class TestNearestIndex:
@@ -607,3 +609,221 @@ class TestBiasPointBucketing:
         assert op["voltages"]
         assert op["currents"]
         assert op["other"] == {}
+
+
+# ---------------------------------------------------------------------------
+# How far a stopped run got
+# ---------------------------------------------------------------------------
+
+_LTSPICE_DATA_MARK = "Binary:\n".encode("utf-16-le")
+
+
+def _ltspice_layout(path: Path) -> tuple[bytes, int, int, np.ndarray]:
+    """A recorded LTspice raw, where its data starts, its record size and axis.
+
+    The record size is the data length over the point count of the finished
+    file, and the axis is spicelib's own parse of it, so neither depends on
+    the reader under test.
+    """
+    data = path.read_bytes()
+    start = data.index(_LTSPICE_DATA_MARK) + len(_LTSPICE_DATA_MARK)
+    raw = RawRead(str(path), verbose=False)
+    axis = raw_parser.real_axis(np.asarray(raw.get_trace(0).data))
+    if raw.get_trace(0).name == "time":
+        axis = np.abs(axis)
+    assert (len(data) - start) % len(axis) == 0
+    return data, start, (len(data) - start) // len(axis), axis
+
+
+class TestPartialRawProgress:
+    """A stopped run's raw is read for how far it got, not for its values.
+
+    spicelib cannot open one: ngspice leaves ``No. Points`` at 0 until a plot
+    ends, which spicelib rejects, and LTspice leaves a count that lags the
+    records behind it. Every expectation here comes from a finished file's
+    own length and spicelib's parse of it, never from the reader's layout.
+    """
+
+    @pytest.mark.parametrize(
+        "fixture",
+        [
+            "ltspice_tran_rc.raw",
+            "ltspice_ac_rc.raw",
+            "ltspice_step_tran.raw",
+            "ltspice_dc_div.raw",
+            "ltspice_noise_rc.raw",
+        ],
+    )
+    def test_truncated_ltspice_raw_counts_complete_records(self, tmp_path: Path, fixture: str):
+        data, start, record, axis = _ltspice_layout(FIXTURES_DIR / fixture)
+        for points in (1, len(axis) // 2, len(axis) - 1):
+            for torn in (0, record // 2):
+                cut = tmp_path / f"{points}_{torn}.raw"
+                cut.write_bytes(data[: start + points * record + torn])
+
+                progress = read_partial_raw_progress(cut)
+
+                assert progress is not None
+                assert progress.header_complete
+                assert progress.points == points
+                assert progress.last_axis_value == pytest.approx(axis[points - 1])
+
+    def test_a_declared_count_behind_the_records_does_not_cap_them(self, tmp_path: Path):
+        """LTspice rewrites ``No. Points`` only now and then while it runs.
+
+        Killed part way (observed on LTspice 26.1), the header said 1821697
+        and the file held 1822135 complete records, every one past the count
+        a valid, rising time. The count is a floor, not the answer.
+        """
+        data, _start, _record, axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
+        final = "No. Points:          221".encode("utf-16-le")
+        lagging = "No. Points:          100".encode("utf-16-le")
+        assert data.count(final) == 1
+        raw = tmp_path / "lagging.raw"
+        raw.write_bytes(data.replace(final, lagging))
+
+        progress = read_partial_raw_progress(raw)
+
+        assert progress is not None
+        assert progress.points == len(axis) == 221
+        assert progress.last_axis_value == pytest.approx(axis[-1])
+
+    def test_negative_stored_time_and_window_offset_read_in_deck_time(self, tmp_path: Path):
+        data, start, record, axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
+        points = 50
+        stored = bytearray(data[: start + points * record])
+        at = start + (points - 1) * record
+        struct.pack_into("<d", stored, at, -axis[points - 1])
+        zero = "Offset:    0.0000000000000000e+00".encode("utf-16-le")
+        window = "Offset:    1.0000000000000000e-03".encode("utf-16-le")
+        raw = tmp_path / "windowed.raw"
+        raw.write_bytes(bytes(stored).replace(zero, window))
+
+        progress = read_partial_raw_progress(raw)
+
+        assert progress is not None
+        assert progress.last_axis_value == pytest.approx(axis[points - 1] + 1e-3)
+
+    def test_stepped_flag_is_reported(self, tmp_path: Path):
+        progress = read_partial_raw_progress(FIXTURES_DIR / "ltspice_step_tran.raw")
+
+        assert progress is not None
+        assert progress.stepped
+
+    def test_header_cut_short_reports_no_points(self, tmp_path: Path):
+        data, start, _record, _axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
+        raw = tmp_path / "header.raw"
+        raw.write_bytes(data[: start - 40])
+
+        progress = read_partial_raw_progress(raw)
+
+        assert progress is not None
+        assert not progress.header_complete
+        assert progress.points == 0
+        assert progress.last_axis_value is None
+        assert progress.plot == "Transient Analysis"
+
+    def test_ngspice_binary_with_an_unpatched_count(self, tmp_path: Path):
+        rows = [(1e-9 * index, 0.5 * index, 2.0) for index in range(7)]
+        raw = tmp_path / "ngspice.raw"
+        raw.write_bytes(ngspice_binary_raw(rows, ["time", "v(in)", "v(out)"], tail=b"\x01" * 13))
+
+        progress = read_partial_raw_progress(raw, "ngspice")
+
+        assert progress is not None
+        assert (progress.plot, progress.axis) == ("Transient Analysis", "time")
+        assert progress.points == 7
+        assert progress.last_axis_value == pytest.approx(6e-9)
+
+    def test_finished_plot_is_stepped_over_to_the_one_in_progress(self, tmp_path: Path):
+        """ngspice writes one plot per analysis: ``.op`` then ``.tran`` is two."""
+        op = ngspice_binary_raw(
+            [(1.0, 2.0)], ["v(in)", "v(out)"], plot="Operating Point", declared=1
+        )
+        tran = ngspice_binary_raw(
+            [(0.0, 1.0, 2.0), (1e-6, 1.1, 2.1), (2e-6, 1.2, 2.2)], ["time", "v(in)", "v(out)"]
+        )
+        raw = tmp_path / "two_plots.raw"
+        raw.write_bytes(op + tran)
+
+        progress = read_partial_raw_progress(raw, "ngspice")
+
+        assert progress is not None
+        assert progress.plot == "Transient Analysis"
+        assert progress.points == 3
+        assert progress.last_axis_value == pytest.approx(2e-6)
+
+    def test_ascii_values_stop_at_the_last_complete_point(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """What ngspice left when killed writing ``filetype=ascii``: a torn line."""
+        header = (
+            "Title: synthesized\nDate: x\nPlotname: Transient Analysis\nFlags: real\n"
+            "No. Variables: 3\nNo. Points: 0       \nVariables:\n"
+            "\t0\ttime\ttime\n\t1\tv(in)\tvoltage\n\t2\tv(out)\tvoltage\nValues:\n"
+        )
+        points = "".join(
+            f"{index}\t\t{index * 1e-3:.15e}\n\t{index * 0.1:.15e}\n\t{index * 0.2:.15e}\n"
+            for index in range(40)
+        )
+        raw = tmp_path / "ascii.raw"
+        raw.write_text(header + points + "40\t\t4.0e-02\n\t4.00000", encoding="ascii")
+        # A window smaller than one point, so finding it takes the growing read.
+        monkeypatch.setattr(raw_parser, "_ASCII_TAIL_START", 16)
+        monkeypatch.setattr(raw_parser, "_ASCII_TAIL_PER_VARIABLE", 0)
+
+        progress = read_partial_raw_progress(raw, "ngspice")
+
+        assert progress is not None
+        assert progress.points == 40
+        assert progress.last_axis_value == pytest.approx(39e-3)
+
+    def test_ascii_complex_axis_reads_its_real_part(self, tmp_path: Path):
+        header = (
+            "Title: ac\nDate: x\nPlotname: AC Analysis\nFlags: complex\n"
+            "No. Variables: 2\nNo. Points: 0       \nVariables:\n"
+            "\t0\tfrequency\tfrequency\tgrid=3\n\t1\tv(out)\tvoltage\nValues:\n"
+        )
+        body = (
+            "0\t\t1.000000000000000e+00,4.645981770173875e-310\n"
+            "\t9.999605231408795e-01,-6.282937266758386e-03\n"
+            "1\t\t1.584893192461113e+00,4.645981770173875e-310\n"
+            "\t9.999008445312640e-01,-9.957190212550916e-03\n"
+        )
+        raw = tmp_path / "ac.raw"
+        raw.write_text(header + body, encoding="ascii")
+
+        progress = read_partial_raw_progress(raw, "ngspice")
+
+        assert progress is not None
+        assert progress.points == 2
+        assert progress.last_axis_value == pytest.approx(1.584893192461113)
+
+    def test_a_following_plot_out_of_reach_is_not_guessed_at(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Past the skip cap, the last plot's lines would be read with the first
+        plot's variable count, so the count is reported as unknown instead."""
+        monkeypatch.setattr(raw_parser, "_ASCII_SKIP_CAP", 64)
+
+        progress = read_partial_raw_progress(FIXTURES_DIR / "ngspice_noise_2plot.raw", "ngspice")
+
+        assert progress is not None
+        assert progress.points is None
+        assert progress.last_axis_value is None
+
+    def test_recorded_two_plot_ascii_raw_reports_its_last_plot(self):
+        progress = read_partial_raw_progress(FIXTURES_DIR / "ngspice_noise_2plot.raw", "ngspice")
+
+        assert progress is not None
+        assert progress.plot == "Integrated Noise"
+        assert progress.axis is None
+        assert progress.points == 1
+
+    def test_a_file_that_is_not_a_raw_reads_as_none(self, tmp_path: Path):
+        other = tmp_path / "other.raw"
+        other.write_bytes(b"\x00\x01 not a raw")
+
+        assert read_partial_raw_progress(other) is None
+        with pytest.raises(FileNotFoundError):
+            read_partial_raw_progress(tmp_path / "missing.raw")
