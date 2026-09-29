@@ -363,6 +363,14 @@ _SETTINGS: tuple[_Setting, ...] = (
         bounds=_Bounds(float, 0, 86400, exclusive_min=True),
     ),
     _Setting(
+        field="run_timeout",
+        section="simulation",
+        key="run_timeout",
+        env="LTSPICE_MCP_RUN_TIMEOUT",
+        # 30 days; spicelib's own process bound is clamped past this anyway.
+        bounds=_Bounds(float, 0, 2_592_000, exclusive_min=True),
+    ),
+    _Setting(
         field="max_estimated_points",
         section="simulation",
         key="max_estimated_points",
@@ -523,7 +531,15 @@ class ServerConfig:
     """Maximum expanded cases accepted by one ``run_experiments`` call."""
 
     default_timeout: float = 300.0
-    """Simulation timeout in seconds."""
+    """Bound on one LTspice schematic netlist export, in seconds.
+    ``[simulation] timeout``. It does not bound simulations: see
+    ``run_timeout``."""
+
+    run_timeout: float | None = None
+    """Per-case simulation timeout in seconds for a ``run_experiments`` request
+    that sets no ``execution.run_timeout_s``. None (the default) leaves such a
+    case unbounded: it runs until it ends or is cancelled, and a running job
+    reports how far each case has got. ``[simulation] run_timeout``."""
 
     max_estimated_points: int = 20_000_000
     """Preflight WARN threshold: a .tran/.ac/.dc whose estimated point count
@@ -775,8 +791,12 @@ def generate_default_config(path: Path) -> None:
     sim_conf.add(comment("Maximum cases after run_experiments variation expansion."))
     sim_conf.add("max_experiment_cases", 1024)
     sim_conf.add(nl())
-    sim_conf.add(comment("Default simulation timeout in seconds"))
+    sim_conf.add(comment("Bound on one LTspice schematic netlist export, in seconds"))
     sim_conf.add("timeout", 300.0)
+    sim_conf.add(nl())
+    sim_conf.add(comment("Per-case simulation timeout in seconds when a request sets none."))
+    sim_conf.add(comment("Default: no limit. execution.run_timeout_s overrides it."))
+    sim_conf.add(comment("run_timeout = 3600"))
     sim_conf.add(nl())
     sim_conf.add(comment("Preflight size guard, estimated from .tran/.ac/.dc directives."))
     sim_conf.add(comment("Warn when the estimated point count exceeds this:"))

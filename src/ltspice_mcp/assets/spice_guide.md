@@ -32,6 +32,14 @@ same response), follow a receipt with `jobs`, measure a finished job with
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 
+A case has no time limit unless `execution.run_timeout_s` (or the server's
+`[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or
+`jobs(wait)` receipt carries a `run_progress` observation per running case:
+points written and the last time or frequency reached, to set against the
+deck's own stop value. A simulator writes in buffered blocks, so judge over looks minutes
+apart: if `points` has not moved across them, the case is not advancing, and
+`jobs(action="cancel")` stops it.
+
 `inspect(kind="reference")` is the lookup for this surface's own vocabulary.
 Each tool holds many capabilities behind a discriminator — twenty-one
 `analyze_results` recipes, eleven `edit_schematic` ops, the variation kinds,

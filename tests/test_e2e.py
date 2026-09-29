@@ -777,7 +777,9 @@ class TestInspectCapabilities:
             assert caps["python_api"]["open"] == f"Api(working_dir={str(tmp_path)!r})"
             assert caps["allowed_paths"] == [str(tmp_path)]
             assert caps["limits"]["max_parallel_sims"] == 1
-            assert caps["limits"]["default_timeout_s"] == 10.0
+            assert caps["limits"]["export_timeout_s"] == 10.0
+            # No [simulation] run_timeout: a case without its own bound is unbounded.
+            assert caps["limits"]["run_timeout_s"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -893,6 +895,7 @@ class TestResources:
         assert data["default_simulator"] is None
         assert data["max_parallel_sims"] == 1
         assert data["default_timeout"] == 10.0
+        assert data["run_timeout"] is None
         assert data["log_level"] == "DEBUG"
 
     async def test_read_netlists_lists_cir_files_only(self, tmp_path):

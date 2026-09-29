@@ -14,6 +14,7 @@ from spicelib.simulators.ltspice_simulator import LTspice
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
+    SPICELIB_TIMEOUT_MARGIN_S,
     ExperimentCancellationError,
     ExperimentRunner,
     ExperimentRunRequest,
@@ -24,9 +25,9 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
+from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
-from tests.conftest import await_until, staged_decks
+from tests.conftest import await_until, ngspice_binary_raw, staged_decks
 
 
 class MockSimulator:
@@ -136,14 +137,18 @@ def _request_and_cases(
 def _controlled_submit(
     monkeypatch: pytest.MonkeyPatch,
     runner: ExperimentRunner,
+    launches: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
+    """Fake the launch; ``launches``, when given, collects each call's keywords."""
     callbacks: dict[str, Any] = {}
     submissions: list[str] = []
 
-    def submit(_netlist: Path, run_filename: str, callback):
+    def submit(_netlist: Path, run_filename: str, callback, **kwargs):
         token = Path(run_filename).stem
         submissions.append(token)
         callbacks[token] = callback
+        if launches is not None:
+            launches.append(kwargs)
         return object()
 
     monkeypatch.setattr(runner, "submit_netlist", submit)
@@ -183,7 +188,7 @@ async def _cancel_during_launch(
     callbacks: dict[str, Any] = {}
     submissions: list[str] = []
 
-    def submit(_netlist: Path, run_filename: str, callback):
+    def submit(_netlist: Path, run_filename: str, callback, **_kwargs):
         token = Path(run_filename).stem
         launching.set()
         release.wait(5)
@@ -244,7 +249,7 @@ class TestSubmitPrimitive:
                 calls.append(kwargs)
                 kwargs["callback"](raw, log)
 
-        monkeypatch.setattr(base, "_build_sim_runner", FakeHandle)
+        monkeypatch.setattr(base, "_build_sim_runner", lambda **_kwargs: FakeHandle())
         received: asyncio.Future[RunOutcome] = loop.create_future()
         handle = await asyncio.to_thread(
             base.submit_netlist,
@@ -306,7 +311,7 @@ class TestSubmitPrimitive:
             def __del__(self) -> None:
                 destroyed.set()
 
-        monkeypatch.setattr(base, "_build_sim_runner", FakeSimRunner)
+        monkeypatch.setattr(base, "_build_sim_runner", lambda **_kwargs: FakeSimRunner())
 
         def submit_and_discard(token: str) -> None:
             base.submit_netlist(netlist, token, lambda _outcome: None)
@@ -336,7 +341,7 @@ def _capturing_submit(
     callbacks: dict[str, Any] = {}
     submitted: list[tuple[Path, bytes]] = []
 
-    def submit(netlist: Path, run_filename: str, callback):
+    def submit(netlist: Path, run_filename: str, callback, **_kwargs):
         submitted.append((netlist, netlist.read_bytes()))
         callbacks[Path(run_filename).stem] = callback
         return object()
@@ -966,6 +971,339 @@ class TestCaseConcurrencyAndTimeouts:
         }
 
 
+def _partial_ngspice_raw(times: list[float]) -> bytes:
+    """A killed ngspice transient: unpatched count, whole records, a torn one."""
+    return ngspice_binary_raw([(time, 0.5) for time in times], ["time", "v(out)"], tail=b"\0" * 11)
+
+
+def _deliver_killed_run(
+    callback: Any,
+    run_dir: Path,
+    token: str,
+    *,
+    log_text: str = "Circuit: deck\n",
+    raw: bytes | None = None,
+) -> None:
+    """Leave what a killed run leaves, and report it the way spicelib does.
+
+    A ``.fail`` log (spicelib renames it on a nonzero exit), the partial raw if
+    any, and the outcome the real collector builds: no raw reported, exit -9.
+    """
+    fail_log = run_dir / f"{token}.fail"
+    fail_log.write_text(log_text)
+    if raw is not None:
+        (run_dir / f"{token}.raw").write_bytes(raw)
+    callback(collect_run_outcome("", str(fail_log), exit_code=-9))
+
+
+@pytest.mark.asyncio
+class TestStoppedCaseRecord:
+    """What a case the coordinator stopped keeps of the run it killed.
+
+    The outcome handed to the callback is the one the real collector builds for
+    a killed run: spicelib reports no raw for a nonzero exit and has renamed
+    the log to ``.fail``.
+    """
+
+    async def _timed_out(
+        self,
+        state: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        request_id: str,
+        run_timeout_s: float | None = 0.01,
+        log_text: str = "Circuit: deck\n",
+        raw: bytes | None = None,
+    ):
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        kill_started = asyncio.Event()
+
+        async def record_kill(_token: str) -> None:
+            kill_started.set()
+
+        monkeypatch.setattr(runner, "_kill_case", record_kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state,
+                    work_dir,
+                    request_id=request_id,
+                    run_timeout_s=run_timeout_s,
+                    kill_grace_s=2.0,
+                )
+            )
+        )
+        await asyncio.wait_for(kill_started.wait(), 2)
+        token = submissions[0]
+        assert receipt.job.output_folder is not None
+        _deliver_killed_run(
+            callbacks[token], receipt.job.output_folder, token, log_text=log_text, raw=raw
+        )
+        assert await runner.wait(receipt.job, 2)
+        return receipt.job
+
+    async def test_run_timeout_keeps_the_killed_runs_diagnostics(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        job = await self._timed_out(
+            state_no_sim,
+            work_dir,
+            monkeypatch,
+            request_id="timeout-diagnostics",
+            log_text=(
+                "Circuit: deck\nTime step too small; time = 1.700000e-05, timestep = 1.2000e-19\n"
+            ),
+        )
+        case = job.cases[0]
+
+        assert case.failure_code == "run_timeout"
+        assert case.error == "Case stopped because the run timeout of 0.01s elapsed"
+        evidence = case.failure_evidence
+        assert evidence is not None
+        assert evidence["run_timeout_s"] == 0.01
+        assert evidence["run_timeout_source"] == "request"
+        assert evidence["exit_code"] == -9
+        assert evidence["log_failure_code"] == "convergence_failed"
+        assert "Time step too small" in evidence["log_excerpt"]
+        assert job.failures[-1]["evidence"] == evidence
+
+    async def test_a_log_naming_no_cause_adds_no_classification(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        job = await self._timed_out(
+            state_no_sim, work_dir, monkeypatch, request_id="timeout-quiet-log"
+        )
+        evidence = job.cases[0].failure_evidence
+
+        assert evidence is not None
+        assert "log_failure_code" not in evidence
+        assert evidence["exit_code"] == -9
+
+    async def test_partial_raw_is_read_for_progress_before_it_is_removed(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        times = [0.0, 1e-6, 2e-6, 3e-6]
+        job = await self._timed_out(
+            state_no_sim,
+            work_dir,
+            monkeypatch,
+            request_id="timeout-progress",
+            raw=_partial_ngspice_raw(times),
+        )
+        case = job.cases[0]
+        assert job.output_folder is not None
+        raw = job.output_folder / f"{case.run_token}.raw"
+
+        progress = [item for item in case.observations if item["code"] == "partial_progress"]
+        assert len(progress) == 1
+        evidence = progress[0]["evidence"]
+        assert evidence["case_id"] == case.case_id
+        assert evidence["raw_present"] is True
+        assert (evidence["plot"], evidence["axis"]) == ("Transient Analysis", "time")
+        assert evidence["points"] == 4
+        assert evidence["last_axis_value"] == pytest.approx(3e-6)
+        assert case.case_id in progress[0]["detail"]
+        assert not await asyncio.to_thread(raw.exists)
+
+    async def test_no_raw_on_disk_is_reported_as_such(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        job = await self._timed_out(
+            state_no_sim, work_dir, monkeypatch, request_id="timeout-no-raw"
+        )
+
+        progress = [
+            item for item in job.cases[0].observations if item["code"] == "partial_progress"
+        ]
+        assert len(progress) == 1
+        assert progress[0]["evidence"]["raw_present"] is False
+        assert progress[0]["evidence"]["points"] == 0
+
+    async def test_server_default_bounds_a_request_that_sets_no_timeout(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        state_no_sim.config.run_timeout = 0.05
+        job = await self._timed_out(
+            state_no_sim,
+            work_dir,
+            monkeypatch,
+            request_id="timeout-server-default",
+            run_timeout_s=None,
+        )
+        case = job.cases[0]
+
+        assert case.failure_code == "run_timeout"
+        assert case.failure_evidence is not None
+        assert case.failure_evidence["run_timeout_s"] == 0.05
+        assert case.failure_evidence["run_timeout_source"] == "server_default"
+        assert "(the server default)" in (case.error or "")
+
+    async def test_spicelib_bound_sits_past_the_coordinators_own(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        launches: list[dict[str, Any]] = []
+        callbacks, _submissions = _controlled_submit(monkeypatch, runner, launches)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="spicelib-bound",
+                    run_timeout_s=30.0,
+                    kill_grace_s=2.0,
+                )
+            )
+        )
+        await await_until(lambda: bool(launches))
+        token = next(iter(callbacks))
+        callbacks[token](_success(work_dir, token))
+        assert await runner.wait(receipt.job, 1)
+
+        assert launches[0]["timeout_s"] == 30.0 + 2.0 + SPICELIB_TIMEOUT_MARGIN_S
+
+    async def test_nothing_bounds_a_case_unless_something_sets_a_timeout(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """No request timeout and no [simulation] run_timeout: the case runs on.
+
+        ``[simulation] timeout`` bounds netlist export only; set low here, it
+        must not reach the case.
+        """
+        state_no_sim.config.default_timeout = 0.01
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        launches: list[dict[str, Any]] = []
+        callbacks, _submissions = _controlled_submit(monkeypatch, runner, launches)
+        kills: list[str] = []
+
+        async def record_kill(token: str) -> None:
+            kills.append(token)
+
+        monkeypatch.setattr(runner, "_kill_case", record_kill)
+        receipt = await asyncio.shield(
+            runner.submit(_request(state_no_sim, work_dir, request_id="no-default-timeout"))
+        )
+        await await_until(lambda: bool(launches))
+        await asyncio.sleep(0.2)
+        assert kills == []
+        assert launches[0]["timeout_s"] is None
+        token = next(iter(callbacks))
+        callbacks[token](_success(work_dir, token))
+        assert await runner.wait(receipt.job, 1)
+        assert receipt.job.cases[0].status == "produced"
+
+    async def test_a_simulator_the_first_kill_missed_is_killed_by_the_next(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A stop landing between launch and spawn finds no process on its first scan."""
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        kills: list[str] = []
+        run_dirs: list[Path] = []
+
+        async def kill(token: str) -> None:
+            kills.append(token)
+            if len(kills) == 2:
+                # The simulator exists by the second scan, and this kill ends it.
+                _deliver_killed_run(callbacks[token], run_dirs[0], token)
+
+        monkeypatch.setattr(runner, "_kill_case", kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="kill-rescan",
+                    run_timeout_s=0.01,
+                    kill_grace_s=5.0,
+                )
+            )
+        )
+        assert receipt.job.output_folder is not None
+        run_dirs.append(receipt.job.output_folder)
+
+        assert await runner.wait(receipt.job, 5)
+        case = receipt.job.cases[0]
+        assert kills == [submissions[0], submissions[0]]
+        assert case.failure_code == "run_timeout"
+        # Exit confirmed, so no permit is held back for it.
+        await await_until(lambda: runner._executions.get(receipt.job.job_id) is None)
+
+    async def test_late_exit_records_progress_and_the_bound_that_applied(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+
+        async def no_kill(_token: str) -> None:
+            return None
+
+        monkeypatch.setattr(runner, "_kill_case", no_kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="late-exit-progress",
+                    run_timeout_s=0.01,
+                    kill_grace_s=0.01,
+                )
+            )
+        )
+        assert await runner.wait(receipt.job, 1)
+        case = receipt.job.cases[0]
+        assert case.failure_code == "kill_unconfirmed"
+        assert case.failure_evidence == {
+            "stop_reason": "run_timeout",
+            "run_timeout_s": 0.01,
+            "run_timeout_source": "request",
+            "kill_grace_s": 0.01,
+        }
+
+        token = submissions[0]
+        run_dir = receipt.job.output_folder
+        assert run_dir is not None
+        raw = run_dir / f"{token}.raw"
+        _deliver_killed_run(
+            callbacks[token], run_dir, token, raw=_partial_ngspice_raw([0.0, 5e-7, 1e-6])
+        )
+        await await_until(lambda: not raw.exists())
+
+        progress = [item for item in case.observations if item["code"] == "partial_progress"]
+        assert len(progress) == 1
+        assert progress[0]["evidence"]["points"] == 3
+        assert progress[0]["evidence"]["last_axis_value"] == pytest.approx(1e-6)
+
+
 @pytest.mark.asyncio
 class TestCancellationAndAnalysis:
     async def test_cancel_barrier_prevents_queued_submission_and_kills_active_case(
@@ -1015,6 +1353,8 @@ class TestCancellationAndAnalysis:
             "case_0000",
             "case_0001",
         }
+        stopped = next(case for case in receipt.job.cases if case.run_token == token)
+        assert stopped.error == "Case stopped because the job was cancelled"
 
     async def test_two_cancels_of_an_active_case_claim_the_transition_once(
         self,

@@ -3,6 +3,7 @@
 import asyncio
 import os
 import shutil
+import struct
 import subprocess
 import time
 import typing
@@ -213,6 +214,38 @@ def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
     return raw
 
 
+def ngspice_binary_raw(
+    rows: list[tuple[float, ...]],
+    names: list[str],
+    *,
+    plot: str = "Transient Analysis",
+    declared: int = 0,
+    tail: bytes = b"",
+) -> bytes:
+    """An ngspice-shaped binary plot: ASCII header, every value a double.
+
+    ``declared`` 0 with the space padding is what ngspice leaves in a plot it
+    has not finished, since it patches the count in place when the plot ends.
+    ``tail`` stands for a record the simulator was part way through writing.
+    """
+    header = (
+        "Title: synthesized\n"
+        "Date: Tue Sep 29 19:37:23  2026\n"
+        f"Plotname: {plot}\n"
+        "Flags: real\n"
+        f"No. Variables: {len(names)}\n"
+        f"No. Points: {declared:<8d}\n"
+        "Variables:\n"
+        + "".join(
+            f"\t{index}\t{name}\t{'time' if name == 'time' else 'voltage'}\n"
+            for index, name in enumerate(names)
+        )
+        + "Binary:\n"
+    ).encode("ascii")
+    body = b"".join(struct.pack(f"<{len(row)}d", *row) for row in rows)
+    return header + body + tail
+
+
 def fake_artifact_paths(output_folder: Path, run_filename: str) -> tuple[Path, Path]:
     """Where a real run's raw and log would land, given a ``run_filename``.
 
@@ -249,7 +282,7 @@ def fake_simulator(
     """
     recorded = [] if submissions is None else submissions
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         recorded.append(run_filename)
         if delay_s is None:
             return object()
@@ -281,7 +314,7 @@ def recorded_fixture_simulator(
     simulator artifacts rather than a mock byte string. Name a different
     *fixture* to run a job over stepped artifacts."""
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
         shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)

@@ -76,6 +76,7 @@ from ltspice_mcp.tools.receipts import (
     render_jobs_receipt_snapshot,
     render_runs_envelope,
     snapshot_receipt,
+    snapshot_receipt_live,
 )
 
 _FOREIGN_WAIT_POLL_S = 2.0
@@ -1050,7 +1051,12 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 timeout_s=args.timeout_s,
                 wait_for=args.wait_for,
             )
-        snapshot = snapshot_receipt(job, state)
+        # A runs page carries no observations, so it skips the progress reads.
+        snapshot = (
+            snapshot_receipt(job, state)
+            if isinstance(args, JobsRunsInput)
+            else await snapshot_receipt_live(job, state)
+        )
         return JobsEvaluation(
             args=args,
             snapshot=snapshot,

@@ -49,6 +49,8 @@ AnalysisStatus = Literal[
 ]
 
 TERMINAL_CASE_STATUSES: frozenset[str] = frozenset({"produced", "failed", "cancelled", "skipped"})
+#: Launched and not yet terminal: a simulator may be running for the case now.
+ACTIVE_CASE_STATUSES: frozenset[str] = frozenset({"submitted", "running"})
 
 
 @dataclass
