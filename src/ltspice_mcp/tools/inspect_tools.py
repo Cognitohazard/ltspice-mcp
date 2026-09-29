@@ -143,8 +143,9 @@ class TraceNetInput(ToolInput):
     pin: str | None = Field(
         default=None,
         description=(
-            "Pin or net reference to start from: 'Ref.Pin' (e.g. 'M1.D'), "
-            "'net:NAME' (e.g. 'net:VDD'), or omit and pass x/y."
+            "Pin or net reference to start from: 'Ref.Pin', the pin by name or "
+            "1-based SpiceOrder (e.g. 'M1.D', 'X1.2'), 'net:NAME' (e.g. "
+            "'net:VDD'), or omit and pass x/y."
         ),
     )
     x: int | None = Field(default=None, description="X coordinate (with y) to trace from")
@@ -447,9 +448,10 @@ class NetQuery(StrictModel):
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
     at: str | list[int] = Field(
         description=(
-            "Where the net is: 'REF.PIN' (e.g. 'M1.D'), 'net:NAME', or [x, y]; "
-            "on a netlist, which has no geometry, it takes 'net:NAME', a node "
-            "name, or 'REF.<terminal-number>' and rejects a coordinate."
+            "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
+            "(e.g. 'M1.D', 'X1.2'), 'net:NAME', or [x, y]; on a netlist, which "
+            "has no geometry, it takes 'net:NAME', a node name, or "
+            "'REF.<terminal-number>' and rejects a coordinate."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -464,18 +466,20 @@ class NetQuery(StrictModel):
         return self
 
 
+#: One filter rule for both kinds that list references. On ``hierarchy`` it
+#: reads each instance's own reference, the last segment of its path.
+_PREFIX_DESCRIPTION = (
+    "Keep only references starting with this, case-insensitively: 'M' for "
+    "every MOSFET, 'LX' for LX1, LX2…. Plain text, not a glob."
+)
+
+
 class ComponentsQuery(StrictModel):
     """The components of a .asc schematic or a .cir/.net/.sp netlist."""
 
     kind: Literal["components"]
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
-    prefix: str | None = Field(
-        default=None,
-        description=(
-            "Keep only components whose reference starts with this element letter "
-            "('R', 'C', 'M', …). A single letter; anything longer is rejected."
-        ),
-    )
+    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     detail: Literal["list", "full"] = Field(
         default="list",
         description=(
@@ -506,9 +510,7 @@ class HierarchyQuery(StrictModel):
         max_length=33,
         description="Exact reference segments selecting a subtree, matched case-insensitively.",
     )
-    prefix: str | None = Field(
-        default=None, pattern="^[A-Za-z]$", description="Single element letter to retain."
-    )
+    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     cursor: str | None = Field(
         default=None,
         description="Resume token bound to captured dependency content, profile and filters.",
@@ -1284,11 +1286,29 @@ def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
 
 
 def _check_prefix(prefix: str | None) -> None:
-    if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
+    """Refuse a ``prefix`` no reference could start with, rather than answer
+    it with an empty list that reads as "no such components"."""
+    if prefix is None:
+        return
+    if not prefix or any(ch.isspace() for ch in prefix):
         raise _QueryError(
             "invalid_prefix",
-            f"component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}",
+            f"prefix must be the start of a reference, without spaces (e.g. 'R', "
+            f"'LX'), got {prefix!r}",
         )
+    wildcard = next((i for i, ch in enumerate(prefix) if ch in "*?["), None)
+    if wildcard is not None:
+        stem = prefix[:wildcard]
+        remedy = f"use prefix='{stem}'" if stem else "omit it to list every reference"
+        raise _QueryError(
+            "invalid_prefix",
+            f"prefix matches the start of a reference as plain text and takes no "
+            f"wildcards; for {prefix!r}, {remedy}",
+        )
+
+
+def _has_prefix(reference: str, prefix: str | None) -> bool:
+    return prefix is None or reference.casefold().startswith(prefix.casefold())
 
 
 def _components_netlist_payload(
@@ -1300,13 +1320,10 @@ def _components_netlist_payload(
     lexed = lex(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
-    upper = prefix.upper() if prefix else None
     rows: list[dict[str, Any]] = []
     for card in by_ref.values():
         ref = card.name
-        if not ref:
-            continue
-        if upper is not None and ref[:1].upper() != upper:
+        if not ref or not _has_prefix(ref, prefix):
             continue
         entry: dict[str, Any] = {"reference": ref, "value": netlist_card_value(card)}
         if detail == "full" and not body_has_stray_kv_remnant(card.body):
@@ -1370,7 +1387,9 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         # Cached editor + component reads stay on the event loop.
         editor = get_asc_editor(path, state)
         try:
-            refs = sorted(editor.get_components(q.prefix) if q.prefix else editor.get_components())
+            # Filtered here, not by spicelib's get_components(prefixes), which
+            # reads its argument as a set of case-sensitive first letters.
+            refs = sorted(r for r in editor.get_components() if _has_prefix(r, q.prefix))
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
@@ -1575,6 +1594,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
+    _check_prefix(q.prefix)
     profile = SemanticProfile(
         q.simulator,
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
@@ -1596,7 +1616,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         row
         for row in hierarchy.instances
         if tuple(p.casefold() for p in row.instance[: len(selected)]) == selected
-        and (q.prefix is None or row.element == q.prefix.upper())
+        and _has_prefix(row.reference, q.prefix)
     ]
     identity = {
         **hierarchy.binding(),

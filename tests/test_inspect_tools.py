@@ -471,12 +471,76 @@ async def test_components_prefix_filter(netlist: Path, state_no_sim: SessionStat
     assert {c["reference"] for c in res["data"]["components"]} == {"R1", "R2"}
 
 
-async def test_components_bad_prefix(netlist: Path, state_no_sim: SessionState):
+@pytest.mark.parametrize("prefix", ["LX*", "", "L X"])
+async def test_components_bad_prefix(netlist: Path, state_no_sim: SessionState, prefix: str):
     (res,) = await _run(
-        state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": "RR"}]
+        state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": prefix}]
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_prefix"
+
+
+async def test_components_prefix_names_the_plain_spelling_of_a_glob(
+    netlist: Path, state_no_sim: SessionState
+):
+    (res,) = await _run(
+        state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": "LX*"}]
+    )
+    assert "prefix='LX'" in res["error"]["message"]
+
+
+@pytest.fixture
+async def prefixed_circuits(asc_state: SessionState, work_dir: Path) -> dict[str, Path]:
+    """The same five references as a netlist and as a schematic: two share a
+    multi-letter stem, and each stem also has a plain single-letter sibling."""
+    from tests._asc_ops import build_sheet
+
+    deck = work_dir / "prefixed.cir"
+    deck.write_text(
+        "* prefixed\nLX1 a b 1u\nLX2 b c 1u\nL1 c 0 1u\n"
+        "MXO1 d g 0 0 nch\nM1 d g 0 0 nch\n.model nch nmos\n.end\n"
+    )
+    placements = [
+        ("LX1", "ind", 128, 128),
+        ("LX2", "ind", 256, 128),
+        ("L1", "ind", 384, 128),
+        ("MXO1", "nmos", 128, 384),
+        ("M1", "nmos", 384, 384),
+    ]
+    await build_sheet(
+        asc_state,
+        "prefixed",
+        [
+            {"op": "add_component", "reference": ref, "symbol": sym, "x": x, "y": y}
+            for ref, sym, x, y in placements
+        ],
+    )
+    return {"netlist": deck, "asc": work_dir / "prefixed.asc"}
+
+
+@pytest.mark.parametrize("source", ["netlist", "asc"])
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("LX", {"LX1", "LX2"}),
+        ("lx", {"LX1", "LX2"}),
+        ("MXO", {"MXO1"}),
+        ("L", {"L1", "LX1", "LX2"}),
+        ("m", {"M1", "MXO1"}),
+    ],
+)
+async def test_components_prefix_is_a_case_insensitive_reference_prefix(
+    asc_state: SessionState,
+    prefixed_circuits: dict[str, Path],
+    source: str,
+    prefix: str,
+    expected: set[str],
+):
+    path = prefixed_circuits[source]
+    (res,) = await _run(asc_state, [{"kind": "components", "path": str(path), "prefix": prefix}])
+    assert res["ok"] is True, res
+    assert {c["reference"] for c in res["data"]["components"]} == expected
+    assert res["data"]["prefix"] == prefix
 
 
 # ---------------------------------------------------------------------------

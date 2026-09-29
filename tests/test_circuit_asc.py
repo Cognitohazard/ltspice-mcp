@@ -489,6 +489,139 @@ def _flag_records(asc_path: Path) -> list[tuple[tuple[int, int], str]]:
     return flags
 
 
+# A subcircuit block whose pins are lettered, so its SpiceOrder is the only
+# number a pin has; and one whose digit-named pins run opposite to their
+# SpiceOrder, the case where matching a name first changes the answer.
+_LETTERED_BLOCK_ASY = """Version 4
+SymbolType CELL
+RECTANGLE Normal -16 -32 16 32
+LINE Normal 0 -32 0 -48
+LINE Normal 0 32 0 48
+SYMATTR Prefix X
+SYMATTR Description Two-pin subcircuit block with lettered pins
+PIN 0 -48 NONE 0
+PINATTR PinName A
+PINATTR SpiceOrder 1
+PIN 0 48 NONE 0
+PINATTR PinName B
+PINATTR SpiceOrder 2
+"""
+
+_SWAPPED_DIGITS_ASY = """Version 4
+SymbolType CELL
+RECTANGLE Normal -16 -32 16 32
+LINE Normal 0 -32 0 -48
+LINE Normal 0 32 0 48
+SYMATTR Prefix X
+SYMATTR Description Two-pin block whose pin named 1 is SpiceOrder 2
+PIN 0 -48 NONE 0
+PINATTR PinName 2
+PINATTR SpiceOrder 1
+PIN 0 48 NONE 0
+PINATTR PinName 1
+PINATTR SpiceOrder 2
+"""
+
+
+@pytest.fixture
+def ordinal_symbols(asc_symbols: Path, work_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Put the two symbols above on the library path beside the fixture library."""
+    from spicelib import AscEditor
+
+    sym_dir = work_dir / "ordinal_syms"
+    sym_dir.mkdir()
+    (sym_dir / "lettered_block.asy").write_text(_LETTERED_BLOCK_ASY, encoding="utf-8")
+    (sym_dir / "swapped_digits.asy").write_text(_SWAPPED_DIGITS_ASY, encoding="utf-8")
+    monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
+    # spicelib caches a symbol's path by name for the whole process; keep this
+    # test's temporary paths out of every later test.
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
+    return sym_dir
+
+
+class TestPinsBySpiceOrder:
+    """'REF.<n>' reaches the pin whose SpiceOrder is n when no pin is named n.
+
+    Every surface that takes a pin goes through one resolver, so the net query
+    and each edit op that takes a pin are driven here.
+    """
+
+    async def test_net_query_finds_a_lettered_pin_by_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_net")
+        placed = add_component(asc_state, sheet, "LX1", "lettered_block", 128, 128)
+        add_net_label(asc_state, sheet, "top", pin="LX1.A")
+        pin_a = next(p for p in placed["pins"] if p["name"] == "A")
+
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "LX1.1"})
+
+        assert data["start"] == {"x": pin_a["x"], "y": pin_a["y"]}
+        assert data["labels"] == ["top"]
+
+    async def test_every_edit_op_that_takes_a_pin_takes_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_ops")
+        build = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "LX1",
+                    "symbol": "lettered_block",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "LX1.2", "to_pin": "R1.1"},
+                {"op": "add_net_label", "net": "top", "pin": "LX1.1"},
+            ],
+        )
+        assert build["saved"] is True, build["abort_reason"]
+        lx1 = {p["name"]: (p["x"], p["y"]) for p in build["results"][0]["pins"]}
+        r1 = {p["name"]: (p["x"], p["y"]) for p in build["results"][1]["pins"]}
+        assert _has_segment(_wire_segments(sheet), lx1["B"], r1["1"])
+        assert _flag_records(sheet) == [(lx1["A"], "top")]
+
+        removal = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {"op": "remove_net_label", "pin": "LX1.1"},
+                {"op": "remove_wire", "pin": "LX1.2"},
+            ],
+        )
+        assert removal["saved"] is True, removal["abort_reason"]
+        assert _flag_records(sheet) == []
+        assert _wire_segments(sheet) == []
+
+    async def test_a_pin_named_with_a_digit_wins_over_the_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_names")
+        placed = add_component(asc_state, sheet, "XS1", "swapped_digits", 128, 128)
+        named_one = next(p for p in placed["pins"] if p["name"] == "1")
+        assert named_one["order"] == 2  # the premise: name and SpiceOrder disagree
+
+        add_net_label(asc_state, sheet, "one", pin="XS1.1")
+
+        assert _flag_records(sheet) == [((named_one["x"], named_one["y"]), "one")]
+
+    async def test_an_unknown_pin_lists_each_name_with_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_unknown")
+        add_component(asc_state, sheet, "LX1", "lettered_block", 128, 128)
+
+        with pytest.raises(NetlistError) as exc_info:
+            wire_pins(asc_state, sheet, "LX1.3", "LX1.A")
+
+        assert "Pin '3' not found on LX1" in str(exc_info.value)
+        assert "Available: A (1), B (2)" in str(exc_info.value)
+
+
 # Absolute pin positions expected for the fixture nmos symbol (pin offsets
 # D=(0,-96), G=(-48,0), S=(0,96)) placed at (400, 200), hand-computed from the
 # LTspice orientation transforms (y axis points down; R90 maps (x, y) to
