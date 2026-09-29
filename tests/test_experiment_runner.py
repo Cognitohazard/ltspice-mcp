@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import struct
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,7 +27,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
-from tests.conftest import await_until, staged_decks
+from tests.conftest import await_until, ngspice_binary_raw, staged_decks
 
 
 class MockSimulator:
@@ -138,14 +137,18 @@ def _request_and_cases(
 def _controlled_submit(
     monkeypatch: pytest.MonkeyPatch,
     runner: ExperimentRunner,
+    launches: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
+    """Fake the launch; ``launches``, when given, collects each call's keywords."""
     callbacks: dict[str, Any] = {}
     submissions: list[str] = []
 
-    def submit(_netlist: Path, run_filename: str, callback, **_kwargs):
+    def submit(_netlist: Path, run_filename: str, callback, **kwargs):
         token = Path(run_filename).stem
         submissions.append(token)
         callbacks[token] = callback
+        if launches is not None:
+            launches.append(kwargs)
         return object()
 
     monkeypatch.setattr(runner, "submit_netlist", submit)
@@ -970,13 +973,27 @@ class TestCaseConcurrencyAndTimeouts:
 
 def _partial_ngspice_raw(times: list[float]) -> bytes:
     """A killed ngspice transient: unpatched count, whole records, a torn one."""
-    header = (
-        "Title: killed\nDate: x\nPlotname: Transient Analysis\nFlags: real\n"
-        "No. Variables: 2\nNo. Points: 0       \nVariables:\n"
-        "\t0\ttime\ttime\n\t1\tv(out)\tvoltage\nBinary:\n"
-    ).encode("ascii")
-    body = b"".join(struct.pack("<2d", time, 0.5) for time in times)
-    return header + body + b"\x00" * 11
+    return ngspice_binary_raw([(time, 0.5) for time in times], ["time", "v(out)"], tail=b"\0" * 11)
+
+
+def _deliver_killed_run(
+    callback: Any,
+    run_dir: Path,
+    token: str,
+    *,
+    log_text: str = "Circuit: deck\n",
+    raw: bytes | None = None,
+) -> None:
+    """Leave what a killed run leaves, and report it the way spicelib does.
+
+    A ``.fail`` log (spicelib renames it on a nonzero exit), the partial raw if
+    any, and the outcome the real collector builds: no raw reported, exit -9.
+    """
+    fail_log = run_dir / f"{token}.fail"
+    fail_log.write_text(log_text)
+    if raw is not None:
+        (run_dir / f"{token}.raw").write_bytes(raw)
+    callback(collect_run_outcome("", str(fail_log), exit_code=-9))
 
 
 @pytest.mark.asyncio
@@ -1020,16 +1037,12 @@ class TestStoppedCaseRecord:
         )
         await asyncio.wait_for(kill_started.wait(), 2)
         token = submissions[0]
-        run_dir = receipt.job.output_folder
-        assert run_dir is not None
-        fail_log = run_dir / f"{token}.fail"
-        fail_log.write_text(log_text)
-        if raw is not None:
-            (run_dir / f"{token}.raw").write_bytes(raw)
-        outcome = await asyncio.to_thread(collect_run_outcome, "", str(fail_log), exit_code=-9)
-        callbacks[token](outcome)
+        assert receipt.job.output_folder is not None
+        _deliver_killed_run(
+            callbacks[token], receipt.job.output_folder, token, log_text=log_text, raw=raw
+        )
         assert await runner.wait(receipt.job, 2)
-        return receipt.job, run_dir / f"{token}.raw"
+        return receipt.job
 
     async def test_run_timeout_keeps_the_killed_runs_diagnostics(
         self,
@@ -1037,7 +1050,7 @@ class TestStoppedCaseRecord:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        job, _raw = await self._timed_out(
+        job = await self._timed_out(
             state_no_sim,
             work_dir,
             monkeypatch,
@@ -1065,7 +1078,7 @@ class TestStoppedCaseRecord:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        job, _raw = await self._timed_out(
+        job = await self._timed_out(
             state_no_sim, work_dir, monkeypatch, request_id="timeout-quiet-log"
         )
         evidence = job.cases[0].failure_evidence
@@ -1081,7 +1094,7 @@ class TestStoppedCaseRecord:
         monkeypatch: pytest.MonkeyPatch,
     ):
         times = [0.0, 1e-6, 2e-6, 3e-6]
-        job, raw = await self._timed_out(
+        job = await self._timed_out(
             state_no_sim,
             work_dir,
             monkeypatch,
@@ -1089,6 +1102,8 @@ class TestStoppedCaseRecord:
             raw=_partial_ngspice_raw(times),
         )
         case = job.cases[0]
+        assert job.output_folder is not None
+        raw = job.output_folder / f"{case.run_token}.raw"
 
         progress = [item for item in case.observations if item["code"] == "partial_progress"]
         assert len(progress) == 1
@@ -1107,7 +1122,7 @@ class TestStoppedCaseRecord:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        job, _raw = await self._timed_out(
+        job = await self._timed_out(
             state_no_sim, work_dir, monkeypatch, request_id="timeout-no-raw"
         )
 
@@ -1125,7 +1140,7 @@ class TestStoppedCaseRecord:
         monkeypatch: pytest.MonkeyPatch,
     ):
         state_no_sim.config.run_timeout = 0.05
-        job, _raw = await self._timed_out(
+        job = await self._timed_out(
             state_no_sim,
             work_dir,
             monkeypatch,
@@ -1148,14 +1163,7 @@ class TestStoppedCaseRecord:
     ):
         runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
         launches: list[dict[str, Any]] = []
-        callbacks: dict[str, Any] = {}
-
-        def submit(_netlist: Path, run_filename: str, callback, **kwargs):
-            launches.append(kwargs)
-            callbacks[Path(run_filename).stem] = callback
-            return object()
-
-        monkeypatch.setattr(runner, "submit_netlist", submit)
+        callbacks, _submissions = _controlled_submit(monkeypatch, runner, launches)
         receipt = await asyncio.shield(
             runner.submit(
                 _request(
@@ -1188,18 +1196,12 @@ class TestStoppedCaseRecord:
         state_no_sim.config.default_timeout = 0.01
         runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
         launches: list[dict[str, Any]] = []
-        callbacks: dict[str, Any] = {}
+        callbacks, _submissions = _controlled_submit(monkeypatch, runner, launches)
         kills: list[str] = []
-
-        def submit(_netlist: Path, run_filename: str, callback, **kwargs):
-            launches.append(kwargs)
-            callbacks[Path(run_filename).stem] = callback
-            return object()
 
         async def record_kill(token: str) -> None:
             kills.append(token)
 
-        monkeypatch.setattr(runner, "submit_netlist", submit)
         monkeypatch.setattr(runner, "_kill_case", record_kill)
         receipt = await asyncio.shield(
             runner.submit(_request(state_no_sim, work_dir, request_id="no-default-timeout"))
@@ -1251,10 +1253,9 @@ class TestStoppedCaseRecord:
         run_dir = receipt.job.output_folder
         assert run_dir is not None
         raw = run_dir / f"{token}.raw"
-        raw.write_bytes(_partial_ngspice_raw([0.0, 5e-7, 1e-6]))
-        fail_log = run_dir / f"{token}.fail"
-        fail_log.write_text("Circuit: deck\n")
-        callbacks[token](collect_run_outcome("", str(fail_log), exit_code=-9))
+        _deliver_killed_run(
+            callbacks[token], run_dir, token, raw=_partial_ngspice_raw([0.0, 5e-7, 1e-6])
+        )
         await await_until(lambda: not raw.exists())
 
         progress = [item for item in case.observations if item["code"] == "partial_progress"]

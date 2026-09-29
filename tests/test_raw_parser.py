@@ -19,7 +19,7 @@ from ltspice_mcp.lib.raw_parser import (
     trace_unit,
     whattype_unit,
 )
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, ngspice_binary_raw
 
 
 class TestNearestIndex:
@@ -628,44 +628,11 @@ def _ltspice_layout(path: Path) -> tuple[bytes, int, int, np.ndarray]:
     data = path.read_bytes()
     start = data.index(_LTSPICE_DATA_MARK) + len(_LTSPICE_DATA_MARK)
     raw = RawRead(str(path), verbose=False)
-    axis = np.asarray(raw.get_trace(0).data)
-    if np.iscomplexobj(axis):
-        axis = axis.real
+    axis = raw_parser.real_axis(np.asarray(raw.get_trace(0).data))
     if raw.get_trace(0).name == "time":
         axis = np.abs(axis)
     assert (len(data) - start) % len(axis) == 0
     return data, start, (len(data) - start) // len(axis), axis
-
-
-def _ngspice_binary(
-    rows: list[tuple[float, ...]],
-    names: list[str],
-    *,
-    plot: str = "Transient Analysis",
-    declared: int = 0,
-    tail: bytes = b"",
-) -> bytes:
-    """An ngspice-shaped binary plot: ASCII header, every value a double.
-
-    ``declared`` 0 with the space padding is what ngspice leaves in a plot it
-    has not finished: it patches the count in place when the plot ends.
-    """
-    header = (
-        "Title: synthesized\n"
-        "Date: Tue Sep 29 19:37:23  2026\n"
-        f"Plotname: {plot}\n"
-        "Flags: real\n"
-        f"No. Variables: {len(names)}\n"
-        f"No. Points: {declared:<8d}\n"
-        "Variables:\n"
-        + "".join(
-            f"\t{index}\t{name}\t{'time' if name == 'time' else 'voltage'}\n"
-            for index, name in enumerate(names)
-        )
-        + "Binary:\n"
-    ).encode("ascii")
-    body = b"".join(struct.pack(f"<{len(row)}d", *row) for row in rows)
-    return header + body + tail
 
 
 class TestPartialRawProgress:
@@ -759,7 +726,7 @@ class TestPartialRawProgress:
     def test_ngspice_binary_with_an_unpatched_count(self, tmp_path: Path):
         rows = [(1e-9 * index, 0.5 * index, 2.0) for index in range(7)]
         raw = tmp_path / "ngspice.raw"
-        raw.write_bytes(_ngspice_binary(rows, ["time", "v(in)", "v(out)"], tail=b"\x01" * 13))
+        raw.write_bytes(ngspice_binary_raw(rows, ["time", "v(in)", "v(out)"], tail=b"\x01" * 13))
 
         progress = read_partial_raw_progress(raw, "ngspice")
 
@@ -770,8 +737,10 @@ class TestPartialRawProgress:
 
     def test_finished_plot_is_stepped_over_to_the_one_in_progress(self, tmp_path: Path):
         """ngspice writes one plot per analysis: ``.op`` then ``.tran`` is two."""
-        op = _ngspice_binary([(1.0, 2.0)], ["v(in)", "v(out)"], plot="Operating Point", declared=1)
-        tran = _ngspice_binary(
+        op = ngspice_binary_raw(
+            [(1.0, 2.0)], ["v(in)", "v(out)"], plot="Operating Point", declared=1
+        )
+        tran = ngspice_binary_raw(
             [(0.0, 1.0, 2.0), (1e-6, 1.1, 2.1), (2e-6, 1.2, 2.2)], ["time", "v(in)", "v(out)"]
         )
         raw = tmp_path / "two_plots.raw"
@@ -801,6 +770,7 @@ class TestPartialRawProgress:
         raw.write_text(header + points + "40\t\t4.0e-02\n\t4.00000", encoding="ascii")
         # A window smaller than one point, so finding it takes the growing read.
         monkeypatch.setattr(raw_parser, "_ASCII_TAIL_START", 16)
+        monkeypatch.setattr(raw_parser, "_ASCII_TAIL_PER_VARIABLE", 0)
 
         progress = read_partial_raw_progress(raw, "ngspice")
 
@@ -855,4 +825,5 @@ class TestPartialRawProgress:
         other.write_bytes(b"\x00\x01 not a raw")
 
         assert read_partial_raw_progress(other) is None
-        assert read_partial_raw_progress(tmp_path / "missing.raw") is None
+        with pytest.raises(FileNotFoundError):
+            read_partial_raw_progress(tmp_path / "missing.raw")

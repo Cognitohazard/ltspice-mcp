@@ -585,6 +585,13 @@ async def test_tran_meas_is_refused_before_submission_in_batch_mode(
     assert [f["code"] for f in receipt["failures"]] == ["lint_blocked"]
 
 
+#: 10^8 steps of an RC under a sine: still solving seconds after launch, so a
+#: test can stop it, or read its raw, part way through.
+_SLOW_RC_DECK = (
+    "* slow rc\nV1 in 0 SIN(0 1 1k)\nR1 in out 1k\nC1 out 0 1u\n.tran 10n 1 0 10n\n.end\n"
+)
+
+
 async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     ngspice_state: SessionState, work_dir: Path
 ):
@@ -598,7 +605,7 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     net = _write(
         work_dir,
         "slow.cir",
-        "* slow rc\nV1 in 0 SIN(0 1 1k)\nR1 in out 1k\nC1 out 0 1u\n.tran 10n 1 0 10n\n.end\n",
+        _SLOW_RC_DECK,
     )
     receipt = await terminal_experiment(
         ngspice_state,
@@ -641,7 +648,7 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
     net = _write(
         work_dir,
         "slow.cir",
-        "* slow rc\nV1 in 0 SIN(0 1 1k)\nR1 in out 1k\nC1 out 0 1u\n.tran 10n 1 0 10n\n.end\n",
+        _SLOW_RC_DECK,
     )
     submitted = await handle_run_experiments(
         RunExperimentsInput.model_validate(
