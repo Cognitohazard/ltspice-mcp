@@ -11,6 +11,7 @@ failure), and an archetype-scale blank build.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from ltspice_mcp.tools.schematic_edit import (
     evaluate_edit_schematic,
     handle_edit_schematic,
 )
+from tests import _fake_netlister as fake_netlister
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -1007,6 +1009,103 @@ async def test_rejected_reference_path_refuses_before_committing(asc_state, work
     # Nothing was written: the rejection lands before the commit protocol runs.
     assert not (work_dir / "denied_ref.asc").exists()
     assert not list(work_dir.glob("denied_ref.asc.staging-*"))
+
+
+# The sheet a caller starts from, with a MOSFET whose SpiceLine the exporter
+# appends and a multi-line directive TEXT block it splits into lines.
+_AMP_ASC = (
+    "Version 4.1\nSHEET 1 880 680\n"
+    "SYMBOL res 256 96 R0\nSYMATTR InstName R1\nSYMATTR Value 10k\n"
+    "SYMBOL nmos 208 224 R0\nSYMATTR InstName M1\nSYMATTR Value NMOS\n"
+    "SYMATTR SpiceLine l=1u w=10u\n"
+    "TEXT 40 400 Left 2 !.model MYN NMOS(VTO=0.7\\n+ KP=100u)\\n.tran 1m\n"
+)
+_ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400, "y": 96}]
+
+
+@pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
+async def test_asc_reference_is_exported_like_the_committed_sheet(
+    asc_state, work_dir, monkeypatch, mode
+):
+    """An additive edit compared with the sheet it started from reports the
+    addition and nothing else.
+
+    The committed sheet reaches the comparison as its LTspice export, so the
+    reference .asc has to as well: read through the schematic editor instead,
+    every SpiceLine read as a changed component and the exporter's boilerplate
+    as added directives, and the graph engine lexed the schematic as SPICE.
+    """
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
+    sheet = work_dir / "amp.asc"
+    sheet.write_text(_AMP_ASC, newline="\n")
+    original = work_dir / "amp_orig.asc"
+    original.write_text(_AMP_ASC, newline="\n")
+
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="amp.asc",
+                expected_sha256=_sha(sheet),
+                ops=_ADD_R2,
+                compare={"reference": "amp_orig.asc", "mode": mode},
+            ),
+            asc_state,
+        )
+    )
+
+    assert data["commit_state"] == "committed"
+    verification = data["verification"]
+    assert verification.get("compare_error") is None
+    comparison = verification["comparison"]
+    if mode == "structural_diff":
+        assert comparison["components_added"] == ["R2"]
+        assert comparison["components_removed"] == []
+        assert comparison["components_changed"] == []
+        assert comparison["directives_added"] == []
+        assert comparison["directives_removed"] == []
+    else:
+        assert [c["ref"] for c in comparison["added"]] == ["R2"]
+        assert comparison["removed"] == []
+        assert comparison["value_mismatches"] == []
+    assert verification["equivalent"] is False
+    # The reference was exported from a copy; nothing was written beside it.
+    assert not (work_dir / "amp_orig.net").exists()
+
+
+async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir, monkeypatch):
+    """The committed sheet exported, the reference did not: nothing to compare
+    against, so no verdict — and the sheet stays committed."""
+    sheet = work_dir / "amp.asc"
+    sheet.write_text(_AMP_ASC, newline="\n")
+    (work_dir / "amp_orig.asc").write_text(_AMP_ASC, newline="\n")
+
+    async def export_only_the_committed_sheet(asc_copy: Path, state: SessionState) -> str:
+        copy, committed = await asyncio.gather(
+            asyncio.to_thread(asc_copy.read_bytes), asyncio.to_thread(sheet.read_bytes)
+        )
+        if copy != committed:
+            raise RuntimeError("injected reference export failure")
+        return await fake_netlister.export_asc_to_netlist(asc_copy, state)
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", export_only_the_committed_sheet)
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="amp.asc",
+                expected_sha256=_sha(sheet),
+                ops=_ADD_R2,
+                compare={"reference": "amp_orig.asc", "mode": "structural_diff"},
+            ),
+            asc_state,
+        )
+    )
+
+    assert data["commit_state"] == "committed"
+    verification = data["verification"]
+    assert verification.get("export_error") is None
+    assert "injected reference export failure" in verification["compare_error"]
+    assert verification["equivalent"] is None
+    assert data["outcome"] == "partial"
 
 
 # ---------------------------------------------------------------------------

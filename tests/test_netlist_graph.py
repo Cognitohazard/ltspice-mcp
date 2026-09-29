@@ -626,3 +626,22 @@ def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(
     parse_netlist_graph(deck, include_resolver=recording_resolver)
 
     assert seen == [Path("/mnt/c/Users/dev/LTspice/lib/cmp/standard.mos")]
+
+
+def test_a_schematic_is_refused_rather_than_lexed_as_spice(tmp_path: Path) -> None:
+    """An ``.asc`` handed to the graph engine is a comparison of the wrong thing.
+
+    Lexed as SPICE, ``SYMBOL``/``SYMATTR`` lines parse as element cards, so a
+    comparison against a schematic reported its drawing records as components.
+    Its LTspice export is the netlist; the schematic itself is refused.
+    """
+    sheet = tmp_path / "amp.asc"
+    sheet.write_text(
+        "Version 4.1\nSHEET 1 880 680\nSYMBOL res 256 96 R0\nSYMATTR InstName R1\n"
+        "SYMATTR Value 10k\n"
+    )
+
+    with pytest.raises(NetlistGraphError, match=r"amp\.asc is an \.asc schematic"):
+        parse_netlist_graph(sheet)
+    with pytest.raises(NetlistGraphError, match=r"amp\.asc is an \.asc schematic"):
+        compare_graphs(str(sheet), DIVIDER)

@@ -754,6 +754,23 @@ read is diffed as empty, so the delta still comes back, `equivalent` is null,
 and a warning names the deck that failed. Either way the call's outcome is
 `partial` and the reason is in the response.
 
+Both modes compare netlists. An `.asc` under test is compared as its LTspice
+export, so an `.asc` reference is exported the same way — on a staged copy,
+never beside the caller's file — and without LTspice the compare fails instead
+of diffing a schematic's attributes against a netlist's cards. Reading the
+reference through the schematic editor while the sheet under test came from
+its export made the representations differ, and every difference in
+representation read as a change: each SpiceLine as a changed component, a
+multi-line TEXT block as one directive removed and several added.
+`structural_diff` lexes both decks, so a `+` continuation belongs to the card
+it continues, and compares directives parsed rather than as text: spacing,
+case, comma separators and assignment order in `.model`/`.param` are spelling.
+It leaves out what the netlister adds to every export — `.backanno`, the
+install-path `.lib …/cmp/standard.*`, and a parameterless default model such as
+`.model NMOS NMOS` while the reference declares no model of that name. A
+component's signature is its model or value plus its instance parameters,
+nodes excluded (equivalence is the mode that compares wiring).
+
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
 summary, `outcome` and `hint`.
