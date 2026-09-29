@@ -22,6 +22,7 @@ from pydantic import BeforeValidator, Field, SkipValidation, model_validator
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     LTSpiceMCPError,
+    PathSecurityError,
     ResultError,
     python_route_text,
 )
@@ -830,15 +831,18 @@ async def _resolve_sources(
                 raw = safe_path(source_input.raw_path, state)
                 resolved = services.source_for_raw_path(raw, state)
             except (LTSpiceMCPError, OSError) as exc:
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": None,
-                        "run_index": 0,
-                        "code": "source_unavailable",
-                        "detail": str(exc),
-                    }
-                )
+                row = {
+                    "label": source_input.label,
+                    "case_id": None,
+                    "run_index": 0,
+                    "code": "source_unavailable",
+                    "detail": str(exc),
+                }
+                if isinstance(exc, PathSecurityError):
+                    # Refused, not unavailable: the file may be perfectly
+                    # readable, and the remedy is the sandbox's setting.
+                    row.update(code=exc.code, hint=state.sandbox_guidance())
+                missing.append(row)
                 continue
             # Preserve the expected sibling-log path even while it is absent:
             # an absent→present transition changes the composite manifest.
@@ -2623,6 +2627,11 @@ def _assemble(
     if signals is not None:
         data["signals_available"] = signals
     hints: list[str] = []
+    if any(case.get("code") == PathSecurityError.code for case in a.missing):
+        hints.append(
+            "The sandbox refused a source path; its coverage.missing_cases row's "
+            "hint names the config line that widens the sandbox."
+        )
     if next_value is not None:
         reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"
         hints.append(

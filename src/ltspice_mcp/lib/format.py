@@ -48,7 +48,9 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
 # netlist, and the Greek mu (μ, U+03BC) is what a keyboard produces; both are
 # admitted to the tail and folded to 'u' before the suffix table is read.
 _NUM_TAIL_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Zµμ]+)$")
-_MICRO_SIGNS = str.maketrans({"µ": "u", "μ": "u"})
+#: The micro sign (U+00B5) and the Greek mu (U+03BC).
+MICRO_SIGNS = frozenset("µμ")
+_MICRO_SIGNS = str.maketrans(dict.fromkeys(MICRO_SIGNS, "u"))
 
 
 def fold_micro_sign(text: str) -> str:

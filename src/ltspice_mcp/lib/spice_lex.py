@@ -30,6 +30,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+#: Directive heads whose first argument is a file path.
+INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
+
 CardKind = Literal[
     "model",
     "param",
@@ -491,6 +494,11 @@ class SpiceCard:
     def meas_label(self) -> str | None:
         """Measurement label for ``.MEAS`` cards, else ``None``."""
         return self.name if self.kind == "meas" else None
+
+    def line_at(self, body_offset: int) -> int:
+        """The 1-based source line that holds ``body[body_offset]``."""
+        seg = _segment_for_offset(self.body_layout, body_offset)
+        return self.line_start + (seg.raw_line_idx if seg is not None else 0)
 
     def replace_span(self, body_start: int, body_end: int, new_text: str) -> None:
         """Replace ``body[body_start:body_end]`` with ``new_text`` atomically.
