@@ -21,6 +21,7 @@ from typing import Any, Literal
 from mcp import types
 
 from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
     Completeness,
@@ -902,8 +903,9 @@ def snapshot_receipt(
     large evidence lists are serialized after the renderer selects a page.
 
     ``live_progress`` is ``live_run_progress``'s read, taken off the loop just
-    before this call. An entry joins the observations only for a case still
-    running here, so a case that finished in between is not reported running.
+    before this call (``snapshot_receipt_live`` pairs the two). An entry joins
+    the observations only for a case still running here, so a case that
+    finished in between is not reported running.
     """
     lint_map: dict[str, list[dict[str, Any]]]
     if lint_by_circuit is None:
@@ -964,6 +966,28 @@ def snapshot_receipt(
         analysis_error=analysis.error,
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
+    )
+
+
+async def snapshot_receipt_live(
+    job: ExperimentJob,
+    state: SessionState | None,
+    *,
+    control_token: str | None = None,
+    lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+) -> ReceiptSnapshot:
+    """``snapshot_receipt`` with each running case's progress, read first.
+
+    The read suspends (it is file I/O, off the loop); the snapshot after it
+    does not. Every receipt that reports on a job in flight is taken here.
+    """
+    live_progress = await live_run_progress(job)
+    return snapshot_receipt(
+        job,
+        state,
+        control_token=control_token,
+        lint_by_circuit=lint_by_circuit,
+        live_progress=live_progress,
     )
 
 

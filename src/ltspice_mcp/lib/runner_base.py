@@ -777,12 +777,10 @@ class RunnerBase:
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
         self._retire_finished_runners()
-        runner = (
-            self._build_sim_runner(
-                timeout_s=timeout_s, cwd=native.cwd, prelaunch_check=native.verify_execution
-            )
-            if native
-            else self._build_sim_runner(timeout_s=timeout_s)
+        runner = self._build_sim_runner(
+            timeout_s=timeout_s,
+            cwd=native.cwd if native else None,
+            prelaunch_check=native.verify_execution if native else None,
         )
         runner.run(
             str(netlist),

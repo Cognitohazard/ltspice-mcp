@@ -479,6 +479,8 @@ writing when the receipt is built, off the event loop, and never stored: the
 job record does not grow, and a job nobody asks about costs nothing. A read is
 the raw's header and last record (the tail, for an ASCII raw), so its cost does
 not grow with the file: under 0.2 ms each on 30-50 MB raws of both simulators.
+The one exception is an ASCII raw holding a finished plot before the running
+one, whose finished plot is searched, at most 8 MB of it, for where it ends.
 It is done for at most as many cases as the job has in flight. A case whose
 `points` stops moving between two reads while `running_s` grows is not
 advancing; that judgment, and whether to cancel, is the caller's.

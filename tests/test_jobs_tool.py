@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import struct
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,7 +48,7 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import await_until, fake_simulator, staged_decks
+from tests.conftest import await_until, fake_simulator, ngspice_binary_raw, staged_decks
 from tests.test_native_records import _record
 
 
@@ -1072,13 +1071,11 @@ class TestDurableProgress:
         running.status = "running"
         running.run_token = f"{job.job_id}_case_0"
         running.submitted_at = now()
-        header = (
-            "Title: running\nDate: x\nPlotname: Transient Analysis\nFlags: real\n"
-            "No. Variables: 2\nNo. Points: 0       \nVariables:\n"
-            "\t0\ttime\ttime\n\t1\tv(out)\tvoltage\nBinary:\n"
-        ).encode("ascii")
-        records = b"".join(struct.pack("<2d", t, 1.0) for t in (0.0, 1e-3, 2e-3))
-        (job.output_folder / f"{running.run_token}.raw").write_bytes(header + records + b"\0" * 5)
+        (job.output_folder / f"{running.run_token}.raw").write_bytes(
+            ngspice_binary_raw(
+                [(t, 1.0) for t in (0.0, 1e-3, 2e-3)], ["time", "v(out)"], tail=b"\0" * 5
+            )
+        )
         job.completeness.recount(job.cases)
         state_no_sim.all_jobs[job.job_id] = job
 

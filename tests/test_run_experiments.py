@@ -846,14 +846,15 @@ class TestLeanReceipt:
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / f"{request_id}.cir")
         captured: list[receipts_mod.ReceiptSnapshot] = []
-        snapshot_receipt = experiments_mod.snapshot_receipt
+        snapshot_receipt = receipts_mod.snapshot_receipt
 
         def capture_snapshot(*args: Any, **kwargs: Any) -> receipts_mod.ReceiptSnapshot:
             snapshot = snapshot_receipt(*args, **kwargs)
             captured.append(snapshot)
             return snapshot
 
-        monkeypatch.setattr(experiments_mod, "snapshot_receipt", capture_snapshot)
+        # The dwell takes its snapshot through snapshot_receipt_live.
+        monkeypatch.setattr(receipts_mod, "snapshot_receipt", capture_snapshot)
         request = (
             _args(deck, request_id, run_fields=run_fields)
             if run_fields is not None

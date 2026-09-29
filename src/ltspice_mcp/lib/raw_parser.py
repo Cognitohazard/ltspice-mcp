@@ -187,6 +187,21 @@ def _install_multiplot_ascii_guard() -> None:
 _install_multiplot_ascii_guard()
 
 
+def _transient_offset(plotname: object, offset: object) -> float:
+    """Where a windowed transient's stored time axis starts, in deck time.
+
+    LTspice stores ``.tran 0 <tstop> <tstart>`` output from 0 with the true
+    start in the header's ``Offset:`` field. Other analyses' axes are not time,
+    and an unwindowed run writes ``Offset: 0``, so both read as 0 here.
+    """
+    if "transient" not in str(plotname or "").lower():
+        return 0.0
+    try:
+        return float(str(offset or 0).strip())
+    except ValueError:
+        return 0.0
+
+
 class OffsetAwareRawRead(RawRead):
     """RawRead that rebases a windowed-transient time axis to deck time.
 
@@ -204,14 +219,9 @@ class OffsetAwareRawRead(RawRead):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.time_offset = 0.0
-        try:
-            offset = float(str(self.raw_params.get("Offset", 0) or 0).strip())
-        except (TypeError, ValueError):
-            offset = 0.0
-        plotname = str(self.raw_params.get("Plotname", "")).lower()
-        if offset != 0.0 and "transient" in plotname:
-            self.time_offset = offset
+        self.time_offset = _transient_offset(
+            self.raw_params.get("Plotname"), self.raw_params.get("Offset")
+        )
 
     def get_axis(self, step: int = 0):
         axis = super().get_axis(step)
@@ -1045,6 +1055,10 @@ def sniff_raw_dialect(path: Path) -> str | None:
 
 #: Plots whose first variable is a value, not a swept axis (spicelib's list).
 _AXISLESS_PLOTS = frozenset({"operating point", "transfer function", "integrated noise"})
+#: Header text by character width: every raw header is ASCII or UTF-16LE.
+#: ``surrogatepass`` round-trips any UTF-16 code unit, and latin-1 any byte, so
+#: re-encoding a decoded prefix gives its byte length exactly.
+_RAW_CODECS = {1: "latin-1", 2: "utf-16-le"}
 #: Bytes one plot header may take before the reader stops looking for its end.
 #: A header is a few lines plus one per variable, so this is far past any deck.
 #: Read in small chunks: a running job's cases are read on every status call,
@@ -1052,11 +1066,14 @@ _AXISLESS_PLOTS = frozenset({"operating point", "transfer function", "integrated
 _PARTIAL_HEADER_CAP = 16 * 1024 * 1024
 _PARTIAL_READ_CHUNK = 8 * 1024
 #: ASCII data has no fixed record size, so its last point is found by reading
-#: the end of the file. The window grows until it holds one complete point.
-_ASCII_TAIL_START = 64 * 1024
+#: the end of the file: a window sized for two points of the plot's variables,
+#: grown until it holds a complete one.
+_ASCII_TAIL_START = 4 * 1024
+_ASCII_TAIL_PER_VARIABLE = 128
 _ASCII_TAIL_CAP = 16 * 1024 * 1024
-#: Bytes of a finished ASCII plot the reader will step through line by line to
-#: reach the plot after it; past this the count is reported as unknown.
+#: Bytes of a finished ASCII plot searched, a block at a time, for the plot
+#: after it; past this the count is reported as unknown.
+_ASCII_SKIP_BLOCK = 1024 * 1024
 _ASCII_SKIP_CAP = 8 * 1024 * 1024
 _RE_DATA_START = re.compile(r"(?im)^(binary|values):[ \t]*\r?\n")
 
@@ -1115,7 +1132,8 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
     ``dialect`` names the simulator when the header does not: ngspice before
     version 44 writes no ``Command:`` line. A UTF-16 header is LTspice's.
 
-    Returns None when the path is missing, unreadable, or not a raw file.
+    Raises FileNotFoundError when there is no file; returns None when the file
+    is unreadable or not a raw.
     """
     try:
         with path.open("rb") as handle:
@@ -1124,30 +1142,31 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
             # still be writing.
             size = handle.seek(0, os.SEEK_END)
             handle.seek(0)
-            magic = handle.read(max(map(len, _RAW_HEADER_UTF16)))
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
             if magic.startswith(_RAW_HEADER_UTF16):
-                codec, width = "utf-16-le", 2
+                width = 2
             elif magic.startswith(_RAW_HEADER_ASCII):
-                codec, width = "latin-1", 1
+                width = 1
             else:
                 return None
             offset = 0
             while True:
-                header = _read_plot_header(handle, offset, codec, width)
-                following = _progress_of_plot(handle, header, size, codec, width, dialect)
+                header = _read_plot_header(handle, offset, width)
+                following = _progress_of_plot(handle, header, size, width, dialect)
                 if isinstance(following, int):
                     offset = following
                     continue
                 return following
+    except FileNotFoundError:
+        raise
     except OSError:
         return None
 
 
-def _read_plot_header(handle: Any, offset: int, codec: str, width: int) -> _PlotHeader:
+def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
     """Read one plot header from ``offset``, up to the line that starts its data."""
-    decoder = codecs.getincrementaldecoder(codec)(
-        errors="surrogatepass" if width == 2 else "strict"
-    )
+    codec = _RAW_CODECS[width]
+    decoder = codecs.getincrementaldecoder(codec)(errors="surrogatepass")
     handle.seek(offset)
     text = ""
     consumed = 0
@@ -1161,12 +1180,7 @@ def _read_plot_header(handle: Any, offset: int, codec: str, width: int) -> _Plot
         # Back up by the marker's length: it may straddle two chunks.
         match = _RE_DATA_START.search(text, max(0, searched - 16))
         if match is not None:
-            # Encoding the decoded prefix back gives its byte length exactly:
-            # latin-1 is one byte per character, and surrogatepass round-trips
-            # every UTF-16 code unit.
-            prefix = text[: match.end()].encode(
-                codec, errors="surrogatepass" if width == 2 else "strict"
-            )
+            prefix = text[: match.end()].encode(codec, errors="surrogatepass")
             fields, variables = _parse_plot_header(text[: match.start()])
             return _PlotHeader(fields, variables, offset + len(prefix), match.group(1).lower())
     fields, variables = _parse_plot_header(text)
@@ -1188,7 +1202,7 @@ def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str]]:
         key, sep, value = line.partition(":")
         if not sep:
             continue
-        key = key.strip().lstrip("﻿").lower()
+        key = key.strip().lstrip("\ufeff").lower()
         if key == "variables":
             in_variables = True
             continue
@@ -1222,7 +1236,6 @@ def _progress_of_plot(
     handle: Any,
     header: _PlotHeader,
     size: int,
-    codec: str,
     width: int,
     dialect: str | None,
 ) -> PartialRawProgress | int | None:
@@ -1253,17 +1266,14 @@ def _progress_of_plot(
 
     if header.data_kind == "values":
         if declared > 0 and width == 1:
-            following, at_end = _skip_ascii_plot(handle, header.data_start, size)
-            if following is not None:
-                return following
-            if not at_end:
+            end = _ascii_plot_end(handle, header.data_start, size)
+            if end is None:
                 # The plot this file ends in is out of reach; its lines would
                 # be read with this plot's variable count.
                 return progress(None, None)
-        tail = _ascii_last_point(handle, header.data_start, size, codec, width, n_vars)
-        if tail is None:
-            return progress(None, None)
-        return progress(*tail)
+            if end < size:
+                return end
+        return progress(*_ascii_last_point(handle, header.data_start, size, width, n_vars))
 
     writer = _raw_writer(fields, width, dialect)
     complex_values = "complex" in flags or (plot or "").lower() == "ac analysis"
@@ -1278,7 +1288,7 @@ def _progress_of_plot(
     on_disk = (size - header.data_start) // record
     if 0 < declared < on_disk:
         following = header.data_start + declared * record
-        if _plot_starts_at(handle, following, codec):
+        if _plot_starts_at(handle, following, width):
             return following
     # Every complete record counts, even past a nonzero declared count: LTspice
     # rewrites that count only now and then while it runs, so a killed run's
@@ -1299,49 +1309,50 @@ def _progress_of_plot(
     return progress(points, struct.unpack("<d", value)[0])
 
 
-def _plot_starts_at(handle: Any, offset: int, codec: str) -> bool:
-    marker = "Title:".encode(codec)
+def _plot_starts_at(handle: Any, offset: int, width: int) -> bool:
     handle.seek(offset)
-    head = handle.read(len(marker) + 2)
-    return head.startswith(marker) or head.startswith(b"\xff\xfe" + marker)
+    head = handle.read(len(_RAW_HEADER_UTF16[0]))
+    return head.startswith(_RAW_HEADER_UTF16 if width == 2 else _RAW_HEADER_ASCII)
 
 
-def _skip_ascii_plot(handle: Any, data_start: int, size: int) -> tuple[int | None, bool]:
-    """The offset of the plot after a finished ASCII plot, and whether the file ended.
+def _ascii_plot_end(handle: Any, data_start: int, size: int) -> int | None:
+    """Where a finished ASCII plot's data ends: the next plot's offset, or ``size``.
 
-    ``(offset, False)`` when another plot follows, ``(None, True)`` when this
-    plot runs to the end of the file, ``(None, False)`` when the read cap was
-    reached first.
+    None when the search cap comes first. Searched a block at a time for the
+    next ``Title:`` line, so the scan runs in C rather than line by line.
     """
+    marker = b"\n" + _RAW_HEADER_ASCII
     handle.seek(data_start)
     position = data_start
+    carry = b""
     while position - data_start < _ASCII_SKIP_CAP:
-        if position >= size:
-            return None, True
-        line = handle.readline()
-        if not line:
-            return None, True
-        if line.startswith(_RAW_HEADER_ASCII):
-            return position, False
-        position += len(line)
-    return None, False
+        block = handle.read(min(_ASCII_SKIP_BLOCK, _ASCII_SKIP_CAP - (position - data_start)))
+        if not block:
+            return size
+        found = (carry + block).find(marker)
+        if found >= 0:
+            return position - len(carry) + found + 1
+        # Keep enough of this block to find a marker that straddles the next.
+        carry = block[-(len(marker) - 1) :]
+        position += len(block)
+    return None
 
 
 def _ascii_last_point(
     handle: Any,
     data_start: int,
     size: int,
-    codec: str,
     width: int,
     n_vars: int,
-) -> tuple[int, float | None] | None:
+) -> tuple[int | None, float | None]:
     """The point count and axis value of the last complete ASCII point.
 
-    ``(0, None)`` when the data holds no complete point, None when the last one
-    could not be found within the read cap or the data does not have the shape
-    of raw values.
+    ``(0, None)`` when the data holds no complete point; ``(None, None)`` when
+    the last one could not be found within the read cap or the data does not
+    have the shape of raw values.
     """
-    window = _ASCII_TAIL_START
+    codec = _RAW_CODECS[width]
+    window = _ASCII_TAIL_START + _ASCII_TAIL_PER_VARIABLE * n_vars
     while True:
         start = max(data_start, size - window)
         start += (start - data_start) % width
@@ -1356,13 +1367,13 @@ def _ascii_last_point(
         try:
             found = _last_complete_ascii_point(lines, n_vars)
         except ValueError:
-            return None
+            return None, None
         if found is not None:
             return found
         if start == data_start:
             return 0, None
         if window >= _ASCII_TAIL_CAP:
-            return None
+            return None, None
         window *= 4
 
 
@@ -1402,14 +1413,10 @@ def _deck_axis_value(
 
     The same two corrections a full load makes: LTspice may store a time value
     negated (spicelib's ``Axis.get_wave`` takes the absolute value of a
-    ``time`` axis), and a windowed transient stores time from 0 with the true
-    start in ``Offset:`` (``OffsetAwareRawRead``).
+    ``time`` axis), and a windowed transient's stored time starts from 0.
     """
     if value is None or not math.isfinite(value):
         return None
     if (axis or "").lower() == "time":
         value = abs(value)
-    if "transient" in (plot or "").lower():
-        with contextlib.suppress(ValueError):
-            value += float(fields.get("offset", "0") or 0)
-    return value
+    return value + _transient_offset(plot, fields.get("offset"))
