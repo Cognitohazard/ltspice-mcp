@@ -114,6 +114,24 @@ class TestSurface:
         assert definition.annotations.destructive_hint is True
         assert definition.annotations.read_only_hint is False
 
+    def test_the_descriptions_list_exactly_the_namespace(self, state: SessionState):
+        """An advertised name missing from scope is a NameError; a name in scope
+        but never advertised goes unused. Both lists come from SNIPPET_NAMES."""
+        from types import SimpleNamespace
+
+        from ltspice_mcp.code_worker import (
+            SNIPPET_NAMES,
+            _namespace,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        stub = SimpleNamespace(load_raw=None, measurements=None, reference=None)
+        assert set(_namespace(stub)) - {"__name__"} == set(SNIPPET_NAMES)
+        definition = {d.name: d for d in state.tool_defs}["run_code"]
+        field = RunCodeInput.model_fields["code"].description or ""
+        for name in SNIPPET_NAMES:
+            assert name in (definition.description or ""), name
+            assert name in field, name
+
 
 # ---------------------------------------------------------------------------
 # Running code
@@ -150,12 +168,14 @@ class TestExecution:
         code = (
             "ops = [n for n in ('run_experiments', 'analyze_results', 'jobs', 'inspect',"
             " 'edit_schematic', 'verify_circuit') if callable(getattr(api, n, None))]\n"
-            "print(np.__name__, callable(load_raw), callable(measurements))\n"
+            "print(np.__name__, callable(load_raw), callable(measurements),"
+            " callable(window_and_clean), callable(compute_signal_stats),"
+            " callable(time_weighted_quantiles))\n"
             "(len(ops), reference('jobs')[:6])"
         )
         reply = await run(state, code)
         assert reply["status"] == "ok", reply
-        assert reply["stdout"] == "numpy True True\n"
+        assert reply["stdout"] == "numpy True True True True True\n"
         assert reply["result"].startswith("(6, ")
 
     async def test_each_call_is_a_fresh_namespace(self, state: SessionState):
@@ -315,6 +335,28 @@ class TestLifetime:
         done = await first
         assert done["status"] == "ok"
         assert done["result"] == "'first'"
+        assert second["running"]["exec_seq"] == done["exec_seq"]
+
+    async def test_a_call_during_a_slow_boot_is_busy(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # A second call landing while the first is still booting the worker
+        # read the reply pipe alongside it instead of being answered busy.
+        worker = worker_for(state)
+        await run(state, "", reset=True)
+        boot = worker._ensure  # pyright: ignore[reportPrivateUsage]
+
+        async def slow_boot() -> None:
+            await asyncio.sleep(0.5)
+            await boot()
+
+        monkeypatch.setattr(worker, "_ensure", slow_boot)
+        first = asyncio.ensure_future(run(state, "'first'"))
+        await asyncio.sleep(0.1)
+        second = await run(state, "2")
+        assert second["status"] == "busy", second
+        done = await first
+        assert done["status"] == "ok", done
         assert second["running"]["exec_seq"] == done["exec_seq"]
 
     async def test_reset_restarts_the_worker(self, state: SessionState):

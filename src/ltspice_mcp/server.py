@@ -251,7 +251,7 @@ For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Writ
 
 Runs are cheap: simulate instead of reasoning it out.
 
-EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. {code_loops}
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. Loops, trace math: {code_loops}
 
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check by plain words ('phase margin').
 
@@ -273,10 +273,8 @@ _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", 
 
 #: The code-loop clause, in its two editions: the library alone, or the tool
 #: in front of it when the operator turned run_code on.
-_CODE_LOOPS_LIBRARY = "Code loops: from ltspice_mcp.api import Api, the same ops in-process."
-_CODE_LOOPS_TOOL = (
-    "Code loops: run_code runs Python with api in scope, or from ltspice_mcp.api import Api."
-)
+_CODE_LOOPS_LIBRARY = "from ltspice_mcp.api import Api, the same ops in-process."
+_CODE_LOOPS_TOOL = "run_code runs Python with api in scope, or from ltspice_mcp.api import Api."
 
 #: The guide as the default configuration serves it (run_code on) — the static
 #: default the Server is constructed with, and what the tests pin.

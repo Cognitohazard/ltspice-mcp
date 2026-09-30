@@ -670,8 +670,10 @@ expected_sha256     REQUIRED whenever target exists, under either base;
                     Both refusals — missing and mismatched — report the
                     target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
-compare             {reference, anchors?, rtol} — post-commit netlist
-                    compare, inside the transaction
+compare             {reference, anchors?, rtol, mode?} — post-commit netlist
+                    compare ("equivalence" | "structural_diff"), inside
+                    the transaction; the exported netlist is returned
+                    only when the verdict is not a match
 dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend"], default ["touched"]
 view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
@@ -684,6 +686,20 @@ netlist" is written the same way on both tools. It is the only spelling: the
 flat `reference` this tool shipped with said nothing the object did not, and a
 call carrying both was refused rather than resolved, so the second spelling
 could only ever be the same call written a longer way.
+
+**The exported netlist is returned only when the comparison did not match.**
+The compare stage exports the committed sheet to a netlist. On `equivalent:
+true` the reply leaves that deck out. It is equivalent to the reference the
+caller supplied, so it adds nothing to the verdict, and every later turn would
+re-read it. A mismatch, a compare error or no verdict returns it as `netlist`,
+because it is the sheet's side of the comparison the caller now has to
+diagnose. §2 keeps a failed row's log path for the same reason. An export
+failure produces no deck, so none is returned. The confirmed case has no
+opt-in. The netlist is still one call away: `verify_circuit` with the `export`
+check writes it and returns its path. A `return_views` member would have put a
+plain string among paginated pin/net tables, and it would have had nothing to
+return on a call without `compare`. The Python API applies the same rule; its
+complete reply differs from the MCP one only in unpaginated views.
 
 **This tool does not draw.** `verify_circuit` owns rendering, and its policy is
 the more capable one — a pixel cap, an inline delivery channel, and a
@@ -769,7 +785,8 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist?, verification?,
+Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
 hint`.
@@ -789,15 +806,15 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 export_to     "managed" (default) | "sidecar"
 ```
 
-`compare` is shared with `edit_schematic`. The shared half —
-`{reference, anchors, rtol}` — means the same thing on both tools;
-`compare.mode` is on a subclass here because only this tool has two comparisons
-to choose between, and `render`'s `mode`/`delivery` because only this tool has
-checks to skip and an image channel to deliver into. A tool never advertises a
-field it cannot honour, which is also why `render` is here and not on
-`edit_schematic`. There is one spelling of each: the flat
-`reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with said nothing
-the object did not, and a call carrying both was refused rather than resolved.
+`compare` is shared with `edit_schematic`, `mode` included: `{reference,
+anchors, rtol, mode}` means the same thing on both tools, and both run either
+comparison through one dispatcher. `render`'s `mode`/`delivery` are here
+because only this tool has checks to skip and an image channel to deliver
+into. A tool never advertises a field it cannot honour, which is also why
+`render` is here and not on `edit_schematic`. There is one spelling of each:
+the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
+said nothing the object did not, and a call carrying both was refused rather
+than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
@@ -1166,7 +1183,7 @@ recipe takes none, having one number.
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
-| `signal_stats` | tran | `signal` | `window?` |
+| `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
