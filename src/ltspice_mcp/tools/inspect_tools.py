@@ -16,7 +16,8 @@ and the circuits it can reach. Each query is one of eight kinds:
 * ``symbol`` — one symbol's pin positions per rotation (``R0``…``M270``),
   bounding box, and origin (the ``symbol_info`` geometry internals).
 * ``net`` — everything on a net. On a ``.asc`` this is a geometric trace
-  (``trace_net`` internals: pins, wire vertices, labels, shorts). On a
+  (``trace_net`` internals: pins, wire vertices, labels, shorts); an ``[x, y]``
+  on a wire's interior traces that wire and reports it as ``snapped_to_wire``. On a
   ``.cir``/``.net``/``.sp`` netlist it is card-membership — which element cards
   reference the node — carrying **no geometry** at all.
 * ``components`` — the component list (``detail:"list"``) or full per-component
@@ -100,6 +101,7 @@ from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
+    label_folded_nets,
     named_labels,
     net_partition,
     netlist_card_value,
@@ -108,6 +110,7 @@ from ltspice_mcp.lib.schematic_ops import (
     resolve_pin,
     same_instance_dropped_segments,
     wire_segments_of,
+    wires_through,
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import (
@@ -193,6 +196,23 @@ class TraceNetInput(ToolInput):
                 },
             },
             "is_shorted": {"type": "boolean"},
+            "snapped_to_wire": {
+                "type": "object",
+                "description": (
+                    "Present when the start point lies on a wire's interior: the "
+                    "wire whose net was traced."
+                ),
+                "properties": {
+                    "from": {
+                        "type": "object",
+                        "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                    },
+                    "to": {
+                        "type": "object",
+                        "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                    },
+                },
+            },
             "warnings": WARNINGS_SCHEMA,
         },
     }
@@ -229,44 +249,39 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
 
     part = net_partition(editor)
     start = (x, y)
-    physical_members = part.members.get(part.root(start), set())
-    if start not in physical_members and start not in part.pin_owners:
-        # The coordinate isn't on any pin/label/wire endpoint — an empty point
-        # (or a bare mid-wire span carrying nothing).
-        raise NetlistError(
-            f"Nothing found at ({x},{y}): no component pin, net label, or wire "
-            "vertex sits there. Use inspect(kind='components') to inspect the layout."
-        )
 
     # The physical partition connects by wire only; LTspice also makes FLAGs
-    # with the same NAME electrically common. Fold physical nets that share a
-    # label name together (a second union-find over physical roots) so
-    # trace_net answers "what's on net X" on label-wired schematics,
-    # not just wire-routed ones.
-    root_parent: dict[tuple[int, int], tuple[int, int]] = {}
+    # with the same NAME electrically common, so trace_net answers "what's on
+    # net X" on label-wired schematics, not just wire-routed ones.
+    net_of = label_folded_nets(part)
 
-    def _rfind(r: tuple[int, int]) -> tuple[int, int]:
-        root_parent.setdefault(r, r)
-        while root_parent[r] != r:
-            root_parent[r] = root_parent[root_parent[r]]
-            r = root_parent[r]
-        return r
+    trace_from = start
+    snapped: tuple[int, int, int, int] | None = None
+    if start not in part.members.get(part.root(start), set()) and start not in part.pin_owners:
+        # No pin, label or wire end sits here. A point on a wire's interior is
+        # still on that wire's net, since LTspice joins anything placed there,
+        # so trace from the wire's end and say so.
+        through = wires_through(start, wire_segments_of(editor))
+        if not through:
+            raise NetlistError(
+                f"Nothing found at ({x},{y}): no component pin, net label or wire "
+                "touches it. Use inspect(kind='components') to inspect the layout."
+            )
+        if len({net_of((s[0], s[1])) for s in through}) > 1:
+            listed = "; ".join(f"({s[0]},{s[1]})->({s[2]},{s[3]})" for s in through)
+            raise NetlistError(
+                f"({x},{y}) is where wires on separate nets cross ({listed}); LTspice "
+                "does not join a crossing that no wire end, pin or label sits on, so "
+                "the point is on neither net alone. Trace from an end of the wire "
+                "you mean."
+            )
+        snapped = through[0]
+        trace_from = (snapped[0], snapped[1])
 
-    label_first: dict[str, tuple[int, int]] = {}
-    for root, coords in part.members.items():
-        for coord in coords:
-            for lbl in part.label_texts.get(coord, ()):
-                if lbl in label_first:
-                    ra, rb = _rfind(label_first[lbl]), _rfind(root)
-                    if ra != rb:
-                        root_parent[ra] = rb
-                else:
-                    label_first[lbl] = root
-
-    target_root = _rfind(part.root(start))
+    target_root = net_of(trace_from)
     member_coords: set[tuple[int, int]] = set()
     for root, coords in part.members.items():
-        if _rfind(root) == target_root:
+        if net_of(root) == target_root:
             member_coords |= coords
     if not member_coords:
         member_coords = {start}
@@ -308,11 +323,21 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         "coordinates": [{"x": cx, "y": cy} for cx, cy in coords],
         "is_shorted": is_shorted,
     }
+    if snapped is not None:
+        data["snapped_to_wire"] = {
+            "from": {"x": snapped[0], "y": snapped[1]},
+            "to": {"x": snapped[2], "y": snapped[3]},
+        }
     if warnings:
         data["warnings"] = warnings
 
     net_name = ", ".join(sorted(labels)) if labels else "<unnamed>"
     lines = [f"Net at ({x},{y}): {net_name}"]
+    if snapped is not None:
+        lines.append(
+            f"  ({x},{y}) lies on the wire ({snapped[0]},{snapped[1]})->"
+            f"({snapped[2]},{snapped[3]}); traced that wire's net."
+        )
     if pins:
         lines.append("  Pins:")
         for p in pins:
@@ -1341,6 +1366,8 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
         "returned_coordinates": page["secondary_returned"],
         "coordinates_truncated": page["secondary_truncated"],
     }
+    if "snapped_to_wire" in tdata:
+        data["snapped_to_wire"] = tdata["snapped_to_wire"]
     if page["secondary_truncated"]:
         data["hint"] = (
             f"{page['secondary_returned']} of {page['secondary_total']} wire-vertex "
