@@ -28,9 +28,10 @@ import shutil
 import stat
 import tempfile
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple, cast
+from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
 
 from mcp import types
 from pydantic import Field
@@ -38,12 +39,14 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, replace_file
+from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
     decode_page_cursor,
+    encode_page_cursor,
     find_label_only_pins,
     paginate_view,
 )
@@ -77,6 +80,7 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     OUTCOME_SCHEMA,
+    VALIDATION_WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
     comparison_mismatch,
@@ -125,6 +129,12 @@ ConsolidatedOp = Annotated[
 ]
 
 
+# The views return_views can name, each resumable through its own field of
+# EditViewCursors.
+ViewName = Literal["touched", "pin_legend", "preexisting"]
+_VIEWS: tuple[str, ...] = get_args(ViewName)
+
+
 class EditViewCursors(StrictModel):
     """Resumption cursors for the paginated views, each a page's ``next_cursor``."""
 
@@ -136,6 +146,10 @@ class EditViewCursors(StrictModel):
     )
     touched: str | None = Field(
         default=None, description="next_cursor from a previous views.touched page."
+    )
+    preexisting: str | None = Field(
+        default=None,
+        description="preexisting.cursor, or a views.preexisting page's next_cursor.",
     )
 
 
@@ -180,28 +194,27 @@ class EditSchematicInput(ToolInput):
             "is attempted, so all problems surface at once."
         ),
     )
-    return_views: list[Literal["touched", "pin_legend"]] = Field(
+    return_views: list[ViewName] = Field(
         default_factory=lambda: ["touched"],
         description=(
             "Which pin/net table to return: 'touched' (default) covers the "
-            "components this batch named, 'pin_legend' the whole sheet. To "
-            "draw the sheet, call verify_circuit with a render policy."
+            "components this batch named, 'pin_legend' the whole sheet. "
+            "'preexisting' lists the findings and label-only pins counted "
+            "under preexisting. To draw the sheet, call verify_circuit."
         ),
     )
     view_cursors: EditViewCursors | None = Field(
         default=None,
         description=(
             "Resume a paginated view by echoing back that page's next_cursor "
-            "unmodified. Checked before any work runs, so a bad one cannot "
-            "surface after the sheet is committed."
+            "unmodified; it returns that view even if return_views omits it. "
+            "Checked before any work runs, so a bad one cannot surface after "
+            "the sheet is committed."
         ),
     )
     view_limit: int = Field(
         default=_DEFAULT_VIEW_LIMIT,
-        description=(
-            "Page size for the paginated views — views.touched, views.pin_legend "
-            "and wiring.label_only_pins."
-        ),
+        description="Page size for every views page and for wiring.label_only_pins.",
     )
 
 
@@ -218,6 +231,21 @@ _PAGE_SCHEMA: dict[str, Any] = page_schema(
         ),
     },
 )
+
+# One wiring.label_only_pins row, tagged with its kind where it shares a page
+# with the validation pass's findings.
+_LABEL_ONLY_ROW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"const": "label_only_pin"},
+        "ref": {"type": "string"},
+        "pin": {"type": "string"},
+        "net": {"type": ["string", "null"]},
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+    },
+    "required": ["kind", "ref", "pin", "net", "x", "y"],
+}
 
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -285,8 +313,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "description": (
                 "Connectivity counts over components with resolvable geometry: of "
                 "pins_total pins, pins_wired have a wire through them and "
-                "pins_label_only carry a net-label but no wire. label_only_pins lists "
-                "the label-only pins as an addressable, paginated page."
+                "pins_label_only carry a net-label but no wire. The counts are "
+                "whole-sheet; label_only_pins pages the label-only pins this batch "
+                "introduced or named, and preexisting.label_only_pins counts the "
+                "rest, so the two sum to pins_label_only."
             ),
             "properties": {
                 "wire_segments": {"type": "integer"},
@@ -297,11 +327,50 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             },
             "required": ["pins_total", "pins_wired", "pins_label_only", "label_only_pins"],
         },
+        "preexisting": {
+            "type": "object",
+            "description": (
+                "What the sheet already reported before this batch and that involves "
+                "no reference or coordinate the batch named: counted here, left out "
+                "of 'warnings' and wiring.label_only_pins. count = findings + "
+                "label_only_pins. Echo cursor as view_cursors.preexisting, or ask "
+                "return_views ['preexisting'], to list them."
+            ),
+            "properties": {
+                "count": {"type": "integer"},
+                "findings": {
+                    "type": "integer",
+                    "description": "Sheet findings (floating pins, dangling labels, ...).",
+                },
+                "label_only_pins": {"type": "integer"},
+                "cursor": {
+                    "type": ["string", "null"],
+                    "description": "Starts the views.preexisting page; null when count is 0.",
+                },
+            },
+            "required": ["count", "findings", "label_only_pins", "cursor"],
+        },
         "views": {
             "type": "object",
             "properties": {
                 "touched": _PAGE_SCHEMA,
                 "pin_legend": _PAGE_SCHEMA,
+                "preexisting": page_schema(
+                    items={
+                        "type": "array",
+                        "items": {
+                            "anyOf": [
+                                VALIDATION_WARNINGS_SCHEMA["items"],
+                                _LABEL_ONLY_ROW_SCHEMA,
+                            ]
+                        },
+                        "description": (
+                            "Sheet findings as the validation pass reports them, then "
+                            "label-only pins with kind 'label_only_pin'."
+                        ),
+                    },
+                    primary_truncated=_PAGE_SCHEMA["properties"]["primary_truncated"],
+                ),
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -400,42 +469,100 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _wiring_and_legend(
-    editor, *, include_legend: bool
-) -> tuple[dict[str, int], list[dict], list[dict]]:
-    """Wiring counts, pin legend, and the label-only pins for a placed editor.
+def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]]:
+    """The pin legend (only when ``include_legend``) and the label-only pins of a placed editor.
 
-    Reuses circuit.py's ``net_partition``-backed helpers (via ``trace_nets``
-    and ``build_on_wire_predicate``) rather than re-deriving connectivity, and
-    hands the plain result to the pure ``lib/pin_legend`` builders. The wiring
-    metric and label-only detection are contract output and always run; the
-    per-component legend is built only when ``include_legend`` (its own view was
-    requested), returned empty otherwise.
+    A label-only pin has no wire through it, so its net holds nothing but what
+    sits at its own coordinate, and its net name is the labels there — read
+    without tracing the sheet. The whole-sheet trace (``trace_nets``, the
+    union-find over every segment and point) runs only for the legend, which
+    names the net of every pin. The plain results go to the pure
+    ``lib/pin_legend`` builders.
     """
-    profile = wiring_profile(editor)
     geometry = collect_component_geometry(editor)
-    nets = trace_nets(editor)
     segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    on_wire = build_on_wire_predicate(segments)
-    label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
+    labels_at: dict[tuple[int, int], set[str]] = {}
+    for lbl in editor.labels:
+        labels_at.setdefault((int(lbl.coord.X), int(lbl.coord.Y)), set()).add(lbl.text)
 
-    def net_name_of(coord: tuple[int, int]) -> str | None:
-        names = nets.get(coord, frozenset())
-        return "/".join(sorted(names)) or None
+    def net_name(labels: Iterable[str]) -> str | None:
+        return "/".join(sorted(labels)) or None
 
-    legend = build_pin_legend(geometry, net_name_of) if include_legend else []
     label_only = find_label_only_pins(
         geometry,
-        is_wired=on_wire,
-        is_labeled=lambda c: c in label_coords,
-        net_name_of=net_name_of,
+        is_wired=build_on_wire_predicate(segments),
+        is_labeled=lambda c: c in labels_at,
+        net_name_of=lambda c: net_name(labels_at.get(c, ())),
     )
-    return profile, legend, label_only
+    if not include_legend:
+        return [], label_only
+    nets = trace_nets(editor)
+    return build_pin_legend(geometry, lambda c: net_name(nets.get(c, ()))), label_only
+
+
+# The ``kind`` a label-only pin carries in the preexisting view, beside the
+# validation pass's own finding kinds.
+_LABEL_ONLY_KIND = "label_only_pin"
+
+
+def _sheet_report(editor) -> tuple[list[dict], list[dict]]:
+    """``(findings, label_only_pins)`` of a placed editor: what the sheet says about itself."""
+    return post_op_warnings(editor), _pin_tables(editor, include_legend=False)[1]
+
+
+def _names_ref(row: Mapping[str, Any], refs: set[str]) -> bool:
+    """Whether a row's ``ref`` is one of ``refs`` (casefolded references)."""
+    ref = row.get("ref")
+    return isinstance(ref, str) and ref.casefold() in refs
+
+
+def _row_coords(row: dict[str, Any]) -> list[tuple[int, int]]:
+    """The coordinates a row names: its anchor, or a wire's two ends."""
+    coords = []
+    if isinstance(row.get("x"), int) and isinstance(row.get("y"), int):
+        coords.append((row["x"], row["y"]))
+    for end in ("from", "to"):
+        point = row.get(end)
+        if isinstance(point, dict):
+            coords.append((point["x"], point["y"]))
+    return coords
+
+
+def _split_by_edit(
+    after: Sequence[dict[str, Any]],
+    before: Sequence[dict[str, Any]],
+    refs: set[str],
+    coords: set[tuple[int, int]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(reported, preexisting)``: the rows of ``after`` this batch accounts for, and the rest.
+
+    A row is reported when the sheet did not have it before the batch — any
+    change to it counts, since its identity is every field — or when it names a
+    reference in ``refs`` (casefolded) or a coordinate in ``coords``. Every
+    other row was already there and involves nothing the batch named. Identity
+    is counted, not merely matched, so a second copy of a row that was there
+    once is new.
+    """
+    remaining = Counter(map(canonical_json, before))
+    reported: list[dict[str, Any]] = []
+    preexisting: list[dict[str, Any]] = []
+    for row in after:
+        key = canonical_json(row)
+        was_there = remaining[key] > 0
+        if was_there:
+            remaining[key] -= 1
+        named = _names_ref(row, refs) or any(coord in coords for coord in _row_coords(row))
+        (preexisting if was_there and not named else reported).append(row)
+    return reported, preexisting
 
 
 @dataclass(frozen=True)
 class EditSchematicViews:
     """Complete pin/net views tied to the bytes produced by one transaction.
+
+    ``label_only_pins`` holds the label-only pins this batch introduced or
+    named; ``preexisting`` holds the sheet findings and label-only pins it left
+    out (see ``_split_by_edit``), each row tagged with its ``kind``.
 
     Drawing the sheet is not among them: ``verify_circuit`` owns rendering, and
     its policy is the more capable one (a pixel cap, inline delivery, and
@@ -447,12 +574,14 @@ class EditSchematicViews:
     wiring_profile: dict[str, int]
     pin_legend: tuple[dict[str, Any], ...]
     label_only_pins: tuple[dict[str, Any], ...]
+    preexisting: tuple[dict[str, Any], ...]
 
 
 def _build_edit_views(
     profile: dict[str, int],
     legend: list[dict],
     label_only: list[dict],
+    preexisting: list[dict],
     sheet_sha256: str,
 ) -> EditSchematicViews:
     """Package the transaction's own views.
@@ -465,6 +594,37 @@ def _build_edit_views(
         wiring_profile=profile,
         pin_legend=tuple(legend),
         label_only_pins=tuple(label_only),
+        preexisting=tuple(preexisting),
+    )
+
+
+def _preexisting_block(findings: int, label_only_pins: int) -> dict[str, Any]:
+    """The count of what was left out, by collection, and where listing it starts."""
+    count = findings + label_only_pins
+    return {
+        "count": count,
+        "findings": findings,
+        "label_only_pins": label_only_pins,
+        "cursor": encode_page_cursor("preexisting", 0) if count else None,
+    }
+
+
+def _preexisting_hint(block: dict[str, Any], *, listed: bool) -> str | None:
+    """One sentence on what was left out, or None when nothing was.
+
+    ``listed`` is whether this reply already carries the preexisting view.
+    """
+    if not block["count"]:
+        return None
+    where = (
+        "listed in views.preexisting"
+        if listed
+        else "counted in preexisting, not listed; add 'preexisting' to return_views, "
+        "or echo preexisting.cursor as view_cursors.preexisting, to list them"
+    )
+    return (
+        f"{block['findings']} sheet finding(s) and {block['label_only_pins']} label-only "
+        f"pin(s) predate this batch and involve nothing it named, so they are {where}."
     )
 
 
@@ -492,6 +652,36 @@ def touched_refs(ops: list[ConsolidatedOp]) -> set[str]:
     return refs
 
 
+def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
+    """Sheet coordinates this op batch named.
+
+    An op's own ``x``/``y`` (a label, a directive anchor, a component origin,
+    a wire's incident point), both ends of an exact wire segment, and every
+    routing waypoint. A pin endpoint names a component, not a coordinate; see
+    ``touched_refs``.
+    """
+    coords: set[tuple[int, int]] = set()
+    for op in ops:
+        for xname, yname in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
+            x, y = getattr(op, xname, None), getattr(op, yname, None)
+            if isinstance(x, int) and isinstance(y, int):
+                coords.add((x, y))
+        for point in getattr(op, "waypoints", None) or ():
+            coords.add((point.x, point.y))
+    return coords
+
+
+def _requested_views(args: EditSchematicInput) -> list[str]:
+    """The views to return: those in return_views, then any whose cursor was echoed.
+
+    Echoing a page's cursor is itself the request for that page, so it never
+    needs a second spelling in return_views to take effect.
+    """
+    cursors = args.view_cursors or EditViewCursors()
+    echoed = [view for view in _VIEWS if getattr(cursors, view)]
+    return list(dict.fromkeys([*args.return_views, *echoed]))
+
+
 def _present_edit_views(
     args: EditSchematicInput,
     neutral: EditSchematicViews,
@@ -500,27 +690,20 @@ def _present_edit_views(
 ) -> tuple[dict, dict]:
     """Apply MCP paging, or build the same page shapes without omissions."""
     cursors = args.view_cursors or EditViewCursors()
-    limit = max(len(neutral.pin_legend), len(neutral.label_only_pins), 1)
-    label_only_page = paginate_view(
-        list(neutral.label_only_pins),
-        "label_only_pins",
-        cursor=None if complete else cursors.label_only_pins,
-        limit=limit if complete else args.view_limit,
-    )
+
+    def page(rows: Sequence[dict[str, Any]], kind: str) -> dict[str, Any]:
+        if complete:
+            return paginate_view(rows, kind, limit=max(len(rows), 1))
+        return paginate_view(rows, kind, cursor=getattr(cursors, kind), limit=args.view_limit)
 
     views: dict[str, Any] = {}
-    for view in args.return_views:
-        rows = list(neutral.pin_legend)
+    for view in _requested_views(args):
+        rows = neutral.preexisting if view == "preexisting" else neutral.pin_legend
         if view == "touched":
             wanted = touched_refs(args.ops)
-            rows = [row for row in rows if str(row.get("ref", "")).casefold() in wanted]
-        views[view] = paginate_view(
-            rows,
-            view,
-            cursor=None if complete else getattr(cursors, view),
-            limit=limit if complete else args.view_limit,
-        )
-    return label_only_page, views
+            rows = [row for row in rows if _names_ref(row, wanted)]
+        views[view] = page(rows, view)
+    return page(neutral.label_only_pins, "label_only_pins"), views
 
 
 def _paged_edit_views(
@@ -716,6 +899,7 @@ def _envelope(
     error: dict | None = None,
     wiring: dict | None = None,
     views: dict | None = None,
+    preexisting: dict | None = None,
     verification: dict | None = None,
     netlist: str | None = None,
     warnings: list[str] | None = None,
@@ -751,6 +935,8 @@ def _envelope(
         data["error"] = error
     if wiring is not None:
         data["wiring"] = wiring
+    if preexisting is not None:
+        data["preexisting"] = preexisting
     if views:
         data["views"] = views
     if verification is not None:
@@ -795,7 +981,8 @@ async def _evaluate_edit_schematic(
     """Implementation shared by the neutral seam and guarded MCP presentation."""
     target = safe_path(args.target, state)
     require_asc(target)
-    if not args.ops and not args.return_views:
+    views = _requested_views(args)
+    if not args.ops and not views:
         raise NetlistError(
             "ops list is empty — pass at least one op, or name return_views to "
             "read the sheet's pin table without changing it."
@@ -923,6 +1110,15 @@ async def _evaluate_edit_schematic(
         committed_sha: str | None = None
         post_commit_stage = "response"
         try:
+            # What the sheet already said about itself, read before the ops run,
+            # so the reply can tell what this batch introduced from what it found.
+            # A blank base starts from nothing; an op-less read changes nothing,
+            # so its "before" is its "after" (None here) and is not read twice.
+            before: tuple[list[dict], list[dict]] | None = None
+            if use_template:
+                before = ([], [])
+            elif args.ops:
+                before = _sheet_report(editor)
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run)
 
             # --- op failure → transactional abort (nothing written)
@@ -955,12 +1151,26 @@ async def _evaluate_edit_schematic(
                 )
             _stage("apply_ops")
 
-            profile, legend, label_only = _wiring_and_legend(
-                editor, include_legend=bool({"pin_legend", "touched"} & set(args.return_views))
+            profile = wiring_profile(editor)
+            legend, label_only = _pin_tables(
+                editor, include_legend=bool({"pin_legend", "touched"} & set(views))
             )
+            findings = post_op_warnings(editor)
+            before_findings, before_pins = before or (findings, label_only)
+            refs, coords = touched_refs(args.ops), touched_coords(args.ops)
+            findings_reported, findings_left_out = _split_by_edit(
+                findings, before_findings, refs, coords
+            )
+            pins_reported, pins_left_out = _split_by_edit(label_only, before_pins, refs, coords)
+            preexisting_rows = findings_left_out + [
+                {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out
+            ]
+            preexisting = _preexisting_block(len(findings_left_out), len(pins_left_out))
+            left_out_hint = _preexisting_hint(preexisting, listed="preexisting" in views)
             # Two sources, one channel: what the ops themselves reported, then
-            # what the finished sheet reports about itself.
-            warnings = _op_warnings(results) + [w["message"] for w in post_op_warnings(editor)]
+            # what the finished sheet reports about itself that this batch
+            # accounts for. The rest is counted under preexisting.
+            warnings = _op_warnings(results) + [w["message"] for w in findings_reported]
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 
@@ -970,7 +1180,8 @@ async def _evaluate_edit_schematic(
                 neutral_views = _build_edit_views(
                     profile,
                     legend,
-                    label_only,
+                    pins_reported,
+                    preexisting_rows,
                     hashlib.sha256(committed_text.encode(encoding)).hexdigest(),
                 )
                 wiring, presented_views = _paged_edit_views(
@@ -990,9 +1201,18 @@ async def _evaluate_edit_schematic(
                             stages=stages,
                             wiring=wiring,
                             views=presented_views,
+                            preexisting=preexisting,
                             warnings=warnings,
                             failures=failures,
-                            hint="Dry run — resubmit without dry_run to commit.",
+                            hint=" ".join(
+                                filter(
+                                    None,
+                                    (
+                                        "Dry run — resubmit without dry_run to commit.",
+                                        left_out_hint,
+                                    ),
+                                )
+                            ),
                         ),
                         text=(
                             f"edit_schematic (dry run) on {target.name}: {len(results)} ops "
@@ -1042,7 +1262,9 @@ async def _evaluate_edit_schematic(
             # Views report no stage entry of their own, so they open and close
             # their name by hand; a stage that calls _stage() only opens it.
             post_commit_stage = "views"
-            neutral_views = _build_edit_views(profile, legend, label_only, committed_sha)
+            neutral_views = _build_edit_views(
+                profile, legend, pins_reported, preexisting_rows, committed_sha
+            )
             wiring, presented_views = _paged_edit_views(
                 args,
                 profile,
@@ -1070,7 +1292,7 @@ async def _evaluate_edit_schematic(
                 if mismatch:
                     netlist = exported
 
-            hint = _commit_hint(profile, verification)
+            hint = _commit_hint(profile, verification, left_out_hint)
             return finish(
                 EditSchematicEvaluation(
                     data=_envelope(
@@ -1084,6 +1306,7 @@ async def _evaluate_edit_schematic(
                         sha256=committed_sha,
                         wiring=wiring,
                         views=presented_views,
+                        preexisting=preexisting,
                         verification=verification,
                         netlist=netlist,
                         warnings=warnings,
@@ -1195,6 +1418,7 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
         ("label_only_pins", cursors.label_only_pins),
         ("pin_legend", cursors.pin_legend),
         ("touched", cursors.touched),
+        ("preexisting", cursors.preexisting),
     ):
         if cursor is None:
             continue
@@ -1366,11 +1590,13 @@ def _post_commit_failure_response(
     )
 
 
-def _commit_hint(profile: dict[str, int], verification: dict | None) -> str:
+def _commit_hint(profile: dict[str, int], verification: dict | None, left_out: str | None) -> str:
     parts = [
         f"Committed. Of {profile['pins_total']} pins, {profile['pins_wired']} are on wires and "
         f"{profile['pins_label_only']} carry a net-label only."
     ]
+    if left_out:
+        parts.append(left_out)
     if verification is not None:
         if verification.get("export_error"):
             parts.append(f"Reference check could not export: {verification['export_error']}.")
