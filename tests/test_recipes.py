@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import get_args
 
-import numpy as np
 import pytest
 from pydantic import ValidationError
 
@@ -331,8 +330,8 @@ class TestSignalStatsQuantiles:
 
     @pytest.mark.parametrize(
         "levels",
-        [[], [1.5], [-0.1], [0.5, 0.5], [0.0000001], list(np.linspace(0.05, 0.95, 17))],
+        [[], [1.5], [-0.1], [0.5, 0.5], [0.0000001], [i / 20 for i in range(1, 18)]],
     )
     def test_unusable_levels_are_refused(self, levels: list[float]):
         with pytest.raises(ValidationError):
-            self._stats(quantiles=[float(level) for level in levels])
+            self._stats(quantiles=levels)

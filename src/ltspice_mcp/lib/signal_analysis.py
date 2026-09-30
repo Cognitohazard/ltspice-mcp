@@ -1593,7 +1593,7 @@ def _unfold_compressed_time(t: np.ndarray) -> np.ndarray:
 
 
 class _TimeMass:
-    """The time a piecewise-linear signal spends at or below a value.
+    """The time a piecewise-linear signal spends at or below each breakpoint.
 
     Built from the positive-duration segments between consecutive samples. A
     flat segment holds its whole duration at one value, so it is kept as an
@@ -1620,22 +1620,39 @@ class _TimeMass:
         self._ramp_dt = dt[sloped]
         self._ramp_lo = lo[sloped]
         self._ramp_span = hi[sloped] - lo[sloped]
-        #: Candidate quantiles: the segment ends, sorted and unique (never
-        #: empty: the caller has refused a window that holds no time).
-        #: Between two neighbours the mass is linear in the value.
-        self.breakpoints = np.unique(np.concatenate((lo, hi)))
+        self._scratch = np.empty_like(self._ramp_lo)
+        #: Ramp mass by breakpoint index. Every level's bisection starts from
+        #: the same midpoints, and a bracket's ends were visited on the way.
+        self._ramp_mass: dict[int, float] = {}
+        ends = np.zeros(len(y), dtype=bool)
+        ends[:-1] |= held
+        ends[1:] |= held
+        #: Candidate quantiles: the samples that end a held segment, sorted
+        #: and unique (never empty: the caller has refused a window that holds
+        #: no time). Between two neighbours the mass is linear in the value.
+        self.breakpoints = np.unique(y[ends])
         #: The mass at the top breakpoint, computed the way every other
         #: evaluation is, so the 1.0 level compares against the exact total.
-        self.total = self.at(float(self.breakpoints[-1]))
+        self.total = self.at(len(self.breakpoints) - 1)
 
-    def at(self, v: float, *, inclusive: bool = True) -> float:
-        """Time at or below ``v`` (strictly below for an atom at ``v`` when not inclusive)."""
+    def at(self, index: int, *, inclusive: bool = True) -> float:
+        """Time at or below breakpoint ``index`` (strictly below for an atom
+        there when not inclusive)."""
+        v = self.breakpoints[index]
         side: Literal["left", "right"] = "right" if inclusive else "left"
         atoms = float(self._atom_cumulative[np.searchsorted(self._atom_values, v, side=side)])
-        # Division, not a precomputed reciprocal: (hi - lo) / (hi - lo) is
-        # exactly 1, so a value at the top of a ramp counts its whole duration.
-        fraction = np.clip((v - self._ramp_lo) / self._ramp_span, 0.0, 1.0)
-        return atoms + float(np.sum(self._ramp_dt * fraction))
+        ramps = self._ramp_mass.get(index)
+        if ramps is None:
+            # Division, not a precomputed reciprocal: (hi - lo) / (hi - lo) is
+            # exactly 1, so a value at the top of a ramp counts its whole
+            # duration. One scratch buffer instead of a temporary per step.
+            fraction = self._scratch
+            np.subtract(v, self._ramp_lo, out=fraction)
+            np.divide(fraction, self._ramp_span, out=fraction)
+            np.clip(fraction, 0.0, 1.0, out=fraction)
+            np.multiply(fraction, self._ramp_dt, out=fraction)
+            ramps = self._ramp_mass[index] = float(fraction.sum())
+        return atoms + ramps
 
     def quantile(self, level: float) -> float:
         """The smallest value the signal spends ``level`` of its time at or below.
@@ -1643,30 +1660,30 @@ class _TimeMass:
         Level 0 is the lowest value the signal holds for any time: the
         smallest ``v`` whose mass is positive rather than merely reached.
         """
-        values = self.breakpoints
         target = level * self.total
 
-        def reached(mass: float) -> bool:
+        def reached(index: int) -> bool:
+            mass = self.at(index)
             return mass > target if level == 0.0 else mass >= target
 
         # Smallest breakpoint index whose mass reaches the target; the top
         # breakpoint always does (its mass is the total).
-        low, high = 0, len(values) - 1
+        low, high = 0, len(self.breakpoints) - 1
         while low < high:
             mid = (low + high) // 2
-            if reached(self.at(float(values[mid]))):
+            if reached(mid):
                 high = mid
             else:
                 low = mid + 1
         if low == 0:
-            return float(values[0])
-        below = float(values[low - 1])
-        above = float(values[low])
-        mass_below = self.at(below)
+            return float(self.breakpoints[0])
+        below = float(self.breakpoints[low - 1])
+        above = float(self.breakpoints[low])
+        mass_below = self.at(low - 1)
         # Mass just under `above`: linear from `mass_below` up to here. When it
         # already passes the target the quantile is on that slope; otherwise
         # the target is met only by the atom sitting at `above`.
-        mass_under = self.at(above, inclusive=False)
+        mass_under = self.at(low, inclusive=False)
         if mass_under > target:
             step = (target - mass_below) / (mass_under - mass_below) * (above - below)
             return min(max(below + step, below), above)
