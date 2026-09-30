@@ -449,7 +449,7 @@ def collect_component_geometry(editor: AscEditor) -> list[dict]:
     for ref in editor.get_components():
         comp = editor.components[ref]
         sym = comp.symbol
-        sym_info = get_symbol_info(sym) if sym else None
+        sym_info = get_symbol_info(sym, editor.asc_file_path) if sym else None
         if sym_info is None:
             continue
         pos, erot = editor.get_component_position(ref)
@@ -479,7 +479,7 @@ def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, i
     comp = editor.components[reference]
     if not comp.symbol:
         return set()
-    sym_info = get_symbol_info(comp.symbol)
+    sym_info = get_symbol_info(comp.symbol, editor.asc_file_path)
     if sym_info is None:
         return set()
     pos, erot = editor.get_component_position(reference)
@@ -1204,7 +1204,7 @@ def _move_component_warnings(
     comp = editor.components[reference]
     moved_bb: dict[str, int] | None = None
     if comp.symbol:
-        moved_sym = get_symbol_info(comp.symbol)
+        moved_sym = get_symbol_info(comp.symbol, editor.asc_file_path)
         if moved_sym is not None:
             moved_bb = compute_placed_geometry(moved_sym, x, y, rot_name)["bounding_box"]
     if moved_bb is not None:
@@ -1298,7 +1298,7 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     comp = editor.components[ref]
     symbol = comp.symbol
 
-    sym_info = get_symbol_info(symbol) if symbol else None
+    sym_info = get_symbol_info(symbol, editor.asc_file_path) if symbol else None
     if sym_info is None:
         raise NetlistError(f"Cannot resolve pins for '{ref}': symbol '{symbol}' not found.")
 
@@ -2024,9 +2024,12 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
     decides whether to abort or continue based on ``stop_on_error``.
     """
     if isinstance(op, OpAddComponent):
-        symbol_info = get_symbol_info(op.symbol)
+        symbol_info = get_symbol_info(op.symbol, editor.asc_file_path)
         if symbol_info is None:
-            raise NetlistError(f"Symbol '{op.symbol}' not found in any configured symbol library.")
+            raise NetlistError(
+                f"Symbol '{op.symbol}' not found beside the schematic or in any "
+                "configured symbol library."
+            )
         if op.reference in editor.components:
             raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
         erot = _parse_rotation(op.rotation)

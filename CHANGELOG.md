@@ -97,6 +97,17 @@ tool-surface changes.
 - `inspect(kind="components", prefix=...)` on a `.asc` matched the prefix
   case-sensitively, so `"r"` listed no resistors on a schematic while it
   listed them on a netlist. Both now match case-insensitively.
+- A symbol saved in the same folder as its `.asc`, where LTspice looks first and
+  where a hand-drawn subcircuit symbol usually lives, was not found for pin
+  positions. `inspect(kind="symbol")` and rendering found it, but
+  `inspect(kind="net")` on its pins failed with "symbol not found",
+  `inspect(kind="components", detail="full")` left out its pins and bounding
+  box, and `add_component`, `wire_pins` and the other ops that take a pin
+  refused it. Pin positions now come from the sheet's own folder first, then
+  the libraries, so a local symbol wins over a same-named library one and two
+  sheets in different folders each keep their own. A redrawn local symbol is
+  read again. A `base="blank"` build looks beside its target, not beside the
+  temporary template it starts from.
 
 ### Added
 
