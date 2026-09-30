@@ -179,6 +179,7 @@ def stage_deck(
     allowed_roots: list[Path],
     *,
     origin: Path,
+    exports_dir: Path | None = None,
     allow_live_includes: bool = False,
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
     windows_paths: bool = False,
@@ -205,6 +206,14 @@ def stage_deck(
     rather than defaulted, so a new caller has to answer the question instead
     of inheriting an answer that silently records the wrong file.
 
+    ``exports_dir`` is where the server keeps the netlists it exports from
+    schematics (``Store.exports_dir``). A primary deck inside it, other than
+    ``origin`` itself, is the server's export of ``origin`` and is staged as if
+    it stood where the netlister wrote it, beside ``origin``: it is admitted
+    because ``origin`` is (the store need not sit inside the allowed roots),
+    and its relative references resolve against ``origin``'s directory, which
+    is the directory the schematic's own ``.include`` lines name files in.
+
     ``windows_paths`` renders the root deck's rewritten references in Windows
     form, for a Windows simulator reached across the WSL boundary: it cannot
     open the ``/mnt/c/...`` spelling of the very file it is being handed.
@@ -221,16 +230,27 @@ def stage_deck(
     allowed = _resolved_roots(allowed_roots)
     roots = allowed + _resolved_roots(list(simulator_roots), required=False)
     source = source_path.resolve(strict=True)
+    authored = origin.resolve(strict=True)
+    exported = (
+        exports_dir is not None
+        and source != authored
+        and source.is_relative_to(exports_dir.resolve())
+    )
+    # Where the primary deck stands for the sandbox, for its place in the
+    # staging tree, and for its relative references: its own path, or for an
+    # export the server keeps in its store, the path LTspice wrote it at.
+    stands_at = authored.parent / source.name if exported else source
     # Authored files are checked against ``allowed`` alone — a prefix of
     # ``roots``, so the index means the same thing in both — which is what
     # keeps the simulator's library a place references may POINT, never a
     # place a deck may be RUN FROM.
-    root_index = _containing_root(source, allowed)
+    root_index = _containing_root(stands_at, allowed)
     if root_index is None:
+        outside = authored if exported else source
         raise DeckStagingError(
             "include_unstaged",
-            f"Primary deck {source} is outside the configured allowed roots",
-            reference=str(source),
+            f"Primary deck {outside} is outside the configured allowed roots",
+            reference=str(outside),
         )
 
     def _render_absolute(path: Path) -> str:
@@ -254,7 +274,7 @@ def stage_deck(
     processing: set[Path] = set()
     observations: list[dict[str, Any]] = []
 
-    primary_destination = _destination_for(source, staging_root, roots, root_index)
+    primary_destination = _destination_for(stands_at, staging_root, roots, root_index)
 
     def add_manifest(entry: ManifestEntry) -> None:
         key = (entry.path, entry.section)
@@ -313,8 +333,9 @@ def stage_deck(
             text = decode_spice_bytes(data)
             parsed = lex(text)
             changed = False
-            for reference in scan_include_references(parsed.cards, resolved, depth=depth):
-                target = resolve_reference(resolved.parent, reference.raw_path)
+            anchor = stands_at if resolved == source else resolved
+            for reference in scan_include_references(parsed.cards, anchor, depth=depth):
+                target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
                 target_root = (
                     _containing_root(target_resolved, roots)

@@ -39,6 +39,8 @@ DECLARED_ROOTS: dict[str, str] = {
     "detached": "hand-off files and console logs for per-job detached owners",
     "verify": "verify_circuit exports and scratch",
     "edit-exports": "edit_schematic exports",
+    "exports": "the schematic exports experiments ran, named by their job records",
+    "plots": "plot_waveform charts written without an out_dir",
     "locks": "cross-process store locks",
 }
 
@@ -172,13 +174,16 @@ _PATH_MEMBERS: dict[str, Any] = {
     "result_artifacts": ("rs_" + "0" * 32,),
     "verify_artifact": ("export",),
     "edit_export": ("build_1",),
+    "exports_dir": (),
+    "export_snapshot": ("amp.run-0123456789ab.net",),
+    "plots_dir": (),
 }
 
 # Paths that deliberately live outside the working-directory store, and why.
 _OUTSIDE_THE_STORE: dict[str, str] = {
-    "circuit_sidecar": "belongs to the user's circuit, not to a session",
-    "circuit_exports": "a receipt's provenance names it; it outlives the session",
-    "circuit_plots": "a plot belongs beside the circuit it was made from",
+    "circuit_lock": (
+        "per user: every session editing the file contends on it, whatever its working directory"
+    ),
     "artifact_base": "returns the routing decision, not a path",
 }
 

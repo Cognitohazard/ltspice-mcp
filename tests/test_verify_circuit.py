@@ -289,6 +289,24 @@ async def test_export_stage_flags_micro_sign_in_the_exported_netlist(
     assert asc.read_bytes() == before
 
 
+async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_state, work_dir):
+    """The default export mode's contract: nothing is written beside the caller's file.
+
+    The staged copy is exported inside the store, but the copy is taken under
+    the schematic's cross-process lock, and that lock used to live in a
+    ``.ltspice-mcp/locks/`` directory created beside the schematic.
+    """
+    project = work_dir / "project"
+    project.mkdir()
+    sheet = _write(project, "amp.asc", fake_netlister.amp_asc())
+
+    data = await _run(exporting_state, path=str(sheet), checks=["export"])
+
+    assert data["export"]["ok"] is True
+    assert data["export"]["destination"] == "managed"
+    assert sorted(p.name for p in project.iterdir()) == ["amp.asc"]
+
+
 async def test_lexer_warnings_reach_the_observations(state_no_sim, work_dir):
     """The lexer already reports what it had to guess about — an unclosed
     .SUBCKT, a mismatched .ENDS, a stray continuation. The syntax check lexes
