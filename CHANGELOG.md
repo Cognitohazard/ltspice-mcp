@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- A job replayed by `request_id` from a process that did not own it could end
+  `interrupted` although it had completed. The replay saved its own copy of the
+  record, read while the job was still running, and that write could land
+  after the owner's `completed` one. The owner had exited by then, so the next
+  reader found a running job with no owner and recovered it as interrupted.
+  Seen with two scripts detaching the same request. Only the owning process
+  writes a job's record now; the caller that replayed still gets the
+  `idempotent_replay` observation in its receipt.
 - On Windows, a second `run_experiments` call carrying the same `request_id`
   could mint a second job instead of replaying the first. Opening a job record
   while its running job rewrites it fails with a sharing violation for a

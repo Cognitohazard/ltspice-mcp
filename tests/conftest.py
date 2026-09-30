@@ -713,6 +713,19 @@ def sample_netlist(work_dir: Path) -> Path:
     return p
 
 
+@pytest.fixture(scope="module")
+def live_peer_pid() -> Iterator[int]:
+    """A real, live process that is not this one (a parallel session stand-in)."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    yield proc.pid
+    proc.kill()
+    proc.wait()
+
+
 # ---------------------------------------------------------------------------
 # PNG rasterizer absence
 # ---------------------------------------------------------------------------
