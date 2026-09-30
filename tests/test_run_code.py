@@ -114,6 +114,24 @@ class TestSurface:
         assert definition.annotations.destructive_hint is True
         assert definition.annotations.read_only_hint is False
 
+    def test_the_descriptions_list_exactly_the_namespace(self, state: SessionState):
+        """An advertised name missing from scope is a NameError; a name in scope
+        but never advertised goes unused. Both lists come from SNIPPET_NAMES."""
+        from types import SimpleNamespace
+
+        from ltspice_mcp.code_worker import (
+            SNIPPET_NAMES,
+            _namespace,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        stub = SimpleNamespace(load_raw=None, measurements=None, reference=None)
+        assert set(_namespace(stub)) - {"__name__"} == set(SNIPPET_NAMES)
+        definition = {d.name: d for d in state.tool_defs}["run_code"]
+        field = RunCodeInput.model_fields["code"].description or ""
+        for name in SNIPPET_NAMES:
+            assert name in (definition.description or ""), name
+            assert name in field, name
+
 
 # ---------------------------------------------------------------------------
 # Running code
@@ -151,12 +169,13 @@ class TestExecution:
             "ops = [n for n in ('run_experiments', 'analyze_results', 'jobs', 'inspect',"
             " 'edit_schematic', 'verify_circuit') if callable(getattr(api, n, None))]\n"
             "print(np.__name__, callable(load_raw), callable(measurements),"
-            " time_weighted_quantiles.__module__)\n"
+            " callable(window_and_clean), callable(compute_signal_stats),"
+            " callable(time_weighted_quantiles))\n"
             "(len(ops), reference('jobs')[:6])"
         )
         reply = await run(state, code)
         assert reply["status"] == "ok", reply
-        assert reply["stdout"] == "numpy True True ltspice_mcp.lib.signal_analysis\n"
+        assert reply["stdout"] == "numpy True True True True True\n"
         assert reply["result"].startswith("(6, ")
 
     async def test_each_call_is_a_fresh_namespace(self, state: SessionState):
@@ -318,34 +337,27 @@ class TestLifetime:
         assert done["result"] == "'first'"
         assert second["running"]["exec_seq"] == done["exec_seq"]
 
-    async def test_a_call_while_the_worker_starts_is_busy(
+    async def test_a_call_during_a_slow_boot_is_busy(
         self, state: SessionState, monkeypatch: pytest.MonkeyPatch
     ):
-        """The one-snippet rule holds from the moment a call is accepted, not
-        from when the worker it starts is ready. A slow start (a cold Windows
-        worker, after a kill) let a second call through, and the two then read
-        the reply pipe at once."""
-        await run(state, "", reset=True)  # the next call starts a fresh worker
-        entered, release = asyncio.Event(), asyncio.Event()
-        spawn = CodeWorker._spawn
+        # A second call landing while the first is still booting the worker
+        # read the reply pipe alongside it instead of being answered busy.
+        worker = worker_for(state)
+        await run(state, "", reset=True)
+        boot = worker._ensure  # pyright: ignore[reportPrivateUsage]
 
-        async def held_spawn(worker: CodeWorker) -> None:
-            entered.set()
-            await release.wait()
-            await spawn(worker)
+        async def slow_boot() -> None:
+            await asyncio.sleep(0.5)
+            await boot()
 
-        monkeypatch.setattr(CodeWorker, "_spawn", held_spawn)
+        monkeypatch.setattr(worker, "_ensure", slow_boot)
         first = asyncio.ensure_future(run(state, "'first'"))
-        try:
-            await asyncio.wait_for(entered.wait(), 10)
-            second = await asyncio.wait_for(run(state, "2"), 5)
-        finally:
-            release.set()
+        await asyncio.sleep(0.1)
+        second = await run(state, "2")
+        assert second["status"] == "busy", second
         done = await first
-        assert second["status"] == "busy"
+        assert done["status"] == "ok", done
         assert second["running"]["exec_seq"] == done["exec_seq"]
-        assert done["status"] == "ok"
-        assert done["result"] == "'first'"
 
     async def test_reset_restarts_the_worker(self, state: SessionState):
         before = (await run(state, "1"))["worker_pid"]

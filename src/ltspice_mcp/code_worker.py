@@ -100,16 +100,31 @@ def _tail(text: str, cap: int) -> str:
     return text if len(text) <= cap else "..." + text[-cap:]
 
 
-def _namespace(api: Any) -> dict[str, Any]:
-    """The names a snippet starts with, rebuilt around the same live ``Api``.
+#: The names a snippet starts with besides ``__name__``, in the order the
+#: run_code descriptions list them.
+SNIPPET_NAMES: tuple[str, ...] = (
+    "api",
+    "np",
+    "load_raw",
+    "measurements",
+    "reference",
+    "window_and_clean",
+    "compute_signal_stats",
+    "time_weighted_quantiles",
+)
 
-    ``time_weighted_quantiles`` sits beside ``np`` because ``np.percentile``
-    is the call a snippet reaches for, and over LTspice's adaptive step it
-    weights the densely sampled edges instead of time.
-    """
+
+def _namespace(api: Any) -> dict[str, Any]:
+    """The ``SNIPPET_NAMES``, rebuilt around the same live ``Api``. The signal
+    helpers are in scope so a derived trace's statistics and quantiles are
+    time-weighted without an import."""
     import numpy as np
 
-    from ltspice_mcp.api import time_weighted_quantiles
+    from ltspice_mcp.api import (
+        compute_signal_stats,
+        time_weighted_quantiles,
+        window_and_clean,
+    )
 
     return {
         "__name__": "__main__",
@@ -118,6 +133,8 @@ def _namespace(api: Any) -> dict[str, Any]:
         "load_raw": api.load_raw,
         "measurements": api.measurements,
         "reference": api.reference,
+        "window_and_clean": window_and_clean,
+        "compute_signal_stats": compute_signal_stats,
         "time_weighted_quantiles": time_weighted_quantiles,
     }
 

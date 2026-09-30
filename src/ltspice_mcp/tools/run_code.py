@@ -34,6 +34,7 @@ from pydantic import Field, model_validator
 
 from ltspice_mcp.code_worker import (
     RESULT_CHARS,
+    SNIPPET_NAMES,
     STDERR_TAIL_CHARS,
     STDOUT_HEAD_CHARS,
     STDOUT_TAIL_CHARS,
@@ -56,14 +57,19 @@ CLOSE_GRACE_S = 5.0
 _PIPE_LINE_LIMIT = 1 << 20
 
 
+#: What a snippet starts with, as both descriptions below list it.
+_IN_SCOPE = (
+    "api (the same six ops as methods on this working directory, complete results, "
+    "no paging), " + ", ".join(SNIPPET_NAMES[1:])
+)
+
+
 class RunCodeInput(ToolInput):
     code: str = Field(
         default="",
         description=(
-            "Python source. In scope: api (the engine on this working directory: the "
-            "same six ops as methods, complete results), np, load_raw, measurements, "
-            "reference, time_weighted_quantiles. The repr of a trailing expression "
-            "comes back as result."
+            f"Python source. In scope: {_IN_SCOPE}. The repr of a trailing "
+            "expression comes back as result."
         ),
     )
     timeout_s: float = Field(
@@ -460,24 +466,25 @@ class CodeWorker:
                 return self._reply("reset", hint=_RESTART_HINT)
         if self.running is not None:
             return self._busy(code)
-        # Claimed before the worker is ensured: a start can take seconds (a
-        # cold Windows worker), and a call arriving meanwhile is busy too.
-        self.running = _Running(self.exec_seq + 1, code, time.monotonic())
+        # Claimed before the worker boots: a boot can outlast a caller's wait,
+        # and a call arriving during it would otherwise pass the check above and
+        # read the reply pipe alongside this one.
+        self.exec_seq += 1
+        seq = self.exec_seq
+        started = time.monotonic()
+        self.running = _Running(seq, code, started)
         try:
             await self._ensure()
-        except (OSError, RuntimeError) as exc:
+        except BaseException as exc:
             self.running = None
+            self.exec_seq -= 1
+            if not isinstance(exc, (OSError, RuntimeError)):
+                raise
             return self._reply(
                 "error",
                 error={"type": "WorkerBootFailed", "message": str(exc), "traceback_tail": ""},
                 hint="The worker could not start; the server's log has the details.",
             )
-        except BaseException:
-            self.running = None
-            raise
-        self.exec_seq += 1
-        seq = self.exec_seq
-        started = time.monotonic()
         try:
             reply = await self._exchange(seq, code, timeout_s)
         except asyncio.CancelledError:
@@ -543,13 +550,14 @@ def worker_for(state: SessionState) -> CodeWorker:
         "`api`. The snippet has the server process's own file and process "
         "authority, not the sandbox, so permission this tool like a shell. For "
         "loops over many runs, numpy on samples, and compute-decide-compute; a "
-        "single run or measurement is a tool call. In scope: api (the same six ops "
-        "as methods on this working directory, complete results, no paging), np, "
-        "load_raw, measurements, reference — reference('run_experiments') lists an "
-        "op's arguments, so read it before guessing them — and "
-        "time_weighted_quantiles(t, y, levels), np.percentile weighted by time "
-        "rather than by sample. Every call is a fresh namespace around the same "
-        "live engine; keep state on disk (a job by "
+        "single run or measurement is a tool call. Trace math is numpy on one "
+        "step's traces, r.trace(name, step=k) on r.axis(step=k); "
+        "compute_signal_stats and time_weighted_quantiles weight a derived "
+        "trace's statistics and quantiles by time, which np.mean and "
+        "np.percentile do not (spice://guide, 'trace math'). "
+        f"In scope: {_IN_SCOPE} — reference('run_experiments') lists an op's "
+        "arguments, so read it before guessing them. Every call is a fresh "
+        "namespace around the same live engine; keep state on disk (a job by "
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "
