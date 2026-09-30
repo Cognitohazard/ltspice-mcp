@@ -153,6 +153,8 @@ persist_jobs = true
 
 `run_code`, on by default, runs a Python snippet in a worker process holding the engine as `api` (the same six ops as methods, complete results), for loops over runs and numpy on samples. The snippet runs with the server process's own file and process authority, not inside `allowed_paths`: permission `mcp__ltspice__run_code` in your client the way you permission a shell, and never blanket-allow it as part of `mcp__ltspice__*`. Set `run_code = false` when the server is reachable by more than one trusted client, for example through a proxy in front of it; the change takes effect at the next start, and `inspect(kind="capabilities")` reports whether the tool is on.
 
+`plot_waveform` opens its chart in a browser window when the client cannot show it in-chat; set `[analysis] open_plot = false` to get only the file path. `[analysis] attach_plot = true` makes it return a PNG of the chart for a vision model (about a thousand tokens per call); rendering the PNG needs the `raster` extra (`pip install 'ltspice-mcp[raster]'`), and without it the reply says the image was skipped.
+
 See [`src/ltspice_mcp/config.py`](src/ltspice_mcp/config.py) for the full option list (`[analysis]`, `[schematic]`, `[logging]`, ...).
 
 <details>
@@ -183,7 +185,7 @@ The server exposes **8 tools**: six arranged over three planes, the waveform wid
 | Understand | `inspect` | Read decks, schematics, symbols, nets, models, and server capabilities — never results |
 | Author | `edit_schematic` | Create and mutate `.asc` transactionally: place, move, wire, label, set attributes |
 | Author | `verify_circuit` | Syntax, symbol, layout, and quality checks, schematic-vs-netlist equivalence, and rendering |
-| — | `plot_waveform` | Interactive chart of a run's waveforms, in-chat where the client renders widgets, otherwise opened on your desktop |
+| — | `plot_waveform` | Interactive chart of a run's waveforms, in-chat where the client renders widgets, otherwise opened on your desktop; the reply summarizes each trace, and `attach_plot` adds a PNG for the model |
 | — | `run_code` | Run a Python snippet in a warm worker that holds the engine as `api`: loops over runs, numpy on samples. On by default; `[tools] run_code = false` removes it, see Configuration |
 
 Netlists are written and edited with the agent's own file tools; the server does not wrap text edits. The same six operations are importable as `ltspice_mcp.api` (`Api(working_dir=...)`), so a Python script can drive the same engine without an MCP client.

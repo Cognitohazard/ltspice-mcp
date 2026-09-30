@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- `plot_waveform` drew nothing for a `.step` transient whose steps have
+  different time vectors, the usual case. Each step's trace was padded onto
+  the combined time axis with a gap wherever another step had a sample, so
+  every sample stood alone and none was drawn. The chart now joins each
+  trace across that padding and breaks it only at the trace's own non-finite
+  samples. Linear axes also printed neighbouring ticks alike (0.5 ms and
+  1 ms both as `0.001`); they now take one SI prefix per axis and the
+  decimals the tick step needs.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
@@ -97,6 +105,29 @@ tool-surface changes.
 
 ### Added
 
+- `plot_waveform` replies summarize each plotted trace: `min` and `max` with
+  the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
+  `final`, and the time-weighted `mean` on a transient, read from every sample
+  in the window before any decimation. An AC trace is summarized in dB with
+  its unwrapped phase at both ends; a stepped run gets one summary per step,
+  up to 32 (`traces_total` gives the count, and an observation says when the
+  list is cut short). The summaries are in `traces` and the text reply, on
+  both the in-chat widget and the terminal path, and `x_unit` names the axis
+  unit. Before, the reply held only the file path and the plot's point
+  counts.
+- `plot_waveform(attach_plot=true)` returns a PNG of the chart as an image
+  block for a vision model, and writes it beside the HTML (`image_path`,
+  with its size and `estimated_tokens` in `image`). It draws the same panels
+  as the interactive chart, is off by default, and takes its default from
+  `[analysis] attach_plot` (`LTSPICE_MCP_ATTACH_PLOT`). Rendering needs the
+  `raster` extra; without it the reply carries an `image_unavailable`
+  observation instead of the image.
+- `plot_waveform(panels=[[...], [...]])` lays the panels out by hand, one
+  list of signals per panel (up to 8), for traces of one unit but very
+  different size.
+- `[analysis] open_plot` (`LTSPICE_MCP_OPEN_PLOT`, on by default) sets
+  whether `plot_waveform` opens its chart in a local browser window; a call's
+  `open` still wins. A terminal session can turn the windows off.
 - A `partial_progress` observation for every case the coordinator stops and
   whose simulator exit is seen. It gives the plot, its axis, the complete
   points on disk and the last axis value reached, read from the partial raw
@@ -135,6 +166,17 @@ tool-surface changes.
 
 ### Changed
 
+- `plot_waveform` and the `analyze_results` `plot` recipe give each declared
+  unit its own panel, so volts and amps no longer share a y-axis; an AC plot
+  gets a magnitude and phase pair per unit. Panel titles carry the unit, and
+  a `.dc` sweep's x axis is labelled with its swept source. Noise densities
+  are labelled V/√Hz or A/√Hz. Input-referred noise takes its unit from the
+  deck's `.NOISE` source, and when there is no deck to check,
+  `plot_waveform` reports a `noise_input_unit_unverified` observation. Every
+  multi-panel chart shares one x cursor, where only the two Bode panels did
+  before.
+- `plot_waveform`'s `open` defaults to `[analysis] open_plot` instead of
+  always `true`.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.

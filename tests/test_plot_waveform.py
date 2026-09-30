@@ -6,6 +6,7 @@ LTspice fixtures with ``open=False`` (or an injected opener) so no browser is
 launched. The AC dual-panel, .step overlay, and noise cases are load-bearing.
 """
 
+import base64
 import json
 import os
 import sys
@@ -17,9 +18,13 @@ from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import desktop
+from ltspice_mcp.lib import desktop, raster, services
+from ltspice_mcp.lib.ac_analysis import prepare_ac_arrays
+from ltspice_mcp.lib.metrics import guarded_axis
 from ltspice_mcp.lib.plot_html import build_plot_html
-from ltspice_mcp.lib.signal_analysis import downsample_minmax
+from ltspice_mcp.lib.raster import raster_available
+from ltspice_mcp.lib.raw_parser import safe_magnitude_db
+from ltspice_mcp.lib.signal_analysis import compute_signal_stats, downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
     PlotWaveformInput,
@@ -114,6 +119,33 @@ class TestUnionPanel:
         # series b has no sample at x=1.0 -> null gap there
         assert panel["data"][2] == [20.0, None, 22.0]
 
+    def test_padded_series_are_marked_and_keep_their_own_gaps(self):
+        # A .step overlay whose steps have distinct time vectors interleaves
+        # every series with the others' padding. The renderers must join a line
+        # across padding (else each sample is isolated and nothing is drawn)
+        # but still break it at the series' own non-finite samples, so the
+        # spec says which nulls are which.
+        panel, unioned = _union_panel(
+            [
+                (np.array([0.0, 1.0, 2.0]), np.array([10.0, np.nan, 12.0]), "a"),
+                (np.array([0.0, 0.5, 2.0]), np.array([20.0, 21.0, 22.0]), "b"),
+            ],
+            "linear",
+            "t",
+            "v",
+        )
+        assert unioned is True
+        assert panel["data"][0] == [0.0, 0.5, 1.0, 2.0]
+        assert panel["data"][1] == [10.0, None, None, 12.0]
+        assert panel["series"][0] == {"label": "a", "padded": True, "gaps": [2]}
+        assert panel["series"][1] == {"label": "b", "padded": True, "gaps": []}
+
+    def test_shared_x_series_carry_no_padding_marks(self):
+        x = np.array([0.0, 1.0, 2.0])
+        panel, _ = _union_panel([(x, np.array([1.0, np.nan, 3.0]), "a")], "linear", "t", "v")
+        assert panel["series"] == [{"label": "a"}]
+        assert panel["data"][1] == [1.0, None, 3.0]  # a real gap stays a gap
+
     def test_refuses_oversized_union_before_padding(self, monkeypatch):
         # Distinct axes inflate the union; the cap must trip (stage 2) before the
         # padded arrays are materialized.
@@ -187,6 +219,49 @@ class TestBuildPlotHtml:
         assert "hooks: { draw:" in html
         assert "spec.annotations" in html
         assert "OUT-OF-PHASE ZERO / DELAY" in html
+
+    def test_every_multi_panel_chart_shares_one_x_cursor(self):
+        html = build_plot_html(
+            {
+                "analysis_type": "transient",
+                "bode": False,
+                "panels": [
+                    {
+                        "x_scale": "linear",
+                        "x_label": "Time (s)",
+                        "y_label": label,
+                        "series": [{"label": label}],
+                        "data": [[0.0, 1.0], [0.1, 0.2]],
+                    }
+                    for label in ("V(out) (V)", "I(C1) (A)", "V(sense) (V)")
+                ],
+            },
+            title="t",
+        )
+        # The cursor sync used to be wired only for a two-panel Bode pair.
+        assert "spec.bode && spec.panels.length === 2" not in html
+        assert "spec.panels.length > 1" in html
+
+    def test_render_core_joins_lines_across_union_padding(self):
+        # uPlot breaks a line only at a strict null and joins across undefined,
+        # so the render core must turn a padded series' padding into undefined.
+        html = build_plot_html(
+            {
+                "analysis_type": "transient",
+                "bode": False,
+                "panels": [
+                    {
+                        "x_scale": "linear",
+                        "x_label": "Time (s)",
+                        "y_label": "V(out) (V)",
+                        "series": [{"label": "V(out)", "padded": True, "gaps": []}],
+                        "data": [[0.0, 1.0], [0.1, None]],
+                    }
+                ],
+            },
+            title="t",
+        )
+        assert ".padded" in html and "undefined" in html
 
     def test_annotations_roundtrip_into_blob(self):
         spec = self._spec()
@@ -335,13 +410,20 @@ class TestInputModel:
     def test_defaults(self):
         m = PlotWaveformInput()
         assert m.signals == "all"
-        assert m.open is True
+        # None defers to the [analysis] open_plot / attach_plot settings.
+        assert m.open is None
+        assert m.attach_plot is None
+        assert m.panels is None
         assert m.step is None
         assert m.max_points is None
 
     def test_strict_rejects_unknown(self):
         with pytest.raises(ValidationError):
             PlotWaveformInput(bogus=1)  # type: ignore[call-arg]
+
+    def test_empty_panel_is_refused(self):
+        with pytest.raises(ValidationError):
+            PlotWaveformInput(panels=[["V(out)"], []])
 
 
 # --- handler error paths ---------------------------------------------------
@@ -457,6 +539,8 @@ class TestRender:
         assert data["series_count"] == data["n_steps"]  # one trace per step
         # the step_tran fixture has distinct per-step time vectors -> union-x
         assert any(o["code"] == "step_axis_unioned" for o in data["observations"])
+        blob = _data_blob(_read(Path(data["path"])))
+        assert all(s.get("padded") for s in blob["panels"][0]["series"])
 
     async def test_oversized_stepped_plot_refused(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -734,3 +818,367 @@ class TestWidgetTemplateAndResource:
         defs, _ = registry.get_tools()
         plot = next(d for d in defs if d.name == "plot_waveform")
         assert plot.meta == {"ui": {"resourceUri": WIDGET_RESOURCE_URI}}
+
+
+# --- what the model reads: per-trace summary, panel layout, attached image ---
+
+
+async def _raw_series(state: SessionState, raw_path: Path, name: str, step: int = 0):
+    """One trace straight from the raw, independent of the plot path."""
+    raw = await services.load_raw(raw_path, state)
+    return guarded_axis(raw, step), np.asarray(raw.get_wave(name, step=step))
+
+
+def _series_labels(blob: dict) -> list[list[str]]:
+    return [[s["label"] for s in p["series"]] for p in blob["panels"]]
+
+
+@pytest.mark.asyncio
+class TestTraceSummary:
+    """Every reply carries each plotted trace's extremes, ends and mean, so a
+    model that cannot see the chart still learns what it shows."""
+
+    async def test_transient_summary_is_computed_over_every_sample(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        # max_points=20 decimates the plotted series; the summary must still be
+        # read from the full-resolution data, not the decimated copy.
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], max_points=20)
+        assert data["downsampled"] is True
+        t, y = await _raw_series(state_no_sim, raw, "V(out)")
+        want = compute_signal_stats(t, y)
+        (trace,) = data["traces"]
+        assert trace["signal"] == "V(out)"
+        assert trace["unit"] == "V"
+        assert trace["panel"] == 0
+        assert "step" not in trace
+        assert trace["min"] == pytest.approx(want["min"])
+        assert trace["max"] == pytest.approx(want["max"])
+        assert trace["x_at_min"] == pytest.approx(want["t_at_min"])
+        assert trace["x_at_max"] == pytest.approx(want["t_at_max"])
+        assert trace["mean"] == pytest.approx(want["mean"])
+        assert trace["initial"] == pytest.approx(float(y[0]))
+        assert trace["final"] == pytest.approx(float(y[-1]))
+        assert data["x_unit"] == "s"
+        assert data["traces_total"] == 1
+
+    async def test_summary_covers_only_the_window(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        t, y = await _raw_series(state_no_sim, raw, "V(out)")
+        mid = len(t) // 2
+        t_end = f"{float(t[mid]):.12g}"
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], t_end=t_end)
+        (trace,) = data["traces"]
+        hi = int(np.searchsorted(t, float(t_end), side="right"))
+        want = compute_signal_stats(t[:hi], y[:hi])
+        assert trace["final"] == pytest.approx(float(y[hi - 1]))
+        assert trace["mean"] == pytest.approx(want["mean"])
+        assert trace["max"] == pytest.approx(want["max"])
+
+    async def test_text_channel_carries_the_summary(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        text = result.content[0].text
+        final = result.structured_content["traces"][0]["final"]
+        assert "V(out)" in text
+        assert f"final {final:.4g}" in text
+
+    async def test_each_step_is_its_own_trace(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        assert [t["step"] for t in data["traces"]] == list(range(data["n_steps"]))
+        _, y1 = await _raw_series(state_no_sim, raw, "V(out)", step=1)
+        assert data["traces"][1]["final"] == pytest.approx(float(y1[-1]))
+        assert data["traces"][1]["max"] == pytest.approx(float(np.max(y1)))
+
+    async def test_summary_is_capped_and_says_so(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        assert data["n_steps"] > 2
+        assert len(data["traces"]) == 2
+        assert data["traces_total"] == data["n_steps"]
+        (obs,) = [o for o in data["observations"] if o["code"] == "trace_summary_truncated"]
+        assert f"2 of {data['n_steps']}" in obs["detail"]
+
+    async def test_ac_summary_reads_magnitude_in_db_and_phase_ends(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        axis, wave = await _raw_series(state_no_sim, raw, "V(out)")
+        f, h = prepare_ac_arrays(axis, wave)
+        mag = safe_magnitude_db(h)
+        phase = np.degrees(np.unwrap(np.angle(h)))
+        (trace,) = data["traces"]
+        assert trace["unit"] == "dB"
+        assert "mean" not in trace  # an average over a log sweep is not a figure of merit
+        assert trace["max"] == pytest.approx(float(np.max(mag)))
+        assert trace["x_at_max"] == pytest.approx(float(f[int(np.argmax(mag))]))
+        assert trace["min"] == pytest.approx(float(np.min(mag)))
+        assert trace["initial"] == pytest.approx(float(mag[0]))
+        assert trace["final"] == pytest.approx(float(mag[-1]))
+        assert trace["phase_initial_deg"] == pytest.approx(float(phase[0]), abs=1e-6)
+        assert trace["phase_final_deg"] == pytest.approx(float(phase[-1]), abs=1e-6)
+        assert data["x_unit"] == "Hz"
+
+    async def test_sweeps_report_no_mean(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_dc_div")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        (trace,) = data["traces"]
+        assert "mean" not in trace
+        _, y = await _raw_series(state_no_sim, raw, "V(out)")
+        assert trace["final"] == pytest.approx(float(y[-1]))
+        assert data["x_unit"] == "V"  # the swept source's declared unit
+
+    async def test_ui_delivery_carries_the_summary_too(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+        )
+        assert result.structured_content["delivery"] == "ui"
+        (trace,) = result.structured_content["traces"]
+        assert trace["signal"] == "V(out)" and trace["final"] is not None
+
+
+@pytest.mark.asyncio
+class TestPanelLayout:
+    """Traces of different units never share a y-axis; a caller can group
+    same-unit traces of very different size apart by naming the panels."""
+
+    async def test_volts_and_amps_get_separate_panels(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)", "I(C1)", "V(in)"])
+        assert data["panels"] == 2
+        blob = _data_blob(_read(Path(data["path"])))
+        assert _series_labels(blob) == [["V(out)", "V(in)"], ["I(C1)"]]
+        assert blob["panels"][0]["y_label"].endswith("(V)")
+        assert blob["panels"][1]["y_label"].endswith("(A)")
+        assert {t["signal"]: t["panel"] for t in data["traces"]} == {
+            "V(out)": 0,
+            "V(in)": 0,
+            "I(C1)": 1,
+        }
+        assert {t["signal"]: t["unit"] for t in data["traces"]}["I(C1)"] == "A"
+
+    async def test_one_unit_is_one_panel(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(in)", "V(out)"])
+        assert data["panels"] == 1
+
+    async def test_explicit_panels_are_drawn_as_named(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _plot(
+            state_no_sim, raw_file=str(raw), panels=[["V(out)"], ["V(in)", "I(C1)"]]
+        )
+        assert data["signals"] == ["V(out)", "V(in)", "I(C1)"]
+        assert data["panels"] == 2
+        blob = _data_blob(_read(Path(data["path"])))
+        assert _series_labels(blob) == [["V(out)"], ["V(in)", "I(C1)"]]
+        # A panel the caller mixed keeps both units in its label.
+        assert blob["panels"][1]["y_label"].endswith("(V, A)")
+
+    async def test_panels_beside_a_signal_list_is_refused(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        with pytest.raises(ResultError, match="panels"):
+            await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], panels=[["V(in)"]])
+
+    async def test_a_signal_in_two_panels_is_refused(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        with pytest.raises(ResultError, match="more than one panel"):
+            await _plot(state_no_sim, raw_file=str(raw), panels=[["V(out)"], ["v(out)", "V(in)"]])
+
+    async def test_ac_gets_a_bode_pair_per_unit(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)", "I(C1)"])
+        assert data["panels"] == 4
+        blob = _data_blob(_read(Path(data["path"])))
+        assert blob["bode"] is True
+        assert _series_labels(blob) == [["V(out)"], ["V(out)"], ["I(C1)"], ["I(C1)"]]
+        labels = [p["y_label"] for p in blob["panels"]]
+        assert "Magnitude (dB)" in labels[0] and "Phase (deg)" in labels[1]
+        assert "Magnitude (dB)" in labels[2] and "Phase (deg)" in labels[3]
+        assert {t["signal"]: t["panel"] for t in data["traces"]} == {"V(out)": 0, "I(C1)": 2}
+
+    async def test_noise_gain_is_kept_off_the_density_axis(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals="all")
+        units = {t["signal"]: t["unit"] for t in data["traces"]}
+        # The raw spells its noise traces in lower case.
+        assert units["v(onoise)"] == "V/√Hz"
+        assert units["gain"] is None
+        panel_of = {t["signal"]: t["panel"] for t in data["traces"]}
+        assert panel_of["gain"] != panel_of["v(onoise)"]
+        # No deck beside this raw to read the .NOISE source from: the input-
+        # referred unit is the simulator's declared one, and the reply says so.
+        assert any(o["code"] == "noise_input_unit_unverified" for o in data["observations"])
+
+
+needs_raster = pytest.mark.skipif(
+    not raster_available(), reason="optional 'raster' extra (cairosvg) not installed"
+)
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _images(result) -> list[types.ImageContent]:
+    return [c for c in result.content if isinstance(c, types.ImageContent)]
+
+
+@pytest.mark.asyncio
+class TestAttachedImage:
+    """``attach_plot`` adds a static PNG a vision model can read, rendered from
+    the same panels; without the raster extra it is skipped and reported."""
+
+    @needs_raster
+    async def test_attach_plot_returns_a_png(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(
+                raw_file=str(raw), signals=["V(out)", "I(C1)"], open=False, attach_plot=True
+            ),
+            state_no_sim,
+        )
+        (image,) = _images(result)
+        assert image.mime_type == "image/png"
+        png = base64.b64decode(image.data)
+        assert png.startswith(_PNG_MAGIC)
+        sc = result.structured_content
+        assert sc["image"]["image_format"] == "png"
+        assert sc["image"]["width"] > 0 and sc["image"]["height"] > 0
+        assert sc["image"]["estimated_tokens"] > 0
+        on_disk = Path(sc["image_path"])
+        assert on_disk.suffix == ".png"
+        assert on_disk.parent == Path(sc["path"]).parent
+        assert on_disk.read_bytes() == png  # noqa: ASYNC240
+
+    async def test_no_image_unless_asked(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        assert _images(result) == []
+        assert "image" not in result.structured_content
+        assert "image_path" not in result.structured_content
+
+    @needs_raster
+    async def test_config_default_attaches_and_a_call_can_decline(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        state_no_sim.config.attach_plot = True
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        attached = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        assert len(_images(attached)) == 1
+        declined = await handle_plot_waveform(
+            PlotWaveformInput(
+                raw_file=str(raw), signals=["V(out)"], open=False, attach_plot=False
+            ),
+            state_no_sim,
+        )
+        assert _images(declined) == []
+
+    async def test_missing_extra_is_reported_not_raised(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(raster, "_load_cairosvg", lambda: None)
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False, attach_plot=True),
+            state_no_sim,
+        )
+        assert _images(result) == []
+        # The SVG fallback is not passed on as text: path data is no use to a model.
+        assert not any("<svg" in getattr(c, "text", "") for c in result.content)
+        sc = result.structured_content
+        assert "image" not in sc and "image_path" not in sc
+        (obs,) = [o for o in sc["observations"] if o["code"] == "image_unavailable"]
+        assert "raster" in obs["detail"]
+        assert sc["traces"]  # the numbers still arrive
+
+    @needs_raster
+    async def test_ui_host_gets_the_widget_and_the_image(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], attach_plot=True),
+            state_no_sim,
+        )
+        assert _widget_spec(result) is not None
+        assert len(_images(result)) == 1
+
+
+@pytest.mark.asyncio
+class TestOpenDefault:
+    """``[analysis] open_plot`` lets a terminal session stop the browser windows."""
+
+    async def test_config_can_turn_the_local_open_off(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        opens: list = []
+        monkeypatch.setattr(
+            desktop, "open_in_desktop", lambda p: (opens.append(p), (True, "x"))[1]
+        )
+        state_no_sim.config.open_plot = False
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+        )
+        assert opens == []
+        sc = result.structured_content
+        assert sc["opened"] is False
+        (obs,) = [o for o in sc["observations"] if o["code"] == "open_skipped"]
+        assert "open_plot" in obs["detail"]
+
+    async def test_a_call_overrides_the_config(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        opens: list = []
+        monkeypatch.setattr(
+            desktop, "open_in_desktop", lambda p: (opens.append(p), (True, "x"))[1]
+        )
+        state_no_sim.config.open_plot = False
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
+        )
+        assert len(opens) == 1
+
+    async def test_default_config_still_opens(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        opens: list = []
+        monkeypatch.setattr(
+            desktop, "open_in_desktop", lambda p: (opens.append(p), (True, "x"))[1]
+        )
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+        )
+        assert len(opens) == 1

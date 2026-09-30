@@ -40,7 +40,8 @@ WIDGET_RESOURCE_URI = "ui://ltspice-mcp/plot"
 
 # Namespaced key under the tool result's ``_meta`` carrying the per-call chart
 # spec (a JSON string) for the widget. ``_meta`` is not shown to the model, so the
-# plot returns no numbers to it; the widget reads this in ``app.ontoolresult``.
+# chart data never reaches it (the model reads the reply's trace summaries); the
+# widget reads this in ``app.ontoolresult``.
 WIDGET_SPEC_META_KEY = "ltspice/plotSpec"
 
 
@@ -61,15 +62,16 @@ _PAGE_CSS = (
 )
 
 # Shared render core — NO user data is interpolated. Defines renderSpec(spec, root):
-# one uPlot per panel; a 'bode' spec stacks two panels sharing a synced
-# log-frequency x cursor/zoom. All presentation (palette, sizes) lives here. Used
-# by both the offline file and the in-chat widget so they render identically.
+# one uPlot per panel, stacked. When there is more than one panel (a Bode pair,
+# or traces split by unit or by the caller) they share one synced x cursor, so a
+# feature lines up across panels. All presentation (palette, sizes) lives here.
+# Used by both the offline file and the in-chat widget so they render identically.
 _RENDER_JS = """
 function renderSpec(spec, root) {
   var palette = ['#1f77b4','#d62728','#2ca02c','#ff7f0e','#9467bd','#8c564b',
                  '#e377c2','#7f7f7f','#bcbd22','#17becf'];
   var charts = [];
-  var H = spec.bode ? 300 : 440;
+  var H = spec.panels.length > 1 ? 300 : 440;
   function width() { return Math.max(640, Math.floor(window.innerWidth - 40)); }
   function fmtHz(v) { var a = Math.abs(v);
     if (a >= 1e6) return (v / 1e6) + 'M'; if (a >= 1e3) return (v / 1e3) + 'k'; return '' + v; }
@@ -80,6 +82,47 @@ function renderSpec(spec, root) {
     if (v == null || !isFinite(v)) return null;
     var l = Math.log10(v);
     return Math.abs(l - Math.round(l)) > 1e-6 ? null : fmtHz(v);
+  }
+  // Linear-axis tick labels: one SI prefix per axis (from its largest tick) and
+  // as many decimals as the tick step needs, so neighbouring ticks never print
+  // alike (a fixed precision printed 0.5 ms and 1 ms both as "0.001").
+  var PREFIX = [[1e12, 'T'], [1e9, 'G'], [1e6, 'M'], [1e3, 'k'], [1, ''], [1e-3, 'm'],
+                [1e-6, '\\u00b5'], [1e-9, 'n'], [1e-12, 'p'], [1e-15, 'f']];
+  function engTicks(u, splits) {
+    var top = 0, step = Infinity, i;
+    for (i = 0; i < splits.length; i++) {
+      if (splits[i] == null) continue;
+      top = Math.max(top, Math.abs(splits[i]));
+      if (i && splits[i - 1] != null) step = Math.min(step, Math.abs(splits[i] - splits[i - 1]));
+    }
+    if (!top) return splits.map(function (v) { return v == null ? null : '0'; });
+    // A lone tick has no step to read decimals from; its own size stands in.
+    if (!isFinite(step) || !(step > 0)) step = top;
+    var p = PREFIX[PREFIX.length - 1];
+    for (i = 0; i < PREFIX.length; i++) if (top >= PREFIX[i][0] * (1 - 1e-9)) { p = PREFIX[i]; break; }
+    var dec = Math.max(0, Math.min(6, -Math.floor(Math.log10(step / p[0]) + 1e-9)));
+    return splits.map(function (v) {
+      if (v == null) return null;
+      if (Math.abs(v) < step * 1e-9) return '0';
+      return (v / p[0]).toFixed(dec) + p[1];
+    });
+  }
+  // A series null-padded onto a shared x (a .step overlay whose steps have their
+  // own time vectors) has no sample at the other steps' x values. uPlot breaks a
+  // line at null but joins across undefined, so its padding becomes undefined and
+  // only its own non-finite samples (listed in gaps) stay breaks.
+  function columns(panel) {
+    var out = [panel.data[0]];
+    for (var i = 0; i < panel.series.length; i++) {
+      var col = panel.data[i + 1], s = panel.series[i];
+      if (s.padded) {
+        var gap = {};
+        (s.gaps || []).forEach(function (k) { gap[k] = true; });
+        col = col.map(function (v, k) { return v === null && !gap[k] ? undefined : v; });
+      }
+      out.push(col);
+    }
+    return out;
   }
   // Draw detected AC corner markers (dashed vertical lines + labels) and an
   // out-of-phase-zero / delay tag straight onto each panel's canvas. Pure canvas — no
@@ -174,8 +217,8 @@ function renderSpec(spec, root) {
       // as epoch time (uPlot's x-scale default), which renders Hz values as dates.
       scales: { x: logx ? { distr: 3, log: 10, time: false } : { time: false } },
       axes: [
-        { label: panel.x_label, values: logx ? function (u, sp) { return sp.map(hzTick); } : null },
-        { label: panel.y_label },
+        { label: panel.x_label, values: logx ? function (u, sp) { return sp.map(hzTick); } : engTicks },
+        { label: panel.y_label, values: engTicks },
       ],
       series: series,
       plugins: [annotPlugin()],
@@ -184,16 +227,18 @@ function renderSpec(spec, root) {
     return opts;
   }
   function add(panel, syncKey) {
-    var u = new uPlot(mkOpts(panel, syncKey), panel.data, root);
+    var u = new uPlot(mkOpts(panel, syncKey), columns(panel), root);
     charts.push(u);
     return u;
   }
-  if (spec.bode && spec.panels.length === 2) {
-    var s = uPlot.sync('bode');
-    s.sub(add(spec.panels[0], s.key));
-    s.sub(add(spec.panels[1], s.key));
+  if (spec.panels.length > 1) {
+    // A fresh sync group per render: the widget re-renders into the same page
+    // on each result, and a shared key would keep the replaced charts subscribed.
+    renderSpec.seq = (renderSpec.seq || 0) + 1;
+    var s = uPlot.sync('panels-' + renderSpec.seq);
+    for (var q = 0; q < spec.panels.length; q++) s.sub(add(spec.panels[q], s.key));
   } else {
-    for (var p = 0; p < spec.panels.length; p++) add(spec.panels[p], null);
+    add(spec.panels[0], null);
   }
   window.addEventListener('resize', function () {
     var w = width();
@@ -297,7 +342,7 @@ _WIDGET_THEME_CSS = (
 # Widget driver — set ontoolresult BEFORE connect (the result can arrive
 # immediately). ``ontoolresult`` receives the full CallToolResult; the chart spec
 # rides in ``_meta["ltspice/plotSpec"]`` (a JSON string) — a non-model-visible
-# channel, so the plot returns no numbers to the model. NO user data is in this
+# channel, so the chart data never reaches the model. NO user data is in this
 # template; the per-call spec arrives at runtime via the host bridge.
 _WIDGET_INIT_JS = """
 (async function () {

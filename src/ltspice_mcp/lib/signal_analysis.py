@@ -1558,6 +1558,60 @@ def compute_signal_stats(
     }
 
 
+def summarize_trace(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    time_weighted_mean: bool,
+) -> dict[str, float | int | None]:
+    """Extremes, end values and (on a time axis) the mean of one plotted trace.
+
+    Returns ``min``/``max`` with the axis value where each occurs
+    (``x_at_min``/``x_at_max``), the first and last sample (``initial``/
+    ``final``), and, when ``time_weighted_mean`` is set, the trapezoidal mean
+    from :func:`compute_signal_stats`. The mean is left out for a sweep axis: an
+    average over swept voltage or log-spaced frequency depends on the sweep, not
+    the circuit.
+
+    Non-finite samples are left out of every statistic, as
+    :func:`window_and_clean` leaves them out of the ``signal_stats`` recipe, and
+    counted in ``non_finite`` (present only when there are some). ``initial`` and
+    ``final`` are the first and last samples themselves, so either is ``None``
+    when that sample is not finite; every statistic is ``None`` when no sample
+    is.
+    """
+    if len(x) != len(y):
+        raise ValueError(f"Axis and wave have different lengths: {len(x)} vs {len(y)}")
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    n_bad = int(len(y) - np.count_nonzero(finite))
+
+    def _sample(i: int) -> float | None:
+        return float(y[i]) if len(y) and bool(finite[i]) else None
+
+    summary: dict[str, float | int | None] = {}
+    if not finite.any():
+        summary.update(min=None, max=None, x_at_min=None, x_at_max=None)
+        if time_weighted_mean:
+            summary["mean"] = None
+    else:
+        core = compute_signal_stats(x[finite], y[finite])
+        summary.update(
+            min=core["min"],
+            max=core["max"],
+            x_at_min=core["t_at_min"],
+            x_at_max=core["t_at_max"],
+        )
+        if time_weighted_mean:
+            summary["mean"] = core["mean"]
+    summary["initial"] = _sample(0)
+    summary["final"] = _sample(-1)
+    if n_bad:
+        summary["non_finite"] = n_bad
+    return summary
+
+
 def _equal_time_buckets(t: np.ndarray, n_buckets: int) -> tuple[np.ndarray, np.ndarray, int]:
     """Tile ``[t[0], t[-1]]`` into up to ``n_buckets`` equal-time buckets.
 

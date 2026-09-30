@@ -23,6 +23,7 @@ from ltspice_mcp.lib.signal_analysis import (
     compute_measurement_stats,
     compute_signal_stats,
     stat_envelope,
+    summarize_trace,
     window_and_clean,
 )
 
@@ -1035,6 +1036,56 @@ class TestComputeSignalStats:
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="no samples"):
             compute_signal_stats(np.array([]), np.array([]))
+
+
+# ---------------------------------------------------------------------------
+# summarize_trace
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeTrace:
+    """The per-trace facts plot_waveform returns beside its chart."""
+
+    def test_time_axis_matches_compute_signal_stats(self):
+        t = np.array([0.0, 1.0, 3.0, 4.0])  # non-uniform, like LTspice's timestep
+        y = np.array([0.0, 2.0, 2.0, -1.0])
+        want = compute_signal_stats(t, y)
+        s = summarize_trace(t, y, time_weighted_mean=True)
+        assert s["min"] == want["min"] and s["max"] == want["max"]
+        assert s["x_at_min"] == want["t_at_min"] and s["x_at_max"] == want["t_at_max"]
+        assert s["mean"] == pytest.approx(want["mean"])
+        assert s["initial"] == 0.0 and s["final"] == -1.0
+        assert "non_finite" not in s
+
+    def test_sweep_axis_has_no_mean(self):
+        s = summarize_trace(
+            np.array([5.0, 4.0, 3.0]), np.array([1.0, 3.0, 2.0]), time_weighted_mean=False
+        )
+        assert "mean" not in s
+        assert s["x_at_max"] == 4.0
+
+    def test_non_finite_samples_are_counted_and_left_out(self):
+        t = np.array([0.0, 1.0, 2.0, 3.0])
+        y = np.array([1.0, np.nan, 3.0, np.inf])
+        s = summarize_trace(t, y, time_weighted_mean=True)
+        assert s["non_finite"] == 2
+        assert s["min"] == 1.0 and s["max"] == 3.0 and s["x_at_max"] == 2.0
+        # The mean integrates the finite samples, as the signal_stats recipe does.
+        assert s["mean"] == pytest.approx(2.0)
+        assert s["initial"] == 1.0
+        assert s["final"] is None  # the last sample itself is not finite
+
+    def test_no_finite_sample_gives_nulls_not_nan(self):
+        s = summarize_trace(
+            np.array([0.0, 1.0]), np.array([np.nan, np.nan]), time_weighted_mean=True
+        )
+        assert s["non_finite"] == 2
+        for key in ("min", "max", "x_at_min", "x_at_max", "mean", "initial", "final"):
+            assert s[key] is None
+
+    def test_length_mismatch(self):
+        with pytest.raises(ValueError, match="different lengths"):
+            summarize_trace(np.zeros(3), np.zeros(4), time_weighted_mean=False)
 
 
 class TestPulseResponseDoubleTransition:
