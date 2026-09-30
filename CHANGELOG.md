@@ -10,6 +10,11 @@ tool-surface changes.
 
 ### Fixed
 
+- A `run_code` call made while the worker was still starting (the first call
+  after a restart, which takes seconds on Windows) was run instead of answered
+  `busy`. The two calls then read the worker's reply pipe at once, and the
+  first one failed with an internal error. The one-snippet rule now holds from
+  the moment a call is accepted.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.

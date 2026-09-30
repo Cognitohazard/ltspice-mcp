@@ -460,18 +460,24 @@ class CodeWorker:
                 return self._reply("reset", hint=_RESTART_HINT)
         if self.running is not None:
             return self._busy(code)
+        # Claimed before the worker is ensured: a start can take seconds (a
+        # cold Windows worker), and a call arriving meanwhile is busy too.
+        self.running = _Running(self.exec_seq + 1, code, time.monotonic())
         try:
             await self._ensure()
         except (OSError, RuntimeError) as exc:
+            self.running = None
             return self._reply(
                 "error",
                 error={"type": "WorkerBootFailed", "message": str(exc), "traceback_tail": ""},
                 hint="The worker could not start; the server's log has the details.",
             )
+        except BaseException:
+            self.running = None
+            raise
         self.exec_seq += 1
         seq = self.exec_seq
         started = time.monotonic()
-        self.running = _Running(seq, code, started)
         try:
             reply = await self._exchange(seq, code, timeout_s)
         except asyncio.CancelledError:
