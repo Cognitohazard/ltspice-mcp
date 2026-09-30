@@ -317,6 +317,35 @@ class TestLifetime:
         assert done["result"] == "'first'"
         assert second["running"]["exec_seq"] == done["exec_seq"]
 
+    async def test_a_call_while_the_worker_starts_is_busy(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The one-snippet rule holds from the moment a call is accepted, not
+        from when the worker it starts is ready. A slow start (a cold Windows
+        worker, after a kill) let a second call through, and the two then read
+        the reply pipe at once."""
+        await run(state, "", reset=True)  # the next call starts a fresh worker
+        entered, release = asyncio.Event(), asyncio.Event()
+        spawn = CodeWorker._spawn
+
+        async def held_spawn(worker: CodeWorker) -> None:
+            entered.set()
+            await release.wait()
+            await spawn(worker)
+
+        monkeypatch.setattr(CodeWorker, "_spawn", held_spawn)
+        first = asyncio.ensure_future(run(state, "'first'"))
+        try:
+            await asyncio.wait_for(entered.wait(), 10)
+            second = await asyncio.wait_for(run(state, "2"), 5)
+        finally:
+            release.set()
+        done = await first
+        assert second["status"] == "busy"
+        assert second["running"]["exec_seq"] == done["exec_seq"]
+        assert done["status"] == "ok"
+        assert done["result"] == "'first'"
+
     async def test_reset_restarts_the_worker(self, state: SessionState):
         before = (await run(state, "1"))["worker_pid"]
         reply = await run(state, "", reset=True)
