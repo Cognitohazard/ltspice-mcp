@@ -498,6 +498,17 @@ async def test_components_prefix_filter(netlist: Path, state_no_sim: SessionStat
     assert {c["reference"] for c in res["data"]["components"]} == {"R1", "R2"}
 
 
+@pytest.mark.parametrize("prefix", ["R", "r"])
+async def test_components_prefix_filter_asc_ignores_case(
+    asc_file: Path, asc_state: SessionState, prefix: str
+):
+    (res,) = await _run(
+        asc_state, [{"kind": "components", "path": str(asc_file), "prefix": prefix}]
+    )
+    assert res["ok"] is True, res
+    assert {c["reference"] for c in res["data"]["components"]} == {"R1"}
+
+
 async def test_components_bad_prefix(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(
         state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": "RR"}]
