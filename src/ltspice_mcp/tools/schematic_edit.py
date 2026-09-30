@@ -1061,13 +1061,13 @@ async def _evaluate_edit_schematic(
                 )
                 exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
-                ok = verification.get("export_error") is None and verification.get("equivalent")
-                _stage("reference", bool(ok))
+                mismatch = comparison_mismatch(verification)
+                _stage("reference", not mismatch)
                 # A confirmed match is the answer, and the exported deck only
                 # restates the reference the caller supplied. A mismatch, a
                 # compare error or no verdict keeps it: it is the sheet's side
                 # of a comparison the caller now has to diagnose.
-                if comparison_mismatch(verification):
+                if mismatch:
                     netlist = exported
 
             hint = _commit_hint(profile, verification)

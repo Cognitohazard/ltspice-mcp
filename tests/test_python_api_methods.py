@@ -31,6 +31,7 @@ from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edi
 from ltspice_mcp.tools import jobs as jobs_mod
 from ltspice_mcp.tools.reference_index import validation_error_detail
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
+from tests.test_edit_schematic import _DIVIDER_OPS, _REF_DECK, _REF_DECK_DIFFERENT
 
 
 def _result(payload: Mapping[str, Any], *, is_error: bool = False) -> types.CallToolResult:
@@ -712,13 +713,9 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     assert legend["next_cursor"] is None
 
 
-_EDIT_REF_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
-_EDIT_MISMATCHED_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
-
-
 @pytest.mark.parametrize(
     ("exported", "returns_netlist"),
-    [(_EDIT_REF_DECK, False), (_EDIT_MISMATCHED_DECK, True)],
+    [(_REF_DECK, False), (_REF_DECK_DIFFERENT, True)],
     ids=["equivalent", "mismatch"],
 )
 def test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does(
@@ -741,8 +738,8 @@ def test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does(
     api = SyncApi(asc_state)
     arguments: dict[str, Any] = {
         "base": "blank",
-        "ops": [{"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300}],
-        "compare": {"reference": _EDIT_REF_DECK},
+        "ops": _DIVIDER_OPS,
+        "compare": {"reference": _REF_DECK},
     }
     page = api.edit_schematic(raw_page=True, target="mcp.asc", **arguments)
     complete = api.edit_schematic(target="api.asc", **arguments)

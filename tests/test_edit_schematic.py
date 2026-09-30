@@ -894,40 +894,6 @@ async def test_an_equivalent_comparison_leaves_the_netlist_out(asc_state, monkey
     assert "netlist" not in data
 
 
-async def test_a_mismatch_returns_the_exported_netlist(asc_state, monkeypatch):
-    """A comparison that did not match keeps the deck: it is what the sheet
-    actually exports to, and the caller diagnoses the difference from it."""
-
-    async def fake_export(_copy, _state):
-        return _REF_DECK_DIFFERENT
-
-    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(
-        asc_state, "refmismatchnet", _DIVIDER_OPS, compare={"reference": _REF_DECK}
-    )
-    assert data["verification"]["equivalent"] is False
-    assert data["netlist"] == _REF_DECK_DIFFERENT
-
-
-async def test_a_compare_error_returns_the_exported_netlist(asc_state, work_dir, monkeypatch):
-    """No verdict is not a match: the sheet exported, the reference did not,
-    so the sheet's deck is the one half of the comparison the caller has."""
-    (work_dir / "ref.asc").write_text("Version 4\nSHEET 1 880 680\n")
-
-    async def fake_export(copy, _state):
-        if copy.name == "reference.asc":
-            raise RuntimeError("injected reference export failure")
-        return _REF_DECK
-
-    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(
-        asc_state, "refcmperr", _DIVIDER_OPS, compare={"reference": "ref.asc"}
-    )
-    assert data["verification"]["equivalent"] is None
-    assert "could not be exported" in data["verification"]["compare_error"]
-    assert data["netlist"] == _REF_DECK
-
-
 async def test_reference_may_be_netlist_text(asc_state, monkeypatch):
     """The shared compare spec reads a multi-line reference as netlist text;
     this tool honours that the same way verify_circuit does."""
@@ -1000,6 +966,8 @@ async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypat
     assert data["verification"]["equivalent"] is False
     # A difference is data, not a failure: the sheet stays committed.
     assert (work_dir / "refbad.asc").is_file()
+    # The sheet's exported deck is the side of the difference to diagnose from.
+    assert data["netlist"] == _REF_DECK_DIFFERENT
 
 
 async def test_reference_mismatch_is_a_partial_outcome(asc_state, work_dir, monkeypatch):
@@ -1150,6 +1118,8 @@ async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir
     assert "injected reference export failure" in verification["compare_error"]
     assert verification["equivalent"] is None
     assert data["outcome"] == "partial"
+    # No verdict is not a match: the sheet's deck is the half the caller has.
+    assert "R2" in data["netlist"]
 
 
 # ---------------------------------------------------------------------------
