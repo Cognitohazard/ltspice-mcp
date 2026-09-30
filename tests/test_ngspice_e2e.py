@@ -17,9 +17,11 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.native_execution import observe_simulator
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
@@ -306,6 +308,40 @@ async def test_op_divider_full_stack(ngspice_state: SessionState, work_dir: Path
     # A clean divider trips no observation checks and no per-case failure.
     assert summary.get("observations", []) == []
     assert receipt["failures"] == []
+
+
+async def test_each_run_records_the_ngspice_build_that_ran_it(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # The build a case records is what the real ngspice printed about itself
+    # during the run: the version its own --version names. The capabilities
+    # report then names that build for this executable.
+    net = _write(
+        work_dir, "build.cir", "* divider\nV1 in 0 10\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"
+    )
+    receipt = await _run_one(ngspice_state, "ng-build", net)
+
+    runs = await handle_jobs(
+        JobsInput.model_validate({"action": "runs", "job_id": receipt["job_id"]}),
+        ngspice_state,
+    )
+    assert runs.structured_content is not None
+    (row,) = runs.structured_content["items"]
+    # Asked directly, as the native statistics path asks it (-n --version).
+    installed = await asyncio.to_thread(
+        observe_simulator, ngspice_state.available_simulators["ngspice"]
+    )
+    assert installed.version is not None
+    assert row["simulator_version"] is not None, row
+    assert row["simulator_version"].split(",")[0] == installed.version
+
+    caps = await handle_inspect(
+        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), ngspice_state
+    )
+    assert caps.structured_content is not None
+    ngspice = caps.structured_content["results"][0]["data"]["simulators"]["ngspice"]
+    assert ngspice["version"] == row["simulator_version"]
+    assert ngspice["executable_sha256"]
 
 
 async def test_active_npn_switch_op_full_stack(ngspice_state: SessionState, work_dir: Path):

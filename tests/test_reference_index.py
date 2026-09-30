@@ -272,6 +272,13 @@ class TestSearch:
             f"{hit.tool}.{hit.name}" for hit in hits
         )
 
+    @pytest.mark.parametrize("phrase", ["percentile", "99th percentile", "robust peak to peak"])
+    def test_a_robust_spread_reaches_signal_stats(self, phrase: str):
+        hits, _ = search_branches(phrase, limit=5)
+        assert (hits[0].tool, hits[0].name) == ("analyze_results", "signal_stats"), (
+            f"{phrase!r} ranked {hits[0].tool}.{hits[0].name} first"
+        )
+
     def test_ranking_prefers_the_name_over_a_field_or_prose_hit(self):
         hits, _ = search_branches("waveform", limit=5)
         assert hits[0].name == "waveform"
@@ -319,6 +326,8 @@ class TestSearch:
             ("cancel a run", ("jobs", "cancel")),
             ("trace a net", ("inspect", "net")),
             ("pelgrom mismatch", ("run_experiments", "mismatch")),
+            ("check my allowed paths", ("inspect", "capabilities")),
+            ("which config file", ("inspect", "capabilities")),
         ):
             hits, _ = search_branches(phrase, limit=5)
             assert expected in [(hit.tool, hit.name) for hit in hits], (

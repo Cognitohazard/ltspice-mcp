@@ -120,10 +120,37 @@ r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
 k = 0  # one step at a time
 t = r.axis(step=k)
 p_load = r.trace("V(out)", step=k) * r.trace("I(Rload)", step=k)
+t_w, p_w, _ = window_and_clean(t, p_load, 1e-3, None)  # from 1 ms to the end
+stats = compute_signal_stats(t_w, p_w)  # stats["mean"] is the average power
 ```
 
 A step's traces share that step's axis. The steps of a `.step` run each have
 an axis of their own, so never combine traces across steps.
+
+Take statistics of a derived trace with `compute_signal_stats` and
+`time_weighted_quantiles`, not `np.mean`, `np.std` or `np.percentile` over the
+samples. LTspice varies its timestep and packs samples around every edge, so a
+plain sample average or percentile over-weights the edges; `compute_signal_stats`
+weights mean, RMS and standard deviation by time, the way `signal_stats` does
+(its `min`, `max` and `pk_pk` are the sample extremes), and
+`time_weighted_quantiles` does the same for quantiles. `window_and_clean` cuts
+the window and drops non-finite samples first. All three are in `run_code`'s
+scope; in your own Python, `from ltspice_mcp.api import compute_signal_stats,
+time_weighted_quantiles, window_and_clean`.
+
+```python
+q = time_weighted_quantiles(t_w, p_w, [0.01, 0.5, 0.99])
+q["values"]  # one per level, in the order given
+```
+
+The `signal_stats` recipe keeps `min`, `max` and `peak_to_peak` as the sample
+extremes, so a narrow spike or an edge's overshoot is never averaged away. For
+a spread that leaves out the few edges of a switching train, which no single
+window can skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`,
+`q99` and `quantile_peak_to_peak` (highest level minus lowest), each a name
+`field` can reduce or spec. A key is the level as a percentage with `_` for
+the decimal point, so 0.999 is `q99_9`. `q99` is the smallest value the signal
+spends 99% of the window at or below.
 
 ### Reading a deck that carries `.step`
 
@@ -851,6 +878,8 @@ C1 out 0 {C}
 
 Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M90→(y,x), M180→(x,-y), M270→(-y,-x). Use `inspect(kind="symbol")` for exact positions.
 
+A pin is addressed as `REF.PIN` (`M1.D`) by its name. When no pin has that name and it is all digits, it is the pin's 1-based SpiceOrder, the terminal number a netlist uses, so `X1.2` reaches the second pin of a block whose pins are lettered. Names are matched first because some symbols name their pins `1`/`2` in an order that need not be their SpiceOrder. `inspect(kind="symbol")` lists each pin's `name` and `order`.
+
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols are 3-terminal — a MOSFET's bulk ties internally to its source, and a BJT has no separate substrate pin. When you need the body/substrate on its own net (e.g. a non-source bulk bias), use the 4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
 
 #### MOSFET orientation conventions
@@ -897,6 +926,7 @@ section, require it to build with `edit_schematic` (never by hand-writing the
 - **Tap an existing wire with a T-junction**: give the `wire_pins` op a coordinate endpoint on the wire, `to_pin: {"x": 240, "y": 196}`. LTspice joins a wire end, pin or label anywhere along a wire, so the wire stays whole and a `remove_wire` op on the new segment undoes it. Two wires that only cross are not joined. A waypoint that touches another net's wiring is refused rather than silently merging it; `inspect(kind="net")` at a point on a wire traces that wire (`snapped_to_wire`).
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
 - **Read the `wiring` profile `edit_schematic` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with the `wire_pins` op for local nets; reserve net-labels for ground, power rails, and distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
+- **On an existing sheet, the reported findings are the edit's.** `warnings` and `wiring.label_only_pins` list only what your ops introduced or named; older ones are counted in `preexisting`, not listed. Before calling a sheet done, list them with `return_views: ["preexisting"]` (on an op-less read, `ops: []`, that is the whole sheet) or run `verify_circuit`.
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.

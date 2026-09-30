@@ -1486,3 +1486,147 @@ Workaround: `raw_parser.py` `read_partial_raw_progress`, used by
 `test_a_declared_count_behind_the_records_does_not_cap_them`) and, against a
 real killed ngspice run,
 `tests/test_ngspice_e2e.py::test_run_timeout_reports_the_killed_runs_diagnostics_and_progress`.
+
+## Bug 16 — `AscEditor.get_components(prefixes)` matches a character set, case-sensitively (limitation)
+
+### Summary and affected version
+
+In spicelib 1.4.9 and 1.5.1, `editor/asc_editor.py::AscEditor.get_components`
+filters with `[k for k in self.components.keys() if k[0] in prefixes]`. The
+argument is documented as "Type of prefixes to search for. Examples: 'C' for
+capacitors", but it is read as a set of characters, compared with the
+reference's first character as written. So `get_components("r")` returns no
+`R1`, and `get_components("LX")` returns every `L…` and every `X…` rather than
+the `LX…` references. SPICE element letters are case-insensitive, and LTspice
+sheets carry upper-case references, so a lower-case filter silently returns
+nothing.
+
+### Reproduction
+
+Load any sheet holding `SYMATTR InstName R1` with `AscEditor` and call
+`editor.get_components("r")`: the result is `[]`. `get_components("R")`
+returns `["R1"]`. `get_components("RC")` returns both resistors and
+capacitors.
+
+### Impact, proposed upstream fix and test
+
+A caller that passes the letter it was given gets an empty component list on
+a populated sheet, with no error. Compare case-insensitively
+(`k[:1].upper() in prefixes.upper()`), and either document the argument as a
+set of element letters or accept a sequence of prefixes and test
+`k.upper().startswith(p.upper())` for each. An upstream test should cover a
+lower-case letter, a multi-letter prefix, and the `'*'` default.
+
+### Workaround and regression
+
+`tools/inspect_tools.py::_do_components` no longer passes a prefix to
+spicelib. It lists every reference and keeps those `montecarlo.matches_prefix`
+says the prefix claims, a case-insensitive start-of-reference match, the same
+rule its netlist branch and the `hierarchy` query use (`_check_prefix` returns
+the upper-cased prefix all three compare against). Pinned by
+`tests/test_inspect_tools.py::test_components_prefix_filter_asc_ignores_case`
+and `test_components_prefix_is_a_case_insensitive_reference_prefix`. Nothing
+here depends on spicelib's filter, so there is no workaround to remove when
+upstream changes.
+
+## Bug 17 — the symbol cache is keyed by file name, so one folder's symbol stands in for another's
+
+**Status:** draft for an upstream spicelib pull request. A known limitation; no
+workaround ships.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.symbol_cache` and `_asy_file_find`).
+**Our workaround:** none for spicelib's own loading. Our pin geometry does not
+read this cache: `lib/symbol_geometry.py` `get_symbol_info(symbol, asc_path)`
+looks for a symbol beside the sheet itself and caches it by file.
+
+### Summary
+
+`AscEditor.symbol_cache` is a class attribute shared by every editor in the
+process, and `_asy_file_find` keys it by the bare `.asy` file name. The search
+it caches starts in the schematic's own folder, so the first sheet to load a
+name decides which file that name means for every later sheet. A second sheet
+in another folder, with its own symbol of the same name beside it, is resolved
+to the first sheet's file. For a hierarchical block, `AsyReader.get_schematic_file`
+derives the sub-sheet from that `.asy` path, so the second sheet's block opens
+the first folder's sub-sheet.
+
+### Affected code
+
+`spicelib/editor/asc_editor.py`:
+
+```python
+symbol_cache = {}  # This is a class variable, so it can be shared between all instances.
+
+def _asy_file_find(self, filename) -> str | None:
+    if filename in self.symbol_cache:          # keyed by bare file name
+        return self.symbol_cache[filename]
+    ...
+    file_found = search_file_in_containers(filename,
+                                           os.path.split(self.asc_file_path)[0],  # this sheet's folder
+                                           ...)
+    if file_found is not None:
+        self.symbol_cache[filename] = file_found
+```
+
+### Reproduction
+
+Two folders, each with a block symbol `amp.asy`, its sub-sheet `amp.asc` and a
+`top.asc` placing it as `X1`. The sub-sheets differ only in `R1`'s value: 1k in
+`a`, 2k in `b`. A `res.asy` sits on the custom library path.
+
+```python
+a = AscEditor(root / "a" / "top.asc")
+b = AscEditor(root / "b" / "top.asc")
+a.get_component_value("X1:R1")   # '1k'
+b.get_component_value("X1:R1")   # '1k', but b/amp.asc says 2k
+AscEditor.symbol_cache           # {'amp.asy': '.../a/amp.asy', ...}
+
+b.set_component_value("X1:R1", "5k")
+b.save_netlist(root / "b" / "top.asc")
+# a/amp.asc now reads "SYMATTR Value 5k"; b/amp.asc still reads 2k
+```
+
+### Impact
+
+- A process that opens schematics from more than one folder reads a later
+  sheet's same-named block through an earlier sheet's files: the wrong
+  sub-sheet, the wrong component values, and the wrong `SymbolType`/`Prefix`
+  when spicelib decides whether an instance is a subcircuit.
+- Saving the later sheet writes its sub-sheet changes into the earlier
+  folder's file, because `save_netlist` saves each updated child to its own
+  `asc_file_path` (see Bug 13).
+- Which file wins depends on which sheet a long-lived process loaded first,
+  so the same request can read differently in two sessions.
+
+### Proposed fix
+
+Key the cache by the folder searched as well as the name, or cache only the
+library results and search the sheet's own folder on every load:
+
+```python
+key = (os.path.split(self.asc_file_path)[0], filename)
+if key in self.symbol_cache:
+    return self.symbol_cache[key]
+```
+
+### Suggested upstream test
+
+```python
+def test_same_named_block_beside_two_sheets_resolves_per_folder(tmp_path):
+    # a/ and b/ each hold amp.asy (SymbolType BLOCK), amp.asc and top.asc,
+    # with R1 = 1k in a/amp.asc and 2k in b/amp.asc.
+    a = AscEditor(tmp_path / "a" / "top.asc")
+    b = AscEditor(tmp_path / "b" / "top.asc")
+    assert a.get_component_value("X1:R1") == "1k"
+    assert b.get_component_value("X1:R1") == "2k"
+```
+
+### Cross-reference
+
+Our pin geometry is pinned per folder by
+`tests/test_circuit_asc.py::TestSheetLocalSymbols::test_same_named_symbols_beside_two_sheets_keep_their_own_pins`.
+The write in the reproduction is not reachable through `edit_schematic`, which
+refuses pending child edits before saving (Bug 13's workaround); the wrong read
+is. The test suite warms this cache for the fixture library once per session
+(`tests/conftest.py::_asc_symbol_cache`), and tests that load sheet-local
+symbols swap in a copy of it so no later test inherits their folders.

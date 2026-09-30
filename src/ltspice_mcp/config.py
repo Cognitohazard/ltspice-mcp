@@ -413,6 +413,22 @@ _SETTINGS: tuple[_Setting, ...] = (
         bounds=_Bounds(float, 0, 87600, exclusive_min=True),
     ),
     _Setting(
+        field="open_plot",
+        section="analysis",
+        key="open_plot",
+        from_toml=_toml_bool("analysis.open_plot"),
+        env="LTSPICE_MCP_OPEN_PLOT",
+        from_env=_env_bool("LTSPICE_MCP_OPEN_PLOT"),
+    ),
+    _Setting(
+        field="attach_plot",
+        section="analysis",
+        key="attach_plot",
+        from_toml=_toml_bool("analysis.attach_plot"),
+        env="LTSPICE_MCP_ATTACH_PLOT",
+        from_env=_env_bool("LTSPICE_MCP_ATTACH_PLOT"),
+    ),
+    _Setting(
         field="log_level",
         section="logging",
         key="level",
@@ -561,6 +577,19 @@ class ServerConfig:
 
     result_set_ttl_hours: float = 24.0
     """Retention for raw-path-only immutable analysis result sets."""
+
+    open_plot: bool = True
+    """Whether ``plot_waveform`` opens the chart it writes in a local browser
+    window when the client cannot show it in-chat. A call's own ``open`` wins.
+    Set false in a terminal session that should only get the file path.
+    ``[analysis] open_plot``."""
+
+    attach_plot: bool = False
+    """Whether ``plot_waveform`` attaches a static PNG of the chart for a vision
+    model to read. A call's own ``attach_plot`` wins. Off by default: the image
+    costs roughly a thousand tokens and is of no use to a client without vision.
+    Needs the ``raster`` extra; without it the reply says the image was skipped.
+    ``[analysis] attach_plot``."""
 
     default_budget: int = 4000
     """Server-side response budget, in estimated tokens, for a consolidated-profile
@@ -816,6 +845,13 @@ def generate_default_config(path: Path) -> None:
     analysis.add("default_budget", 4000)
     analysis.add(comment("Retention for raw-path-only analysis result sets, in hours"))
     analysis.add("result_set_ttl_hours", 24.0)
+    analysis.add(
+        comment("Open plot_waveform's chart in a local browser window (a call's open wins)")
+    )
+    analysis.add("open_plot", True)
+    analysis.add(comment("Attach a PNG of plot_waveform's chart for a vision model (needs the"))
+    analysis.add(comment("raster extra; a call's attach_plot wins)"))
+    analysis.add("attach_plot", False)
     doc.add("analysis", analysis)
     doc.add(nl())
 
