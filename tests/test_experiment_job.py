@@ -972,6 +972,43 @@ class TestRequestBarrier:
             item["code"] == "dangling_request_index_replaced" for item in result.job.observations
         )
 
+    async def test_a_briefly_unreadable_indexed_record_is_replayed_not_replaced(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # On Windows, opening a record while its running job rewrites it fails
+        # with a sharing violation for a moment. That record is not missing, and
+        # reading it as missing minted a second job for the same request_id.
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+
+        def request(job_id: str) -> ExperimentRunRequest:
+            return ExperimentRunRequest(
+                state=state_no_sim,
+                request_id="shared-request",
+                fingerprint="a" * 64,
+                stage=staged_decks([_case(circuit)], [_source(circuit)]),
+                simulator="FakeSim",
+                job_id=job_id,
+            )
+
+        first = await _run_barrier(request("exp_first"))
+        record = Store(work_dir).job_record(first.job.job_id)
+        real_open = Path.open
+        denials = iter(range(2))
+
+        def sharing_violation(self: Path, *args: Any, **kwargs: Any) -> Any:
+            if self == record and next(denials, None) is not None:
+                raise PermissionError(errno.EACCES, "Permission denied", str(self))
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", sharing_violation)
+        second = await _run_barrier(request("exp_second"))
+        assert second.replayed
+        assert second.job.job_id == first.job.job_id
+
     async def test_request_index_rejects_an_inconsistent_coordinator(
         self,
         state_no_sim: SessionState,

@@ -120,10 +120,21 @@ r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
 k = 0  # one step at a time
 t = r.axis(step=k)
 p_load = r.trace("V(out)", step=k) * r.trace("I(Rload)", step=k)
+t_w, p_w, _ = window_and_clean(t, p_load, 1e-3, None)  # from 1 ms to the end
+stats = compute_signal_stats(t_w, p_w)  # stats["mean"] is the average power
 ```
 
 A step's traces share that step's axis. The steps of a `.step` run each have
 an axis of their own, so never combine traces across steps.
+
+Take statistics of a derived trace with `compute_signal_stats`, not
+`np.mean`, `np.std` or `np.percentile` over the samples. LTspice varies its
+timestep and packs samples around every edge, so a plain sample average
+over-weights the edges; `compute_signal_stats` weights mean, RMS and standard
+deviation by time, the way `signal_stats` does (its `min`, `max` and `pk_pk`
+are the sample extremes). `window_and_clean` cuts the window and drops
+non-finite samples first. Both are in `run_code`'s scope; in your own Python,
+`from ltspice_mcp.api import compute_signal_stats, window_and_clean`.
 
 ### Reading a deck that carries `.step`
 
