@@ -1915,16 +1915,16 @@ class OpWirePins(StrictModel):
     op: Literal["wire_pins"]
     from_pin: str = Field(
         description=(
-            "Source pin as 'REF.PIN', PIN a pin name or else its 1-based "
-            "SpiceOrder ('M1.D', 'X1.2'), or 'net:NAME' for a label."
+            "Source pin: 'REF.PIN' by name, else 1-based SpiceOrder ('M1.D', "
+            "'X1.2'), or 'net:NAME' for a label."
         )
     )
     to_pin: str = Field(description="Target pin, in from_pin's forms.")
     waypoints: list[WaypointInput] = Field(
         default_factory=list,
         description=(
-            "Corner points the route must pass through, in order; omit to let "
-            "the router pick the elbow."
+            "Corner points the route passes through, in order; with none, the two "
+            "ends must share an x or a y."
         ),
     )
 
