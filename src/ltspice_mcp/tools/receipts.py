@@ -37,6 +37,7 @@ from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.projection import keep_plan, project_row
+from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
@@ -189,6 +190,7 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "status": {"type": "string"},
         "raw": {"type": ["string", "null"]},
         "log": {"type": ["string", "null"]},
+        "simulator_version": {"type": ["string", "null"]},
     },
     # run_fields may project away any key, so the shared row fragment
     # deliberately requires none of them.
@@ -271,6 +273,18 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                     "dialect",
                 ],
             },
+        },
+        # The program the job's cases launched, as identified at submission.
+        # Provenance: emitted under 'provenance' only.
+        "simulator_executable": {
+            "type": ["object", "null"],
+            "properties": {
+                "path": {"type": "string"},
+                "sha256": {"type": ["string", "null"]},
+                "bytes": {"type": ["integer", "null"]},
+                "modified": {"type": ["string", "null"]},
+            },
+            "required": ["path", "sha256", "bytes", "modified"],
         },
         "completeness": _COMPLETENESS_SCHEMA,
         "progress": _PROGRESS_SCHEMA,
@@ -520,6 +534,7 @@ class ReceiptSnapshot:
     analysis_error: str | None
     analysis_observations: tuple[dict[str, Any], ...]
     analysis_request: dict[str, Any] | None
+    simulator_executable: SimulatorExecutable | None = None
     path_denied_hint: str | None = None
     """The session's sandbox guidance, which a ``path_denied`` failure row
     carries as its hint. Not a job fact: the remedy is the sandbox setting as
@@ -605,6 +620,9 @@ def render_receipt_snapshot(
             # The caller's own attached-analysis input, replayed back —
             # proof of what ran, not something to re-read every turn.
             data["analysis"]["request"] = copy.deepcopy(snapshot.analysis_request)
+    if provenance:
+        executable = snapshot.simulator_executable
+        data["simulator_executable"] = executable.to_record() if executable else None
     return data
 
 
@@ -710,6 +728,7 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         "status": case.status,
         "raw": str(case.raw_file) if case.raw_file else None,
         "log": str(case.log_file) if case.log_file else None,
+        "simulator_version": case.simulator_version,
     }
 
 
@@ -734,10 +753,12 @@ def _project_run_rows(
         return [project_row(row, plan) for row in rows]
     if lean_default:
         # Produced artifacts can be resolved by job/case identity. Failed runs
-        # keep their log paths so the caller can inspect the failure.
+        # keep their log paths so the caller can inspect the failure. The build
+        # that produced a result is confirming detail too, one jobs(runs) or
+        # run_fields away; a failed run keeps it beside its log.
         for row in rows:
             if row["status"] == "produced":
-                del row["raw"], row["log"]
+                del row["raw"], row["log"], row["simulator_version"]
     return rows
 
 
@@ -977,6 +998,7 @@ def snapshot_receipt(
         analysis_error=analysis.error,
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
+        simulator_executable=job.simulator_executable,
         path_denied_hint=(
             state.sandbox_guidance()
             if state is not None

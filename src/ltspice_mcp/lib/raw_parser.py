@@ -1060,6 +1060,35 @@ def sniff_raw_dialect(path: Path) -> str | None:
     return "ngspice"
 
 
+_RE_HEADER_END = re.compile(r"(?im)^(?:variables|binary|values):")
+_RE_COMMAND = re.compile(r"(?im)^command:[ \t]*(\S[^\r\n]*)")
+
+
+def raw_writer_command(path: Path) -> str | None:
+    """The first plot header's ``Command:`` value: the writer naming itself.
+
+    ``Linear Technology Corporation LTspice XVII`` from LTspice XVII, or
+    ``ngspice-46, Build Mar 29 2026 15:02:07`` from ngspice 44 and later. None
+    when the file is not a raw, has no such field (ngspice before 44), or
+    cannot be read. Only the header text before the variables block is
+    searched, and only the first ``_SNIFF_BYTES`` of the file are read.
+    """
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(_SNIFF_BYTES)
+    except OSError:
+        return None
+    if head.startswith(_RAW_HEADER_UTF16):
+        text = head[: len(head) // 2 * 2].decode("utf-16-le", errors="replace")
+    elif head.startswith(_RAW_HEADER_ASCII):
+        text = head.decode("latin-1")
+    else:
+        return None
+    header_end = _RE_HEADER_END.search(text)
+    match = _RE_COMMAND.search(text, 0, header_end.start() if header_end else len(text))
+    return match[1].strip() if match else None
+
+
 # ---------------------------------------------------------------------------
 # How far a stopped run got
 # ---------------------------------------------------------------------------

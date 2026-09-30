@@ -31,6 +31,7 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
+from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
@@ -86,6 +87,10 @@ class RunOutcome(NamedTuple):
     # stopped keeps this, not the error: "no output generated" describes a
     # run that ended on its own.
     log_excerpt: str | None = None
+    # The build the run named in its own output (``simulator_build``). Read
+    # for every run, stopped ones included: which program ran is a fact about
+    # the run whatever became of its results.
+    simulator_version: str | None = None
 
 
 _RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS)
@@ -759,6 +764,14 @@ class RunnerBase:
                     simulator_exception=getattr(
                         threading.current_thread(), "exception_text", None
                     ),
+                )
+                # Before the callback: a stopped case's artifacts are removed
+                # once it lands, and this is read from them.
+                outcome = outcome._replace(
+                    simulator_version=reported_build(
+                        Path(log_file) if log_file else None,
+                        Path(raw_file) if raw_file else None,
+                    )
                 )
             except Exception as exc:
                 outcome = RunOutcome(
