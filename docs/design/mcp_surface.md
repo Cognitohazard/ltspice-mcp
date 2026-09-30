@@ -22,7 +22,11 @@ source wins and this document is the thing to fix.
 
 A seventh tool, `plot_waveform`, is registered alongside them. It is the
 interactive MCP Apps waveform widget; it predates this envelope and stays
-outside it.
+outside it. Its reply summarizes each plotted trace (min and max and where,
+first and final value, the time-weighted mean on a transient) so a model
+learns what the chart shows, and `attach_plot` adds a PNG of the chart for a
+vision model. Traces split into panels by declared unit, or as the caller's
+`panels` lays them out.
 
 An eighth, `run_code`, is registered always and served unless the operator
 sets `[tools] run_code = false`. It runs a Python snippet in a warm worker
@@ -97,7 +101,7 @@ From the error hierarchy:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was asked for without the optional `raster` extra |
+| `raster_unavailable` | a PNG was asked for without a usable rasterizer: the optional `raster` extra, or the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Named by the stage instead, where the stage is the more useful fact:
@@ -140,6 +144,13 @@ dicts, full run records, the `source_hashes` identity echo, and `provenance`.
 Never trimmed in any mode: failures, errors, observations, warnings, and any
 completeness shortfall. Lean drops the confirming detail of a success, never
 the fact channels.
+
+One kind of fact is scoped rather than trimmed: a standing fact about the
+target that predates the call and involves nothing the call named. The call is
+not its source, so it need not be listed; it is counted beside the channel it
+was left out of, with a route to list it, and never dropped. The call's own
+warnings and failures are never scoped. `edit_schematic`'s `preexisting` block
+(§3.4) is the instance.
 
 The reason is response cost: every response byte is re-read on every later
 turn of the conversation, and measurement put the tool path at several times
@@ -205,12 +216,14 @@ validation and every response are identical either way.
 
 The transform has one exemption, and it is read off the node's own shape
 rather than declared: a branch whose published properties are all fixed values
-keeps its description. That covers the dormant recipe branches and
-`inspect(kind: "capabilities")`, which are advertised as their discriminant and
-nothing else — "a client can still build a valid call" holds because a stripped
-branch still has structure to build one from, and these have none, so the
-description is the whole branch. Stripping it would publish a name a client
-could send with no way to learn what it does.
+keeps its description. That covers the dormant recipe branches, which are
+advertised as their discriminant and nothing else — "a client can still build a
+valid call" holds because a stripped branch still has structure to build one
+from, and these have none, so the description is the whole branch. Stripping it
+would publish a name a client could send with no way to learn what it does.
+`inspect(kind: "capabilities")` was the other such branch until it took a
+`fields` selector; its enum of report keys is now what the compact listing
+shows in place of the description.
 
 **How long a listing stays fresh.** Because they are static, the server tells
 the client so rather than making it re-list every turn: `tools/list`,
@@ -675,9 +688,12 @@ compare             {reference, anchors?, rtol, mode?} — post-commit netlist
                     the transaction; the exported netlist is returned
                     only when the verdict is not a match
 dry_run             resolve, validate and return geometry; no write
-return_views        subset ["touched", "pin_legend"], default ["touched"]
-view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
-                    next_cursor from a previous page of that view
+return_views        subset ["touched", "pin_legend", "preexisting"],
+                    default ["touched"]
+view_cursors        {label_only_pins?, pin_legend?, touched?, preexisting?} —
+                    each a next_cursor from a previous page of that view, and
+                    echoing one returns that view even when return_views
+                    omits it; preexisting also takes preexisting.cursor
 view_limit          page size for the paginated views (default 100)
 ```
 
@@ -724,6 +740,36 @@ specified and then measured: both arms of the comparison produced zero
 placement defects — the transaction guards already prevent the defect class —
 and the grid arm was strictly less efficient, so the variant was removed from
 the enum rather than shipped.
+
+**Findings are scoped to the edit.** The validation pass (floating pins,
+duplicate wires, dangling labels, a label inside a body, stacked directives)
+and the label-only-pin list are whole-sheet facts, and on an existing sheet
+most of them predate the call. One recorded edit came back with about eighteen of
+those findings and a 28-pin `label_only_pins` list, none of them about what it
+changed. So the transaction runs both passes twice — on the sheet before the
+ops and after them, which it holds in memory anyway — and reports a row only
+when it is new (the sheet did not have it before; any change to a row makes it
+new, since its identity is every field) or when it names a reference or a
+coordinate the batch named. A reference is named by an op's `reference` or a
+`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, or a
+waypoint. Everything else goes in the `preexisting` block:
+
+```
+preexisting {count, findings, label_only_pins, cursor}
+```
+
+Nothing is dropped — a finding the caller did not cause is still a fact about
+the sheet, so it is counted, and the counts reconcile: `wiring.pins_total`,
+`pins_wired` and `pins_label_only` stay whole-sheet, and
+`label_only_pins.total + preexisting.label_only_pins == pins_label_only`. To see
+the rest, echo `cursor` as `view_cursors.preexisting` (the cheap call is an
+op-less read, `ops: []`, on which nothing is new, so its pages cover the whole
+sheet), or name `preexisting` in `return_views` to have the first page in the
+same call. Either returns `views.preexisting`: the findings as the validation
+pass reports them, then the label-only pins with `kind: "label_only_pin"`. A
+`base: "blank"` build starts from nothing, so it withholds nothing. The op
+advisories in `warnings` (prefixed with the op that raised them) are about the
+batch itself and are never scoped.
 
 The op union is discriminated on `op`. Undiscriminated, one mistyped op
 produced an error per branch — thirty-odd of them, truncated — so the caller
@@ -835,8 +881,9 @@ symbol but cannot define a new block) and a whole-document validation pass.
 Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
-views {touched?: Page, pin_legend?: Page}, results[], warnings, failures,
-observations, hint`.
+preexisting {count, findings, label_only_pins, cursor},
+views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
+warnings, failures, observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
 
@@ -870,7 +917,16 @@ destructive, which the annotation table reflects.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
-as a file.
+as a file. Inline delivery is PNG only. An SVG sent as an image block is not
+reliably displayed. Sent as markup it runs about 600 bytes a component, so
+past a handful of parts it costs more than the PNG, and it would ride the text
+channel a structured-only client drops. When `inline` or `both` returns no
+image, `render.inline_skipped` says why (`svg_requested` or
+`png_unavailable`) and `render.note` says where the file is. A PNG needs the
+`raster` extra and the native Cairo library. A render without them falls back
+to SVG, with a `render` failure naming which of the two is missing and a
+per-platform remedy. `inspect(kind:"capabilities")` reports the same as
+`render: {png, missing, reason, remedy}` before anything is drawn.
 
 The two comparison modes differ in what an unreadable deck does to them.
 `equivalence` graph-compares connectivity — component set, values, normalized
@@ -900,8 +956,9 @@ component's signature is its model or value plus its instance parameters,
 nodes excluded (equivalence is the mode that compares wiring).
 
 Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
-summary, `outcome` and `hint`.
+block `{path, sha256, source_sha256, width, height, downscaled,
+returned_inline, inline_skipped, note, …}`, a scene summary, `outcome` and
+`hint`.
 
 The render block carries three digests' worth of care in two names. `sha256` is
 the image's; `source_sha256` is the sheet's own, read from the file this call
@@ -915,16 +972,34 @@ third thing again: the netlist's.
 The historical per-rule finding cap applies only to layout and quality issue
 rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 
+**No `baseline` filter.** `edit_schematic` scopes its findings to the edit
+because the transaction holds the sheet before and after its ops for free.
+`verify_circuit` holds one file, and neither form of baseline gives it the
+second one honestly. A prior `sha256` names bytes the server does not keep:
+there is no revision store, by the same decision that left out an undo tool
+(§3.4), and one built only for this filter would be that feature half done. A
+prior *path* means the caller kept a copy, and then the delta is a set
+difference over findings that already carry `rule_id`, `at` and `subject` —
+agent-side code, not a missing primitive. The one trap is the per-rule cap: two
+capped lists do not diff reliably, so that difference is taken over the
+complete findings `api.verify_circuit` returns (through `run_code` or the
+Python API), which are never capped. The gate stays a whole-file answer.
+
 ### 3.6 `inspect` — pure read
 
 `queries: list[Query]`, with per-item results and cursors where listed:
 
 ```
-{kind: "capabilities"}
+{kind: "capabilities", fields?}
     simulators and versions, exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
-    limits, linter_version, and the startup diagnostics that say whether
-    this server started degraded
+    limits, linter_version, the startup diagnostics that say whether
+    this server started degraded, and `render: {png, missing, reason,
+    remedy}` — whether verify_circuit can make the PNG it inlines, and
+    if not, whether the `raster` extra or native Cairo is missing;
+    `fields` (e.g. ["allowed_paths", "config_path"], what a caller checks
+    after a config edit) returns only those top-level keys, and omitting
+    it returns the whole report
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence

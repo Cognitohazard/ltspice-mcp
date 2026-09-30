@@ -10,6 +10,24 @@ tool-surface changes.
 
 ### Fixed
 
+- `plot_waveform` drew nothing for a `.step` transient whose steps have
+  different time vectors, the usual case. Each step's trace was padded onto
+  the combined time axis with a gap wherever another step had a sample, so
+  every sample stood alone and none was drawn. Each step's trace now keeps
+  its own time vector in the chart data, and the chart aligns them with
+  uPlot's own join, which draws each trace through its own samples and
+  breaks it only at its own non-finite ones. The chart file for such a run
+  is also smaller, since no padding is written. Linear axes also printed
+  neighbouring ticks alike (0.5 ms and 1 ms both as `0.001`); they now take
+  one SI prefix per axis and the decimals the tick step needs.
+- A job replayed by `request_id` from a process that did not own it could end
+  `interrupted` although it had completed. The replay saved its own copy of the
+  record, read while the job was still running, and that write could land
+  after the owner's `completed` one. The owner had exited by then, so the next
+  reader found a running job with no owner and recovered it as interrupted.
+  Seen with two scripts detaching the same request. Only the owning process
+  writes a job's record now; the caller that replayed still gets the
+  `idempotent_replay` observation in its receipt.
 - On Windows, a second `run_experiments` call carrying the same `request_id`
   could mint a second job instead of replaying the first. Opening a job record
   while its running job rewrites it fails with a sharing violation for a
@@ -133,8 +151,52 @@ tool-surface changes.
   waypoints the two ends must share an x or a y, or the route is refused as
   diagonal.
 
+- A PNG render that fell back to SVG blamed the optional `raster` extra even
+  when the extra was installed and the native Cairo library it loads was what
+  was missing, so the advice was to install something already installed. The
+  `render` failure, `render.note` and the hint now name which of the two is
+  missing, with the remedy for the server's platform: the install command for
+  the extra, or how to install Cairo on Linux, macOS or Windows. On Windows
+  that includes putting the DLL folder on `PATH` or in
+  `CAIROCFFI_DLL_DIRECTORIES`. The server checks once per process, because
+  each retry reran cairocffi's library search, so a fix takes effect after a
+  restart, as each remedy says.
+- A `verify_circuit` render with `delivery: "inline"` or `"both"` that returned
+  no image said only `returned_inline: false`. An agent that cannot read files
+  had no way to tell the drawing existed. The render block now carries
+  `inline_skipped` (`svg_requested` or `png_unavailable`). `render.note` says
+  that inline delivery is PNG only and where the file was written, and when
+  SVG was requested the hint says so too. SVG markup is still not returned
+  inline. It runs about 600 bytes a component, which costs more than the PNG
+  past a handful of parts, and structured-only clients drop the text channel
+  it would ride on.
+
 ### Added
 
+- `plot_waveform` replies summarize each plotted trace: `min` and `max` with
+  the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
+  `final`, and the time-weighted `mean` on a transient, read from every sample
+  in the window before any decimation. An AC trace is summarized in dB with
+  its unwrapped phase at both ends; a stepped run gets one summary per step,
+  up to 32 (when there are more, `traces_truncated` gives the total and an
+  observation says so). The summaries are in `traces` and the text reply, on
+  both the in-chat widget and the terminal path, and `x_unit` names the axis
+  unit. Before, the reply held only the file path and the plot's point
+  counts.
+- `plot_waveform(attach_plot=true)` returns a PNG of the chart as an image
+  block for a vision model, and writes it beside the HTML (`image_path`,
+  with its size and `estimated_tokens` in `image`). It draws the same panels
+  as the interactive chart, is off by default, and takes its default from
+  `[analysis] attach_plot` (`LTSPICE_MCP_ATTACH_PLOT`). Rendering needs the
+  `raster` extra and the native Cairo library; without either, the reply
+  carries an `image_unavailable` observation naming the missing piece and
+  how to install it, instead of the image.
+- `plot_waveform(panels=[[...], [...]])` lays the panels out by hand, one
+  list of signals per panel (up to 8), for traces of one unit but very
+  different size.
+- `[analysis] open_plot` (`LTSPICE_MCP_OPEN_PLOT`, on by default) sets
+  whether `plot_waveform` opens its chart in a local browser window; a call's
+  `open` still wins. A terminal session can turn the windows off.
 - `run_code` has `window_and_clean` and `compute_signal_stats` in scope, so a
   derived trace's statistics are weighted by time; `np.mean` over LTspice's
   variable timestep over-weights the samples packed around edges. The guide's
@@ -214,8 +276,31 @@ tool-surface changes.
   raw's stored data, with LTspice's negated compressed-time points, through
   `abs()` as spicelib does.
 
+- `inspect(kind="capabilities")` reports `render: {png, missing, reason,
+  remedy}`. It says whether `verify_circuit` can make the PNG it returns
+  inline and, if not, whether the `raster` extra or the native Cairo library is
+  missing and how to install it, before anything is drawn.
+
+- `inspect(kind="capabilities")` takes an optional `fields` list naming the
+  top-level keys to return, such as `["allowed_paths", "config_path"]` after a
+  config edit. Without it the report is unchanged.
+- `edit_schematic` has a `preexisting` view, which lists what an edit counted
+  under `preexisting` (see Changed). Name it in `return_views`, or echo
+  `preexisting.cursor` as `view_cursors.preexisting`.
+
 ### Changed
 
+- `plot_waveform` and the `analyze_results` `plot` recipe give each declared
+  unit its own panel, so volts and amps no longer share a y-axis; an AC plot
+  gets a magnitude and phase pair per unit. Panel titles carry the unit, and
+  a `.dc` sweep's x axis is labelled with its swept source. Noise densities
+  are labelled V/√Hz or A/√Hz. Input-referred noise takes its unit from the
+  deck's `.NOISE` source, and when there is no deck to check,
+  `plot_waveform` reports a `noise_input_unit_unverified` observation. Every
+  multi-panel chart shares one x cursor, where only the two Bode panels did
+  before.
+- `plot_waveform`'s `open` defaults to `[analysis] open_plot` instead of
+  always `true`.
 - The server instructions and `analyze_results`' description say where trace
   math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
   numpy on the traces. Before, only the error after a failed expression said
@@ -245,6 +330,29 @@ tool-surface changes.
   comparison to diagnose. To get the netlist of a matching sheet, run
   `verify_circuit` with the `export` check. The Python API's `edit_schematic`
   follows the same rule.
+
+- The Claude Code plugin and the Claude Desktop extension install
+  `ltspice-mcp[raster]`. Neither lets a user add an extra to the launch it
+  ships, so PNG rendering was impossible through them; installing native Cairo
+  is now the only step. The README documents the extra and the per-platform
+  Cairo install.
+
+- An `edit_schematic` call on an existing sheet reports only the sheet findings
+  in `warnings` (floating pins, dangling labels, duplicate wires, a label
+  inside a body, stacked directives) and the `wiring.label_only_pins` rows that
+  the batch introduced, or that name a reference or coordinate one of its ops
+  named. It used to return every one on the sheet, so a one-part edit to a
+  large sheet carried every older finding and label-only pin with it. The rest
+  are counted in a new `preexisting {count, findings, label_only_pins, cursor}`
+  block rather than dropped. `pins_total`, `pins_wired` and `pins_label_only`
+  stay whole-sheet, and `label_only_pins.total + preexisting.label_only_pins`
+  equals `pins_label_only`. A `base: "blank"` build is unchanged, since
+  everything on it is new. A caller that relied on the whole-sheet lists can
+  add `preexisting` to `return_views`. An op-less read (`ops: []`) now counts
+  every finding under `preexisting` too, because nothing on it is new.
+- An `edit_schematic` view cursor now returns its view even when
+  `return_views` does not name it. A `pin_legend` or `touched` cursor sent with
+  the default `return_views` used to be accepted and then ignored.
 
 ### Security
 
