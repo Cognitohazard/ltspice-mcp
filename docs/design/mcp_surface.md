@@ -670,8 +670,9 @@ expected_sha256     REQUIRED whenever target exists, under either base;
                     Both refusals — missing and mismatched — report the
                     target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
-compare             {reference, anchors?, rtol} — post-commit netlist
-                    compare, inside the transaction
+compare             {reference, anchors?, rtol, mode?} — post-commit netlist
+                    compare ("equivalence" | "structural_diff"), inside
+                    the transaction
 dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend"], default ["touched"]
 view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
@@ -789,15 +790,15 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 export_to     "managed" (default) | "sidecar"
 ```
 
-`compare` is shared with `edit_schematic`. The shared half —
-`{reference, anchors, rtol}` — means the same thing on both tools;
-`compare.mode` is on a subclass here because only this tool has two comparisons
-to choose between, and `render`'s `mode`/`delivery` because only this tool has
-checks to skip and an image channel to deliver into. A tool never advertises a
-field it cannot honour, which is also why `render` is here and not on
-`edit_schematic`. There is one spelling of each: the flat
-`reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with said nothing
-the object did not, and a call carrying both was refused rather than resolved.
+`compare` is shared with `edit_schematic`, `mode` included: `{reference,
+anchors, rtol, mode}` means the same thing on both tools, and both run either
+comparison through one dispatcher. `render`'s `mode`/`delivery` are here
+because only this tool has checks to skip and an image channel to deliver
+into. A tool never advertises a field it cannot honour, which is also why
+`render` is here and not on `edit_schematic`. There is one spelling of each:
+the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
+said nothing the object did not, and a call carrying both was refused rather
+than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
