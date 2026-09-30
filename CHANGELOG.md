@@ -439,6 +439,17 @@ tool-surface changes.
   ships, so PNG rendering was impossible through them; installing native Cairo
   is now the only step. The README documents the extra and the per-platform
   Cairo install.
+- CI: lint and type check run once, in a new `checks / static` job, instead of
+  on every interpreter. They gave the same answer on each: ruff and pyright
+  both target 3.11, and the lockfile resolves one package set for 3.11 through
+  3.13. The Linux test legs run the suite on one xdist worker per core, which
+  takes about 90 s on a four-core machine instead of about 200 s serially. The
+  existing status-check contexts keep their names.
+- The alias publish workflow no longer runs its own copy of the checks. An
+  alias already waits for the canonical `ltspice-mcp` release to appear on
+  PyPI, and that release publishes only after the checks pass, so the second
+  run doubled every release's test matrix without gating anything more. The
+  wait now allows 30 minutes, long enough to cover the checks.
 
 - An `edit_schematic` call on an existing sheet reports only the sheet findings
   in `warnings` (floating pins, dangling labels, duplicate wires, a label
