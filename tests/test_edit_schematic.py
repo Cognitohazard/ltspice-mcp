@@ -114,6 +114,22 @@ async def test_blank_build_parity_with_the_shared_op_runner(asc_state, work_dir)
     assert (work_dir / "parity_edit.asc").read_text() == control.read_text()
 
 
+async def test_a_t_junction_endpoint_commits_through_the_whole_transaction(asc_state):
+    """A wire_pins endpoint given as {x, y} on a wire's interior is carried
+    through the tool's own validation, commit and touched view, which reads each
+    op's pins by name and must pass over one that has none."""
+    ops = [
+        *_DIVIDER_OPS,
+        {"op": "add_component", "reference": "R3", "symbol": "res", "x": 550, "y": 100},
+        {"op": "wire_pins", "from_pin": "R3.2", "to_pin": {"x": 550, "y": 200}},
+    ]
+    data = await _build_blank(asc_state, "tee_edit", ops)
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "committed"
+    touched = {row["ref"] for row in data["views"]["touched"]["items"]}
+    assert "R3" in touched
+
+
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
     """A batch is where the same advisory repeats.
 
