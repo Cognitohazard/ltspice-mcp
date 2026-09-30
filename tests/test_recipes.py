@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
+    QUANTILE_SPREAD_FIELD,
     RECIPE_MODELS,
     BodeCrossingRecipe,
     KeyedRecipe,
@@ -17,6 +18,7 @@ from ltspice_mcp.lib.recipes import (
     SignalStatsRecipe,
     ValueRecipe,
     VariableRecipe,
+    quantile_key,
     validate_recipe,
 )
 
@@ -278,3 +280,58 @@ def test_field_dependency_rides_the_advertised_schema():
     for text in (json.dumps(schema), json.dumps(strip_argument_descriptions(schema))):
         assert multi in text
         assert keyed in text
+
+
+class TestSignalStatsQuantiles:
+    """signal_stats takes caller-chosen quantile levels and reports each one
+    under a key a 'field' can name, so a reduce or a spec reads it."""
+
+    @staticmethod
+    def _stats(**extra: object) -> SignalStatsRecipe:
+        recipe = validate_recipe(
+            {"key": "s", "metric": "signal_stats", "signal": "V(out)", **extra}
+        )
+        assert isinstance(recipe, SignalStatsRecipe)
+        return recipe
+
+    @pytest.mark.parametrize(
+        ("level", "key"),
+        [
+            (0.0, "q00"),
+            (0.01, "q01"),
+            (0.07, "q07"),
+            (0.5, "q50"),
+            (0.99, "q99"),
+            (0.025, "q02_5"),
+            (0.999, "q99_9"),
+            (0.0001, "q00_01"),
+            (1.0, "q100"),
+        ],
+    )
+    def test_a_level_is_reported_under_its_percentage(self, level: float, key: str):
+        assert quantile_key(level) == key
+
+    def test_requested_quantiles_and_their_spread_are_reducible(self):
+        levels = [0.01, 0.99]
+        assert self._stats(quantiles=levels, field="q99", reduce=["max"]).field == "q99"
+        assert self._stats(quantiles=levels, field="q01", spec={"min": 0.0}).field == "q01"
+        spread = self._stats(quantiles=levels, field=QUANTILE_SPREAD_FIELD, spec={"max": 0.05})
+        assert spread.field == QUANTILE_SPREAD_FIELD
+
+    def test_a_quantile_that_was_not_requested_is_not_a_field(self):
+        with pytest.raises(ValidationError, match="does not produce reducible field"):
+            self._stats(quantiles=[0.01, 0.99], field="q50", reduce=["max"])
+        with pytest.raises(ValidationError, match="does not produce reducible field"):
+            self._stats(field="q99", reduce=["max"])
+
+    def test_one_level_has_no_spread(self):
+        with pytest.raises(ValidationError, match="does not produce reducible field"):
+            self._stats(quantiles=[0.99], field=QUANTILE_SPREAD_FIELD, reduce=["max"])
+
+    @pytest.mark.parametrize(
+        "levels",
+        [[], [1.5], [-0.1], [0.5, 0.5], [0.0000001], [i / 20 for i in range(1, 18)]],
+    )
+    def test_unusable_levels_are_refused(self, levels: list[float]):
+        with pytest.raises(ValidationError):
+            self._stats(quantiles=levels)

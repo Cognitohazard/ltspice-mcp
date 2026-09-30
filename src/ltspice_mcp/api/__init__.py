@@ -72,6 +72,7 @@ if TYPE_CHECKING:
         PulseResponseOutput,
         SignalStatsOutput,
         ThdOutput,
+        TimeWeightedQuantilesOutput,
         TimingBetweenOutput,
         analyze_disturbance_response,
         analyze_edge,
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
         analyze_timing_between,
         compute_measurement_stats,
         compute_signal_stats,
+        time_weighted_quantiles,
         window_and_clean,
     )
 
@@ -116,6 +118,7 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     "analyze_periodic",
     "analyze_thd",
     "compute_signal_stats",
+    "time_weighted_quantiles",
     "compute_measurement_stats",
     "analyze_ac_structure",
     # Variation values round-trip as SPICE literals ('5p'), so the Python API
@@ -145,6 +148,7 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     "TimingBetweenOutput",
     "PeriodicMetricsOutput",
     "SignalStatsOutput",
+    "TimeWeightedQuantilesOutput",
     "ThdOutput",
     "HarmonicEntry",
     "MeasurementStatsEntry",
@@ -228,6 +232,7 @@ _SOURCES: dict[str, str] = {
                 "PulseResponseOutput",
                 "SignalStatsOutput",
                 "ThdOutput",
+                "TimeWeightedQuantilesOutput",
                 "TimingBetweenOutput",
                 "analyze_disturbance_response",
                 "analyze_edge",
@@ -237,6 +242,7 @@ _SOURCES: dict[str, str] = {
                 "analyze_timing_between",
                 "compute_measurement_stats",
                 "compute_signal_stats",
+                "time_weighted_quantiles",
                 "window_and_clean",
             ),
         ),

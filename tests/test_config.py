@@ -592,6 +592,8 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_ANALYSIS_BUDGET_S": "21.5",
     "LTSPICE_MCP_DEFAULT_BUDGET": "3300",
     "LTSPICE_MCP_RESULT_SET_TTL_HOURS": "72",
+    "LTSPICE_MCP_OPEN_PLOT": "yes",
+    "LTSPICE_MCP_ATTACH_PLOT": "0",
     "LTSPICE_MCP_MAX_ESTIMATED_POINTS": "7654321",
     "LTSPICE_MCP_MAX_RAW_MB": "256",
     "LTSPICE_MCP_LOG_LEVEL": "error",
@@ -628,6 +630,8 @@ max_points = 555
 analysis_budget_s = 12.5
 default_budget = 2500
 result_set_ttl_hours = 48
+open_plot = false
+attach_plot = true
 
 [logging]
 level = "debug"
@@ -685,6 +689,8 @@ class TestLoadCoversEveryKey:
             "max_points_returned": 555,
             "analysis_budget_s": 12.5,
             "result_set_ttl_hours": 48.0,
+            "open_plot": False,
+            "attach_plot": True,
             "default_budget": 2500,
             "log_level": "DEBUG",
             "symbol_paths": [Path("/tmp/sym-a"), Path("/tmp/sym-b")],
@@ -718,6 +724,8 @@ class TestLoadCoversEveryKey:
             "max_points_returned": 777,
             "analysis_budget_s": 21.5,
             "result_set_ttl_hours": 72.0,
+            "open_plot": True,
+            "attach_plot": False,
             "default_budget": 3300,
             "log_level": "ERROR",
             "symbol_paths": [Path("/tmp/env-sym-a"), Path("/tmp/env-sym-b")],
@@ -769,6 +777,8 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_LOG_LEVEL": "LOUD",
             "LTSPICE_MCP_TOOL_LISTING": "sparse",
             "LTSPICE_MCP_PERSIST_JOBS": "maybe",
+            "LTSPICE_MCP_OPEN_PLOT": "sometimes",
+            "LTSPICE_MCP_ATTACH_PLOT": "2",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "-2",
         }
         for name, value in rejected.items():
@@ -790,6 +800,8 @@ class TestLoadCoversEveryKey:
         assert snapshot["log_level"] == "DEBUG"
         assert snapshot["tool_listing"] == "compact"
         assert snapshot["persist_jobs"] is False
+        assert snapshot["open_plot"] is False
+        assert snapshot["attach_plot"] is True
         assert snapshot["preload_recent_count"] == 3
         message = "\n".join(record.getMessage() for record in caplog.records)
         for named in (
@@ -805,6 +817,8 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_RAW_MB",
             "LTSPICE_MCP_LOG_LEVEL",
             "LTSPICE_MCP_PERSIST_JOBS",
+            "LTSPICE_MCP_OPEN_PLOT",
+            "LTSPICE_MCP_ATTACH_PLOT",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT",
         ):
             assert named in message, f"no warning named {named}: {message!r}"
@@ -833,6 +847,8 @@ class TestLoadCoversEveryKey:
             "analysis_budget_s = 0\n"
             "default_budget = -1\n"
             "result_set_ttl_hours = 0\n"
+            'open_plot = "no"\n'
+            "attach_plot = 1\n"
             "[logging]\n"
             'level = "LOUD"\n'
             "[schematic]\n"
@@ -859,6 +875,8 @@ class TestLoadCoversEveryKey:
         assert config.analysis_budget_s == defaults.analysis_budget_s
         assert config.default_budget == defaults.default_budget
         assert config.result_set_ttl_hours == defaults.result_set_ttl_hours
+        assert config.open_plot is True
+        assert config.attach_plot is False
         assert config.log_level == defaults.log_level
         assert config.persist_jobs is True
         assert config.preload_recent_count == defaults.preload_recent_count

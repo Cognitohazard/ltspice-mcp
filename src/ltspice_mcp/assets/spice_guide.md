@@ -127,14 +127,30 @@ stats = compute_signal_stats(t_w, p_w)  # stats["mean"] is the average power
 A step's traces share that step's axis. The steps of a `.step` run each have
 an axis of their own, so never combine traces across steps.
 
-Take statistics of a derived trace with `compute_signal_stats`, not
-`np.mean`, `np.std` or `np.percentile` over the samples. LTspice varies its
-timestep and packs samples around every edge, so a plain sample average
-over-weights the edges; `compute_signal_stats` weights mean, RMS and standard
-deviation by time, the way `signal_stats` does (its `min`, `max` and `pk_pk`
-are the sample extremes). `window_and_clean` cuts the window and drops
-non-finite samples first. Both are in `run_code`'s scope; in your own Python,
-`from ltspice_mcp.api import compute_signal_stats, window_and_clean`.
+Take statistics of a derived trace with `compute_signal_stats` and
+`time_weighted_quantiles`, not `np.mean`, `np.std` or `np.percentile` over the
+samples. LTspice varies its timestep and packs samples around every edge, so a
+plain sample average or percentile over-weights the edges; `compute_signal_stats`
+weights mean, RMS and standard deviation by time, the way `signal_stats` does
+(its `min`, `max` and `pk_pk` are the sample extremes), and
+`time_weighted_quantiles` does the same for quantiles. `window_and_clean` cuts
+the window and drops non-finite samples first. All three are in `run_code`'s
+scope; in your own Python, `from ltspice_mcp.api import compute_signal_stats,
+time_weighted_quantiles, window_and_clean`.
+
+```python
+q = time_weighted_quantiles(t_w, p_w, [0.01, 0.5, 0.99])
+q["values"]  # one per level, in the order given
+```
+
+The `signal_stats` recipe keeps `min`, `max` and `peak_to_peak` as the sample
+extremes, so a narrow spike or an edge's overshoot is never averaged away. For
+a spread that leaves out the few edges of a switching train, which no single
+window can skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`,
+`q99` and `quantile_peak_to_peak` (highest level minus lowest), each a name
+`field` can reduce or spec. A key is the level as a percentage with `_` for
+the decimal point, so 0.999 is `q99_9`. `q99` is the smallest value the signal
+spends 99% of the window at or below.
 
 ### Reading a deck that carries `.step`
 
@@ -907,6 +923,7 @@ section, require it to build with `edit_schematic` (never by hand-writing the
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
 - **Read the `wiring` profile `edit_schematic` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with the `wire_pins` op for local nets; reserve net-labels for ground, power rails, and distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
+- **On an existing sheet, the reported findings are the edit's.** `warnings` and `wiring.label_only_pins` list only what your ops introduced or named; older ones are counted in `preexisting`, not listed. Before calling a sheet done, list them with `return_views: ["preexisting"]` (on an op-less read, `ops: []`, that is the whole sheet) or run `verify_circuit`.
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.

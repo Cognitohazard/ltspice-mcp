@@ -12,7 +12,7 @@
   "mcpServers": {
     "ltspice": {
       "command": "uvx",
-      "args": ["ltspice-mcp"]
+      "args": ["--from", "ltspice-mcp[raster]", "ltspice-mcp"]
     }
   }
 }

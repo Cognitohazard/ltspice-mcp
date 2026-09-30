@@ -110,16 +110,21 @@ SNIPPET_NAMES: tuple[str, ...] = (
     "reference",
     "window_and_clean",
     "compute_signal_stats",
+    "time_weighted_quantiles",
 )
 
 
 def _namespace(api: Any) -> dict[str, Any]:
     """The ``SNIPPET_NAMES``, rebuilt around the same live ``Api``. The signal
-    helpers are in scope so a derived trace's statistics are time-weighted
-    without an import."""
+    helpers are in scope so a derived trace's statistics and quantiles are
+    time-weighted without an import."""
     import numpy as np
 
-    from ltspice_mcp.api import compute_signal_stats, window_and_clean
+    from ltspice_mcp.api import (
+        compute_signal_stats,
+        time_weighted_quantiles,
+        window_and_clean,
+    )
 
     return {
         "__name__": "__main__",
@@ -130,6 +135,7 @@ def _namespace(api: Any) -> dict[str, Any]:
         "reference": api.reference,
         "window_and_clean": window_and_clean,
         "compute_signal_stats": compute_signal_stats,
+        "time_weighted_quantiles": time_weighted_quantiles,
     }
 
 

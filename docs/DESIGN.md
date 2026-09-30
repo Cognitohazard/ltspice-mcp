@@ -248,13 +248,14 @@ thresholds. The model decides what the shape is and where to look next;
 the server reports the facts.
 
 **Optional always-attach plot.** A config default plus a per-call tool
-parameter make waveform / analysis responses include a rendered plot (MCP
-`ImageContent`) of the queried window in addition to the scalars and the
-stat-envelope data points, not instead of them. The plot is the
-shape-recognition layer for the vision case above. Because it renders the
-queried window, the same zoom loop re-renders it at finer scale. Off by
-default (token cost, non-vision clients); on for clients that want a plot
-with every result; a per-call override is available either way.
+parameter make a response include a rendered plot (MCP `ImageContent`) of
+the queried window in addition to the scalars, not instead of them. The
+plot is the shape-recognition layer for the vision case above. Because it
+renders the queried window, the same zoom loop re-renders it at finer
+scale. Off by default (token cost, non-vision clients); on for clients that
+want a plot with every result; a per-call override is available either way.
+Built on `plot_waveform` (`attach_plot`, below); the `analyze_results`
+recipes do not attach one.
 
 ### Export & plot surface (as of 2026-06-13)
 
@@ -265,7 +266,7 @@ still open.
 | Consumer | Needs | Channel |
 |-|-|-|
 | The agent (computes) | the numbers, full fidelity | the `waveform` recipe in `format: "csv"` → CSV on disk |
-| A vision model (one frame) | shape-at-a-glance | static PNG (`ImageContent`) attached to a result |
+| A vision model (one frame) | shape-at-a-glance | static PNG (`ImageContent`) attached to a `plot_waveform` result (`attach_plot`) |
 | A human (explores) | an interactive plot | `plot_waveform`, rendered to the richest surface the client supports |
 
 One constraint affects the last two: the terminal CLIs do not render images
@@ -312,9 +313,25 @@ so zoom / pan / hover does nothing for it.
   file opened on the local desktop for a terminal client (a chromeless
   Chromium/Edge `--app` window when one is on the path; otherwise, on WSL,
   `explorer.exe` on a `wslpath -w` conversion, and `xdg-open` / `open` /
-  `os.startfile` elsewhere). Either way the tool returns the file path and
-  the plot's facts (series, points per series, downsampling, window), not
-  the data values, so the model can continue from the path. Because the
+  `os.startfile` elsewhere). Either way the tool also returns the file path
+  and a summary of each plotted trace, read from every sample in the window
+  before any decimation: min and max and the axis value where each occurs,
+  the first and final value, and on a transient the time-weighted mean (a
+  mean over a swept voltage or a log frequency axis describes the sweep,
+  not the circuit, so it is left out). An AC trace is summarized as
+  magnitude in dB plus its unwrapped phase at both ends. A stepped or Monte
+  Carlo overlay summarizes each step, up to a cap the reply reports. The
+  model gets the numbers the chart shows without seeing it, and continues
+  from the path.
+  Panels follow units: traces of one declared unit (`trace_unit`, the
+  simulator's own type, never a guess from the name) share a panel, so
+  volts and amps never share a y-axis, and an AC plot gets a magnitude and
+  phase pair per unit. A noise run's densities are V/√Hz, and input-referred
+  noise takes its unit from the deck's `.NOISE` source when there is one.
+  Scale is never guessed at: a caller who wants a 10 mV signal off a 4 V
+  swing's axis names the layout with `panels`. Every multi-panel chart
+  shares one x cursor, and the static image draws every panel over the same
+  x range. Because the
   server is local, an interactive plot needs no widget infrastructure: it
   opens a window or browser that the OS renders, which works the same under
   any CLI. The chart is built on uPlot (~50 KB, zero-dependency, canvas-2D)
@@ -328,11 +345,16 @@ so zoom / pan / hover does nothing for it.
   truncation). Both delivery paths are implemented. uPlot is vendored as a
   bundled MIT asset under `src/ltspice_mcp/assets/uplot/` (in the wheel,
   inlined at render; no pip dependency, no CDN). A step whose axis misses the
-  window is skipped; transient `.step` overlays with differing per-step time
-  vectors are null-padded onto a union x; AC Bode phase is unwrapped;
-  non-finite samples become JSON `null` gaps. A global per-panel cell cap
-  refuses, before allocating, a plot whose union-padded size would be too
-  large. Delivery is chosen by the capabilities the calling client declared
+  window is skipped; a panel's data is one or more tables `[x, y...]`, so
+  traces on one axis share a table and a transient `.step` overlay with
+  differing per-step time vectors has one per step, which the chart aligns
+  with `uPlot.join` (it joins a line across another table's samples and
+  breaks it at the trace's own `null`) and the static image draws against
+  each table's own x; AC Bode phase is unwrapped; non-finite samples become
+  JSON `null` gaps. The traces are read and windowed once per call; the file,
+  the widget spec and the image are projections of that at their own point
+  budgets. A global per-panel cell cap refuses, before building it, a plot
+  whose aligned size would be too large. Delivery is chosen by the capabilities the calling client declared
   (`capabilities.extensions["io.modelcontextprotocol/ui"]`) — in the
   `initialize` handshake, or in the per-request envelope on a 2026-07-28
   connection, which has no handshake; `server.py:get_client_capabilities`
@@ -344,9 +366,10 @@ so zoom / pan / hover does nothing for it.
     vendored Apache-2.0 ext-apps `App` runtime inlined) is served via
     `resources/read`; the host renders it in a sandboxed iframe and passes it
     a compact chart spec (decimated harder than the file, carried in the
-    result `_meta`, a channel the model does not see, so the plot still
-    returns no numbers to the model), which `app.ontoolresult` draws. The
-    full-fidelity HTML still lands on disk; an oversized spec (byte cap) or a
+    result `_meta`, a channel the model does not see, so the chart data
+    never reaches the model, which reads the trace summaries instead),
+    which `app.ontoolresult` draws. The full-fidelity HTML still lands on
+    disk; an oversized spec (byte cap) or a
     build failure falls back to local-open and is reported.
   - **Terminal client** → the self-contained HTML is opened locally
     (`explorer.exe` via `wslpath -w`, else `xdg-open`/`open`/`startfile`),
@@ -354,16 +377,28 @@ so zoom / pan / hover does nothing for it.
   Both always return the file path and a text summary, so a host with neither
   surface still gets a usable result (the fallback the MCP Apps spec
   describes).
-- **Static PNG (the vision tier) — opt-in.** A config default
-  `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
+- **Static PNG (the vision tier) — opt-in, on `plot_waveform`.** A config
+  default `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
   parameter that overrides it: an operator can attach a plot to every
-  analysis result, and the model can opt in or out for a single call.
-  Default off (a base64 PNG on every result is expensive, useless to
-  non-vision clients, and barely works in Codex). Gated on the optional
-  `[plot]` extra (matplotlib); if it is absent, skip and report rather than
-  error. Scoped first to the recipes where a plot helps most (`waveform` and
-  the Bode recipes). Not built; the interactive channel covered the need
-  first.
+  `plot_waveform` result, and the model can opt in or out for a single
+  call. Default off (a base64 PNG on every result is expensive, useless to
+  non-vision clients, and barely works in Codex). The image is drawn from
+  the same plot spec as the interactive chart, so the two cannot disagree
+  on panels or labels, by a plain-Python SVG renderer
+  (`lib/plot_svg.py`) and rasterized by the optional `raster` extra
+  (cairosvg) that schematic renders already use, instead of the
+  matplotlib `[plot]` extra first planned: no plotting dependency, and one
+  optional native library instead of two. Without the extra or the native
+  Cairo library the image is skipped and reported as an observation naming
+  the missing piece and its remedy (`raster_support`, the same record
+  `inspect(kind="capabilities")` reports); SVG markup is never sent in its
+  place, because path data is no use to a model and costs more than the
+  picture. The PNG is also written beside the HTML. It is about a thousand
+  tokens for two panels (the reply reports `estimated_tokens`). Its points
+  are budgeted in total rather than per series, since rasterization time
+  follows the points drawn and the plot area is under 700 px wide: a
+  many-step overlay gets fewer points per step, never a slower render. The
+  `analyze_results` recipes do not attach an image.
 
 **Fidelity by consumer.** The inline `waveform` recipe decimates (the LLM's
 context is the limit), its `format: "csv"` form is lossless (disk has no such
@@ -372,8 +407,9 @@ limit), and
 capping only at very large sizes.
 
 **Dependencies.** The core install adds no plotting dependency. The
-interactive channel adds only uPlot (~50 KB, zero-dep, inlined); matplotlib
-is confined to the static-PNG tier and ships as the optional `[plot]` extra.
+interactive channel adds only uPlot (~50 KB, zero-dep, inlined); the
+static-PNG tier is plain Python up to the SVG and needs only the optional
+`raster` extra to rasterize it.
 **Renderer principle:** the plot layer takes plain arrays plus labels and
 knows nothing about job or run internals, so the three channels stay
 swappable behind one data contract.
@@ -592,9 +628,9 @@ geometry-aware, and LTspice-specific comes first.
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
 - **Waveform export & plotting**: shipped (see *Export & plot surface*
-  above) — the `waveform` recipe's CSV form and both `plot_waveform`
-  delivery tiers. What remains open is the opt-in static-PNG attach for the
-  vision tier.
+  above) — the `waveform` recipe's CSV form, both `plot_waveform`
+  delivery tiers, and its opt-in static PNG for the vision tier. What
+  remains open is attaching that image to `analyze_results` recipes.
 - **Pin-compatible alternate suggestions** for unknown parts.
 
 ## Configuration

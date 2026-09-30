@@ -22,7 +22,10 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.schematic_ops import (
+    build_on_wire_predicate,
+    collect_component_geometry,
     get_asc_editor,
+    post_op_warnings,
     run_op_batch,
 )
 from ltspice_mcp.state import SessionState
@@ -35,6 +38,7 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
+from tests._asc_ops import apply_ops
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -691,6 +695,298 @@ async def test_wiring_metric_and_label_only(asc_state):
 
 
 # ---------------------------------------------------------------------------
+# Findings scoped to the edit
+# ---------------------------------------------------------------------------
+
+# A sheet that already has problems before anyone edits it: four resistors with
+# no wires (every free pin floats), two of them tied to their nets by a label
+# alone, and a label sitting on nothing. Seven sheet findings, two label-only
+# pins.
+_UNTIDY_OPS: list[dict] = [
+    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 300},
+    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 300, "y": 300},
+    {"op": "add_component", "reference": "R3", "symbol": "res", "x": 500, "y": 300},
+    {"op": "add_component", "reference": "R4", "symbol": "res", "x": 700, "y": 300},
+    {"op": "add_net_label", "net": "n3", "pin": "R3.1"},
+    {"op": "add_net_label", "net": "n4", "pin": "R4.1"},
+    {"op": "add_net_label", "net": "orphan", "x": 900, "y": 900},
+]
+_UNTIDY_FINDINGS = 7
+_UNTIDY_LABEL_ONLY = 2
+
+
+def _sheet_findings(data: dict) -> list[str]:
+    """The sheet's own findings in the warnings channel; op advisories are
+    attributed to their op and prefixed with it."""
+    return [w for w in data["warnings"] if not w.startswith("op ")]
+
+
+def _whole_sheet(state: SessionState, path: Path) -> tuple[list[str], list[str]]:
+    """Every finding message and label-only pin on the sheet as committed.
+
+    Read through a fresh parse of the file with the same validation pass the
+    tool runs, so the control shares nothing with the envelope under test.
+    """
+    state.editors.invalidate(path)
+    editor = get_asc_editor(path, state)
+    labels = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
+    wired = build_on_wire_predicate(
+        [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
+    )
+    label_only = [
+        f"{comp['ref']}.{pin['name']}"
+        for comp in collect_component_geometry(editor)
+        for pin in comp["pins"]
+        if not wired((pin["x"], pin["y"])) and (pin["x"], pin["y"]) in labels
+    ]
+    return [w["message"] for w in post_op_warnings(editor)], label_only
+
+
+async def _untidy_sheet(state: SessionState, name: str) -> Path:
+    built = await _build_blank(state, name, _UNTIDY_OPS)
+    assert built["commit_state"] == "committed"
+    return Path(state.working_dir) / f"{name}.asc"
+
+
+async def test_a_blank_build_withholds_nothing(asc_state):
+    """Everything on a sheet built from blank is new, so everything is reported."""
+    data = await _build_blank(asc_state, "untidy-blank", _UNTIDY_OPS)
+    assert len(_sheet_findings(data)) == _UNTIDY_FINDINGS
+    assert data["wiring"]["label_only_pins"]["total"] == _UNTIDY_LABEL_ONLY
+    assert data["preexisting"] == {
+        "count": 0,
+        "findings": 0,
+        "label_only_pins": 0,
+        "cursor": None,
+    }
+
+
+async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state):
+    """Adding one unwired part reports that part's two floating pins, not the
+    seven findings the sheet already had; those are counted, not listed."""
+    sheet = await _untidy_sheet(asc_state, "untidy-add")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
+    )
+
+    assert data["commit_state"] == "committed"
+    assert _sheet_findings(data) == [
+        "Floating pin: R5.1 at (1100,252)",
+        "Floating pin: R5.2 at (1100,348)",
+    ]
+    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS
+    assert data["preexisting"]["label_only_pins"] == _UNTIDY_LABEL_ONLY
+    assert data["preexisting"]["count"] == _UNTIDY_FINDINGS + _UNTIDY_LABEL_ONLY
+    assert data["preexisting"]["cursor"]
+    # structuredContent is all a structured-aware client reads, so the route
+    # to the rest rides in the hint as well as in the schema.
+    assert "predate" in data["hint"]
+    assert "view_cursors.preexisting" in data["hint"]
+    # Reported plus withheld is the whole sheet: nothing was dropped.
+    whole, _ = _whole_sheet(asc_state, sheet)
+    assert len(whole) == len(_sheet_findings(data)) + data["preexisting"]["findings"]
+
+
+async def test_a_finding_on_a_reference_the_batch_named_is_reported(asc_state):
+    """R1's floating pins predate the edit, but the edit is about R1."""
+    sheet = await _untidy_sheet(asc_state, "untidy-touch")
+
+    data = await apply_ops(
+        asc_state, sheet, [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
+    )
+
+    assert _sheet_findings(data) == [
+        "Floating pin: R1.1 at (100,252)",
+        "Floating pin: R1.2 at (100,348)",
+    ]
+    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 2
+
+
+async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
+    """The orphan label predates the edit; the directive is placed on it."""
+    sheet = await _untidy_sheet(asc_state, "untidy-coord")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
+    )
+
+    assert _sheet_findings(data) == ["Dangling label 'orphan' at (900,900)"]
+    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
+
+
+async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):
+    sheet = await _untidy_sheet(asc_state, "untidy-labels")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [
+            {"op": "add_component", "reference": "R6", "symbol": "res", "x": 1300, "y": 300},
+            {"op": "add_net_label", "net": "n6", "pin": "R6.1"},
+        ],
+    )
+
+    wiring = data["wiring"]
+    assert [row["pin"] for row in wiring["label_only_pins"]["items"]] == ["R6.1"]
+    # The metric stays whole-sheet; the list is what this edit did, and the
+    # difference is counted rather than dropped.
+    assert wiring["pins_label_only"] == _UNTIDY_LABEL_ONLY + 1
+    assert (
+        wiring["label_only_pins"]["total"] + data["preexisting"]["label_only_pins"]
+        == wiring["pins_label_only"]
+    )
+    _, label_only = _whole_sheet(asc_state, sheet)
+    assert len(label_only) == wiring["pins_label_only"]
+
+
+async def test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call(asc_state):
+    sheet = await _untidy_sheet(asc_state, "untidy-ask")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
+        return_views=["touched", "preexisting"],
+    )
+
+    page = data["views"]["preexisting"]
+    assert page["total"] == data["preexisting"]["count"]
+    assert "listed in views.preexisting" in data["hint"]
+    assert page["next_cursor"] is None
+    findings = [row["message"] for row in page["items"] if row["kind"] != "label_only_pin"]
+    pins = [row["pin"] for row in page["items"] if row["kind"] == "label_only_pin"]
+    assert sorted(pins) == ["R3.1", "R4.1"]
+    whole, _ = _whole_sheet(asc_state, sheet)
+    assert sorted(findings + _sheet_findings(data)) == sorted(whole)
+
+
+async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
+    """Echoing preexisting.cursor is the request: no return_views entry needed.
+    An op-less read reports nothing as new, so its pages cover the whole sheet."""
+    sheet = await _untidy_sheet(asc_state, "untidy-page")
+    edit = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
+    )
+
+    rows: list[dict] = []
+    cursor = edit["preexisting"]["cursor"]
+    for _ in range(10):
+        page = await apply_ops(
+            asc_state, sheet, [], view_cursors={"preexisting": cursor}, view_limit=3
+        )
+        assert page["commit_state"] == "not_committed"
+        view = page["views"]["preexisting"]
+        assert view["returned"] <= 3
+        rows += view["items"]
+        cursor = view["next_cursor"]
+        if cursor is None:
+            break
+
+    whole, label_only = _whole_sheet(asc_state, sheet)
+    assert sorted(r["message"] for r in rows if r["kind"] != "label_only_pin") == sorted(whole)
+    assert sorted(r["pin"] for r in rows if r["kind"] == "label_only_pin") == sorted(label_only)
+    assert len(rows) == len(whole) + len(label_only)
+
+
+async def test_an_echoed_cursor_returns_its_view_without_a_return_views_entry(asc_state):
+    """The cursor is the request. A pin_legend cursor sent with the default
+    return_views used to be validated and then ignored, so the page it asked
+    for never came back."""
+    built = await _build_blank(
+        asc_state,
+        "cursor-implies",
+        _many_labeled_ops(5),
+        return_views=["pin_legend"],
+        view_limit=2,
+    )
+    sheet = Path(asc_state.working_dir) / "cursor-implies.asc"
+
+    page = await apply_ops(
+        asc_state,
+        sheet,
+        [],
+        view_cursors={"pin_legend": built["views"]["pin_legend"]["next_cursor"]},
+        view_limit=2,
+    )
+
+    assert [row["ref"] for row in page["views"]["pin_legend"]["items"]] == ["R2", "R3"]
+
+
+async def test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate(asc_state):
+    """A label-only pin is on no wire, so its net holds only what sits at its
+    coordinate: the label-only list names it from the labels there, without
+    tracing the sheet, and must agree with the traced whole-sheet legend."""
+    await _build_blank(
+        asc_state,
+        "label-only-nets",
+        # The same name on the wired net as on the label-only pin: it may not
+        # leak from one into the other's net name.
+        [*_DIVIDER_OPS, {"op": "add_net_label", "net": "vout", "x": 550, "y": 200}],
+    )
+    sheet = Path(asc_state.working_dir) / "label-only-nets.asc"
+    # A second name on the label-only pin. The tool refuses to write one (it
+    # shorts two nets), so only a hand-written sheet carries it.
+    with sheet.open("a", newline="\n") as handle:
+        handle.write("FLAG 400 348 alias\n")
+
+    data = await apply_ops(asc_state, sheet, [], return_views=["pin_legend", "preexisting"])
+
+    traced = {
+        f"{row['ref']}.{pin['name']}": pin["net"]
+        for row in data["views"]["pin_legend"]["items"]
+        for pin in row["pins"]
+    }
+    rows = [r for r in data["views"]["preexisting"]["items"] if r["kind"] == "label_only_pin"]
+    assert [(row["pin"], row["net"]) for row in rows] == [("R1.2", "alias/vout")]
+    assert all(row["net"] == traced[row["pin"]] for row in rows)
+
+
+async def test_malformed_preexisting_cursor_is_rejected_before_the_sheet_is_written(asc_state):
+    sheet = await _untidy_sheet(asc_state, "untidy-badcursor")
+    before = sheet.read_bytes()
+    with pytest.raises(NetlistError, match="preexisting"):
+        await apply_ops(
+            asc_state,
+            sheet,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
+            view_cursors={"preexisting": "tampered"},
+        )
+    assert sheet.read_bytes() == before
+
+
+async def test_the_python_seam_scopes_the_same_way_and_completes_the_view(asc_state):
+    """One evaluator: the API gets the MCP's scoped lists, and the withheld rows
+    complete rather than paged."""
+    sheet = await _untidy_sheet(asc_state, "untidy-api")
+    args = _edit_input(
+        target=sheet.name,
+        expected_sha256=_sha(sheet),
+        dry_run=True,
+        return_views=["preexisting"],
+        view_limit=1,
+        ops=[{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
+    )
+
+    complete = complete_edit_schematic_data(await evaluate_edit_schematic(args, asc_state), args)
+
+    assert _sheet_findings(complete) == [
+        "Floating pin: R5.1 at (1100,252)",
+        "Floating pin: R5.2 at (1100,348)",
+    ]
+    view = complete["views"]["preexisting"]
+    assert view["total"] == view["returned"] == _UNTIDY_FINDINGS + _UNTIDY_LABEL_ONLY
+    assert view["truncated"] is False
+    assert complete["preexisting"]["count"] == view["total"]
+
+
+# ---------------------------------------------------------------------------
 # Paginated views + cursor resumption
 # ---------------------------------------------------------------------------
 
@@ -742,9 +1038,14 @@ async def test_view_pagination_cursor_resumption(asc_state):
                     return_views=["pin_legend"],
                     view_limit=2,
                     view_cursors={"label_only_pins": cursor_lo, "pin_legend": cursor_pl},
-                    # A no-op-on-geometry op keeps the paged list identical across
-                    # resume calls (add_net_label would change label_only membership).
-                    ops=[{"op": "add_directive", "instruction": ".op"}],
+                    # Ops that name every part without moving one keep the paged
+                    # list identical across resume calls: add_net_label would change
+                    # label_only membership, and an op naming none of the parts
+                    # would leave their label-only pins counted under preexisting.
+                    ops=[
+                        {"op": "set_component_value", "reference": f"R{i}", "value": "1k"}
+                        for i in range(5)
+                    ],
                 ),
                 asc_state,
             )
@@ -870,8 +1171,28 @@ async def test_reference_success(asc_state, work_dir, monkeypatch):
     data = await _build_blank(asc_state, "refok", _DIVIDER_OPS, compare={"reference": "ref.cir"})
     assert data["commit_state"] == "committed"
     assert data["verification"]["equivalent"] is True
-    assert data["netlist"] == _REF_DECK
+    # The verdict is the answer; the exported deck only confirms it.
+    assert "netlist" not in data
     assert data["stages"][-1] == {"stage": "reference", "ok": True}
+
+
+async def test_an_equivalent_comparison_leaves_the_netlist_out(asc_state, monkeypatch):
+    """A confirmed match does not echo the exported deck.
+
+    Every compare used to return the committed sheet's whole netlist, even
+    when the verdict was ``equivalent: true``. That deck is equivalent to the
+    reference the caller supplied, so it carried no fact the verdict did not,
+    and every later turn re-read it.
+    """
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(asc_state, "reflean", _DIVIDER_OPS, compare={"reference": _REF_DECK})
+    assert data["verification"]["equivalent"] is True
+    assert data["outcome"] == "complete"
+    assert "netlist" not in data
 
 
 async def test_reference_may_be_netlist_text(asc_state, monkeypatch):
@@ -946,6 +1267,8 @@ async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypat
     assert data["verification"]["equivalent"] is False
     # A difference is data, not a failure: the sheet stays committed.
     assert (work_dir / "refbad.asc").is_file()
+    # The sheet's exported deck is the side of the difference to diagnose from.
+    assert data["netlist"] == _REF_DECK_DIFFERENT
 
 
 async def test_reference_mismatch_is_a_partial_outcome(asc_state, work_dir, monkeypatch):
@@ -987,6 +1310,8 @@ async def test_reference_export_failure_is_a_partial_outcome(asc_state, work_dir
     )
     assert data["verification"]["equivalent"] is None
     assert data["verification"]["export_error"]
+    # Nothing exported, so there is no deck to return.
+    assert "netlist" not in data
     assert data["outcome"] == "partial"
     assert data["commit_state"] == "committed"
 
@@ -1094,6 +1419,8 @@ async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir
     assert "injected reference export failure" in verification["compare_error"]
     assert verification["equivalent"] is None
     assert data["outcome"] == "partial"
+    # No verdict is not a match: the sheet's deck is the half the caller has.
+    assert "R2" in data["netlist"]
 
 
 # ---------------------------------------------------------------------------
