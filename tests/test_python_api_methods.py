@@ -31,6 +31,7 @@ from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edi
 from ltspice_mcp.tools import jobs as jobs_mod
 from ltspice_mcp.tools.reference_index import validation_error_detail
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
+from tests.test_edit_schematic import _DIVIDER_OPS, _REF_DECK, _REF_DECK_DIFFERENT
 
 
 def _result(payload: Mapping[str, Any], *, is_error: bool = False) -> types.CallToolResult:
@@ -710,6 +711,43 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     assert legend["returned"] == legend["total"] == 121
     assert legend["truncated"] is False
     assert legend["next_cursor"] is None
+
+
+@pytest.mark.parametrize(
+    ("exported", "returns_netlist"),
+    [(_REF_DECK, False), (_REF_DECK_DIFFERENT, True)],
+    ids=["equivalent", "mismatch"],
+)
+def test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does(
+    asc_state: SessionState,
+    monkeypatch: pytest.MonkeyPatch,
+    exported: str,
+    returns_netlist: bool,
+) -> None:
+    """The netlist rule is decided once, in the shared evaluator.
+
+    The complete door fills in unpaged views and nothing else, so a confirmed
+    match leaves the exported deck out of both replies and a mismatch keeps it
+    in both.
+    """
+
+    async def fake_export(_copy: Path, _state: SessionState) -> str:
+        return exported
+
+    monkeypatch.setattr(schematic_edit, "_export_asc_to_netlist", fake_export)
+    api = SyncApi(asc_state)
+    arguments: dict[str, Any] = {
+        "base": "blank",
+        "ops": _DIVIDER_OPS,
+        "compare": {"reference": _REF_DECK},
+    }
+    page = api.edit_schematic(raw_page=True, target="mcp.asc", **arguments)
+    complete = api.edit_schematic(target="api.asc", **arguments)
+    for data in (page, complete):
+        assert data["verification"]["equivalent"] is (not returns_netlist)
+        assert ("netlist" in data) is returns_netlist
+    if returns_netlist:
+        assert page["netlist"] == complete["netlist"] == exported
 
 
 # ---------------------------------------------------------------------------
