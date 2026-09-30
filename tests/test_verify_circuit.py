@@ -21,6 +21,7 @@ undeclared keys past both the suite and the session-wide conformance hook.
 from __future__ import annotations
 
 import hashlib
+import sys
 import typing
 from pathlib import Path
 from types import NoneType
@@ -45,6 +46,7 @@ from ltspice_mcp.tools.verify import (
     handle_verify_circuit,
 )
 from tests import _fake_netlister as fake_netlister
+from tests.conftest import needs_raster
 
 
 class FakeSim:
@@ -1118,7 +1120,7 @@ async def test_the_digest_names_the_bytes_that_were_drawn(state_no_sim, work_dir
     assert payload["source_sha256"] == drawn
 
 
-@pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
+@needs_raster
 async def test_render_png_present(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "rp.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
@@ -1129,9 +1131,8 @@ async def test_render_png_present(state_no_sim, work_dir, asc_symbols):
 
 
 async def test_render_png_forced_absent_declares_extra(
-    state_no_sim, work_dir, asc_symbols, monkeypatch
+    state_no_sim, work_dir, asc_symbols, raster_extra_missing
 ):
-    monkeypatch.setattr(raster, "_load_cairosvg", lambda: None)
     asc = _write(work_dir, "rf.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
     render = data["render"]
@@ -1139,12 +1140,103 @@ async def test_render_png_forced_absent_declares_extra(
     assert "raster" in (render["note"] or "")
     render_failures = [f for f in data["failures"] if f["stage"] == "render"]
     assert render_failures, "a PNG request without the extra must declare a per-item failure"
-    assert "raster" in render_failures[0]["error"]
+    assert "'raster' extra" in render_failures[0]["error"]
+    assert "ltspice-mcp[raster]" in (render_failures[0]["remedy"] or "")
 
 
+async def test_render_png_without_native_cairo_blames_the_library(
+    state_no_sim, work_dir, asc_symbols, raster_native_missing
+):
+    """With the extra installed and libcairo absent, "install the extra" is
+    advice the caller already followed. The failure names the native library,
+    and the remedy is the one for the platform the server runs on."""
+    asc = _write(work_dir, "rn.asc", _RES_ASC)
+    data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
+    assert data["render"]["image_format"] == "svg"
+    (failure,) = [f for f in data["failures"] if f["stage"] == "render"]
+    assert "Cairo" in failure["error"]
+    assert "not installed" not in failure["error"]
+    assert failure["remedy"] == raster.native_library_remedy(sys.platform)
+    assert "Cairo" in data["render"]["note"]
+    # The headline a structured-only client reads carries it too.
+    assert "Cairo" in data["hint"]
+
+
+async def test_inline_svg_request_says_why_nothing_was_inlined(
+    state_no_sim, work_dir, asc_symbols
+):
+    """Inline delivery is PNG only. A caller that asked for it and got an SVG
+    used to learn only 'returned_inline: false', with nothing saying why or
+    that the drawing is on disk."""
+    asc = _write(work_dir, "ri.asc", _RES_ASC)
+    result = await handle_verify_circuit(
+        VerifyCircuitInput.model_validate(
+            {
+                "path": str(asc),
+                "render": {"mode": "only", "format": "svg", "delivery": "inline"},
+            }
+        ),
+        state_no_sim,
+    )
+    data = _assert_schema(result)
+    render = data["render"]
+    assert render["returned_inline"] is False
+    assert render["inline_skipped"] == "svg_requested"
+    note = render["note"] or ""
+    assert "PNG only" in note
+    assert render["path"] in note
+    # The caller chose SVG, so nothing failed: this is an explanation, not a
+    # shortfall, and it still reaches the headline.
+    assert data["failures"] == []
+    assert data["outcome"] == "complete"
+    assert "not returned inline" in data["hint"]
+    assert render["path"] in data["hint"]
+    assert not [c for c in result.content if c.type == "image"]
+
+
+async def test_inline_png_request_without_raster_says_why_nothing_was_inlined(
+    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+):
+    asc = _write(work_dir, "rj.asc", _RES_ASC)
+    data = await _run(
+        state_no_sim,
+        path=str(asc),
+        render={"mode": "only", "format": "png", "delivery": "both"},
+    )
+    render = data["render"]
+    assert render["returned_inline"] is False
+    assert render["inline_skipped"] == "png_unavailable"
+    note = render["note"] or ""
+    # Why the PNG could not be made, then where the SVG went instead.
+    assert "'raster' extra" in note
+    assert render["path"] in note
+
+
+async def test_artifact_delivery_skips_nothing(state_no_sim, work_dir, asc_symbols):
+    # Nothing inline was asked for, so nothing inline was skipped.
+    asc = _write(work_dir, "ra.asc", _RES_ASC)
+    data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
+    assert data["render"]["inline_skipped"] is None
+    assert data["render"]["note"] is None
+
+
+@needs_raster
+async def test_inline_png_is_delivered(state_no_sim, work_dir, asc_symbols):
+    asc = _write(work_dir, "rk.asc", _RES_ASC)
+    result = await handle_verify_circuit(
+        VerifyCircuitInput.model_validate(
+            {"path": str(asc), "render": {"mode": "only", "delivery": "inline"}}
+        ),
+        state_no_sim,
+    )
+    data = _assert_schema(result)
+    assert data["render"]["returned_inline"] is True
+    assert data["render"]["inline_skipped"] is None
+    assert [c.mime_type for c in result.content if c.type == "image"] == ["image/png"]
+
+
+@needs_raster
 async def test_render_max_pixels_downscales(state_no_sim, work_dir, asc_symbols):
-    if not raster.raster_available():
-        pytest.skip("cairosvg not installed")
     asc = _write(work_dir, "rd.asc", _RES_ASC)
     data = await _run(
         state_no_sim,

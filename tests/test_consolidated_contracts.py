@@ -638,23 +638,47 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 160 characters so value's 'expr' and 'at' say what they
     # take: a field named for an expression, with no description, was read as
     # one, and 'at' being required on a multi-sample axis was stated nowhere.
-    "analyze_results": 19260,
+    # Raised by about 110 characters so the description says a signal is one
+    # trace or V(a,b) and where other trace math goes, before a recipe is
+    # chosen rather than in the error after an expression fails.
+    # Raised by about 260 characters for signal_stats' 'quantiles': the levels'
+    # bounds and count, and one sentence naming the q-keyed fields they add,
+    # which a 'field' has to spell to reduce or spec one; plus "percentiles"
+    # on the roster, so a host routes that word here. Measured 19,621.
+    "analyze_results": 19630,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
-    "inspect": 8300,
+    # Raised by about 400 characters for the capabilities 'fields' selector: a
+    # caller checking a config edit wanted two keys and was sent the whole
+    # report. Most of it is the enum of report keys, which is also what a
+    # compact-listing client reads in place of the stripped description.
+    "inspect": 8620,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
     # compare is verify_circuit's spec: the mode field rides along.
-    "edit_schematic": 11800,
+    # Raised by about 200 characters for the 'preexisting' view and its cursor:
+    # an edit to an existing sheet reports only what the batch introduced or
+    # named, and those two are how the rest is listed.
+    "edit_schematic": 12000,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
     # the description does not say it looks at.
-    "verify_circuit": 4850,
+    # Raised by 30 characters so render.format says a PNG also needs native
+    # Cairo and that inspect capabilities reports whether it works here: the
+    # extra was the only requirement it named, and a host with the extra but
+    # no libcairo had no way to find out before a render fell back to SVG.
+    "verify_circuit": 4880,
     # Job/case addressing, windowing, and delivery flags.
-    "plot_waveform": 3200,
+    # Raised by about 500 characters for what the model gets back: the
+    # description says the reply summarizes each trace and that attach_plot
+    # adds a PNG, and three arguments were added or reworded — panels (a
+    # hand-made panel layout, since the automatic split goes by unit and never
+    # by scale), attach_plot, and open, whose default now comes from
+    # [analysis] open_plot. Measured 3,695 characters.
+    "plot_waveform": 3700,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
@@ -1031,3 +1055,10 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     def test_it_points_at_the_reference_lookup(self):
         description = _registered()["analyze_results"].description or ""
         assert "inspect(kind='reference'" in description
+
+    def test_it_says_a_signal_is_not_an_expression(self):
+        """Names V(a,b) and where trace math goes, never the gated run_code."""
+        description = _registered()["analyze_results"].description or ""
+        assert "V(a,b)" in description
+        assert "trace math" in description
+        assert "run_code" not in description

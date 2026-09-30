@@ -341,19 +341,6 @@ def _running_experiment(work_dir: Path, job_id: str, pid: int) -> ExperimentJob:
     return job
 
 
-@pytest.fixture(scope="module")
-def live_peer_pid():
-    """A real, live process that is not this one (a parallel session stand-in)."""
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(60)"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    yield proc.pid
-    proc.kill()
-    proc.wait()
-
-
 class TestOwnerPidLiveness:
     def test_running_job_with_live_owner_stays_running(self, work_dir: Path, live_peer_pid: int):
         job = _running_experiment(work_dir, "exp_livepeer", live_peer_pid)

@@ -1543,17 +1543,24 @@ async def _plot(
     )
     pending.parent.mkdir(parents=True, exist_ok=True)
     span = recipe.span
+    plan = await asyncio.to_thread(
+        an.plan_plot,
+        raw,
+        [cols],
+        split_by_unit=True,
+        netlist=run.source.netlist,
+        steps=[step for step, _ in steps],
+        step_dicts=[values for _, values in steps],
+        analysis_type=analysis_type,
+        x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
+        ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
+        te=metrics.parse_time(_spice(span.end) if span else None, "span.end"),
+    )
     facts = await asyncio.to_thread(
         an.build_plot_file,
         raw,
         run.source.raw,
-        cols,
-        [step for step, _ in steps],
-        [values for _, values in steps],
-        analysis_type,
-        x_is_log if recipe.log_x is None else recipe.log_x,
-        metrics.parse_time(_spice(span.start) if span else None, "span.start"),
-        metrics.parse_time(_spice(span.end) if span else None, "span.end"),
+        plan,
         min(100_000, an.PLOT_MAX_POINTS_CEILING),
         pending,
         recipe.title or f"{run.source.raw.stem} — {analysis_type}",
@@ -3660,12 +3667,14 @@ async def capture_attached_analysis(
         "gain), bode_filter (cutoff, bandwidth, Q), bode_point, bode_slope "
         "(dB/decade), bode_crossing, ac_structure (poles, zeros), resonance, "
         "return_loss (VSWR), thd (distortion), noise_integral, signal_stats (RMS, "
-        "ripple, peak-to-peak), edges (rise/fall time), timing (propagation "
-        "delay), periodic (duty cycle), transient_response (overshoot, settling, "
+        "ripple, peak-to-peak, percentiles), edges (rise/fall time), timing "
+        "(propagation delay), periodic (duty cycle), transient_response (overshoot, settling, "
         "load step), operating_point (bias point, gm/gds/vth), measurements "
         "(.meas), value (one trace at one axis point), summary, waveform "
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
-        "searches these by plain words and returns a recipe's fields."
+        "searches these by plain words and returns a recipe's fields. A signal is "
+        "one trace or V(a,b), not an expression; other trace math is numpy "
+        "(spice://guide, 'trace math')."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(

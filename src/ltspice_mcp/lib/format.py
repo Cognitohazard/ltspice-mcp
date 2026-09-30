@@ -24,6 +24,32 @@ def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
         payload[key] = items
 
 
+#: SI prefixes for engineering-notation display, largest first, as
+#: ``(scale, prefix)``. Display only: SPICE input spells mega ``Meg`` and micro
+#: ``u`` (see :data:`_SCALE_FACTORS`).
+SI_PREFIXES: tuple[tuple[float, str], ...] = (
+    (1e12, "T"),
+    (1e9, "G"),
+    (1e6, "M"),
+    (1e3, "k"),
+    (1.0, ""),
+    (1e-3, "m"),
+    (1e-6, "µ"),
+    (1e-9, "n"),
+    (1e-12, "p"),
+    (1e-15, "f"),
+)
+
+
+def si_prefix(magnitude: float) -> tuple[float, str]:
+    """The largest SI prefix whose scale does not exceed ``magnitude``, as
+    ``(scale, prefix)``; the smallest prefix for anything below it."""
+    return next(
+        ((scale, prefix) for scale, prefix in SI_PREFIXES if magnitude >= scale * (1 - 1e-9)),
+        SI_PREFIXES[-1],
+    )
+
+
 # SPICE scale factors. Matching is case-insensitive to follow SPICE convention
 # (LTspice, ngspice, qspice all treat suffixes as case-insensitive).
 # Order matters: longer suffixes must come first so 'Meg' matches before 'm'.
