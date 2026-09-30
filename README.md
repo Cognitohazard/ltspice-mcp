@@ -181,7 +181,7 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
    uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
    ```
 
-   If you launch the server with `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude Desktop extension already includes the extra. The Claude Code plugin runs the plain package, so for PNG in Claude Code register the server yourself with `claude mcp add ltspice -- uvx --from 'ltspice-mcp[raster]' ltspice-mcp` instead of using the plugin.
+   If you launch the server with `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude Code plugin and the Claude Desktop extension already include the extra.
 
 2. **The native Cairo library**, which no Python wheel ships:
    - **Linux and WSL:** `sudo apt install libcairo2` (Fedora: `sudo dnf install cairo`). Under WSL the server is a Linux process, so install it inside the distro.

@@ -176,10 +176,11 @@ tool-surface changes.
   `[simulation] timeout` bounds only LTspice netlist export, which is all it
   ever bounded.
 
-- The Claude Desktop extension installs `ltspice-mcp[raster]`. A Desktop user
-  cannot add an extra to the bundle, so PNG rendering was impossible there;
-  installing native Cairo is now the only step. The README documents the
-  extra and the per-platform Cairo install.
+- The Claude Code plugin and the Claude Desktop extension install
+  `ltspice-mcp[raster]`. Neither lets a user add an extra to the launch it
+  ships, so PNG rendering was impossible through them; installing native Cairo
+  is now the only step. The README documents the extra and the per-platform
+  Cairo install.
 
 ### Security
 
