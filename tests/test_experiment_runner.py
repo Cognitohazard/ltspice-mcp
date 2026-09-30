@@ -827,6 +827,48 @@ class TestCaseConcurrencyAndTimeouts:
         assert any(item["code"] == "late_simulator_exit" for item in case.observations)
         assert receipt.job.completeness.failed == 1
 
+    async def test_kill_grace_ends_on_its_wait_under_a_coarse_clock(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # asyncio runs a timer once it is within one clock resolution of now,
+        # 15.6 ms on Windows, so the loop clock can read short of a deadline the
+        # wait already ran to. Pinned here so every platform sees what Windows does.
+        loop = asyncio.get_running_loop()
+        monkeypatch.setattr(loop, "_clock_resolution", 0.015625)
+        runner = ExperimentRunner(loop, MockSimulator, work_dir, max_parallel=1)
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        kills: list[str] = []
+
+        async def no_kill(token: str) -> None:
+            kills.append(token)
+
+        monkeypatch.setattr(runner, "_kill_case", no_kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="coarse-clock",
+                    run_timeout_s=0.01,
+                    kill_grace_s=0.01,
+                )
+            )
+        )
+        assert await runner.wait(receipt.job, 1)
+        case = receipt.job.cases[0]
+        assert case.failure_code == "kill_unconfirmed"
+        token = submissions[0]
+        assert kills == [token]
+        # Let the late exit return the retained permit, as a real simulator would.
+        execution = runner._executions[receipt.job.job_id]
+        raw = work_dir / f"{token}.raw"
+        raw.write_bytes(b"partial")
+        callbacks[token](RunOutcome(str(raw), str(work_dir / f"{token}.fail"), 0, "killed"))
+        await await_until(lambda: case.case_id not in execution.retained_slots)
+
     async def test_run_timeout_callback_within_grace_releases_capacity(
         self,
         state_no_sim: SessionState,

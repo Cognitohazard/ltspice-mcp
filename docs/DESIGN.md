@@ -309,10 +309,12 @@ so zoom / pan / hover does nothing for it.
   chart, delivered one of two ways depending on the capabilities the calling
   client declared: an in-chat `ui://` widget for an apps-capable GUI host (in
   practice Claude Desktop for a local stdio server), or a self-contained HTML
-  file opened on the local desktop for a terminal client (on WSL,
-  `explorer.exe` / `cmd.exe /c start` via a `wslpath -w` conversion;
-  otherwise `xdg-open` / `open` / `start`). Either way the tool also returns
-  a text summary and the data path so the model can continue. Because the
+  file opened on the local desktop for a terminal client (a chromeless
+  Chromium/Edge `--app` window when one is on the path; otherwise, on WSL,
+  `explorer.exe` on a `wslpath -w` conversion, and `xdg-open` / `open` /
+  `os.startfile` elsewhere). Either way the tool returns the file path and
+  the plot's facts (series, points per series, downsampling, window), not
+  the data values, so the model can continue from the path. Because the
   server is local, an interactive plot needs no widget infrastructure: it
   opens a window or browser that the OS renders, which works the same under
   any CLI. The chart is built on uPlot (~50 KB, zero-dependency, canvas-2D)

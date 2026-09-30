@@ -97,7 +97,7 @@ From the error hierarchy:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was asked for without the optional `raster` extra |
+| `raster_unavailable` | a PNG was asked for without a usable rasterizer: the optional `raster` extra, or the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Named by the stage instead, where the stage is the more useful fact:
@@ -692,8 +692,10 @@ expected_sha256     REQUIRED whenever target exists, under either base;
                     Both refusals — missing and mismatched — report the
                     target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
-compare             {reference, anchors?, rtol} — post-commit netlist
-                    compare, inside the transaction
+compare             {reference, anchors?, rtol, mode?} — post-commit netlist
+                    compare ("equivalence" | "structural_diff"), inside
+                    the transaction; the exported netlist is returned
+                    only when the verdict is not a match
 dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend"], default ["touched"]
 view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
@@ -706,6 +708,20 @@ netlist" is written the same way on both tools. It is the only spelling: the
 flat `reference` this tool shipped with said nothing the object did not, and a
 call carrying both was refused rather than resolved, so the second spelling
 could only ever be the same call written a longer way.
+
+**The exported netlist is returned only when the comparison did not match.**
+The compare stage exports the committed sheet to a netlist. On `equivalent:
+true` the reply leaves that deck out. It is equivalent to the reference the
+caller supplied, so it adds nothing to the verdict, and every later turn would
+re-read it. A mismatch, a compare error or no verdict returns it as `netlist`,
+because it is the sheet's side of the comparison the caller now has to
+diagnose. §2 keeps a failed row's log path for the same reason. An export
+failure produces no deck, so none is returned. The confirmed case has no
+opt-in. The netlist is still one call away: `verify_circuit` with the `export`
+check writes it and returns its path. A `return_views` member would have put a
+plain string among paginated pin/net tables, and it would have had nothing to
+return on a call without `compare`. The Python API applies the same rule; its
+complete reply differs from the MCP one only in unpaginated views.
 
 **This tool does not draw.** `verify_circuit` owns rendering, and its policy is
 the more capable one — a pixel cap, an inline delivery channel, and a
@@ -791,7 +807,8 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist?, verification?,
+Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
 hint`.
@@ -811,15 +828,15 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 export_to     "managed" (default) | "sidecar"
 ```
 
-`compare` is shared with `edit_schematic`. The shared half —
-`{reference, anchors, rtol}` — means the same thing on both tools;
-`compare.mode` is on a subclass here because only this tool has two comparisons
-to choose between, and `render`'s `mode`/`delivery` because only this tool has
-checks to skip and an image channel to deliver into. A tool never advertises a
-field it cannot honour, which is also why `render` is here and not on
-`edit_schematic`. There is one spelling of each: the flat
-`reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with said nothing
-the object did not, and a call carrying both was refused rather than resolved.
+`compare` is shared with `edit_schematic`, `mode` included: `{reference,
+anchors, rtol, mode}` means the same thing on both tools, and both run either
+comparison through one dispatcher. `render`'s `mode`/`delivery` are here
+because only this tool has checks to skip and an image channel to deliver
+into. A tool never advertises a field it cannot honour, which is also why
+`render` is here and not on `edit_schematic`. There is one spelling of each:
+the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
+said nothing the object did not, and a call carrying both was refused rather
+than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
@@ -828,7 +845,16 @@ destructive, which the annotation table reflects.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
-as a file.
+as a file. Inline delivery is PNG only. An SVG sent as an image block is not
+reliably displayed. Sent as markup it runs about 600 bytes a component, so
+past a handful of parts it costs more than the PNG, and it would ride the text
+channel a structured-only client drops. When `inline` or `both` returns no
+image, `render.inline_skipped` says why (`svg_requested` or
+`png_unavailable`) and `render.note` says where the file is. A PNG needs the
+`raster` extra and the native Cairo library. A render without them falls back
+to SVG, with a `render` failure naming which of the two is missing and a
+per-platform remedy. `inspect(kind:"capabilities")` reports the same as
+`render: {png, missing, reason, remedy}` before anything is drawn.
 
 The two comparison modes differ in what an unreadable deck does to them.
 `equivalence` graph-compares connectivity — component set, values, normalized
@@ -858,8 +884,9 @@ component's signature is its model or value plus its instance parameters,
 nodes excluded (equivalence is the mode that compares wiring).
 
 Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
-summary, `outcome` and `hint`.
+block `{path, sha256, source_sha256, width, height, downscaled,
+returned_inline, inline_skipped, note, …}`, a scene summary, `outcome` and
+`hint`.
 
 The render block carries three digests' worth of care in two names. `sha256` is
 the image's; `source_sha256` is the sheet's own, read from the file this call
@@ -884,8 +911,10 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
     `version_source` naming the job and case (null until one has run; the
     executable is never launched to ask); exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
-    limits, linter_version, and the startup diagnostics that say whether
-    this server started degraded
+    limits, linter_version, the startup diagnostics that say whether
+    this server started degraded, and `render: {png, missing, reason,
+    remedy}` — whether verify_circuit can make the PNG it inlines, and
+    if not, whether the `raster` extra or native Cairo is missing
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
@@ -1179,7 +1208,7 @@ recipe takes none, having one number.
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
-| `signal_stats` | tran | `signal` | `window?` |
+| `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
