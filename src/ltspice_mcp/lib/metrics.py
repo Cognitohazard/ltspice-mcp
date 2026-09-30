@@ -101,6 +101,7 @@ from ltspice_mcp.lib.recipes import (
     ValueRecipe,
     WaveformRecipe,
     Window,
+    quantile_row,
 )
 from ltspice_mcp.lib.result_observations import (
     deck_observation_inputs,
@@ -115,6 +116,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
+    time_weighted_quantiles,
     window_and_clean,
 )
 from ltspice_mcp.state import SessionState
@@ -1236,6 +1238,12 @@ async def signal_stats(
     resolved = services.resolve_signal(raw, recipe.signal)
     signal = resolved.name
     services.validate_step(raw, step)
+    if recipe.quantiles and (run := classify_analysis(raw)[1]) != "transient":
+        raise ResultError(
+            f"quantiles are weighted by time, so they need a transient run; this one is "
+            f"{run!r}. Drop 'quantiles' for this source.",
+            show_hint=False,
+        )
     # A failed-but-completed solve makes every stat below garbage; relay it.
     failures = await solve_failures(source)
 
@@ -1349,6 +1357,14 @@ async def signal_stats(
             "t_at_min": core["t_at_min"],
             "t_at_max": core["t_at_max"],
         }
+        if recipe.quantiles:
+            # Extra fields beside the sample extremes, never a replacement. A
+            # bisection over every sample per level: long enough on a
+            # million-point trace to stall every other request if run inline.
+            spread = await asyncio.to_thread(
+                run_compute, time_weighted_quantiles, t_win, y_win, recipe.quantiles
+            )
+            stats.update(quantile_row(recipe.quantiles, spread["values"]))
 
     # Surface a FACT (not a verdict) when the signal never moves across the
     # window. min == max is the tell of a coerced/latched solve (e.g. a

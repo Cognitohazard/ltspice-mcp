@@ -326,6 +326,7 @@ class TestExpressionPointer:
         assert "run_code" in message
         assert "r.trace(" in message
         assert "api.load_raw(" in message
+        assert "compute_signal_stats(t, y)" in message
 
     async def test_names_the_library_when_run_code_is_off(
         self, state_no_sim: SessionState, work_dir: Path

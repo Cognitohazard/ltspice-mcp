@@ -25,6 +25,7 @@ from ltspice_mcp.lib.signal_analysis import (
     compute_signal_stats,
     stat_envelope,
     summarize_trace,
+    time_weighted_quantiles,
     window_and_clean,
 )
 
@@ -1090,6 +1091,136 @@ class TestSummarizeTrace:
     def test_length_mismatch(self):
         with pytest.raises(ValueError, match="different lengths"):
             summarize_trace(np.zeros(3), np.zeros(4), time_weighted_mean=False)
+
+
+# ---------------------------------------------------------------------------
+# time_weighted_quantiles
+# ---------------------------------------------------------------------------
+
+
+class TestTimeWeightedQuantiles:
+    """Quantiles of the piecewise-linear signal over time, not over samples."""
+
+    def test_non_uniform_steps_weight_by_time_not_by_sample(self):
+        # y = t on [0, 1] is exactly piecewise linear, so the fraction of the
+        # window it spends at or below v is v and its p-quantile is p. The
+        # samples crowd toward t = 0 (the cube of a uniform grid), the way
+        # LTspice crowds them around an edge, so the sample median is 0.125.
+        t = np.linspace(0.0, 1.0, 2001) ** 3
+        y = t.copy()
+        levels = [0.01, 0.25, 0.5, 0.9, 0.99]
+        r = time_weighted_quantiles(t, y, levels)
+        assert r["levels"] == levels
+        assert r["values"] == pytest.approx(levels, abs=1e-12)
+        assert np.percentile(y, 50) == pytest.approx(0.125, rel=1e-3)
+        assert r["values"][2] - np.percentile(y, 50) > 0.37
+
+    def test_densely_sampled_edge_does_not_pull_the_tails_in(self):
+        # Low for half the window, a 1 us edge carrying 1000 samples, then high
+        # for the rest. Time puts about half the weight on each rail; the
+        # samples put most of theirs on the edge.
+        edge_t = np.linspace(0.5, 0.5 + 1e-6, 1001)
+        t = np.concatenate(([0.0], edge_t, [1.0]))
+        y = np.concatenate(([0.0], np.linspace(0.0, 1.0, 1001), [1.0]))
+        r = time_weighted_quantiles(t, y, [0.1, 0.25, 0.75, 0.9])
+        assert r["values"] == pytest.approx([0.0, 0.0, 1.0, 1.0], abs=1e-9)
+        sample = np.percentile(y, [10, 25, 75, 90])
+        assert sample == pytest.approx([0.1, 0.25, 0.75, 0.9], abs=2e-3)
+
+    def test_sine_matches_the_arcsine_distribution_on_a_random_grid(self):
+        # Over whole periods the fraction of time A*sin spends at or below v is
+        # 1/2 + asin(v/A)/pi, so its p-quantile is -A*cos(pi*p).
+        rng = np.random.default_rng(1)
+        amp = 2.0
+        t = np.sort(np.concatenate(([0.0, 1.0], rng.uniform(0.0, 1.0, 40000))))
+        y = amp * np.sin(2 * np.pi * 5 * t)
+        levels = [0.01, 0.1, 0.5, 0.9, 0.99]
+        r = time_weighted_quantiles(t, y, levels)
+        expected = [-amp * math.cos(math.pi * p) for p in levels]
+        assert r["values"] == pytest.approx(expected, abs=2e-3)
+
+    def test_flat_segments_are_atoms_and_a_level_between_them_lands_on_one(self):
+        # 30% of the window at 1, 70% at 0, the jump between them taking no
+        # time: every quantile is one of the two rails, never a value between.
+        t = np.array([0.0, 0.3, 0.3, 1.0])
+        y = np.array([1.0, 1.0, 0.0, 0.0])
+        r = time_weighted_quantiles(t, y, [0.0, 0.5, 0.69, 0.71, 1.0])
+        assert r["values"] == [0.0, 0.0, 0.0, 1.0, 1.0]
+
+    def test_a_sample_holding_no_time_carries_no_weight(self):
+        # A spike on a repeated time point: the sample max is 9, but the signal
+        # spends no time above 0, so even the 1.0 quantile is 0.
+        t = np.array([0.0, 1.0, 1.0, 1.0, 2.0])
+        y = np.array([0.0, 0.0, 9.0, 0.0, 0.0])
+        r = time_weighted_quantiles(t, y, [1.0])
+        assert r["values"] == [0.0]
+
+    def test_extreme_levels_are_the_extremes_the_signal_holds_for_time(self):
+        t = np.linspace(0.0, 1.0, 101)
+        y = np.sin(2 * np.pi * t)
+        r = time_weighted_quantiles(t, y, [0.0, 1.0])
+        assert r["values"] == [float(y.min()), float(y.max())]
+
+    def test_values_follow_the_level_order_given(self):
+        t = np.linspace(0.0, 1.0, 11)
+        r = time_weighted_quantiles(t, t, [0.9, 0.1, 0.5])
+        assert r["levels"] == [0.9, 0.1, 0.5]
+        assert r["values"] == pytest.approx([0.9, 0.1, 0.5], abs=1e-12)
+
+    def test_non_finite_samples_are_dropped_counted_and_bridged(self):
+        t = np.linspace(0.0, 1.0, 101)
+        y = t.copy()
+        y[[10, 40, 41, 70]] = [np.nan, np.inf, -np.inf, np.nan]
+        r = time_weighted_quantiles(t, y, [0.25, 0.75])
+        assert r["dropped_nonfinite"] == 4
+        assert r["num_samples"] == 97
+        # A straight line bridged across the gaps is still the same line.
+        assert r["values"] == pytest.approx([0.25, 0.75], abs=1e-12)
+
+    def test_window_bounds_select_the_span(self):
+        t = np.linspace(0.0, 2.0, 201)
+        y = np.where(t < 1.0, 0.0, 5.0)
+        r = time_weighted_quantiles(t, y, [0.01, 0.99], t_start=1.2, t_end=2.0)
+        assert r["values"] == pytest.approx([5.0, 5.0])
+        assert r["t_start"] == pytest.approx(1.2)
+        assert r["t_end"] == pytest.approx(2.0)
+        assert r["duration"] == pytest.approx(0.8)
+
+    def test_negated_compressed_time_markers_read_as_their_magnitude(self):
+        # LTspice may store a compressed transient's time value negated;
+        # spicelib reads a time axis through abs(). An array taken straight
+        # from the stored data carries the signs and must read the same.
+        t = np.linspace(0.0, 1.0, 101) ** 2
+        y = np.sqrt(t)
+        stored = t.copy()
+        stored[[3, 17, 18, 60]] *= -1.0
+        folded = time_weighted_quantiles(stored, y, [0.1, 0.5, 0.9])
+        plain = time_weighted_quantiles(t, y, [0.1, 0.5, 0.9])
+        assert folded["values"] == plain["values"]
+        assert folded["t_start"] == 0.0
+
+    def test_an_increasing_negative_axis_is_left_as_it_is(self):
+        # Time shifted to put an edge at 0 is negative and in order: that is
+        # not a stored marker, and folding it would scramble the signal.
+        t = np.linspace(-1.0, 1.0, 201)
+        r = time_weighted_quantiles(t, t, [0.25, 0.75])
+        assert r["values"] == pytest.approx([-0.5, 0.5], abs=1e-12)
+        assert r["t_start"] == pytest.approx(-1.0)
+
+    def test_a_window_with_no_duration_is_refused(self):
+        with pytest.raises(ValueError, match="no time"):
+            time_weighted_quantiles(np.ones(4), np.arange(4.0), [0.5])
+
+    @pytest.mark.parametrize("levels", [[], [-0.01], [1.5], [float("nan")]])
+    def test_levels_outside_the_unit_interval_are_refused(self, levels):
+        t = np.linspace(0.0, 1.0, 11)
+        with pytest.raises(ValueError, match="level"):
+            time_weighted_quantiles(t, t, levels)
+
+    def test_complex_input_is_refused(self):
+        t = np.linspace(0.0, 1.0, 11)
+        with pytest.raises(ValueError, match="real"):
+            time_weighted_quantiles(t, t + 1j, [0.5])
 
 
 class TestPulseResponseDoubleTransition:

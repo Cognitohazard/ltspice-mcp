@@ -62,7 +62,7 @@ from ltspice_mcp.lib.plot_html import (
     build_plot_html,
 )
 from ltspice_mcp.lib.plot_svg import render_plot_svg
-from ltspice_mcp.lib.raster import RenderedImage, raster_available, render_image
+from ltspice_mcp.lib.raster import RasterSupport, RenderedImage, raster_support, render_image
 from ltspice_mcp.lib.raw_parser import (
     dc_axis_name,
     get_step_count,
@@ -965,23 +965,25 @@ def _widget_spec_json(plot: PlotData, max_points: int) -> str:
 
 def build_plot_image(
     plot: PlotData, max_points: int, title: str, png_path: Path
-) -> RenderedImage | None:
-    """Render the plot as a PNG and write it; ``None`` without the raster extra.
+) -> RenderedImage | RasterSupport:
+    """Render the plot as a PNG and write it, or say why this host cannot.
 
     Runs in a worker thread (SVG build, rasterization, file I/O). Draws the same
     panels as the chart, with each series' points set by the total the image
-    draws (``_IMAGE_TOTAL_POINTS``) and never above ``max_points``. Checks for
-    the rasterizer first, so nothing is drawn only to be discarded.
+    draws (``_IMAGE_TOTAL_POINTS``) and never above ``max_points``. Without a
+    rasterizer it returns the :class:`RasterSupport` naming what is missing and
+    how to install it, checked first so nothing is drawn only to be discarded.
     """
-    if not raster_available():
-        return None
+    support = raster_support()
+    if not support.png:
+        return support
     n_series = sum(len(t.ys) for _, traces in plot.groups for t in traces)
     lo, hi = _IMAGE_SERIES_POINTS
     per_series = min(max_points, max(lo, min(hi, _IMAGE_TOTAL_POINTS // n_series)))
     spec, _ = plot_spec(plot, per_series)
     image = render_image(render_plot_svg(spec, title=title), image_format="png", scale=1.0)
-    if not image.is_raster:
-        return None
+    if image.png_unavailable is not None:
+        return image.png_unavailable
     atomic_write_bytes(png_path, image.data, durable=False)
     return image
 
@@ -1332,19 +1334,18 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     png_path = out_path.with_suffix(".png")
     if attach:
         try:
-            image = await asyncio.to_thread(build_plot_image, plot, max_points, title, png_path)
+            rendered = await asyncio.to_thread(build_plot_image, plot, max_points, title, png_path)
         # An optional add-on: the chart and its numbers are already built, so a
         # render failure is reported beside them rather than failing the call.
         except Exception as e:
             image_problem = f"The image could not be rendered ({type(e).__name__}: {e})."
         else:
-            if image is None:
+            if isinstance(rendered, RasterSupport):
                 # SVG path data as text is no use to a model and costs far more
                 # than the picture would, so the fallback is reported, not sent.
-                image_problem = (
-                    "No image attached: PNG rendering needs the optional raster extra "
-                    "(pip install 'ltspice-mcp[raster]') and its native cairo library."
-                )
+                image_problem = f"No image attached: {rendered.reason}. To fix: {rendered.remedy}."
+            else:
+                image = rendered
 
     traces: list[TraceSummary] = facts["traces"]
     traces_total: int = facts["traces_total"]

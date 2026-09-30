@@ -18,11 +18,10 @@ from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import desktop, raster, services
+from ltspice_mcp.lib import desktop, services
 from ltspice_mcp.lib.ac_analysis import prepare_ac_arrays
 from ltspice_mcp.lib.metrics import guarded_axis
 from ltspice_mcp.lib.plot_html import build_plot_html
-from ltspice_mcp.lib.raster import raster_available
 from ltspice_mcp.lib.raw_parser import safe_magnitude_db
 from ltspice_mcp.lib.signal_analysis import compute_signal_stats, downsample_minmax
 from ltspice_mcp.state import SessionState
@@ -31,7 +30,12 @@ from ltspice_mcp.tools.analysis import (
     _panel,
     handle_plot_waveform,
 )
-from tests.conftest import make_experiment_job, stage_recorded_fixture, symlink_or_skip
+from tests.conftest import (
+    make_experiment_job,
+    needs_raster,
+    stage_recorded_fixture,
+    symlink_or_skip,
+)
 
 
 def _read(path: Path) -> str:
@@ -999,9 +1003,6 @@ class TestPanelLayout:
         assert any(o["code"] == "noise_input_unit_unverified" for o in data["observations"])
 
 
-needs_raster = pytest.mark.skipif(
-    not raster_available(), reason="optional 'raster' extra (cairosvg) not installed"
-)
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
@@ -1063,23 +1064,42 @@ class TestAttachedImage:
         )
         assert _images(declined) == []
 
-    async def test_missing_extra_is_reported_not_raised(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(raster, "_load_cairosvg", lambda: None)
+    async def _plot_asking_for_an_image(self, state: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        result = await handle_plot_waveform(
+        return await handle_plot_waveform(
             PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False, attach_plot=True),
-            state_no_sim,
+            state,
         )
+
+    def _skipped_image_detail(self, result) -> str:
         assert _images(result) == []
         # The SVG fallback is not passed on as text: path data is no use to a model.
         assert not any("<svg" in getattr(c, "text", "") for c in result.content)
         sc = result.structured_content
         assert "image" not in sc and "image_path" not in sc
-        (obs,) = [o for o in sc["observations"] if o["code"] == "image_unavailable"]
-        assert "raster" in obs["detail"]
         assert sc["traces"]  # the numbers still arrive
+        (obs,) = [o for o in sc["observations"] if o["code"] == "image_unavailable"]
+        return obs["detail"]
+
+    async def test_a_missing_extra_is_named_with_its_install_step(
+        self, state_no_sim: SessionState, work_dir: Path, raster_extra_missing
+    ):
+        detail = self._skipped_image_detail(
+            await self._plot_asking_for_an_image(state_no_sim, work_dir)
+        )
+        assert "'raster' extra" in detail
+        assert "pip install 'ltspice-mcp[raster]'" in detail
+
+    async def test_a_missing_native_library_is_named_as_itself(
+        self, state_no_sim: SessionState, work_dir: Path, raster_native_missing
+    ):
+        # The extra is installed but libcairo is not: telling the caller to
+        # install the extra again would not help.
+        detail = self._skipped_image_detail(
+            await self._plot_asking_for_an_image(state_no_sim, work_dir)
+        )
+        assert "native Cairo library" in detail
+        assert "pip install" not in detail
 
     @needs_raster
     async def test_ui_host_gets_the_widget_and_the_image(
