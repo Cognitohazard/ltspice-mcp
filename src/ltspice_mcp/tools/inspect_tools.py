@@ -1362,7 +1362,9 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
                 entry["symbol"] = comp.symbol
                 entry["position"] = {"x": pos.X, "y": pos.Y}
                 entry["rotation"] = rot_str
-                sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
+                sym_info = (
+                    get_symbol_info(comp.symbol, editor.asc_file_path) if comp.symbol else None
+                )
                 if sym_info is not None:
                     geom = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
                     entry["pins"] = geom["pins"]
