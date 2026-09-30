@@ -689,6 +689,7 @@ def test_verify_and_edit_return_uncapped_neutral_data(
         },
         pin_legend=pin_rows,
         label_only_pins=(),
+        preexisting=(),
     )
 
     async def evaluate_edit(_request: object, _state: SessionState):

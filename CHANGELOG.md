@@ -171,6 +171,9 @@ tool-surface changes.
   everything on it is new. A caller that relied on the whole-sheet lists can
   add `preexisting` to `return_views`. An op-less read (`ops: []`) now counts
   every finding under `preexisting` too, because nothing on it is new.
+- An `edit_schematic` view cursor now returns its view even when
+  `return_views` does not name it. A `pin_legend` or `touched` cursor sent with
+  the default `return_views` used to be accepted and then ignored.
 
 ### Security
 

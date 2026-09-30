@@ -22,7 +22,10 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.schematic_ops import (
+    build_on_wire_predicate,
+    collect_component_geometry,
     get_asc_editor,
+    post_op_warnings,
     run_op_batch,
 )
 from ltspice_mcp.state import SessionState
@@ -35,6 +38,7 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
+from tests._asc_ops import apply_ops
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -723,17 +727,15 @@ def _whole_sheet(state: SessionState, path: Path) -> tuple[list[str], list[str]]
     Read through a fresh parse of the file with the same validation pass the
     tool runs, so the control shares nothing with the envelope under test.
     """
-    from ltspice_mcp.lib.schematic_ops import post_op_warnings
-
     state.editors.invalidate(path)
     editor = get_asc_editor(path, state)
     labels = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
-    wired = se.build_on_wire_predicate(
+    wired = build_on_wire_predicate(
         [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
     )
     label_only = [
         f"{comp['ref']}.{pin['name']}"
-        for comp in se.collect_component_geometry(editor)
+        for comp in collect_component_geometry(editor)
         for pin in comp["pins"]
         if not wired((pin["x"], pin["y"])) and (pin["x"], pin["y"]) in labels
     ]
@@ -744,14 +746,6 @@ async def _untidy_sheet(state: SessionState, name: str) -> Path:
     built = await _build_blank(state, name, _UNTIDY_OPS)
     assert built["commit_state"] == "committed"
     return Path(state.working_dir) / f"{name}.asc"
-
-
-async def _edit_existing(state: SessionState, path: Path, ops: list[dict], **kw) -> dict:
-    return _assert_schema(
-        await handle_edit_schematic(
-            _edit_input(target=path.name, expected_sha256=_sha(path), ops=ops, **kw), state
-        )
-    )
 
 
 async def test_a_blank_build_withholds_nothing(asc_state):
@@ -772,7 +766,7 @@ async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state)
     seven findings the sheet already had; those are counted, not listed."""
     sheet = await _untidy_sheet(asc_state, "untidy-add")
 
-    data = await _edit_existing(
+    data = await apply_ops(
         asc_state,
         sheet,
         [{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
@@ -800,7 +794,7 @@ async def test_a_finding_on_a_reference_the_batch_named_is_reported(asc_state):
     """R1's floating pins predate the edit, but the edit is about R1."""
     sheet = await _untidy_sheet(asc_state, "untidy-touch")
 
-    data = await _edit_existing(
+    data = await apply_ops(
         asc_state, sheet, [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
     )
 
@@ -815,7 +809,7 @@ async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
     """The orphan label predates the edit; the directive is placed on it."""
     sheet = await _untidy_sheet(asc_state, "untidy-coord")
 
-    data = await _edit_existing(
+    data = await apply_ops(
         asc_state,
         sheet,
         [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
@@ -828,7 +822,7 @@ async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
 async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-labels")
 
-    data = await _edit_existing(
+    data = await apply_ops(
         asc_state,
         sheet,
         [
@@ -853,7 +847,7 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
 async def test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-ask")
 
-    data = await _edit_existing(
+    data = await apply_ops(
         asc_state,
         sheet,
         [{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
@@ -875,7 +869,7 @@ async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
     """Echoing preexisting.cursor is the request: no return_views entry needed.
     An op-less read reports nothing as new, so its pages cover the whole sheet."""
     sheet = await _untidy_sheet(asc_state, "untidy-page")
-    edit = await _edit_existing(
+    edit = await apply_ops(
         asc_state,
         sheet,
         [{"op": "add_component", "reference": "R5", "symbol": "res", "x": 1100, "y": 300}],
@@ -884,7 +878,7 @@ async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
     rows: list[dict] = []
     cursor = edit["preexisting"]["cursor"]
     for _ in range(10):
-        page = await _edit_existing(
+        page = await apply_ops(
             asc_state, sheet, [], view_cursors={"preexisting": cursor}, view_limit=3
         )
         assert page["commit_state"] == "not_committed"
@@ -901,11 +895,64 @@ async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
     assert len(rows) == len(whole) + len(label_only)
 
 
+async def test_an_echoed_cursor_returns_its_view_without_a_return_views_entry(asc_state):
+    """The cursor is the request. A pin_legend cursor sent with the default
+    return_views used to be validated and then ignored, so the page it asked
+    for never came back."""
+    built = await _build_blank(
+        asc_state,
+        "cursor-implies",
+        _many_labeled_ops(5),
+        return_views=["pin_legend"],
+        view_limit=2,
+    )
+    sheet = Path(asc_state.working_dir) / "cursor-implies.asc"
+
+    page = await apply_ops(
+        asc_state,
+        sheet,
+        [],
+        view_cursors={"pin_legend": built["views"]["pin_legend"]["next_cursor"]},
+        view_limit=2,
+    )
+
+    assert [row["ref"] for row in page["views"]["pin_legend"]["items"]] == ["R2", "R3"]
+
+
+async def test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate(asc_state):
+    """A label-only pin is on no wire, so its net holds only what sits at its
+    coordinate: the label-only list names it from the labels there, without
+    tracing the sheet, and must agree with the traced whole-sheet legend."""
+    await _build_blank(
+        asc_state,
+        "label-only-nets",
+        # The same name on the wired net as on the label-only pin: it may not
+        # leak from one into the other's net name.
+        [*_DIVIDER_OPS, {"op": "add_net_label", "net": "vout", "x": 550, "y": 200}],
+    )
+    sheet = Path(asc_state.working_dir) / "label-only-nets.asc"
+    # A second name on the label-only pin. The tool refuses to write one (it
+    # shorts two nets), so only a hand-written sheet carries it.
+    with sheet.open("a", newline="\n") as handle:
+        handle.write("FLAG 400 348 alias\n")
+
+    data = await apply_ops(asc_state, sheet, [], return_views=["pin_legend", "preexisting"])
+
+    traced = {
+        f"{row['ref']}.{pin['name']}": pin["net"]
+        for row in data["views"]["pin_legend"]["items"]
+        for pin in row["pins"]
+    }
+    rows = [r for r in data["views"]["preexisting"]["items"] if r["kind"] == "label_only_pin"]
+    assert [(row["pin"], row["net"]) for row in rows] == [("R1.2", "alias/vout")]
+    assert all(row["net"] == traced[row["pin"]] for row in rows)
+
+
 async def test_malformed_preexisting_cursor_is_rejected_before_the_sheet_is_written(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-badcursor")
     before = sheet.read_bytes()
     with pytest.raises(NetlistError, match="preexisting"):
-        await _edit_existing(
+        await apply_ops(
             asc_state,
             sheet,
             [{"op": "set_component_value", "reference": "R1", "value": "2k"}],

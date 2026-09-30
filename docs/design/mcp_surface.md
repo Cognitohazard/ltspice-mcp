@@ -141,6 +141,13 @@ Never trimmed in any mode: failures, errors, observations, warnings, and any
 completeness shortfall. Lean drops the confirming detail of a success, never
 the fact channels.
 
+One kind of fact is scoped rather than trimmed: a standing fact about the
+target that predates the call and involves nothing the call named. The call is
+not its source, so it need not be listed; it is counted beside the channel it
+was left out of, with a route to list it, and never dropped. The call's own
+warnings and failures are never scoped. `edit_schematic`'s `preexisting` block
+(§3.4) is the instance.
+
 The reason is response cost: every response byte is re-read on every later
 turn of the conversation, and measurement put the tool path at several times
 the cost of a hand-rolled shell table for identical numbers even with the
@@ -678,9 +685,9 @@ dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend", "preexisting"],
                     default ["touched"]
 view_cursors        {label_only_pins?, pin_legend?, touched?, preexisting?} —
-                    each a next_cursor from a previous page of that view;
-                    preexisting also takes preexisting.cursor, and echoing it
-                    returns that view without naming it in return_views
+                    each a next_cursor from a previous page of that view, and
+                    echoing one returns that view even when return_views
+                    omits it; preexisting also takes preexisting.cursor
 view_limit          page size for the paginated views (default 100)
 ```
 
