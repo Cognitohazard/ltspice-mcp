@@ -219,6 +219,17 @@ _PAGE_SCHEMA: dict[str, Any] = page_schema(
     },
 )
 
+_POINT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+    "required": ["x", "y"],
+}
+_SEGMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"from": _POINT_SCHEMA, "to": _POINT_SCHEMA},
+    "required": ["from", "to"],
+}
+
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -302,6 +313,47 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "touched": _PAGE_SCHEMA,
                 "pin_legend": _PAGE_SCHEMA,
+            },
+        },
+        "results": {
+            "type": "array",
+            "description": (
+                "What each op found on the sheet beyond its own arguments, by op "
+                "index; an op with nothing to add has no entry. wire_pins reports "
+                "wire_count (segments drawn), already_present (requested segments "
+                "already on the sheet, not redrawn) and junctions (where the route "
+                "joined existing wiring off its endpoints, or an endpoint ended on "
+                "a wire's interior). Removals report what they took."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "op": {"type": "string"},
+                    "wire_count": {"type": "integer"},
+                    "already_present": {"type": "array", "items": _SEGMENT_SCHEMA},
+                    "junctions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "via": {
+                                    "type": "string",
+                                    "enum": ["endpoint", "waypoint", "wire_end", "label", "pin"],
+                                },
+                                "wire": _SEGMENT_SCHEMA,
+                                "label": {"type": "string"},
+                                "pin": {"type": "string"},
+                            },
+                            "required": ["x", "y", "via"],
+                        },
+                    },
+                    "removed": {"type": ["integer", "string"]},
+                    "deleted_wires": {"type": "integer"},
+                },
+                "required": ["index", "op"],
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -675,6 +727,36 @@ def _apply_ops(
     return results, failures, abort_reason
 
 
+# Result keys the response already carries elsewhere: the runner's bookkeeping,
+# the advisories ``warnings`` attributes to their op, and add_component's
+# placed geometry, which the pin/net views and inspect's components view carry.
+_ELSEWHERE_RESULT_KEYS = frozenset({"ok", "error", "warnings", "position", "pins", "bounding_box"})
+
+
+def _op_results(results: list[dict], ops: list[ConsolidatedOp]) -> list[dict]:
+    """Each op's own facts: what its result says beyond its arguments.
+
+    The runner's entry restates much of the op (the reference it placed, the
+    endpoints it routed, the label it removed). What is left is what the op
+    found on the sheet: segments already there, the junctions a route made,
+    how much a removal took. Anything a result carries that is neither an
+    argument nor listed in ``_ELSEWHERE_RESULT_KEYS`` is relayed, so a new
+    fact reaches the caller without a change here. An op with nothing left
+    has no entry, so a large build does not pay a line per component.
+    """
+    relayed: list[dict] = []
+    for entry in results:
+        arguments = type(ops[entry["index"]]).model_fields
+        facts = {
+            key: value
+            for key, value in entry.items()
+            if key not in _ELSEWHERE_RESULT_KEYS and key not in arguments and key != "index"
+        }
+        if facts:
+            relayed.append({"index": entry["index"], "op": entry["op"], **facts})
+    return relayed
+
+
 def _op_warnings(results: list[dict]) -> list[str]:
     """The batch's per-op advisories, attributed to the op that raised them.
 
@@ -718,6 +800,7 @@ def _envelope(
     views: dict | None = None,
     verification: dict | None = None,
     netlist: str | None = None,
+    results: list[dict] | None = None,
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
@@ -740,6 +823,7 @@ def _envelope(
         "base": base,
         "stages": stages,
         "sha256": sha256,
+        "results": results or [],
         "warnings": warnings or [],
         "failures": failures or [],
         "observations": observations or [],
@@ -961,6 +1045,7 @@ async def _evaluate_edit_schematic(
             # Two sources, one channel: what the ops themselves reported, then
             # what the finished sheet reports about itself.
             warnings = _op_warnings(results) + [w["message"] for w in post_op_warnings(editor)]
+            op_results = _op_results(results, args.ops)
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 
@@ -990,6 +1075,7 @@ async def _evaluate_edit_schematic(
                             stages=stages,
                             wiring=wiring,
                             views=presented_views,
+                            results=op_results,
                             warnings=warnings,
                             failures=failures,
                             hint="Dry run — resubmit without dry_run to commit.",
@@ -1086,6 +1172,7 @@ async def _evaluate_edit_schematic(
                         views=presented_views,
                         verification=verification,
                         netlist=netlist,
+                        results=op_results,
                         warnings=warnings,
                         hint=hint,
                     ),

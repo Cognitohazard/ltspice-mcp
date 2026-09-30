@@ -31,7 +31,7 @@ from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edi
 from ltspice_mcp.tools import jobs as jobs_mod
 from ltspice_mcp.tools.reference_index import validation_error_detail
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
-from tests.test_edit_schematic import _DIVIDER_OPS, _REF_DECK, _REF_DECK_DIFFERENT
+from tests.test_edit_schematic import _DIVIDER_OPS, _FACT_OPS, _REF_DECK, _REF_DECK_DIFFERENT
 
 
 def _result(payload: Mapping[str, Any], *, is_error: bool = False) -> types.CallToolResult:
@@ -748,6 +748,23 @@ def test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does(
         assert ("netlist" in data) is returns_netlist
     if returns_netlist:
         assert page["netlist"] == complete["netlist"] == exported
+
+
+def test_edit_returns_each_ops_facts_exactly_as_the_mcp_reply_does(
+    asc_state: SessionState,
+) -> None:
+    """Per-op facts come from the shared evaluator, not from either door.
+
+    The complete door pages nothing here to fill in, so its ``results`` are
+    the MCP page's, junctions and already-present segments included.
+    """
+    api = SyncApi(asc_state)
+    page = api.edit_schematic(raw_page=True, target="mcp.asc", base="blank", ops=_FACT_OPS)
+    complete = api.edit_schematic(target="api.asc", base="blank", ops=_FACT_OPS)
+    assert page["results"] == complete["results"]
+    assert {entry["index"] for entry in complete["results"]} == {3, 4, 5, 6}
+    assert complete["results"][2]["already_present"]
+    assert complete["results"][3]["junctions"]
 
 
 # ---------------------------------------------------------------------------

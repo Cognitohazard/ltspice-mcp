@@ -3,8 +3,8 @@
 Covers the revision guard (sha match / mismatch / missing), the commit protocol
 (staged write + rename-last, with crash injection before and after the rename),
 a base:"blank" build reaching the same sheet as the same ops applied to an
-existing one, the wiring metric and the paginated touched / pin_legend /
-label_only_pins views, the refusal of every spelling of a render this tool no
+existing one, each op's own facts under ``results``, the wiring metric and the
+paginated touched / pin_legend / label_only_pins views, the refusal of every spelling of a render this tool no
 longer has, the post-commit compare stage (success / mismatch / export
 failure), and an archetype-scale blank build.
 """
@@ -128,6 +128,55 @@ async def test_a_t_junction_endpoint_commits_through_the_whole_transaction(asc_s
     assert data["commit_state"] == "committed"
     touched = {row["ref"] for row in data["views"]["touched"]["items"]}
     assert "R3" in touched
+
+
+_RAIL = {"from": {"x": 400, "y": 200}, "to": {"x": 700, "y": 200}}
+_BOTTOM = {"from": {"x": 400, "y": 348}, "to": {"x": 700, "y": 348}}
+
+# R1 and R2 side by side, R3 above the middle of them. The res fixture's pins
+# sit 48 above and below its origin.
+_FACT_OPS: list[dict] = [
+    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
+    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
+    {"op": "add_component", "reference": "R3", "symbol": "res", "x": 550, "y": 100},
+    # 3: over the top, leaving a rail along y=200
+    {
+        "op": "wire_pins",
+        "from_pin": "R1.1",
+        "to_pin": "R2.1",
+        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
+    },
+    # 4 and 5: the same straight run twice
+    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
+    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
+    # 6: a stem from R3 ending on the rail's interior
+    {"op": "wire_pins", "from_pin": "R3.2", "to_pin": {"x": 550, "y": 200}},
+]
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["commit", "dry_run"])
+async def test_the_response_carries_each_ops_own_facts(asc_state, dry_run: bool):
+    """What an op found out reaches the caller as a field, not only as text.
+
+    A route already on the sheet draws nothing and names what it found there;
+    a T onto a wire's interior names the wire it joined. Both used to stop at
+    the op runner, so the caller could learn of neither from the response.
+    An op whose result only restates its arguments has no entry.
+    """
+    data = await _build_blank(asc_state, "facts", _FACT_OPS, dry_run=dry_run)
+
+    assert data["outcome"] == "complete"
+    assert data["results"] == [
+        {"index": 3, "op": "wire_pins", "wire_count": 3},
+        {"index": 4, "op": "wire_pins", "wire_count": 1},
+        {"index": 5, "op": "wire_pins", "wire_count": 0, "already_present": [_BOTTOM]},
+        {
+            "index": 6,
+            "op": "wire_pins",
+            "wire_count": 1,
+            "junctions": [{"x": 550, "y": 200, "via": "endpoint", "wire": _RAIL}],
+        },
+    ]
 
 
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
