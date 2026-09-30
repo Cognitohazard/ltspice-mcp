@@ -6,6 +6,7 @@ through the shared op runner (``tests/_asc_ops.py``) and then read the sheet bac
 off disk, so a claim about geometry is checked against what was actually written.
 """
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ from tests._asc_ops import (
     structured_warnings,
     wire_pins,
 )
+from tests._schematic_fixtures import write_file
 from tests.conftest import FIXTURES_DIR
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -495,6 +497,285 @@ def _flag_records(asc_path: Path) -> list[tuple[tuple[int, int], str]]:
             _, x, y, net = line.split(maxsplit=3)
             flags.append(((int(x), int(y)), net))
     return flags
+
+
+def _block_asy(description: str, *pins: tuple[str, int, int, int]) -> str:
+    """A CELL subcircuit symbol with a body and the given (name, SpiceOrder, x, y) pins."""
+    lines = [
+        "Version 4",
+        "SymbolType CELL",
+        "RECTANGLE Normal -16 -32 16 32",
+        "SYMATTR Prefix X",
+        f"SYMATTR Description {description}",
+    ]
+    for name, order, x, y in pins:
+        lines += [f"PIN {x} {y} NONE 0", f"PINATTR PinName {name}", f"PINATTR SpiceOrder {order}"]
+    return "\n".join(lines) + "\n"
+
+
+# A block whose pins are lettered, so its SpiceOrder is the only number a pin
+# has; and one whose digit-named pins run opposite to their SpiceOrder, the
+# case where matching a name first changes the answer.
+_LETTERED_BLOCK_ASY = _block_asy("Lettered pins", ("A", 1, 0, -48), ("B", 2, 0, 48))
+_SWAPPED_DIGITS_ASY = _block_asy("Pin 1 is SpiceOrder 2", ("2", 1, 0, -48), ("1", 2, 0, 48))
+
+
+@pytest.fixture
+def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """spicelib caches a symbol's path by file name for the whole process; keep
+    the temporary folders a test adds out of every later test."""
+    from spicelib import AscEditor
+
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
+
+
+@pytest.fixture
+def ordinal_symbols(
+    asc_symbols: Path,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_spicelib_symbol_cache: None,
+) -> Path:
+    """Put the two symbols above on the library path beside the fixture library."""
+    from spicelib import AscEditor
+
+    sym_dir = work_dir / "ordinal_syms"
+    write_file(sym_dir / "lettered_block.asy", _LETTERED_BLOCK_ASY)
+    write_file(sym_dir / "swapped_digits.asy", _SWAPPED_DIGITS_ASY)
+    monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
+    return sym_dir
+
+
+class TestPinsBySpiceOrder:
+    """'REF.<n>' reaches the pin whose SpiceOrder is n when no pin is named n.
+
+    Every surface that takes a pin goes through one resolver, so the net query
+    and each edit op that takes a pin are driven here.
+    """
+
+    async def test_net_query_finds_a_lettered_pin_by_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_net")
+        placed = add_component(asc_state, sheet, "LX1", "lettered_block", 128, 128)
+        add_net_label(asc_state, sheet, "top", pin="LX1.A")
+        pin_a = next(p for p in placed["pins"] if p["name"] == "A")
+
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "LX1.1"})
+
+        assert data["start"] == {"x": pin_a["x"], "y": pin_a["y"]}
+        assert data["labels"] == ["top"]
+
+    async def test_every_edit_op_that_takes_a_pin_takes_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_ops")
+        build = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "LX1",
+                    "symbol": "lettered_block",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "LX1.2", "to_pin": "R1.1"},
+                {"op": "add_net_label", "net": "top", "pin": "LX1.1"},
+            ],
+        )
+        assert build["saved"] is True, build["abort_reason"]
+        lx1 = {p["name"]: (p["x"], p["y"]) for p in build["results"][0]["pins"]}
+        r1 = {p["name"]: (p["x"], p["y"]) for p in build["results"][1]["pins"]}
+        assert _has_segment(_wire_segments(sheet), lx1["B"], r1["1"])
+        assert _flag_records(sheet) == [(lx1["A"], "top")]
+
+        removal = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {"op": "remove_net_label", "pin": "LX1.1"},
+                {"op": "remove_wire", "pin": "LX1.2"},
+            ],
+        )
+        assert removal["saved"] is True, removal["abort_reason"]
+        assert _flag_records(sheet) == []
+        assert _wire_segments(sheet) == []
+
+    async def test_a_pin_named_with_a_digit_wins_over_the_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_names")
+        placed = add_component(asc_state, sheet, "XS1", "swapped_digits", 128, 128)
+        named_one = next(p for p in placed["pins"] if p["name"] == "1")
+        assert named_one["order"] == 2  # the premise: name and SpiceOrder disagree
+
+        add_net_label(asc_state, sheet, "one", pin="XS1.1")
+
+        assert _flag_records(sheet) == [((named_one["x"], named_one["y"]), "one")]
+
+    async def test_an_unknown_pin_lists_each_name_with_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_unknown")
+        add_component(asc_state, sheet, "LX1", "lettered_block", 128, 128)
+
+        with pytest.raises(NetlistError) as exc_info:
+            wire_pins(asc_state, sheet, "LX1.3", "LX1.A")
+
+        assert "Pin '3' not found on LX1" in str(exc_info.value)
+        assert "Available: A (1), B (2)" in str(exc_info.value)
+
+
+def _sheet_beside_symbol(folder: Path, asy: str) -> Path:
+    """``folder/top.asc`` holding X1, a ``localblk`` placed at (128, 128), with
+    ``localblk.asy`` saved beside it rather than in any library."""
+    write_file(folder / "localblk.asy", asy)
+    return write_file(
+        folder / "top.asc",
+        "Version 4\nSHEET 1 880 680\nSYMBOL localblk 128 128 R0\nSYMATTR InstName X1\n",
+    )
+
+
+async def _x1_pins(state: SessionState, sheet: Path) -> dict[str, tuple[int, int]]:
+    """X1's placed pins as ``inspect(kind="components", detail="full")`` reports them."""
+    data = await components_of(state, sheet)
+    (x1,) = data["components"]
+    return {p["name"]: (p["x"], p["y"]) for p in x1.get("pins", [])}
+
+
+@pytest.mark.usefixtures("isolated_spicelib_symbol_cache")
+class TestSheetLocalSymbols:
+    """A symbol saved beside the .asc, where LTspice looks first, gives the pin
+    geometry every pin-taking surface uses, and never another sheet's."""
+
+    async def test_net_query_resolves_a_pin_of_a_sheet_local_symbol(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "X1.B"})
+
+        assert data["start"] == {"x": 128, "y": 176}
+
+    async def test_components_full_carries_the_pins_of_a_sheet_local_symbol(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 176)}
+
+    async def test_edit_ops_place_and_wire_a_sheet_local_symbol(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        result = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "X2",
+                    "symbol": "localblk",
+                    "x": 384,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "X1.B", "to_pin": "R1.1"},
+            ],
+        )
+
+        assert result["saved"] is True, result["abort_reason"]
+        x2 = {p["name"]: (p["x"], p["y"]) for p in result["results"][0]["pins"]}
+        assert x2 == {"A": (384, 80), "B": (384, 176)}
+        assert _has_segment(_wire_segments(sheet), (128, 176), (128, 272))
+
+    async def test_a_blank_build_finds_symbols_beside_its_target(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A blank build parses its editor from a template in a temporary
+        # folder; the symbols that count are the ones beside the target.
+        from tests._asc_ops import build_sheet
+
+        _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        envelope = await build_sheet(
+            asc_state,
+            "proj/fresh",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "X9",
+                    "symbol": "localblk",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "X9.B", "to_pin": "R1.1"},
+            ],
+        )
+
+        assert envelope["outcome"] == "complete", envelope
+        fresh = work_dir / "proj" / "fresh.asc"
+        assert _has_segment(_wire_segments(fresh), (128, 176), (128, 272))
+
+    async def test_same_named_symbols_beside_two_sheets_keep_their_own_pins(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        upright = _sheet_beside_symbol(work_dir / "a", _LETTERED_BLOCK_ASY)
+        sideways = _sheet_beside_symbol(
+            work_dir / "b", _block_asy("Sideways", ("A", 1, -64, 0), ("B", 2, 64, 0))
+        )
+
+        assert await _x1_pins(asc_state, upright) == {"A": (128, 80), "B": (128, 176)}
+        assert await _x1_pins(asc_state, sideways) == {"A": (64, 128), "B": (192, 128)}
+        assert await _x1_pins(asc_state, upright) == {"A": (128, 80), "B": (128, 176)}
+
+    async def test_one_edit_looks_each_symbol_up_once(
+        self, asc_state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Every geometry pass of every op re-reads each part's symbol, and a
+        # lookup now checks the sheet's folder on disk, on the event loop. One
+        # request resolves each distinct symbol once, however many parts use it.
+        from ltspice_mcp.lib import schematic_ops
+        from tests._asc_ops import build_sheet
+
+        lookups: Counter[str] = Counter()
+        real_lookup = schematic_ops.get_symbol_info
+
+        def counting_lookup(symbol: str, asc_path: Path | None):
+            lookups[symbol] += 1
+            return real_lookup(symbol, asc_path)
+
+        monkeypatch.setattr(schematic_ops, "get_symbol_info", counting_lookup)
+        ops = [
+            {"op": "add_component", "reference": f"R{i}", "symbol": "res", "x": 128 * i, "y": 128}
+            for i in range(1, 13)
+        ]
+        ops.append({"op": "add_component", "reference": "C1", "symbol": "cap", "x": 128, "y": 400})
+        ops.append({"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"})
+        ops += [{"op": "add_net_label", "net": f"n{i}", "pin": f"R{i}.1"} for i in range(1, 13)]
+
+        envelope = await build_sheet(asc_state, "many_parts", ops)
+
+        assert envelope["outcome"] == "complete", envelope
+        assert lookups == {"res": 1, "cap": 1}
+
+    async def test_an_edited_sheet_local_symbol_is_read_again(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+        assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 176)}
+
+        write_file(
+            sheet.parent / "localblk.asy",
+            _block_asy("Longer lead", ("A", 1, 0, -48), ("B", 2, 0, 112)),
+        )
+
+        assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 240)}
 
 
 # Absolute pin positions expected for the fixture nmos symbol (pin offsets

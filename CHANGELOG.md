@@ -173,6 +173,17 @@ tool-surface changes.
   inline. It runs about 600 bytes a component, which costs more than the PNG
   past a handful of parts, and structured-only clients drop the text channel
   it would ride on.
+- A symbol saved in the same folder as its `.asc`, where LTspice looks first and
+  where a hand-drawn subcircuit symbol usually lives, was not found for pin
+  positions. `inspect(kind="symbol")` and rendering found it, but
+  `inspect(kind="net")` on its pins failed with "symbol not found",
+  `inspect(kind="components", detail="full")` left out its pins and bounding
+  box, and `add_component`, `wire_pins` and the other ops that take a pin
+  refused it. Pin positions now come from the sheet's own folder first, then
+  the libraries, so a local symbol wins over a same-named library one and two
+  sheets in different folders each keep their own. A redrawn local symbol is
+  read again. A `base="blank"` build looks beside its target, not beside the
+  temporary template it starts from.
 
 ### Added
 
@@ -304,6 +315,13 @@ tool-surface changes.
 - `edit_schematic` has a `preexisting` view, which lists what an edit counted
   under `preexisting` (see Changed). Name it in `return_views`, or echo
   `preexisting.cursor` as `view_cursors.preexisting`.
+- A `.asc` pin can be addressed by its 1-based SpiceOrder: `X1.2` reaches the
+  second pin of a block whose pins are named `A`/`B`, the same terminal number
+  a netlist `inspect(kind="net")` query takes. Pin names are matched first,
+  because some symbols name their pins `1`/`2` in an order that need not be
+  their SpiceOrder. This works everywhere a pin is taken: `inspect(kind="net")`,
+  the `wire_pins` op, and the `pin` of `add_net_label`, `remove_net_label` and
+  `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
 
@@ -380,6 +398,15 @@ tool-surface changes.
 - An `edit_schematic` view cursor now returns its view even when
   `return_views` does not name it. A `pin_legend` or `touched` cursor sent with
   the default `return_views` used to be accepted and then ignored.
+- `prefix` on `inspect(kind="components")` and `inspect(kind="hierarchy")` is
+  a case-insensitive prefix of the reference rather than a single letter:
+  `"LX"` keeps LX1 and LX2 but not L1, and `"MXO"` keeps MXO1. A one-letter
+  prefix still selects an element type. On `hierarchy` it reads each
+  instance's own reference, the last segment of its path. It is plain text:
+  a prefix with a wildcard is refused with the plain spelling to use
+  (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
+  too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
+  `invalid_query`.
 
 ### Security
 

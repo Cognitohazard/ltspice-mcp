@@ -831,3 +831,31 @@ async def test_ngspice_ground_alias_precedes_scope_and_ports(state_no_sim, work_
         node == {"scope": [], "name": "0", "voltage_trace": "V(0)", "reason": None}
         for node in grounds
     )
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("MXO", {("XA", "MXO1"), ("MXO2",)}),
+        ("mxo", {("XA", "MXO1"), ("MXO2",)}),
+        ("M", {("XA", "MXO1"), ("XA", "M1"), ("MXO2",)}),
+    ],
+)
+async def test_prefix_is_a_case_insensitive_prefix_of_the_instance_reference(
+    state_no_sim, work_dir, prefix, expected
+):
+    path = work_dir / "prefixes.cir"
+    path.write_text(
+        "* prefixes\n.model nch nmos(level=1)\n"
+        ".subckt cell d g\nMXO1 d g 0 0 nch\nM1 d g 0 0 nch\n.ends cell\n"
+        "XA a b cell\nMXO2 a b 0 0 nch\n.end\n",
+        encoding="utf-8",
+    )
+    result = await _inspect(state_no_sim, path, prefix=prefix)
+    assert result["ok"], result
+    assert {tuple(row["instance"]) for row in result["data"]["instances"]} == expected
+
+
+async def test_prefix_refuses_a_glob(state_no_sim, hierarchy_deck):
+    result = await _inspect(state_no_sim, hierarchy_deck, prefix="M*")
+    assert not result["ok"] and result["error"]["code"] == "invalid_prefix"

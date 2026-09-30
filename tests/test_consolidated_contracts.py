@@ -664,8 +664,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # compare is verify_circuit's spec: the mode field rides along.
     # Raised by about 200 characters for the 'preexisting' view and its cursor:
     # an edit to an existing sheet reports only what the batch introduced or
-    # named, and those two are how the rest is listed.
-    "edit_schematic": 12000,
+    # named, and those two are how the rest is listed. Raised by about 40 more
+    # for wire_pins' {x, y} endpoint, the one way to end a route on a wire's
+    # interior (a T-junction), which from_pin names beside the SpiceOrder form.
+    # Measured 12,038.
+    "edit_schematic": 12040,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
