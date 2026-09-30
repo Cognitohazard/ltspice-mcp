@@ -812,7 +812,8 @@ class PlotWaveformInput(ToolInput):
         default=None,
         description=(
             "Directory for the HTML (under an allowed path; created if needed). "
-            "Default: '.ltspice-mcp/plots/' in the working directory's store."
+            "Default: the server's store, '.ltspice-mcp/plots/' in the working "
+            "directory unless LTSPICE_MCP_STORE_DIR moves it."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -830,8 +831,8 @@ class PlotWaveformInput(ToolInput):
         "type follows the run (transient, DC sweep, AC Bode, noise) and a .step "
         "or Monte Carlo run overlays every step.\n\n"
         "Writes a self-contained HTML file and returns its path — into "
-        "``out_dir`` if given, else the store's '.ltspice-mcp/plots/'. On a "
-        "host that supports MCP Apps the chart is also "
+        "``out_dir`` if given, else the server's store. On a host that "
+        "supports MCP Apps the chart is also "
         "embedded as an in-chat widget; otherwise it opens in your local "
         "browser.\n\n"
         "For numbers use analyze_results instead: the waveform recipe returns a "

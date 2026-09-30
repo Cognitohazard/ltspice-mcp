@@ -301,8 +301,7 @@ so zoom / pan / hover does nothing for it.
   non-monotonic axis is refused when windowed (searchsorted would corrupt
   it). Rows stream straight into the atomic temp file (no whole-CSV copy held
   in memory) under a generous row-count limit that raises rather than
-  truncates; the resolved output path is rejected if a symlinked sidecar
-  would redirect it outside the circuit directory; and in a stepped run, a
+  truncates; and in a stepped run, a
   step whose axis misses the window is skipped and reported rather than
   failing the whole export.
 - **`plot_waveform` — one chart core, two delivery paths.** One interactive
@@ -597,9 +596,22 @@ geometry-aware, and LTspice-specific comes first.
 
 ## Configuration
 
-`ltspice-mcp.toml` in the working directory (auto-generated if missing).
+`ltspice-mcp.toml` in the working directory, written with defaults on the
+first tool call if missing (`LTSPICE_MCP_WRITE_CONFIG=false` turns that off).
 Environment variables with `LTSPICE_MCP_` prefix override TOML values.
 See `config.py:ServerConfig` for all options.
+
+What the server writes, and where: the working directory's `.ltspice-mcp/`
+store (records, runs, result sets, export snapshots, plots), a per-user home
+(`%LOCALAPPDATA%\ltspice-mcp` on Windows, the XDG state directory elsewhere,
+`LTSPICE_MCP_HOME` to override) for the recent-circuits index and the
+per-circuit lock files, and nothing beside a circuit that a caller did not
+ask for. `LTSPICE_MCP_STORE_DIR` moves the store to one directory per working
+directory under the named directory. The working directory stays what scopes
+the records (idempotency, job listings, result sets), but a process now finds
+them only if it carries the same setting: a server or script started without
+it looks in `<working_dir>/.ltspice-mcp/` and sees none of them.
+`lib/store.py`'s module docstring is the layout.
 
 TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`,
 `[logging]`, `[schematic]`, `[tools]`, `[state]`.

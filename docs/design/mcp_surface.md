@@ -131,7 +131,8 @@ and `subject` are required on anything a caller is expected to fix.
 
 **Self-sufficiency.** `structuredContent` carries everything the caller needs,
 including a `hint`; the text channel is presentation only. Every user-supplied
-path goes through `safe_path`, and `.asc` work runs under `circuit_file_lock`.
+path goes through `safe_path`, and `.asc` work runs under `circuit_file_lock`,
+whose lock file lives in the per-user home rather than beside the circuit.
 
 **Lean by default.** The default response is the answer channel: per-case
 headline rows (label, promoted headline scalars, verdicts) plus a one-line
@@ -365,12 +366,16 @@ what a Windows process wait can express.
 
 **Job model.** An experiment job is a coordinator spanning multiple circuits.
 Its persistence home is the server working directory's store
-(`{working_dir}/.ltspice-mcp/experiments/`), holding the coordinator record —
+(`{working_dir}/.ltspice-mcp/experiments/`, or the working directory's store
+under `LTSPICE_MCP_STORE_DIR` when that is set), holding the coordinator record —
 case records, counters, analysis state, source manifests — beside two indexes
 into it: `by-request/` for the idempotency lookup and `by-circuit/` so
 `jobs(list, circuit=...)` can find every job that ran a given circuit. Its run
-artifacts live in `runs/{job_id}/`, staged decks included. `lib/store.py` owns
-the whole layout and is where to read it. Owner-pid liveness and
+artifacts live in `runs/{job_id}/`, staged decks included, and a schematic
+runs from the snapshot of its export in the store's `exports/`, which staging
+treats as standing beside the schematic: admitted because the schematic is, and
+with its relative includes resolved from the schematic's folder.
+`lib/store.py` owns the whole layout and is where to read it. Owner-pid liveness and
 foreign-session read rules are unchanged from the simulation-job model.
 
 **Attached analysis is a job stage.** Job terminality means all runs terminal
@@ -800,7 +805,9 @@ field it cannot honour, which is also why `render` is here and not on
 the object did not, and a call carrying both was refused rather than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
-and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
+in the store and writes nothing beside the caller's file (the lock it takes
+while copying lives in the per-user home). A compare of that export resolves
+its relative includes from the schematic's folder, not from the scratch copy. `sidecar` overwrites the deck's `.net`
 under lock and returns `{path, sha256, diff_vs_prior?}`; that makes the call
 destructive, which the annotation table reflects.
 

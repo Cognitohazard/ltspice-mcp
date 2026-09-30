@@ -155,6 +155,11 @@ persist_jobs = true
 
 See [`src/ltspice_mcp/config.py`](src/ltspice_mcp/config.py) for the full option list (`[analysis]`, `[schematic]`, `[logging]`, ...).
 
+**What the server writes, and where.** Nothing it keeps goes beside your circuits; only files you ask for do (an edited sheet, a `sidecar` export, a plot's `out_dir`), plus the `<name>.net` LTspice's own exporter writes beside a schematic it runs. Job records, runs, result sets, export snapshots and plots go to the working directory's `.ltspice-mcp/` store. The recent-circuits index and per-circuit lock files go to a per-user directory (`%LOCALAPPDATA%\ltspice-mcp` on Windows, `~/.local/state/ltspice-mcp` elsewhere, `LTSPICE_MCP_HOME` to override). Two environment settings reduce that further:
+
+- `LTSPICE_MCP_WRITE_CONFIG=false` stops the first tool call from writing a default `ltspice-mcp.toml` into the working directory.
+- `LTSPICE_MCP_STORE_DIR=<dir>` keeps the store in `<dir>` (one subdirectory per working directory) instead. The trade-off: a server, script or Python API session only finds those job records, and replays their `request_id`s, if it carries the same setting.
+
 <details>
 <summary><strong>WSL specifics</strong></summary>
 
