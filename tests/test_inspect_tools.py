@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import typing
+from dataclasses import asdict
 from pathlib import Path
 
 import jsonschema
@@ -23,10 +24,11 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import raster
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import symlink_or_skip
+from tests.conftest import needs_raster, symlink_or_skip
 
 
 class FakeLT:
@@ -132,6 +134,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "config_path",
         "python",
         "python_api",
+        "render",
     ):
         assert key in data, f"missing capabilities key {key!r}"
     # The library door, named where an agent already looks for what the
@@ -166,6 +169,30 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+@needs_raster
+async def test_capabilities_reports_png_rendering(cap_state: SessionState):
+    """An agent deciding between an inline PNG and a file path asks here first,
+    rather than rendering to find out."""
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"]["render"] == {"png": True, "missing": None, "reason": None, "remedy": None}
+
+
+@pytest.mark.parametrize(
+    ("absence", "missing"),
+    [("raster_extra_missing", "extra"), ("raster_native_missing", "native_library")],
+)
+async def test_capabilities_reports_what_is_missing(
+    cap_state: SessionState, request: pytest.FixtureRequest, absence: str, missing: str
+):
+    request.getfixturevalue(absence)
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    render = res["data"]["render"]
+    assert render["png"] is False
+    assert render["missing"] == missing
+    # The loader's own answer, reason and per-platform remedy included.
+    assert render == asdict(raster.raster_support())
 
 
 async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):

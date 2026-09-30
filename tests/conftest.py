@@ -1,10 +1,12 @@
 """Shared fixtures and helpers for ltspice-mcp tests."""
 
 import asyncio
+import importlib.abc
 import os
 import shutil
 import struct
 import subprocess
+import sys
 import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
@@ -18,7 +20,7 @@ from ltspice_mcp.api import _session as _api_session
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
-from ltspice_mcp.lib import now
+from ltspice_mcp.lib import now, raster
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, StagedDecks
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -709,6 +711,87 @@ def sample_netlist(work_dir: Path) -> Path:
         ".END\n"
     )
     return p
+
+
+@pytest.fixture(scope="module")
+def live_peer_pid() -> Iterator[int]:
+    """A real, live process that is not this one (a parallel session stand-in)."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    yield proc.pid
+    proc.kill()
+    proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# PNG rasterizer absence
+# ---------------------------------------------------------------------------
+#
+# The optional rasterizer is missing in one of two ways, and each must be
+# reported as itself. Both fixtures fail the real `import cairosvg` the way the
+# environment would, so the server's own loader decides which half is missing.
+
+_RASTER_SUPPORT = raster.raster_support()
+
+#: Skip a test that needs a real PNG where this host cannot make one.
+needs_raster = pytest.mark.skipif(
+    not _RASTER_SUPPORT.png, reason=f"no PNG rasterizer here: {_RASTER_SUPPORT.reason}"
+)
+
+
+class FailingCairosvgImport(importlib.abc.MetaPathFinder):
+    """Fails every `import cairosvg` with ``error``, counting the attempts."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.attempts = 0
+
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "cairosvg":
+            self.attempts += 1
+            raise self._error
+        return None
+
+
+def _fail_cairosvg_import(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> FailingCairosvgImport:
+    finder = FailingCairosvgImport(error)
+    monkeypatch.delitem(sys.modules, "cairosvg", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [finder, *sys.meta_path])
+    # The loader keeps the first failure for the life of the process; start
+    # from none so this test's failure is the one it reports.
+    monkeypatch.setattr(raster, "_unavailable", None)
+    return finder
+
+
+@pytest.fixture
+def raster_extra_missing(monkeypatch: pytest.MonkeyPatch) -> FailingCairosvgImport:
+    """The 'raster' extra is not installed: importing cairosvg finds no module."""
+    return _fail_cairosvg_import(
+        monkeypatch, ModuleNotFoundError("No module named 'cairosvg'", name="cairosvg")
+    )
+
+
+@pytest.fixture
+def raster_native_missing(monkeypatch: pytest.MonkeyPatch) -> FailingCairosvgImport:
+    """The extra is installed but libcairo is not.
+
+    cairocffi opens the native library while it is imported, and reports a
+    library it cannot find as an OSError, not an ImportError. The message is
+    the one it builds on a host with no Cairo at all.
+    """
+    return _fail_cairosvg_import(
+        monkeypatch,
+        OSError(
+            'no library called "cairo-2" was found\n'
+            'no library called "cairo" was found\n'
+            'no library called "libcairo-2" was found'
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

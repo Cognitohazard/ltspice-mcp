@@ -97,7 +97,7 @@ From the error hierarchy:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was asked for without the optional `raster` extra |
+| `raster_unavailable` | a PNG was asked for without a usable rasterizer: the optional `raster` extra, or the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Named by the stage instead, where the stage is the more useful fact:
@@ -823,7 +823,16 @@ destructive, which the annotation table reflects.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
-as a file.
+as a file. Inline delivery is PNG only. An SVG sent as an image block is not
+reliably displayed. Sent as markup it runs about 600 bytes a component, so
+past a handful of parts it costs more than the PNG, and it would ride the text
+channel a structured-only client drops. When `inline` or `both` returns no
+image, `render.inline_skipped` says why (`svg_requested` or
+`png_unavailable`) and `render.note` says where the file is. A PNG needs the
+`raster` extra and the native Cairo library. A render without them falls back
+to SVG, with a `render` failure naming which of the two is missing and a
+per-platform remedy. `inspect(kind:"capabilities")` reports the same as
+`render: {png, missing, reason, remedy}` before anything is drawn.
 
 The two comparison modes differ in what an unreadable deck does to them.
 `equivalence` graph-compares connectivity — component set, values, normalized
@@ -853,8 +862,9 @@ component's signature is its model or value plus its instance parameters,
 nodes excluded (equivalence is the mode that compares wiring).
 
 Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
-summary, `outcome` and `hint`.
+block `{path, sha256, source_sha256, width, height, downscaled,
+returned_inline, inline_skipped, note, …}`, a scene summary, `outcome` and
+`hint`.
 
 The render block carries three digests' worth of care in two names. `sha256` is
 the image's; `source_sha256` is the sheet's own, read from the file this call
@@ -876,8 +886,10 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 {kind: "capabilities"}
     simulators and versions, exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
-    limits, linter_version, and the startup diagnostics that say whether
-    this server started degraded
+    limits, linter_version, the startup diagnostics that say whether
+    this server started degraded, and `render: {png, missing, reason,
+    remedy}` — whether verify_circuit can make the PNG it inlines, and
+    if not, whether the `raster` extra or native Cairo is missing
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
