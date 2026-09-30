@@ -16,6 +16,10 @@ tool-surface changes.
   moment, and the request gate read that as a missing record and recreated the
   submission. The gate now re-reads a record that exists, and treats only a
   record that is actually gone as missing.
+- A `run_code` call that arrives while the worker is still starting is answered
+  `busy`, as one arriving while a snippet runs already was. The call in
+  progress claimed the worker only after it had booted, so a second call
+  during a slow boot read the reply pipe alongside the first and failed.
 - A stopped case's kill grace ends when its last wait runs out, not when the
   loop clock reads past the deadline. asyncio fires a timer up to one clock
   resolution early (15.6 ms on Windows), so the clock could read short of a

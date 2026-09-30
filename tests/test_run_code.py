@@ -336,6 +336,28 @@ class TestLifetime:
         assert done["result"] == "'first'"
         assert second["running"]["exec_seq"] == done["exec_seq"]
 
+    async def test_a_call_during_a_slow_boot_is_busy(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # A second call landing while the first is still booting the worker
+        # read the reply pipe alongside it instead of being answered busy.
+        worker = worker_for(state)
+        await run(state, "", reset=True)
+        boot = worker._ensure  # pyright: ignore[reportPrivateUsage]
+
+        async def slow_boot() -> None:
+            await asyncio.sleep(0.5)
+            await boot()
+
+        monkeypatch.setattr(worker, "_ensure", slow_boot)
+        first = asyncio.ensure_future(run(state, "'first'"))
+        await asyncio.sleep(0.1)
+        second = await run(state, "2")
+        assert second["status"] == "busy", second
+        done = await first
+        assert done["status"] == "ok", done
+        assert second["running"]["exec_seq"] == done["exec_seq"]
+
     async def test_reset_restarts_the_worker(self, state: SessionState):
         before = (await run(state, "1"))["worker_pid"]
         reply = await run(state, "", reset=True)
