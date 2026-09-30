@@ -834,9 +834,14 @@ def _build_editor(target: Path, use_template: bool, state: SessionState) -> AscE
         tmp_asc = tmp_dir / "blank.asc"
         tmp_asc.write_text(_BLANK_TEMPLATE, encoding="utf-8")
         # The template is .asc, so make_editor always yields an AscEditor here.
-        return cast(AscEditor, make_editor(tmp_asc))
+        editor = cast(AscEditor, make_editor(tmp_asc))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+    # The editor stands for the target from here on. Its path is where a symbol
+    # saved beside the sheet is looked up, by spicelib and by the pin geometry,
+    # and nothing re-reads the sheet through it.
+    editor.asc_file_path = target
+    return editor
 
 
 def _apply_ops(
