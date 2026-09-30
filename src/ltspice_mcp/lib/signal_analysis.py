@@ -1528,17 +1528,13 @@ def compute_signal_stats(
     t_at_min = float(t[int(np.argmin(y))])
     t_at_max = float(t[int(np.argmax(y))])
 
+    mean = trapezoid_mean(t, y)
+    mean_sq = trapezoid_mean(t, y * y)
+    abs_mean = trapezoid_mean(t, np.abs(y))
+    rms = float(np.sqrt(mean_sq))
     if duration > 0 and len(t) >= 2:
-        mean = float(np.trapezoid(y, t) / duration)
-        mean_sq = float(np.trapezoid(y * y, t) / duration)
-        abs_mean = float(np.trapezoid(np.abs(y), t) / duration)
-        variance = max(mean_sq - mean * mean, 0.0)
-        std = float(np.sqrt(variance))
-        rms = float(np.sqrt(mean_sq))
+        std = float(np.sqrt(max(mean_sq - mean * mean, 0.0)))
     else:
-        mean = float(np.mean(y))
-        rms = float(np.sqrt(np.mean(y * y)))
-        abs_mean = float(np.mean(np.abs(y)))
         std = float(np.std(y, ddof=0))
 
     return {
@@ -1558,18 +1554,40 @@ def compute_signal_stats(
     }
 
 
+def trapezoid_mean(t: np.ndarray, y: np.ndarray) -> float:
+    """Trapezoidal average of ``y`` over ``[t[0], t[-1]]``, which is correct on
+    LTspice's adaptive timestep; the plain mean when the window is one instant."""
+    duration = float(t[-1] - t[0])
+    if duration > 0 and len(t) >= 2:
+        return float(np.trapezoid(y, t) / duration)
+    return float(np.mean(y))
+
+
+class TraceStats(TypedDict):
+    """What :func:`summarize_trace` reports about one trace."""
+
+    min: float | None
+    max: float | None
+    x_at_min: float | None
+    x_at_max: float | None
+    initial: float | None
+    final: float | None
+    mean: NotRequired[float | None]
+    non_finite: NotRequired[int]
+
+
 def summarize_trace(
     x: np.ndarray,
     y: np.ndarray,
     *,
     time_weighted_mean: bool,
-) -> dict[str, float | int | None]:
+) -> TraceStats:
     """Extremes, end values and (on a time axis) the mean of one plotted trace.
 
     Returns ``min``/``max`` with the axis value where each occurs
     (``x_at_min``/``x_at_max``), the first and last sample (``initial``/
     ``final``), and, when ``time_weighted_mean`` is set, the trapezoidal mean
-    from :func:`compute_signal_stats`. The mean is left out for a sweep axis: an
+    of :func:`trapezoid_mean`. The mean is left out for a sweep axis: an
     average over swept voltage or log-spaced frequency depends on the sweep, not
     the circuit.
 
@@ -1586,30 +1604,26 @@ def summarize_trace(
     y = np.asarray(y, dtype=float)
     finite = np.isfinite(x) & np.isfinite(y)
     n_bad = int(len(y) - np.count_nonzero(finite))
+    xs, ys = (x[finite], y[finite]) if n_bad else (x, y)
 
-    def _sample(i: int) -> float | None:
-        return float(y[i]) if len(y) and bool(finite[i]) else None
-
-    summary: dict[str, float | int | None] = {}
-    if not finite.any():
-        summary.update(min=None, max=None, x_at_min=None, x_at_max=None)
-        if time_weighted_mean:
-            summary["mean"] = None
-    else:
-        core = compute_signal_stats(x[finite], y[finite])
-        summary.update(
-            min=core["min"],
-            max=core["max"],
-            x_at_min=core["t_at_min"],
-            x_at_max=core["t_at_max"],
+    stats: TraceStats = {
+        "min": None,
+        "max": None,
+        "x_at_min": None,
+        "x_at_max": None,
+        "initial": float(y[0]) if len(y) and finite[0] else None,
+        "final": float(y[-1]) if len(y) and finite[-1] else None,
+    }
+    if len(ys):
+        lo, hi = int(np.argmin(ys)), int(np.argmax(ys))
+        stats.update(
+            min=float(ys[lo]), max=float(ys[hi]), x_at_min=float(xs[lo]), x_at_max=float(xs[hi])
         )
-        if time_weighted_mean:
-            summary["mean"] = core["mean"]
-    summary["initial"] = _sample(0)
-    summary["final"] = _sample(-1)
+    if time_weighted_mean:
+        stats["mean"] = trapezoid_mean(xs, ys) if len(ys) else None
     if n_bad:
-        summary["non_finite"] = n_bad
-    return summary
+        stats["non_finite"] = n_bad
+    return stats
 
 
 def _equal_time_buckets(t: np.ndarray, n_buckets: int) -> tuple[np.ndarray, np.ndarray, int]:

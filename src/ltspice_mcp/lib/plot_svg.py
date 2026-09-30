@@ -22,20 +22,8 @@ from collections.abc import Mapping, Sequence
 from itertools import pairwise
 from typing import Any
 
-# Same palette, in the same order, as the interactive chart, so a trace keeps
-# its color between the image and the HTML file.
-_PALETTE = (
-    "#1f77b4",
-    "#d62728",
-    "#2ca02c",
-    "#ff7f0e",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-    "#7f7f7f",
-    "#bcbd22",
-    "#17becf",
-)
+from ltspice_mcp.lib.format import si_prefix
+from ltspice_mcp.lib.plot_html import PALETTE
 
 _FONT = "DejaVu Sans, Arial, Helvetica, sans-serif"
 _WIDTH = 960
@@ -49,22 +37,8 @@ _X_LABEL_HEIGHT = 22
 _LEGEND_ROW = 16
 _LEGEND_CHARS = 30
 
-# SI prefixes for tick labels, largest first.
-_PREFIXES = (
-    (1e12, "T"),
-    (1e9, "G"),
-    (1e6, "M"),
-    (1e3, "k"),
-    (1.0, ""),
-    (1e-3, "m"),
-    (1e-6, "µ"),
-    (1e-9, "n"),
-    (1e-12, "p"),
-    (1e-15, "f"),
-)
-
 # XML 1.0 cannot carry these at all, escaped or not.
-_XML_INVALID = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+_XML_INVALID = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
 
 
 def _esc(text: object) -> str:
@@ -85,13 +59,6 @@ def _panel_height(n_panels: int) -> int:
     return 150
 
 
-def _prefix_for(magnitude: float) -> tuple[float, str]:
-    return next(
-        ((scale, prefix) for scale, prefix in _PREFIXES if magnitude >= scale * (1 - 1e-9)),
-        _PREFIXES[-1],
-    )
-
-
 def tick_labels(ticks: Sequence[float]) -> list[str]:
     """Labels for evenly stepped linear ticks: one SI prefix for the whole axis
     (from its largest tick) and as many decimals as the step needs, so
@@ -99,7 +66,7 @@ def tick_labels(ticks: Sequence[float]) -> list[str]:
     top = max((abs(t) for t in ticks), default=0.0)
     if not top:
         return ["0" for _ in ticks]
-    scale, prefix = _prefix_for(top)
+    scale, prefix = si_prefix(top)
     steps = [abs(b - a) for a, b in pairwise(ticks) if b != a]
     step = min(steps) if steps else top
     decimals = max(0, min(6, -math.floor(math.log10(step / scale) + 1e-9)))
@@ -111,7 +78,7 @@ def _eng(value: float) -> str:
     ``1.5m``, ``20k``, ``-2µ``, ``0``."""
     if value == 0 or not math.isfinite(value):
         return "0" if value == 0 else ""
-    scale, prefix = _prefix_for(abs(value))
+    scale, prefix = si_prefix(abs(value))
     return f"{value / scale:.3g}{prefix}"
 
 
@@ -156,7 +123,7 @@ def _finite(values: Sequence[Any], *, positive: bool = False) -> list[float]:
 
 
 def _x_range(panels: Sequence[Mapping[str, Any]], log: bool) -> tuple[float, float]:
-    xs = [v for p in panels for v in _finite(p["data"][0] if p["data"] else [], positive=log)]
+    xs = [v for p in panels for table in p["tables"] for v in _finite(table[0], positive=log)]
     if not xs:
         return (1.0, 10.0) if log else (0.0, 1.0)
     lo, hi = min(xs), max(xs)
@@ -165,8 +132,8 @@ def _x_range(panels: Sequence[Mapping[str, Any]], log: bool) -> tuple[float, flo
     return (lo / 2, lo * 2) if log else (lo - 1.0, lo + 1.0)
 
 
-def _y_range(rows: Sequence[Sequence[Any]]) -> tuple[float, float]:
-    ys = [v for row in rows for v in _finite(row)]
+def _y_range(panel: Mapping[str, Any]) -> tuple[float, float]:
+    ys = [v for table in panel["tables"] for row in table[1:] for v in _finite(row)]
     if not ys:
         return 0.0, 1.0
     lo, hi = min(ys), max(ys)
@@ -191,26 +158,11 @@ class _Axis:
         return self.p0 + (v - self.lo) / (self.hi - self.lo) * (self.p1 - self.p0)
 
 
-def _trace_path(
-    xs: Sequence[Any],
-    ys: Sequence[Any],
-    sx: _Axis,
-    sy: _Axis,
-    series: Mapping[str, Any],
-) -> str:
-    """SVG path data for one series; a null or non-finite sample breaks the line.
-
-    A series ``padded`` onto a shared x has no sample at the other series' x
-    values; its line is joined across those, and broken only at its own
-    non-finite samples, which ``gaps`` lists by index.
-    """
-    padded = bool(series.get("padded"))
-    gaps = set(series.get("gaps") or ())
+def _trace_path(xs: Sequence[Any], ys: Sequence[Any], sx: _Axis, sy: _Axis) -> str:
+    """SVG path data for one series; a null or non-finite sample breaks the line."""
     parts: list[str] = []
     pen_down = False
-    for i, (x, y) in enumerate(zip(xs, ys, strict=False)):
-        if y is None and padded and i not in gaps:
-            continue
+    for x, y in zip(xs, ys, strict=False):
         if x is None or y is None:
             pen_down = False
             continue
@@ -241,10 +193,11 @@ def render_plot_svg(spec: Mapping[str, Any], *, title: str) -> str:
 
     One stacked plot area per panel, all over the same x range, each with its
     own y range, gridlines, tick labels, title (the panel's ``y_label``) and a
-    legend in the right-hand column. A legend with more series than fit beside
-    its panel lists as many as fit and says how many it left out. AC
-    ``annotations`` are drawn as dashed guide lines across every panel, labelled
-    on the first, and ``nmp`` as a tag on the first panel.
+    legend in the right-hand column. Each series is drawn against its own
+    table's x, so a .step overlay needs no shared axis. A legend with more
+    series than fit beside its panel lists as many as fit and says how many it
+    left out. AC ``annotations`` are drawn as dashed guide lines across every
+    panel, labelled on the first, and ``nmp`` as a tag on the first panel.
     """
     panels: list[Mapping[str, Any]] = list(spec.get("panels") or [])
     if not panels:
@@ -257,8 +210,16 @@ def render_plot_svg(spec: Mapping[str, Any], *, title: str) -> str:
     height = _TITLE_HEIGHT + len(panels) * block + _X_LABEL_HEIGHT
     left = _MARGIN_LEFT
     right = _WIDTH - _LEGEND_WIDTH - 12
+    sx = _Axis(x_lo, x_hi, left, right, log_x)
     sx_ticks = _log_ticks(x_lo, x_hi) if log_x else _nice_ticks(x_lo, x_hi, target=8)
     sx_labels = [_eng(t) for t in sx_ticks] if log_x else tick_labels(sx_ticks)
+    # _x_range keeps the range finite and, on a log axis, positive, so the
+    # range check alone rejects a missing, non-finite or off-axis marker.
+    annotations = [
+        (float(ann["x"]), str(ann.get("label", "")))
+        for ann in spec.get("annotations") or []
+        if ann.get("x") is not None and x_lo <= ann["x"] <= x_hi
+    ]
 
     out: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_WIDTH}" height="{height}" '
@@ -270,9 +231,7 @@ def render_plot_svg(spec: Mapping[str, Any], *, title: str) -> str:
     for i, panel in enumerate(panels):
         top = _TITLE_HEIGHT + i * block + _PANEL_TITLE_HEIGHT
         bottom = top + ph
-        sx = _Axis(x_lo, x_hi, left, right, log_x)
-        rows = list(panel["data"][1:])
-        y_lo, y_hi = _y_range(rows)
+        y_lo, y_hi = _y_range(panel)
         sy = _Axis(y_lo, y_hi, bottom, top, False)
 
         out.append('<g class="panel">')
@@ -280,7 +239,8 @@ def render_plot_svg(spec: Mapping[str, Any], *, title: str) -> str:
             _text(left, top - 6, str(panel.get("y_label", "")), size=12, font_weight="bold")
         )
         out.append(
-            f'<clipPath id="clip{i}"><rect x="{left}" y="{top}" width="{right - left}" height="{ph}"/></clipPath>'
+            f'<clipPath id="clip{i}"><rect x="{left}" y="{top}" '
+            f'width="{right - left}" height="{ph}"/></clipPath>'
         )
 
         grid: list[str] = []
@@ -295,35 +255,28 @@ def render_plot_svg(spec: Mapping[str, Any], *, title: str) -> str:
             out.append(_text(left - 5, py + 3.5, label, size=10, anchor="end", fill="#444"))
         out.append(f'<g stroke="#e3e3e3" stroke-width="1">{"".join(grid)}</g>')
 
-        xs = panel["data"][0]
-        series = list(panel.get("series") or [])
         out.append(
             f'<g clip-path="url(#clip{i})" fill="none" stroke-width="1.5" '
             'stroke-linejoin="round" stroke-linecap="round">'
         )
-        for j, row in enumerate(rows):
-            d = _trace_path(xs, row, sx, sy, series[j] if j < len(series) else {})
-            if d:
-                color = _PALETTE[j % len(_PALETTE)]
-                out.append(f'<path class="trace" stroke="{color}" d="{d}"/>')
+        j = 0
+        for table in panel["tables"]:
+            for row in table[1:]:
+                d = _trace_path(table[0], row, sx, sy)
+                if d:
+                    color = PALETTE[j % len(PALETTE)]
+                    out.append(f'<path class="trace" stroke="{color}" d="{d}"/>')
+                j += 1
         out.append("</g>")
 
-        annotations = spec.get("annotations") or []
-        for ann in annotations:
-            ax = ann.get("x")
-            if ax is None or not math.isfinite(ax) or (log_x and ax <= 0):
-                continue
-            if not min(x_lo, x_hi) <= ax <= max(x_lo, x_hi):
-                continue
-            px = sx(float(ax))
+        for ax, label in annotations:
+            px = sx(ax)
             out.append(
                 f'<line x1="{px:.1f}" y1="{top}" x2="{px:.1f}" y2="{bottom}" '
                 'stroke="#888" stroke-width="1" stroke-dasharray="3,3"/>'
             )
             if i == 0:
-                out.append(
-                    _text(px + 4, top + 12, str(ann.get("label", "")), size=10, fill="#222")
-                )
+                out.append(_text(px + 4, top + 12, label, size=10, fill="#222"))
         if i == 0 and spec.get("nmp"):
             out.append(
                 _text(
@@ -342,12 +295,13 @@ def render_plot_svg(spec: Mapping[str, Any], *, title: str) -> str:
             'fill="none" stroke="#666" stroke-width="1"/>'
         )
 
+        series = list(panel.get("series") or [])
         fits = max(1, ph // _LEGEND_ROW)
         shown = series if len(series) <= fits else series[: fits - 1]
         lx = right + 14
         for j, entry in enumerate(shown):
             ly = top + 10 + j * _LEGEND_ROW
-            color = _PALETTE[j % len(_PALETTE)]
+            color = PALETTE[j % len(PALETTE)]
             out.append(
                 f'<line x1="{lx}" y1="{ly - 4}" x2="{lx + 16}" y2="{ly - 4}" '
                 f'stroke="{color}" stroke-width="2.5"/>'

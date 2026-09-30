@@ -872,6 +872,29 @@ def noise_input_source_unit(netlist: Path | None) -> str | None:
     return None
 
 
+def is_input_noise(trace: str) -> bool:
+    """Whether a noise-run trace is the input-referred noise (LTspice's
+    ``V(inoise)``, ngspice's ``inoise_spectrum``)."""
+    return "inoise" in trace.lower()
+
+
+def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[str | None, bool]:
+    """The unit a noise-run trace's density is referred to, and whether it was checked.
+
+    The simulator's declared unit (``trace_unit``) stands for every trace but
+    the input-referred one: LTspice declares that a voltage even when the
+    ``.NOISE`` source is a current source, so it takes ``input_source_unit``
+    (the deck's answer from :func:`noise_input_source_unit`) and is unchecked
+    when there is none. The unit is of the amplitude; the density is per √Hz.
+    """
+    unit = trace_unit(raw, trace)
+    if not is_input_noise(trace):
+        return unit, True
+    if input_source_unit is not None:
+        return input_source_unit, True
+    return unit, False
+
+
 def query_x_label(raw, sim_type: str) -> str:
     """Axis label for a point read: ``f`` for AC, ``t`` for transient, and the
     swept variable's own name for a .dc sweep (not a misleading ``t``)."""
@@ -1887,21 +1910,18 @@ async def noise_integral(
         parse_time(spice_text(recipe.to_hz), "f_end"),
     )
 
-    unit = trace_unit(raw, signal)
-    if "inoise" in signal.lower():
-        # trace_unit() alone can't distinguish a voltage- from a
-        # current-referred inoise trace (see noise_input_source_unit); check
-        # the deck's .NOISE line when the run carries one.
-        resolved = noise_input_source_unit(source.netlist)
-        if resolved is not None:
-            unit = resolved
-        else:
-            data.setdefault("warnings", []).append(
-                "Could not verify the input-referred noise unit against the "
-                f"deck's .NOISE source; assuming {unit or 'V'!r}. Analyze a run "
-                "whose deck is known so the .NOISE line can be checked "
-                "(V-source -> V, I-source -> A)."
-            )
+    unit, verified = noise_trace_unit(
+        raw,
+        signal,
+        noise_input_source_unit(source.netlist) if is_input_noise(signal) else None,
+    )
+    if not verified:
+        data.setdefault("warnings", []).append(
+            "Could not verify the input-referred noise unit against the "
+            f"deck's .NOISE source; assuming {unit or 'V'!r}. Analyze a run "
+            "whose deck is known so the .NOISE line can be checked "
+            "(V-source -> V, I-source -> A)."
+        )
     data["signal"] = signal
     data["unit"] = unit or ""
     data["density_unit"] = f"{unit}/√Hz" if unit else "amplitude/√Hz"

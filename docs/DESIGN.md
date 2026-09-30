@@ -343,14 +343,16 @@ so zoom / pan / hover does nothing for it.
   truncation). Both delivery paths are implemented. uPlot is vendored as a
   bundled MIT asset under `src/ltspice_mcp/assets/uplot/` (in the wheel,
   inlined at render; no pip dependency, no CDN). A step whose axis misses the
-  window is skipped; transient `.step` overlays with differing per-step time
-  vectors are null-padded onto a union x, with each padded series marked and
-  its own non-finite samples listed, because the renderers must join a line
-  across padding (uPlot joins across `undefined` and breaks at `null`) but
-  still break it at a real gap; AC Bode phase is unwrapped;
-  non-finite samples become JSON `null` gaps. A global per-panel cell cap
-  refuses, before allocating, a plot whose union-padded size would be too
-  large. Delivery is chosen by the capabilities the calling client declared
+  window is skipped; a panel's data is one or more tables `[x, y...]`, so
+  traces on one axis share a table and a transient `.step` overlay with
+  differing per-step time vectors has one per step, which the chart aligns
+  with `uPlot.join` (it joins a line across another table's samples and
+  breaks it at the trace's own `null`) and the static image draws against
+  each table's own x; AC Bode phase is unwrapped; non-finite samples become
+  JSON `null` gaps. The traces are read and windowed once per call; the file,
+  the widget spec and the image are projections of that at their own point
+  budgets. A global per-panel cell cap refuses, before building it, a plot
+  whose aligned size would be too large. Delivery is chosen by the capabilities the calling client declared
   (`capabilities.extensions["io.modelcontextprotocol/ui"]`) — in the
   `initialize` handshake, or in the per-request envelope on a 2026-07-28
   connection, which has no handshake; `server.py:get_client_capabilities`
@@ -388,7 +390,10 @@ so zoom / pan / hover does nothing for it.
   skipped and reported as an observation; SVG markup is never sent in its
   place, because path data is no use to a model and costs more than the
   picture. The PNG is also written beside the HTML. It is about a thousand
-  tokens for two panels (the reply reports `estimated_tokens`). The
+  tokens for two panels (the reply reports `estimated_tokens`). Its points
+  are budgeted in total rather than per series, since rasterization time
+  follows the points drawn and the plot area is under 700 px wide: a
+  many-step overlay gets fewer points per step, never a slower render. The
   `analyze_results` recipes do not attach an image.
 
 **Fidelity by consumer.** The inline `waveform` recipe decimates (the LLM's

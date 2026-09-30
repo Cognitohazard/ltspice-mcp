@@ -1543,18 +1543,18 @@ async def _plot(
     )
     pending.parent.mkdir(parents=True, exist_ok=True)
     span = recipe.span
-    plan, _ = an.plan_plot(
+    plan = await asyncio.to_thread(
+        an.plan_plot,
         raw,
-        cols,
+        [cols],
+        split_by_unit=True,
+        netlist=run.source.netlist,
         steps=[step for step, _ in steps],
         step_dicts=[values for _, values in steps],
         analysis_type=analysis_type,
         x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
         ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
         te=metrics.parse_time(_spice(span.end) if span else None, "span.end"),
-        input_noise_unit=await an.resolve_input_noise_unit(
-            analysis_type, cols, run.source.netlist
-        ),
     )
     facts = await asyncio.to_thread(
         an.build_plot_file,
