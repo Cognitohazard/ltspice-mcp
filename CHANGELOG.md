@@ -10,23 +10,6 @@ tool-surface changes.
 
 ### Fixed
 
-- A `wire_pins` waypoint on an existing wire, or a route passing through
-  another wire's end or a lone net label, joined that wiring without a word:
-  the crossing check only looked at crossings strictly inside both wires, and
-  LTspice joins anything that ends on a wire. The contact is now refused when
-  it would merge a net neither endpoint is on, naming the wire and the `{x, y}`
-  endpoint that makes the same T on purpose, and reported as a warning when it
-  touches a net the route already joins. Passing over a pin already wired to
-  an endpoint is reported the same way.
-- `add_net_label` warned that LTspice would ignore a label placed on a wire's
-  interior. LTspice names the wire's net after it, as the net trace and the
-  post-edit `dangling_label` check already assumed; the warning now fires only
-  for a label that touches no wire and no pin.
-- `wire_pins`' own advisories (a long run, a wire through a component's
-  bounding box) reach the `edit_schematic` response's `warnings` again. Since
-  the op replaced the standalone tool they had stopped at the op.
-- The refusal of a route crossing a wire where neither ends no longer claims
-  the crossing would join them; LTspice leaves a plain crossing unjoined.
 - `plot_waveform` drew nothing for a `.step` transient whose steps have
   different time vectors, the usual case. Each step's trace was padded onto
   the combined time axis with a gap wherever another step had a sample, so
@@ -45,12 +28,12 @@ tool-surface changes.
   Seen with two scripts detaching the same request. Only the owning process
   writes a job's record now; the caller that replayed still gets the
   `idempotent_replay` observation in its receipt.
-- On Windows, a second `run_experiments` call carrying the same `request_id`
-  could mint a second job instead of replaying the first. Opening a job record
-  while its running job rewrites it fails with a sharing violation for a
-  moment, and the request gate read that as a missing record and recreated the
-  submission. The gate now re-reads a record that exists, and treats only a
-  record that is actually gone as missing.
+- On Windows, a job record read while its running job rewrote it could read as
+  missing: opening a file at the instant a rename replaces it fails with access
+  denied for a moment. The request gate then minted a second job for a repeated
+  `request_id` instead of replaying the first, and a lookup, a listing or a
+  cancel could report a live job as not found. Reading a job record now retries
+  that denial on the same short schedule writing one already did.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call
@@ -59,6 +42,23 @@ tool-surface changes.
   loop clock reads past the deadline. asyncio fires a timer up to one clock
   resolution early (15.6 ms on Windows), so the clock could read short of a
   deadline the wait had reached and the coordinator killed again.
+- A `wire_pins` waypoint on an existing wire, or a route passing through
+  another wire's end or a lone net label, joined that wiring without a word:
+  the crossing check only looked at crossings strictly inside both wires, and
+  LTspice joins anything that ends on a wire. The contact is now refused when
+  it would merge a net neither endpoint is on, naming the wire and the `{x, y}`
+  endpoint that makes the same T on purpose, and reported as a warning when it
+  touches a net the route already joins. Passing over a pin already wired to
+  an endpoint is reported the same way.
+- `add_net_label` warned that LTspice would ignore a label placed on a wire's
+  interior. LTspice names the wire's net after it, as the net trace and the
+  post-edit `dangling_label` check already assumed; the warning now fires only
+  for a label that touches no wire and no pin.
+- `wire_pins`' own advisories (a long run, a wire through a component's
+  bounding box) reach the `edit_schematic` response's `warnings` again. Since
+  the op replaced the standalone tool they had stopped at the op.
+- The refusal of a route crossing a wire where neither ends no longer claims
+  the crossing would join them; LTspice leaves a plain crossing unjoined.
 - Under Wine, `inspect(kind="capabilities")` reported `wine` as the LTspice
   executable, because it read the first word of the launch command. It now
   reports the simulator itself, e.g. `.../LTspice.exe`.
@@ -187,18 +187,6 @@ tool-surface changes.
 
 ### Added
 
-- T-junctions onto an existing wire. `wire_pins` takes `{x, y}` for
-  `from_pin` or `to_pin`; the point must touch a wire or a pin, and on a
-  wire's interior the new segment ends there with the wire left whole, as
-  LTspice's netlister needs no split to join it. The op reports the T under
-  `junctions`. A leg running along the wire it joins, or an endpoint where
-  wires of two nets cross, is refused. `inspect(kind: "net")` at a point on a
-  wire's interior traces that wire's net and names the wire under
-  `snapped_to_wire`, where it used to answer "Nothing found"; a point where
-  two nets' wires cross is refused as ambiguous. The connectivity rule was
-  checked against LTspice 26.1.1 exports of a label, a pin and a wire end on
-  a wire's interior, a plain crossing and a label at a crossing, recorded in
-  `tests/fixtures/t_junctions/`.
 - `plot_waveform` replies summarize each plotted trace: `min` and `max` with
   the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
   `final`, and the time-weighted `mean` on a transient, read from every sample
@@ -227,6 +215,27 @@ tool-surface changes.
   derived trace's statistics are weighted by time; `np.mean` over LTspice's
   variable timestep over-weights the samples packed around edges. The guide's
   trace-math example goes on to them.
+- T-junctions onto an existing wire. `wire_pins` takes `{x, y}` for
+  `from_pin` or `to_pin`; the point must touch a wire or a pin, and on a
+  wire's interior the new segment ends there with the wire left whole, as
+  LTspice's netlister needs no split to join it. The op reports the T under
+  `junctions`. A leg running along the wire it joins, or an endpoint where
+  wires of two nets cross, is refused. `inspect(kind: "net")` at a point on a
+  wire's interior traces that wire's net and names the wire under
+  `snapped_to_wire`, where it used to answer "Nothing found"; a point where
+  two nets' wires cross is refused as ambiguous. The connectivity rule was
+  checked against LTspice 26.1.1 exports of a label, a pin and a wire end on
+  a wire's interior, a plain crossing and a label at a crossing, recorded in
+  `tests/fixtures/t_junctions/`.
+- `edit_schematic` returns what each op found on the sheet in a `results`
+  list, one entry per op keyed by `index` and `op`. `wire_pins` gives the
+  requested segments that were `already_present` and not redrawn and the
+  `junctions` its route made; `remove_wire`, `remove_net_label` and
+  `remove_component`'s wire cleanup give how much they removed. These facts
+  used to stop at the op runner, so a caller saw a redundant junction only as
+  warning text and a skipped segment not at all, though the design doc said
+  `already_present` was reported. An op that found nothing has no entry.
+  `Api.edit_schematic` returns the same list.
 - A `partial_progress` observation for every case the coordinator stops and
   whose simulator exit is seen. It gives the plot, its axis, the complete
   points on disk and the last axis value reached, read from the partial raw
