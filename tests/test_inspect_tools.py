@@ -175,9 +175,7 @@ async def test_capabilities_fields_returns_only_the_named_keys(cap_state: Sessio
         cap_state, [{"kind": "capabilities", "fields": ["config_path", "allowed_paths"]}]
     )
     assert picked["ok"] is True
-    assert set(picked["data"]) == {"allowed_paths", "config_path"}
-    assert picked["data"]["allowed_paths"] == full["data"]["allowed_paths"]
-    assert picked["data"]["config_path"] == full["data"]["config_path"]
+    assert picked["data"] == {key: full["data"][key] for key in ("allowed_paths", "config_path")}
 
 
 async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
