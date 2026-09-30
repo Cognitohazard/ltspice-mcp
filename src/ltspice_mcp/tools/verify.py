@@ -1560,20 +1560,35 @@ def compare_equivalence(
     resolver: IncludeResolver,
     *,
     denied_hint: str,
+    ref_base_dir: Path | None = None,
+    cand_base_dir: Path | None = None,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver.
 
-    ``candidate`` may be the already-read netlist text (parsed with ``cand_source``
-    as the include base dir) or a path; ``cand_source`` is the location reported in
-    findings and failures either way. ``denied_hint`` is the sandbox guidance each
-    refused include's finding carries.
+    ``candidate`` may be the already-read netlist text or a path; ``cand_source``
+    is the location reported in findings and failures either way.
+    ``denied_hint`` is the sandbox guidance each refused include's finding
+    carries.
+
+    ``ref_base_dir`` and ``cand_base_dir`` are the directories each side's
+    relative includes resolve against. For an export they are the schematic's
+    folder: the export itself sits in the store's scratch, where a relative
+    include names nothing the author wrote, and which need not be inside the
+    allowed roots. Unset, the reference resolves against its own directory and
+    the candidate against ``cand_source``'s.
     """
     findings: list[dict[str, Any]] = []
-    ref_graph, failure = _parse_graph_or_fail(reference, "reference netlist", ref_source, resolver)
+    ref_graph, failure = _parse_graph_or_fail(
+        reference, "reference netlist", ref_source, resolver, base_dir=ref_base_dir
+    )
     if failure is not None:
         return None, findings, failure, []
     cand_graph, failure = _parse_graph_or_fail(
-        candidate, "netlist under test", cand_source, resolver, base_dir=cand_source.parent
+        candidate,
+        "netlist under test",
+        cand_source,
+        resolver,
+        base_dir=cand_base_dir or cand_source.parent,
     )
     if failure is not None:
         return None, findings, failure, []
@@ -1658,13 +1673,16 @@ def compare_netlists(
     ref_source: Path,
     cand_source: Path,
     state: SessionState,
+    *,
+    ref_base_dir: Path | None = None,
+    cand_base_dir: Path | None = None,
 ) -> CompareResult:
     """Compare two netlists the way ``spec`` asks (blocking CPU/IO).
 
     ``reference`` and ``candidate`` are netlist text or paths; ``ref_source`` and
-    ``cand_source`` are where a finding about each side points (the caller's own
-    file, even when what was compared is its export), and ``cand_source``'s
-    directory is where a text candidate's includes resolve.
+    ``cand_source`` are where a finding about each side points. The two base
+    directories are where each side's relative includes resolve (see
+    ``compare_equivalence``); a structural diff opens no includes.
     """
     if spec.mode == "structural_diff":
         return compare_structural(reference, candidate)
@@ -1677,6 +1695,8 @@ def compare_netlists(
         spec.rtol,
         make_include_resolver(state),
         denied_hint=state.sandbox_guidance(),
+        ref_base_dir=ref_base_dir,
+        cand_base_dir=cand_base_dir,
     )
 
 
@@ -2154,7 +2174,16 @@ async def evaluate_verify_circuit(
                         compared = None, [], failure, []
                     else:
                         compared = await asyncio.to_thread(
-                            compare_netlists,
+                            functools.partial(
+                                compare_netlists,
+                                # The files the caller named are where their
+                                # relative includes live; an export of either
+                                # sits in the store's scratch.
+                                ref_base_dir=(
+                                    reference.parent if isinstance(reference, Path) else None
+                                ),
+                                cand_base_dir=path.parent,
+                            ),
                             compare,
                             ref_netlist.source,
                             cand_input,

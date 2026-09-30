@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import io
 import os
@@ -601,7 +602,13 @@ async def _run_reference_stage(
             return verification
         ref_source = ref if isinstance(ref, Path) else target
         payload, findings, failure, cmp_warnings = await asyncio.to_thread(
-            compare_netlists,
+            functools.partial(
+                compare_netlists,
+                # Both exports are copies in the store; the relative includes
+                # they carry name files beside the sheets they were copied from.
+                ref_base_dir=ref.parent if isinstance(ref, Path) else None,
+                cand_base_dir=target.parent,
+            ),
             spec,
             ref_netlist.source,
             netlist_text,
