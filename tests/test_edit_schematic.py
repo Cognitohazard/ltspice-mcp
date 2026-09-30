@@ -22,6 +22,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.schematic_ops import (
+    OP_RESULT_FACTS,
     get_asc_editor,
     run_op_batch,
 )
@@ -35,6 +36,7 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
+from tests.test_api_reference import _op_kinds
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -130,53 +132,50 @@ async def test_a_t_junction_endpoint_commits_through_the_whole_transaction(asc_s
     assert "R3" in touched
 
 
-_RAIL = {"from": {"x": 400, "y": 200}, "to": {"x": 700, "y": 200}}
+# The divider's route over the top leaves this rail along y=200; the res
+# fixture's pins sit 48 above and below its origin, so R1.2 and R2.2 are at
+# y=348.
+_RAIL = {"from": _DIVIDER_OPS[2]["waypoints"][0], "to": _DIVIDER_OPS[2]["waypoints"][1]}
 _BOTTOM = {"from": {"x": 400, "y": 348}, "to": {"x": 700, "y": 348}}
 
-# R1 and R2 side by side, R3 above the middle of them. The res fixture's pins
-# sit 48 above and below its origin.
 _FACT_OPS: list[dict] = [
-    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
-    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
+    *_DIVIDER_OPS,
     {"op": "add_component", "reference": "R3", "symbol": "res", "x": 550, "y": 100},
-    # 3: over the top, leaving a rail along y=200
-    {
-        "op": "wire_pins",
-        "from_pin": "R1.1",
-        "to_pin": "R2.1",
-        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
-    },
-    # 4 and 5: the same straight run twice
-    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
-    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
-    # 6: a stem from R3 ending on the rail's interior
+    # 5: a stem from R3 ending on the rail's interior
     {"op": "wire_pins", "from_pin": "R3.2", "to_pin": {"x": 550, "y": 200}},
+    # 6 and 7: the same straight run twice
+    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
+    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
+]
+
+_FACT_RESULTS: list[dict] = [
+    {
+        "index": 5,
+        "op": "wire_pins",
+        "junctions": [{"x": 550, "y": 200, "via": "endpoint", "wire": _RAIL}],
+    },
+    {"index": 7, "op": "wire_pins", "already_present": [_BOTTOM]},
 ]
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["commit", "dry_run"])
 async def test_the_response_carries_each_ops_own_facts(asc_state, dry_run: bool):
-    """What an op found out reaches the caller as a field, not only as text.
+    """What an op found on the sheet reaches the caller as a field, not text.
 
-    A route already on the sheet draws nothing and names what it found there;
-    a T onto a wire's interior names the wire it joined. Both used to stop at
-    the op runner, so the caller could learn of neither from the response.
-    An op whose result only restates its arguments has no entry.
+    A T onto a wire's interior names the wire it joined; a route already on
+    the sheet names the segments it did not redraw. Both used to stop at the
+    op runner, so the caller could learn of neither from the response. The
+    ops that found nothing, the plain routes included, have no entry.
     """
     data = await _build_blank(asc_state, "facts", _FACT_OPS, dry_run=dry_run)
 
     assert data["outcome"] == "complete"
-    assert data["results"] == [
-        {"index": 3, "op": "wire_pins", "wire_count": 3},
-        {"index": 4, "op": "wire_pins", "wire_count": 1},
-        {"index": 5, "op": "wire_pins", "wire_count": 0, "already_present": [_BOTTOM]},
-        {
-            "index": 6,
-            "op": "wire_pins",
-            "wire_count": 1,
-            "junctions": [{"x": 550, "y": 200, "via": "endpoint", "wire": _RAIL}],
-        },
-    ]
+    assert data["results"] == _FACT_RESULTS
+
+
+def test_every_op_declaring_result_facts_is_an_op_this_tool_takes():
+    # A misspelt key would relay nothing for that op, without an error.
+    assert set(OP_RESULT_FACTS) <= _op_kinds()
 
 
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):

@@ -49,6 +49,7 @@ from ltspice_mcp.lib.pin_legend import (
 )
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
+    OP_RESULT_FACTS,
     OpAddComponent,
     OpAddDirective,
     OpAddNetLabel,
@@ -318,19 +319,18 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "results": {
             "type": "array",
             "description": (
-                "What each op found on the sheet beyond its own arguments, by op "
-                "index; an op with nothing to add has no entry. wire_pins reports "
-                "wire_count (segments drawn), already_present (requested segments "
-                "already on the sheet, not redrawn) and junctions (where the route "
-                "joined existing wiring off its endpoints, or an endpoint ended on "
-                "a wire's interior). Removals report what they took."
+                "What each op found on the sheet, by op index; an op with nothing "
+                "to report has no entry. wire_pins reports already_present "
+                "(requested segments already on the sheet, not redrawn) and "
+                "junctions (where the route joined existing wiring off its "
+                "endpoints, or an endpoint ended on a wire's interior). Removals "
+                "report how much they took."
             ),
             "items": {
                 "type": "object",
                 "properties": {
                     "index": {"type": "integer"},
                     "op": {"type": "string"},
-                    "wire_count": {"type": "integer"},
                     "already_present": {"type": "array", "items": _SEGMENT_SCHEMA},
                     "junctions": {
                         "type": "array",
@@ -339,10 +339,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "properties": {
                                 "x": {"type": "integer"},
                                 "y": {"type": "integer"},
-                                "via": {
-                                    "type": "string",
-                                    "enum": ["endpoint", "waypoint", "wire_end", "label", "pin"],
-                                },
+                                "via": {"type": "string"},
                                 "wire": _SEGMENT_SCHEMA,
                                 "label": {"type": "string"},
                                 "pin": {"type": "string"},
@@ -350,7 +347,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "required": ["x", "y", "via"],
                         },
                     },
-                    "removed": {"type": ["integer", "string"]},
+                    "removed": {"type": "integer"},
                     "deleted_wires": {"type": "integer"},
                 },
                 "required": ["index", "op"],
@@ -727,31 +724,16 @@ def _apply_ops(
     return results, failures, abort_reason
 
 
-# Result keys the response already carries elsewhere: the runner's bookkeeping,
-# the advisories ``warnings`` attributes to their op, and add_component's
-# placed geometry, which the pin/net views and inspect's components view carry.
-_ELSEWHERE_RESULT_KEYS = frozenset({"ok", "error", "warnings", "position", "pins", "bounding_box"})
+def _op_results(results: list[dict]) -> list[dict]:
+    """What each op found on the sheet: its result's ``OP_RESULT_FACTS`` keys.
 
-
-def _op_results(results: list[dict], ops: list[ConsolidatedOp]) -> list[dict]:
-    """Each op's own facts: what its result says beyond its arguments.
-
-    The runner's entry restates much of the op (the reference it placed, the
-    endpoints it routed, the label it removed). What is left is what the op
-    found on the sheet: segments already there, the junctions a route made,
-    how much a removal took. Anything a result carries that is neither an
-    argument nor listed in ``_ELSEWHERE_RESULT_KEYS`` is relayed, so a new
-    fact reaches the caller without a change here. An op with nothing left
-    has no entry, so a large build does not pay a line per component.
+    The rest of a runner entry restates the op or rides on ``warnings`` and
+    the views. An op with no fact to report has no entry, so a large build
+    pays for what its ops found, not a line per op.
     """
     relayed: list[dict] = []
     for entry in results:
-        arguments = type(ops[entry["index"]]).model_fields
-        facts = {
-            key: value
-            for key, value in entry.items()
-            if key not in _ELSEWHERE_RESULT_KEYS and key not in arguments and key != "index"
-        }
+        facts = {key: entry[key] for key in OP_RESULT_FACTS.get(entry["op"], ()) if key in entry}
         if facts:
             relayed.append({"index": entry["index"], "op": entry["op"], **facts})
     return relayed
@@ -1045,7 +1027,7 @@ async def _evaluate_edit_schematic(
             # Two sources, one channel: what the ops themselves reported, then
             # what the finished sheet reports about itself.
             warnings = _op_warnings(results) + [w["message"] for w in post_op_warnings(editor)]
-            op_results = _op_results(results, args.ops)
+            op_results = _op_results(results)
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 
