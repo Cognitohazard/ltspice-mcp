@@ -326,6 +326,8 @@ class TestSearch:
             ("cancel a run", ("jobs", "cancel")),
             ("trace a net", ("inspect", "net")),
             ("pelgrom mismatch", ("run_experiments", "mismatch")),
+            ("check my allowed paths", ("inspect", "capabilities")),
+            ("which config file", ("inspect", "capabilities")),
         ):
             hits, _ = search_branches(phrase, limit=5)
             assert expected in [(hit.tool, hit.name) for hit in hits], (

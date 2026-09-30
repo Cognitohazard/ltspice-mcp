@@ -166,6 +166,15 @@ def format_response(
     )
 
 
+def image_content(image: RenderedImage) -> types.ImageContent:
+    """A raster image as the MCP image block a model looks at."""
+    return types.ImageContent(
+        type="image",
+        data=base64.b64encode(image.data).decode("ascii"),
+        mime_type=image.mime_type,
+    )
+
+
 def image_response(
     image: RenderedImage,
     text: str,
@@ -195,13 +204,7 @@ def image_response(
 
     content: list[Any] = []
     if image.is_raster:
-        content.append(
-            types.ImageContent(
-                type="image",
-                data=base64.b64encode(image.data).decode("ascii"),
-                mime_type=image.mime_type,
-            )
-        )
+        content.append(image_content(image))
     else:
         content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
     content.append(types.TextContent(type="text", text=text))
@@ -268,15 +271,16 @@ BBOX_SCHEMA: dict[str, Any] = {
     },
 }
 
-# Structured advisories emitted by mutating .asc handlers after a successful
-# op. ``message`` is always present and human-readable; the other keys
-# depend on ``kind``. New kinds extend ``VALIDATION_WARNING_KINDS`` and the
-# schema enum together so producers and consumers stay in lockstep.
+# The rows ``schematic_ops.post_op_warnings`` returns, as edit_schematic's
+# preexisting view publishes them. ``message`` is always present and
+# human-readable; the other keys depend on ``kind``. A new kind there extends
+# ``VALIDATION_WARNING_KINDS`` here, so producer and schema stay in lockstep.
 VALIDATION_WARNING_KINDS: tuple[str, ...] = (
     "floating_pin",
     "duplicate_wire",
     "dangling_label",
     "label_over_component",
+    "stacked_directive",
 )
 
 VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
@@ -616,8 +620,9 @@ class RenderPolicy(StrictModel):
     format: Literal["png", "svg"] = Field(
         default="png",
         description=(
-            "PNG (lossless, what a model looks at) needs the optional 'raster' "
-            "extra; without it the render degrades to SVG and says so."
+            "PNG (lossless, what a model looks at) needs the 'raster' extra and "
+            "native Cairo, as inspect capabilities reports; without them the "
+            "render degrades to SVG and says why."
         ),
     )
     scale: float = Field(

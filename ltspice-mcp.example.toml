@@ -59,6 +59,11 @@ analysis_budget_s = 60.0
 default_budget = 4000
 # Retention for raw-path-only analysis result sets, in hours
 result_set_ttl_hours = 24.0
+# Open plot_waveform's chart in a local browser window (a call's open wins)
+open_plot = true
+# Attach a PNG of plot_waveform's chart for a vision model (needs the
+# raster extra; a call's attach_plot wins)
+attach_plot = false
 
 [tools]
 # How much of each tool definition the tool list carries. "compact"
