@@ -16,7 +16,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import now, parse_iso_datetime
+from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
@@ -651,8 +651,7 @@ def load_job_from_path(
 
 def _read_job_record(path: Path) -> dict[str, Any] | None:
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
+        data = json.loads(read_text_file(path))
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:

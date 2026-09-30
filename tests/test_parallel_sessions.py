@@ -46,6 +46,7 @@ from ltspice_mcp.lib.schematic_ops import (
 )
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import generate_id
+from ltspice_mcp.lib.windows_job import python_launch
 from ltspice_mcp.state import SessionState
 from tests._asc_ops import apply_ops, sha_of
 
@@ -441,11 +442,15 @@ class TestScopedKill:
         script named after a case do) is spared.
         """
         token = "exp_wrapped_1790000000_ab12cd34_case_0"
-        sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
-        launched = subprocess.Popen([*sleeper, str(tmp_path / f"{token}.cir")])
+        # The base interpreter, not a Windows venv's redirector: the redirector
+        # starts the interpreter as a child carrying the same arguments, so one
+        # launch would be one or two matching descendants depending on timing.
+        executable, env = python_launch()
+        sleeper = [executable, "-c", "import time; time.sleep(60)"]
+        launched = subprocess.Popen([*sleeper, str(tmp_path / f"{token}.cir")], env=env)
         bystanders = [
-            subprocess.Popen([*sleeper, str(tmp_path / f"{token}.py")]),
-            subprocess.Popen([*sleeper, f"*{token}.*"]),
+            subprocess.Popen([*sleeper, str(tmp_path / f"{token}.py")], env=env),
+            subprocess.Popen([*sleeper, f"*{token}.*"], env=env),
         ]
         try:
             assert kill_simulator_by_token(token, {"ngspice"}) == 1
