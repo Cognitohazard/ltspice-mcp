@@ -751,8 +751,9 @@ ops and after them, which it holds in memory anyway — and reports a row only
 when it is new (the sheet did not have it before; any change to a row makes it
 new, since its identity is every field) or when it names a reference or a
 coordinate the batch named. A reference is named by an op's `reference` or a
-`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, or a
-waypoint. Everything else goes in the `preexisting` block:
+`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, a
+waypoint, or an `{x, y}` endpoint. Everything else goes in the `preexisting`
+block:
 
 ```
 preexisting {count, findings, label_only_pins, cursor}
