@@ -575,9 +575,14 @@ def net_partition(
 ) -> NetPartition:
     """Union-find over pins, labels, and wires → a connected-net partition.
 
-    Segment-aware: a label or pin lying anywhere ON a wire (not just at an
-    endpoint) is unioned with that wire — endpoint-only matching misses
-    FLAGs placed mid-segment.
+    Segment-aware: a pin, a label or another wire's end lying anywhere ON a
+    wire, its interior included, is unioned with that wire. Two wires that
+    merely cross, neither ending at the crossing, stay separate. This is how
+    LTspice's own netlister connects a sheet: checked against LTspice 26.1.1
+    ``-netlist`` exports of a label, a pin and a wire end on a wire's interior
+    (connected, with the wire left whole — no split needed), a plain crossing
+    (not connected), and a label at a crossing (joins both wires).
+    The sheets and their exports are ``tests/fixtures/t_junctions/``.
 
     ``extra_segments`` lets the caller include not-yet-committed wire
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
@@ -649,6 +654,37 @@ def net_partition(
     return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
 
 
+def label_folded_nets(part: NetPartition) -> "Callable[[tuple[int, int]], tuple[int, int]]":
+    """Map a coordinate to its electrical net's representative.
+
+    The partition connects by wire only; LTspice also makes every FLAG with the
+    same name one node, so wired nets that share a label name fold into one
+    here. Two coordinates are on the same netlist node iff this returns the same
+    representative for both.
+    """
+    parent: dict[tuple[int, int], tuple[int, int]] = {}
+
+    def find(r: tuple[int, int]) -> tuple[int, int]:
+        parent.setdefault(r, r)
+        while parent[r] != r:
+            parent[r] = parent[parent[r]]
+            r = parent[r]
+        return r
+
+    first_root: dict[str, tuple[int, int]] = {}
+    for root, coords in part.members.items():
+        for coord in coords:
+            for text in part.label_texts.get(coord, ()):
+                if text not in first_root:
+                    first_root[text] = root
+                    continue
+                ra, rb = find(first_root[text]), find(root)
+                if ra != rb:
+                    parent[ra] = rb
+
+    return lambda coord: find(part.root(coord))
+
+
 def trace_nets(
     editor: AscEditor,
     extra_segments: list[tuple[int, int, int, int]] | None = None,
@@ -688,6 +724,11 @@ def _segment_key(
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """One segment's identity, orientation-independent."""
     return (a, b) if a <= b else (b, a)
+
+
+def _wire_endpoint_pairs(editor: AscEditor) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Every wire as its ``((x1, y1), (x2, y2))`` endpoint pair, in sheet order."""
+    return [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
 
 
 def _wire_segment_keys(editor: AscEditor) -> list[tuple[tuple[int, int], tuple[int, int]]]:
@@ -917,9 +958,11 @@ def wiring_profile(editor: AscEditor) -> dict[str, int]:
 Editor = AscEditor | SpiceEditor
 
 
-class WaypointInput(StrictModel):
-    x: int = Field(description="X coordinate of waypoint")
-    y: int = Field(description="Y coordinate of waypoint")
+# A sheet coordinate: a route waypoint, or a wire_pins endpoint on a wire or pin.
+# No docstring, since the class docstring would be published with every use.
+class GridPoint(StrictModel):
+    x: int
+    y: int
 
 
 # ---------------------------------------------------------------------------
@@ -1342,17 +1385,16 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                 f"'{net}' would short those nets together. Remove the existing label(s) "
                 f"first or pick a different coordinate."
             )
-    # Floating label: a FLAG at a coordinate with no wire endpoint and no
-    # component pin is silently ignored by LTspice at netlist time.
-    wire_endpoints = {(int(w.V1.X), int(w.V1.Y)) for w in editor.wires} | {
-        (int(w.V2.X), int(w.V2.Y)) for w in editor.wires
-    }
+    # Floating label: a FLAG touching no wire and no component pin names
+    # nothing at netlist time. A FLAG anywhere along a wire, its interior
+    # included, names that wire's net (see net_partition for the export record).
+    on_wire = build_on_wire_predicate(_wire_endpoint_pairs(editor))
     all_pin_coords: set[tuple[int, int]] = set()
     for ref in editor.get_components():
         all_pin_coords.update(_component_pin_coords(editor, ref))
-    if (x, y) not in wire_endpoints and (x, y) not in all_pin_coords:
+    if not on_wire((x, y)) and (x, y) not in all_pin_coords:
         warnings.append(
-            f"({x},{y}) has no wire endpoint or component pin — LTspice will ignore "
+            f"({x},{y}) touches no wire and no component pin — LTspice will ignore "
             "this floating label until you wire it up."
         )
     return warnings
@@ -1368,6 +1410,9 @@ class _ConnectPlan(NamedTuple):
     points: list[tuple[int, int]]
     segments: list[tuple[int, int, int, int]]
     warnings: list[str]
+    # Every point other than the two endpoints where the route joins existing
+    # wiring, and each endpoint that ends on a wire's interior (a T-junction).
+    junctions: list[dict[str, object]]
 
 
 def _merge_collinear_runs(
@@ -1462,6 +1507,18 @@ def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
     return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
 
 
+def wires_through(
+    coord: tuple[int, int], segments: Sequence[tuple[int, int, int, int]]
+) -> list[tuple[int, int, int, int]]:
+    """The segments ``coord`` lies on, ends included, in the order given.
+
+    A point on a wire's interior touches that wire the way its end would: LTspice
+    joins anything placed there (see :func:`net_partition`). More than one
+    segment comes back where wires meet, overlap or cross.
+    """
+    return [s for s in segments if point_on_segment(coord, (s[0], s[1]), (s[2], s[3]))]
+
+
 def same_instance_dropped_segments(
     pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
     segments: list[tuple[int, int, int, int]],
@@ -1506,31 +1563,112 @@ def same_instance_dropped_segments(
     return dropped
 
 
+def _endpoint_name(endpoint: "str | GridPoint") -> str:
+    """A route endpoint as a message names it: as given, or as ``(x,y)``."""
+    return endpoint if isinstance(endpoint, str) else f"({endpoint.x},{endpoint.y})"
+
+
+def _segment_text(seg: tuple[int, int, int, int]) -> str:
+    return f"({seg[0]},{seg[1]})->({seg[2]},{seg[3]})"
+
+
+def _segment_json(seg: tuple[int, int, int, int]) -> dict[str, dict[str, int]]:
+    return {"from": {"x": seg[0], "y": seg[1]}, "to": {"x": seg[2], "y": seg[3]}}
+
+
+def _crossing_error(x: int, y: int) -> str:
+    """Why a route may not cross a wire where neither one ends.
+
+    LTspice leaves such a crossing unjoined (``tests/fixtures/t_junctions/``
+    ``crossing_wires``), so it creates no connection; it is refused because the
+    sheet reads ambiguously there, not because the nets would merge.
+    """
+    return (
+        f"Wire crosses existing wire at ({x},{y}): LTspice leaves a plain crossing "
+        "unjoined, and the sheet reads ambiguously there; route around it, or end "
+        "the route on that wire to join it"
+    )
+
+
+def _collinear_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    """True iff two orthogonal segments lie on one line and share a stretch of it."""
+    if a[0] == a[2] == b[0] == b[2]:
+        lo, hi = max(min(a[1], a[3]), min(b[1], b[3])), min(max(a[1], a[3]), max(b[1], b[3]))
+        return hi > lo
+    if a[1] == a[3] == b[1] == b[3]:
+        lo, hi = max(min(a[0], a[2]), min(b[0], b[2])), min(max(a[0], a[2]), max(b[0], b[2]))
+        return hi > lo
+    return False
+
+
+def _resolve_route_endpoint(
+    endpoint: "str | GridPoint",
+    editor: AscEditor,
+    existing_wires: list[tuple[int, int, int, int]],
+    pin_coords: set[tuple[int, int]],
+    net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
+) -> tuple[int, int]:
+    """Resolve one ``wire_pins`` endpoint to a coordinate.
+
+    A pin or label reference resolves through :func:`resolve_pin`. A coordinate
+    must already touch the circuit, at a pin or anywhere along a wire: an end
+    there connects to it, and one on a wire's interior is a T-junction LTspice
+    joins without the wire being split. A coordinate where wires of separate
+    nets cross is refused, because a wire ending there would join all of them.
+    """
+    if isinstance(endpoint, str):
+        return resolve_pin(endpoint, editor)
+    coord = (endpoint.x, endpoint.y)
+    if coord in pin_coords:
+        return coord
+    through = wires_through(coord, existing_wires)
+    if not through:
+        raise NetlistError(
+            f"{_endpoint_name(endpoint)} touches no wire and no component pin. A "
+            "coordinate endpoint must land on existing wiring; to turn a corner at "
+            "a free point, give it as a waypoint instead."
+        )
+    if len({net_of((s[0], s[1])) for s in through}) > 1:
+        listed = "; ".join(_segment_text(s) for s in through)
+        raise NetlistError(
+            f"{_endpoint_name(endpoint)} is where wires on separate nets cross "
+            f"({listed}). A wire ending there joins every wire it touches, so it "
+            "would merge those nets; end the route on a point of just the wire "
+            "you mean."
+        )
+    return coord
+
+
 def _plan_connect_route(
     editor: AscEditor,
-    from_pin: str,
-    to_pin: str,
-    waypoints: list[WaypointInput],
+    from_pin: "str | GridPoint",
+    to_pin: "str | GridPoint",
+    waypoints: list[GridPoint],
 ) -> _ConnectPlan:
-    """Resolve, route, and validate a wire path between two pins.
+    """Resolve, route, and validate a wire path between two endpoints.
 
     Returns a :class:`_ConnectPlan` whose ``segments`` are ready to append
     to ``editor.wires`` directly. Raises ``NetlistError`` for any
     validation failure (zero-length route, diagonal segment, pin
-    collision, wire-junction overlap, named-net short).
+    collision, wire-junction overlap, named-net short, or a waypoint or
+    route segment touching another net's wiring).
 
     Backs the ``wire_pins`` op, so a route the planner refuses is never
     written by any caller.
     """
     component_geo = collect_component_geometry(editor)
     existing_wires = wire_segments_of(editor)
+    part_before = net_partition(editor)
+    net_of = label_folded_nets(part_before)
+    pin_coords = {(pin["x"], pin["y"]) for cg in component_geo for pin in cg["pins"]}
+    from_name, to_name = _endpoint_name(from_pin), _endpoint_name(to_pin)
 
-    x1, y1 = resolve_pin(from_pin, editor)
-    x2, y2 = resolve_pin(to_pin, editor)
+    x1, y1 = _resolve_route_endpoint(from_pin, editor, existing_wires, pin_coords, net_of)
+    x2, y2 = _resolve_route_endpoint(to_pin, editor, existing_wires, pin_coords, net_of)
 
     if (x1, y1) == (x2, y2) and not waypoints:
         raise NetlistError(
-            f"Cannot connect {from_pin} to {to_pin}: "
+            f"Cannot connect {from_name} to {to_name}: "
             f"both endpoints resolve to the same coordinate ({x1},{y1})."
         )
 
@@ -1551,7 +1689,7 @@ def _plan_connect_route(
 
     if not segments:
         raise NetlistError(
-            f"Cannot connect {from_pin} to {to_pin}: "
+            f"Cannot connect {from_name} to {to_name}: "
             "the requested route has zero length after deduplicating waypoints."
         )
 
@@ -1559,32 +1697,43 @@ def _plan_connect_route(
     skip_refs = {
         ref.rsplit(".", 1)[0]
         for ref in (from_pin, to_pin)
-        if "." in ref and not ref.startswith("net:")
+        if isinstance(ref, str) and "." in ref and not ref.startswith("net:")
     }
+    known = {c for coords in part_before.members.values() for c in coords}
+
+    def _anchor(coord: tuple[int, int]) -> tuple[int, int]:
+        """A pin, label or wire end on ``coord``'s net before the route is drawn:
+        ``coord`` itself, or an end of the wire whose interior it lies on."""
+        if coord in known:
+            return coord
+        through = wires_through(coord, existing_wires)
+        return (through[0][0], through[0][1]) if through else coord
+
     errors: list[str] = []
     warnings: list[str] = []
 
     # Net-label conflict — checked first because it's a "wrong intent"
     # error: rejecting it gives the user a clearer signal than a route
     # geometry complaint. Skip when either side uses ``net:`` form (those
-    # are already named explicitly). Two-phase check:
+    # are already named explicitly). A coordinate endpoint on a wire's interior
+    # reads the labels of that wire's net. Two-phase check:
     #   1) BEFORE state — endpoints resolve to two different already-named
     #      nets (the standard short).
     #   2) AFTER state — proposed route drags a mid-segment label into
     #      the union, merging an additional named net.
-    if not from_pin.startswith("net:") and not to_pin.startswith("net:"):
+    if not any(isinstance(ep, str) and ep.startswith("net:") for ep in (from_pin, to_pin)):
         nets_before = trace_nets(editor)
-        from_labels_before = named_labels(_net_label_at(nets_before, (x1, y1)))
-        to_labels_before = named_labels(_net_label_at(nets_before, (x2, y2)))
+        from_labels_before = named_labels(_net_label_at(nets_before, _anchor((x1, y1))))
+        to_labels_before = named_labels(_net_label_at(nets_before, _anchor((x2, y2))))
         if (
             from_labels_before
             and to_labels_before
             and from_labels_before.isdisjoint(to_labels_before)
         ):
             raise NetlistError(
-                f"Refused to connect {from_pin} to {to_pin}: "
-                f"Net-label conflict — {from_pin} is on net "
-                f"{sorted(from_labels_before)} and {to_pin} is on net "
+                f"Refused to connect {from_name} to {to_name}: "
+                f"Net-label conflict — {from_name} is on net "
+                f"{sorted(from_labels_before)} and {to_name} is on net "
                 f"{sorted(to_labels_before)}. Connecting them would short "
                 f"the two named nets. Pick one labelling and rewire, or "
                 f"use the edit_schematic add_net_label op to merge them "
@@ -1601,7 +1750,7 @@ def _plan_connect_route(
             new_labels = unioned - unioned_before
             if new_labels:
                 raise NetlistError(
-                    f"Refused to connect {from_pin} to {to_pin}: "
+                    f"Refused to connect {from_name} to {to_name}: "
                     f"Net-label conflict — the proposed route would "
                     f"merge named nets {sorted(unioned)} (a label on a "
                     f"mid-segment of the wire path adds "
@@ -1620,7 +1769,7 @@ def _plan_connect_route(
         ref = dropped[0]["ref"]
         pin_a, pin_b = dropped[0]["pins"]
         raise NetlistError(
-            f"Refused to connect {from_pin} to {to_pin}: this is a same-instance "
+            f"Refused to connect {from_name} to {to_name}: this is a same-instance "
             f"wire — it ties two pins of the same component {ref} ({ref}.{pin_a} "
             f"and {ref}.{pin_b}). LTspice drops such a wire from the exported "
             f"netlist, so the tie would have no electrical effect. To tie two pins "
@@ -1653,28 +1802,35 @@ def _plan_connect_route(
     # component while wire_pins reports success. ``skip_refs`` stays in the
     # bbox-crossing *warning* loop, where exempting an endpoint component is
     # reasonable.
+    junctions: list[dict[str, object]] = []
     for cg in component_geo:
         for pin in cg["pins"]:
             px, py = pin["x"], pin["y"]
             if (px, py) in endpoints:
                 continue
-            if _pin_on_target_net(px, py):
+            # A pin at the shared corner of two consecutive segments satisfies
+            # point_on_segment for both, so test the route once per pin.
+            if not any(point_on_segment((px, py), s[:2], s[2:]) for s in segments):
                 continue
-            for sx1, sy1, sx2, sy2 in segments:
-                if point_on_segment((px, py), (sx1, sy1), (sx2, sy2)):
-                    errors.append(
-                        f"Wire passes through {cg['ref']}.{pin['name']} at ({px},{py}): "
-                        "will create unintended connection"
-                    )
-                    # A pin at the shared corner of two consecutive segments
-                    # satisfies point_on_segment for both — report it once.
-                    break
+            pin_label = f"{cg['ref']}.{pin['name']}"
+            if _pin_on_target_net(px, py):
+                junctions.append({"x": px, "y": py, "via": "pin", "pin": pin_label})
+                warnings.append(
+                    f"The route passes over {pin_label} at ({px},{py}), already wired "
+                    "to this net; LTspice joins it there."
+                )
+                continue
+            errors.append(
+                f"Wire passes through {pin_label} at ({px},{py}): "
+                "will create unintended connection"
+            )
 
     # Wire-junction check: forbid overlaps with existing wires unless the
     # existing wire already terminates at one of our endpoints (intended
     # T-junction).
+    flagged: set[int] = set()
     for sx1, sy1, sx2, sy2 in segments:
-        for ex1, ey1, ex2, ey2 in existing_wires:
+        for ext_index, (ex1, ey1, ex2, ey2) in enumerate(existing_wires):
             ext_endpoints = {(ex1, ey1), (ex2, ey2)}
             if ext_endpoints & endpoints:
                 continue
@@ -1684,6 +1840,7 @@ def _plan_connect_route(
                 if new_min < ext_max and new_max > ext_min:
                     overlap_y = max(new_min, ext_min)
                     if (sx1, overlap_y) not in endpoints:
+                        flagged.add(ext_index)
                         errors.append(
                             f"Wire overlap at x={sx1} between y={max(new_min, ext_min)} "
                             f"and y={min(new_max, ext_max)}: will create unintended junction"
@@ -1695,6 +1852,7 @@ def _plan_connect_route(
                 if new_min < ext_max and new_max > ext_min:
                     overlap_x = max(new_min, ext_min)
                     if (overlap_x, sy1) not in endpoints:
+                        flagged.add(ext_index)
                         errors.append(
                             f"Wire overlap at y={sy1} between x={max(new_min, ext_min)} "
                             f"and x={min(new_max, ext_max)}: will create unintended junction"
@@ -1709,10 +1867,8 @@ def _plan_connect_route(
                     and ext_min < cross_x < ext_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    errors.append(
-                        f"Wire crosses existing wire at ({cross_x},{cross_y}): "
-                        "will create unintended junction"
-                    )
+                    flagged.add(ext_index)
+                    errors.append(_crossing_error(cross_x, cross_y))
             elif sy1 == sy2 and ex1 == ex2:
                 cross_x, cross_y = ex1, sy1
                 new_min, new_max = min(sx1, sx2), max(sx1, sx2)
@@ -1722,13 +1878,113 @@ def _plan_connect_route(
                     and new_min < cross_x < new_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    errors.append(
-                        f"Wire crosses existing wire at ({cross_x},{cross_y}): "
-                        "will create unintended junction"
-                    )
+                    flagged.add(ext_index)
+                    errors.append(_crossing_error(cross_x, cross_y))
+
+    # An endpoint on a wire's interior is a T-junction onto that wire. Its leg
+    # must leave the wire: one running along it overlaps the wire it joins,
+    # which the overlap check above exempts because it starts at an endpoint.
+    for endpoint, coord, leg in (
+        (from_pin, (x1, y1), segments[0]),
+        (to_pin, (x2, y2), segments[-1]),
+    ):
+        if isinstance(endpoint, str) or coord in pin_coords:
+            continue
+        for ext_index, wire in enumerate(existing_wires):
+            if not point_on_segment(coord, wire[:2], wire[2:]):
+                continue
+            if _collinear_overlap(leg, wire):
+                flagged.add(ext_index)
+                errors.append(
+                    f"Wire overlap: the leg from {_endpoint_name(endpoint)} runs along "
+                    f"the wire {_segment_text(wire)} it ends on; leave that wire at a "
+                    "right angle"
+                )
+            elif coord not in {wire[:2], wire[2:]}:
+                junctions.append(
+                    {"x": coord[0], "y": coord[1], "via": "endpoint", "wire": _segment_json(wire)}
+                )
+
+    # Contact check. LTspice joins a wire wherever another wire's end, a pin or
+    # a label touches it (see net_partition), so a waypoint on existing wiring,
+    # or a route passing through an existing wire's end or a lone label, joins
+    # the route there as an endpoint would. Onto a net the route already joins
+    # that is a redundant junction, reported; onto any other net it would merge
+    # a net nobody named, so it is refused, pointing at the coordinate endpoint
+    # that makes the same T on purpose. Pins are the pin-collision check's, and
+    # a wire the overlap check already refused is not reported twice.
+    endpoint_nets = {net_of(_anchor(coord)) for coord in endpoints}
+    vertices = [v for v in points[1:-1] if v not in endpoints and v not in pin_coords]
+    contacts: list[tuple[tuple[int, int], str, tuple[int, int, int, int] | None]] = []
+    for ext_index, wire in enumerate(existing_wires):
+        if ext_index in flagged:
+            continue
+        contacts.extend(
+            (v, "waypoint", wire) for v in vertices if point_on_segment(v, wire[:2], wire[2:])
+        )
+        for end in (wire[:2], wire[2:]):
+            if end in endpoints or end in vertices or end in pin_coords:
+                continue
+            if any(point_on_segment(end, s[:2], s[2:]) for s in segments):
+                contacts.append((end, "wire_end", wire))
+    for coord in sorted(part_before.label_texts):
+        if coord in endpoints or coord in pin_coords or wires_through(coord, existing_wires):
+            continue
+        if any(point_on_segment(coord, s[:2], s[2:]) for s in segments):
+            contacts.append((coord, "label", None))
+
+    def _describe_net(net: tuple[int, int]) -> str:
+        on_net = [c for c in known if net_of(c) == net]
+        labels = sorted({t for c in on_net for t in part_before.label_texts.get(c, ())})
+        if labels:
+            return "net " + ", ".join(f"'{t}'" for t in labels)
+        pins = sorted(
+            f"{ref}.{name}" for c in on_net for ref, name in part_before.pin_owners.get(c, ())
+        )
+        if pins:
+            more = " and others" if len(pins) > 3 else ""
+            return "the net of " + ", ".join(pins[:3]) + more
+        return "a wire no pin or label is on"
+
+    seen_contacts: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    for (cx, cy), via, wire in contacts:
+        touched = net_of((cx, cy) if wire is None else wire[:2])
+        if ((cx, cy), touched) in seen_contacts:
+            continue
+        seen_contacts.add(((cx, cy), touched))
+        if wire is None:
+            names = ", ".join(f"'{t}'" for t in sorted(part_before.label_texts[(cx, cy)]))
+            what = f"the net label {names} at ({cx},{cy})"
+        elif via == "waypoint":
+            what = f"the wire {_segment_text(wire)} at waypoint ({cx},{cy})"
+        else:
+            what = f"the end of the wire {_segment_text(wire)} at ({cx},{cy})"
+        if touched in endpoint_nets:
+            entry: dict[str, object] = {"x": cx, "y": cy, "via": via}
+            if wire is None:
+                entry["label"] = sorted(part_before.label_texts[(cx, cy)])[0]
+            else:
+                entry["wire"] = _segment_json(wire)
+            junctions.append(entry)
+            warnings.append(
+                f"The route touches {what}, already on {_describe_net(touched)}; "
+                "LTspice joins them there."
+            )
+            continue
+        remedy = (
+            f"To join it on purpose, end a route there with "
+            f'{{"x": {cx}, "y": {cy}}} as from_pin or to_pin; otherwise move the '
+            "waypoint off it."
+            if via == "waypoint"
+            else "Reroute around it."
+        )
+        errors.append(
+            f"Route touches {what}, on {_describe_net(touched)}: LTspice joins "
+            f"wiring wherever it touches, so this would merge that net. {remedy}"
+        )
 
     if errors:
-        error_lines = [f"Refused to connect {from_pin} to {to_pin}:"]
+        error_lines = [f"Refused to connect {from_name} to {to_name}:"]
         for e in errors:
             error_lines.append(f"  {e}")
         error_lines.append("\nFix the route with different waypoints to avoid these issues.")
@@ -1763,7 +2019,7 @@ def _plan_connect_route(
                         f"({bx},{by})-({bx + bw},{by + bh})"
                     )
 
-    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings)
+    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings, junctions)
 
 
 # ---------------------------------------------------------------------------
@@ -1882,21 +2138,22 @@ class OpAddNetLabel(StrictModel):
 
 
 class OpWirePins(StrictModel):
-    """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
-    collision, or an overlapping wire junction rather than drawing them."""
+    """Draw an orthogonal wire between two endpoints, refusing a diagonal run, a
+    pin collision, or an overlapping wire junction rather than drawing them."""
 
     op: Literal["wire_pins"]
-    from_pin: str = Field(
-        description="Source pin as 'Reference.Pin', e.g. 'M1.D', or 'net:NAME' for a label."
+    from_pin: str | GridPoint = Field(
+        description=(
+            "'Reference.Pin' (e.g. 'M1.D'), 'net:NAME' for a label, or {x, y} on a "
+            "wire or pin; a wire's interior makes a T-junction."
+        )
     )
-    to_pin: str = Field(
-        description="Target pin as 'Reference.Pin', e.g. 'M4a.D', or 'net:NAME' for a label."
-    )
-    waypoints: list[WaypointInput] = Field(
+    to_pin: str | GridPoint = Field(description="Same forms as from_pin.")
+    waypoints: list[GridPoint] = Field(
         default_factory=list,
         description=(
-            "Corner points the route must pass through, in order; omit to let "
-            "the router pick the elbow."
+            "Corners, in order; none means one straight segment. "
+            "One on another net's wire is refused; end there to join it."
         ),
     )
 
@@ -2200,8 +2457,8 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
         already = _append_wire_segments(editor, plan.segments)
         result = {
             "op": op.op,
-            "from_pin": op.from_pin,
-            "to_pin": op.to_pin,
+            "from_pin": _endpoint_name(op.from_pin),
+            "to_pin": _endpoint_name(op.to_pin),
             "wire_count": len(plan.segments) - len(already),
         }
         if already:
@@ -2209,6 +2466,10 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
                 {"from": {"x": sx1, "y": sy1}, "to": {"x": sx2, "y": sy2}}
                 for sx1, sy1, sx2, sy2 in already
             ]
+        if plan.junctions:
+            result["junctions"] = plan.junctions
+        if plan.warnings:
+            result["warnings"] = plan.warnings
         return result
 
     if isinstance(op, OpAddDirective):

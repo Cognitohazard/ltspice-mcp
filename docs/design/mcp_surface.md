@@ -734,7 +734,7 @@ session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
 **Wire ops.** A routed segment identical to one already on the sheet is not
-drawn a second time; the response reports it under `already_present` and
+drawn a second time; the op's result records it under `already_present` and
 `wire_count` counts only what was drawn. Removing an exact segment that exists
 more than once removes every copy, but only when that leaves no pin newly
 floating — otherwise the op refuses, naming the pin, with nothing written. A
@@ -742,6 +742,36 @@ segment that exists once is still removed unconditionally: that is an explicit
 disconnection, not a tidy-up. A duplicate connects nothing and is
 indistinguishable from a real second wire, so "delete the duplicate" and
 "delete the connection" were otherwise the same request.
+
+**T-junctions.** LTspice's netlister joins a wire end, a pin or a label placed
+anywhere along a wire, its interior included, and leaves two wires that only
+cross unjoined; a label at a crossing joins both wires. Each case was checked
+against an LTspice 26.1.1 `-netlist` export, and the sheets and exports are
+kept in `tests/fixtures/t_junctions/`, with a test that the net trace agrees
+with every one. That is the rule `net_partition` applies for every tool that
+reads connectivity, and it means a T needs no split. `wire_pins` takes `{x, y}`
+for either endpoint; the point must touch a wire or a pin, and on a wire's
+interior the new segment ends there and the wire is left whole, so a
+`remove_wire` of that segment restores the sheet. The leg must leave the wire
+at a right angle, and a point where wires of two nets cross is refused, since a
+wire ending there would join both.
+
+Anywhere else the route touches existing wiring — a waypoint on a wire, a
+segment passing through another wire's end or a lone label, or over a pin
+already wired to an endpoint — it joins that wiring too, so the planner checks
+it against the nets the two endpoints already join. Onto one of those it is a
+redundant junction, drawn and reported (a warning, and `junctions` on the op's
+result). Onto any other net it is refused, naming the wire and the `{x, y}`
+endpoint that makes the same T on purpose: a join no argument asked for must
+not pass silently. A route crossing a wire where neither ends is still refused,
+though LTspice would not join it, because the sheet reads ambiguously there.
+The planner's own advisories (long run, bounding-box crossing) now reach the
+response's `warnings` too; they used to stop at the op.
+
+`add_net_label` calls a label floating only when it touches no wire and no pin.
+`inspect(kind: "net")` at a point on a wire's interior traces that wire's net
+and names the wire under `snapped_to_wire`; a point where two nets' wires
+cross is refused as ambiguous rather than resolved to either.
 
 **Domain rule: the AUTHOR plane edits schematics and not netlists.** Both
 `.asc` and `.cir` are text files, so the split is not about file format. The
@@ -867,8 +897,9 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
-    .asc gives a geometric trace; a netlist gives card membership and makes
-    no geometry claims
+    .asc gives a geometric trace; an [x, y] on a wire's interior traces that
+    wire, reported as snapped_to_wire; a netlist gives card membership and
+    makes no geometry claims
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
@@ -1214,6 +1245,16 @@ Recorded so they are not mistaken for oversights:
 - Re-running an attached analysis stage after a server restart.
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
+- `edit_schematic`'s per-op facts (`already_present`, `junctions`) stop at the
+  op runner. The envelope carries only the flat `warnings` list, so a caller
+  learns of a redundant junction from its warning text, not from a field.
+- Two wires that cross can be joined only by ending one on the other. There
+  is no op for a junction at a crossing, and `wire_pins` refuses a route that
+  crosses a wire where neither ends, even though LTspice leaves it unjoined.
+- `remove_wire`'s point form removes the segments that end at the point; a
+  wire whose interior passes through it stays. At a T that removes the stem
+  and keeps the wire it joined, but at a pin sitting on a wire's interior it
+  leaves that wire in place although the two are connected.
 
 ## Hierarchy discovery contract
 
