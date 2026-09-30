@@ -269,7 +269,7 @@ class TestSessionStateHonoursTheListing:
         from ltspice_mcp.lib.raster import raster_support
         from ltspice_mcp.tools.inspect_tools import _do_capabilities
 
-        capabilities = _do_capabilities(_state(work_dir, listing), raster_support())
+        capabilities = _do_capabilities(_state(work_dir, listing), raster_support(), {})
         assert capabilities["tool_listing"] == listing
 
     def test_compact_state_serves_no_argument_prose(self, work_dir):

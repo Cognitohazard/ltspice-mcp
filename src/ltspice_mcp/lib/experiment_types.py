@@ -17,6 +17,7 @@ from ltspice_mcp.lib import now
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.native_records import NativeCaseRecord
+    from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 
 ExperimentStatus = Literal[
     "queued",
@@ -77,6 +78,10 @@ class ExperimentCase:
     step_index: int | None = None
     step_values: dict[str, Any] = field(default_factory=dict)
     native_statistics: NativeCaseRecord | None = None
+    #: The build this case's run named in its own output (log banner, console
+    #: banner or raw ``Command:``), read once the run ended. None until then,
+    #: and for a run whose output named none.
+    simulator_version: str | None = None
 
 
 def failure_row(case: ExperimentCase) -> dict[str, Any]:
@@ -240,6 +245,11 @@ class ExperimentJob:
     #: data; absent on records written before it existed, which simply skips
     #: that promotion.
     output_folder: Path | None = None
+    #: The program every case of this job launches, identified at submission.
+    #: A replay of this job's request_id is refused when the program the
+    #: request would launch now is a different build. None when the simulator
+    #: named no program, and on a record written before it was recorded.
+    simulator_executable: SimulatorExecutable | None = None
     failures: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)

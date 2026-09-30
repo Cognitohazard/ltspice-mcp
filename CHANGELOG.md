@@ -59,6 +59,9 @@ tool-surface changes.
   the op replaced the standalone tool they had stopped at the op.
 - The refusal of a route crossing a wire where neither ends no longer claims
   the crossing would join them; LTspice leaves a plain crossing unjoined.
+- Under Wine, `inspect(kind="capabilities")` reported `wine` as the LTspice
+  executable, because it read the first word of the launch command. It now
+  reports the simulator itself, e.g. `.../LTspice.exe`.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
@@ -280,6 +283,20 @@ tool-surface changes.
   remedy}`. It says whether `verify_circuit` can make the PNG it returns
   inline and, if not, whether the `raster` extra or the native Cairo library is
   missing and how to install it, before anything is drawn.
+- Results record which simulator build produced them. A job records the
+  executable its cases launch: path, size, modification time and SHA-256.
+  Each case records the build the simulator named in its own output: the
+  LTspice log banner (`LTspice 26.0.2 for Windows`), the ngspice console
+  banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:`
+  when neither exists (LTspice XVII). Run rows carry it as `simulator_version`.
+  `jobs(runs)` and `run_fields` return it, and the lean receipt drops it from
+  produced rows along with their artifact paths. `provenance: true` adds the
+  job's `simulator_executable` to the receipt. Only the first few kilobytes of
+  each artifact are read, whatever its size.
+- `inspect(kind="capabilities")` reports each simulator's `executable_sha256`.
+  Its `version` is now the build that the latest run on that same executable
+  reported, with `version_source` naming the job and case; it was always
+  null. The executable is never launched to ask.
 
 - `inspect(kind="capabilities")` takes an optional `fields` list naming the
   top-level keys to return, such as `["allowed_paths", "config_path"]` after a
@@ -305,6 +322,16 @@ tool-surface changes.
   math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
   numpy on the traces. Before, only the error after a failed expression said
   so. That error's example is now a product, not a difference `V(a,b)` reads.
+- Reusing a `request_id` returns an `idempotency_conflict` when the job ran on
+  a different simulator build than the request would launch now, just as it
+  does for an edited deck. Before, swapping the simulator executable (or the
+  default simulator) and restarting replayed the earlier build's results under
+  the same id. A job record that names no executable is refused the same way.
+  A replay therefore needs the requested simulator to be available, as a fresh
+  submission does; `jobs(action="status")` reads the recorded job without one.
+- The store format is version 3. Job records gained the simulator executable
+  and each case's reported build. Version 2 records still load, with both
+  unknown; version 1 records (0.6.1) are not read.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.
@@ -312,7 +339,7 @@ tool-surface changes.
   returned page. Sample validation reuses unchanged original model parsing
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
-  statistical provenance. The store format is version 2.
+  statistical provenance.
 - A case has no time limit unless one is set. Before, every case was capped
   at spicelib's hidden 600 s. Now a case runs until it ends or is cancelled,
   unless the request sets `execution.run_timeout_s` or the operator sets the
