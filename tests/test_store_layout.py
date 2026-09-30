@@ -66,6 +66,44 @@ def _tree(store: Store, job_id: str) -> set[str]:
     }
 
 
+def _write_deck(work_dir: Path) -> Path:
+    deck = work_dir / "dut.cir"
+    deck.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    return deck
+
+
+async def _submit(state: SessionState, deck: Path, request_id: str) -> dict[str, Any]:
+    submitted = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": request_id,
+                "circuits": [{"path": str(deck), "id": "dut"}],
+                "execution": {"wait_s": 5.0},
+            }
+        ),
+        state,
+    )
+    receipt = submitted.structured_content
+    assert receipt is not None, submitted.content[0].text
+    return receipt
+
+
+async def _run_and_analyze(state: SessionState, deck: Path, request_id: str) -> str:
+    """Run ``deck`` and read one result set from the run; return its job id."""
+    job_id = (await _submit(state, deck, request_id))["job_id"]
+    analyzed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": job_id, "label": "dut"}],
+                "recipes": [{"key": "vin", "metric": "value", "expr": "V(in)"}],
+            }
+        ),
+        state,
+    )
+    assert analyzed.structured_content is not None
+    return job_id
+
+
 @pytest.mark.asyncio
 async def test_a_finished_run_creates_only_declared_roots(
     state_with_sim: SessionState,
@@ -81,33 +119,7 @@ async def test_a_finished_run_creates_only_declared_roots(
     # the one store record that lives outside the working directory.
     monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
     fake_simulator(monkeypatch)
-    deck = work_dir / "dut.cir"
-    deck.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
-
-    submitted = await handle_run_experiments(
-        RunExperimentsInput.model_validate(
-            {
-                "request_id": "store-layout",
-                "circuits": [{"path": str(deck), "id": "dut"}],
-                "execution": {"wait_s": 5.0},
-            }
-        ),
-        state_with_sim,
-    )
-    receipt = submitted.structured_content
-    assert receipt is not None, submitted.content[0].text
-    job_id = receipt["job_id"]
-
-    analyzed = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                "sources": [{"job_id": job_id, "label": "dut"}],
-                "recipes": [{"key": "vin", "metric": "value", "expr": "V(in)"}],
-            }
-        ),
-        state_with_sim,
-    )
-    assert analyzed.structured_content is not None
+    job_id = await _run_and_analyze(state_with_sim, _write_deck(work_dir), "store-layout")
 
     tree = _tree(Store(work_dir), job_id)
     top_level = {entry.split("/")[0] for entry in tree}
@@ -160,37 +172,17 @@ async def test_a_relocated_store_leaves_the_working_directory_alone(
     store_dir = tmp_path_factory.mktemp("stores")
     monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(store_dir))
     fake_simulator(monkeypatch)
-    deck = work_dir / "dut.cir"
-    deck.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
-    request = RunExperimentsInput.model_validate(
-        {
-            "request_id": "relocated",
-            "circuits": [{"path": str(deck), "id": "dut"}],
-            "execution": {"wait_s": 5.0},
-        }
-    )
+    deck = _write_deck(work_dir)
 
-    first = (await handle_run_experiments(request, state_with_sim)).structured_content
-    assert first is not None
-    analyzed = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                "sources": [{"job_id": first["job_id"], "label": "dut"}],
-                "recipes": [{"key": "vin", "metric": "value", "expr": "V(in)"}],
-            }
-        ),
-        state_with_sim,
-    )
-    assert analyzed.structured_content is not None
-    replay = (await handle_run_experiments(request, state_with_sim)).structured_content
-    assert replay is not None
+    job_id = await _run_and_analyze(state_with_sim, deck, "relocated")
+    replay = await _submit(state_with_sim, deck, "relocated")
 
     assert sorted(p.name for p in work_dir.iterdir()) == ["dut.cir"]  # noqa: ASYNC240
     store = Store(work_dir)
     assert store.root.parent == store_dir
-    assert store.job_record(first["job_id"]).is_file()
+    assert store.job_record(job_id).is_file()
     assert {"experiments", "runs", "results"} <= {p.name for p in store.root.iterdir()}
-    assert replay["job_id"] == first["job_id"]
+    assert replay["job_id"] == job_id
     assert replay["replayed"] is True
 
 

@@ -39,7 +39,8 @@ from ltspice_mcp.config import (
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.store import Store, readable_segment
+from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.sweep_utils import sanitize_stem
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -92,19 +93,20 @@ async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
         yield
 
 
-def _ngspice_deck(net_path: Path) -> tuple[str, bytes]:
-    """The ngspice-runnable twin of an LTspice-exported netlist: its stem and bytes.
+def _read_export(net_path: Path, *, for_ngspice: bool) -> tuple[str, bytes]:
+    """The deck a run of this export reads: the stem it is named by, and its bytes.
 
-    LTspice's exporter appends ``.backanno`` — an LTspice-only dot command
-    ngspice aborts on ("unimplemented dot command") — and can emit its
-    private ``§`` name-prefix character and ``µ`` unit suffix, neither of
-    which ngspice's parser accepts. The scrub never rewrites the shared
-    ``.net`` in place: a concurrent LTspice-target run of the same schematic
-    regenerates it after the export lock releases, and an in-place rewrite
-    would hand one of the two runs the other simulator's deck. Nor does it
-    get a file of its own beside the schematic; it goes straight into the
-    snapshot, under a stem that says which simulator it is for.
+    For ngspice it is scrubbed first. LTspice's exporter appends ``.backanno`` —
+    an LTspice-only dot command ngspice aborts on ("unimplemented dot
+    command") — and can emit its private ``§`` name-prefix character and ``µ``
+    unit suffix, neither of which ngspice's parser accepts. The scrub never
+    rewrites the shared ``.net`` in place: a concurrent LTspice-target run of
+    the same schematic regenerates it after the export lock releases, and an
+    in-place rewrite would hand one of the two runs the other simulator's deck.
+    It goes straight into the snapshot, under a stem naming the simulator.
     """
+    if not for_ngspice:
+        return net_path.stem, net_path.read_bytes()
     from ltspice_mcp.lib.encoding import read_spice_text
     from ltspice_mcp.lib.format import fold_micro_sign
 
@@ -112,13 +114,6 @@ def _ngspice_deck(net_path: Path) -> tuple[str, bytes]:
     lines = [ln for ln in text.splitlines() if ln.strip().lower() != ".backanno"]
     cleaned = fold_micro_sign("\n".join(lines).replace("§", ""))
     return f"{net_path.stem}.ngspice", (cleaned + "\n").encode("utf-8")
-
-
-def _exported_deck(net_path: Path, *, for_ngspice: bool) -> tuple[str, bytes]:
-    """The deck a run of this export reads: its stem and bytes, read once."""
-    if for_ngspice:
-        return _ngspice_deck(net_path)
-    return net_path.stem, net_path.read_bytes()
 
 
 async def _export_schematic(
@@ -133,7 +128,7 @@ async def _export_schematic(
 
     ``simulator`` is the class the run will execute on (defaults to the
     session default): when it is ngspice, the LTspice export is sanitized
-    for it (see ``_ngspice_deck``) — without that, every schematic run on
+    for it (see ``_read_export``) — without that, every schematic run on
     ngspice dies on the exporter's ``.backanno``.
 
     The export launches the LTspice binary and blocks until it exits — heavy
@@ -175,9 +170,10 @@ async def _export_schematic(
             raise SimulationError(
                 f"Auto-exporting {asc_path.name} to a netlist failed: {e}"
             ) from e
-        if not await asyncio.to_thread(net_path.exists):
-            raise SimulationError(f"Auto-export of {asc_path.name} produced no .net file")
-        return await asyncio.to_thread(_exported_deck, net_path, for_ngspice=for_ngspice)
+        try:
+            return await asyncio.to_thread(_read_export, net_path, for_ngspice=for_ngspice)
+        except FileNotFoundError as e:
+            raise SimulationError(f"Auto-export of {asc_path.name} produced no .net file") from e
 
 
 async def resolve_runnable_netlist(
@@ -196,9 +192,8 @@ async def resolve_runnable_netlist(
     export in the store (``Store.exports_dir``), not the shared ``<stem>.net``
     LTspice writes: a caller that stored the shared path (sweep/MC config, or a
     run staged moments later) would otherwise read a parallel session's
-    re-export. A relative ``.include`` in the snapshot means what it meant
-    beside the schematic, and staging resolves it there
-    (``deck_staging.stage_deck``'s ``exports_dir``).
+    re-export. Staging resolves its relative includes beside the schematic
+    (``deck_staging.stage_deck``).
     """
     netlist_path = resolve_netlist_path(netlist_str, state)
     if netlist_path.suffix.lower() != ".asc":
@@ -232,13 +227,12 @@ def _stage_deck_snapshot(store: Store, stem: str, data: bytes) -> Path:
     replay identity names this file, so it has to persist for as long as the
     receipt does, and one ``<name>.run-<hash>.net`` per distinct edit would
     accumulate in the author's tree forever. The schematic's name survives in
-    the snapshot's, spelled with the characters a store name may carry.
+    the snapshot's, folded the way a job id folds it.
     """
     from ltspice_mcp.lib import atomic_write_bytes
 
     digest = hashlib.sha1(data).hexdigest()[:12]
-    readable = readable_segment(stem, limit=80, fallback="deck")
-    snapshot = store.export_snapshot(f"{readable}.run-{digest}.net")
+    snapshot = store.export_snapshot(f"{sanitize_stem(stem) or 'deck'}.run-{digest}.net")
     if not snapshot.exists():
         store.ensure_root()
         snapshot.parent.mkdir(parents=True, exist_ok=True)

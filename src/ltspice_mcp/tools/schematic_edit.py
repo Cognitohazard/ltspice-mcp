@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import hashlib
 import io
 import os
@@ -550,7 +549,7 @@ async def _exported_reference(
     ref_copy = export_root / "reference.asc"
     await asyncio.to_thread(shutil.copyfile, ref, ref_copy)
     try:
-        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state))
+        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state), base_dir=ref.parent)
     except Exception as exc:  # broad by design — export failure is a reported fact
         return ReferenceNetlist(
             None, f"the reference {ref.name} could not be exported to a netlist: {exc}"
@@ -602,19 +601,14 @@ async def _run_reference_stage(
             return verification
         ref_source = ref if isinstance(ref, Path) else target
         payload, findings, failure, cmp_warnings = await asyncio.to_thread(
-            functools.partial(
-                compare_netlists,
-                # Both exports are copies in the store; the relative includes
-                # they carry name files beside the sheets they were copied from.
-                ref_base_dir=ref.parent if isinstance(ref, Path) else None,
-                cand_base_dir=target.parent,
-            ),
+            compare_netlists,
             spec,
             ref_netlist.source,
             netlist_text,
             ref_source,
-            copy_asc.with_suffix(".net"),
+            target,
             state,
+            ref_base_dir=ref_netlist.base_dir,
         )
         verification["_warnings"] = cmp_warnings + [
             f"{f.get('rule_id')}: {(f.get('evidence') or {}).get('detail') or f.get('subject')}"

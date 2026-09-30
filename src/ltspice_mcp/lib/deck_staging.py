@@ -179,7 +179,6 @@ def stage_deck(
     allowed_roots: list[Path],
     *,
     origin: Path,
-    exports_dir: Path | None = None,
     allow_live_includes: bool = False,
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
     windows_paths: bool = False,
@@ -206,13 +205,12 @@ def stage_deck(
     rather than defaulted, so a new caller has to answer the question instead
     of inheriting an answer that silently records the wrong file.
 
-    ``exports_dir`` is where the server keeps the netlists it exports from
-    schematics (``Store.exports_dir``). A primary deck inside it, other than
-    ``origin`` itself, is the server's export of ``origin`` and is staged as if
-    it stood where the netlister wrote it, beside ``origin``: it is admitted
-    because ``origin`` is (the store need not sit inside the allowed roots),
-    and its relative references resolve against ``origin``'s directory, which
-    is the directory the schematic's own ``.include`` lines name files in.
+    A primary deck generated from ``origin`` is staged as if it stood where the
+    netlister wrote it, beside ``origin``, wherever it is kept (the server keeps
+    exports in its store, ``Store.exports_dir``): it is admitted because
+    ``origin`` is, so the store need not sit inside the allowed roots, and its
+    relative references resolve against ``origin``'s directory, which is the
+    directory the schematic's own ``.include`` lines name files in.
 
     ``windows_paths`` renders the root deck's rewritten references in Windows
     form, for a Windows simulator reached across the WSL boundary: it cannot
@@ -231,14 +229,9 @@ def stage_deck(
     roots = allowed + _resolved_roots(list(simulator_roots), required=False)
     source = source_path.resolve(strict=True)
     authored = origin.resolve(strict=True)
-    exported = (
-        exports_dir is not None
-        and source != authored
-        and source.is_relative_to(exports_dir.resolve())
-    )
+    exported = source != authored
     # Where the primary deck stands for the sandbox, for its place in the
-    # staging tree, and for its relative references: its own path, or for an
-    # export the server keeps in its store, the path LTspice wrote it at.
+    # staging tree, and for its relative references.
     stands_at = authored.parent / source.name if exported else source
     # Authored files are checked against ``allowed`` alone — a prefix of
     # ``roots``, so the index means the same thing in both — which is what
@@ -466,7 +459,7 @@ def stage_deck(
         processed_depths[resolved] = depth
         return destination
 
-    def _snapshot_origin(authoring_source: Path) -> str:
+    def _snapshot_origin(resolved: Path) -> str:
         """Snapshot the file the primary deck was generated from; return its digest.
 
         It carries no include references — it is not SPICE — so it is staged
@@ -475,8 +468,7 @@ def stage_deck(
         matters, since an edit to the schematic leaves the previously exported
         netlist on disk byte-identical.
         """
-        resolved = authoring_source.resolve(strict=True)
-        if resolved == source:
+        if not exported:
             return primary_sha
         origin_root = _containing_root(resolved, allowed)
         if origin_root is None:
@@ -497,7 +489,7 @@ def stage_deck(
     primary_sha = next(
         entry.sha256 for entry in manifest if entry.path == source and entry.section is None
     )
-    origin_sha = _snapshot_origin(origin)
+    origin_sha = _snapshot_origin(authored)
     return StagedDeck(
         source_path=source,
         staged_deck=staged_primary,

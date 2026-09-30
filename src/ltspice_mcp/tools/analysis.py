@@ -130,19 +130,6 @@ async def _experiment_case(
     return None
 
 
-def _resolve_artifact_dest(*, out_dir: str | None, filename: str, state: SessionState) -> Path:
-    """Resolve where a generated artifact (the plot HTML) is written.
-
-    An explicit ``out_dir`` (validated via ``safe_path``) wins; otherwise the
-    store's plots directory (``Store.plots_dir``). Neither is the directory a
-    job-run raw sits in, which on WSL can be a Windows temp under /mnt/c the
-    client cannot Read, and nothing is written beside a raw or circuit the
-    caller named unless ``out_dir`` says so.
-    """
-    dest_dir = safe_path(out_dir, state) if out_dir else state.store.plots_dir
-    return (dest_dir / filename).resolve()
-
-
 # ---------------------------------------------------------------------------
 # export_waveform — full-fidelity CSV egress to disk
 # ---------------------------------------------------------------------------
@@ -918,11 +905,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, PLOT_MAX_POINTS_CEILING)
 
-    out_path = _resolve_artifact_dest(
-        out_dir=args.out_dir,
-        filename=_plot_filename(raw_path, analysis_type, args.job_id, run_index),
-        state=state,
-    )
+    # Into ``out_dir`` when named, else the store: never beside a raw the
+    # caller named, which on WSL can sit in a Windows temp the client cannot read.
+    dest_dir = safe_path(args.out_dir, state) if args.out_dir else state.store.plots_dir
+    out_path = dest_dir / _plot_filename(raw_path, analysis_type, args.job_id, run_index)
 
     title = f"{raw_path.stem} — {analysis_type}"
     try:

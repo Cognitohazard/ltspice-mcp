@@ -16,52 +16,40 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.deck_prep import export_netlist_text, resolve_runnable_netlist
 from ltspice_mcp.state import SessionState
+from tests._fake_netlister import install_fixed_exporter
 
 _EXPORT = "* amp.asc\nV1 in 0 1\nR1 in 0 4.7µ\n.op\n.backanno\n.end\n"
 
 
-def _exporting(state: SessionState) -> None:
-    class _Exporter:
-        @staticmethod
-        def create_netlist(path: str, timeout: float | None = None) -> str:
-            exported = Path(path).with_suffix(".net")
-            exported.write_text(_EXPORT, encoding="utf-8")
-            return str(exported)
-
-    state.available_simulators["ltspice"] = _Exporter
-
-
-def _schematic(work_dir: Path) -> Path:
-    project = work_dir / "project"
-    project.mkdir()
-    sheet = project / "amp.asc"
+def _schematic(folder: Path, name: str = "amp.asc") -> Path:
+    sheet = folder / name
     sheet.write_text("Version 4\n")
     return sheet
 
 
 @pytest.mark.asyncio
 async def test_the_ngspice_deck_goes_straight_into_the_store(
-    state_no_sim: SessionState, work_dir: Path
+    state_no_sim: SessionState, project_dir: Path
 ):
     """No ``<name>.ngspice.net`` beside the schematic, and the scrub still happens."""
-    _exporting(state_no_sim)
-    sheet = _schematic(work_dir)
+    install_fixed_exporter(state_no_sim, _EXPORT)
+    sheet = _schematic(project_dir)
 
     deck = await resolve_runnable_netlist(str(sheet), state_no_sim, simulator=NGspiceSimulator)
 
     assert deck.parent == state_no_sim.store.exports_dir
-    assert deck.name.startswith("amp.ngspice.run-")
+    assert deck.name.startswith("amp-ngspice.run-")
     text = deck.read_text(encoding="utf-8")
     assert ".backanno" not in text
     assert "4.7u" in text
-    assert sorted(p.name for p in sheet.parent.iterdir()) == ["amp.asc", "amp.net"]
+    assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
 
 
 @pytest.mark.asyncio
-async def test_one_deck_content_is_one_snapshot(state_no_sim: SessionState, work_dir: Path):
+async def test_one_deck_content_is_one_snapshot(state_no_sim: SessionState, project_dir: Path):
     """Content-addressed: exporting an unchanged schematic again reuses the file."""
-    _exporting(state_no_sim)
-    sheet = _schematic(work_dir)
+    install_fixed_exporter(state_no_sim, _EXPORT)
+    sheet = _schematic(project_dir)
 
     first = await resolve_runnable_netlist(str(sheet), state_no_sim)
     second = await resolve_runnable_netlist(str(sheet), state_no_sim)
@@ -72,23 +60,22 @@ async def test_one_deck_content_is_one_snapshot(state_no_sim: SessionState, work
 
 
 @pytest.mark.asyncio
-async def test_a_schematic_name_a_store_path_cannot_carry_is_respelled(
-    state_no_sim: SessionState, work_dir: Path
+async def test_a_schematic_name_a_store_path_cannot_carry_is_folded(
+    state_no_sim: SessionState, project_dir: Path
 ):
-    _exporting(state_no_sim)
-    sheet = work_dir / "My Amp (v2).asc"
-    sheet.write_text("Version 4\n")
+    install_fixed_exporter(state_no_sim, _EXPORT)
+    sheet = _schematic(project_dir, "My Amp (v2).asc")
 
     deck = await resolve_runnable_netlist(str(sheet), state_no_sim)
 
     assert deck.parent == state_no_sim.store.exports_dir
-    assert deck.name.startswith("My_Amp_v2.run-")
+    assert deck.name.startswith("my-amp-v2.run-")
 
 
 @pytest.mark.asyncio
-async def test_the_edit_path_export_keeps_no_snapshot(state_no_sim: SessionState, work_dir: Path):
+async def test_the_edit_path_export_keeps_no_snapshot(state_no_sim: SessionState):
     """``edit_schematic`` compares a throwaway copy's export; nothing names it later."""
-    _exporting(state_no_sim)
+    install_fixed_exporter(state_no_sim, _EXPORT)
     copy = state_no_sim.store.edit_export("build_1") / "committed.asc"
     copy.parent.mkdir(parents=True)
     copy.write_text("Version 4\n")

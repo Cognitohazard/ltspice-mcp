@@ -201,16 +201,12 @@ def user_home() -> Path:
     return base / _APP_DIRNAME
 
 
-_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def readable_segment(text: str, *, limit: int, fallback: str) -> str:
-    """``text`` respelled as a store path segment a person can still recognise.
-
-    For a name that is shown, not relied on: the digest it travels with is
-    what keeps two names apart.
-    """
-    return _UNSAFE_NAME_CHARS.sub("_", text).strip("._-")[:limit] or fallback
+def _resolved(path: Path) -> Path:
+    """``path`` resolved, or made absolute when it cannot be (a symlink loop)."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return path.absolute()
 
 
 @functools.lru_cache(maxsize=64)
@@ -232,12 +228,11 @@ def relocated_store_root(store_dir: Path, working_dir: Path) -> Path:
     working directory is resolved to name the store and this is asked for on
     every store path.
     """
+    from ltspice_mcp.lib.sweep_utils import sanitize_stem
+
     base = store_dir if store_dir.is_absolute() else working_dir / store_dir
-    try:
-        resolved = working_dir.resolve()
-    except (OSError, RuntimeError):
-        resolved = working_dir.absolute()
-    readable = readable_segment(resolved.name, limit=40, fallback="root")
+    resolved = _resolved(working_dir)
+    readable = sanitize_stem(resolved.name) or "root"
     return base / f"{readable}-{path_digest(os.path.normcase(str(resolved)))[:16]}"
 
 
@@ -715,9 +710,8 @@ class Store:
         In the store, beside the job records that name them: a receipt's replay
         identity names one of these files, so it lives exactly as long as the
         records do, and no schematic's folder collects one per distinct edit.
-        A snapshot's relative ``.include`` still means what it meant beside the
-        schematic, because staging resolves it against the schematic's own
-        directory (``deck_staging.stage_deck``'s ``exports_dir``).
+        Staging resolves a snapshot's relative includes beside its schematic
+        (``deck_staging.stage_deck``).
         """
         return self.root / "exports"
 
@@ -743,27 +737,17 @@ class Store:
     def circuit_lock(circuit_path: Path) -> Path:
         """Anchor for the cross-process lock on one circuit file (``file_lock`` appends .lock).
 
-        In the per-user home, not beside the circuit and not in a working-dir
-        store. Beside the circuit put a ``.ltspice-mcp/`` into every folder a
-        schematic was ever edited or exported from, even by a read-only check.
-        In a working-dir store, two sessions started in different directories
-        would hold two different locks on the same file, and their whole-file
-        saves would be last-writer-wins again. One file, one lock, for every
-        session of this user.
+        Per user, so sessions started in different working directories contend
+        on one lock per file, and nothing is written beside the circuit.
 
-        Keyed by the digest of the resolved path, case-folded. Case folding
-        makes two spellings of one file on a case-insensitive filesystem
-        (Windows, macOS, a WSL ``/mnt/c`` mount) share their lock; on a
-        case-sensitive one, two files that differ only in case share one too.
-        That costs a wait, and past the lock's timeout the "locked, retry"
-        error, but never a missed exclusion. Resolving follows symlinks and
-        ``..``, and is filesystem work, so an event-loop caller resolves this
-        off-loop.
+        Keyed by the digest of the resolved path, case-folded so two spellings
+        of one file on a case-insensitive filesystem (Windows, macOS, a WSL
+        ``/mnt/c`` mount) share their lock. On a case-sensitive one, two files
+        differing only in case share one too: a wait, and past the timeout the
+        "locked, retry" error, never a missed exclusion. Resolving is filesystem
+        work, so an event-loop caller runs this off-loop.
         """
-        try:
-            resolved = circuit_path.resolve()
-        except (OSError, RuntimeError):
-            resolved = circuit_path.absolute()
+        resolved = _resolved(circuit_path)
         return user_home() / "locks" / "circuits" / path_digest(str(resolved).casefold())
 
 

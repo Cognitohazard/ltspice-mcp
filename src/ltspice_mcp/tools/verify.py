@@ -809,13 +809,16 @@ class ReferenceNetlist:
 
     ``source`` is netlist text or a netlist path — for an ``.asc`` reference, its
     LTspice export. It is None when the reference could not be made a netlist,
-    and ``error`` (with ``remedy`` when there is one) says why.
+    and ``error`` (with ``remedy`` when there is one) says why. ``base_dir`` is
+    where its relative includes resolve when that is not ``source``'s own
+    directory: for an export, the schematic's folder, not the scratch copy's.
     """
 
     source: str | Path | None
     error: str = ""
     remedy: str | None = None
     observations: tuple[str, ...] = ()
+    base_dir: Path | None = None
 
 
 def reference_as_given(reference: str | Path) -> ReferenceNetlist | None:
@@ -889,7 +892,7 @@ async def _export_reference(
     if net_path is None:
         error = f"LTspice exported the reference {reference.name} but produced no .net file"
         return ReferenceNetlist(None, error, observations=observations)
-    return ReferenceNetlist(net_path, observations=observations)
+    return ReferenceNetlist(net_path, observations=observations, base_dir=reference.parent)
 
 
 # ---------------------------------------------------------------------------
@@ -1560,22 +1563,16 @@ def compare_equivalence(
     resolver: IncludeResolver,
     *,
     denied_hint: str,
-    ref_base_dir: Path | None = None,
-    cand_base_dir: Path | None = None,
+    ref_base_dir: Path | None,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver.
 
-    ``candidate`` may be the already-read netlist text or a path; ``cand_source``
-    is the location reported in findings and failures either way.
-    ``denied_hint`` is the sandbox guidance each refused include's finding
-    carries.
-
-    ``ref_base_dir`` and ``cand_base_dir`` are the directories each side's
-    relative includes resolve against. For an export they are the schematic's
-    folder: the export itself sits in the store's scratch, where a relative
-    include names nothing the author wrote, and which need not be inside the
-    allowed roots. Unset, the reference resolves against its own directory and
-    the candidate against ``cand_source``'s.
+    ``candidate`` may be the already-read netlist text or a path. ``cand_source``
+    is the file the caller named: findings and failures point at it, and the
+    candidate's relative includes resolve in its directory, not in the store
+    scratch an export was made in. ``ref_base_dir`` is the reference's
+    (``ReferenceNetlist.base_dir``). ``denied_hint`` is the sandbox guidance
+    each refused include's finding carries.
     """
     findings: list[dict[str, Any]] = []
     ref_graph, failure = _parse_graph_or_fail(
@@ -1584,11 +1581,7 @@ def compare_equivalence(
     if failure is not None:
         return None, findings, failure, []
     cand_graph, failure = _parse_graph_or_fail(
-        candidate,
-        "netlist under test",
-        cand_source,
-        resolver,
-        base_dir=cand_base_dir or cand_source.parent,
+        candidate, "netlist under test", cand_source, resolver, base_dir=cand_source.parent
     )
     if failure is not None:
         return None, findings, failure, []
@@ -1674,15 +1667,15 @@ def compare_netlists(
     cand_source: Path,
     state: SessionState,
     *,
-    ref_base_dir: Path | None = None,
-    cand_base_dir: Path | None = None,
+    ref_base_dir: Path | None,
 ) -> CompareResult:
     """Compare two netlists the way ``spec`` asks (blocking CPU/IO).
 
     ``reference`` and ``candidate`` are netlist text or paths; ``ref_source`` and
-    ``cand_source`` are where a finding about each side points. The two base
-    directories are where each side's relative includes resolve (see
-    ``compare_equivalence``); a structural diff opens no includes.
+    ``cand_source`` are where a finding about each side points (the caller's own
+    file, even when what was compared is its export). ``cand_source``'s
+    directory and ``ref_base_dir`` are where each side's relative includes
+    resolve; a structural diff opens no includes.
     """
     if spec.mode == "structural_diff":
         return compare_structural(reference, candidate)
@@ -1696,7 +1689,6 @@ def compare_netlists(
         make_include_resolver(state),
         denied_hint=state.sandbox_guidance(),
         ref_base_dir=ref_base_dir,
-        cand_base_dir=cand_base_dir,
     )
 
 
@@ -2174,22 +2166,14 @@ async def evaluate_verify_circuit(
                         compared = None, [], failure, []
                     else:
                         compared = await asyncio.to_thread(
-                            functools.partial(
-                                compare_netlists,
-                                # The files the caller named are where their
-                                # relative includes live; an export of either
-                                # sits in the store's scratch.
-                                ref_base_dir=(
-                                    reference.parent if isinstance(reference, Path) else None
-                                ),
-                                cand_base_dir=path.parent,
-                            ),
+                            compare_netlists,
                             compare,
                             ref_netlist.source,
                             cand_input,
                             ref_source,
-                            candidate,
+                            path,
                             state,
+                            ref_base_dir=ref_netlist.base_dir,
                         )
                 comparison, cmp_findings, cmp_failure, cmp_warnings = compared
                 findings.extend(cmp_findings)

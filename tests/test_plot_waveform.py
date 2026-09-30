@@ -395,17 +395,15 @@ class TestRender:
         assert any(o["code"] == "open_skipped" for o in data["observations"])
 
     async def test_a_raw_in_its_own_folder_plots_into_the_store(
-        self, state_no_sim: SessionState, work_dir: Path
+        self, state_no_sim: SessionState, project_dir: Path
     ):
         """Nothing lands beside the raw a caller named: no ``.ltspice-mcp/`` there."""
-        raw_dir = work_dir / "measurements"
-        raw_dir.mkdir()
-        raw = stage_recorded_fixture(raw_dir, "ltspice_tran_rc")
-        before = sorted(p.name for p in raw_dir.iterdir())
+        raw = stage_recorded_fixture(project_dir, "ltspice_tran_rc")
+        before = sorted(p.name for p in project_dir.iterdir())  # noqa: ASYNC240
 
         data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
 
-        assert sorted(p.name for p in raw_dir.iterdir()) == before
+        assert sorted(p.name for p in project_dir.iterdir()) == before  # noqa: ASYNC240
         assert Path(data["path"]).parent == state_no_sim.store.plots_dir
 
     async def test_ac_bode_dual_panel(self, state_no_sim: SessionState, work_dir: Path):
@@ -531,7 +529,7 @@ class TestDeliveryAndSecurity:
         assert seen["path"] == Path(data["path"])
 
     async def test_a_sidecar_symlink_beside_the_raw_is_never_followed(
-        self, state_no_sim: SessionState, work_dir: Path
+        self, state_no_sim: SessionState, work_dir: Path, project_dir: Path
     ):
         """A ``.ltspice-mcp`` link planted in a caller's folder redirects nothing.
 
@@ -539,12 +537,10 @@ class TestDeliveryAndSecurity:
         send the write anywhere and had to be refused. They go into the store
         now, and the folder the raw sits in is not written at all.
         """
-        raw_dir = work_dir / "measurements"
-        raw_dir.mkdir()
-        raw = stage_recorded_fixture(raw_dir, "ltspice_tran_rc")
+        raw = stage_recorded_fixture(project_dir, "ltspice_tran_rc")
         outside = work_dir.parent / f"{work_dir.name}-plot-outside"
         outside.mkdir()
-        symlink_or_skip(raw_dir / ".ltspice-mcp", outside)
+        symlink_or_skip(project_dir / ".ltspice-mcp", outside)
 
         data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
 
