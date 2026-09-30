@@ -226,6 +226,13 @@ tool-surface changes.
   reported, with `version_source` naming the job and case; it was always
   null. The executable is never launched to ask.
 
+- `inspect(kind="capabilities")` takes an optional `fields` list naming the
+  top-level keys to return, such as `["allowed_paths", "config_path"]` after a
+  config edit. Without it the report is unchanged.
+- `edit_schematic` has a `preexisting` view, which lists what an edit counted
+  under `preexisting` (see Changed). Name it in `return_views`, or echo
+  `preexisting.cursor` as `view_cursors.preexisting`.
+
 ### Changed
 
 - The server instructions and `analyze_results`' description say where trace
@@ -273,6 +280,23 @@ tool-surface changes.
   ships, so PNG rendering was impossible through them; installing native Cairo
   is now the only step. The README documents the extra and the per-platform
   Cairo install.
+
+- An `edit_schematic` call on an existing sheet reports only the sheet findings
+  in `warnings` (floating pins, dangling labels, duplicate wires, a label
+  inside a body, stacked directives) and the `wiring.label_only_pins` rows that
+  the batch introduced, or that name a reference or coordinate one of its ops
+  named. It used to return every one on the sheet, so a one-part edit to a
+  large sheet carried every older finding and label-only pin with it. The rest
+  are counted in a new `preexisting {count, findings, label_only_pins, cursor}`
+  block rather than dropped. `pins_total`, `pins_wired` and `pins_label_only`
+  stay whole-sheet, and `label_only_pins.total + preexisting.label_only_pins`
+  equals `pins_label_only`. A `base: "blank"` build is unchanged, since
+  everything on it is new. A caller that relied on the whole-sheet lists can
+  add `preexisting` to `return_views`. An op-less read (`ops: []`) now counts
+  every finding under `preexisting` too, because nothing on it is new.
+- An `edit_schematic` view cursor now returns its view even when
+  `return_views` does not name it. A `pin_legend` or `touched` cursor sent with
+  the default `return_views` used to be accepted and then ignored.
 
 ### Security
 

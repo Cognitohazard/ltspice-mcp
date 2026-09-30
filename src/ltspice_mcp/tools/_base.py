@@ -268,15 +268,16 @@ BBOX_SCHEMA: dict[str, Any] = {
     },
 }
 
-# Structured advisories emitted by mutating .asc handlers after a successful
-# op. ``message`` is always present and human-readable; the other keys
-# depend on ``kind``. New kinds extend ``VALIDATION_WARNING_KINDS`` and the
-# schema enum together so producers and consumers stay in lockstep.
+# The rows ``schematic_ops.post_op_warnings`` returns, as edit_schematic's
+# preexisting view publishes them. ``message`` is always present and
+# human-readable; the other keys depend on ``kind``. A new kind there extends
+# ``VALIDATION_WARNING_KINDS`` here, so producer and schema stay in lockstep.
 VALIDATION_WARNING_KINDS: tuple[str, ...] = (
     "floating_pin",
     "duplicate_wire",
     "dangling_label",
     "label_over_component",
+    "stacked_directive",
 )
 
 VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {

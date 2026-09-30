@@ -400,13 +400,44 @@ _CURSOR_DESCRIPTION_FILE = (
 )
 
 
+#: The capabilities report's top-level keys, which are what ``fields`` selects.
+#: ``tests/test_inspect_tools.py`` holds it equal to what ``_do_capabilities``
+#: returns, so a key added to one and not the other fails there.
+CapabilityField: TypeAlias = Literal[
+    "config_path",
+    "python",
+    "simulators",
+    "default_simulator",
+    "exporter_available",
+    "render",
+    "dialects",
+    "diagnostics",
+    "ngbehavior",
+    "persist_jobs",
+    "allowed_paths",
+    "tool_profile",
+    "python_api",
+    "tool_listing",
+    "limits",
+    "linter_version",
+]
+
+
 class CapabilitiesQuery(StrictModel):
-    """What this server can do: detected simulators with their executables, the
-    build each one's latest run reported, and their raw dialects; whether the
-    .asc exporter is available, job persistence, allowed roots, the configured
-    limits, and the linter version. Takes no arguments."""
+    """What this server can do: detected simulators with their executables, last
+    reported builds and raw dialects, whether the .asc exporter is available,
+    job persistence, allowed roots, the configured limits, and the linter
+    version."""
 
     kind: Literal["capabilities"]
+    fields: list[CapabilityField] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Return only these keys, e.g. ['allowed_paths', 'config_path'] after "
+            "a config edit. Omit for the whole report."
+        ),
+    )
 
 
 class SymbolsQuery(StrictModel):
@@ -1686,7 +1717,11 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        simulators = dict(state.available_simulators)
+        wanted = set(query.fields) if query.fields is not None else None
+        # Executables are identified only for a report that shows them.
+        simulators = (
+            dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
+        )
 
         def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
             # Off the loop: the first successful raster probe loads the native
@@ -1696,7 +1731,10 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
             return raster_support(), identities
 
         raster, executables = await asyncio.to_thread(probe)
-        return {"data": _do_capabilities(state, raster, executables)}
+        report = _do_capabilities(state, raster, executables)
+        if wanted is not None:
+            report = {key: value for key, value in report.items() if key in wanted}
+        return {"data": report}
     if isinstance(query, SymbolsQuery):
         return await _do_symbols(query, state, view)
     if isinstance(query, SymbolQuery):
