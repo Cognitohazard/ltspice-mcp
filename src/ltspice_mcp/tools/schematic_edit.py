@@ -52,6 +52,8 @@ from ltspice_mcp.lib.pin_legend import (
 )
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
+    OP_RESULT_FACTS,
+    GridPoint,
     OpAddComponent,
     OpAddDirective,
     OpAddNetLabel,
@@ -232,6 +234,17 @@ _PAGE_SCHEMA: dict[str, Any] = page_schema(
     },
 )
 
+_POINT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+    "required": ["x", "y"],
+}
+_SEGMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"from": _POINT_SCHEMA, "to": _POINT_SCHEMA},
+    "required": ["from", "to"],
+}
+
 # One wiring.label_only_pins row, tagged with its kind where it shares a page
 # with the validation pass's findings.
 _LABEL_ONLY_ROW_SCHEMA: dict[str, Any] = {
@@ -371,6 +384,43 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     },
                     primary_truncated=_PAGE_SCHEMA["properties"]["primary_truncated"],
                 ),
+            },
+        },
+        "results": {
+            "type": "array",
+            "description": (
+                "What each op found on the sheet, by op index; an op with nothing "
+                "to report has no entry. wire_pins reports already_present "
+                "(requested segments already on the sheet, not redrawn) and "
+                "junctions (where the route joined existing wiring off its "
+                "endpoints, or an endpoint ended on a wire's interior). Removals "
+                "report how much they took."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "op": {"type": "string"},
+                    "already_present": {"type": "array", "items": _SEGMENT_SCHEMA},
+                    "junctions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "via": {"type": "string"},
+                                "wire": _SEGMENT_SCHEMA,
+                                "label": {"type": "string"},
+                                "pin": {"type": "string"},
+                            },
+                            "required": ["x", "y", "via"],
+                        },
+                    },
+                    "removed": {"type": "integer"},
+                    "deleted_wires": {"type": "integer"},
+                },
+                "required": ["index", "op"],
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -657,8 +707,8 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
 
     An op's own ``x``/``y`` (a label, a directive anchor, a component origin,
     a wire's incident point), both ends of an exact wire segment, and every
-    routing waypoint. A pin endpoint names a component, not a coordinate; see
-    ``touched_refs``.
+    routing waypoint and ``{x, y}`` endpoint. A pin endpoint names a component,
+    not a coordinate; see ``touched_refs``.
     """
     coords: set[tuple[int, int]] = set()
     for op in ops:
@@ -666,8 +716,9 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
             x, y = getattr(op, xname, None), getattr(op, yname, None)
             if isinstance(x, int) and isinstance(y, int):
                 coords.add((x, y))
-        for point in getattr(op, "waypoints", None) or ():
-            coords.add((point.x, point.y))
+        points = [*(getattr(op, "waypoints", None) or ())]
+        points += [getattr(op, "from_pin", None), getattr(op, "to_pin", None)]
+        coords.update((point.x, point.y) for point in points if isinstance(point, GridPoint))
     return coords
 
 
@@ -863,6 +914,21 @@ def _apply_ops(
     return results, failures, abort_reason
 
 
+def _op_results(results: list[dict]) -> list[dict]:
+    """What each op found on the sheet: its result's ``OP_RESULT_FACTS`` keys.
+
+    The rest of a runner entry restates the op or rides on ``warnings`` and
+    the views. An op with no fact to report has no entry, so a large build
+    pays for what its ops found, not a line per op.
+    """
+    relayed: list[dict] = []
+    for entry in results:
+        facts = {key: entry[key] for key in OP_RESULT_FACTS.get(entry["op"], ()) if key in entry}
+        if facts:
+            relayed.append({"index": entry["index"], "op": entry["op"], **facts})
+    return relayed
+
+
 def _op_warnings(results: list[dict]) -> list[str]:
     """The batch's per-op advisories, attributed to the op that raised them.
 
@@ -907,6 +973,7 @@ def _envelope(
     preexisting: dict | None = None,
     verification: dict | None = None,
     netlist: str | None = None,
+    results: list[dict] | None = None,
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
@@ -929,6 +996,7 @@ def _envelope(
         "base": base,
         "stages": stages,
         "sha256": sha256,
+        "results": results or [],
         "warnings": warnings or [],
         "failures": failures or [],
         "observations": observations or [],
@@ -1176,6 +1244,7 @@ async def _evaluate_edit_schematic(
             # what the finished sheet reports about itself that this batch
             # accounts for. The rest is counted under preexisting.
             warnings = _op_warnings(results) + [w["message"] for w in findings_reported]
+            op_results = _op_results(results)
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 
@@ -1207,6 +1276,7 @@ async def _evaluate_edit_schematic(
                             wiring=wiring,
                             views=presented_views,
                             preexisting=preexisting,
+                            results=op_results,
                             warnings=warnings,
                             failures=failures,
                             hint=" ".join(
@@ -1314,6 +1384,7 @@ async def _evaluate_edit_schematic(
                         preexisting=preexisting,
                         verification=verification,
                         netlist=netlist,
+                        results=op_results,
                         warnings=warnings,
                         hint=hint,
                     ),

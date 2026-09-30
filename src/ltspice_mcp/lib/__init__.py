@@ -13,9 +13,11 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import IO, Any, Literal
+from typing import IO, Any, Literal, TypeVar
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 _EST = timezone(timedelta(hours=-5), name="EST")
 
@@ -95,27 +97,48 @@ def fsync_dir(path: Path) -> None:
         os.close(dir_fd)
 
 
+def _outlast_windows_refusal(operation: Callable[[], _T]) -> _T:
+    """Run ``operation``, retrying the access denial Windows gives for a moment.
+
+    POSIX has no such window, so the call is direct. On Windows the last of
+    six attempts raises what it gets.
+    """
+    if sys.platform != "win32":
+        return operation()
+    delay = 0.01
+    for _ in range(5):
+        try:
+            return operation()
+        except PermissionError:
+            time.sleep(delay)
+            delay *= 2
+    return operation()
+
+
 def replace_file(src: Path, dst: Path) -> None:
     """``os.replace`` that outlasts Windows' transient refusal.
 
     A rename onto a target that another rename is landing on at that instant
     (two callers publishing one content-addressed file), or that a reader
     holds open, fails there with access denied and succeeds a moment later.
-    POSIX has no such window, so the call is direct.
     """
-    if sys.platform != "win32":
-        os.replace(src, dst)
-        return
-    delay = 0.01
-    for attempt in range(6):
-        try:
-            os.replace(src, dst)
-            return
-        except PermissionError:
-            if attempt == 5:
-                raise
-            time.sleep(delay)
-            delay *= 2
+    _outlast_windows_refusal(lambda: os.replace(src, dst))
+
+
+def read_text_file(path: Path, *, encoding: str = "utf-8") -> str:
+    """Read ``path`` whole, outlasting Windows' transient refusal.
+
+    The reader's side of ``replace_file``: opening a file at the instant a
+    rename replaces it fails there with access denied and succeeds a moment
+    later, so a record another thread or process rewrites through
+    ``atomic_write`` can read as unreadable when it is not.
+    """
+
+    def read() -> str:
+        with path.open("r", encoding=encoding) as handle:
+            return handle.read()
+
+    return _outlast_windows_refusal(read)
 
 
 def _commit(tmp_path: Path, dst: Path, *, overwrite: bool) -> None:
@@ -197,9 +220,10 @@ def atomic_write(
     -------
     * If ``path`` is a symlink, the symlink itself is replaced — not its
       target. Pass ``path.resolve()`` if you want the target replaced.
-    * On Windows, ``os.replace`` may briefly fail with ``PermissionError``
-      if another process (e.g., antivirus) has the file open; no retry
-      is attempted.
+    * On Windows, the rename and a reader's open each fail with
+      ``PermissionError`` for a moment while the other has ``path`` (or
+      antivirus does). The rename retries through ``replace_file``; a
+      reader of a file written here reads it with ``read_text_file``.
     * ``overwrite=False`` on Windows has a TOCTOU window between the
       existence check (implicit in ``os.rename``) and the rename itself.
       POSIX uses ``os.link``, which is race-free.
@@ -291,5 +315,6 @@ __all__ = [
     "atomic_write_text",
     "now",
     "parse_iso_datetime",
+    "read_text_file",
     "replace_file",
 ]

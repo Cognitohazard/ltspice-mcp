@@ -10,7 +10,6 @@ import logging
 import secrets
 import shutil
 import threading
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -93,13 +92,6 @@ StageDecks = Callable[[], Awaitable["StagedDecks"]]
 # same request_id waits for the first submission's deck copies, and a large
 # matrix takes longer to stage than an index write.
 REQUEST_GATE_TIMEOUT_S = 300.0
-
-#: Reads of an indexed record that exists but did not load. On Windows, opening
-#: a file while another thread replaces it fails with a sharing violation for a
-#: moment, and a running job rewrites its record as it goes: that is not the
-#: record being gone, and treating it as gone mints a second job for the id.
-INDEXED_RECORD_READ_ATTEMPTS = 5
-INDEXED_RECORD_RETRY_S = 0.05
 
 #: The durable replay note, written on the job record once and read by
 #: everyone who looks at the job afterwards — the original submitter included,
@@ -737,18 +729,13 @@ class ExperimentRunner(RunnerBase):
             )
         indexed_job_id = str(index.get("job_id", ""))
         try:
-            record = Store(working_dir).job_record(indexed_job_id)
+            existing = experiment_store.load_job(
+                indexed_job_id,
+                working_dir,
+                own_is_alive=True,
+            )
         except ValueError:
-            record = None
-        existing = None
-        if record is not None:
-            for _ in range(INDEXED_RECORD_READ_ATTEMPTS):
-                existing = experiment_store.load_job(
-                    indexed_job_id, working_dir, own_is_alive=True
-                )
-                if existing is not None or not record.exists():
-                    break
-                time.sleep(INDEXED_RECORD_RETRY_S)
+            existing = None
         if existing is None:
             # The index names a record that is gone; this submission recreates it.
             return _IndexLookup(existing=None, dangling=True)
@@ -1294,18 +1281,16 @@ class ExperimentRunner(RunnerBase):
         deadline = self.loop.time() + grace_s
         for kill_pass in range(1, KILL_MAX_PASSES + 1):
             remaining = max(0.0, deadline - self.loop.time())
-            wait = (
-                remaining
-                if kill_pass == KILL_MAX_PASSES
-                else min(remaining, KILL_RESCAN_INTERVAL_S)
-            )
+            last = kill_pass == KILL_MAX_PASSES or remaining <= KILL_RESCAN_INTERVAL_S
             try:
-                return await asyncio.wait_for(asyncio.shield(future), wait)
+                return await asyncio.wait_for(
+                    asyncio.shield(future), remaining if last else KILL_RESCAN_INTERVAL_S
+                )
             except TimeoutError:
-                # The wait that ran to the deadline ends the grace, not the clock:
-                # asyncio runs a timer up to one clock resolution early (15.6 ms on
-                # Windows), so loop.time() can still read short of the deadline.
-                if wait >= remaining:
+                # The wait to the deadline ends the grace, not a clock read after
+                # it: asyncio fires a timer up to one clock resolution early
+                # (15.6 ms on Windows), so the clock can still read short.
+                if last:
                     return None
             await kill()
         return None

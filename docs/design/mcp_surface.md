@@ -773,8 +773,9 @@ ops and after them, which it holds in memory anyway — and reports a row only
 when it is new (the sheet did not have it before; any change to a row makes it
 new, since its identity is every field) or when it names a reference or a
 coordinate the batch named. A reference is named by an op's `reference` or a
-`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, or a
-waypoint. Everything else goes in the `preexisting` block:
+`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, a
+waypoint, or an `{x, y}` endpoint. Everything else goes in the `preexisting`
+block:
 
 ```
 preexisting {count, findings, label_only_pins, cursor}
@@ -819,9 +820,22 @@ rebuild from its own ops. What is lost is a one-call "undo everything this
 session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
+**Per-op facts.** `results` carries what each op found on the sheet, one entry
+per op, keyed by `index` and `op` like a `failures` entry: for `wire_pins` the
+segments it found `already_present` and the `junctions` it made, for the
+removals how much they took. Which keys of an op's result are such facts is
+declared beside the op applier, in `OP_RESULT_FACTS`; the rest restates the
+op's arguments or rides on `warnings` and the views. An op that found nothing
+has no entry, so a whole-circuit build pays for what its ops ran into, not a
+line per op. That is why a route's `wire_count` is not relayed:
+`already_present` already names what it did not draw. `results` is not a page:
+like `failures`, its length is bounded by the batch the caller sent, and a
+cursor could not resume it, since the ops it reports on do not run again. The
+Python API returns the same list, from the same evaluator.
+
 **Wire ops.** A routed segment identical to one already on the sheet is not
-drawn a second time; the op's result records it under `already_present` and
-`wire_count` counts only what was drawn. Removing an exact segment that exists
+drawn a second time; the op's `results` entry lists it under `already_present`,
+and only the rest of the route is drawn. Removing an exact segment that exists
 more than once removes every copy, but only when that leaves no pin newly
 floating — otherwise the op refuses, naming the pin, with nothing written. A
 segment that exists once is still removed unconditionally: that is an explicit
@@ -838,20 +852,24 @@ with every one. That is the rule `net_partition` applies for every tool that
 reads connectivity, and it means a T needs no split. `wire_pins` takes `{x, y}`
 for either endpoint; the point must touch a wire or a pin, and on a wire's
 interior the new segment ends there and the wire is left whole, so a
-`remove_wire` of that segment restores the sheet. The leg must leave the wire
-at a right angle, and a point where wires of two nets cross is refused, since a
-wire ending there would join both.
+`remove_wire` of that segment restores the sheet. The op's `results` entry
+names the T under `junctions` as `{x, y, via: "endpoint", wire}`, `wire` being
+the segment it joined. The leg must leave the wire at a right angle, and a
+point where wires of two nets cross is refused, since a wire ending there would
+join both.
 
 Anywhere else the route touches existing wiring — a waypoint on a wire, a
 segment passing through another wire's end or a lone label, or over a pin
 already wired to an endpoint — it joins that wiring too, so the planner checks
 it against the nets the two endpoints already join. Onto one of those it is a
-redundant junction, drawn and reported (a warning, and `junctions` on the op's
-result). Onto any other net it is refused, naming the wire and the `{x, y}`
-endpoint that makes the same T on purpose: a join no argument asked for must
-not pass silently. A route crossing a wire where neither ends is still refused,
-though LTspice would not join it, because the sheet reads ambiguously there.
-The planner's own advisories (long run, bounding-box crossing) now reach the
+redundant junction, drawn and reported: a warning, and a `junctions` entry on
+the op's `results` entry whose `via` says what it touched (`waypoint`,
+`wire_end`, `label` or `pin`) and whose `wire`, `label` or `pin` names it. Onto
+any other net it is refused, naming the wire and the `{x, y}` endpoint that
+makes the same T on purpose: a join no argument asked for must not pass
+silently. A route crossing a wire where neither ends is still refused, though
+LTspice would not join it, because the sheet reads ambiguously there. The
+planner's own advisories (long run, bounding-box crossing) now reach the
 response's `warnings` too; they used to stop at the op.
 
 `add_net_label` calls a label floating only when it touches no wire and no pin.
@@ -889,8 +907,8 @@ Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
-views {touched?: Page, pin_legend?: Page, preexisting?: Page}, warnings,
-failures, observations, hint`.
+views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
+warnings, failures, observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
 
@@ -1016,11 +1034,10 @@ Python API), which are never capped. The gate stays a whole-file answer.
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
-    .asc gives a geometric trace; a netlist gives card membership and makes
-    no geometry claims. On a .asc, PIN is a pin name or, failing that, the
-    pin's 1-based SpiceOrder, and an [x, y] on a wire's interior traces that
-    wire, reported as snapped_to_wire; on a netlist PIN is a 1-based
-    terminal number
+    .asc gives a geometric trace; an [x, y] on a wire's interior traces that
+    wire, reported as snapped_to_wire; a netlist gives card membership and
+    makes no geometry claims. On a .asc, PIN is a pin name or, failing that,
+    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
@@ -1372,9 +1389,6 @@ Recorded so they are not mistaken for oversights:
 - Re-running an attached analysis stage after a server restart.
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
-- `edit_schematic`'s per-op facts (`already_present`, `junctions`) stop at the
-  op runner. The envelope carries only the flat `warnings` list, so a caller
-  learns of a redundant junction from its warning text, not from a field.
 - Two wires that cross can be joined only by ending one on the other. There
   is no op for a junction at a crossing, and `wire_pins` refuses a route that
   crosses a wire where neither ends, even though LTspice leaves it unjoined.
