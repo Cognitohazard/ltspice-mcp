@@ -171,6 +171,42 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         assert lim in data["limits"], f"missing limits key {lim!r}"
 
 
+async def test_capabilities_fields_returns_only_the_named_keys(cap_state: SessionState):
+    """What a caller checks after a config edit, without the rest of the report."""
+    (full,) = await _run(cap_state, [{"kind": "capabilities"}])
+    (picked,) = await _run(
+        cap_state, [{"kind": "capabilities", "fields": ["config_path", "allowed_paths"]}]
+    )
+    assert picked["ok"] is True
+    assert picked["data"] == {key: full["data"][key] for key in ("allowed_paths", "config_path")}
+
+
+async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"] == insp._do_capabilities(cap_state, raster.raster_support())
+
+
+def test_capabilities_field_names_are_the_report_keys(cap_state: SessionState):
+    """The selector's vocabulary and the report's keys are one list: a key added
+    to the report without a selector name, or the reverse, fails here."""
+    assert set(typing.get_args(insp.CapabilityField)) == set(
+        insp._do_capabilities(cap_state, raster.raster_support())
+    )
+
+
+@pytest.mark.parametrize("fields", [["no_such_key"], []], ids=["unknown", "empty"])
+async def test_a_bad_capabilities_selector_fails_only_that_item(
+    cap_state: SessionState, fields: list[str]
+):
+    results = await _run(
+        cap_state,
+        [{"kind": "capabilities", "fields": fields}, {"kind": "capabilities"}],
+    )
+    assert results[0]["ok"] is False
+    assert results[0]["error"]["code"] == "invalid_query"
+    assert results[1]["ok"] is True
+
+
 @needs_raster
 async def test_capabilities_reports_png_rendering(cap_state: SessionState):
     """An agent deciding between an inline PNG and a file path asks here first,
