@@ -169,12 +169,13 @@ class TestExecution:
             "ops = [n for n in ('run_experiments', 'analyze_results', 'jobs', 'inspect',"
             " 'edit_schematic', 'verify_circuit') if callable(getattr(api, n, None))]\n"
             "print(np.__name__, callable(load_raw), callable(measurements),"
-            " callable(window_and_clean), callable(compute_signal_stats))\n"
+            " callable(window_and_clean), callable(compute_signal_stats),"
+            " callable(time_weighted_quantiles))\n"
             "(len(ops), reference('jobs')[:6])"
         )
         reply = await run(state, code)
         assert reply["status"] == "ok", reply
-        assert reply["stdout"] == "numpy True True True True\n"
+        assert reply["stdout"] == "numpy True True True True True\n"
         assert reply["result"].startswith("(6, ")
 
     async def test_each_call_is_a_fresh_namespace(self, state: SessionState):

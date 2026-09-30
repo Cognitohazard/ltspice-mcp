@@ -150,7 +150,8 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("analyze_results", "signal_stats"): (
         "Amplitude statistics of a transient signal: min, max, mean, RMS, "
-        "peak-to-peak and standard deviation over an optional window."
+        "peak-to-peak and standard deviation over an optional window, plus "
+        "time-weighted quantiles at the levels you name."
     ),
     ("analyze_results", "edges"): (
         "Rise and fall times of a transient signal, between level thresholds you "
@@ -267,7 +268,16 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "differential voltage",
         "current",
     ),
-    ("analyze_results", "signal_stats"): ("rms", "peak to peak", "ripple", "amplitude", "mean"),
+    ("analyze_results", "signal_stats"): (
+        "rms",
+        "peak to peak",
+        "ripple",
+        "amplitude",
+        "mean",
+        "percentile",
+        "quantile",
+        "robust peak to peak",
+    ),
     ("analyze_results", "edges"): ("rise time", "fall time", "slew", "transition time"),
     ("analyze_results", "timing"): ("propagation delay", "delay", "skew", "setup"),
     ("analyze_results", "periodic"): ("duty cycle", "oscillation frequency", "period"),
@@ -363,6 +373,9 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "server status",
         "what can this server do",
         "limits",
+        "allowed paths",
+        "config file",
+        "sandbox",
     ),
     ("inspect", "symbols"): ("available parts", "symbol library", "what can i place"),
     ("inspect", "symbol"): ("pin positions", "bounding box", "rotation", "geometry"),

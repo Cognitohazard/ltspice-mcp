@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import typing
+from dataclasses import asdict
 from pathlib import Path
 
 import jsonschema
@@ -23,10 +24,11 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import raster
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import symlink_or_skip
+from tests.conftest import needs_raster, symlink_or_skip
 
 
 class FakeLT:
@@ -132,6 +134,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "config_path",
         "python",
         "python_api",
+        "render",
     ):
         assert key in data, f"missing capabilities key {key!r}"
     # The library door, named where an agent already looks for what the
@@ -166,6 +169,66 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+async def test_capabilities_fields_returns_only_the_named_keys(cap_state: SessionState):
+    """What a caller checks after a config edit, without the rest of the report."""
+    (full,) = await _run(cap_state, [{"kind": "capabilities"}])
+    (picked,) = await _run(
+        cap_state, [{"kind": "capabilities", "fields": ["config_path", "allowed_paths"]}]
+    )
+    assert picked["ok"] is True
+    assert picked["data"] == {key: full["data"][key] for key in ("allowed_paths", "config_path")}
+
+
+async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"] == insp._do_capabilities(cap_state, raster.raster_support())
+
+
+def test_capabilities_field_names_are_the_report_keys(cap_state: SessionState):
+    """The selector's vocabulary and the report's keys are one list: a key added
+    to the report without a selector name, or the reverse, fails here."""
+    assert set(typing.get_args(insp.CapabilityField)) == set(
+        insp._do_capabilities(cap_state, raster.raster_support())
+    )
+
+
+@pytest.mark.parametrize("fields", [["no_such_key"], []], ids=["unknown", "empty"])
+async def test_a_bad_capabilities_selector_fails_only_that_item(
+    cap_state: SessionState, fields: list[str]
+):
+    results = await _run(
+        cap_state,
+        [{"kind": "capabilities", "fields": fields}, {"kind": "capabilities"}],
+    )
+    assert results[0]["ok"] is False
+    assert results[0]["error"]["code"] == "invalid_query"
+    assert results[1]["ok"] is True
+
+
+@needs_raster
+async def test_capabilities_reports_png_rendering(cap_state: SessionState):
+    """An agent deciding between an inline PNG and a file path asks here first,
+    rather than rendering to find out."""
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"]["render"] == {"png": True, "missing": None, "reason": None, "remedy": None}
+
+
+@pytest.mark.parametrize(
+    ("absence", "missing"),
+    [("raster_extra_missing", "extra"), ("raster_native_missing", "native_library")],
+)
+async def test_capabilities_reports_what_is_missing(
+    cap_state: SessionState, request: pytest.FixtureRequest, absence: str, missing: str
+):
+    request.getfixturevalue(absence)
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    render = res["data"]["render"]
+    assert render["png"] is False
+    assert render["missing"] == missing
+    # The loader's own answer, reason and per-platform remedy included.
+    assert render == asdict(raster.raster_support())
 
 
 async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):

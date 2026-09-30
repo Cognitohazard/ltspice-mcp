@@ -66,7 +66,7 @@ import asyncio
 import copy
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
@@ -96,6 +96,7 @@ from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_awar
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
+from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     named_labels,
@@ -394,12 +395,43 @@ _CURSOR_DESCRIPTION_FILE = (
 )
 
 
+#: The capabilities report's top-level keys, which are what ``fields`` selects.
+#: ``tests/test_inspect_tools.py`` holds it equal to what ``_do_capabilities``
+#: returns, so a key added to one and not the other fails there.
+CapabilityField: TypeAlias = Literal[
+    "config_path",
+    "python",
+    "simulators",
+    "default_simulator",
+    "exporter_available",
+    "render",
+    "dialects",
+    "diagnostics",
+    "ngbehavior",
+    "persist_jobs",
+    "allowed_paths",
+    "tool_profile",
+    "python_api",
+    "tool_listing",
+    "limits",
+    "linter_version",
+]
+
+
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators and their raw dialects,
     whether the .asc exporter is available, job persistence, allowed roots, the
-    configured limits, and the linter version. Takes no arguments."""
+    configured limits, and the linter version."""
 
     kind: Literal["capabilities"]
+    fields: list[CapabilityField] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Return only these keys, e.g. ['allowed_paths', 'config_path'] after "
+            "a config edit. Omit for the whole report."
+        ),
+    )
 
 
 class SymbolsQuery(StrictModel):
@@ -841,7 +873,7 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _do_capabilities(state: SessionState) -> dict[str, Any]:
+def _do_capabilities(state: SessionState, raster: RasterSupport) -> dict[str, Any]:
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
         info: dict[str, Any] = {
@@ -876,6 +908,10 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         ),
         # The .asc → LTspice netlist exporter needs LTspice itself.
         "exporter_available": "ltspice" in state.available_simulators,
+        # Whether verify_circuit can draw a PNG, the only format it returns
+        # inline. Asked here so an agent that cannot read files knows before it
+        # renders whether it will see the picture, and what to install if not.
+        "render": asdict(raster),
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
@@ -1632,7 +1668,12 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        return {"data": _do_capabilities(state)}
+        # The first successful probe loads the native Cairo library.
+        report = _do_capabilities(state, await asyncio.to_thread(raster_support))
+        if query.fields is not None:
+            wanted = set(query.fields)
+            report = {key: value for key, value in report.items() if key in wanted}
+        return {"data": report}
     if isinstance(query, SymbolsQuery):
         return await _do_symbols(query, state, view)
     if isinstance(query, SymbolQuery):
