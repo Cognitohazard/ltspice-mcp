@@ -28,7 +28,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
-from ltspice_mcp.lib.runner_base import RunOutcome
+from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
 
 _T = typing.TypeVar("_T")
@@ -260,6 +260,26 @@ def fake_artifact_paths(output_folder: Path, run_filename: str) -> tuple[Path, P
     staged = output_folder / run_filename
     staged.parent.mkdir(parents=True, exist_ok=True)
     return staged.with_suffix(".raw"), staged.with_suffix(".log")
+
+
+async def submit_through_spicelib(
+    tmp_path: Path, simulator: type, timeout_s: float | None = None
+) -> RunOutcome:
+    """One run through spicelib's real SimRunner and RunTask threads.
+
+    ``simulator`` is a spicelib ``Simulator`` subclass whose ``run`` stands in
+    for the process; everything around it — the runner, spicelib's threads and
+    the server's completion callback — is the production path.
+    """
+    loop = asyncio.get_running_loop()
+    runner = RunnerBase(loop, simulator, tmp_path, max_parallel=1)
+    deck = tmp_path / "deck.cir"
+    deck.write_text(".op\n.end\n")
+    received: asyncio.Future[RunOutcome] = loop.create_future()
+    await asyncio.to_thread(
+        runner.submit_netlist, deck, "run.cir", received.set_result, timeout_s=timeout_s
+    )
+    return await asyncio.wait_for(received, 10)
 
 
 def fake_simulator(

@@ -21,12 +21,12 @@ from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import (
     SUBPROCESS_TIMEOUT_CEILING_S,
     RunnerBase,
-    RunOutcome,
     collect_run_outcome,
     deck_requests_raw,
     discard_generated_netlist,
 )
 from ltspice_mcp.lib.spice_lex import lex
+from tests.conftest import submit_through_spicelib
 
 
 class FakeSim:
@@ -1005,21 +1005,6 @@ class _TimedOutSimulator(_RecordingSimulator):
         raise subprocess.TimeoutExpired(cmd=["recording-simulator"], timeout=timeout or 0)
 
 
-async def _submit_through_spicelib(
-    tmp_path: Path, simulator: type, timeout_s: float | None
-) -> RunOutcome:
-    """One run through spicelib's real SimRunner and RunTask threads."""
-    loop = asyncio.get_running_loop()
-    runner = RunnerBase(loop, simulator, tmp_path, max_parallel=1)
-    deck = tmp_path / "deck.cir"
-    deck.write_text(".op\n.end\n")
-    received: asyncio.Future[RunOutcome] = loop.create_future()
-    await asyncio.to_thread(
-        runner.submit_netlist, deck, "run.cir", received.set_result, timeout_s=timeout_s
-    )
-    return await asyncio.wait_for(received, 10)
-
-
 @pytest.mark.asyncio
 class TestSimulatorProcessBound:
     """The bound spicelib puts on the simulator process is the caller's.
@@ -1043,14 +1028,14 @@ class TestSimulatorProcessBound:
     ):
         _RecordingSimulator.timeouts.clear()
 
-        outcome = await _submit_through_spicelib(tmp_path, _RecordingSimulator, given)
+        outcome = await submit_through_spicelib(tmp_path, _RecordingSimulator, given)
 
         assert outcome.error is None
         assert _RecordingSimulator.timeouts == [expected]
         assert expected * 1000 < 2**32
 
     async def test_a_run_spicelib_timed_out_says_so(self, tmp_path: Path):
-        outcome = await _submit_through_spicelib(tmp_path, _TimedOutSimulator, 5.0)
+        outcome = await submit_through_spicelib(tmp_path, _TimedOutSimulator, 5.0)
 
         assert outcome.failure_evidence is not None
         assert outcome.failure_evidence["exit_code"] == -2

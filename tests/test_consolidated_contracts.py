@@ -653,7 +653,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # caller checking a config edit wanted two keys and was sent the whole
     # report. Most of it is the enum of report keys, which is also what a
     # compact-listing client reads in place of the stripped description.
-    "inspect": 8620,
+    # Raised by about 40 characters so the capabilities description says it
+    # reports each simulator's executable and the build its last run reported:
+    # that report is where a caller finds which build this server runs.
+    # Measured 8,657.
+    "inspect": 8660,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
