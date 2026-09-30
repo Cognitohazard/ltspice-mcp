@@ -65,7 +65,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
@@ -113,6 +113,12 @@ from ltspice_mcp.lib.simulator import (
     dialect_for_simulator_name,
     simulator_library_roots,
     simulator_remediation,
+)
+from ltspice_mcp.lib.simulator_build import (
+    SimulatorExecutable,
+    executable_identity,
+    executable_path,
+    same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -395,9 +401,10 @@ _CURSOR_DESCRIPTION_FILE = (
 
 
 class CapabilitiesQuery(StrictModel):
-    """What this server can do: detected simulators and their raw dialects,
-    whether the .asc exporter is available, job persistence, allowed roots, the
-    configured limits, and the linter version. Takes no arguments."""
+    """What this server can do: detected simulators with their executables, the
+    build each one's latest run reported, and their raw dialects; whether the
+    .asc exporter is available, job persistence, allowed roots, the configured
+    limits, and the linter version. Takes no arguments."""
 
     kind: Literal["capabilities"]
 
@@ -841,20 +848,61 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _do_capabilities(state: SessionState) -> dict[str, Any]:
+def _reported_version(
+    state: SessionState,
+    executable: SimulatorExecutable | None,
+) -> tuple[str, dict[str, str]] | None:
+    """The build the latest run on this same executable reported, and which run.
+
+    Read from the jobs this session holds, its own and the recent ones loaded
+    at startup, so it is a run's own output rather than a probe: asking the
+    executable would launch the simulator. None until a run on this build has
+    finished and named itself.
+    """
+    if executable is None:
+        return None
+    latest: tuple[Any, str, str, str] | None = None
+    for job in state.all_jobs.values():
+        if not same_executable(job.simulator_executable, executable):
+            continue
+        for case in job.cases:
+            if not case.simulator_version:
+                continue
+            finished = case.completed_at or job.started_at
+            if latest is None or finished > latest[0]:
+                latest = (finished, case.simulator_version, job.job_id, case.case_id)
+    if latest is None:
+        return None
+    return latest[1], {"job_id": latest[2], "case_id": latest[3]}
+
+
+def _do_capabilities(
+    state: SessionState,
+    executables: Mapping[str, SimulatorExecutable | None] | None = None,
+) -> dict[str, Any]:
+    """The capabilities report. ``executables`` is each available simulator's
+    ``executable_identity``, computed off the loop by the caller; without it the
+    report names each executable's path and reports no digest or version."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
+        executable = executables.get(name) if executables is not None else None
+        reported = _reported_version(state, executable)
         info: dict[str, Any] = {
             "available": True,
             "default": cls is state.default_simulator,
-            # Version is not probed (that would run the executable); the raw
-            # dialect spicelib parses results with is the cheap, honest fact.
-            "version": None,
+            # What a run on this same executable said about itself; nothing
+            # is launched to ask. Null until one has run.
+            "version": reported[0] if reported else None,
+            "version_source": reported[1] if reported else None,
             "dialect": dialect_for_simulator_name(cls.__name__),
         }
-        exe = getattr(cls, "spice_exe", None)
-        if exe is not None:
-            info["executable"] = str(exe[0] if isinstance(exe, list) else exe)
+        # The simulator itself, not its launcher: under Wine the command
+        # starts with "wine".
+        program = executable.path if executable is not None else executable_path(cls)
+        if program is not None:
+            info["executable"] = program
+        if executable is not None:
+            info["executable_sha256"] = executable.sha256
         simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that
     # would turn it on — the config self-diagnosis surface. Detection runs at
@@ -1622,7 +1670,12 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        return {"data": _do_capabilities(state)}
+        simulators = dict(state.available_simulators)
+        # Off the loop: the first identification of an executable digests it.
+        executables = await asyncio.to_thread(
+            lambda: {name: executable_identity(cls) for name, cls in simulators.items()}
+        )
+        return {"data": _do_capabilities(state, executables)}
     if isinstance(query, SymbolsQuery):
         return await _do_symbols(query, state, view)
     if isinstance(query, SymbolQuery):

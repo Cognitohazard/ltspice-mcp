@@ -44,6 +44,11 @@ from ltspice_mcp.lib.runner_base import (
     inject_ngspice_control_write,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator_build import (
+    SimulatorExecutable,
+    describe_executable,
+    same_executable,
+)
 from ltspice_mcp.lib.store import Store, run_dir_in, run_filename_in, validate_job_id
 from ltspice_mcp.lib.sweep_utils import generate_id
 
@@ -293,6 +298,38 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
             )
 
 
+def verify_replay_executable(
+    job: ExperimentJob,
+    current: SimulatorExecutable | None,
+    request_id: str,
+) -> None:
+    """Refuse to replay a receipt that a different simulator build produced.
+
+    The fingerprint hashes the request, and nothing in a request names the
+    executable: swap the simulator for another build (or change which
+    simulator is the default) and restart, and a reused request_id would hand
+    back the earlier build's numbers as the answer for this one. So the
+    program recorded at the job's submission is compared with the one this
+    request would launch now, the way ``verify_replay_sources`` compares the
+    decks, and a different build is the same conflict a changed deck is.
+
+    The executable is checked beside the fingerprint rather than hashed into
+    it: it is the server's state, not the caller's request, and folding it in
+    would report a changed executable as "a different request payload". A
+    record that names no executable fails closed, as a record with no source
+    digests does.
+    """
+    if same_executable(job.simulator_executable, current):
+        return
+    raise IdempotencyConflictError(
+        f"request_id {request_id!r} already ran experiment {job.job_id} on "
+        f"{describe_executable(job.simulator_executable)}; this request would now run "
+        f"on {describe_executable(current)}. Its results cannot be shown to come from "
+        "the current build. Submit under a new request_id to run it on the current "
+        "executable; jobs(action='status') still reads the recorded job."
+    )
+
+
 def _already_staged() -> StagedDecks:
     """Stand-in for a staging pass that has run.
 
@@ -321,6 +358,9 @@ class ExperimentRunRequest:
     simulator: str
     stage: StageDecks
     job_id: str | None = None
+    #: The program this request's cases will launch, identified before the
+    #: request gate. Recorded on a new job and compared against a recorded one.
+    simulator_executable: SimulatorExecutable | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
     max_parallel: int | None = None
@@ -505,6 +545,7 @@ class ExperimentRunner(RunnerBase):
             cases=staged.cases,
             sources=staged.sources,
             simulator=request.simulator,
+            simulator_executable=request.simulator_executable,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
             # not the folder itself: everything this job wrote is under it, and
@@ -705,6 +746,7 @@ class ExperimentRunner(RunnerBase):
         # a record written after it looked, so the same drift is re-checked
         # here, under the gate.
         verify_replay_sources(existing, request.request_id)
+        verify_replay_executable(existing, request.simulator_executable, request.request_id)
         if existing.restart_reconciled:
             experiment_store.save_job(existing)
         return _IndexLookup(existing=existing, dangling=False)
@@ -1332,6 +1374,7 @@ class ExperimentRunner(RunnerBase):
     def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
+        case.simulator_version = outcome.simulator_version
         if outcome.observations:
             case.observations.extend(outcome.observations)
 
@@ -1340,6 +1383,7 @@ class ExperimentRunner(RunnerBase):
         """Keep post-kill diagnostics without advertising artifacts we remove."""
         case.raw_file = None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
+        case.simulator_version = outcome.simulator_version
         if outcome.observations:
             case.observations.extend(outcome.observations)
 

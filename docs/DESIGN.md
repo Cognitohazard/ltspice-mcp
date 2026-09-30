@@ -401,6 +401,7 @@ Key `lib/` modules:
 |`schematic_ops.py`|the `.asc` edit engine — op models, appliers, geometry, net tracing|
 |`runner_manager.py`|centralized runner lifecycle with auto-invalidation on loop / simulator / output-folder change|
 |`simulator.py`|simulator detection, WSL/Wine selection|
+|`simulator_build.py`|which build ran: the executable a job launches, and the version each run reports in its own output|
 |`ltspice_wsl.py`, `wsl.py`|WSL path conversion and Windows interop|
 |`raw_parser.py`, `log_parser.py`|simulation result parsing|
 |`library_manager.py`, `library_parser.py`|component library handling|
@@ -491,6 +492,47 @@ Per-simulator notes:
 - **QSPICE** uses `.qraw` (double precision). Windows-only, limited Wine.
 - **Xyce** supports `-syntax` and `-norun` for validation without
   simulation.
+
+### Which build ran
+
+A result is only as reproducible as the simulator build that produced it, so
+the build is a recorded fact rather than an assumption
+(`lib/simulator_build.py`):
+
+- **The executable, per job.** At submission the job records the program its
+  cases will launch: path, size, modification time and SHA-256
+  (`simulator_executable`). The program is the last element of spicelib's
+  `spice_exe`, so under Wine it is `LTspice.exe` and not `wine`. The digest is
+  computed once per build in a process.
+- **The reported build, per case.** When a run ends, the build it named in its
+  own output is read into the case (`simulator_version`). LTspice 24 and later
+  put it on the log's first line (`LTspice 26.0.2 for Windows`). ngspice's `-o`
+  log carries no version, but its console banner does, which the runner
+  captures in the run's `.exe.log`
+  (`ngspice-42, Creation Date: Sun Mar 31 20:15:14 UTC 2024`). The raw
+  header's `Command:` is the fallback: LTspice XVII writes no log banner and
+  names itself only there. Every read is a fixed number of bytes from the head
+  of an artifact. Simulator output is untrusted input.
+- **Replay compares them.** A reused `request_id` whose job ran on a different
+  build than the one the request would launch now is an `idempotency_conflict`,
+  as an edited deck is. The executable is checked beside the fingerprint rather
+  than hashed into it. It is server state, not request content, and folding it
+  in would report a swapped executable as "a different request payload".
+- **Capabilities reads runs, not the executable.** `inspect(kind="capabilities")`
+  reports each simulator's executable and digest, and as `version` the build
+  that the latest run on that same executable reported. Asking the executable
+  would mean launching the simulator just to fill in a report.
+
+One executable per simulator family per process remains the rule: spicelib's
+`create_from` sets `spice_exe` on the shared class. Running a second build
+means a second process on the same working directory, e.g.
+`Api(working_dir=..., simulator_exe=".../XVIIx64.exe")`. Both processes read
+and write the same job records, and each job records which build ran it, so
+the two builds' results stay distinguishable. A per-run executable choice
+(named executables in config, each a simulator subclass with its own
+`spice_exe`, runner and permits) would change the `execution.simulator` input
+contract and simulator detection. It is left until a task shows the
+two-process route falls short.
 
 ## WSL support
 

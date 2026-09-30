@@ -285,7 +285,21 @@ canonical bytes and never triggers a bump.
 
 `allow_live_includes` is *not* a presentation field: a job whose
 inputs cannot be proven cannot be replayed on the strength of a stored
-fingerprint, so reusing its `request_id` runs the experiment again.
+fingerprint, so reusing its `request_id` is an `idempotency_conflict`, and a
+new `request_id` runs the experiment again.
+
+**Replay is scoped to the simulator build.** Nothing in a request names the
+simulator executable. The job therefore records the program its cases launch
+(`simulator_executable`: path, size, modification time, SHA-256). A replay
+compares it with the program the request would launch now, resolved the way a
+fresh submission resolves it, so a changed default simulator counts too. A
+different build is an `idempotency_conflict` naming both programs, the same
+answer a changed deck gets. Builds are compared by digest, or by path, size and
+time when either side has no digest. A record that names no executable (store
+version 2) fails closed the same way. The check sits beside the fingerprint, not
+inside it: the executable is server state, and hashing it in would report a
+swapped build as a different request payload. `jobs(status)` still reads the
+recorded job, and a new `request_id` runs it on the current build.
 
 **Control token.** The receipt carries an unguessable `control_token`. Cancel
 authority is the owning process *or* a presented control token, so a
@@ -405,9 +419,10 @@ and an observation says the provenance is explicitly weaker. Live references
 are enumerated, never silently trusted. Reject the fail-by-default rule and the
 hashes can lie; reject staging altogether and vendor-library decks cannot run.
 
-Provenance is opt-in on the response. Digests, staged paths, the full manifest
-and the linter version are emitted only under `provenance: true` on
-`run_experiments`, or `include.provenance: true` on `analyze_results`. The
+Provenance is opt-in on the response. Digests, staged paths, the full manifest,
+the linter version and the job's `simulator_executable` are emitted only under
+`provenance: true` on `run_experiments`, or `include.provenance: true` on
+`analyze_results` (which carries no executable). The
 lean receipt keeps `{circuit, path, simulator, dialect, staged_files}` plus
 every manifest entry that *discloses* something — live, carrying a reason, or
 otherwise not an ordinary staged reference — so it fails closed. An analysis's
@@ -493,8 +508,15 @@ advancing; that judgment, and whether to cancel, is the caller's.
 
 **RunRecord** is a standalone schema fragment shared by `run_experiments` and
 `jobs`:
-`{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?}`. The keys
-are optional because a requested run-field projection may remove any of them.
+`{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
+simulator_version?}`. The keys are optional because a requested run-field
+projection may remove any of them. `simulator_version` is the build the run
+named in its own output: the LTspice log banner (`LTspice 26.0.2 for Windows`),
+the ngspice console banner (`ngspice-42, Creation Date: ...`), or the raw
+header's `Command:` when neither exists. It is null when the output named none.
+It is recorded per case, so an executable replaced mid-job shows up as two
+builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
+`jobs(runs)` and `run_fields` return it.
 Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
@@ -857,7 +879,10 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 
 ```
 {kind: "capabilities"}
-    simulators and versions, exporter presence, dialects, persistence,
+    simulators: each one's executable and its sha256, and as `version` the
+    build the latest run on that same executable reported, with
+    `version_source` naming the job and case (null until one has run; the
+    executable is never launched to ask); exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, and the startup diagnostics that say whether
     this server started degraded

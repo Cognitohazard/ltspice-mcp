@@ -360,6 +360,7 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("inspect", "capabilities"): (
         "which simulators",
+        "simulator version",
         "server status",
         "what can this server do",
         "limits",
