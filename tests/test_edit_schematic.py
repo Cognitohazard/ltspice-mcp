@@ -3,8 +3,8 @@
 Covers the revision guard (sha match / mismatch / missing), the commit protocol
 (staged write + rename-last, with crash injection before and after the rename),
 a base:"blank" build reaching the same sheet as the same ops applied to an
-existing one, the wiring metric and the paginated touched / pin_legend /
-label_only_pins views, the refusal of every spelling of a render this tool no
+existing one, each op's own facts under ``results``, the wiring metric and the
+paginated touched / pin_legend / label_only_pins views, the refusal of every spelling of a render this tool no
 longer has, the post-commit compare stage (success / mismatch / export
 failure), and an archetype-scale blank build.
 """
@@ -22,6 +22,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.schematic_ops import (
+    OP_RESULT_FACTS,
     build_on_wire_predicate,
     collect_component_geometry,
     get_asc_editor,
@@ -39,6 +40,7 @@ from ltspice_mcp.tools.schematic_edit import (
 )
 from tests import _fake_netlister as fake_netlister
 from tests._asc_ops import apply_ops
+from tests.test_api_reference import _op_kinds
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -116,6 +118,68 @@ async def test_blank_build_parity_with_the_shared_op_runner(asc_state, work_dir)
     editor.save_netlist(control)
 
     assert (work_dir / "parity_edit.asc").read_text() == control.read_text()
+
+
+async def test_a_t_junction_endpoint_commits_through_the_whole_transaction(asc_state):
+    """A wire_pins endpoint given as {x, y} on a wire's interior is carried
+    through the tool's own validation, commit and touched view, which reads each
+    op's pins by name and must pass over one that has none."""
+    ops = [
+        *_DIVIDER_OPS,
+        {"op": "add_component", "reference": "R3", "symbol": "res", "x": 550, "y": 100},
+        {"op": "wire_pins", "from_pin": "R3.2", "to_pin": {"x": 550, "y": 200}},
+    ]
+    data = await _build_blank(asc_state, "tee_edit", ops)
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "committed"
+    touched = {row["ref"] for row in data["views"]["touched"]["items"]}
+    assert "R3" in touched
+
+
+# The divider's route over the top leaves this rail along y=200; the res
+# fixture's pins sit 48 above and below its origin, so R1.2 and R2.2 are at
+# y=348.
+_RAIL = {"from": _DIVIDER_OPS[2]["waypoints"][0], "to": _DIVIDER_OPS[2]["waypoints"][1]}
+_BOTTOM = {"from": {"x": 400, "y": 348}, "to": {"x": 700, "y": 348}}
+
+_FACT_OPS: list[dict] = [
+    *_DIVIDER_OPS,
+    {"op": "add_component", "reference": "R3", "symbol": "res", "x": 550, "y": 100},
+    # 5: a stem from R3 ending on the rail's interior
+    {"op": "wire_pins", "from_pin": "R3.2", "to_pin": {"x": 550, "y": 200}},
+    # 6 and 7: the same straight run twice
+    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
+    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.2"},
+]
+
+_FACT_RESULTS: list[dict] = [
+    {
+        "index": 5,
+        "op": "wire_pins",
+        "junctions": [{"x": 550, "y": 200, "via": "endpoint", "wire": _RAIL}],
+    },
+    {"index": 7, "op": "wire_pins", "already_present": [_BOTTOM]},
+]
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["commit", "dry_run"])
+async def test_the_response_carries_each_ops_own_facts(asc_state, dry_run: bool):
+    """What an op found on the sheet reaches the caller as a field, not text.
+
+    A T onto a wire's interior names the wire it joined; a route already on
+    the sheet names the segments it did not redraw. Both used to stop at the
+    op runner, so the caller could learn of neither from the response. The
+    ops that found nothing, the plain routes included, have no entry.
+    """
+    data = await _build_blank(asc_state, "facts", _FACT_OPS, dry_run=dry_run)
+
+    assert data["outcome"] == "complete"
+    assert data["results"] == _FACT_RESULTS
+
+
+def test_every_op_declaring_result_facts_is_an_op_this_tool_takes():
+    # A misspelt key would relay nothing for that op, without an error.
+    assert set(OP_RESULT_FACTS) <= _op_kinds()
 
 
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
@@ -817,6 +881,38 @@ async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
 
     assert _sheet_findings(data) == ["Dangling label 'orphan' at (900,900)"]
     assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
+
+
+async def test_a_finding_at_a_routes_coordinate_endpoint_is_reported(asc_state, work_dir):
+    """The duplicated stub predates the edit; the route ends on its free end,
+    naming that point as surely as a waypoint or a label's x, y would."""
+    await _build_blank(
+        asc_state,
+        "dup-stub",
+        [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 300},
+            {"op": "add_component", "reference": "R2", "symbol": "res", "x": 300, "y": 300},
+        ],
+    )
+    sheet = work_dir / "dup-stub.asc"
+    # edit_schematic never draws a segment twice, so the duplicate is written raw.
+    sheet.write_bytes(sheet.read_bytes() + b"WIRE 100 252 100 200\n" * 2)
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [
+            {
+                "op": "wire_pins",
+                "from_pin": "R2.1",
+                "to_pin": {"x": 100, "y": 200},
+                "waypoints": [{"x": 300, "y": 200}],
+            }
+        ],
+    )
+
+    assert data["commit_state"] == "committed"
+    assert any(w.startswith("Duplicate wire (2×)") for w in _sheet_findings(data))
 
 
 async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):

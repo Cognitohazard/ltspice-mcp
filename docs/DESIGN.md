@@ -89,9 +89,10 @@ Geometry-aware editing is `edit_schematic`, one transactional op batch
 `add_directive`, `remove_directive`). The ops work against pin
 coordinates, bounding boxes, and named-net topology: the `wire_pins` op
 refuses diagonal wires,
-pin collisions, wire-junction overlaps, and named-net shorts before
-touching the file, and the batch returns geometry the agent
-can use in its next call. `inspect(kind="symbol")` is the read-only half
+pin collisions, wire-junction overlaps, named-net shorts, and a waypoint
+that would join another net's wiring before touching the file, takes a
+point on an existing wire as an endpoint to draw a T-junction, and the
+batch returns geometry the agent can use in its next call. `inspect(kind="symbol")` is the read-only half
 of that workflow: it returns pin positions and bounding boxes so the caller
 can plan an edit. It does not validate one.
 
