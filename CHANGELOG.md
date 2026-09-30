@@ -102,7 +102,9 @@ tool-surface changes.
   missing, with the remedy for the server's platform: the install command for
   the extra, or how to install Cairo on Linux, macOS or Windows. On Windows
   that includes putting the DLL folder on `PATH` or in
-  `CAIROCFFI_DLL_DIRECTORIES`.
+  `CAIROCFFI_DLL_DIRECTORIES`. The server checks once per process, because
+  each retry reran cairocffi's library search, so a fix takes effect after a
+  restart, as each remedy says.
 - A `verify_circuit` render with `delivery: "inline"` or `"both"` that returned
   no image said only `returned_inline: false`. An agent that cannot read files
   had no way to tell the drawing existed. The render block now carries

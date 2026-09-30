@@ -46,6 +46,7 @@ from ltspice_mcp.tools.verify import (
     handle_verify_circuit,
 )
 from tests import _fake_netlister as fake_netlister
+from tests.conftest import needs_raster
 
 
 class FakeSim:
@@ -1071,7 +1072,7 @@ async def test_the_digest_names_the_bytes_that_were_drawn(state_no_sim, work_dir
     assert payload["source_sha256"] == drawn
 
 
-@pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
+@needs_raster
 async def test_render_png_present(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "rp.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
@@ -1171,7 +1172,7 @@ async def test_artifact_delivery_skips_nothing(state_no_sim, work_dir, asc_symbo
     assert data["render"]["note"] is None
 
 
-@pytest.mark.skipif(not raster.raster_available(), reason="cairosvg not installed")
+@needs_raster
 async def test_inline_png_is_delivered(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "rk.asc", _RES_ASC)
     result = await handle_verify_circuit(
@@ -1186,9 +1187,8 @@ async def test_inline_png_is_delivered(state_no_sim, work_dir, asc_symbols):
     assert [c.mime_type for c in result.content if c.type == "image"] == ["image/png"]
 
 
+@needs_raster
 async def test_render_max_pixels_downscales(state_no_sim, work_dir, asc_symbols):
-    if not raster.raster_available():
-        pytest.skip("cairosvg not installed")
     asc = _write(work_dir, "rd.asc", _RES_ASC)
     data = await _run(
         state_no_sim,

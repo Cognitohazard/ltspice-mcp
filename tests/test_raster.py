@@ -12,8 +12,10 @@ installed.
 from __future__ import annotations
 
 import base64
+import pickle
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 
 import pytest
 from mcp import types
@@ -23,6 +25,7 @@ from ltspice_mcp.lib.raster import (
     DEFAULT_SCALE,
     PNG,
     SVG,
+    RasterSupport,
     RasterUnavailableError,
     RenderedImage,
     raster_available,
@@ -30,6 +33,7 @@ from ltspice_mcp.lib.raster import (
     render_image,
 )
 from ltspice_mcp.tools._base import image_response
+from tests.conftest import FailingCairosvgImport, needs_raster
 
 # Smallest thing cairosvg will accept that still has measurable extent.
 TINY_SVG = (
@@ -39,11 +43,6 @@ TINY_SVG = (
 )
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-
-needs_raster = pytest.mark.skipif(
-    not raster_available(), reason="optional 'raster' extra (cairosvg) not installed"
-)
-
 
 # ---------------------------------------------------------------------------
 # Rasterization
@@ -111,6 +110,8 @@ def test_svg_request_never_rasterizes(raster_extra_missing: None) -> None:
     assert image.mime_type == "image/svg+xml"
     assert image.scale is None
     assert image.note is None
+    # Asking for SVG is not a degraded PNG, even where no rasterizer exists.
+    assert image.png_unavailable is None
     assert image.data.decode("utf-8") == TINY_SVG
 
 
@@ -128,12 +129,6 @@ def test_png_request_degrades_to_svg_without_the_extra(raster_extra_missing: Non
     assert image.png_unavailable.missing == "extra"
     assert image.png_unavailable.remedy is not None
     assert "ltspice-mcp[raster]" in image.png_unavailable.remedy
-
-
-def test_an_svg_request_carries_no_unavailability(raster_extra_missing: None) -> None:
-    # Asking for SVG is not a degraded PNG, even where no rasterizer exists.
-    image = render_image(TINY_SVG, image_format=SVG)
-    assert image.png_unavailable is None
 
 
 def test_missing_extra_is_reported_as_the_extra(raster_extra_missing: None) -> None:
@@ -164,14 +159,14 @@ def test_missing_native_library_is_reported_as_the_library(
     assert support.remedy == raster.native_library_remedy(sys.platform)
 
 
-def test_png_request_names_the_missing_native_library(raster_native_missing: None) -> None:
-    image = render_image(TINY_SVG, image_format=PNG)
-    assert image.image_format == SVG
-    assert image.png_unavailable is not None
-    assert image.png_unavailable.missing == "native_library"
-    assert image.note is not None
-    assert "Cairo" in image.note
-    assert "not installed" not in image.note
+def test_a_failed_probe_is_not_repeated(raster_native_missing: FailingCairosvgImport) -> None:
+    # A failed import is not cached by Python, and each retry reruns
+    # cairocffi's library search. The remedy ends in a restart, so the loader
+    # answers from its first attempt.
+    first = raster_support()
+    render_image(TINY_SVG, image_format=PNG)
+    assert raster_support() == first
+    assert raster_native_missing.attempts == 1
 
 
 def test_native_library_remedy_is_per_platform() -> None:
@@ -189,9 +184,7 @@ def test_native_library_remedy_is_per_platform() -> None:
 @needs_raster
 def test_a_working_rasterizer_reports_png_support() -> None:
     support = raster_support()
-    assert support.png is True
-    assert (support.missing, support.reason, support.remedy) == (None, None, None)
-    assert support.to_dict() == {"png": True, "missing": None, "reason": None, "remedy": None}
+    assert asdict(support) == {"png": True, "missing": None, "reason": None, "remedy": None}
 
 
 def test_direct_rasterize_raises_when_unavailable(raster_extra_missing: None) -> None:
@@ -199,19 +192,17 @@ def test_direct_rasterize_raises_when_unavailable(raster_extra_missing: None) ->
     # a caller that genuinely requires a bitmap can detect it.
     with pytest.raises(RasterUnavailableError, match="cairosvg") as caught:
         raster.rasterize_svg(TINY_SVG)
-    assert caught.value.missing == "extra"
+    assert caught.value.support.missing == "extra"
 
 
 def test_the_unavailable_error_survives_pickling(raster_native_missing: None) -> None:
     # A Python API caller may carry it across a process boundary; what is
     # missing and how to fix it must arrive with the message.
-    import pickle
-
     with pytest.raises(RasterUnavailableError) as caught:
         raster.rasterize_svg(TINY_SVG)
     copy = pickle.loads(pickle.dumps(caught.value))
-    assert copy.support() == caught.value.support()
-    assert copy.missing == "native_library"
+    assert copy.support == caught.value.support
+    assert str(copy) == str(caught.value)
 
 
 def test_unknown_format_is_rejected() -> None:
@@ -295,7 +286,9 @@ def test_metadata_survives_for_structured_only_clients() -> None:
         data=b"<svg/>",
         image_format=SVG,
         mime_type="image/svg+xml",
-        note="returned SVG instead of PNG: cairosvg missing",
+        png_unavailable=RasterSupport(
+            png=False, missing="extra", reason="cairosvg missing", remedy="install it"
+        ),
     )
     result = image_response(image, "rendered", {"path": "/tmp/rc.asc"})
 
@@ -361,4 +354,8 @@ def test_a_missing_native_cairo_library_counts_as_no_rasterizer(
     image = render_image(TINY_SVG, image_format=PNG)
     assert image.image_format == SVG
     assert image.data.decode("utf-8") == TINY_SVG
-    assert image.note is not None and "raster" in image.note
+    assert image.png_unavailable is not None
+    assert image.png_unavailable.missing == "native_library"
+    # The extra is installed; the note blames the library, not the extra.
+    assert image.note is not None and "Cairo" in image.note
+    assert "not installed" not in image.note
