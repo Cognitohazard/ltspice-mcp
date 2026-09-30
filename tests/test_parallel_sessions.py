@@ -284,7 +284,10 @@ class TestCircuitLockLocation:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 await apply_ops(asc_state, sheet, _SET_R1)
         finally:
-            await asyncio.wait_for(holder.communicate(), timeout=60)
+            # Given input, even empty, communicate() closes the child's stdin,
+            # which is what lets it release the lock and exit. Given none, it
+            # leaves stdin open on Python 3.11 and the wait runs out.
+            await asyncio.wait_for(holder.communicate(b""), timeout=60)
         assert b"2k" not in (work_dir / sheet).read_bytes()
 
     async def test_the_lock_is_per_user_and_names_the_file_not_its_spelling(self, work_dir: Path):
