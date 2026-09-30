@@ -307,6 +307,38 @@ async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_s
     assert sorted(p.name for p in project.iterdir()) == ["amp.asc"]
 
 
+async def test_an_exports_relative_include_resolves_beside_the_schematic(
+    exporting_state, work_dir, tmp_path_factory, monkeypatch
+):
+    """With the store outside the sandbox, a managed export is still compared whole.
+
+    The export sits in the store's scratch; its ``.include models.inc`` names the
+    file beside the schematic, which is inside the sandbox. Resolved against the
+    scratch copy instead, the include is refused as a path outside the allowed
+    roots and the comparison reports the author's own library as denied.
+    """
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(tmp_path_factory.mktemp("stores")))
+    project = work_dir / "project"
+    project.mkdir()
+    _write(project, "models.inc", ".param rload=10k\n")
+    sheet = _write(
+        project,
+        "amp.asc",
+        _RES_ASC.replace("Value 1k", "Value {rload}") + "TEXT 0 0 Left 2 !.include models.inc\n",
+    )
+    reference = _write(project, "ref.net", "* ref\n.include models.inc\nR1 a b {rload}\n.end\n")
+    assert not exporting_state.store.root.is_relative_to(work_dir)
+
+    data = await _run(
+        exporting_state, path=str(sheet), checks=["export", "compare"], reference=str(reference)
+    )
+
+    assert data["failures"] == []
+    assert [f for f in data["findings"] if f["rule_id"] == "path_denied"] == []
+    assert data["comparison"]["equivalent"] is True
+    assert sorted(p.name for p in project.iterdir()) == ["amp.asc", "models.inc", "ref.net"]
+
+
 async def test_lexer_warnings_reach_the_observations(state_no_sim, work_dir):
     """The lexer already reports what it had to guess about — an unclosed
     .SUBCKT, a mismatched .ENDS, a stray continuation. The syntax check lexes

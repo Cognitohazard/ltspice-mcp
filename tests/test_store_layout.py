@@ -144,6 +144,79 @@ async def test_a_finished_run_creates_only_declared_roots(
     assert not list(Store(work_dir).runs_root().glob("*.raw"))
 
 
+@pytest.mark.asyncio
+async def test_a_relocated_store_leaves_the_working_directory_alone(
+    state_with_sim: SessionState,
+    work_dir: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``LTSPICE_MCP_STORE_DIR`` moves the whole store, and nothing else changes.
+
+    The working directory keeps the deck and nothing more; the records, the
+    run, the result set and the request index land in the relocated store,
+    which still answers a repeated request_id with the job it already ran.
+    """
+    store_dir = tmp_path_factory.mktemp("stores")
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(store_dir))
+    fake_simulator(monkeypatch)
+    deck = work_dir / "dut.cir"
+    deck.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    request = RunExperimentsInput.model_validate(
+        {
+            "request_id": "relocated",
+            "circuits": [{"path": str(deck), "id": "dut"}],
+            "execution": {"wait_s": 5.0},
+        }
+    )
+
+    first = (await handle_run_experiments(request, state_with_sim)).structured_content
+    assert first is not None
+    analyzed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": first["job_id"], "label": "dut"}],
+                "recipes": [{"key": "vin", "metric": "value", "expr": "V(in)"}],
+            }
+        ),
+        state_with_sim,
+    )
+    assert analyzed.structured_content is not None
+    replay = (await handle_run_experiments(request, state_with_sim)).structured_content
+    assert replay is not None
+
+    assert sorted(p.name for p in work_dir.iterdir()) == ["dut.cir"]  # noqa: ASYNC240
+    store = Store(work_dir)
+    assert store.root.parent == store_dir
+    assert store.job_record(first["job_id"]).is_file()
+    assert {"experiments", "runs", "results"} <= {p.name for p in store.root.iterdir()}
+    assert replay["job_id"] == first["job_id"]
+    assert replay["replayed"] is True
+
+
+def test_a_relocated_store_is_one_per_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relocating keeps what the working directory scopes scoped to it."""
+    store_dir = tmp_path / "stores"
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(store_dir))
+    project = tmp_path / "project"
+    other = tmp_path / "other"
+    project.mkdir()
+    other.mkdir()
+
+    root = Store(project).root
+    assert root.parent == store_dir
+    assert root.name.startswith("project-")
+    assert Store(project / "sub" / "..").root == root
+    assert Store(other).root != root
+
+    # A relative setting is read from the working directory, the one thing every
+    # process sharing these records has in common.
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", "stores")
+    assert Store(project).root.parent == project / "stores"
+
+
 # Placeholder arguments for every path-returning member of Store, so each can
 # be called and asked which root it lands in. A member missing from this table
 # fails the test below by name: that is the prompt to decide, deliberately,
