@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- A job replayed by `request_id` from a process that did not own it could end
+  `interrupted` although it had completed. The replay saved its own copy of the
+  record, read while the job was still running, and that write could land
+  after the owner's `completed` one. The owner had exited by then, so the next
+  reader found a running job with no owner and recovered it as interrupted.
+  Seen with two scripts detaching the same request. Only the owning process
+  writes a job's record now; the caller that replayed still gets the
+  `idempotent_replay` observation in its receipt.
 - On Windows, a second `run_experiments` call carrying the same `request_id`
   could mint a second job instead of replaying the first. Opening a job record
   while its running job rewrites it fails with a sharing violation for a
@@ -116,6 +124,26 @@ tool-surface changes.
   waypoints the two ends must share an x or a y, or the route is refused as
   diagonal.
 
+- A PNG render that fell back to SVG blamed the optional `raster` extra even
+  when the extra was installed and the native Cairo library it loads was what
+  was missing, so the advice was to install something already installed. The
+  `render` failure, `render.note` and the hint now name which of the two is
+  missing, with the remedy for the server's platform: the install command for
+  the extra, or how to install Cairo on Linux, macOS or Windows. On Windows
+  that includes putting the DLL folder on `PATH` or in
+  `CAIROCFFI_DLL_DIRECTORIES`. The server checks once per process, because
+  each retry reran cairocffi's library search, so a fix takes effect after a
+  restart, as each remedy says.
+- A `verify_circuit` render with `delivery: "inline"` or `"both"` that returned
+  no image said only `returned_inline: false`. An agent that cannot read files
+  had no way to tell the drawing existed. The render block now carries
+  `inline_skipped` (`svg_requested` or `png_unavailable`). `render.note` says
+  that inline delivery is PNG only and where the file was written, and when
+  SVG was requested the hint says so too. SVG markup is still not returned
+  inline. It runs about 600 bytes a component, which costs more than the PNG
+  past a handful of parts, and structured-only clients drop the text channel
+  it would ride on.
+
 ### Added
 
 - `run_code` has `window_and_clean` and `compute_signal_stats` in scope, so a
@@ -176,6 +204,11 @@ tool-surface changes.
   raw's stored data, with LTspice's negated compressed-time points, through
   `abs()` as spicelib does.
 
+- `inspect(kind="capabilities")` reports `render: {png, missing, reason,
+  remedy}`. It says whether `verify_circuit` can make the PNG it returns
+  inline and, if not, whether the `raster` extra or the native Cairo library is
+  missing and how to install it, before anything is drawn.
+
 ### Changed
 
 - The server instructions and `analyze_results`' description say where trace
@@ -207,6 +240,12 @@ tool-surface changes.
   comparison to diagnose. To get the netlist of a matching sheet, run
   `verify_circuit` with the `export` check. The Python API's `edit_schematic`
   follows the same rule.
+
+- The Claude Code plugin and the Claude Desktop extension install
+  `ltspice-mcp[raster]`. Neither lets a user add an extra to the launch it
+  ships, so PNG rendering was impossible through them; installing native Cairo
+  is now the only step. The README documents the extra and the per-platform
+  Cairo install.
 
 ### Security
 

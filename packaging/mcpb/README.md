@@ -27,6 +27,15 @@ geometry comes from those symbol files, so an install of LTspice is what
 supplies them (auto-detected on Windows and macOS). Running simulations
 needs a simulator.
 
+**Optional: native Cairo, for PNG schematic renders.** The bundle installs the
+`raster` extra, but the Cairo library it loads is a native install that no
+wheel ships. Without it, renders come back as SVG files and are never shown
+inline. `inspect(kind="capabilities")` reports `render.png`, and when it is
+false it names what is missing and how to install it on your platform. See
+[PNG rendering](../../README.md#png-rendering-optional) for the per-platform
+steps. The server reads its environment when Claude Desktop starts it, so
+restart Claude Desktop after installing Cairo.
+
 ## Build
 
 Requires Node (for the `mcpb` CLI). From this directory:
