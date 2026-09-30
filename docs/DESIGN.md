@@ -310,17 +310,19 @@ so zoom / pan / hover does nothing for it.
   chart, delivered one of two ways depending on the capabilities the calling
   client declared: an in-chat `ui://` widget for an apps-capable GUI host (in
   practice Claude Desktop for a local stdio server), or a self-contained HTML
-  file opened on the local desktop for a terminal client (on WSL,
-  `explorer.exe` / `cmd.exe /c start` via a `wslpath -w` conversion;
-  otherwise `xdg-open` / `open` / `start`). Either way the tool also returns
-  the data path and a summary of each plotted trace, read from every sample
-  in the window before any decimation: min and max and the axis value where
-  each occurs, the first and final value, and on a transient the
-  time-weighted mean (a mean over a swept voltage or a log frequency axis
-  describes the sweep, not the circuit, so it is left out). An AC trace is
-  summarized as magnitude in dB plus its unwrapped phase at both ends. A
-  stepped or Monte Carlo overlay summarizes each step, up to a cap the reply
-  reports. The model gets the numbers the chart shows without seeing it.
+  file opened on the local desktop for a terminal client (a chromeless
+  Chromium/Edge `--app` window when one is on the path; otherwise, on WSL,
+  `explorer.exe` on a `wslpath -w` conversion, and `xdg-open` / `open` /
+  `os.startfile` elsewhere). Either way the tool also returns the file path
+  and a summary of each plotted trace, read from every sample in the window
+  before any decimation: min and max and the axis value where each occurs,
+  the first and final value, and on a transient the time-weighted mean (a
+  mean over a swept voltage or a log frequency axis describes the sweep,
+  not the circuit, so it is left out). An AC trace is summarized as
+  magnitude in dB plus its unwrapped phase at both ends. A stepped or Monte
+  Carlo overlay summarizes each step, up to a cap the reply reports. The
+  model gets the numbers the chart shows without seeing it, and continues
+  from the path.
   Panels follow units: traces of one declared unit (`trace_unit`, the
   simulator's own type, never a guess from the name) share a panel, so
   volts and amps never share a y-axis, and an AC plot gets a magnitude and
@@ -386,8 +388,10 @@ so zoom / pan / hover does nothing for it.
   (`lib/plot_svg.py`) and rasterized by the optional `raster` extra
   (cairosvg) that schematic renders already use, instead of the
   matplotlib `[plot]` extra first planned: no plotting dependency, and one
-  optional native library instead of two. Without the extra the image is
-  skipped and reported as an observation; SVG markup is never sent in its
+  optional native library instead of two. Without the extra or the native
+  Cairo library the image is skipped and reported as an observation naming
+  the missing piece and its remedy (`raster_support`, the same record
+  `inspect(kind="capabilities")` reports); SVG markup is never sent in its
   place, because path data is no use to a model and costs more than the
   picture. The PNG is also written beside the HTML. It is about a thousand
   tokens for two panels (the reply reports `estimated_tokens`). Its points

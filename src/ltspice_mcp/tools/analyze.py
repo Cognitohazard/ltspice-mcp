@@ -3667,12 +3667,14 @@ async def capture_attached_analysis(
         "gain), bode_filter (cutoff, bandwidth, Q), bode_point, bode_slope "
         "(dB/decade), bode_crossing, ac_structure (poles, zeros), resonance, "
         "return_loss (VSWR), thd (distortion), noise_integral, signal_stats (RMS, "
-        "ripple, peak-to-peak), edges (rise/fall time), timing (propagation "
-        "delay), periodic (duty cycle), transient_response (overshoot, settling, "
+        "ripple, peak-to-peak, percentiles), edges (rise/fall time), timing "
+        "(propagation delay), periodic (duty cycle), transient_response (overshoot, settling, "
         "load step), operating_point (bias point, gm/gds/vth), measurements "
         "(.meas), value (one trace at one axis point), summary, waveform "
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
-        "searches these by plain words and returns a recipe's fields."
+        "searches these by plain words and returns a recipe's fields. A signal is "
+        "one trace or V(a,b), not an expression; other trace math is numpy "
+        "(spice://guide, 'trace math')."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(

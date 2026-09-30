@@ -1486,3 +1486,43 @@ Workaround: `raw_parser.py` `read_partial_raw_progress`, used by
 `test_a_declared_count_behind_the_records_does_not_cap_them`) and, against a
 real killed ngspice run,
 `tests/test_ngspice_e2e.py::test_run_timeout_reports_the_killed_runs_diagnostics_and_progress`.
+
+## Bug 16 — `AscEditor.get_components(prefixes)` matches a character set, case-sensitively (limitation)
+
+### Summary and affected version
+
+In spicelib 1.4.9 and 1.5.1, `editor/asc_editor.py::AscEditor.get_components`
+filters with `[k for k in self.components.keys() if k[0] in prefixes]`. The
+argument is documented as "Type of prefixes to search for. Examples: 'C' for
+capacitors", but it is read as a set of characters, compared with the
+reference's first character as written. So `get_components("r")` returns no
+`R1`, and `get_components("LX")` returns every `L…` and every `X…` rather than
+the `LX…` references. SPICE element letters are case-insensitive, and LTspice
+sheets carry upper-case references, so a lower-case filter silently returns
+nothing.
+
+### Reproduction
+
+Load any sheet holding `SYMATTR InstName R1` with `AscEditor` and call
+`editor.get_components("r")`: the result is `[]`. `get_components("R")`
+returns `["R1"]`. `get_components("RC")` returns both resistors and
+capacitors.
+
+### Impact, proposed upstream fix and test
+
+A caller that passes the letter it was given gets an empty component list on
+a populated sheet, with no error. Compare case-insensitively
+(`k[:1].upper() in prefixes.upper()`), and either document the argument as a
+set of element letters or accept a sequence of prefixes and test
+`k.upper().startswith(p.upper())` for each. An upstream test should cover a
+lower-case letter, a multi-letter prefix, and the `'*'` default.
+
+### Workaround and regression
+
+`tools/inspect_tools.py::_do_components` no longer passes a prefix to
+spicelib. It lists every reference and filters by first letter without regard
+to case, the same rule its netlist branch uses (`_check_prefix` returns the
+upper-cased letter both branches compare against). Pinned by
+`tests/test_inspect_tools.py::test_components_prefix_filter_asc_ignores_case`.
+Nothing here depends on spicelib's filter, so there is no workaround to remove
+when upstream changes.

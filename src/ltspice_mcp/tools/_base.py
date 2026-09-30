@@ -619,8 +619,9 @@ class RenderPolicy(StrictModel):
     format: Literal["png", "svg"] = Field(
         default="png",
         description=(
-            "PNG (lossless, what a model looks at) needs the optional 'raster' "
-            "extra; without it the render degrades to SVG and says so."
+            "PNG (lossless, what a model looks at) needs the 'raster' extra and "
+            "native Cairo, as inspect capabilities reports; without them the "
+            "render degrades to SVG and says why."
         ),
     )
     scale: float = Field(
