@@ -749,13 +749,30 @@ rebuild from its own ops. What is lost is a one-call "undo everything this
 session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
+**Per-op facts.** `results` carries what each op found on the sheet that its
+own arguments do not say, one entry per op, keyed by `index` and `op` like a
+`failures` entry. It is the op runner's own result minus what the response
+already carries: the op's arguments, the advisories `warnings` attributes to
+it, and `add_component`'s placed geometry, which the pin/net views and
+`inspect(kind: "components")` report. An op with nothing left has no entry, so
+a whole-circuit build pays for its routes and removals, not a line per
+component. `wire_pins` reports `wire_count` and, when they occur,
+`already_present` and `junctions`; `remove_wire`, `remove_net_label` and
+`remove_directive` report what they `removed`; `remove_component`'s
+`cleanup_wires` reports how many wires it took as `deleted_wires`. The filter
+drops named keys rather than keeping named ones, so a fact a later op result
+adds reaches the caller without a change to this tool. `results` is not a
+page: like `failures`, its length is bounded by the batch the caller sent, and
+a cursor could not resume it, since the ops it reports on do not run again.
+The Python API returns the same list, from the same evaluator.
+
 **Wire ops.** A routed segment identical to one already on the sheet is not
-drawn a second time; the op's result records it under `already_present` and
-`wire_count` counts only what was drawn. Removing an exact segment that exists
-more than once removes every copy, but only when that leaves no pin newly
-floating — otherwise the op refuses, naming the pin, with nothing written. A
-segment that exists once is still removed unconditionally: that is an explicit
-disconnection, not a tidy-up. A duplicate connects nothing and is
+drawn a second time; the op's `results` entry lists it under `already_present`,
+and its `wire_count` counts only what was drawn. Removing an exact segment that
+exists more than once removes every copy, but only when that leaves no pin
+newly floating — otherwise the op refuses, naming the pin, with nothing
+written. A segment that exists once is still removed unconditionally: that is
+an explicit disconnection, not a tidy-up. A duplicate connects nothing and is
 indistinguishable from a real second wire, so "delete the duplicate" and
 "delete the connection" were otherwise the same request.
 
@@ -768,20 +785,24 @@ with every one. That is the rule `net_partition` applies for every tool that
 reads connectivity, and it means a T needs no split. `wire_pins` takes `{x, y}`
 for either endpoint; the point must touch a wire or a pin, and on a wire's
 interior the new segment ends there and the wire is left whole, so a
-`remove_wire` of that segment restores the sheet. The leg must leave the wire
-at a right angle, and a point where wires of two nets cross is refused, since a
-wire ending there would join both.
+`remove_wire` of that segment restores the sheet. The op's `results` entry
+names the T under `junctions` as `{x, y, via: "endpoint", wire}`, `wire` being
+the segment it joined. The leg must leave the wire at a right angle, and a
+point where wires of two nets cross is refused, since a wire ending there would
+join both.
 
 Anywhere else the route touches existing wiring — a waypoint on a wire, a
 segment passing through another wire's end or a lone label, or over a pin
 already wired to an endpoint — it joins that wiring too, so the planner checks
 it against the nets the two endpoints already join. Onto one of those it is a
-redundant junction, drawn and reported (a warning, and `junctions` on the op's
-result). Onto any other net it is refused, naming the wire and the `{x, y}`
-endpoint that makes the same T on purpose: a join no argument asked for must
-not pass silently. A route crossing a wire where neither ends is still refused,
-though LTspice would not join it, because the sheet reads ambiguously there.
-The planner's own advisories (long run, bounding-box crossing) now reach the
+redundant junction, drawn and reported: a warning, and a `junctions` entry on
+the op's `results` entry whose `via` says what it touched (`waypoint`,
+`wire_end`, `label` or `pin`) and whose `wire`, `label` or `pin` names it. Onto
+any other net it is refused, naming the wire and the `{x, y}` endpoint that
+makes the same T on purpose: a join no argument asked for must not pass
+silently. A route crossing a wire where neither ends is still refused, though
+LTspice would not join it, because the sheet reads ambiguously there. The
+planner's own advisories (long run, bounding-box crossing) now reach the
 response's `warnings` too; they used to stop at the op.
 
 `add_net_label` calls a label floating only when it touches no wire and no pin.
@@ -818,8 +839,8 @@ symbol but cannot define a new block) and a whole-document validation pass.
 Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
-views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
-hint`.
+views {touched?: Page, pin_legend?: Page}, results[], warnings, failures,
+observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
 
@@ -1262,9 +1283,6 @@ Recorded so they are not mistaken for oversights:
 - Re-running an attached analysis stage after a server restart.
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
-- `edit_schematic`'s per-op facts (`already_present`, `junctions`) stop at the
-  op runner. The envelope carries only the flat `warnings` list, so a caller
-  learns of a redundant junction from its warning text, not from a field.
 - Two wires that cross can be joined only by ending one on the other. There
   is no op for a junction at a crossing, and `wire_pins` refuses a route that
   crosses a wire where neither ends, even though LTspice leaves it unjoined.
