@@ -672,7 +672,13 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # no libcairo had no way to find out before a render fell back to SVG.
     "verify_circuit": 4880,
     # Job/case addressing, windowing, and delivery flags.
-    "plot_waveform": 3200,
+    # Raised by about 500 characters for what the model gets back: the
+    # description says the reply summarizes each trace and that attach_plot
+    # adds a PNG, and three arguments were added or reworded — panels (a
+    # hand-made panel layout, since the automatic split goes by unit and never
+    # by scale), attach_plot, and open, whose default now comes from
+    # [analysis] open_plot. Measured 3,695 characters.
+    "plot_waveform": 3700,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

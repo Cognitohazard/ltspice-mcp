@@ -1545,17 +1545,13 @@ def compute_signal_stats(
     t_at_min = float(t[int(np.argmin(y))])
     t_at_max = float(t[int(np.argmax(y))])
 
+    mean = trapezoid_mean(t, y)
+    mean_sq = trapezoid_mean(t, y * y)
+    abs_mean = trapezoid_mean(t, np.abs(y))
+    rms = float(np.sqrt(mean_sq))
     if duration > 0 and len(t) >= 2:
-        mean = float(np.trapezoid(y, t) / duration)
-        mean_sq = float(np.trapezoid(y * y, t) / duration)
-        abs_mean = float(np.trapezoid(np.abs(y), t) / duration)
-        variance = max(mean_sq - mean * mean, 0.0)
-        std = float(np.sqrt(variance))
-        rms = float(np.sqrt(mean_sq))
+        std = float(np.sqrt(max(mean_sq - mean * mean, 0.0)))
     else:
-        mean = float(np.mean(y))
-        rms = float(np.sqrt(np.mean(y * y)))
-        abs_mean = float(np.mean(np.abs(y)))
         std = float(np.std(y, ddof=0))
 
     return {
@@ -1573,6 +1569,78 @@ def compute_signal_stats(
         "t_at_min": t_at_min,
         "t_at_max": t_at_max,
     }
+
+
+def trapezoid_mean(t: np.ndarray, y: np.ndarray) -> float:
+    """Trapezoidal average of ``y`` over ``[t[0], t[-1]]``, which is correct on
+    LTspice's adaptive timestep; the plain mean when the window is one instant."""
+    duration = float(t[-1] - t[0])
+    if duration > 0 and len(t) >= 2:
+        return float(np.trapezoid(y, t) / duration)
+    return float(np.mean(y))
+
+
+class TraceStats(TypedDict):
+    """What :func:`summarize_trace` reports about one trace."""
+
+    min: float | None
+    max: float | None
+    x_at_min: float | None
+    x_at_max: float | None
+    initial: float | None
+    final: float | None
+    mean: NotRequired[float | None]
+    non_finite: NotRequired[int]
+
+
+def summarize_trace(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    time_weighted_mean: bool,
+) -> TraceStats:
+    """Extremes, end values and (on a time axis) the mean of one plotted trace.
+
+    Returns ``min``/``max`` with the axis value where each occurs
+    (``x_at_min``/``x_at_max``), the first and last sample (``initial``/
+    ``final``), and, when ``time_weighted_mean`` is set, the trapezoidal mean
+    of :func:`trapezoid_mean`. The mean is left out for a sweep axis: an
+    average over swept voltage or log-spaced frequency depends on the sweep, not
+    the circuit.
+
+    Non-finite samples are left out of every statistic, as
+    :func:`window_and_clean` leaves them out of the ``signal_stats`` recipe, and
+    counted in ``non_finite`` (present only when there are some). ``initial`` and
+    ``final`` are the first and last samples themselves, so either is ``None``
+    when that sample is not finite; every statistic is ``None`` when no sample
+    is.
+    """
+    if len(x) != len(y):
+        raise ValueError(f"Axis and wave have different lengths: {len(x)} vs {len(y)}")
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    n_bad = int(len(y) - np.count_nonzero(finite))
+    xs, ys = (x[finite], y[finite]) if n_bad else (x, y)
+
+    stats: TraceStats = {
+        "min": None,
+        "max": None,
+        "x_at_min": None,
+        "x_at_max": None,
+        "initial": float(y[0]) if len(y) and finite[0] else None,
+        "final": float(y[-1]) if len(y) and finite[-1] else None,
+    }
+    if len(ys):
+        lo, hi = int(np.argmin(ys)), int(np.argmax(ys))
+        stats.update(
+            min=float(ys[lo]), max=float(ys[hi]), x_at_min=float(xs[lo]), x_at_max=float(xs[hi])
+        )
+    if time_weighted_mean:
+        stats["mean"] = trapezoid_mean(xs, ys) if len(ys) else None
+    if n_bad:
+        stats["non_finite"] = n_bad
+    return stats
 
 
 def _unfold_compressed_time(t: np.ndarray) -> np.ndarray:
