@@ -26,6 +26,8 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import Any
 
+from ltspice_mcp.lib.format import SI_PREFIXES
+
 _ASSET_PKG = "ltspice_mcp"
 
 # MIME type SEP-1865 mandates for an HTML UI resource — how an apps-capable host
@@ -61,15 +63,34 @@ _PAGE_CSS = (
     "font-size:12px;margin:0 0 12px;white-space:pre-wrap}.uplot{margin-bottom:18px}"
 )
 
-# Shared render core — NO user data is interpolated. Defines renderSpec(spec, root):
-# one uPlot per panel, stacked. When there is more than one panel (a Bode pair,
-# or traces split by unit or by the caller) they share one synced x cursor, so a
-# feature lines up across panels. All presentation (palette, sizes) lives here.
-# Used by both the offline file and the in-chat widget so they render identically.
+#: Series colours, in order. The static image (``plot_svg``) draws with the same
+#: list, so a trace keeps its colour between the chart and the PNG.
+PALETTE = (
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#ff7f0e",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+)
+
+# Shared render core — NO user data is interpolated (the palette and the SI
+# prefix table are constants, placed once at import). Defines renderSpec(spec,
+# root), which draws one uPlot per panel, stacked, and returns a function that
+# tears them down. A panel's data is one or more tables ``[x, y...]``: series
+# that share an axis share a table, and a .step overlay whose steps have their
+# own time vectors has one per step, which uPlot.join aligns — joining each line
+# across the other tables' samples and breaking it only at its own nulls. When
+# there is more than one panel (a Bode pair, or traces split by unit or by the
+# caller) they share one synced x cursor. Used by both the offline file and the
+# in-chat widget so they render identically.
 _RENDER_JS = """
 function renderSpec(spec, root) {
-  var palette = ['#1f77b4','#d62728','#2ca02c','#ff7f0e','#9467bd','#8c564b',
-                 '#e377c2','#7f7f7f','#bcbd22','#17becf'];
+  var palette = __PALETTE__;
   var charts = [];
   var H = spec.panels.length > 1 ? 300 : 440;
   function width() { return Math.max(640, Math.floor(window.innerWidth - 40)); }
@@ -86,8 +107,7 @@ function renderSpec(spec, root) {
   // Linear-axis tick labels: one SI prefix per axis (from its largest tick) and
   // as many decimals as the tick step needs, so neighbouring ticks never print
   // alike (a fixed precision printed 0.5 ms and 1 ms both as "0.001").
-  var PREFIX = [[1e12, 'T'], [1e9, 'G'], [1e6, 'M'], [1e3, 'k'], [1, ''], [1e-3, 'm'],
-                [1e-6, '\\u00b5'], [1e-9, 'n'], [1e-12, 'p'], [1e-15, 'f']];
+  var PREFIX = __PREFIXES__;
   function engTicks(u, splits) {
     var top = 0, step = Infinity, i;
     for (i = 0; i < splits.length; i++) {
@@ -106,23 +126,6 @@ function renderSpec(spec, root) {
       if (Math.abs(v) < step * 1e-9) return '0';
       return (v / p[0]).toFixed(dec) + p[1];
     });
-  }
-  // A series null-padded onto a shared x (a .step overlay whose steps have their
-  // own time vectors) has no sample at the other steps' x values. uPlot breaks a
-  // line at null but joins across undefined, so its padding becomes undefined and
-  // only its own non-finite samples (listed in gaps) stay breaks.
-  function columns(panel) {
-    var out = [panel.data[0]];
-    for (var i = 0; i < panel.series.length; i++) {
-      var col = panel.data[i + 1], s = panel.series[i];
-      if (s.padded) {
-        var gap = {};
-        (s.gaps || []).forEach(function (k) { gap[k] = true; });
-        col = col.map(function (v, k) { return v === null && !gap[k] ? undefined : v; });
-      }
-      out.push(col);
-    }
-    return out;
   }
   // Draw detected AC corner markers (dashed vertical lines + labels) and an
   // out-of-phase-zero / delay tag straight onto each panel's canvas. Pure canvas — no
@@ -227,25 +230,27 @@ function renderSpec(spec, root) {
     return opts;
   }
   function add(panel, syncKey) {
-    var u = new uPlot(mkOpts(panel, syncKey), columns(panel), root);
+    var data = panel.tables.length === 1 ? panel.tables[0] : uPlot.join(panel.tables);
+    var u = new uPlot(mkOpts(panel, syncKey), data, root);
     charts.push(u);
     return u;
   }
-  if (spec.panels.length > 1) {
-    // A fresh sync group per render: the widget re-renders into the same page
-    // on each result, and a shared key would keep the replaced charts subscribed.
-    renderSpec.seq = (renderSpec.seq || 0) + 1;
-    var s = uPlot.sync('panels-' + renderSpec.seq);
-    for (var q = 0; q < spec.panels.length; q++) s.sub(add(spec.panels[q], s.key));
-  } else {
-    add(spec.panels[0], null);
-  }
-  window.addEventListener('resize', function () {
+  var syncKey = spec.panels.length > 1 ? 'panels' : null;
+  for (var q = 0; q < spec.panels.length; q++) add(spec.panels[q], syncKey);
+  function onResize() {
     var w = width();
     for (var i = 0; i < charts.length; i++) charts[i].setSize({ width: w, height: H });
-  });
+  }
+  window.addEventListener('resize', onResize);
+  // destroy() also leaves the cursor sync group, so a re-render starts clean.
+  return function dispose() {
+    window.removeEventListener('resize', onResize);
+    for (var i = 0; i < charts.length; i++) charts[i].destroy();
+  };
 }
-"""
+""".replace("__PALETTE__", json.dumps(PALETTE)).replace(
+    "__PREFIXES__", json.dumps([list(p) for p in SI_PREFIXES])
+)
 
 # Offline-file driver: reads the inlined JSON blob and renders once.
 _FILE_INIT_JS = """
@@ -259,7 +264,7 @@ _FILE_INIT_JS = """
 def build_plot_html(spec: dict[str, Any], *, title: str, summary: str = "") -> str:
     """Assemble a single self-contained HTML file from a PlotSpec.
 
-    ``spec`` carries only chart data (``panels``/``bode``/``analysis_type``) — the
+    ``spec`` carries only chart data (``panels``/``analysis_type``) — the
     ``title``/``summary`` chrome is passed separately so neither can collide with
     the data blob. ``allow_nan=False``: non-finite samples must already be JSON
     ``null`` (the worker's job); a stray ``NaN`` raises here (fail loud) rather
@@ -350,14 +355,16 @@ _WIDGET_INIT_JS = """
   var root = document.getElementById('panels');
   var status = document.getElementById('status');
   function applyTheme(t) { document.documentElement.classList.toggle('dark', t === 'dark'); }
+  var dispose = null;
   function draw(result) {
     var raw = result && result._meta && result._meta['__SPEC_KEY__'];
     if (!raw) { status.textContent = 'No plot data in this result.'; return; }
     var spec;
     try { spec = JSON.parse(raw); } catch (e) { status.textContent = 'Could not parse plot data.'; return; }
     status.style.display = 'none';
+    if (dispose) dispose();
     root.innerHTML = '';
-    renderSpec(spec, root);
+    dispose = renderSpec(spec, root);
   }
   var app = new App({ name: 'ltspice-plot', version: '1.0.0' }, {});
   app.onhostcontextchanged = function (ctx) { applyTheme(ctx && ctx.theme); };

@@ -13,11 +13,13 @@ tool-surface changes.
 - `plot_waveform` drew nothing for a `.step` transient whose steps have
   different time vectors, the usual case. Each step's trace was padded onto
   the combined time axis with a gap wherever another step had a sample, so
-  every sample stood alone and none was drawn. The chart now joins each
-  trace across that padding and breaks it only at the trace's own non-finite
-  samples. Linear axes also printed neighbouring ticks alike (0.5 ms and
-  1 ms both as `0.001`); they now take one SI prefix per axis and the
-  decimals the tick step needs.
+  every sample stood alone and none was drawn. Each step's trace now keeps
+  its own time vector in the chart data, and the chart aligns them with
+  uPlot's own join, which draws each trace through its own samples and
+  breaks it only at its own non-finite ones. The chart file for such a run
+  is also smaller, since no padding is written. Linear axes also printed
+  neighbouring ticks alike (0.5 ms and 1 ms both as `0.001`); they now take
+  one SI prefix per axis and the decimals the tick step needs.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
@@ -110,8 +112,8 @@ tool-surface changes.
   `final`, and the time-weighted `mean` on a transient, read from every sample
   in the window before any decimation. An AC trace is summarized in dB with
   its unwrapped phase at both ends; a stepped run gets one summary per step,
-  up to 32 (`traces_total` gives the count, and an observation says when the
-  list is cut short). The summaries are in `traces` and the text reply, on
+  up to 32 (when there are more, `traces_truncated` gives the total and an
+  observation says so). The summaries are in `traces` and the text reply, on
   both the in-chat widget and the terminal path, and `x_unit` names the axis
   unit. Before, the reply held only the file path and the plot's point
   counts.

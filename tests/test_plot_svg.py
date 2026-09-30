@@ -14,33 +14,38 @@ import pytest
 
 from ltspice_mcp.lib.plot_svg import render_plot_svg, tick_labels
 
-_NS = {"svg": "http://www.w3.org/2000/svg"}
+_SVG = "{http://www.w3.org/2000/svg}"
 
 
-def _panel(data, labels, *, x_scale="linear", x_label="Time (s)", y_label="V(out) (V)"):
+def _panel(table, labels, *, x_scale="linear", x_label="Time (s)", y_label="V(out) (V)"):
+    """A one-table panel: ``table`` is ``[x, y...]``, one row per label."""
     return {
         "x_scale": x_scale,
         "x_label": x_label,
         "y_label": y_label,
         "series": [{"label": label} for label in labels],
-        "data": data,
+        "tables": [table],
     }
 
 
 def _spec(*panels, **extra):
-    return {"analysis_type": "transient", "bode": False, "panels": list(panels), **extra}
+    return {"analysis_type": "transient", "panels": list(panels), **extra}
 
 
 def _parse(svg: str) -> ET.Element:
     return ET.fromstring(svg)
 
 
+def _by_class(root: ET.Element, tag: str, cls: str) -> list[ET.Element]:
+    return [e for e in root.iter(_SVG + tag) if e.get("class") == cls]
+
+
 def _texts(root: ET.Element) -> list[str]:
-    return ["".join(t.itertext()) for t in root.iter("{http://www.w3.org/2000/svg}text")]
+    return ["".join(t.itertext()) for t in root.iter(_SVG + "text")]
 
 
 def _series_paths(root: ET.Element) -> list[ET.Element]:
-    return [p for p in root.iter("{http://www.w3.org/2000/svg}path") if p.get("class") == "trace"]
+    return _by_class(root, "path", "trace")
 
 
 class TestRenderPlotSvg:
@@ -50,10 +55,7 @@ class TestRenderPlotSvg:
             _panel([[0.0, 1.0, 2.0], [1e-3, 2e-3, 0.0]], ["I(C1)"], y_label="I(C1) (A)"),
         )
         root = _parse(render_plot_svg(spec, title="rc — transient"))
-        panels = [
-            g for g in root.iter("{http://www.w3.org/2000/svg}g") if g.get("class") == "panel"
-        ]
-        assert len(panels) == 2
+        assert len(_by_class(root, "g", "panel")) == 2
         assert len(_series_paths(root)) == 2
         texts = _texts(root)
         assert "rc — transient" in texts
@@ -62,7 +64,7 @@ class TestRenderPlotSvg:
     def test_markup_in_labels_stays_text(self):
         evil = 'V(</text><script>alert(1)</script>)&"'
         root = _parse(render_plot_svg(_spec(_panel([[0.0, 1.0], [0.0, 1.0]], [evil])), title=evil))
-        assert not list(root.iter("{http://www.w3.org/2000/svg}script"))
+        assert not list(root.iter(_SVG + "script"))
         assert evil in _texts(root)
 
     def test_null_samples_break_the_line(self):
@@ -111,14 +113,14 @@ class TestRenderPlotSvg:
         assert tick_labels([-0.02, 0.0, 0.02]) == ["-20m", "0", "20m"]
         assert tick_labels([-40.0, -20.0, 0.0]) == ["-40", "-20", "0"]
 
-    def test_padding_is_joined_across_and_real_gaps_break_the_line(self):
-        panel = _panel([[0.0, 0.5, 1.0, 1.5, 2.0], [1.0, None, 2.0, None, 3.0]], ["V(out)"])
-        panel["series"][0].update(padded=True, gaps=[])
-        (path,) = _series_paths(_parse(render_plot_svg(_spec(panel), title="t")))
-        assert path.get("d", "").count("M") == 1
-        panel["series"][0]["gaps"] = [3]
-        (path,) = _series_paths(_parse(render_plot_svg(_spec(panel), title="t")))
-        assert path.get("d", "").count("M") == 2
+    def test_each_table_is_drawn_against_its_own_axis(self):
+        # A .step overlay: each step keeps its own time vector, so one line per
+        # step, unbroken even though the axes interleave; a real null in a row
+        # still breaks that row's line.
+        panel = _panel([[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]], ["V(out) [step 0]", "V(out) [step 1]"])
+        panel["tables"].append([[0.5, 1.5, 2.5], [4.0, None, 6.0]])
+        paths = _series_paths(_parse(render_plot_svg(_spec(panel), title="t")))
+        assert [p.get("d", "").count("M") for p in paths] == [1, 2]
 
     def test_descending_axis_renders_finite_coordinates(self):
         spec = _spec(_panel([[5.0, 4.0, 3.0, 2.0], [1.0, 2.0, 3.0, 4.0]], ["V(out)"]))
