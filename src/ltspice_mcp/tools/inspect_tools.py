@@ -95,12 +95,14 @@ from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
+from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     named_labels,
     net_partition,
     netlist_card_value,
+    placed_geometry,
     require_asc,
     resolve_pin,
     same_instance_dropped_segments,
@@ -1307,10 +1309,6 @@ def _check_prefix(prefix: str | None) -> None:
         )
 
 
-def _has_prefix(reference: str, prefix: str | None) -> bool:
-    return prefix is None or reference.casefold().startswith(prefix.casefold())
-
-
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -1323,7 +1321,7 @@ def _components_netlist_payload(
     rows: list[dict[str, Any]] = []
     for card in by_ref.values():
         ref = card.name
-        if not ref or not _has_prefix(ref, prefix):
+        if not ref or (prefix is not None and not matches_prefix(ref, prefix)):
             continue
         entry: dict[str, Any] = {"reference": ref, "value": netlist_card_value(card)}
         if detail == "full" and not body_has_stray_kv_remnant(card.body):
@@ -1342,8 +1340,6 @@ def _components_netlist_payload(
 
 def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
     """Build per-component detail for a page of .asc references (editor on loop)."""
-    from ltspice_mcp.lib.symbol_geometry import get_symbol_info
-
     rows: list[dict[str, Any]] = []
     for ref in refs:
         try:
@@ -1358,15 +1354,11 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
                 entry["attributes"] = attrs
             if detail == "full":
                 pos, erot = editor.get_component_position(ref)
-                rot_str = erot.name if erot else "R0"
                 entry["symbol"] = comp.symbol
                 entry["position"] = {"x": pos.X, "y": pos.Y}
-                entry["rotation"] = rot_str
-                sym_info = (
-                    get_symbol_info(comp.symbol, editor.asc_file_path) if comp.symbol else None
-                )
-                if sym_info is not None:
-                    geom = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+                entry["rotation"] = erot.name if erot else "R0"
+                geom = placed_geometry(editor, ref)
+                if geom is not None:
                     entry["pins"] = geom["pins"]
                     entry["bounding_box"] = geom["bounding_box"]
         rows.append(entry)
@@ -1391,7 +1383,11 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         try:
             # Filtered here, not by spicelib's get_components(prefixes), which
             # reads its argument as a set of case-sensitive first letters.
-            refs = sorted(r for r in editor.get_components() if _has_prefix(r, q.prefix))
+            refs = sorted(
+                r
+                for r in editor.get_components()
+                if q.prefix is None or matches_prefix(r, q.prefix)
+            )
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
@@ -1618,7 +1614,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         row
         for row in hierarchy.instances
         if tuple(p.casefold() for p in row.instance[: len(selected)]) == selected
-        and _has_prefix(row.reference, q.prefix)
+        and (q.prefix is None or matches_prefix(row.reference, q.prefix))
     ]
     identity = {
         **hierarchy.binding(),

@@ -245,7 +245,7 @@ class TestParseAsyFile:
 
         monkeypatch.setattr(sg, "parse_asy_file", _boom)
         sg._symbol_cache.pop("bad_xyz", None)
-        assert sg.get_symbol_info("bad_xyz") is None
+        assert sg.get_symbol_info("bad_xyz", None) is None
 
 
 # ---------------------------------------------------------------------------

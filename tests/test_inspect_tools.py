@@ -471,22 +471,19 @@ async def test_components_prefix_filter(netlist: Path, state_no_sim: SessionStat
     assert {c["reference"] for c in res["data"]["components"]} == {"R1", "R2"}
 
 
-@pytest.mark.parametrize("prefix", ["LX*", "", "L X"])
-async def test_components_bad_prefix(netlist: Path, state_no_sim: SessionState, prefix: str):
+@pytest.mark.parametrize(
+    ("prefix", "names"),
+    [("LX*", "prefix='LX'"), ("*", "omit it"), ("", "without spaces"), ("L X", "without spaces")],
+)
+async def test_components_bad_prefix(
+    netlist: Path, state_no_sim: SessionState, prefix: str, names: str
+):
     (res,) = await _run(
         state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": prefix}]
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_prefix"
-
-
-async def test_components_prefix_names_the_plain_spelling_of_a_glob(
-    netlist: Path, state_no_sim: SessionState
-):
-    (res,) = await _run(
-        state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": "LX*"}]
-    )
-    assert "prefix='LX'" in res["error"]["message"]
+    assert names in res["error"]["message"]
 
 
 @pytest.fixture
