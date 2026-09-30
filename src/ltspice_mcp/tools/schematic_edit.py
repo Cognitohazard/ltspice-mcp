@@ -256,7 +256,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "required": ["stage", "ok"],
             },
         },
-        "netlist": {"type": ["string", "null"]},
+        "netlist": {
+            "type": ["string", "null"],
+            "description": (
+                "The committed sheet's exported netlist text. Present only when a "
+                "reference comparison did not confirm equivalence: a mismatch, a "
+                "compare error, or no verdict."
+            ),
+        },
         "verification": {
             "type": "object",
             "description": (
@@ -1052,10 +1059,16 @@ async def _evaluate_edit_schematic(
                 verification = await _run_reference_stage(
                     committed_text, encoding, reference_path, compare, build_id, state, target
                 )
-                netlist = verification.pop("_netlist", None)
+                exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
                 ok = verification.get("export_error") is None and verification.get("equivalent")
                 _stage("reference", bool(ok))
+                # A confirmed match is the answer, and the exported deck only
+                # restates the reference the caller supplied. A mismatch, a
+                # compare error or no verdict keeps it: it is the sheet's side
+                # of a comparison the caller now has to diagnose.
+                if comparison_mismatch(verification):
+                    netlist = exported
 
             hint = _commit_hint(profile, verification)
             return finish(
