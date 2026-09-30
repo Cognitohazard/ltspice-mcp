@@ -803,7 +803,9 @@ kind alone.
 Unchanged fundamentals: the commit protocol (content-hashed support assets,
 with the `.asc` rename last, so a multi-asset transaction rides a single-file
 atomic primitive); the vocabulary (grid 16; rotations `R0..M270`;
-`REF.PINNAME` pins; the legal symbol set is what `inspect` reports); the
+`REF.PIN` pins, where `PIN` is the pin's name or, when no pin has that name
+and it is all digits, its 1-based SpiceOrder, so `X1.2` works on a block whose
+pins are lettered; the legal symbol set is what `inspect` reports); the
 validation errors (unresolvable endpoint, diagonal wire, wire over a symbol
 body, pin collision, junction overlap); the wiring metric with
 `label_only_pins`; findings carrying `at` and `subject`; and the retry story —
@@ -985,11 +987,18 @@ Python API), which are never capped. The gate stays a whole-file answer.
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
     .asc gives a geometric trace; a netlist gives card membership and makes
-    no geometry claims
+    no geometry claims. On a .asc, PIN is a pin name or, failing that, the
+    pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
+    `prefix` keeps references that start with it, case-insensitively, on
+    both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
+    but not L1. It is plain text; a wildcard is refused with the plain
+    spelling to use
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
-    selecting a subtree, and `prefix` is a single element letter
+    selecting a subtree, and `prefix` is the `components` rule applied to
+    each instance's own reference (the last segment), so a one-letter
+    prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query; enumerate requires libs
 {kind: "reference", query?, limit? (default 5, cap 20)}
