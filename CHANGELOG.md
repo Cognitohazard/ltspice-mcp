@@ -199,6 +199,14 @@ tool-surface changes.
   server's per-case limit, `null` when unset) and `export_timeout_s`.
   `[simulation] timeout` bounds only LTspice netlist export, which is all it
   ever bounded.
+- `edit_schematic` with `compare` no longer returns the committed sheet's
+  exported netlist when the verdict is `equivalent: true`. Before, every
+  compare returned the whole deck in `netlist`, even though a confirmed match
+  means it is equivalent to the reference the caller supplied. A mismatch, a
+  compare error or no verdict still returns it, as the sheet's side of the
+  comparison to diagnose. To get the netlist of a matching sheet, run
+  `verify_circuit` with the `export` check. The Python API's `edit_schematic`
+  follows the same rule.
 
 ### Security
 
