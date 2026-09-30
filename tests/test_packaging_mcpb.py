@@ -92,3 +92,13 @@ def test_uv_bundle_installs_the_raster_extra() -> None:
     pyproject = MCPB_DIR / "pyproject.toml"
     deps = tomllib.loads(pyproject.read_text("utf-8"))["project"]["dependencies"]
     assert "ltspice-mcp[raster]" in deps
+
+
+def test_plugin_launches_with_the_raster_extra() -> None:
+    """The plugin's launch line is fixed in its manifest, so a Claude Code user
+    cannot add the extra to it either. Launched without it, the server can
+    never render the PNG it returns inline."""
+    plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text("utf-8"))
+    server = plugin["mcpServers"]["ltspice"]
+    assert server["command"] == "uvx"
+    assert server["args"] == ["--from", "ltspice-mcp[raster]", "ltspice-mcp"]
