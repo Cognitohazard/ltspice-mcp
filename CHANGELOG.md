@@ -10,12 +10,12 @@ tool-surface changes.
 
 ### Fixed
 
-- On Windows, a second `run_experiments` call carrying the same `request_id`
-  could mint a second job instead of replaying the first. Opening a job record
-  while its running job rewrites it fails with a sharing violation for a
-  moment, and the request gate read that as a missing record and recreated the
-  submission. The gate now re-reads a record that exists, and treats only a
-  record that is actually gone as missing.
+- On Windows, a job record read while its running job rewrote it could read as
+  missing: opening a file at the instant a rename replaces it fails with access
+  denied for a moment. The request gate then minted a second job for a repeated
+  `request_id` instead of replaying the first, and a lookup, a listing or a
+  cancel could report a live job as not found. Reading a job record now retries
+  that denial on the same short schedule writing one already did.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call
