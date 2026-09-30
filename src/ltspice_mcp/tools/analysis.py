@@ -25,20 +25,23 @@ return derived metrics. Organized by what the tool answers:
 """
 
 import asyncio
+import base64
 import csv
 import json
 import math
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
+from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
-from ltspice_mcp.lib import atomic_write, desktop, services
+from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, services
 from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
     unwrap_phase_safe,
@@ -48,6 +51,7 @@ from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.metrics import (
     classify_analysis,
     guarded_axis,
+    noise_input_source_unit,
     parse_time,
     window_indices,
 )
@@ -56,13 +60,17 @@ from ltspice_mcp.lib.plot_html import (
     WIDGET_SPEC_META_KEY,
     build_plot_html,
 )
+from ltspice_mcp.lib.plot_svg import render_plot_svg
+from ltspice_mcp.lib.raster import RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import (
     dc_axis_name,
     get_step_count,
     safe_magnitude_db,
+    trace_unit,
 )
 from ltspice_mcp.lib.signal_analysis import (
     downsample_minmax,
+    summarize_trace,
 )
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -419,12 +427,167 @@ PLOT_MAX_POINTS_CEILING = 2_000_000
 # allocate a giant payload / write an unopenable HTML (no silent truncation).
 _PLOT_MAX_CELLS = 10_000_000
 
+# Most per-trace summaries one reply carries. A stepped or Monte Carlo overlay
+# can plot hundreds of traces; past this many the reply lists the first ones and
+# says how many it left out, and analyze_results' signal_stats reads the rest.
+_TRACE_SUMMARY_MAX = 32
+# Per-series point budget for the attached image. The image is under a thousand
+# pixels wide, so more than about two points per pixel column adds bytes, not
+# detail; the min/max decimation keeps every spike.
+_IMAGE_MAX_POINTS = 2_000
+# Most panels a caller may lay out by hand.
+_MAX_PANELS = 8
+
 _X_LABEL = {
     "transient": "Time (s)",
     "ac": "Frequency (Hz)",
     "noise": "Frequency (Hz)",
     "dc": "Sweep",
 }
+_X_UNIT = {"transient": "s", "ac": "Hz", "noise": "Hz"}
+
+
+def _x_axis(raw, analysis_type: str) -> tuple[str, str | None]:
+    """The x-axis label and unit. A .dc sweep is labelled with its swept
+    variable (``V1 (V)``) when the raw names it."""
+    if analysis_type != "dc":
+        return _X_LABEL[analysis_type], _X_UNIT[analysis_type]
+    name, unit = dc_axis_name(raw)
+    if not name:
+        return _X_LABEL["dc"], None
+    return (f"{name} ({unit})" if unit else name), unit
+
+
+def _is_input_noise(sig: services.Signal) -> bool:
+    return "inoise" in sig.trace.lower()
+
+
+async def resolve_input_noise_unit(
+    analysis_type: str, cols: list[services.Signal], netlist: Path | None
+) -> str | None:
+    """The unit input-referred noise is referred to, from the deck's .NOISE line.
+
+    Only read when a noise run plots an ``inoise`` trace; the deck read is a
+    file parse, so it runs off the loop. ``None`` when there is no deck or it
+    does not say.
+    """
+    if analysis_type != "noise" or not any(_is_input_noise(sig) for sig in cols):
+        return None
+    return await asyncio.to_thread(noise_input_source_unit, netlist)
+
+
+def _trace_units(
+    raw,
+    cols: list[services.Signal],
+    analysis_type: str,
+    input_noise_unit: str | None,
+) -> tuple[dict[str, str | None], list[str]]:
+    """The unit of each signal's plotted values, and the input-noise traces whose
+    unit could not be checked against the deck.
+
+    The unit is the one the simulator declared (``trace_unit``), never one
+    guessed from a name. A noise run plots spectral densities, so a declared V
+    or A becomes V/√Hz or A/√Hz. LTspice declares input-referred noise as a
+    voltage even when the .NOISE source is a current source, so an ``inoise``
+    trace takes ``input_noise_unit`` when the deck gave one, and is listed as
+    unverified when it did not.
+    """
+    units: dict[str, str | None] = {}
+    unverified: list[str] = []
+    for sig in cols:
+        unit = trace_unit(raw, sig.trace)
+        if analysis_type == "noise" and unit is not None:
+            if _is_input_noise(sig):
+                if input_noise_unit is None:
+                    unverified.append(sig.name)
+                else:
+                    unit = input_noise_unit
+            unit = f"{unit}/√Hz"
+        units[sig.name] = unit
+    return units, unverified
+
+
+def _unit_groups(
+    cols: list[services.Signal], units: dict[str, str | None]
+) -> list[list[services.Signal]]:
+    """One panel per unit, in the order each unit first appears; traces with no
+    known unit share a panel of their own. Scale is never guessed at: two
+    same-unit traces of very different size share a panel unless the caller
+    lays the panels out."""
+    groups: dict[str | None, list[services.Signal]] = {}
+    for sig in cols:
+        groups.setdefault(units[sig.name], []).append(sig)
+    return list(groups.values())
+
+
+def _group_title(group: list[services.Signal], units: dict[str, str | None]) -> str:
+    names = ", ".join(s.name for s in group) if len(group) <= 3 else f"{len(group)} signals"
+    group_units = list(dict.fromkeys(u for s in group if (u := units[s.name])))
+    return f"{names} ({', '.join(group_units)})" if group_units else names
+
+
+@dataclass(frozen=True)
+class PlotPlan:
+    """What a plot draws, resolved once and shared by every rendering of it.
+
+    The HTML file, the in-chat widget spec and the attached image are each
+    built from one plan, at their own point budgets, so they cannot disagree
+    about which traces share a panel, what the panels are called, or which
+    steps and window they cover.
+    """
+
+    groups: list[list[services.Signal]]
+    units: dict[str, str | None]
+    steps: list[int]
+    step_dicts: list[dict[str, float]]
+    analysis_type: str
+    x_is_log: bool
+    x_label: str
+    ts: float | None
+    te: float | None
+    annotate: bool = False
+    #: The run is a .step sweep, so each summary names its step even when one
+    #: step was selected.
+    stepped: bool = False
+
+    @property
+    def signals(self) -> list[services.Signal]:
+        return [sig for group in self.groups for sig in group]
+
+
+def plan_plot(
+    raw,
+    cols: list[services.Signal],
+    *,
+    steps: list[int],
+    step_dicts: list[dict[str, float]],
+    analysis_type: str,
+    x_is_log: bool,
+    ts: float | None,
+    te: float | None,
+    panels: list[list[services.Signal]] | None = None,
+    annotate: bool = False,
+    input_noise_unit: str | None = None,
+) -> tuple[PlotPlan, list[str]]:
+    """Lay ``cols`` out into panels: the caller's ``panels`` as given, else one
+    panel per unit. Returns the plan and the input-noise traces whose unit the
+    deck did not confirm (see :func:`_trace_units`)."""
+    units, unverified = _trace_units(raw, cols, analysis_type, input_noise_unit)
+    x_label, _ = _x_axis(raw, analysis_type)
+    plan = PlotPlan(
+        groups=panels if panels is not None else _unit_groups(cols, units),
+        units=units,
+        steps=steps,
+        step_dicts=step_dicts,
+        analysis_type=analysis_type,
+        x_is_log=x_is_log,
+        x_label=x_label,
+        ts=ts,
+        te=te,
+        annotate=annotate,
+        stepped=get_step_count(raw) > 1,
+    )
+    return plan, unverified
 
 
 def _plot_filename(raw_path: Path, analysis_type: str, job_id: str | None, run_index: int) -> str:
@@ -485,17 +648,24 @@ def _union_panel(
     if n_rows * len(union) > _PLOT_MAX_CELLS:
         raise _plot_cells_exceeded(n_rows, len(union))
     data: list[list[float | None]] = [_to_json_floats(union)]
-    labels: list[dict[str, str]] = []
+    labels: list[dict[str, Any]] = []
     unioned = False
     for x, y, label in series:
         if len(x) == len(union) and np.array_equal(x, union):
             data.append(_to_json_floats(y))
-        else:
-            unioned = True
-            col = np.full(len(union), np.nan)
-            col[np.searchsorted(union, x)] = y
-            data.append(_to_json_floats(col))
-        labels.append({"label": label})
+            labels.append({"label": label})
+            continue
+        unioned = True
+        col = np.full(len(union), np.nan)
+        at = np.searchsorted(union, x)
+        col[at] = y
+        data.append(_to_json_floats(col))
+        # Padding and the series' own non-finite samples are both null in the
+        # column, but a renderer must join the line across the first and break
+        # it at the second — else a step whose samples interleave with the
+        # others' is drawn as isolated points. ``gaps`` names the second kind.
+        own_gaps = at[~np.isfinite(np.asarray(y, dtype=float))]
+        labels.append({"label": label, "padded": True, "gaps": sorted(set(own_gaps.tolist()))})
     panel = {
         "x_scale": x_scale,
         "x_label": x_label,
@@ -572,27 +742,42 @@ def _ac_annotations(freq: np.ndarray, h: np.ndarray) -> tuple[list[dict], bool]:
     return annotations, bool(result["non_minimum_phase"])
 
 
+def _summary_entry(
+    plan: PlotPlan, sig: services.Signal, step: int, label: str, panel: int
+) -> dict[str, Any]:
+    """The identifying half of one trace summary; the numbers are added after."""
+    entry: dict[str, Any] = {"signal": sig.name}
+    if plan.stepped:
+        entry["step"] = step
+        if label != sig.name:
+            entry["label"] = label
+    entry["panel"] = panel
+    return entry
+
+
 def _compute_plot_spec(
     raw,
-    cols: list[services.Signal],
-    steps_to_plot: list[int],
-    step_dicts: list[dict[str, float]],
-    analysis_type: str,
-    x_is_log: bool,
-    ts: float | None,
-    te: float | None,
+    plan: PlotPlan,
     max_points: int,
-    annotate: bool = False,
+    *,
+    summarize: bool = False,
 ) -> tuple[dict, dict]:
     """Build the renderer-ready plot spec + coverage facts (no I/O).
 
     Runs in a worker thread (heavy numpy). Returns ``(spec, facts)``: ``spec`` is
-    the PlotSpec (panels/bode/analysis_type) consumed by both the offline HTML
-    file and the in-chat widget (called at different point budgets); ``facts`` are
-    the coverage facts the handler turns into observations on the event loop.
+    the PlotSpec (panels/bode/analysis_type) consumed by the offline HTML file,
+    the in-chat widget and the attached image (called at different point
+    budgets); ``facts`` are the coverage facts the handler turns into
+    observations on the event loop. With ``summarize``, ``facts["traces"]``
+    holds one summary per plotted trace, read from the full-resolution window
+    before any decimation.
     """
+    analysis_type = plan.analysis_type
     is_ac = analysis_type == "ac"
-    x_label = _X_LABEL[analysis_type]
+    steps_to_plot = plan.steps
+    step_dicts = plan.step_dicts
+    ts, te = plan.ts, plan.te
+    x_label = plan.x_label
     multi = len(steps_to_plot) > 1
 
     def _label(col: str, step: int) -> str:
@@ -605,11 +790,14 @@ def _compute_plot_spec(
         )
         return f"{col} [{sv}]" if sv else f"{col} [step {step}]"
 
-    empty_steps: list[int] = []
+    empty_steps: set[int] = set()
     non_finite = 0
     downsampled = False
     points_per_series: list[int] = []
     phase_warnings: list[str] = []
+    traces: list[dict[str, Any]] = []
+    panels: list[dict] = []
+    unioned = False
     win_lo: float | None = None
     win_hi: float | None = None
 
@@ -619,86 +807,111 @@ def _compute_plot_spec(
         win_lo = lo0 if win_lo is None else min(win_lo, lo0)
         win_hi = hi0 if win_hi is None else max(win_hi, hi0)
 
-    if is_ac:
-        mag_series: list[tuple[np.ndarray, np.ndarray, str]] = []
-        phase_series: list[tuple[np.ndarray, np.ndarray, str]] = []
-        # Single-trace annotation: capture the full-resolution complex response
-        # BEFORE any downsampling so the corner reading runs on every sample.
-        single_trace = annotate and len(cols) == 1 and len(steps_to_plot) == 1
-        annotate_freq: np.ndarray | None = None
-        annotate_h: np.ndarray | None = None
-        for step in steps_to_plot:
-            axis = guarded_axis(raw, step)
-            lo, hi = window_indices(axis, ts, te)
-            if lo >= hi:
-                empty_steps.append(step)
-                continue
-            for col in cols:
-                wave = col.wave(raw, step)[lo:hi]
-                freq, h = prepare_ac_arrays(axis[lo:hi], wave)
-                if single_trace:
-                    annotate_freq, annotate_h = freq, h
-                mag = safe_magnitude_db(h)
-                phase, warns = unwrap_phase_safe(h)
-                phase_warnings.extend(warns)
-                non_finite += int(np.count_nonzero(~np.isfinite(mag)))
-                non_finite += int(np.count_nonzero(~np.isfinite(phase)))
-                if len(freq) > max_points:
-                    downsampled = True
-                    f_ds, mag = downsample_minmax(freq, mag, max_points)
-                    _, phase = downsample_minmax(freq, phase, max_points)
-                    freq = f_ds
-                _track_window(freq)
-                points_per_series.append(len(freq))
-                label = _label(col.name, step)
-                mag_series.append((freq, mag, label))
-                phase_series.append((freq, phase, label))
-        if not mag_series:
-            raise ResultError(
-                "The [t_start, t_end] window selects no samples"
-                + (f" in any of the {len(steps_to_plot)} steps." if multi else ".")
-            )
-        mag_panel, u1 = _union_panel(mag_series, "log", x_label, "Magnitude (dB)")
-        phase_panel, u2 = _union_panel(phase_series, "log", x_label, "Phase (deg)")
-        unioned = u1 or u2
-        spec = {"analysis_type": analysis_type, "bode": True, "panels": [mag_panel, phase_panel]}
-        if single_trace and annotate_freq is not None and annotate_h is not None:
-            annotations, nmp = _ac_annotations(annotate_freq, annotate_h)
-            spec["annotations"] = annotations
-            spec["nmp"] = nmp
-    else:
-        plot_series: list[tuple[np.ndarray, np.ndarray, str]] = []
-        for col in cols:
-            for step in steps_to_plot:
-                axis = guarded_axis(raw, step)
-                lo, hi = window_indices(axis, ts, te)
-                if lo >= hi:
-                    if step not in empty_steps:
-                        empty_steps.append(step)
-                    continue
-                axis_w = axis[lo:hi]
-                wave = col.wave(raw, step)[lo:hi]
-                if np.iscomplexobj(wave):
-                    # Defensive: a stray complex trace in a non-AC raw.
-                    wave = np.real(wave)
-                non_finite += int(np.count_nonzero(~np.isfinite(wave)))
-                x_arr, y_arr = axis_w, wave
-                if len(y_arr) > max_points:
-                    downsampled = True
-                    x_arr, y_arr = downsample_minmax(axis_w, wave, max_points)
-                _track_window(x_arr)
-                points_per_series.append(len(y_arr))
-                plot_series.append((x_arr, y_arr, _label(col.name, step)))
-        if not plot_series:
-            raise ResultError(
-                "The [t_start, t_end] window selects no samples"
-                + (f" in any of the {len(steps_to_plot)} steps." if multi else ".")
-            )
-        y_label = ", ".join(col.name for col in cols) if len(cols) <= 3 else f"{len(cols)} signals"
-        panel, unioned = _union_panel(
-            plot_series, "log" if x_is_log else "linear", x_label, y_label
+    def _no_samples() -> ResultError:
+        return ResultError(
+            "The [t_start, t_end] window selects no samples"
+            + (f" in any of the {len(steps_to_plot)} steps." if multi else ".")
         )
-        spec = {"analysis_type": analysis_type, "bode": False, "panels": [panel]}
+
+    annotate_freq: np.ndarray | None = None
+    annotate_h: np.ndarray | None = None
+    # Single-trace annotation: capture the full-resolution complex response
+    # BEFORE any downsampling so the corner reading runs on every sample.
+    single_trace = is_ac and plan.annotate and len(plan.signals) == 1 and len(steps_to_plot) == 1
+    one_group = len(plan.groups) == 1
+
+    for group in plan.groups:
+        title = _group_title(group, plan.units)
+        panel_index = len(panels)
+        if is_ac:
+            mag_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+            phase_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+            for col in group:
+                for step in steps_to_plot:
+                    axis = guarded_axis(raw, step)
+                    lo, hi = window_indices(axis, ts, te)
+                    if lo >= hi:
+                        empty_steps.add(step)
+                        continue
+                    wave = col.wave(raw, step)[lo:hi]
+                    freq, h = prepare_ac_arrays(axis[lo:hi], wave)
+                    if single_trace:
+                        annotate_freq, annotate_h = freq, h
+                    mag = safe_magnitude_db(h)
+                    phase, warns = unwrap_phase_safe(h)
+                    phase_warnings.extend(warns)
+                    non_finite += int(np.count_nonzero(~np.isfinite(mag)))
+                    non_finite += int(np.count_nonzero(~np.isfinite(phase)))
+                    label = _label(col.name, step)
+                    if summarize:
+                        entry = _summary_entry(plan, col, step, label, panel_index)
+                        entry["unit"] = "dB"
+                        entry.update(summarize_trace(freq, mag, time_weighted_mean=False))
+                        ends = [float(phase[i]) for i in (0, -1)]
+                        entry["phase_initial_deg"] = ends[0] if math.isfinite(ends[0]) else None
+                        entry["phase_final_deg"] = ends[1] if math.isfinite(ends[1]) else None
+                        traces.append(entry)
+                    if len(freq) > max_points:
+                        downsampled = True
+                        f_ds, mag = downsample_minmax(freq, mag, max_points)
+                        _, phase = downsample_minmax(freq, phase, max_points)
+                        freq = f_ds
+                    _track_window(freq)
+                    points_per_series.append(len(freq))
+                    mag_series.append((freq, mag, label))
+                    phase_series.append((freq, phase, label))
+            if not mag_series:
+                raise _no_samples()
+            suffix = "" if one_group else f" — {title}"
+            mag_panel, u1 = _union_panel(mag_series, "log", x_label, f"Magnitude (dB){suffix}")
+            phase_panel, u2 = _union_panel(phase_series, "log", x_label, f"Phase (deg){suffix}")
+            unioned = unioned or u1 or u2
+            panels.extend([mag_panel, phase_panel])
+        else:
+            plot_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+            for col in group:
+                for step in steps_to_plot:
+                    axis = guarded_axis(raw, step)
+                    lo, hi = window_indices(axis, ts, te)
+                    if lo >= hi:
+                        empty_steps.add(step)
+                        continue
+                    axis_w = axis[lo:hi]
+                    wave = col.wave(raw, step)[lo:hi]
+                    if np.iscomplexobj(wave):
+                        # Defensive: a stray complex trace in a non-AC raw.
+                        wave = np.real(wave)
+                    non_finite += int(np.count_nonzero(~np.isfinite(wave)))
+                    label = _label(col.name, step)
+                    if summarize:
+                        entry = _summary_entry(plan, col, step, label, panel_index)
+                        entry["unit"] = plan.units[col.name]
+                        entry.update(
+                            summarize_trace(
+                                axis_w, wave, time_weighted_mean=analysis_type == "transient"
+                            )
+                        )
+                        traces.append(entry)
+                    x_arr, y_arr = axis_w, wave
+                    if len(y_arr) > max_points:
+                        downsampled = True
+                        x_arr, y_arr = downsample_minmax(axis_w, wave, max_points)
+                    _track_window(x_arr)
+                    points_per_series.append(len(y_arr))
+                    plot_series.append((x_arr, y_arr, label))
+            if not plot_series:
+                raise _no_samples()
+            panel, u = _union_panel(
+                plot_series, "log" if plan.x_is_log else "linear", x_label, title
+            )
+            unioned = unioned or u
+            panels.append(panel)
+
+    spec: dict[str, Any] = {"analysis_type": analysis_type, "bode": is_ac, "panels": panels}
+    if single_trace and annotate_freq is not None and annotate_h is not None:
+        annotations, nmp = _ac_annotations(annotate_freq, annotate_h)
+        spec["annotations"] = annotations
+        spec["nmp"] = nmp
 
     series_count = sum(len(p["series"]) for p in spec["panels"])
     facts = {
@@ -707,12 +920,13 @@ def _compute_plot_spec(
         "points_per_series": points_per_series,
         "downsampled": downsampled,
         "unioned": unioned,
-        "empty_steps": sorted(set(empty_steps)),
+        "empty_steps": sorted(empty_steps),
         "non_finite": non_finite,
         "phase_unwrapped": is_ac,
         "phase_warnings": phase_warnings,
         "window_used": [win_lo, win_hi] if win_lo is not None else [],
         "step_values_available": (bool(step_dicts) if multi else None),
+        "traces": traces,
     }
     return spec, facts
 
@@ -720,46 +934,27 @@ def _compute_plot_spec(
 def build_plot_file(
     raw,
     raw_path: Path,
-    cols: list[services.Signal],
-    steps_to_plot: list[int],
-    step_dicts: list[dict[str, float]],
-    analysis_type: str,
-    x_is_log: bool,
-    ts: float | None,
-    te: float | None,
+    plan: PlotPlan,
     max_points: int,
     out_path: Path,
     title: str,
-    annotate: bool = False,
 ) -> dict:
     """Compute the spec, assemble the offline HTML, write it atomically; return facts.
 
     Runs in a worker thread (heavy numpy + HTML build + file I/O). The handler
     turns the returned facts into observations on the event loop (the concurrency
-    contract keeps response building off worker threads).
+    contract keeps response building off worker threads). The facts carry the
+    per-trace summaries.
     """
-    spec, facts = _compute_plot_spec(
-        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points, annotate
-    )
-    summary = f"{raw_path.stem} — {analysis_type}: {facts['series_count']} series"
+    spec, facts = _compute_plot_spec(raw, plan, max_points, summarize=True)
+    summary = f"{raw_path.stem} — {plan.analysis_type}: {facts['series_count']} series"
     html_str = build_plot_html(spec, title=title, summary=summary)
     with atomic_write(out_path) as f:
         f.write(html_str)
     return facts
 
 
-def _compute_widget_spec_json(
-    raw,
-    cols: list[services.Signal],
-    steps_to_plot: list[int],
-    step_dicts: list[dict[str, float]],
-    analysis_type: str,
-    x_is_log: bool,
-    ts: float | None,
-    te: float | None,
-    max_points: int,
-    annotate: bool = False,
-) -> str:
+def _compute_widget_spec_json(raw, plan: PlotPlan, max_points: int) -> str:
     """Build the compact widget chart spec and serialize it — all in the worker.
 
     Both the numpy spec build AND the (potentially large) JSON serialization run
@@ -768,10 +963,56 @@ def _compute_widget_spec_json(
     :func:`_compute_plot_spec` (e.g. the cell cap), which the handler catches to
     fall back to local-open delivery.
     """
-    spec, _ = _compute_plot_spec(
-        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points, annotate
-    )
+    spec, _ = _compute_plot_spec(raw, plan, max_points)
     return json.dumps(spec, ensure_ascii=True, allow_nan=False)
+
+
+def build_plot_image(
+    raw, plan: PlotPlan, max_points: int, title: str, png_path: Path
+) -> RenderedImage:
+    """Render the plot as a static image and, when it rasterized, write the PNG.
+
+    Runs in a worker thread (numpy, SVG build, rasterization, file I/O). Draws
+    the same panels as the chart, decimated to ``max_points`` per series. Without
+    the raster extra the returned image is the SVG with a ``note`` and nothing is
+    written; the handler reports that instead of passing markup to the model.
+    """
+    spec, _ = _compute_plot_spec(raw, plan, max_points)
+    image = render_image(render_plot_svg(spec, title=title), image_format="png", scale=1.0)
+    if image.is_raster:
+        atomic_write_bytes(png_path, image.data, durable=False)
+    return image
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4g}"
+
+
+def _summary_lines(traces: list[dict[str, Any]], x_unit: str | None) -> list[str]:
+    """One text line per summarized trace (the text mirror of ``traces``)."""
+    at = f" {x_unit}" if x_unit else ""
+    lines = []
+    for t in traces:
+        name = t.get("label") or (
+            f"{t['signal']} [step {t['step']}]" if "step" in t else t["signal"]
+        )
+        unit = f" ({t['unit']})" if t.get("unit") else ""
+        parts = [
+            f"min {_fmt(t['min'])} at {_fmt(t['x_at_min'])}{at}",
+            f"max {_fmt(t['max'])} at {_fmt(t['x_at_max'])}{at}",
+            f"initial {_fmt(t['initial'])}",
+            f"final {_fmt(t['final'])}",
+        ]
+        if "mean" in t:
+            parts.append(f"mean {_fmt(t['mean'])}")
+        if "phase_final_deg" in t:
+            parts.append(
+                f"phase {_fmt(t['phase_initial_deg'])} to {_fmt(t['phase_final_deg'])} deg"
+            )
+        if t.get("non_finite"):
+            parts.append(f"{t['non_finite']} non-finite samples left out")
+        lines.append(f"  {name}{unit}, panel {t['panel']}: " + ", ".join(parts))
+    return lines
 
 
 class PlotWaveformInput(ToolInput):
@@ -804,6 +1045,15 @@ class PlotWaveformInput(ToolInput):
             "'all' for every non-axis trace."
         ),
     )
+    panels: list[Annotated[list[str], Field(min_length=1)]] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=_MAX_PANELS,
+        description=(
+            "One list of signals per panel, e.g. [['V(out)'], ['V(sense)']] to part "
+            "traces of very different size. Replaces signals."
+        ),
+    )
     step: int | None = Field(
         default=None,
         description=(
@@ -828,11 +1078,18 @@ class PlotWaveformInput(ToolInput):
             "are preserved when it engages."
         ),
     )
-    open: bool = Field(
-        default=True,
+    open: bool | None = Field(
+        default=None,
         description=(
-            "Open the written HTML in the local browser. Terminal clients only "
-            "— ignored when the chart is delivered as an in-chat widget."
+            "Open the HTML in a local browser (default [analysis] open_plot, on); "
+            "ignored for an in-chat widget."
+        ),
+    )
+    attach_plot: bool | None = Field(
+        default=None,
+        description=(
+            "Also return a PNG of the chart for a vision model, ~1k tokens "
+            "(default [analysis] attach_plot, off)."
         ),
     )
     annotate: bool = Field(
@@ -856,20 +1113,72 @@ class PlotWaveformInput(ToolInput):
     )
 
 
+_NULLABLE_NUMBER: dict[str, Any] = {"type": ["number", "null"]}
+
+_TRACE_SUMMARY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "signal": {"type": "string"},
+        "step": {"type": "integer"},
+        "label": {"type": "string"},
+        "panel": {"type": "integer"},
+        "unit": {"type": ["string", "null"]},
+        "min": _NULLABLE_NUMBER,
+        "max": _NULLABLE_NUMBER,
+        "x_at_min": _NULLABLE_NUMBER,
+        "x_at_max": _NULLABLE_NUMBER,
+        "initial": _NULLABLE_NUMBER,
+        "final": _NULLABLE_NUMBER,
+        "mean": _NULLABLE_NUMBER,
+        "phase_initial_deg": _NULLABLE_NUMBER,
+        "phase_final_deg": _NULLABLE_NUMBER,
+        "non_finite": {"type": "integer"},
+    },
+    "required": [
+        "signal",
+        "panel",
+        "unit",
+        "min",
+        "max",
+        "x_at_min",
+        "x_at_max",
+        "initial",
+        "final",
+    ],
+    "additionalProperties": False,
+}
+
+_IMAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "image_format": {"type": "string"},
+        "mime_type": {"type": "string"},
+        "scale": _NULLABLE_NUMBER,
+        "width": {"type": ["integer", "null"]},
+        "height": {"type": ["integer", "null"]},
+        "bytes": {"type": "integer"},
+        "estimated_tokens": {"type": ["integer", "null"]},
+        "note": {"type": ["string", "null"]},
+    },
+    "required": ["image_format", "width", "height", "bytes"],
+}
+
+
 @registry.tool(
     name="plot_waveform",
     title="Plot Waveforms",
     description=(
         "Render an interactive chart (zoom/pan/hover) of one or more signals for "
-        "a person to look at. It returns a picture, not data values: the chart "
-        "type follows the run (transient, DC sweep, AC Bode, noise) and a .step "
-        "or Monte Carlo run overlays every step.\n\n"
+        "a person to look at. The chart type follows the run (transient, DC sweep, "
+        "AC Bode, noise), a .step or Monte Carlo run overlays every step, and each "
+        "unit gets its own panel.\n\n"
         "Writes a self-contained HTML file and returns its path — into "
         "``out_dir`` if given, else a '.ltspice-mcp/plots/' sidecar next to the "
         "circuit or the raw. On a host that supports MCP Apps the chart is also "
         "embedded as an in-chat widget; otherwise it opens in your local "
-        "browser.\n\n"
-        "For numbers use analyze_results instead: the waveform recipe returns a "
+        "browser. The reply summarizes each trace (min and max and where, first "
+        "and final value, mean on a transient); attach_plot adds a PNG.\n\n"
+        "For more numbers use analyze_results: the waveform recipe returns a "
         "table (or CSV on disk), and signal_stats and the bode_* recipes return "
         "scalars."
     ),
@@ -892,9 +1201,14 @@ class PlotWaveformInput(ToolInput):
             "max_points": {"type": "integer"},
             "downsampled": {"type": "boolean"},
             "window_used": {"type": "array", "items": {"type": "number"}},
+            "x_unit": {"type": ["string", "null"]},
+            "traces": {"type": "array", "items": _TRACE_SUMMARY_SCHEMA},
+            "traces_total": {"type": "integer"},
             "delivery": {"type": "string", "enum": ["terminal", "ui"]},
             "opened": {"type": "boolean"},
             "opener": {"type": ["string", "null"]},
+            "image": _IMAGE_SCHEMA,
+            "image_path": {"type": "string"},
             "observations": OBSERVATIONS_SCHEMA,
         },
     },
@@ -904,12 +1218,17 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     if case is not None:
         raw_path = case.raw
         run_index = case.identity["run_index"]
+        netlist: Path | None = case.netlist
     else:
-        raw_path = _direct_source(args.raw_file, args.job_id, state).raw
+        source = _direct_source(args.raw_file, args.job_id, state)
+        raw_path = source.raw
         run_index = args.run_index
+        netlist = source.netlist
     fmt = args.format
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
+    if args.panels is not None and args.signals != "all":
+        raise ResultError("Pass signals or panels, not both: panels names the signals it plots.")
 
     raw = await services.load_raw(raw_path, state)
     # A .op raw has no sweep axis to plot — refuse early with the clean pointer.
@@ -919,16 +1238,40 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     trace_names = raw.get_trace_names()
     axis_name = trace_names[0]
+
+    def _resolve(name: str) -> services.Signal:
+        sig = services.resolve_signal(raw, name)
+        if sig.name == axis_name:
+            raise ResultError(f"{name!r} is the sweep axis, not a signal column.")
+        return sig
+
     cols: list[services.Signal]
-    if args.signals == "all":
+    explicit: list[list[services.Signal]] | None = None
+    if args.panels is not None:
+        explicit = []
+        panel_of: dict[str, int] = {}
+        for index, names in enumerate(args.panels):
+            group: list[services.Signal] = []
+            for name in names:
+                sig = _resolve(name)
+                if sig.name in panel_of:
+                    if panel_of[sig.name] != index:
+                        raise ResultError(
+                            f"{sig.name!r} is named in more than one panel; give each "
+                            "signal one panel."
+                        )
+                    continue
+                panel_of[sig.name] = index
+                group.append(sig)
+            explicit.append(group)
+        cols = [sig for group in explicit for sig in group]
+    elif args.signals == "all":
         cols = [services.Signal(name, name) for name in trace_names[1:]]
     else:
         seen: set[str] = set()
         cols = []
         for s in args.signals:
-            sig = services.resolve_signal(raw, s)
-            if sig.name == axis_name:
-                raise ResultError(f"{s!r} is the sweep axis, not a signal column.")
+            sig = _resolve(s)
             if sig.name not in seen:
                 seen.add(sig.name)
                 cols.append(sig)
@@ -951,6 +1294,24 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     )
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, PLOT_MAX_POINTS_CEILING)
+    open_locally = state.config.open_plot if args.open is None else args.open
+    attach = state.config.attach_plot if args.attach_plot is None else args.attach_plot
+
+    input_noise_unit = await resolve_input_noise_unit(analysis_type, cols, netlist)
+    plan, unverified_noise = plan_plot(
+        raw,
+        cols,
+        steps=steps_to_plot,
+        step_dicts=step_dicts,
+        analysis_type=analysis_type,
+        x_is_log=x_is_log,
+        ts=ts,
+        te=te,
+        panels=explicit,
+        annotate=args.annotate,
+        input_noise_unit=input_noise_unit,
+    )
+    _, x_unit = _x_axis(raw, analysis_type)
 
     out_path = await _resolve_artifact_dest(
         out_dir=args.out_dir,
@@ -965,20 +1326,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     title = f"{raw_path.stem} — {analysis_type}"
     try:
         facts = await asyncio.to_thread(
-            build_plot_file,
-            raw,
-            raw_path,
-            cols,
-            steps_to_plot,
-            step_dicts,
-            analysis_type,
-            x_is_log,
-            ts,
-            te,
-            max_points,
-            out_path,
-            title,
-            args.annotate,
+            build_plot_file, raw, raw_path, plan, max_points, out_path, title
         )
     except ValueError as e:
         raise ResultError(f"Failed to build the plot (corrupt or truncated .raw?): {e}") from e
@@ -1000,17 +1348,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         budget = min(max_points, _WIDGET_SPEC_MAX_POINTS)
         try:
             widget_spec_json = await asyncio.to_thread(
-                _compute_widget_spec_json,
-                raw,
-                cols,
-                steps_to_plot,
-                step_dicts,
-                analysis_type,
-                x_is_log,
-                ts,
-                te,
-                budget,
-                args.annotate,
+                _compute_widget_spec_json, raw, plan, budget
             )
         except ResultError as e:
             widget_skipped = str(e)
@@ -1022,10 +1360,43 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
             )
             widget_spec_json = None
 
+    # The model's own frame: a static PNG of the same panels, on request.
+    image: RenderedImage | None = None
+    image_path: Path | None = None
+    image_problem: str | None = None
+    if attach:
+        png_path = out_path.with_suffix(".png")
+        try:
+            rendered = await asyncio.to_thread(
+                build_plot_image,
+                raw,
+                plan,
+                min(max_points, _IMAGE_MAX_POINTS),
+                title,
+                png_path,
+            )
+        # An optional add-on: the chart and its numbers are already built, so a
+        # render failure is reported beside them rather than failing the call.
+        except Exception as e:
+            image_problem = f"The image could not be rendered ({type(e).__name__}: {e})."
+        else:
+            if rendered.is_raster:
+                image, image_path = rendered, png_path
+            else:
+                # SVG path data as text is no use to a model and costs far more
+                # than the picture would, so the fallback is reported, not sent.
+                image_problem = (
+                    "No image attached: PNG rendering needs the optional raster "
+                    "extra (pip install 'ltspice-mcp[raster]'). " + (rendered.note or "")
+                ).strip()
+
     # No widget (terminal host, or a UI build that fell back) → open the file.
     opened, opener = False, None
-    if widget_spec_json is None and args.open:
+    if widget_spec_json is None and open_locally:
         opened, opener = await asyncio.to_thread(desktop.open_in_desktop, out_path)
+
+    traces_all: list[dict[str, Any]] = facts["traces"]
+    traces = traces_all[:_TRACE_SUMMARY_MAX]
 
     # Surface FACTS, not verdicts (result-trust doctrine).
     observations: list[dict] = [
@@ -1038,6 +1409,30 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
             ),
         }
     ]
+    if len(traces_all) > len(traces):
+        observations.append(
+            {
+                "code": "trace_summary_truncated",
+                "kind": "coverage",
+                "detail": (
+                    f"Summarized {len(traces)} of {len(traces_all)} plotted traces; "
+                    "analyze_results' signal_stats reads any of the rest."
+                ),
+            }
+        )
+    if unverified_noise:
+        observations.append(
+            {
+                "code": "noise_input_unit_unverified",
+                "kind": "value",
+                "detail": (
+                    f"{', '.join(unverified_noise)} carries the simulator's declared "
+                    "unit; no .NOISE line was found to check it against, and LTspice "
+                    "declares input-referred noise as a voltage even when the input "
+                    "source is a current source (then it is A/√Hz)."
+                ),
+            }
+        )
     if facts["downsampled"]:
         observations.append(
             {
@@ -1046,7 +1441,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "detail": (
                     f"At least one series exceeded {max_points} points and was reduced by "
                     "min/max-preserving decimation (spikes preserved; sub-bucket detail not "
-                    "shown). Pass a larger max_points or narrow [t_start, t_end] for more."
+                    "shown). Pass a larger max_points or narrow [t_start, t_end] for more. "
+                    "The trace summaries are read from every sample."
                 ),
             }
         )
@@ -1071,7 +1467,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "kind": "coverage",
                 "detail": (
                     "Steps have different per-step x vectors; series were aligned onto a "
-                    "union x (each renders as a gap off its own support)."
+                    "union x, and each is drawn through its own samples only."
                 ),
             }
         )
@@ -1093,7 +1489,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "kind": "value",
                 "detail": (
                     f"{facts['non_finite']} non-finite sample(s) are present; they render as "
-                    "gaps in the plot."
+                    "gaps in the plot and are left out of the trace summaries."
                 ),
             }
         )
@@ -1107,6 +1503,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                     "sibling .log."
                 ),
             }
+        )
+    if image_problem is not None:
+        observations.append(
+            {"code": "image_unavailable", "kind": "coverage", "detail": image_problem}
         )
     if widget_spec_json is not None:
         observations.append(
@@ -1133,12 +1533,13 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                     ),
                 }
             )
-        if not args.open:
+        if not open_locally:
+            why = "open=false" if args.open is False else "[analysis] open_plot = false"
             observations.append(
                 {
                     "code": "open_skipped",
                     "kind": "coverage",
-                    "detail": "Local open skipped (open=false); open the returned path manually.",
+                    "detail": f"Local open skipped ({why}); open the returned path manually.",
                 }
             )
         elif not opened:
@@ -1153,7 +1554,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 }
             )
 
-    data = {
+    data: dict[str, Any] = {
         "path": str(out_path),
         "analysis_type": analysis_type,
         "signals": [sig.name for sig in cols],
@@ -1165,11 +1566,17 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         "max_points": max_points,
         "downsampled": facts["downsampled"],
         "window_used": facts["window_used"],
+        "x_unit": x_unit,
+        "traces": traces,
+        "traces_total": len(traces_all),
         "delivery": "ui" if widget_spec_json is not None else "terminal",
         "opened": opened,
         "opener": opener,
         "observations": observations,
     }
+    if image is not None and image_path is not None:
+        data["image"] = image.to_dict()
+        data["image_path"] = str(image_path)
     if widget_spec_json is not None:
         head = (
             f"Rendered an interactive {analysis_type} plot widget in-chat (also wrote {out_path})"
@@ -1178,14 +1585,27 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         head = f"Wrote interactive {analysis_type} plot to {out_path}"
         if opened:
             head += f" (opened with {opener})"
-    lines = [head, *format_observations(observations)]
+    lines = [head]
+    if image_path is not None and image is not None:
+        lines.append(f"Attached a PNG of the chart ({image.width}x{image.height}, {image_path}).")
+    lines.append(f"Traces ({len(traces)} of {len(traces_all)}):")
+    lines.extend(_summary_lines(traces, x_unit))
+    lines.extend(format_observations(observations))
     result = format_response("\n".join(lines), data, fmt)
 
+    if image is not None:
+        result.content.append(
+            types.ImageContent(
+                type="image",
+                data=base64.b64encode(image.data).decode("ascii"),
+                mime_type=image.mime_type,
+            )
+        )
     if widget_spec_json is not None:
         # Pipe the compact chart spec through the result _meta (a non-model-visible
         # channel) as a JSON string. The MCP Apps host forwards the full result to
         # the widget (declared via the tool's ui.resourceUri), where
-        # ``app.ontoolresult`` reads _meta and renders it — so the model sees the
-        # summary/path, never the numbers.
+        # ``app.ontoolresult`` reads _meta and renders it — the model reads the
+        # trace summaries and the path, not the chart data.
         result.meta = {WIDGET_SPEC_META_KEY: widget_spec_json}
     return result

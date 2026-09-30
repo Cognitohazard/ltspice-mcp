@@ -22,7 +22,11 @@ source wins and this document is the thing to fix.
 
 A seventh tool, `plot_waveform`, is registered alongside them. It is the
 interactive MCP Apps waveform widget; it predates this envelope and stays
-outside it.
+outside it. Its reply summarizes each plotted trace (min and max and where,
+first and final value, the time-weighted mean on a transient) so a model
+learns what the chart shows, and `attach_plot` adds a PNG of the chart for a
+vision model. Traces split into panels by declared unit, or as the caller's
+`panels` lays them out.
 
 An eighth, `run_code`, is registered always and served unless the operator
 sets `[tools] run_code = false`. It runs a Python snippet in a warm worker

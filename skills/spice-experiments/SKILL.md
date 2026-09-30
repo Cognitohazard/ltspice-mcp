@@ -18,8 +18,9 @@ sweep in one `run_experiments` call, read the numbers with `analyze_results`.
 The N cases run as one batch; other sessions can run at the same time.
 Values come back parsed, with SI units; if a case produced no result,
 `completeness` reports it and `outcome` is `"partial"`.
-Charts: `plot_waveform` (interactive, where the client supports it); the
-`plot` recipe is the static fallback.
+Charts: `plot_waveform` (interactive, where the client supports it); its
+reply summarizes each trace, and `attach_plot: true` adds a PNG you can look
+at. The `plot` recipe is the static fallback.
 Loops over many runs, numpy on the samples, or a script you will keep:
 `from ltspice_mcp.api import Api` runs the same six ops in-process and returns
 complete results (no paging, no budget); `api.reference("<op>")` gives an

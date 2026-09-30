@@ -1543,17 +1543,24 @@ async def _plot(
     )
     pending.parent.mkdir(parents=True, exist_ok=True)
     span = recipe.span
+    plan, _ = an.plan_plot(
+        raw,
+        cols,
+        steps=[step for step, _ in steps],
+        step_dicts=[values for _, values in steps],
+        analysis_type=analysis_type,
+        x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
+        ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
+        te=metrics.parse_time(_spice(span.end) if span else None, "span.end"),
+        input_noise_unit=await an.resolve_input_noise_unit(
+            analysis_type, cols, run.source.netlist
+        ),
+    )
     facts = await asyncio.to_thread(
         an.build_plot_file,
         raw,
         run.source.raw,
-        cols,
-        [step for step, _ in steps],
-        [values for _, values in steps],
-        analysis_type,
-        x_is_log if recipe.log_x is None else recipe.log_x,
-        metrics.parse_time(_spice(span.start) if span else None, "span.start"),
-        metrics.parse_time(_spice(span.end) if span else None, "span.end"),
+        plan,
         min(100_000, an.PLOT_MAX_POINTS_CEILING),
         pending,
         recipe.title or f"{run.source.raw.stem} — {analysis_type}",
