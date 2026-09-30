@@ -5,10 +5,13 @@ render over MCP generally wants a bitmap, so this module is the one place that
 converts SVG markup to PNG and describes what the caller actually got.
 
 Rasterization needs ``cairosvg``, which is an **optional** dependency (extra:
-``raster``). Without it this module still returns the SVG unchanged rather than
-failing — a render that arrives as markup is degraded, not broken, and the
-caller is told so through :attr:`RenderedImage.note` rather than through an
-exception.
+``raster``), and the native Cairo library it loads. Without either this module
+still returns the SVG unchanged rather than failing — a render that arrives as
+markup is degraded, not broken, and the caller is told so through
+:attr:`RenderedImage.note` rather than through an exception. The two halves are
+installed in different ways, so what is missing is reported as one or the
+other (:class:`RasterSupport`), and :func:`raster_support` answers the same
+question before anything is drawn.
 
 Interface note: ``image_format`` is a named choice rather than a boolean so a
 third format can be added without changing the shape of every call site, and
@@ -26,6 +29,10 @@ from typing import Literal
 from ltspice_mcp.errors import LTSpiceMCPError
 
 ImageFormat = Literal["png", "svg"]
+
+#: Which half of the PNG rasterizer is absent: the Python package the 'raster'
+#: extra installs, or the native Cairo library that package loads.
+RasterMissing = Literal["extra", "native_library"]
 
 # Scale is the only real cost lever. Image cost tracks pixel area (roughly
 # width*height/750), so it grows with the SQUARE of scale, while format does not
@@ -70,25 +77,49 @@ _renderer = (
 
 
 @dataclass(frozen=True)
+class RasterSupport:
+    """Whether this environment can rasterize SVG to PNG, and if not, why.
+
+    ``missing`` is the stable code a caller branches on; ``reason`` and
+    ``remedy`` are the sentence to relay. All three are ``None`` when ``png``
+    is true.
+    """
+
+    png: bool
+    missing: RasterMissing | None = None
+    reason: str | None = None
+    remedy: str | None = None
+
+
+@dataclass(frozen=True)
 class RenderedImage:
     """An image ready to hand back, plus what it actually turned out to be.
 
     ``image_format`` and ``scale`` describe the result, not the request: when
     rasterization is unavailable a PNG request yields ``image_format="svg"``,
-    ``scale=None``, and a ``note`` saying why.
+    ``scale=None``, and ``png_unavailable`` naming what is missing and how to
+    install it, which ``note`` says as a sentence.
     """
 
     data: bytes
     image_format: ImageFormat
     mime_type: str
     scale: float | None = None
-    note: str | None = None
     width: int | None = None
     height: int | None = None
+    png_unavailable: RasterSupport | None = None
 
     @property
     def is_raster(self) -> bool:
         return self.image_format == PNG
+
+    @property
+    def note(self) -> str | None:
+        """Why a PNG request came back as SVG, and the fix; ``None`` otherwise."""
+        missing = self.png_unavailable
+        if missing is None:
+            return None
+        return f"returned SVG instead of PNG: {missing.reason}; to fix, {missing.remedy}"
 
     @property
     def estimated_tokens(self) -> int | None:
@@ -118,14 +149,61 @@ class RenderedImage:
 
 
 class RasterUnavailableError(LTSpiceMCPError):
-    """Rasterization was requested but the optional dependency is not installed.
+    """Rasterization was requested but the optional dependency is not usable.
 
     Part of the project error hierarchy so a consumer calling
     :func:`rasterize_svg` directly raises something the server already handles,
-    rather than an exception that escapes to the protocol layer.
+    rather than an exception that escapes to the protocol layer. ``support``
+    says which half is absent and how to install it; the message is the reason
+    alone.
     """
 
     code = "raster_unavailable"
+
+    def __init__(self, support: RasterSupport) -> None:
+        super().__init__(support.reason)
+        self.support = support
+
+    def __reduce__(self):
+        # Rebuilt from its record rather than its message, so it unpickles whole.
+        return (type(self), (self.support,))
+
+
+_EXTRA_MISSING = "the optional 'raster' extra (cairosvg) is not installed"
+_EXTRA_REMEDY = (
+    "install it where the server runs (pip install 'ltspice-mcp[raster]', "
+    "uv tool install 'ltspice-mcp[raster]', or launch with uvx --from "
+    "'ltspice-mcp[raster]' ltspice-mcp), then restart the server; it also "
+    "needs the native Cairo library"
+)
+
+
+def native_library_remedy(platform: str) -> str:
+    """How to install the native Cairo library on ``platform`` (a ``sys.platform``).
+
+    The server's own platform is the one that matters: under WSL the server is
+    a Linux process, and it is Linux's libcairo that it loads.
+    """
+    if platform == "win32":
+        # cairocffi looks for libcairo-2.dll on PATH, and also adds the folders
+        # named in its own variable to the DLL search, because Python 3.8 and
+        # later no longer search PATH for DLLs. A Cairo runtime installed off
+        # PATH is reachable only through that variable.
+        return (
+            "install a Cairo runtime (for example the GTK for Windows runtime) and "
+            "put the folder holding libcairo-2.dll and the DLLs it depends on on "
+            "PATH or in CAIROCFFI_DLL_DIRECTORIES, then restart the server"
+        )
+    if platform == "darwin":
+        return (
+            "brew install cairo, then restart the server; on Apple silicon also "
+            "set DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib for the server, "
+            "since Homebrew's library folder is not searched by default"
+        )
+    return (
+        "install libcairo2 with the system package manager (apt install libcairo2, "
+        "dnf install cairo), then restart the server"
+    )
 
 
 def _check_scale(scale: float) -> None:
@@ -133,26 +211,61 @@ def _check_scale(scale: float) -> None:
         raise ValueError(f"scale must be positive, got {scale}")
 
 
+def raster_support() -> RasterSupport:
+    """Whether SVG can be rasterized in this environment, and if not, why.
+
+    The first call loads the native library or fails to, so an event-loop
+    caller should run it off the loop.
+    """
+    try:
+        _load_cairosvg()
+    except RasterUnavailableError as exc:
+        return exc.support
+    return RasterSupport(png=True)
+
+
 def raster_available() -> bool:
     """Whether SVG can be rasterized in this environment."""
-    return _load_cairosvg() is not None
+    return raster_support().png
+
+
+#: Why the first import of cairosvg failed. A failed import is not cached in
+#: sys.modules, and each retry reruns cairocffi's library search (tens of ms,
+#: and on Windows one more DLL directory registered per attempt). Every remedy
+#: ends in a server restart, so the first answer stands for the process.
+_unavailable: RasterSupport | None = None
 
 
 def _load_cairosvg():
-    """Import ``cairosvg`` if it is usable; ``None`` when the extra is absent.
+    """Import ``cairosvg``, or raise :class:`RasterUnavailableError` saying why.
 
     Imported lazily rather than at module load: the dependency is optional, and
     importing it costs a non-trivial shared-library load that a server never
-    rendering an image should not pay. The extra is absent in two ways: the
-    package is not installed (ImportError), or it is installed but the native
-    cairo library it binds is not, which cairocffi reports as an OSError from
-    the import. Both mean there is no rasterizer here.
+    rendering an image should not pay. The rasterizer is absent in two ways,
+    fixed in two different places: the package is not installed
+    (ImportError), or it is installed but the native cairo library it binds is
+    not, which cairocffi reports as an OSError from the import.
     """
-    try:
-        import cairosvg
-    except (ImportError, OSError):
-        return None
-    return cairosvg
+    global _unavailable
+    if _unavailable is None:
+        try:
+            import cairosvg
+        except ImportError:
+            _unavailable = RasterSupport(False, "extra", _EXTRA_MISSING, _EXTRA_REMEDY)
+        except OSError as exc:
+            # cairocffi lists every name it tried, one per line; the first says
+            # enough and keeps the reason to one line.
+            detail = str(exc).strip().splitlines()
+            _unavailable = RasterSupport(
+                False,
+                "native_library",
+                "the 'raster' extra is installed but the native Cairo library it "
+                "loads could not be loaded" + (f" ({detail[0]})" if detail else ""),
+                native_library_remedy(sys.platform),
+            )
+        else:
+            return cairosvg
+    raise RasterUnavailableError(_unavailable)
 
 
 def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "white") -> bytes:
@@ -173,12 +286,6 @@ def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "
 
 def _rasterize_svg(svg: str, scale: float, background: str) -> bytes:
     cairosvg = _load_cairosvg()
-    if cairosvg is None:
-        raise RasterUnavailableError(
-            "PNG rasterization needs the optional 'cairosvg' dependency and its "
-            "native cairo library (install the 'raster' extra: pip install "
-            "'ltspice-mcp[raster]', and libcairo on a host without it)"
-        )
     png = cairosvg.svg2png(
         bytestring=svg.encode("utf-8"),
         # cairosvg's type stub declares scale as int, but the library takes a
@@ -204,9 +311,9 @@ def render_image(
     """Package rendered ``svg`` as the requested image format.
 
     Always returns an image for a well-formed request. Asking for PNG without
-    ``cairosvg`` installed yields the SVG with an explanatory ``note`` instead of
-    raising, so a missing optional dependency degrades the render rather than
-    failing the call.
+    a usable rasterizer yields the SVG with an explanatory ``note`` and
+    ``png_unavailable`` instead of raising, so a missing optional dependency
+    degrades the render rather than failing the call.
 
     A malformed request is a different thing from a degraded environment, and is
     rejected either way: arguments are validated before anything is loaded, so
@@ -232,7 +339,7 @@ def render_image(
             data=svg.encode("utf-8"),
             image_format=SVG,
             mime_type=_MIME[SVG],
-            note=f"returned SVG instead of PNG: {exc}",
+            png_unavailable=exc.support,
         )
     width, height = _png_size(png)
     return RenderedImage(

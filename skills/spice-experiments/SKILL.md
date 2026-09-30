@@ -18,13 +18,15 @@ sweep in one `run_experiments` call, read the numbers with `analyze_results`.
 The N cases run as one batch; other sessions can run at the same time.
 Values come back parsed, with SI units; if a case produced no result,
 `completeness` reports it and `outcome` is `"partial"`.
-Charts: `plot_waveform` (interactive, where the client supports it); the
-`plot` recipe is the static fallback.
+Charts: `plot_waveform` (interactive; `attach_plot` adds a PNG to look at);
+the `plot` recipe is the static fallback.
 Loops over many runs, numpy on the samples, or a script you will keep:
 `from ltspice_mcp.api import Api` runs the same six ops in-process and returns
 complete results (no paging, no budget); `api.reference("<op>")` gives an
 op's arguments before you guess them. If the server lists a `run_code` tool,
 the same snippet runs there with `api` already in scope and the engine warm.
+Trace math past one trace or `V(a,b)` is numpy on the traces;
+`compute_signal_stats(t, y)` weights their statistics by time.
 Pass a `request_id`: the same id and args returns the original receipt
 instead of re-running (decks are content-addressed, so a later edit does not
 change what ran); different args return `idempotency_conflict`.

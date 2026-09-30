@@ -266,9 +266,11 @@ class TestSessionStateHonoursTheListing:
         the listing is compact. Nothing else on the wire says which one it is:
         both modes advertise the same seven tools and the same schemas, so a
         caller could only infer it from prose that is not there."""
+        from ltspice_mcp.lib.raster import raster_support
         from ltspice_mcp.tools.inspect_tools import _do_capabilities
 
-        assert _do_capabilities(_state(work_dir, listing))["tool_listing"] == listing
+        capabilities = _do_capabilities(_state(work_dir, listing), raster_support())
+        assert capabilities["tool_listing"] == listing
 
     def test_compact_state_serves_no_argument_prose(self, work_dir):
         state = _state(work_dir, "compact")
