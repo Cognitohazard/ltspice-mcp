@@ -10,6 +10,7 @@ import logging
 import secrets
 import shutil
 import threading
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -92,6 +93,13 @@ StageDecks = Callable[[], Awaitable["StagedDecks"]]
 # same request_id waits for the first submission's deck copies, and a large
 # matrix takes longer to stage than an index write.
 REQUEST_GATE_TIMEOUT_S = 300.0
+
+#: Reads of an indexed record that exists but did not load. On Windows, opening
+#: a file while another thread replaces it fails with a sharing violation for a
+#: moment, and a running job rewrites its record as it goes: that is not the
+#: record being gone, and treating it as gone mints a second job for the id.
+INDEXED_RECORD_READ_ATTEMPTS = 5
+INDEXED_RECORD_RETRY_S = 0.05
 
 #: The durable replay note, written on the job record once and read by
 #: everyone who looks at the job afterwards — the original submitter included,
@@ -729,13 +737,18 @@ class ExperimentRunner(RunnerBase):
             )
         indexed_job_id = str(index.get("job_id", ""))
         try:
-            existing = experiment_store.load_job(
-                indexed_job_id,
-                working_dir,
-                own_is_alive=True,
-            )
+            record = Store(working_dir).job_record(indexed_job_id)
         except ValueError:
-            existing = None
+            record = None
+        existing = None
+        if record is not None:
+            for _ in range(INDEXED_RECORD_READ_ATTEMPTS):
+                existing = experiment_store.load_job(
+                    indexed_job_id, working_dir, own_is_alive=True
+                )
+                if existing is not None or not record.exists():
+                    break
+                time.sleep(INDEXED_RECORD_RETRY_S)
         if existing is None:
             # The index names a record that is gone; this submission recreates it.
             return _IndexLookup(existing=None, dangling=True)
@@ -1289,7 +1302,10 @@ class ExperimentRunner(RunnerBase):
             try:
                 return await asyncio.wait_for(asyncio.shield(future), wait)
             except TimeoutError:
-                if self.loop.time() >= deadline:
+                # The wait that ran to the deadline ends the grace, not the clock:
+                # asyncio runs a timer up to one clock resolution early (15.6 ms on
+                # Windows), so loop.time() can still read short of the deadline.
+                if wait >= remaining:
                     return None
             await kill()
         return None
