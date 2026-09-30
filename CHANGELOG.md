@@ -10,6 +10,16 @@ tool-surface changes.
 
 ### Fixed
 
+- On Windows, a second `run_experiments` call carrying the same `request_id`
+  could mint a second job instead of replaying the first. Opening a job record
+  while its running job rewrites it fails with a sharing violation for a
+  moment, and the request gate read that as a missing record and recreated the
+  submission. The gate now re-reads a record that exists, and treats only a
+  record that is actually gone as missing.
+- A stopped case's kill grace ends when its last wait runs out, not when the
+  loop clock reads past the deadline. asyncio fires a timer up to one clock
+  resolution early (15.6 ms on Windows), so the clock could read short of a
+  deadline the wait had reached and the coordinator killed again.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
