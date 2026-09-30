@@ -1895,8 +1895,8 @@ class OpWirePins(StrictModel):
     waypoints: list[WaypointInput] = Field(
         default_factory=list,
         description=(
-            "Corner points the route must pass through, in order; omit to let "
-            "the router pick the elbow."
+            "Corner points the route passes through, in order; with none, the two "
+            "ends must share an x or a y."
         ),
     )
 

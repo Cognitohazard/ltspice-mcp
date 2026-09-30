@@ -10,11 +10,20 @@ tool-surface changes.
 
 ### Fixed
 
-- A `run_code` call made while the worker was still starting (the first call
-  after a restart, which takes seconds on Windows) was run instead of answered
-  `busy`. The two calls then read the worker's reply pipe at once, and the
-  first one failed with an internal error. The one-snippet rule now holds from
-  the moment a call is accepted.
+- On Windows, a second `run_experiments` call carrying the same `request_id`
+  could mint a second job instead of replaying the first. Opening a job record
+  while its running job rewrites it fails with a sharing violation for a
+  moment, and the request gate read that as a missing record and recreated the
+  submission. The gate now re-reads a record that exists, and treats only a
+  record that is actually gone as missing.
+- A `run_code` call that arrives while the worker is still starting is answered
+  `busy`, as one arriving while a snippet runs already was. The call in
+  progress claimed the worker only after it had booted, so a second call
+  during a slow boot read the reply pipe alongside the first and failed.
+- A stopped case's kill grace ends when its last wait runs out, not when the
+  loop clock reads past the deadline. asyncio fires a timer up to one clock
+  resolution early (15.6 ms on Windows), so the clock could read short of a
+  deadline the wait had reached and the coordinator killed again.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
@@ -99,9 +108,20 @@ tool-surface changes.
   names, quoted strings and include paths are left alone, a file with nothing
   to fold keeps its original bytes, and the schematic is never touched. Each
   folded file is reported as a `micro_sign_folded` observation.
+- `inspect(kind="components")` on an `.asc` compares `prefix` without regard
+  to case, as the netlist branch already did. The prefix went to spicelib as
+  given, so `prefix: "r"` returned no components on a sheet full of resistors.
+- The `wire_pins` op's `waypoints` description no longer tells callers to omit
+  waypoints and "let the router pick the elbow". There is no router: with no
+  waypoints the two ends must share an x or a y, or the route is refused as
+  diagonal.
 
 ### Added
 
+- `run_code` has `window_and_clean` and `compute_signal_stats` in scope, so a
+  derived trace's statistics are weighted by time; `np.mean` over LTspice's
+  variable timestep over-weights the samples packed around edges. The guide's
+  trace-math example goes on to them.
 - A `partial_progress` observation for every case the coordinator stops and
   whose simulator exit is seen. It gives the plot, its axis, the complete
   points on disk and the last axis value reached, read from the partial raw
@@ -137,9 +157,31 @@ tool-surface changes.
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
   model profile, independently replayable samples and persisted provenance.
+- Time-weighted quantiles. The `signal_stats` recipe takes
+  `quantiles: [0.01, 0.99]` (up to 16 levels in [0, 1]) on a transient run
+  and adds `q01`, `q99` and `quantile_peak_to_peak`, the highest level minus
+  the lowest. Each can be named as the `field` a `reduce` or a `spec` reads, so
+  a robust ripple limit is one recipe. A level `p` is the smallest value the
+  signal spends a fraction `p` of the window at or below, reading the
+  straight line between samples the way `mean` and `rms` already do.
+  `np.percentile` over the samples gives a different answer on simulator
+  output, because the simulator shortens its step around every edge and the
+  samples crowd there. On the recorded RC fixture the input's sample 1st
+  percentile is 0.00012 V, while the input spends 99.9% of the window at 1 V.
+  `min`, `max` and `peak_to_peak` are unchanged and remain the sample
+  extremes. Asking for quantiles on an AC, DC-sweep or noise run fails that
+  recipe with a message. The same function is
+  `ltspice_mcp.api.time_weighted_quantiles`, and `run_code` has it in scope.
+  It drops and counts non-finite samples, and reads a time axis taken from a
+  raw's stored data, with LTspice's negated compressed-time points, through
+  `abs()` as spicelib does.
 
 ### Changed
 
+- The server instructions and `analyze_results`' description say where trace
+  math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
+  numpy on the traces. Before, only the error after a failed expression said
+  so. That error's example is now a product, not a difference `V(a,b)` reads.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.
