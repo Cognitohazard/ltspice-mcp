@@ -478,8 +478,8 @@ def touched_refs(ops: list[ConsolidatedOp]) -> set[str]:
     """
     refs: set[str] = set()
 
-    def add_pin(pin: str | None) -> None:
-        if pin and not pin.lower().startswith("net:") and "." in pin:
+    def add_pin(pin: object) -> None:
+        if isinstance(pin, str) and not pin.lower().startswith("net:") and "." in pin:
             refs.add(pin.split(".", 1)[0].casefold())
 
     for op in ops:
