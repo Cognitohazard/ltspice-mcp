@@ -71,10 +71,12 @@ async def apply_ops(
     ops: list[dict[str, Any]],
     **kw: Any,
 ) -> dict[str, Any]:
-    """Apply ``ops`` to an existing sheet, satisfying the revision guard."""
-    name = Path(path).name
-    target = Path(state.working_dir) / name
-    payload: dict[str, Any] = {"target": name, "ops": ops, **kw}
+    """Apply ``ops`` to an existing sheet, satisfying the revision guard.
+
+    ``path`` is relative to the working directory: a bare name for a sheet in it.
+    """
+    target = Path(state.working_dir) / path
+    payload: dict[str, Any] = {"target": str(path), "ops": ops, **kw}
     payload.setdefault("expected_sha256", sha_of(target))
     return _envelope(
         await handle_edit_schematic(EditSchematicInput.model_validate(payload), state)

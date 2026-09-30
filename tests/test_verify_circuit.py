@@ -289,26 +289,24 @@ async def test_export_stage_flags_micro_sign_in_the_exported_netlist(
     assert asc.read_bytes() == before
 
 
-async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_state, work_dir):
+async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_state, project_dir):
     """The default export mode's contract: nothing is written beside the caller's file.
 
     The staged copy is exported inside the store, but the copy is taken under
     the schematic's cross-process lock, and that lock used to live in a
     ``.ltspice-mcp/locks/`` directory created beside the schematic.
     """
-    project = work_dir / "project"
-    project.mkdir()
-    sheet = _write(project, "amp.asc", fake_netlister.amp_asc())
+    sheet = _write(project_dir, "amp.asc", fake_netlister.amp_asc())
 
     data = await _run(exporting_state, path=str(sheet), checks=["export"])
 
     assert data["export"]["ok"] is True
     assert data["export"]["destination"] == "managed"
-    assert sorted(p.name for p in project.iterdir()) == ["amp.asc"]
+    assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc"]
 
 
 async def test_an_exports_relative_include_resolves_beside_the_schematic(
-    exporting_state, work_dir, tmp_path_factory, monkeypatch
+    exporting_state, work_dir, project_dir, tmp_path_factory, monkeypatch
 ):
     """With the store outside the sandbox, a managed export is still compared whole.
 
@@ -318,15 +316,15 @@ async def test_an_exports_relative_include_resolves_beside_the_schematic(
     roots and the comparison reports the author's own library as denied.
     """
     monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(tmp_path_factory.mktemp("stores")))
-    project = work_dir / "project"
-    project.mkdir()
-    _write(project, "models.inc", ".param rload=10k\n")
+    _write(project_dir, "models.inc", ".param rload=10k\n")
     sheet = _write(
-        project,
+        project_dir,
         "amp.asc",
         _RES_ASC.replace("Value 1k", "Value {rload}") + "TEXT 0 0 Left 2 !.include models.inc\n",
     )
-    reference = _write(project, "ref.net", "* ref\n.include models.inc\nR1 a b {rload}\n.end\n")
+    reference = _write(
+        project_dir, "ref.net", "* ref\n.include models.inc\nR1 a b {rload}\n.end\n"
+    )
     assert not exporting_state.store.root.is_relative_to(work_dir)
 
     data = await _run(
@@ -336,7 +334,7 @@ async def test_an_exports_relative_include_resolves_beside_the_schematic(
     assert data["failures"] == []
     assert [f for f in data["findings"] if f["rule_id"] == "path_denied"] == []
     assert data["comparison"]["equivalent"] is True
-    assert sorted(p.name for p in project.iterdir()) == ["amp.asc", "models.inc", "ref.net"]
+    assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "models.inc", "ref.net"]
 
 
 async def test_lexer_warnings_reach_the_observations(state_no_sim, work_dir):

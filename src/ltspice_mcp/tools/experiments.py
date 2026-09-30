@@ -855,10 +855,6 @@ async def _prepare_circuit(
             # exactly what a replay skips, leaving an edited .asc invisible to
             # every check made over this record.
             origin=source_path,
-            # An .asc runs through its export, which the server keeps in the
-            # store; staging reads its relative includes from the schematic's
-            # own directory.
-            exports_dir=state.store.exports_dir,
             allow_live_includes=args.allow_live_includes,
             windows_paths=paths.windows_native,
             compact_digests=compact_digests,

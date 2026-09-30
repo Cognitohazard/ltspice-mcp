@@ -1,6 +1,7 @@
 """Tests for server.py — error hints, asc editor configuration, and dispatch."""
 
 import io
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -465,34 +466,19 @@ def _capabilities_call() -> mcp_types.CallToolRequestParams:
 
 
 @pytest.mark.asyncio
-class TestDefaultConfigWrite:
-    """The first tool call writes a default config where none exists, unless told not to."""
-
-    async def test_first_tool_call_writes_the_default_config(self, work_dir: Path):
-        config_path = work_dir / "ltspice-mcp.toml"
-        state = SessionState.create(
-            ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], config_path=config_path),
-            available={},
-        )
-        await call_tool(fake_request_context(state), _capabilities_call())
-        assert config_path.is_file()
-
-    async def test_switched_off_the_first_tool_call_writes_nothing(self, work_dir: Path):
-        """A server that should leave the directory it was started in untouched."""
-        config_path = work_dir / "ltspice-mcp.toml"
-        state = SessionState.create(
-            ServerConfig(
-                working_dir=work_dir,
-                allowed_paths=[work_dir],
-                config_path=config_path,
-                write_config=False,
-            ),
-            available={},
-        )
-        result = await call_tool(fake_request_context(state), _capabilities_call())
-        assert not result.is_error
-        assert not config_path.exists()
-        assert list(work_dir.iterdir()) == []  # noqa: ASYNC240
+@pytest.mark.parametrize("write_config", [True, False])
+async def test_the_first_tool_call_writes_a_default_config_unless_switched_off(
+    config: ServerConfig, work_dir: Path, write_config: bool
+):
+    """Switched off, a server leaves the directory it was started in untouched."""
+    config_path = work_dir / "ltspice-mcp.toml"
+    state = SessionState.create(
+        replace(config, config_path=config_path, write_config=write_config), available={}
+    )
+    result = await call_tool(fake_request_context(state), _capabilities_call())
+    assert not result.is_error
+    written = [p.name for p in work_dir.iterdir()]  # noqa: ASYNC240
+    assert written == (["ltspice-mcp.toml"] if write_config else [])
 
 
 class TestLoggingCapabilityDropped:

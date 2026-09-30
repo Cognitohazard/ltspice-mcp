@@ -46,6 +46,7 @@ from ltspice_mcp.tools.jobs import (
     handle_jobs,
 )
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
+from tests._fake_netlister import install_fixed_exporter
 from tests.conftest import (
     FakeSim,
     await_until,
@@ -1360,24 +1361,16 @@ class TestReplayRejectsChangedSources:
         assert len(submissions) == 1
 
 
-def _exporter_writing(state: SessionState, netlist: str) -> None:
-    """An LTspice stand-in whose export of any schematic is ``netlist``, beside it."""
-
-    class _Exporter:
-        @staticmethod
-        def create_netlist(path: str, timeout: float | None = None) -> str:
-            exported = Path(path).with_suffix(".net")
-            exported.write_text(netlist)
-            return str(exported)
-
-    state.available_simulators["ltspice"] = _Exporter
+# An export whose relative include names a file beside the schematic.
+_INCLUDING_EXPORT = ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
 
 
-def _project_schematic(work_dir: Path, resistance: str = "1k") -> Path:
-    """A schematic in its own folder, apart from the working directory's store."""
-    project = work_dir / "project"
-    project.mkdir()
-    return _schematic(project / "amp.asc", resistance)
+def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Path, Path]:
+    """A schematic whose export includes ``models.inc`` from its own folder."""
+    models = project_dir / "models.inc"
+    models.write_text(".param rval=1k\n")
+    install_fixed_exporter(state, _INCLUDING_EXPORT)
+    return _schematic(project_dir / "amp.asc", "1k"), models
 
 
 @pytest.mark.asyncio
@@ -1394,10 +1387,11 @@ class TestSchematicExportsLiveInTheStore:
         self,
         state_with_sim: SessionState,
         work_dir: Path,
+        project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
         fake_simulator(monkeypatch)
-        schematic = _project_schematic(work_dir)
+        schematic = _schematic(project_dir / "amp.asc", "1k")
         _asc_exporter(state_with_sim)
 
         data = _assert_schema(
@@ -1407,7 +1401,7 @@ class TestSchematicExportsLiveInTheStore:
         )
 
         assert data["outcome"] == "complete"
-        assert sorted(p.name for p in schematic.parent.iterdir()) == ["amp.asc", "amp.net"]
+        assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
         exports = Store(work_dir).exports_dir
         snapshots = [
             Path(entry["path"])
@@ -1420,7 +1414,7 @@ class TestSchematicExportsLiveInTheStore:
     async def test_a_relative_include_resolves_from_the_schematics_folder(
         self,
         state_with_sim: SessionState,
-        work_dir: Path,
+        project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """The schematic's ``.include models.inc`` names a file in its own folder.
@@ -1429,12 +1423,7 @@ class TestSchematicExportsLiveInTheStore:
         reference against the schematic, and digest the file it finds there.
         """
         fake_simulator(monkeypatch)
-        schematic = _project_schematic(work_dir)
-        models = schematic.parent / "models.inc"
-        models.write_text(".param rval=1k\n")
-        _exporter_writing(
-            state_with_sim, ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
-        )
+        schematic, models = _schematic_with_include(state_with_sim, project_dir)
 
         data = _assert_schema(
             await handle_run_experiments(
@@ -1443,7 +1432,7 @@ class TestSchematicExportsLiveInTheStore:
         )
 
         assert data["outcome"] == "complete", data
-        assert sorted(p.name for p in schematic.parent.iterdir()) == [
+        assert sorted(p.name for p in project_dir.iterdir()) == [  # noqa: ASYNC240
             "amp.asc",
             "amp.net",
             "models.inc",
@@ -1457,17 +1446,12 @@ class TestSchematicExportsLiveInTheStore:
     async def test_an_edited_include_of_a_schematic_blocks_its_replay(
         self,
         state_with_sim: SessionState,
-        work_dir: Path,
+        project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
-        schematic = _project_schematic(work_dir)
-        models = schematic.parent / "models.inc"
-        models.write_text(".param rval=1k\n")
-        _exporter_writing(
-            state_with_sim, ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
-        )
+        schematic, models = _schematic_with_include(state_with_sim, project_dir)
         args = _args(schematic, "edited-include")
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         models.write_text(".param rval=2k\n")
@@ -1481,17 +1465,17 @@ class TestSchematicExportsLiveInTheStore:
 
     async def test_a_store_outside_the_sandbox_still_runs_a_schematic(
         self,
+        config: ServerConfig,
         work_dir: Path,
+        project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """The sandbox admits the schematic; its export is the server's own file."""
         fake_simulator(monkeypatch)
-        schematic = _project_schematic(work_dir)
+        schematic = _schematic(project_dir / "amp.asc", "1k")
         state = SessionState.create(
-            ServerConfig(
-                working_dir=work_dir,
-                allowed_paths=[schematic.parent],
-                config_path=work_dir / "absent.toml",
+            dataclasses.replace(
+                config, allowed_paths=[project_dir], config_path=work_dir / "absent.toml"
             ),
             available={"fake": FakeSim},
         )
@@ -1502,7 +1486,7 @@ class TestSchematicExportsLiveInTheStore:
         )
 
         assert data["outcome"] == "complete", data
-        assert not Store(work_dir).root.is_relative_to(schematic.parent)
+        assert not Store(work_dir).root.is_relative_to(project_dir)
 
 
 @pytest.mark.asyncio
