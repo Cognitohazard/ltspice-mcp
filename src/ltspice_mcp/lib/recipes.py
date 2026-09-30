@@ -14,6 +14,7 @@ from pydantic import (
     ConfigDict,
     Field,
     TypeAdapter,
+    field_validator,
     model_validator,
 )
 
@@ -79,6 +80,46 @@ MULTI_FIELD_KEYS: dict[str, dict[str, str]] = {
     },
     "return_loss": {"reflection_coefficient": "gamma_mag"},
 }
+
+# signal_stats' quantile fields are named by the levels a call asks for, so
+# they cannot sit in the fixed table above: each requested level reads as
+# quantile_key(level), and two or more levels add the spread between the
+# highest and the lowest.
+QUANTILE_SPREAD_FIELD = "quantile_peak_to_peak"
+
+
+def _key_percent(level: float) -> float:
+    """A level as the percentage its key names, to 1e-4 percent (1e-6 in level)."""
+    return round(level * 100, 4)
+
+
+def quantile_key(level: float) -> str:
+    """The row key a quantile level is reported under.
+
+    The level as a percentage, whole part padded to two digits and a decimal
+    point spelled ``_`` so the key stays one segment of a dotted row path:
+    0.01 is ``q01``, 0.5 is ``q50``, 0.999 is ``q99_9``, 1.0 is ``q100``.
+    """
+    whole, _, fraction = f"{_key_percent(level):.6g}".partition(".")
+    return f"q{whole.zfill(2)}" + (f"_{fraction}" if fraction else "")
+
+
+def quantile_fields(levels: list[float] | None) -> tuple[str, ...]:
+    """The row keys a signal_stats call with these (distinct) quantile levels adds."""
+    if not levels:
+        return ()
+    keys = tuple(quantile_key(level) for level in levels)
+    return (*keys, QUANTILE_SPREAD_FIELD) if len(levels) > 1 else keys
+
+
+def quantile_row(levels: list[float], values: list[float]) -> dict[str, float]:
+    """The fields :func:`quantile_fields` names, filled from the value at each level."""
+    row = {quantile_key(level): value for level, value in zip(levels, values, strict=True)}
+    if QUANTILE_SPREAD_FIELD in quantile_fields(levels):
+        top = values[levels.index(max(levels))]
+        row[QUANTILE_SPREAD_FIELD] = top - values[levels.index(min(levels))]
+    return row
+
 
 # Which transient_response fields each mode can reduce. A step response and a
 # disturbance response measure different quantities off the same trace, so the
@@ -266,6 +307,13 @@ class MultiRecipe(RecipeBase):
     )
     spec: SpecLimits | None = None
 
+    def _reducible_fields(self) -> tuple[str, ...]:
+        """The numbers 'field' may name. A recipe whose row keys depend on its
+        own arguments extends this with them."""
+        # ``metric`` is the Literal discriminant every concrete subclass sets;
+        # this abstract base doesn't declare it, so read it dynamically.
+        return REDUCIBLE_FIELDS.get(getattr(self, "metric"), ())  # noqa: B009
+
     @model_validator(mode="after")
     def _field_for_cross_run_work(self) -> MultiRecipe:
         wants_reduction = bool(self.reduce) or self.spec is not None
@@ -275,10 +323,8 @@ class MultiRecipe(RecipeBase):
                 "the reduction or spec should read"
             )
         if self.field is not None:
-            # ``metric`` is the Literal discriminant every concrete subclass
-            # sets; this abstract base doesn't declare it, so read it dynamically.
             metric: str = getattr(self, "metric")  # noqa: B009
-            fields = REDUCIBLE_FIELDS.get(metric, ())
+            fields = self._reducible_fields()
             if self.field not in fields:
                 keys = MULTI_FIELD_KEYS.get(metric, {})
                 by_key = [name for name in fields if keys.get(name) == self.field]
@@ -360,6 +406,32 @@ class SignalStatsRecipe(MultiRecipe):
     metric: Literal["signal_stats"]
     signal: str
     window: Window | None = None
+    quantiles: list[Annotated[float, Field(ge=0, le=1)]] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=16,
+        description=(
+            "Time-weighted quantile levels in [0, 1], transient only; [0.01, 0.99] "
+            "adds q01, q99 and quantile_peak_to_peak."
+        ),
+    )
+
+    @field_validator("quantiles")
+    @classmethod
+    def _quantile_keys_are_distinct(cls, levels: list[float] | None) -> list[float] | None:
+        for level in levels or ():
+            if abs(_key_percent(level) - level * 100) > 1e-9:
+                raise ValueError(
+                    f"quantile level {level!r} has more than six decimal places; its "
+                    "row key names a level to 1e-6"
+                )
+        keys = [quantile_key(level) for level in levels or ()]
+        if len(set(keys)) != len(keys):
+            raise ValueError("quantile levels must be distinct")
+        return levels
+
+    def _reducible_fields(self) -> tuple[str, ...]:
+        return (*super()._reducible_fields(), *quantile_fields(self.quantiles))
 
 
 class Levels(StrictModel):

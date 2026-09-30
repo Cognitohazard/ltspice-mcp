@@ -127,14 +127,30 @@ stats = compute_signal_stats(t_w, p_w)  # stats["mean"] is the average power
 A step's traces share that step's axis. The steps of a `.step` run each have
 an axis of their own, so never combine traces across steps.
 
-Take statistics of a derived trace with `compute_signal_stats`, not
-`np.mean`, `np.std` or `np.percentile` over the samples. LTspice varies its
-timestep and packs samples around every edge, so a plain sample average
-over-weights the edges; `compute_signal_stats` weights mean, RMS and standard
-deviation by time, the way `signal_stats` does (its `min`, `max` and `pk_pk`
-are the sample extremes). `window_and_clean` cuts the window and drops
-non-finite samples first. Both are in `run_code`'s scope; in your own Python,
-`from ltspice_mcp.api import compute_signal_stats, window_and_clean`.
+Take statistics of a derived trace with `compute_signal_stats` and
+`time_weighted_quantiles`, not `np.mean`, `np.std` or `np.percentile` over the
+samples. LTspice varies its timestep and packs samples around every edge, so a
+plain sample average or percentile over-weights the edges; `compute_signal_stats`
+weights mean, RMS and standard deviation by time, the way `signal_stats` does
+(its `min`, `max` and `pk_pk` are the sample extremes), and
+`time_weighted_quantiles` does the same for quantiles. `window_and_clean` cuts
+the window and drops non-finite samples first. All three are in `run_code`'s
+scope; in your own Python, `from ltspice_mcp.api import compute_signal_stats,
+time_weighted_quantiles, window_and_clean`.
+
+```python
+q = time_weighted_quantiles(t_w, p_w, [0.01, 0.5, 0.99])
+q["values"]  # one per level, in the order given
+```
+
+The `signal_stats` recipe keeps `min`, `max` and `peak_to_peak` as the sample
+extremes, so a narrow spike or an edge's overshoot is never averaged away. For
+a spread that leaves out the few edges of a switching train, which no single
+window can skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`,
+`q99` and `quantile_peak_to_peak` (highest level minus lowest), each a name
+`field` can reduce or spec. A key is the level as a percentage with `_` for
+the decimal point, so 0.999 is `q99_9`. `q99` is the smallest value the signal
+spends 99% of the window at or below.
 
 ### Reading a deck that carries `.step`
 

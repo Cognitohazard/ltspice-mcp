@@ -641,7 +641,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 110 characters so the description says a signal is one
     # trace or V(a,b) and where other trace math goes, before a recipe is
     # chosen rather than in the error after an expression fails.
-    "analyze_results": 19380,
+    # Raised by about 260 characters for signal_stats' 'quantiles': the levels'
+    # bounds and count, and one sentence naming the q-keyed fields they add,
+    # which a 'field' has to spell to reduce or spec one; plus "percentiles"
+    # on the roster, so a host routes that word here. Measured 19,621.
+    "analyze_results": 19630,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
