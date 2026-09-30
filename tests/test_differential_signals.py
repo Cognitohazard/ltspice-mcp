@@ -302,7 +302,7 @@ async def test_plot_waveform_draws_the_difference(state_no_sim: SessionState, wo
     blob = _data_blob(await asyncio.to_thread(_read, Path(data["path"])))
     (panel,) = blob["panels"]
     assert panel["series"] == [{"label": "V(in,out)"}]
-    np.testing.assert_allclose(panel["data"][1], _drop(raw))
+    np.testing.assert_allclose(panel["tables"][0][1], _drop(raw))
 
 
 # ---------------------------------------------------------------------------
