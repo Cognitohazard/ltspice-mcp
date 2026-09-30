@@ -169,7 +169,7 @@ path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
 
 Simulation output is automatically redirected to a Windows temp directory: LTspice's `.MEAS` results go through SQLite `.db` files that fail on UNC paths (`\\wsl.localhost\...`), and without the redirect measurement data silently disappears from the logs.
 
-`.asy` symbol paths for `.asc` editing are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS`.
+`.asy` symbol paths for `.asc` editing are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS`. A symbol saved in the same folder as the `.asc` is found first, as LTspice finds it, and needs no configuration.
 
 </details>
 

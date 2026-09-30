@@ -127,22 +127,22 @@ class TestGetSymbolInfoMissCache:
 
     def test_miss_is_cached(self) -> None:
         with patch.object(symbol_geometry, "_find_asy_file", return_value=None) as find_mock:
-            assert symbol_geometry.get_symbol_info("nope_xyz") is None
-            assert symbol_geometry.get_symbol_info("nope_xyz") is None
-            assert symbol_geometry.get_symbol_info("nope_xyz") is None
+            assert symbol_geometry.get_symbol_info("nope_xyz", None) is None
+            assert symbol_geometry.get_symbol_info("nope_xyz", None) is None
+            assert symbol_geometry.get_symbol_info("nope_xyz", None) is None
         assert find_mock.call_count == 1
 
     def test_miss_then_hit_separate_keys(self) -> None:
         with patch.object(symbol_geometry, "_find_asy_file", return_value=None) as find_mock:
-            symbol_geometry.get_symbol_info("missing_a")
-            symbol_geometry.get_symbol_info("missing_b")
+            symbol_geometry.get_symbol_info("missing_a", None)
+            symbol_geometry.get_symbol_info("missing_b", None)
         assert find_mock.call_count == 2
 
     def test_hit_after_miss_does_not_repath(self, tmp_path: Path) -> None:
         # First lookup misses and caches None. Then we replace the cache
         # entry with a real symbol and ensure the cached value wins.
         with patch.object(symbol_geometry, "_find_asy_file", return_value=None):
-            assert symbol_geometry.get_symbol_info("res_test") is None
+            assert symbol_geometry.get_symbol_info("res_test", None) is None
 
         asy = tmp_path / "res_test.asy"
         asy.write_text("Version 4\nLINE Normal 0 0 10 10\n")
@@ -151,7 +151,7 @@ class TestGetSymbolInfoMissCache:
 
         # No filesystem walk should occur — cache hit.
         with patch.object(symbol_geometry, "_find_asy_file", side_effect=AssertionError):
-            assert symbol_geometry.get_symbol_info("res_test") is info
+            assert symbol_geometry.get_symbol_info("res_test", None) is info
 
 
 # ---------------------------------------------------------------------------

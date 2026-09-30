@@ -1046,10 +1046,8 @@ def sniff_raw_dialect(path: Path) -> str | None:
     ``Command:`` field — there spicelib names the writer itself, and its
     answer is better than a guess.
     """
-    try:
-        with path.open("rb") as handle:
-            head = handle.read(_SNIFF_BYTES)
-    except OSError:
+    head = _read_head(path)
+    if head is None:
         return None
     if head.startswith(_RAW_HEADER_UTF16):
         return "ltspice"
@@ -1058,6 +1056,37 @@ def sniff_raw_dialect(path: Path) -> str | None:
     if b"Command:" in head:
         return None
     return "ngspice"
+
+
+def _read_head(path: Path) -> bytes | None:
+    """The first ``_SNIFF_BYTES`` of a file, or None when it cannot be read."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(_SNIFF_BYTES)
+    except OSError:
+        return None
+
+
+def raw_writer_command(path: Path) -> str | None:
+    """The first plot header's ``Command:`` value: the writer naming itself.
+
+    ``Linear Technology Corporation LTspice XVII`` from LTspice XVII, or
+    ``ngspice-46, Build Mar 29 2026 15:02:07`` from ngspice 44 and later. None
+    when the file is not a raw, has no such field (ngspice before 44), or
+    cannot be read. Only the header text before the variables block is
+    searched, and only the first ``_SNIFF_BYTES`` of the file are read.
+    """
+    head = _read_head(path)
+    if head is None:
+        return None
+    if head.startswith(_RAW_HEADER_UTF16):
+        width = 2
+    elif head.startswith(_RAW_HEADER_ASCII):
+        width = 1
+    else:
+        return None
+    fields, _ = _parse_plot_header(head.decode(_RAW_CODECS[width], errors="replace"))
+    return fields.get("command") or None
 
 
 # ---------------------------------------------------------------------------

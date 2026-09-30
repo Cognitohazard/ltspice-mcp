@@ -11,8 +11,9 @@ What lives here:
   applier ``apply_op_inplace``, and the batch runner ``run_op_batch``;
 - ``edit_guard``, which serializes one file's mutation in-process and across
   parallel server sessions, and the cached-editor accessors it wraps;
-- the placement, routing and net-partition geometry (``resolve_pin``,
-  ``plan_connect_route``, ``net_partition``, ``trace_nets``);
+- the placement, routing and net-partition geometry (``placed_geometry``,
+  ``resolve_pin``, ``plan_connect_route``, ``net_partition``, ``trace_nets``),
+  which reads each symbol once per request through ``symbol_info_for``;
 - the post-op validation pass (``post_op_warnings``) and the wiring profile.
 
 Names imported by another module are public.
@@ -31,6 +32,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, NamedTuple
+from weakref import WeakKeyDictionary
 
 from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
@@ -443,19 +445,41 @@ def _bboxes_overlap(a: dict, b: dict) -> bool:
     )
 
 
+# Each editor's symbols, resolved once per request: get_asc_editor hands every
+# editor out on a fresh memo, so a symbol redrawn between requests is read
+# again, while the many geometry passes one request makes over a sheet cost one
+# lookup per distinct symbol rather than a file check per part per pass.
+_symbols_by_editor: WeakKeyDictionary[AscEditor, dict[str, SymbolInfo | None]] = (
+    WeakKeyDictionary()
+)
+
+
+def symbol_info_for(editor: AscEditor, symbol: str) -> SymbolInfo | None:
+    """``symbol`` as ``editor``'s sheet resolves it: beside the sheet, then the libraries."""
+    memo = _symbols_by_editor.setdefault(editor, {})
+    if symbol not in memo:
+        memo[symbol] = get_symbol_info(symbol, editor.asc_file_path)
+    return memo[symbol]
+
+
+def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
+    """A placed component's absolute pins and bounding box (see
+    ``compute_placed_geometry``); ``None`` when its symbol does not resolve."""
+    symbol = editor.components[reference].symbol
+    info = symbol_info_for(editor, symbol) if symbol else None
+    if info is None:
+        return None
+    pos, erot = editor.get_component_position(reference)
+    return compute_placed_geometry(info, int(pos.X), int(pos.Y), erot.name if erot else "R0")
+
+
 def collect_component_geometry(editor: AscEditor) -> list[dict]:
     """Collect bounding boxes and pin positions for all components."""
     result: list[dict] = []
     for ref in editor.get_components():
-        comp = editor.components[ref]
-        sym = comp.symbol
-        sym_info = get_symbol_info(sym) if sym else None
-        if sym_info is None:
-            continue
-        pos, erot = editor.get_component_position(ref)
-        rot_str = erot.name if erot else "R0"
-        geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-        result.append({"ref": ref, **geo["bounding_box"], "pins": geo["pins"]})
+        geo = placed_geometry(editor, ref)
+        if geo is not None:
+            result.append({"ref": ref, **geo["bounding_box"], "pins": geo["pins"]})
     return result
 
 
@@ -476,16 +500,8 @@ def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, i
     """Pin coordinates for a single component, ``set()`` if symbol unknown."""
     if reference not in editor.components:
         return set()
-    comp = editor.components[reference]
-    if not comp.symbol:
-        return set()
-    sym_info = get_symbol_info(comp.symbol)
-    if sym_info is None:
-        return set()
-    pos, erot = editor.get_component_position(reference)
-    rot_str = erot.name if erot else "R0"
-    geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-    return {(p["x"], p["y"]) for p in geo["pins"]}
+    geo = placed_geometry(editor, reference)
+    return set() if geo is None else {(p["x"], p["y"]) for p in geo["pins"]}
 
 
 def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tuple[int, int]]:
@@ -962,6 +978,7 @@ def get_asc_editor(path: Path, state: SessionState) -> AscEditor:
     editor = _get_editor(path, state)
     if not isinstance(editor, AscEditor):
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
+    _symbols_by_editor.pop(editor, None)  # this request resolves symbols afresh
     return editor
 
 
@@ -1204,7 +1221,7 @@ def _move_component_warnings(
     comp = editor.components[reference]
     moved_bb: dict[str, int] | None = None
     if comp.symbol:
-        moved_sym = get_symbol_info(comp.symbol)
+        moved_sym = symbol_info_for(editor, comp.symbol)
         if moved_sym is not None:
             moved_bb = compute_placed_geometry(moved_sym, x, y, rot_name)["bounding_box"]
     if moved_bb is not None:
@@ -1247,7 +1264,13 @@ def _placed_component_data(
 
 
 def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
-    """Resolve a pin reference ('M1.D' or 'net:VDD') to absolute (x, y) coordinates.
+    """Resolve a pin reference ('M1.D', 'X1.2' or 'net:VDD') to absolute (x, y) coordinates.
+
+    The part after the last dot is matched against the symbol's pin names first,
+    case-insensitively. Only when no pin carries that name, and it is all
+    digits, is it read as the pin's 1-based SpiceOrder — the terminal number a
+    netlist uses. Names win because some symbols name their pins '1', '2' in an
+    order that need not be their SpiceOrder.
 
     Raises NetlistError if the reference cannot be resolved.
     """
@@ -1275,8 +1298,9 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     # Component.Pin format
     if "." not in pin_ref:
         raise NetlistError(
-            f"Invalid pin reference '{pin_ref}'. "
-            "Use 'Reference.Pin' (e.g., 'M1.D') or 'net:name' (e.g., 'net:VDD')."
+            f"Invalid pin reference '{pin_ref}'. Use 'Reference.Pin', the pin by "
+            "name or 1-based SpiceOrder (e.g., 'M1.D', 'X1.2'), or 'net:name' "
+            "(e.g., 'net:VDD')."
         )
 
     ref, pin_name = pin_ref.rsplit(".", 1)
@@ -1286,23 +1310,26 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
             f"Component '{ref}' not found. Available: {', '.join(sorted(component_refs))}"
         )
 
-    pos, erot = editor.get_component_position(ref)
-    rot_str = erot.name if erot else "R0"
-    comp = editor.components[ref]
-    symbol = comp.symbol
-
-    sym_info = get_symbol_info(symbol) if symbol else None
-    if sym_info is None:
+    symbol = editor.components[ref].symbol
+    geometry = placed_geometry(editor, ref)
+    if geometry is None:
         raise NetlistError(f"Cannot resolve pins for '{ref}': symbol '{symbol}' not found.")
 
-    geometry = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-    for pin in geometry["pins"]:
+    pins = geometry["pins"]
+    for pin in pins:
         if pin["name"].upper() == pin_name.upper():
             return pin["x"], pin["y"]
+    # A pin with no SpiceOrder line parses as order 0, which is no ordinal.
+    ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
+    if ordinal:
+        for pin in pins:
+            if pin["order"] == ordinal:
+                return pin["x"], pin["y"]
 
-    available = [p["name"] for p in geometry["pins"]]
+    available = [f"{p['name']} ({p['order']})" if p["order"] else p["name"] for p in pins]
     raise NetlistError(
-        f"Pin '{pin_name}' not found on {ref} ({symbol}). Available: {', '.join(available)}"
+        f"Pin '{pin_name}' not found on {ref} ({symbol}). Available: {', '.join(available)} "
+        "(pin name, with its SpiceOrder in parentheses)."
     )
 
 
@@ -1875,7 +1902,7 @@ class OpAddNetLabel(StrictModel):
     net: str = Field(description="Net name the label declares, e.g. 'VDD', 'out'.")
     pin: str | None = Field(
         default=None,
-        description="Place at this pin, e.g. 'M1.D'; give this or x/y, not both.",
+        description="Place at this pin, e.g. 'M1.D' or 'X1.2'; give this or x/y, not both.",
     )
     x: int | None = None
     y: int | None = None
@@ -1887,11 +1914,12 @@ class OpWirePins(StrictModel):
 
     op: Literal["wire_pins"]
     from_pin: str = Field(
-        description="Source pin as 'Reference.Pin', e.g. 'M1.D', or 'net:NAME' for a label."
+        description=(
+            "Source pin: 'REF.PIN' by name, else 1-based SpiceOrder ('M1.D', "
+            "'X1.2'), or 'net:NAME' for a label."
+        )
     )
-    to_pin: str = Field(
-        description="Target pin as 'Reference.Pin', e.g. 'M4a.D', or 'net:NAME' for a label."
-    )
+    to_pin: str = Field(description="Target pin, in from_pin's forms.")
     waypoints: list[WaypointInput] = Field(
         default_factory=list,
         description=(
@@ -2009,9 +2037,12 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
     decides whether to abort or continue based on ``stop_on_error``.
     """
     if isinstance(op, OpAddComponent):
-        symbol_info = get_symbol_info(op.symbol)
+        symbol_info = symbol_info_for(editor, op.symbol)
         if symbol_info is None:
-            raise NetlistError(f"Symbol '{op.symbol}' not found in any configured symbol library.")
+            raise NetlistError(
+                f"Symbol '{op.symbol}' not found beside the schematic or in any "
+                "configured symbol library."
+            )
         if op.reference in editor.components:
             raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
         erot = _parse_rotation(op.rotation)

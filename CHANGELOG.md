@@ -42,6 +42,9 @@ tool-surface changes.
   loop clock reads past the deadline. asyncio fires a timer up to one clock
   resolution early (15.6 ms on Windows), so the clock could read short of a
   deadline the wait had reached and the coordinator killed again.
+- Under Wine, `inspect(kind="capabilities")` reported `wine` as the LTspice
+  executable, because it read the first word of the launch command. It now
+  reports the simulator itself, e.g. `.../LTspice.exe`.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
@@ -153,6 +156,17 @@ tool-surface changes.
   inline. It runs about 600 bytes a component, which costs more than the PNG
   past a handful of parts, and structured-only clients drop the text channel
   it would ride on.
+- A symbol saved in the same folder as its `.asc`, where LTspice looks first and
+  where a hand-drawn subcircuit symbol usually lives, was not found for pin
+  positions. `inspect(kind="symbol")` and rendering found it, but
+  `inspect(kind="net")` on its pins failed with "symbol not found",
+  `inspect(kind="components", detail="full")` left out its pins and bounding
+  box, and `add_component`, `wire_pins` and the other ops that take a pin
+  refused it. Pin positions now come from the sheet's own folder first, then
+  the libraries, so a local symbol wins over a same-named library one and two
+  sheets in different folders each keep their own. A redrawn local symbol is
+  read again. A `base="blank"` build looks beside its target, not beside the
+  temporary template it starts from.
 
 ### Added
 
@@ -242,6 +256,20 @@ tool-surface changes.
   remedy}`. It says whether `verify_circuit` can make the PNG it returns
   inline and, if not, whether the `raster` extra or the native Cairo library is
   missing and how to install it, before anything is drawn.
+- Results record which simulator build produced them. A job records the
+  executable its cases launch: path, size, modification time and SHA-256.
+  Each case records the build the simulator named in its own output: the
+  LTspice log banner (`LTspice 26.0.2 for Windows`), the ngspice console
+  banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:`
+  when neither exists (LTspice XVII). Run rows carry it as `simulator_version`.
+  `jobs(runs)` and `run_fields` return it, and the lean receipt drops it from
+  produced rows along with their artifact paths. `provenance: true` adds the
+  job's `simulator_executable` to the receipt. Only the first few kilobytes of
+  each artifact are read, whatever its size.
+- `inspect(kind="capabilities")` reports each simulator's `executable_sha256`.
+  Its `version` is now the build that the latest run on that same executable
+  reported, with `version_source` naming the job and case; it was always
+  null. The executable is never launched to ask.
 
 - `inspect(kind="capabilities")` takes an optional `fields` list naming the
   top-level keys to return, such as `["allowed_paths", "config_path"]` after a
@@ -249,6 +277,13 @@ tool-surface changes.
 - `edit_schematic` has a `preexisting` view, which lists what an edit counted
   under `preexisting` (see Changed). Name it in `return_views`, or echo
   `preexisting.cursor` as `view_cursors.preexisting`.
+- A `.asc` pin can be addressed by its 1-based SpiceOrder: `X1.2` reaches the
+  second pin of a block whose pins are named `A`/`B`, the same terminal number
+  a netlist `inspect(kind="net")` query takes. Pin names are matched first,
+  because some symbols name their pins `1`/`2` in an order that need not be
+  their SpiceOrder. This works everywhere a pin is taken: `inspect(kind="net")`,
+  the `wire_pins` op, and the `pin` of `add_net_label`, `remove_net_label` and
+  `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
 
@@ -267,6 +302,16 @@ tool-surface changes.
   math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
   numpy on the traces. Before, only the error after a failed expression said
   so. That error's example is now a product, not a difference `V(a,b)` reads.
+- Reusing a `request_id` returns an `idempotency_conflict` when the job ran on
+  a different simulator build than the request would launch now, just as it
+  does for an edited deck. Before, swapping the simulator executable (or the
+  default simulator) and restarting replayed the earlier build's results under
+  the same id. A job record that names no executable is refused the same way.
+  A replay therefore needs the requested simulator to be available, as a fresh
+  submission does; `jobs(action="status")` reads the recorded job without one.
+- The store format is version 3. Job records gained the simulator executable
+  and each case's reported build. Version 2 records still load, with both
+  unknown; version 1 records (0.6.1) are not read.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.
@@ -274,7 +319,7 @@ tool-surface changes.
   returned page. Sample validation reuses unchanged original model parsing
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
-  statistical provenance. The store format is version 2.
+  statistical provenance.
 - A case has no time limit unless one is set. Before, every case was capped
   at spicelib's hidden 600 s. Now a case runs until it ends or is cancelled,
   unless the request sets `execution.run_timeout_s` or the operator sets the
@@ -315,6 +360,15 @@ tool-surface changes.
 - An `edit_schematic` view cursor now returns its view even when
   `return_views` does not name it. A `pin_legend` or `touched` cursor sent with
   the default `return_views` used to be accepted and then ignored.
+- `prefix` on `inspect(kind="components")` and `inspect(kind="hierarchy")` is
+  a case-insensitive prefix of the reference rather than a single letter:
+  `"LX"` keeps LX1 and LX2 but not L1, and `"MXO"` keeps MXO1. A one-letter
+  prefix still selects an element type. On `hierarchy` it reads each
+  instance's own reference, the last segment of its path. It is plain text:
+  a prefix with a wildcard is refused with the plain spelling to use
+  (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
+  too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
+  `invalid_query`.
 
 ### Security
 

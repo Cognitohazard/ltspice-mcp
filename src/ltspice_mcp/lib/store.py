@@ -86,11 +86,18 @@ STORE_SCHEMA = "ltspice-mcp/store"
 
 #: The one version for the whole store. Bump it when ANY record's shape
 #: changes; the manifest at the store root records which version wrote it.
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 #: Versions this build can read. Older entries appear here only once this build
 #: can actually decode them.
-SUPPORTED_STORE_VERSIONS: frozenset[int] = frozenset({STORE_VERSION})
+#:
+#: 2 differs from 3 only by what the experiment record lacks: the job's
+#: ``simulator_executable`` and each case's ``simulator_version``. Both read as
+#: unknown, which is what they are, and a replay of such a job is refused
+#: because nothing shows it ran on the executable in use now. The bump is what
+#: stops a version-2 build reading a version-3 record and dropping both fields
+#: when it writes the record back.
+SUPPORTED_STORE_VERSIONS: frozenset[int] = frozenset({2, STORE_VERSION})
 
 MANIFEST_FILENAME = "store.json"
 
