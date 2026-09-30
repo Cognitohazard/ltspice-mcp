@@ -638,7 +638,14 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 160 characters so value's 'expr' and 'at' say what they
     # take: a field named for an expression, with no description, was read as
     # one, and 'at' being required on a multi-sample axis was stated nowhere.
-    "analyze_results": 19260,
+    # Raised by about 110 characters so the description says a signal is one
+    # trace or V(a,b) and where other trace math goes, before a recipe is
+    # chosen rather than in the error after an expression fails.
+    # Raised by about 260 characters for signal_stats' 'quantiles': the levels'
+    # bounds and count, and one sentence naming the q-keyed fields they add,
+    # which a 'field' has to spell to reduce or spec one; plus "percentiles"
+    # on the roster, so a host routes that word here. Measured 19,621.
+    "analyze_results": 19630,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -1031,3 +1038,10 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     def test_it_points_at_the_reference_lookup(self):
         description = _registered()["analyze_results"].description or ""
         assert "inspect(kind='reference'" in description
+
+    def test_it_says_a_signal_is_not_an_expression(self):
+        """Names V(a,b) and where trace math goes, never the gated run_code."""
+        description = _registered()["analyze_results"].description or ""
+        assert "V(a,b)" in description
+        assert "trace math" in description
+        assert "run_code" not in description
