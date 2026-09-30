@@ -66,7 +66,7 @@ import asyncio
 import copy
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
@@ -96,6 +96,7 @@ from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_awar
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
+from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     named_labels,
@@ -403,6 +404,7 @@ CapabilityField: TypeAlias = Literal[
     "simulators",
     "default_simulator",
     "exporter_available",
+    "render",
     "dialects",
     "diagnostics",
     "ngbehavior",
@@ -871,7 +873,7 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _do_capabilities(state: SessionState) -> dict[str, Any]:
+def _do_capabilities(state: SessionState, raster: RasterSupport) -> dict[str, Any]:
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
         info: dict[str, Any] = {
@@ -906,6 +908,10 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         ),
         # The .asc → LTspice netlist exporter needs LTspice itself.
         "exporter_available": "ltspice" in state.available_simulators,
+        # Whether verify_circuit can draw a PNG, the only format it returns
+        # inline. Asked here so an agent that cannot read files knows before it
+        # renders whether it will see the picture, and what to install if not.
+        "render": asdict(raster),
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
@@ -1313,30 +1319,36 @@ def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
 # ---------------------------------------------------------------------------
 
 
-def _check_prefix(prefix: str | None) -> None:
-    if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
+def _check_prefix(prefix: str | None) -> str | None:
+    """The validated prefix, upper-cased: references match it without regard to case."""
+    if prefix is None:
+        return None
+    if len(prefix) != 1 or not prefix.isalpha():
         raise _QueryError(
             "invalid_prefix",
             f"component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}",
         )
+    return prefix.upper()
 
 
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """The component rows, plus the lexer's notes about how the deck read."""
+    """The component rows, plus the lexer's notes about how the deck read.
+
+    ``prefix`` is the upper-cased letter :func:`_check_prefix` returns.
+    """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
     lexed = lex(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
-    upper = prefix.upper() if prefix else None
     rows: list[dict[str, Any]] = []
     for card in by_ref.values():
         ref = card.name
         if not ref:
             continue
-        if upper is not None and ref[:1].upper() != upper:
+        if prefix is not None and ref[:1].upper() != prefix:
             continue
         entry: dict[str, Any] = {"reference": ref, "value": netlist_card_value(card)}
         if detail == "full" and not body_has_stray_kv_remnant(card.body):
@@ -1385,13 +1397,13 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
 
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    _check_prefix(q.prefix)
+    prefix = _check_prefix(q.prefix)
     path = safe_path(q.path, state)
     # The answer rung revokes detail='full' — the one payload-growing opt-in
     # inspect has. The cursor binds the detail it actually rendered, so a page
     # taken under a budget cannot resume as an unbudgeted one at the same offset.
     detail = "list" if view.lean else q.detail
-    identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
+    identity = {"path": str(path), "prefix": prefix, "detail": detail}
     digest: str | None = None
     lex_notes: list[str] = []
 
@@ -1400,9 +1412,13 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         # Cached editor + component reads stay on the event loop.
         editor = get_asc_editor(path, state)
         try:
-            refs = sorted(editor.get_components(q.prefix) if q.prefix else editor.get_components())
+            refs = sorted(editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
+        # Filtered here as in the netlist branch: spicelib's prefix filter is
+        # case-sensitive (docs/spicelib_bugs.md).
+        if prefix is not None:
+            refs = [ref for ref in refs if ref[:1].upper() == prefix]
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
         rows = _components_asc_page(editor, page["items"], detail)
     else:
@@ -1412,7 +1428,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
             raise _QueryError("read_error", str(exc)) from exc
         try:
             all_rows, lex_notes = await asyncio.to_thread(
-                _components_netlist_payload, text, q.prefix, detail
+                _components_netlist_payload, text, prefix, detail
             )
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
@@ -1652,7 +1668,8 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        report = _do_capabilities(state)
+        # The first successful probe loads the native Cairo library.
+        report = _do_capabilities(state, await asyncio.to_thread(raster_support))
         if query.fields is not None:
             wanted = set(query.fields)
             report = {key: value for key, value in report.items() if key in wanted}

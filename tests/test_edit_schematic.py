@@ -1171,8 +1171,28 @@ async def test_reference_success(asc_state, work_dir, monkeypatch):
     data = await _build_blank(asc_state, "refok", _DIVIDER_OPS, compare={"reference": "ref.cir"})
     assert data["commit_state"] == "committed"
     assert data["verification"]["equivalent"] is True
-    assert data["netlist"] == _REF_DECK
+    # The verdict is the answer; the exported deck only confirms it.
+    assert "netlist" not in data
     assert data["stages"][-1] == {"stage": "reference", "ok": True}
+
+
+async def test_an_equivalent_comparison_leaves_the_netlist_out(asc_state, monkeypatch):
+    """A confirmed match does not echo the exported deck.
+
+    Every compare used to return the committed sheet's whole netlist, even
+    when the verdict was ``equivalent: true``. That deck is equivalent to the
+    reference the caller supplied, so it carried no fact the verdict did not,
+    and every later turn re-read it.
+    """
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(asc_state, "reflean", _DIVIDER_OPS, compare={"reference": _REF_DECK})
+    assert data["verification"]["equivalent"] is True
+    assert data["outcome"] == "complete"
+    assert "netlist" not in data
 
 
 async def test_reference_may_be_netlist_text(asc_state, monkeypatch):
@@ -1247,6 +1267,8 @@ async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypat
     assert data["verification"]["equivalent"] is False
     # A difference is data, not a failure: the sheet stays committed.
     assert (work_dir / "refbad.asc").is_file()
+    # The sheet's exported deck is the side of the difference to diagnose from.
+    assert data["netlist"] == _REF_DECK_DIFFERENT
 
 
 async def test_reference_mismatch_is_a_partial_outcome(asc_state, work_dir, monkeypatch):
@@ -1288,6 +1310,8 @@ async def test_reference_export_failure_is_a_partial_outcome(asc_state, work_dir
     )
     assert data["verification"]["equivalent"] is None
     assert data["verification"]["export_error"]
+    # Nothing exported, so there is no deck to return.
+    assert "netlist" not in data
     assert data["outcome"] == "partial"
     assert data["commit_state"] == "committed"
 
@@ -1395,6 +1419,8 @@ async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir
     assert "injected reference export failure" in verification["compare_error"]
     assert verification["equivalent"] is None
     assert data["outcome"] == "partial"
+    # No verdict is not a match: the sheet's deck is the half the caller has.
+    assert "R2" in data["netlist"]
 
 
 # ---------------------------------------------------------------------------

@@ -171,6 +171,31 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 
 </details>
 
+### PNG rendering (optional)
+
+`verify_circuit` draws a schematic as SVG. An assistant sees the drawing only as a PNG, because PNG is the only format returned inline as image content; clients do not reliably display SVG. The plain install leaves out two things PNG needs:
+
+1. **The `raster` extra** (cairosvg). Install the server with it:
+
+   ```bash
+   uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
+   ```
+
+   If you launch the server with `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude Code plugin and the Claude Desktop extension already include the extra.
+
+2. **The native Cairo library**, which no Python wheel ships:
+   - **Linux and WSL:** `sudo apt install libcairo2` (Fedora: `sudo dnf install cairo`). Under WSL the server is a Linux process, so install it inside the distro.
+   - **macOS:** `brew install cairo`. On Apple silicon, Homebrew's `/opt/homebrew/lib` is not searched by default, so also set `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` in the server's environment.
+   - **Windows:** install a Cairo runtime, for example the [GTK for Windows runtime](https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer). Then either add the folder holding `libcairo-2.dll` and the DLLs it depends on (the runtime's `bin` folder) to `PATH`, or name that folder in `CAIROCFFI_DLL_DIRECTORIES` (separate several folders with `;`).
+
+Restart the server afterwards. If either piece is missing, a PNG request comes back as an SVG file and nothing is returned inline; the reply names the missing piece and how to install it on your platform. `inspect(kind="capabilities")` reports the same before anything is drawn:
+
+```json
+"render": {"png": false, "missing": "native_library", "reason": "...", "remedy": "..."}
+```
+
+`missing` is `"extra"` or `"native_library"`, and all three are null when `png` is true.
+
 ### The tool surface
 
 The server exposes **8 tools**: six arranged over three planes, the waveform widget, and `run_code`, which is registered always and served unless the operator turns it off:

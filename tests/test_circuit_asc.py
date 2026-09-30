@@ -13,6 +13,7 @@ from mcp.types import TextContent
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.schematic_ops import (
+    OpWirePins,
     build_on_wire_predicate,
     point_on_segment,
 )
@@ -289,6 +290,12 @@ class TestEditDirectiveCommentKind:
         # contain Latin-1 µ characters, so read raw bytes and replace.
         text = asc_file.read_bytes().decode("utf-8", errors="replace")  # noqa: ASYNC240
         assert "zap me" not in text
+
+
+def test_waypoints_description_states_the_straight_run_rule():
+    # There is no router; test_diagonal_rejected pins the refusal itself.
+    text = OpWirePins.model_fields["waypoints"].description or ""
+    assert "share an x or a y" in text
 
 
 @pytest.mark.asyncio
