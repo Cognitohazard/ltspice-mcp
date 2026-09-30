@@ -79,6 +79,7 @@ Key `lib/` modules:
 - `schematic_ops.py` — the `.asc` edit engine: op models, appliers, geometry, net tracing. Every name another module imports from it is public
 - `runner_manager.py` — centralized runner lifecycle (see Key Patterns)
 - `simulator.py` — simulator detection, WSL/Wine selection
+- `simulator_build.py` — which build ran: the executable a job records at submission (path, size, mtime, SHA-256; the last word of `spice_exe`, so never `wine`), and the version each case's run named in its own output (LTspice log banner, ngspice `.exe.log` console banner, raw `Command:`), read with bounded head reads. A replay is refused when the executable the request would launch now is a different build: `experiment_runner.verify_replay` is the one check both replay routes run (the tool's lookup before the request gate, the coordinator's under it), decks and executable together
 - `ltspice_wsl.py`, `wsl.py` — WSL path conversion and interop
 - `metrics.py` — the numeric core behind every `analyze_results` recipe: one function per discriminant, each taking a resolved `AnalysisSource` explicitly, with `METRICS` mapping recipe class to function. `tools/analyze.py` looks a recipe up there rather than branching on its type, and a recipe class with no entry fails at import. Also home to the readers those functions share — axis and window handling, the AC signal loader, the log relay, operating-point device matching, .MEAS aggregation
 - `ac_analysis.py`, `signal_analysis.py`, `ac_structure.py` — pure-function analysis primitives for frequency-domain (.AC) and transient (.tran) `.raw` data; the metric functions in `metrics.py` are what put results on the wire
@@ -92,7 +93,7 @@ Key `lib/` modules:
 - `symbol_geometry.py`, `geometry.py` — .asy symbol parsing (pin positions, rotation transforms, bounding boxes) + shared 2D / bbox helpers
 - `observability.py` — structured job-lifecycle events on the `ltspice_mcp.events` stderr logger (the server's only log channel: the MCP logging capability is deprecated as of 2026-07-28 and is not served). `configure_stderr_logging` installs that channel, and is what both the server lifespan and the detached owner call, so every process writes the same format at the level `[logging] level` names
 
-Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `desktop.py`, `plot_html.py`) do what their names say — read them when you need them.
+Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `desktop.py`, `plot_html.py`, `plot_svg.py`) do what their names say — read them when you need them.
 
 ### Tool Module Convention
 
@@ -139,7 +140,7 @@ Direct editing of LTspice `.asc` schematics is a first-class feature. The MCP su
 - The `add_component` op returns pin positions (with direction), bounding box, and overlap warnings; `inspect(kind:"symbol")` provides the same geometry non-destructively for pre-placement planning.
 - `handle_trace_net` (in `tools/inspect_tools.py`, behind `inspect(kind:"net")`) reports every pin/label/wire vertex on the net at a pin/`net:NAME`/`(x,y)`, flagging multi-label shorts. Built on `schematic_ops.net_partition`, the union-find that also backs `trace_nets`.
 - There is no session-side undo. `edit_schematic` is revision-guarded and transactional (a failed batch writes nothing), so recovery from a committed edit is the caller's own copy of the sheet.
-- Every mutation is an op in `edit_schematic`'s batch, applied by `apply_op_inplace` under `run_op_batch`; `post_op_warnings` runs the validation pass over the mutated editor afterwards, and `collapse_result_warnings` folds an advisory repeated across ops into one entry with a count.
+- Every mutation is an op in `edit_schematic`'s batch, applied by `apply_op_inplace` under `run_op_batch`; `post_op_warnings` runs the validation pass over the mutated editor afterwards, and `collapse_result_warnings` folds an advisory repeated across ops into one entry with a count. On an existing sheet the pass and the label-only pins are also read before the ops run, and the reply lists only the rows the batch introduced or named (`_split_by_edit` in `tools/schematic_edit.py`); the rest are counted under `preexisting` and paged by the `preexisting` view, never dropped.
 - What is left in `tools/analysis.py` is the `plot_waveform` tool and the two artifact writers `analyze_results` shares with it (`build_waveform_csv`, `build_plot_file`); every recipe's numbers come from `lib/metrics.py`.
 - All path-taking surfaces use `"path"` as the file parameter name.
 

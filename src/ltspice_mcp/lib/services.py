@@ -747,8 +747,9 @@ def _not_found(raw: RawRead, signal: str) -> ResultError:
             f"Signal '{signal}' not found: it reads as an expression, and a signal "
             "names one trace or a node-pair voltage V(a,b). Available signals: "
             f"{available}. For other trace math, combine the traces in Python: "
-            "r = api.load_raw(job_id=..., case_id=...); "
-            "y = r.trace('V(a)', step=0) - r.trace('V(b)', step=0), on r.axis(step=0).",
+            "r = api.load_raw(job_id=..., case_id=...); t = r.axis(step=0); "
+            "y = r.trace('V(out)', step=0) * r.trace('I(R1)', step=0); "
+            "compute_signal_stats(t, y) gives its time-weighted statistics.",
             show_hint=False,
             python_route=True,
         )

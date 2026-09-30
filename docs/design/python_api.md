@@ -321,7 +321,8 @@ and real axes.
   `integrate_noise`, `classify_filter`, `analyze_ac_structure`.
 - Transient: `window_and_clean`, `analyze_edge`, `analyze_pulse_response`,
   `analyze_disturbance_response`, `analyze_timing_between`, `analyze_periodic`,
-  `analyze_thd`, `compute_signal_stats`, `compute_measurement_stats`.
+  `analyze_thd`, `compute_signal_stats`, `time_weighted_quantiles`,
+  `compute_measurement_stats`.
 - Also `parse_spice_value`, which is not a metric but a value reader: variation
   values cross the boundary as SPICE literals (`'5p'`) in both directions, and
   nothing else on the facade parses one.
@@ -356,8 +357,9 @@ the literal typing surface:
   `ResonancesOutput` (`ResonancePeak`), `NoiseIntegralOutput`,
   `EdgeMetricsOutput`, `PulseResponseOutput`, `DisturbanceResponseOutput`,
   `TimingBetweenOutput`, `PeriodicMetricsOutput`, `SignalStatsOutput`,
-  `ThdOutput` (`HarmonicEntry`), `MeasurementStatsEntry`, `HistogramBin`,
-  `AcStructureResult`, `Corner`, `Observation`.
+  `TimeWeightedQuantilesOutput`, `ThdOutput` (`HarmonicEntry`),
+  `MeasurementStatsEntry`, `HistogramBin`, `AcStructureResult`, `Corner`,
+  `Observation`.
 
 A separate module, **`ltspice_mcp.api.types`**, re-exports the *argument* models
 the six operations validate against: the render and compare policies
@@ -596,3 +598,14 @@ process and is cancelled when that process exits; adding `detach=True` hands it
 to a supervisor process spawned for that one job, which outlives the script
 (§11). Either way the record is the same record, and the other interface reads
 it by `job_id`.
+
+A process runs one executable per simulator family, so a second simulator
+build runs in a second process on the same working directory, e.g.
+`Api(working_dir=..., simulator_exe=".../XVIIx64.exe")` beside a server on the
+default install. Each job records the executable its cases launched
+(`simulator_executable`) and each run the build it reported
+(`simulator_version`), so the two builds' results stay distinguishable in the
+shared records. A `request_id` reused from the other process replays only when
+both processes launch the same build; otherwise it is an
+`idempotency_conflict` (`docs/design/mcp_surface.md`, "Replay is scoped to the
+simulator build").

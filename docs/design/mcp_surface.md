@@ -22,7 +22,11 @@ source wins and this document is the thing to fix.
 
 A seventh tool, `plot_waveform`, is registered alongside them. It is the
 interactive MCP Apps waveform widget; it predates this envelope and stays
-outside it.
+outside it. Its reply summarizes each plotted trace (min and max and where,
+first and final value, the time-weighted mean on a transient) so a model
+learns what the chart shows, and `attach_plot` adds a PNG of the chart for a
+vision model. Traces split into panels by declared unit, or as the caller's
+`panels` lays them out.
 
 An eighth, `run_code`, is registered always and served unless the operator
 sets `[tools] run_code = false`. It runs a Python snippet in a warm worker
@@ -97,7 +101,7 @@ From the error hierarchy:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was asked for without the optional `raster` extra |
+| `raster_unavailable` | a PNG was asked for without a usable rasterizer: the optional `raster` extra, or the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Named by the stage instead, where the stage is the more useful fact:
@@ -140,6 +144,13 @@ dicts, full run records, the `source_hashes` identity echo, and `provenance`.
 Never trimmed in any mode: failures, errors, observations, warnings, and any
 completeness shortfall. Lean drops the confirming detail of a success, never
 the fact channels.
+
+One kind of fact is scoped rather than trimmed: a standing fact about the
+target that predates the call and involves nothing the call named. The call is
+not its source, so it need not be listed; it is counted beside the channel it
+was left out of, with a route to list it, and never dropped. The call's own
+warnings and failures are never scoped. `edit_schematic`'s `preexisting` block
+(§3.4) is the instance.
 
 The reason is response cost: every response byte is re-read on every later
 turn of the conversation, and measurement put the tool path at several times
@@ -205,12 +216,14 @@ validation and every response are identical either way.
 
 The transform has one exemption, and it is read off the node's own shape
 rather than declared: a branch whose published properties are all fixed values
-keeps its description. That covers the dormant recipe branches and
-`inspect(kind: "capabilities")`, which are advertised as their discriminant and
-nothing else — "a client can still build a valid call" holds because a stripped
-branch still has structure to build one from, and these have none, so the
-description is the whole branch. Stripping it would publish a name a client
-could send with no way to learn what it does.
+keeps its description. That covers the dormant recipe branches, which are
+advertised as their discriminant and nothing else — "a client can still build a
+valid call" holds because a stripped branch still has structure to build one
+from, and these have none, so the description is the whole branch. Stripping it
+would publish a name a client could send with no way to learn what it does.
+`inspect(kind: "capabilities")` was the other such branch until it took a
+`fields` selector; its enum of report keys is now what the compact listing
+shows in place of the description.
 
 **How long a listing stays fresh.** Because they are static, the server tells
 the client so rather than making it re-list every turn: `tools/list`,
@@ -285,7 +298,21 @@ canonical bytes and never triggers a bump.
 
 `allow_live_includes` is *not* a presentation field: a job whose
 inputs cannot be proven cannot be replayed on the strength of a stored
-fingerprint, so reusing its `request_id` runs the experiment again.
+fingerprint, so reusing its `request_id` is an `idempotency_conflict`, and a
+new `request_id` runs the experiment again.
+
+**Replay is scoped to the simulator build.** Nothing in a request names the
+simulator executable. The job therefore records the program its cases launch
+(`simulator_executable`: path, size, modification time, SHA-256). A replay
+compares it with the program the request would launch now, resolved the way a
+fresh submission resolves it, so a changed default simulator counts too. A
+different build is an `idempotency_conflict` naming both programs, the same
+answer a changed deck gets. Builds are compared by digest, or by path, size and
+time when either side has no digest. A record that names no executable (store
+version 2) fails closed the same way. The check sits beside the fingerprint, not
+inside it: the executable is server state, and hashing it in would report a
+swapped build as a different request payload. `jobs(status)` still reads the
+recorded job, and a new `request_id` runs it on the current build.
 
 **Control token.** The receipt carries an unguessable `control_token`. Cancel
 authority is the owning process *or* a presented control token, so a
@@ -405,9 +432,10 @@ and an observation says the provenance is explicitly weaker. Live references
 are enumerated, never silently trusted. Reject the fail-by-default rule and the
 hashes can lie; reject staging altogether and vendor-library decks cannot run.
 
-Provenance is opt-in on the response. Digests, staged paths, the full manifest
-and the linter version are emitted only under `provenance: true` on
-`run_experiments`, or `include.provenance: true` on `analyze_results`. The
+Provenance is opt-in on the response. Digests, staged paths, the full manifest,
+the linter version and the job's `simulator_executable` are emitted only under
+`provenance: true` on `run_experiments`, or `include.provenance: true` on
+`analyze_results` (which carries no executable). The
 lean receipt keeps `{circuit, path, simulator, dialect, staged_files}` plus
 every manifest entry that *discloses* something — live, carrying a reason, or
 otherwise not an ordinary staged reference — so it fails closed. An analysis's
@@ -493,8 +521,15 @@ advancing; that judgment, and whether to cancel, is the caller's.
 
 **RunRecord** is a standalone schema fragment shared by `run_experiments` and
 `jobs`:
-`{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?}`. The keys
-are optional because a requested run-field projection may remove any of them.
+`{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
+simulator_version?}`. The keys are optional because a requested run-field
+projection may remove any of them. `simulator_version` is the build the run
+named in its own output: the LTspice log banner (`LTspice 26.0.2 for Windows`),
+the ngspice console banner (`ngspice-42, Creation Date: ...`), or the raw
+header's `Command:` when neither exists. It is null when the output named none.
+It is recorded per case, so an executable replaced mid-job shows up as two
+builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
+`jobs(runs)` and `run_fields` return it.
 Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
@@ -670,12 +705,17 @@ expected_sha256     REQUIRED whenever target exists, under either base;
                     Both refusals — missing and mismatched — report the
                     target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
-compare             {reference, anchors?, rtol} — post-commit netlist
-                    compare, inside the transaction
+compare             {reference, anchors?, rtol, mode?} — post-commit netlist
+                    compare ("equivalence" | "structural_diff"), inside
+                    the transaction; the exported netlist is returned
+                    only when the verdict is not a match
 dry_run             resolve, validate and return geometry; no write
-return_views        subset ["touched", "pin_legend"], default ["touched"]
-view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
-                    next_cursor from a previous page of that view
+return_views        subset ["touched", "pin_legend", "preexisting"],
+                    default ["touched"]
+view_cursors        {label_only_pins?, pin_legend?, touched?, preexisting?} —
+                    each a next_cursor from a previous page of that view, and
+                    echoing one returns that view even when return_views
+                    omits it; preexisting also takes preexisting.cursor
 view_limit          page size for the paginated views (default 100)
 ```
 
@@ -684,6 +724,20 @@ netlist" is written the same way on both tools. It is the only spelling: the
 flat `reference` this tool shipped with said nothing the object did not, and a
 call carrying both was refused rather than resolved, so the second spelling
 could only ever be the same call written a longer way.
+
+**The exported netlist is returned only when the comparison did not match.**
+The compare stage exports the committed sheet to a netlist. On `equivalent:
+true` the reply leaves that deck out. It is equivalent to the reference the
+caller supplied, so it adds nothing to the verdict, and every later turn would
+re-read it. A mismatch, a compare error or no verdict returns it as `netlist`,
+because it is the sheet's side of the comparison the caller now has to
+diagnose. §2 keeps a failed row's log path for the same reason. An export
+failure produces no deck, so none is returned. The confirmed case has no
+opt-in. The netlist is still one call away: `verify_circuit` with the `export`
+check writes it and returns its path. A `return_views` member would have put a
+plain string among paginated pin/net tables, and it would have had nothing to
+return on a call without `compare`. The Python API applies the same rule; its
+complete reply differs from the MCP one only in unpaginated views.
 
 **This tool does not draw.** `verify_circuit` owns rendering, and its policy is
 the more capable one — a pixel cap, an inline delivery channel, and a
@@ -709,6 +763,36 @@ placement defects — the transaction guards already prevent the defect class �
 and the grid arm was strictly less efficient, so the variant was removed from
 the enum rather than shipped.
 
+**Findings are scoped to the edit.** The validation pass (floating pins,
+duplicate wires, dangling labels, a label inside a body, stacked directives)
+and the label-only-pin list are whole-sheet facts, and on an existing sheet
+most of them predate the call. One recorded edit came back with about eighteen of
+those findings and a 28-pin `label_only_pins` list, none of them about what it
+changed. So the transaction runs both passes twice — on the sheet before the
+ops and after them, which it holds in memory anyway — and reports a row only
+when it is new (the sheet did not have it before; any change to a row makes it
+new, since its identity is every field) or when it names a reference or a
+coordinate the batch named. A reference is named by an op's `reference` or a
+`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, or a
+waypoint. Everything else goes in the `preexisting` block:
+
+```
+preexisting {count, findings, label_only_pins, cursor}
+```
+
+Nothing is dropped — a finding the caller did not cause is still a fact about
+the sheet, so it is counted, and the counts reconcile: `wiring.pins_total`,
+`pins_wired` and `pins_label_only` stay whole-sheet, and
+`label_only_pins.total + preexisting.label_only_pins == pins_label_only`. To see
+the rest, echo `cursor` as `view_cursors.preexisting` (the cheap call is an
+op-less read, `ops: []`, on which nothing is new, so its pages cover the whole
+sheet), or name `preexisting` in `return_views` to have the first page in the
+same call. Either returns `views.preexisting`: the findings as the validation
+pass reports them, then the label-only pins with `kind: "label_only_pin"`. A
+`base: "blank"` build starts from nothing, so it withholds nothing. The op
+advisories in `warnings` (prefixed with the op that raised them) are about the
+batch itself and are never scoped.
+
 The op union is discriminated on `op`. Undiscriminated, one mistyped op
 produced an error per branch — thirty-odd of them, truncated — so the caller
 learned neither the op vocabulary nor what their payload lacked, and the
@@ -719,7 +803,9 @@ kind alone.
 Unchanged fundamentals: the commit protocol (content-hashed support assets,
 with the `.asc` rename last, so a multi-asset transaction rides a single-file
 atomic primitive); the vocabulary (grid 16; rotations `R0..M270`;
-`REF.PINNAME` pins; the legal symbol set is what `inspect` reports); the
+`REF.PIN` pins, where `PIN` is the pin's name or, when no pin has that name
+and it is all digits, its 1-based SpiceOrder, so `X1.2` works on a block whose
+pins are lettered; the legal symbol set is what `inspect` reports); the
 validation errors (unresolvable endpoint, diagonal wire, wire over a symbol
 body, pin collision, junction overlap); the wiring metric with
 `label_only_pins`; findings carrying `at` and `subject`; and the retry story —
@@ -799,10 +885,12 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist?, verification?,
+Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
-views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
-hint`.
+preexisting {count, findings, label_only_pins, cursor},
+views {touched?: Page, pin_legend?: Page, preexisting?: Page}, warnings,
+failures, observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
 
@@ -819,15 +907,15 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 export_to     "managed" (default) | "sidecar"
 ```
 
-`compare` is shared with `edit_schematic`. The shared half —
-`{reference, anchors, rtol}` — means the same thing on both tools;
-`compare.mode` is on a subclass here because only this tool has two comparisons
-to choose between, and `render`'s `mode`/`delivery` because only this tool has
-checks to skip and an image channel to deliver into. A tool never advertises a
-field it cannot honour, which is also why `render` is here and not on
-`edit_schematic`. There is one spelling of each: the flat
-`reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with said nothing
-the object did not, and a call carrying both was refused rather than resolved.
+`compare` is shared with `edit_schematic`, `mode` included: `{reference,
+anchors, rtol, mode}` means the same thing on both tools, and both run either
+comparison through one dispatcher. `render`'s `mode`/`delivery` are here
+because only this tool has checks to skip and an image channel to deliver
+into. A tool never advertises a field it cannot honour, which is also why
+`render` is here and not on `edit_schematic`. There is one spelling of each:
+the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
+said nothing the object did not, and a call carrying both was refused rather
+than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
@@ -836,7 +924,16 @@ destructive, which the annotation table reflects.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
-as a file.
+as a file. Inline delivery is PNG only. An SVG sent as an image block is not
+reliably displayed. Sent as markup it runs about 600 bytes a component, so
+past a handful of parts it costs more than the PNG, and it would ride the text
+channel a structured-only client drops. When `inline` or `both` returns no
+image, `render.inline_skipped` says why (`svg_requested` or
+`png_unavailable`) and `render.note` says where the file is. A PNG needs the
+`raster` extra and the native Cairo library. A render without them falls back
+to SVG, with a `render` failure naming which of the two is missing and a
+per-platform remedy. `inspect(kind:"capabilities")` reports the same as
+`render: {png, missing, reason, remedy}` before anything is drawn.
 
 The two comparison modes differ in what an unreadable deck does to them.
 `equivalence` graph-compares connectivity — component set, values, normalized
@@ -866,8 +963,9 @@ component's signature is its model or value plus its instance parameters,
 nodes excluded (equivalence is the mode that compares wiring).
 
 Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
-summary, `outcome` and `hint`.
+block `{path, sha256, source_sha256, width, height, downscaled,
+returned_inline, inline_skipped, note, …}`, a scene summary, `outcome` and
+`hint`.
 
 The render block carries three digests' worth of care in two names. `sha256` is
 the image's; `source_sha256` is the sheet's own, read from the file this call
@@ -881,29 +979,58 @@ third thing again: the netlist's.
 The historical per-rule finding cap applies only to layout and quality issue
 rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 
+**No `baseline` filter.** `edit_schematic` scopes its findings to the edit
+because the transaction holds the sheet before and after its ops for free.
+`verify_circuit` holds one file, and neither form of baseline gives it the
+second one honestly. A prior `sha256` names bytes the server does not keep:
+there is no revision store, by the same decision that left out an undo tool
+(§3.4), and one built only for this filter would be that feature half done. A
+prior *path* means the caller kept a copy, and then the delta is a set
+difference over findings that already carry `rule_id`, `at` and `subject` —
+agent-side code, not a missing primitive. The one trap is the per-rule cap: two
+capped lists do not diff reliably, so that difference is taken over the
+complete findings `api.verify_circuit` returns (through `run_code` or the
+Python API), which are never capped. The gate stays a whole-file answer.
+
 ### 3.6 `inspect` — pure read
 
 `queries: list[Query]`, with per-item results and cursors where listed:
 
 ```
-{kind: "capabilities"}
-    simulators and versions, exporter presence, dialects, persistence,
+{kind: "capabilities", fields?}
+    simulators: each one's executable and its sha256, and as `version` the
+    build the latest run on that same executable reported, with
+    `version_source` naming the job and case (null until one has run; the
+    executable is never launched to ask); exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
-    limits, linter_version, and the startup diagnostics that say whether
-    this server started degraded
+    limits, linter_version, the startup diagnostics that say whether
+    this server started degraded, and `render: {png, missing, reason,
+    remedy}` — whether verify_circuit can make the PNG it inlines, and
+    if not, whether the `raster` extra or native Cairo is missing;
+    `fields` (e.g. ["allowed_paths", "config_path"], what a caller checks
+    after a config edit) returns only those top-level keys, and omitting
+    it returns the whole report
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
-    .asc gives a geometric trace; an [x, y] on a wire's interior traces that
-    wire, reported as snapped_to_wire; a netlist gives card membership and
-    makes no geometry claims
+    .asc gives a geometric trace; a netlist gives card membership and makes
+    no geometry claims. On a .asc, PIN is a pin name or, failing that, the
+    pin's 1-based SpiceOrder, and an [x, y] on a wire's interior traces that
+    wire, reported as snapped_to_wire; on a netlist PIN is a 1-based
+    terminal number
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
+    `prefix` keeps references that start with it, case-insensitively, on
+    both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
+    but not L1. It is plain text; a wildcard is refused with the plain
+    spelling to use
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
-    selecting a subtree, and `prefix` is a single element letter
+    selecting a subtree, and `prefix` is the `components` rule applied to
+    each instance's own reference (the last segment), so a one-letter
+    prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query; enumerate requires libs
 {kind: "reference", query?, limit? (default 5, cap 20)}
@@ -1185,7 +1312,7 @@ recipe takes none, having one number.
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
-| `signal_stats` | tran | `signal` | `window?` |
+| `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |

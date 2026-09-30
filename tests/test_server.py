@@ -182,9 +182,10 @@ class TestBuildInstructions:
         silent = build_instructions({"ltspice": _LT}, _LT, served=())
         assert "run_code runs Python with api in scope" in default
         assert "run_code" not in silent
-        # Neither edition loses the library door.
+        # Neither edition loses the library door, or says trace math goes there.
         assert "from ltspice_mcp.api import Api" in silent
         assert "from ltspice_mcp.api import Api" in default
+        assert "trace math" in silent and "trace math" in default
 
 
 class TestInstructionHints:

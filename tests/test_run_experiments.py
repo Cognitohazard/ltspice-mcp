@@ -10,6 +10,7 @@ import itertools
 import json
 import re
 import threading
+import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -741,6 +742,66 @@ class TestIdempotency:
                 item for item in payload["observations"] if item["code"] == "idempotent_replay"
             )
             assert "A later call carrying this request_id" in note["detail"], note
+
+    async def test_a_replay_in_another_process_leaves_the_owners_record_alone(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        live_peer_pid: int,
+    ):
+        """Only the process that owns a job writes its record.
+
+        A replay from a second process loads the record while the job runs,
+        and the owner can finish before the replay writes. Writing that copy
+        back put a stale "running" over the owner's "completed", and the next
+        reader, finding the owner gone, recovered the job as interrupted.
+        """
+        # Built before the owner's clock starts, so the replay reads the record
+        # while the job is still running even on a slow runner.
+        replayer = SessionState.create(
+            state_with_sim.config, available=dict(state_with_sim.available_simulators)
+        )
+        submissions = fake_simulator(monkeypatch, delay_s=2.0)
+        deck = _deck(work_dir / "foreign-replay.cir")
+        args = _args(deck, "foreign-replay", wait_s=0)
+        job_id = _assert_schema(await handle_run_experiments(args, state_with_sim))["job_id"]
+        await await_until(lambda: len(submissions) == 1)
+        await state_with_sim.job_registry.drain_pending()
+        record = Store(work_dir).job_record(job_id)
+
+        def on_disk_status() -> str | None:
+            # On Windows a record being replaced is briefly unreadable.
+            try:
+                return json.loads(record.read_text(encoding="utf-8"))["status"]
+            except (OSError, ValueError):
+                return None
+
+        # The record as another process sees it: running, and owned by a live
+        # process other than the one about to replay it.
+        running = experiment_store.load_job(job_id, work_dir, own_is_alive=True)
+        assert running is not None and running.status == "running"
+        running.owner_pid = live_peer_pid
+        experiment_store.save_job(running)
+
+        def owner_finishes_meanwhile(job, request_id: str, executable) -> None:
+            deadline = time.monotonic() + 10
+            while on_disk_status() != "completed":
+                assert time.monotonic() < deadline, "the owner never completed"
+                time.sleep(0.02)
+            experiment_runner_mod.verify_replay(job, request_id, executable)
+
+        monkeypatch.setattr(experiments_mod, "verify_replay", owner_finishes_meanwhile)
+        replay = _assert_schema(await handle_run_experiments(args, replayer))
+        await replayer.job_registry.drain_pending()
+
+        assert replayer.all_jobs[job_id].owner_pid == live_peer_pid, (
+            "the replay loaded its own job"
+        )
+        assert replay["replayed"] is True
+        # The caller that replayed is still told so, from its own copy.
+        assert _observation_code(replay, "idempotent_replay") is not None
+        assert on_disk_status() == "completed"
 
     async def test_different_payload_replay_conflicts(
         self,

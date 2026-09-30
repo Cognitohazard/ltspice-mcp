@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import typing
+from dataclasses import asdict
 from pathlib import Path
 
 import jsonschema
@@ -23,10 +24,12 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import raster
+from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import symlink_or_skip
+from tests.conftest import needs_raster, symlink_or_skip
 
 
 class FakeLT:
@@ -132,6 +135,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "config_path",
         "python",
         "python_api",
+        "render",
     ):
         assert key in data, f"missing capabilities key {key!r}"
     # The library door, named where an agent already looks for what the
@@ -166,6 +170,73 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+async def test_capabilities_fields_returns_only_the_named_keys(cap_state: SessionState):
+    """What a caller checks after a config edit, without the rest of the report."""
+    (full,) = await _run(cap_state, [{"kind": "capabilities"}])
+    (picked,) = await _run(
+        cap_state, [{"kind": "capabilities", "fields": ["config_path", "allowed_paths"]}]
+    )
+    assert picked["ok"] is True
+    assert picked["data"] == {key: full["data"][key] for key in ("allowed_paths", "config_path")}
+
+
+def _executables(state: SessionState) -> dict[str, SimulatorExecutable | None]:
+    """What the capabilities query identifies for each available simulator."""
+    return {name: executable_identity(cls) for name, cls in state.available_simulators.items()}
+
+
+async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"] == insp._do_capabilities(
+        cap_state, raster.raster_support(), _executables(cap_state)
+    )
+
+
+def test_capabilities_field_names_are_the_report_keys(cap_state: SessionState):
+    """The selector's vocabulary and the report's keys are one list: a key added
+    to the report without a selector name, or the reverse, fails here."""
+    assert set(typing.get_args(insp.CapabilityField)) == set(
+        insp._do_capabilities(cap_state, raster.raster_support(), _executables(cap_state))
+    )
+
+
+@pytest.mark.parametrize("fields", [["no_such_key"], []], ids=["unknown", "empty"])
+async def test_a_bad_capabilities_selector_fails_only_that_item(
+    cap_state: SessionState, fields: list[str]
+):
+    results = await _run(
+        cap_state,
+        [{"kind": "capabilities", "fields": fields}, {"kind": "capabilities"}],
+    )
+    assert results[0]["ok"] is False
+    assert results[0]["error"]["code"] == "invalid_query"
+    assert results[1]["ok"] is True
+
+
+@needs_raster
+async def test_capabilities_reports_png_rendering(cap_state: SessionState):
+    """An agent deciding between an inline PNG and a file path asks here first,
+    rather than rendering to find out."""
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    assert res["data"]["render"] == {"png": True, "missing": None, "reason": None, "remedy": None}
+
+
+@pytest.mark.parametrize(
+    ("absence", "missing"),
+    [("raster_extra_missing", "extra"), ("raster_native_missing", "native_library")],
+)
+async def test_capabilities_reports_what_is_missing(
+    cap_state: SessionState, request: pytest.FixtureRequest, absence: str, missing: str
+):
+    request.getfixturevalue(absence)
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    render = res["data"]["render"]
+    assert render["png"] is False
+    assert render["missing"] == missing
+    # The loader's own answer, reason and per-platform remedy included.
+    assert render == asdict(raster.raster_support())
 
 
 async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):
@@ -471,12 +542,84 @@ async def test_components_prefix_filter(netlist: Path, state_no_sim: SessionStat
     assert {c["reference"] for c in res["data"]["components"]} == {"R1", "R2"}
 
 
-async def test_components_bad_prefix(netlist: Path, state_no_sim: SessionState):
+@pytest.mark.parametrize("prefix", ["R", "r"])
+async def test_components_prefix_filter_asc_ignores_case(
+    asc_file: Path, asc_state: SessionState, prefix: str
+):
     (res,) = await _run(
-        state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": "RR"}]
+        asc_state, [{"kind": "components", "path": str(asc_file), "prefix": prefix}]
+    )
+    assert res["ok"] is True, res
+    assert {c["reference"] for c in res["data"]["components"]} == {"R1"}
+
+
+@pytest.mark.parametrize(
+    ("prefix", "names"),
+    [("LX*", "prefix='LX'"), ("*", "omit it"), ("", "without spaces"), ("L X", "without spaces")],
+)
+async def test_components_bad_prefix(
+    netlist: Path, state_no_sim: SessionState, prefix: str, names: str
+):
+    (res,) = await _run(
+        state_no_sim, [{"kind": "components", "path": str(netlist), "prefix": prefix}]
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_prefix"
+    assert names in res["error"]["message"]
+
+
+@pytest.fixture
+async def prefixed_circuits(asc_state: SessionState, work_dir: Path) -> dict[str, Path]:
+    """The same five references as a netlist and as a schematic: two share a
+    multi-letter stem, and each stem also has a plain single-letter sibling."""
+    from tests._asc_ops import build_sheet
+
+    deck = work_dir / "prefixed.cir"
+    deck.write_text(
+        "* prefixed\nLX1 a b 1u\nLX2 b c 1u\nL1 c 0 1u\n"
+        "MXO1 d g 0 0 nch\nM1 d g 0 0 nch\n.model nch nmos\n.end\n"
+    )
+    placements = [
+        ("LX1", "ind", 128, 128),
+        ("LX2", "ind", 256, 128),
+        ("L1", "ind", 384, 128),
+        ("MXO1", "nmos", 128, 384),
+        ("M1", "nmos", 384, 384),
+    ]
+    await build_sheet(
+        asc_state,
+        "prefixed",
+        [
+            {"op": "add_component", "reference": ref, "symbol": sym, "x": x, "y": y}
+            for ref, sym, x, y in placements
+        ],
+    )
+    return {"netlist": deck, "asc": work_dir / "prefixed.asc"}
+
+
+@pytest.mark.parametrize("source", ["netlist", "asc"])
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("LX", {"LX1", "LX2"}),
+        ("lx", {"LX1", "LX2"}),
+        ("MXO", {"MXO1"}),
+        ("L", {"L1", "LX1", "LX2"}),
+        ("m", {"M1", "MXO1"}),
+    ],
+)
+async def test_components_prefix_is_a_case_insensitive_reference_prefix(
+    asc_state: SessionState,
+    prefixed_circuits: dict[str, Path],
+    source: str,
+    prefix: str,
+    expected: set[str],
+):
+    path = prefixed_circuits[source]
+    (res,) = await _run(asc_state, [{"kind": "components", "path": str(path), "prefix": prefix}])
+    assert res["ok"] is True, res
+    assert {c["reference"] for c in res["data"]["components"]} == expected
+    assert res["data"]["prefix"] == prefix
 
 
 # ---------------------------------------------------------------------------
