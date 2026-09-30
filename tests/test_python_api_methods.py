@@ -712,6 +712,47 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     assert legend["next_cursor"] is None
 
 
+_EDIT_REF_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
+_EDIT_MISMATCHED_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
+
+
+@pytest.mark.parametrize(
+    ("exported", "returns_netlist"),
+    [(_EDIT_REF_DECK, False), (_EDIT_MISMATCHED_DECK, True)],
+    ids=["equivalent", "mismatch"],
+)
+def test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does(
+    asc_state: SessionState,
+    monkeypatch: pytest.MonkeyPatch,
+    exported: str,
+    returns_netlist: bool,
+) -> None:
+    """The netlist rule is decided once, in the shared evaluator.
+
+    The complete door fills in unpaged views and nothing else, so a confirmed
+    match leaves the exported deck out of both replies and a mismatch keeps it
+    in both.
+    """
+
+    async def fake_export(_copy: Path, _state: SessionState) -> str:
+        return exported
+
+    monkeypatch.setattr(schematic_edit, "_export_asc_to_netlist", fake_export)
+    api = SyncApi(asc_state)
+    arguments: dict[str, Any] = {
+        "base": "blank",
+        "ops": [{"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300}],
+        "compare": {"reference": _EDIT_REF_DECK},
+    }
+    page = api.edit_schematic(raw_page=True, target="mcp.asc", **arguments)
+    complete = api.edit_schematic(target="api.asc", **arguments)
+    for data in (page, complete):
+        assert data["verification"]["equivalent"] is (not returns_netlist)
+        assert ("netlist" in data) is returns_netlist
+    if returns_netlist:
+        assert page["netlist"] == complete["netlist"] == exported
+
+
 # ---------------------------------------------------------------------------
 # The automatic mode's denylist, pinned fail-closed
 # ---------------------------------------------------------------------------

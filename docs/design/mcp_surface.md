@@ -671,7 +671,8 @@ expected_sha256     REQUIRED whenever target exists, under either base;
                     target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
 compare             {reference, anchors?, rtol} — post-commit netlist
-                    compare, inside the transaction
+                    compare, inside the transaction; the exported netlist
+                    is returned only when the verdict is not a match
 dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend"], default ["touched"]
 view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
@@ -684,6 +685,20 @@ netlist" is written the same way on both tools. It is the only spelling: the
 flat `reference` this tool shipped with said nothing the object did not, and a
 call carrying both was refused rather than resolved, so the second spelling
 could only ever be the same call written a longer way.
+
+**The exported netlist is returned only when the comparison did not match.**
+The compare stage exports the committed sheet to a netlist. On `equivalent:
+true` the reply leaves that deck out. It is equivalent to the reference the
+caller supplied, so it adds nothing to the verdict, and every later turn would
+re-read it. A mismatch, a compare error or no verdict returns it as `netlist`,
+because it is the sheet's side of the comparison the caller now has to
+diagnose. §2 keeps a failed row's log path for the same reason. An export
+failure produces no deck, so none is returned. The confirmed case has no
+opt-in. The netlist is still one call away: `verify_circuit` with the `export`
+check writes it and returns its path. A `return_views` member would have put a
+plain string among paginated pin/net tables, and it would have had nothing to
+return on a call without `compare`. The Python API applies the same rule; its
+complete reply differs from the MCP one only in unpaginated views.
 
 **This tool does not draw.** `verify_circuit` owns rendering, and its policy is
 the more capable one — a pixel cap, an inline delivery channel, and a
@@ -769,7 +784,8 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist?, verification?,
+Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
 hint`.
