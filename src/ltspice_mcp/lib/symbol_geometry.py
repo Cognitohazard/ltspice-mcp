@@ -12,7 +12,7 @@ from pathlib import Path
 
 from spicelib import AscEditor
 
-from ltspice_mcp.lib.cache import file_stamp
+from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
 
@@ -280,11 +280,10 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
 # Library symbols by name, misses included, so a repeat never re-walks the paths.
 _symbol_cache: dict[str, SymbolInfo | None] = {}
 
-# Symbols saved beside a schematic, by file, with the content stamp they were
-# parsed at. By file because two sheets in different folders may each carry
-# their own same-named symbol; stamped because a sheet's own symbol is the one
-# a user redraws mid-session.
-_local_symbol_cache: dict[str, tuple[tuple[int, int], SymbolInfo | None]] = {}
+# Symbols saved beside a schematic, by file and content stamp: two sheets in
+# different folders may each carry their own same-named symbol, and a sheet's
+# own symbol is the one a user redraws mid-session.
+_local_symbol_cache: FileCache[SymbolInfo | None] = FileCache(maxsize=256)
 
 
 def _parse_or_none(asy_path: Path) -> SymbolInfo | None:
@@ -298,13 +297,15 @@ def _parse_or_none(asy_path: Path) -> SymbolInfo | None:
         return None
 
 
-def get_symbol_info(symbol: str, asc_path: Path | None = None) -> SymbolInfo | None:
+def get_symbol_info(symbol: str, asc_path: Path | None) -> SymbolInfo | None:
     """Get symbol info by name. Returns ``None`` if symbol file not found.
 
-    With ``asc_path``, the schematic's own folder is searched first, as LTspice
-    does, so a symbol saved beside the sheet wins over a same-named library
-    one. That search is the one exact path ``<folder>/<symbol>.asy``, never a
-    walk, so a library symbol pays one failed stat for it.
+    ``asc_path`` is the schematic the symbol is placed on, or ``None`` for a
+    library-only lookup. Its folder is searched first, as LTspice does, so a
+    symbol saved beside the sheet wins over a same-named library one. That
+    search is the one exact path ``<folder>/<symbol>.asy``, never a walk.
+    ``schematic_ops.symbol_info_for`` is the per-request memo placed
+    components go through.
 
     Library results are cached by name, negative ones too — without that,
     every reference to a missing symbol re-walks the entire library search
@@ -314,16 +315,8 @@ def get_symbol_info(symbol: str, asc_path: Path | None = None) -> SymbolInfo | N
         # LTspice writes a symbol in a subfolder with backslash separators.
         relative = symbol.replace("\\", "/")
         local = asc_path.parent / f"{relative}.asy"
-        try:
-            stamp = file_stamp(local)
-        except OSError:
-            pass  # nothing beside the sheet: the libraries decide
-        else:
-            cached = _local_symbol_cache.get(str(local))
-            if cached is None or cached[0] != stamp:
-                cached = (stamp, _parse_or_none(local))
-                _local_symbol_cache[str(local)] = cached
-            return cached[1]
+        if local.is_file():
+            return _local_symbol_cache.get(local, _parse_or_none)
 
     if symbol not in _symbol_cache:
         asy_path = _find_asy_file(symbol)

@@ -6,6 +6,7 @@ through the shared op runner (``tests/_asc_ops.py``) and then read the sheet bac
 off disk, so a claim about geometry is checked against what was actually written.
 """
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ from tests._asc_ops import (
     structured_warnings,
     wire_pins,
 )
+from tests._schematic_fixtures import write_file
 from tests.conftest import FIXTURES_DIR
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -511,18 +513,28 @@ _SWAPPED_DIGITS_ASY = _block_asy("Pin 1 is SpiceOrder 2", ("2", 1, 0, -48), ("1"
 
 
 @pytest.fixture
-def ordinal_symbols(asc_symbols: Path, work_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """spicelib caches a symbol's path by file name for the whole process; keep
+    the temporary folders a test adds out of every later test."""
+    from spicelib import AscEditor
+
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
+
+
+@pytest.fixture
+def ordinal_symbols(
+    asc_symbols: Path,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_spicelib_symbol_cache: None,
+) -> Path:
     """Put the two symbols above on the library path beside the fixture library."""
     from spicelib import AscEditor
 
     sym_dir = work_dir / "ordinal_syms"
-    sym_dir.mkdir()
-    (sym_dir / "lettered_block.asy").write_text(_LETTERED_BLOCK_ASY, encoding="utf-8")
-    (sym_dir / "swapped_digits.asy").write_text(_SWAPPED_DIGITS_ASY, encoding="utf-8")
+    write_file(sym_dir / "lettered_block.asy", _LETTERED_BLOCK_ASY)
+    write_file(sym_dir / "swapped_digits.asy", _SWAPPED_DIGITS_ASY)
     monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
-    # spicelib caches a symbol's path by name for the whole process; keep this
-    # test's temporary paths out of every later test.
-    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
     return sym_dir
 
 
@@ -612,14 +624,11 @@ class TestPinsBySpiceOrder:
 def _sheet_beside_symbol(folder: Path, asy: str) -> Path:
     """``folder/top.asc`` holding X1, a ``localblk`` placed at (128, 128), with
     ``localblk.asy`` saved beside it rather than in any library."""
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "localblk.asy").write_text(asy, encoding="utf-8")
-    sheet = folder / "top.asc"
-    sheet.write_text(
+    write_file(folder / "localblk.asy", asy)
+    return write_file(
+        folder / "top.asc",
         "Version 4\nSHEET 1 880 680\nSYMBOL localblk 128 128 R0\nSYMATTR InstName X1\n",
-        encoding="utf-8",
     )
-    return sheet
 
 
 async def _x1_pins(state: SessionState, sheet: Path) -> dict[str, tuple[int, int]]:
@@ -629,17 +638,10 @@ async def _x1_pins(state: SessionState, sheet: Path) -> dict[str, tuple[int, int
     return {p["name"]: (p["x"], p["y"]) for p in x1.get("pins", [])}
 
 
+@pytest.mark.usefixtures("isolated_spicelib_symbol_cache")
 class TestSheetLocalSymbols:
     """A symbol saved beside the .asc, where LTspice looks first, gives the pin
     geometry every pin-taking surface uses, and never another sheet's."""
-
-    @pytest.fixture(autouse=True)
-    def _isolated_spicelib_symbol_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # spicelib caches a symbol's path by file name for the whole process;
-        # keep these tests' temporary folders out of every later test.
-        from spicelib import AscEditor
-
-        monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
     async def test_net_query_resolves_a_pin_of_a_sheet_local_symbol(
         self, asc_state: SessionState, work_dir: Path
@@ -724,14 +726,45 @@ class TestSheetLocalSymbols:
         assert await _x1_pins(asc_state, sideways) == {"A": (64, 128), "B": (192, 128)}
         assert await _x1_pins(asc_state, upright) == {"A": (128, 80), "B": (128, 176)}
 
+    async def test_one_edit_looks_each_symbol_up_once(
+        self, asc_state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Every geometry pass of every op re-reads each part's symbol, and a
+        # lookup now checks the sheet's folder on disk, on the event loop. One
+        # request resolves each distinct symbol once, however many parts use it.
+        from ltspice_mcp.lib import schematic_ops
+        from tests._asc_ops import build_sheet
+
+        lookups: Counter[str] = Counter()
+        real_lookup = schematic_ops.get_symbol_info
+
+        def counting_lookup(symbol: str, asc_path: Path | None):
+            lookups[symbol] += 1
+            return real_lookup(symbol, asc_path)
+
+        monkeypatch.setattr(schematic_ops, "get_symbol_info", counting_lookup)
+        ops = [
+            {"op": "add_component", "reference": f"R{i}", "symbol": "res", "x": 128 * i, "y": 128}
+            for i in range(1, 13)
+        ]
+        ops.append({"op": "add_component", "reference": "C1", "symbol": "cap", "x": 128, "y": 400})
+        ops.append({"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"})
+        ops += [{"op": "add_net_label", "net": f"n{i}", "pin": f"R{i}.1"} for i in range(1, 13)]
+
+        envelope = await build_sheet(asc_state, "many_parts", ops)
+
+        assert envelope["outcome"] == "complete", envelope
+        assert lookups == {"res": 1, "cap": 1}
+
     async def test_an_edited_sheet_local_symbol_is_read_again(
         self, asc_state: SessionState, work_dir: Path
     ):
         sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
         assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 176)}
 
-        (sheet.parent / "localblk.asy").write_text(
-            _block_asy("Longer lead", ("A", 1, 0, -48), ("B", 2, 0, 112)), encoding="utf-8"
+        write_file(
+            sheet.parent / "localblk.asy",
+            _block_asy("Longer lead", ("A", 1, 0, -48), ("B", 2, 0, 112)),
         )
 
         assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 240)}
