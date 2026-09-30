@@ -719,6 +719,13 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
+#: Run-row keys a lean receipt leaves out of a produced row. Its artifacts can
+#: be resolved by job/case identity, and the build that produced it is
+#: confirming detail; jobs(runs) and run_fields return all three. A failed row
+#: keeps them, its log path being how the caller inspects the failure.
+_LEAN_PRODUCED_OMITS = ("raw", "log", "simulator_version")
+
+
 def _run_item(case: ExperimentCase) -> dict[str, Any]:
     return {
         "case_id": case.case_id,
@@ -752,13 +759,10 @@ def _project_run_rows(
     if plan is not None:
         return [project_row(row, plan) for row in rows]
     if lean_default:
-        # Produced artifacts can be resolved by job/case identity. Failed runs
-        # keep their log paths so the caller can inspect the failure. The build
-        # that produced a result is confirming detail too, one jobs(runs) or
-        # run_fields away; a failed run keeps it beside its log.
         for row in rows:
             if row["status"] == "produced":
-                del row["raw"], row["log"], row["simulator_version"]
+                for key in _LEAN_PRODUCED_OMITS:
+                    del row[key]
     return rows
 
 

@@ -117,7 +117,6 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    executable_path,
     same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
@@ -861,31 +860,33 @@ def _reported_version(
     """
     if executable is None:
         return None
-    latest: tuple[Any, str, str, str] | None = None
-    for job in state.all_jobs.values():
-        if not same_executable(job.simulator_executable, executable):
-            continue
-        for case in job.cases:
-            if not case.simulator_version:
-                continue
-            finished = case.completed_at or job.started_at
-            if latest is None or finished > latest[0]:
-                latest = (finished, case.simulator_version, job.job_id, case.case_id)
+    latest = max(
+        (
+            (case.completed_at or job.started_at, job, case)
+            for job in state.all_jobs.values()
+            if same_executable(job.simulator_executable, executable)
+            for case in job.cases
+            if case.simulator_version
+        ),
+        key=lambda run: run[0],
+        default=None,
+    )
     if latest is None:
         return None
-    return latest[1], {"job_id": latest[2], "case_id": latest[3]}
+    _, job, case = latest
+    assert case.simulator_version is not None
+    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
 
 
 def _do_capabilities(
     state: SessionState,
-    executables: Mapping[str, SimulatorExecutable | None] | None = None,
+    executables: Mapping[str, SimulatorExecutable | None],
 ) -> dict[str, Any]:
     """The capabilities report. ``executables`` is each available simulator's
-    ``executable_identity``, computed off the loop by the caller; without it the
-    report names each executable's path and reports no digest or version."""
+    ``executable_identity``, computed off the loop by the caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
-        executable = executables.get(name) if executables is not None else None
+        executable = executables.get(name)
         reported = _reported_version(state, executable)
         info: dict[str, Any] = {
             "available": True,
@@ -896,12 +897,10 @@ def _do_capabilities(
             "version_source": reported[1] if reported else None,
             "dialect": dialect_for_simulator_name(cls.__name__),
         }
-        # The simulator itself, not its launcher: under Wine the command
-        # starts with "wine".
-        program = executable.path if executable is not None else executable_path(cls)
-        if program is not None:
-            info["executable"] = program
         if executable is not None:
+            # The simulator itself, not its launcher: under Wine the command
+            # starts with "wine".
+            info["executable"] = executable.path
             info["executable_sha256"] = executable.sha256
         simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that

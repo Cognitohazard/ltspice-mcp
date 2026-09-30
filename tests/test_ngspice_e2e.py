@@ -11,14 +11,13 @@ lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 """
 
 import asyncio
-import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.native_execution import observe_simulator
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
@@ -311,24 +310,6 @@ async def test_op_divider_full_stack(ngspice_state: SessionState, work_dir: Path
     assert receipt["failures"] == []
 
 
-def _installed_ngspice_version(command: list[str]) -> str:
-    """The version the session's ngspice reports when asked directly.
-
-    Asked the way the native statistics path asks it (``-n --version``), with
-    the session's own launch command.
-    """
-    completed = subprocess.run(
-        [*command, "-n", "--version"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=30,
-    )
-    matched = re.search(r"ngspice-[^\s:]+", completed.stdout + completed.stderr)
-    assert matched is not None, completed
-    return matched[0]
-
-
 async def test_each_run_records_the_ngspice_build_that_ran_it(
     ngspice_state: SessionState, work_dir: Path
 ):
@@ -346,11 +327,13 @@ async def test_each_run_records_the_ngspice_build_that_ran_it(
     )
     assert runs.structured_content is not None
     (row,) = runs.structured_content["items"]
+    # Asked directly, as the native statistics path asks it (-n --version).
     installed = await asyncio.to_thread(
-        _installed_ngspice_version, ngspice_state.available_simulators["ngspice"].spice_exe
+        observe_simulator, ngspice_state.available_simulators["ngspice"]
     )
+    assert installed.version is not None
     assert row["simulator_version"] is not None, row
-    assert row["simulator_version"].split(",")[0] == installed
+    assert row["simulator_version"].split(",")[0] == installed.version
 
     caps = await handle_inspect(
         InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), ngspice_state
