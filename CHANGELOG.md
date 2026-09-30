@@ -152,14 +152,14 @@ tool-surface changes.
   a wire's interior, a plain crossing and a label at a crossing, recorded in
   `tests/fixtures/t_junctions/`.
 - `edit_schematic` returns what each op found on the sheet in a `results`
-  list, one entry per op keyed by `index` and `op`. `wire_pins` gives its
-  `wire_count`, the requested segments that were `already_present` and not
-  redrawn, and the `junctions` its route made; the removals give what they
-  removed. These facts used to stop at the op runner, so a caller saw a
-  redundant junction only as warning text and a skipped segment not at all,
-  though the design doc said `already_present` was reported. An op whose
-  result only restates its arguments has no entry. `Api.edit_schematic`
-  returns the same list.
+  list, one entry per op keyed by `index` and `op`. `wire_pins` gives the
+  requested segments that were `already_present` and not redrawn and the
+  `junctions` its route made; `remove_wire`, `remove_net_label` and
+  `remove_component`'s wire cleanup give how much they removed. These facts
+  used to stop at the op runner, so a caller saw a redundant junction only as
+  warning text and a skipped segment not at all, though the design doc said
+  `already_present` was reported. An op that found nothing has no entry.
+  `Api.edit_schematic` returns the same list.
 - A `partial_progress` observation for every case the coordinator stops and
   whose simulator exit is seen. It gives the plot, its axis, the complete
   points on disk and the last axis value reached, read from the partial raw

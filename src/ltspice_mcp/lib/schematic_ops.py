@@ -8,7 +8,8 @@ enforces and a finding the checker reports cannot drift apart.
 What lives here:
 
 - the typed op union (``OpAddComponent`` … ``OpRemoveDirective``), the in-place
-  applier ``apply_op_inplace``, and the batch runner ``run_op_batch``;
+  applier ``apply_op_inplace``, the facts its results report
+  (``OP_RESULT_FACTS``), and the batch runner ``run_op_batch``;
 - ``edit_guard``, which serializes one file's mutation in-process and across
   parallel server sessions, and the cached-editor accessors it wraps;
 - the placement, routing and net-partition geometry (``resolve_pin``,
@@ -2254,6 +2255,22 @@ def _resolve_op_xy(
     if op.x is not None and op.y is not None:
         return op.x, op.y
     raise NetlistError(f"{op.op} needs either pin or both x and y.")
+
+
+# The keys of an op's result that report what applying it found on the sheet:
+# the segments a route found already drawn, the junctions it made, how much a
+# removal took. The rest of a result restates the op or carries geometry and
+# advisories a surface reports through views and warnings of its own. A route's
+# ``wire_count`` is not one: ``already_present`` names the segments it did not
+# draw, and relaying the count would put a line per route on every build. Nor
+# is ``remove_directive``'s ``removed``, which names a kind, not an amount. An
+# op missing here reports nothing beyond its arguments.
+OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
+    "wire_pins": ("already_present", "junctions"),
+    "remove_wire": ("removed",),
+    "remove_net_label": ("removed",),
+    "remove_component": ("deleted_wires",),
+}
 
 
 def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict[str, object]:
