@@ -1719,10 +1719,8 @@ def _render_scene(
     )
 
 
-#: Why an inline delivery returned no image. Inline is PNG only: an SVG sent as
-#: an image block is not reliably displayed, and sent as markup it costs more
-#: than the PNG past a handful of parts (about 600 bytes a component) while a
-#: structured-only client drops the text channel it would ride on.
+#: Why an inline delivery returned no image. Inline is PNG only; the reasons
+#: are in the verify_circuit section of docs/design/mcp_surface.md.
 InlineSkipped: TypeAlias = Literal["svg_requested", "png_unavailable"]
 
 
@@ -1779,8 +1777,8 @@ async def _do_render(
     inline_asked = policy.delivery in ("inline", "both")
     want_inline = inline_asked and image.is_raster
     inline_skipped: InlineSkipped | None = None
-    if inline_asked and not want_inline:
-        inline_skipped = "png_unavailable" if unavailable is not None else "svg_requested"
+    if inline_asked and not image.is_raster:
+        inline_skipped = "svg_requested" if policy.format == "svg" else "png_unavailable"
     payload = _render_payload(
         image,
         out_path,
@@ -1805,8 +1803,7 @@ def _render_note(
             f"'svg' was requested; the SVG is at {path}. Request format 'png' "
             "to receive the drawing inline."
         )
-    fallback = f"{image.note}. " if image.note else ""
-    return f"{fallback}Not returned inline: inline delivery is PNG only; the SVG is at {path}."
+    return f"{image.note}. Not returned inline: inline delivery is PNG only; the SVG is at {path}."
 
 
 def _render_payload(
@@ -1927,14 +1924,14 @@ def _hint(data: dict[str, Any]) -> str:
     # fix, but is still not holding what it asked for, so the headline says so.
     render = data.get("render") or {}
     delivery_note = render.get("note") if render.get("inline_skipped") == "svg_requested" else None
-    if not parts:
+    if parts:
+        headline = "; ".join(parts) + "."
+    else:
         skipped = data.get("checks_skipped") or []
-        base = "No problems found in the checks that ran."
+        headline = "No problems found in the checks that ran."
         if skipped:
-            base += " Not run: " + ", ".join(f"{s['check']} ({s['reason']})" for s in skipped)
-        return f"{base.rstrip('.')}. {delivery_note}" if delivery_note else base
-    headline = "; ".join(parts) + "."
-    return f"{headline} {delivery_note}" if delivery_note else headline
+            headline += " Not run: " + ", ".join(f"{s['check']} ({s['reason']})" for s in skipped)
+    return f"{headline.rstrip('.')}. {delivery_note}" if delivery_note else headline
 
 
 # ---------------------------------------------------------------------------

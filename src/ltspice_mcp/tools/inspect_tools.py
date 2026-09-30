@@ -66,7 +66,7 @@ import asyncio
 import copy
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
@@ -880,7 +880,7 @@ def _do_capabilities(state: SessionState, raster: RasterSupport) -> dict[str, An
         # Whether verify_circuit can draw a PNG, the only format it returns
         # inline. Asked here so an agent that cannot read files knows before it
         # renders whether it will see the picture, and what to install if not.
-        "render": raster.to_dict(),
+        "render": asdict(raster),
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()

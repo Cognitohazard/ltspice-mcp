@@ -90,14 +90,6 @@ class RasterSupport:
     reason: str | None = None
     remedy: str | None = None
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "png": self.png,
-            "missing": self.missing,
-            "reason": self.reason,
-            "remedy": self.remedy,
-        }
-
 
 @dataclass(frozen=True)
 class RenderedImage:
@@ -105,15 +97,14 @@ class RenderedImage:
 
     ``image_format`` and ``scale`` describe the result, not the request: when
     rasterization is unavailable a PNG request yields ``image_format="svg"``,
-    ``scale=None``, a ``note`` saying why, and ``png_unavailable`` naming what
-    is missing and how to install it.
+    ``scale=None``, and ``png_unavailable`` naming what is missing and how to
+    install it, which ``note`` says as a sentence.
     """
 
     data: bytes
     image_format: ImageFormat
     mime_type: str
     scale: float | None = None
-    note: str | None = None
     width: int | None = None
     height: int | None = None
     png_unavailable: RasterSupport | None = None
@@ -121,6 +112,14 @@ class RenderedImage:
     @property
     def is_raster(self) -> bool:
         return self.image_format == PNG
+
+    @property
+    def note(self) -> str | None:
+        """Why a PNG request came back as SVG, and the fix; ``None`` otherwise."""
+        missing = self.png_unavailable
+        if missing is None:
+            return None
+        return f"returned SVG instead of PNG: {missing.reason}; to fix, {missing.remedy}"
 
     @property
     def estimated_tokens(self) -> int | None:
@@ -154,24 +153,20 @@ class RasterUnavailableError(LTSpiceMCPError):
 
     Part of the project error hierarchy so a consumer calling
     :func:`rasterize_svg` directly raises something the server already handles,
-    rather than an exception that escapes to the protocol layer. ``missing``
-    says which half is absent and ``remedy`` how to install it; the message is
-    the reason alone.
+    rather than an exception that escapes to the protocol layer. ``support``
+    says which half is absent and how to install it; the message is the reason
+    alone.
     """
 
     code = "raster_unavailable"
 
-    # Defaulted so the error unpickles: an exception is rebuilt from its message
-    # alone, and these come back with the rest of its attributes afterwards.
-    def __init__(
-        self, reason: str, *, missing: RasterMissing | None = None, remedy: str | None = None
-    ) -> None:
-        super().__init__(reason)
-        self.missing: RasterMissing | None = missing
-        self.remedy: str | None = remedy
+    def __init__(self, support: RasterSupport) -> None:
+        super().__init__(support.reason)
+        self.support = support
 
-    def support(self) -> RasterSupport:
-        return RasterSupport(png=False, missing=self.missing, reason=str(self), remedy=self.remedy)
+    def __reduce__(self):
+        # Rebuilt from its record rather than its message, so it unpickles whole.
+        return (type(self), (self.support,))
 
 
 _EXTRA_MISSING = "the optional 'raster' extra (cairosvg) is not installed"
@@ -219,19 +214,26 @@ def _check_scale(scale: float) -> None:
 def raster_support() -> RasterSupport:
     """Whether SVG can be rasterized in this environment, and if not, why.
 
-    The first successful call loads the native library, so an event-loop
+    The first call loads the native library or fails to, so an event-loop
     caller should run it off the loop.
     """
     try:
         _load_cairosvg()
     except RasterUnavailableError as exc:
-        return exc.support()
+        return exc.support
     return RasterSupport(png=True)
 
 
 def raster_available() -> bool:
     """Whether SVG can be rasterized in this environment."""
     return raster_support().png
+
+
+#: Why the first import of cairosvg failed. A failed import is not cached in
+#: sys.modules, and each retry reruns cairocffi's library search (tens of ms,
+#: and on Windows one more DLL directory registered per attempt). Every remedy
+#: ends in a server restart, so the first answer stands for the process.
+_unavailable: RasterSupport | None = None
 
 
 def _load_cairosvg():
@@ -244,23 +246,26 @@ def _load_cairosvg():
     (ImportError), or it is installed but the native cairo library it binds is
     not, which cairocffi reports as an OSError from the import.
     """
-    try:
-        import cairosvg
-    except ImportError as exc:
-        raise RasterUnavailableError(
-            _EXTRA_MISSING, missing="extra", remedy=_EXTRA_REMEDY
-        ) from exc
-    except OSError as exc:
-        # cairocffi lists every name it tried, one per line; the first says
-        # enough and keeps the reason to one line.
-        detail = str(exc).strip().splitlines()
-        raise RasterUnavailableError(
-            "the 'raster' extra is installed but the native Cairo library it "
-            "loads could not be loaded" + (f" ({detail[0]})" if detail else ""),
-            missing="native_library",
-            remedy=native_library_remedy(sys.platform),
-        ) from exc
-    return cairosvg
+    global _unavailable
+    if _unavailable is None:
+        try:
+            import cairosvg
+        except ImportError:
+            _unavailable = RasterSupport(False, "extra", _EXTRA_MISSING, _EXTRA_REMEDY)
+        except OSError as exc:
+            # cairocffi lists every name it tried, one per line; the first says
+            # enough and keeps the reason to one line.
+            detail = str(exc).strip().splitlines()
+            _unavailable = RasterSupport(
+                False,
+                "native_library",
+                "the 'raster' extra is installed but the native Cairo library it "
+                "loads could not be loaded" + (f" ({detail[0]})" if detail else ""),
+                native_library_remedy(sys.platform),
+            )
+        else:
+            return cairosvg
+    raise RasterUnavailableError(_unavailable)
 
 
 def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "white") -> bytes:
@@ -334,8 +339,7 @@ def render_image(
             data=svg.encode("utf-8"),
             image_format=SVG,
             mime_type=_MIME[SVG],
-            note=f"returned SVG instead of PNG: {exc}; to fix, {exc.remedy}",
-            png_unavailable=exc.support(),
+            png_unavailable=exc.support,
         )
     width, height = _png_size(png)
     return RenderedImage(

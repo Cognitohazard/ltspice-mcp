@@ -17,12 +17,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MCPB_DIR = REPO_ROOT / "packaging" / "mcpb"
 MANIFEST = MCPB_DIR / "manifest.json"
+PLUGIN = REPO_ROOT / ".claude-plugin" / "plugin.json"
 
 _PLACEHOLDER = re.compile(r"\$\{user_config\.([^}]+)\}")
 
 
 def _manifest() -> dict:
     return json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def _plugin() -> dict:
+    return json.loads(PLUGIN.read_text(encoding="utf-8"))
 
 
 def test_manifest_parses_and_names_the_server() -> None:
@@ -61,7 +66,9 @@ def test_uv_bundle_declares_its_dependency() -> None:
     pyproject = MCPB_DIR / "pyproject.toml"
     assert pyproject.is_file(), "type='uv' bundle must ship a pyproject.toml"
     deps = tomllib.loads(pyproject.read_text("utf-8"))["project"]["dependencies"]
-    assert any(d == "ltspice-mcp" or d.startswith("ltspice-mcp") for d in deps)
+    # With the raster extra: a Desktop user cannot add an extra to a bundle they
+    # did not build, so without it the server could never render a PNG there.
+    assert "ltspice-mcp[raster]" in deps
 
 
 def test_bundle_versions_agree() -> None:
@@ -72,7 +79,7 @@ def test_bundle_versions_agree() -> None:
     four spots. Pin them to one value so a release bump cannot silently leave
     one behind.
     """
-    plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text("utf-8"))
+    plugin = _plugin()
     market = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text("utf-8"))
     versions = {
         "plugin.json": plugin["version"],
@@ -83,22 +90,10 @@ def test_bundle_versions_agree() -> None:
     assert len(set(versions.values())) == 1, f"bundle versions disagree: {versions}"
 
 
-def test_uv_bundle_installs_the_raster_extra() -> None:
-    """A Desktop user cannot add an extra to a bundle they did not build, so a
-    bundle without it can never render a PNG, however the host is set up. With
-    it, installing native Cairo is the whole fix, and the server names that
-    library, rather than an extra the user has no way to install, when it is
-    missing."""
-    pyproject = MCPB_DIR / "pyproject.toml"
-    deps = tomllib.loads(pyproject.read_text("utf-8"))["project"]["dependencies"]
-    assert "ltspice-mcp[raster]" in deps
-
-
 def test_plugin_launches_with_the_raster_extra() -> None:
     """The plugin's launch line is fixed in its manifest, so a Claude Code user
     cannot add the extra to it either. Launched without it, the server can
     never render the PNG it returns inline."""
-    plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text("utf-8"))
-    server = plugin["mcpServers"]["ltspice"]
+    server = _plugin()["mcpServers"]["ltspice"]
     assert server["command"] == "uvx"
     assert server["args"] == ["--from", "ltspice-mcp[raster]", "ltspice-mcp"]
