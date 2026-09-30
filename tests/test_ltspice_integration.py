@@ -349,6 +349,29 @@ class TestManagedExport:
         net_file = asc_in_workdir.with_suffix(".net")
         assert net_file.exists(), f"Expected {net_file} to exist after export"
 
+    @pytest.mark.parametrize(
+        "stem", sorted(p.stem for p in (_FIXTURE_DIR / "t_junctions").glob("*.asc"))
+    )
+    async def test_t_junction_sheets_still_export_as_recorded(
+        self, ltspice_state: SessionState, work_dir: Path, stem: str
+    ):
+        """The installed LTspice connects each T-junction sheet the way the
+        recorded export says, so the connectivity rule the editor and the net
+        trace rely on still holds for this LTspice version."""
+        cases = _FIXTURE_DIR / "t_junctions"
+        shutil.copy2(cases / f"{stem}.asc", work_dir / f"{stem}.asc")
+        # The recorded exports were made with the fixture resistor beside them.
+        shutil.copy2(_FIXTURE_DIR / "symbols" / "res.asy", work_dir / "res.asy")
+        data = await self._export(ltspice_state, work_dir / f"{stem}.asc")
+        assert data["export"]["ok"] is True, data["export"]
+
+        def cards(text: str) -> list[str]:
+            return [line for line in text.splitlines() if line and not line.startswith("*")]
+
+        live = await asyncio.to_thread(Path(data["export"]["netlist"]).read_text, encoding="utf-8")
+        recorded = (cases / f"{stem}.net").read_text(encoding="utf-8")
+        assert cards(live) == cards(recorded)
+
 
 # The live-LTspice wait: WSL interop and .asc export make these runs slower
 # than the ngspice tier, so the shared helper gets a longer jobs(wait).
