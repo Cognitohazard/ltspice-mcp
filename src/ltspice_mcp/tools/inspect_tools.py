@@ -95,6 +95,7 @@ from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
+from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
@@ -102,6 +103,7 @@ from ltspice_mcp.lib.schematic_ops import (
     named_labels,
     net_partition,
     netlist_card_value,
+    placed_geometry,
     require_asc,
     resolve_pin,
     same_instance_dropped_segments,
@@ -149,8 +151,9 @@ class TraceNetInput(ToolInput):
     pin: str | None = Field(
         default=None,
         description=(
-            "Pin or net reference to start from: 'Ref.Pin' (e.g. 'M1.D'), "
-            "'net:NAME' (e.g. 'net:VDD'), or omit and pass x/y."
+            "Pin or net reference to start from: 'Ref.Pin', the pin by name or "
+            "1-based SpiceOrder (e.g. 'M1.D', 'X1.2'), 'net:NAME' (e.g. "
+            "'net:VDD'), or omit and pass x/y."
         ),
     )
     x: int | None = Field(default=None, description="X coordinate (with y) to trace from")
@@ -485,9 +488,10 @@ class NetQuery(StrictModel):
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
     at: str | list[int] = Field(
         description=(
-            "Where the net is: 'REF.PIN' (e.g. 'M1.D'), 'net:NAME', or [x, y]; "
-            "on a netlist, which has no geometry, it takes 'net:NAME', a node "
-            "name, or 'REF.<terminal-number>' and rejects a coordinate."
+            "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
+            "(e.g. 'M1.D', 'X1.2'), 'net:NAME', or [x, y]; on a netlist, which "
+            "has no geometry, it takes 'net:NAME', a node name, or "
+            "'REF.<terminal-number>' and rejects a coordinate."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -502,18 +506,20 @@ class NetQuery(StrictModel):
         return self
 
 
+#: One filter rule for both kinds that list references. On ``hierarchy`` it
+#: reads each instance's own reference, the last segment of its path.
+_PREFIX_DESCRIPTION = (
+    "Keep only references starting with this, case-insensitively: 'M' for "
+    "every MOSFET, 'LX' for LX1, LX2…. Plain text, not a glob."
+)
+
+
 class ComponentsQuery(StrictModel):
     """The components of a .asc schematic or a .cir/.net/.sp netlist."""
 
     kind: Literal["components"]
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
-    prefix: str | None = Field(
-        default=None,
-        description=(
-            "Keep only components whose reference starts with this element letter "
-            "('R', 'C', 'M', …). A single letter; anything longer is rejected."
-        ),
-    )
+    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     detail: Literal["list", "full"] = Field(
         default="list",
         description=(
@@ -544,9 +550,7 @@ class HierarchyQuery(StrictModel):
         max_length=33,
         description="Exact reference segments selecting a subtree, matched case-insensitively.",
     )
-    prefix: str | None = Field(
-        default=None, pattern="^[A-Za-z]$", description="Single element letter to retain."
-    )
+    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     cursor: str | None = Field(
         default=None,
         description="Resume token bound to captured dependency content, profile and filters.",
@@ -1369,13 +1373,27 @@ def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
 
 
 def _check_prefix(prefix: str | None) -> str | None:
-    """The validated prefix, upper-cased: references match it without regard to case."""
+    """The validated prefix, upper-cased: references match it without regard to case.
+
+    Refuses a prefix no reference could start with, rather than answer it with
+    an empty list that reads as "no such components".
+    """
     if prefix is None:
         return None
-    if len(prefix) != 1 or not prefix.isalpha():
+    if not prefix or any(ch.isspace() for ch in prefix):
         raise _QueryError(
             "invalid_prefix",
-            f"component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}",
+            f"prefix must be the start of a reference, without spaces (e.g. 'R', "
+            f"'LX'), got {prefix!r}",
+        )
+    wildcard = next((i for i, ch in enumerate(prefix) if ch in "*?["), None)
+    if wildcard is not None:
+        stem = prefix[:wildcard]
+        remedy = f"use prefix='{stem}'" if stem else "omit it to list every reference"
+        raise _QueryError(
+            "invalid_prefix",
+            f"prefix matches the start of a reference as plain text and takes no "
+            f"wildcards; for {prefix!r}, {remedy}",
         )
     return prefix.upper()
 
@@ -1385,7 +1403,7 @@ def _components_netlist_payload(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The component rows, plus the lexer's notes about how the deck read.
 
-    ``prefix`` is the upper-cased letter :func:`_check_prefix` returns.
+    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns.
     """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
@@ -1395,9 +1413,7 @@ def _components_netlist_payload(
     rows: list[dict[str, Any]] = []
     for card in by_ref.values():
         ref = card.name
-        if not ref:
-            continue
-        if prefix is not None and ref[:1].upper() != prefix:
+        if not ref or (prefix is not None and not matches_prefix(ref, prefix)):
             continue
         entry: dict[str, Any] = {"reference": ref, "value": netlist_card_value(card)}
         if detail == "full" and not body_has_stray_kv_remnant(card.body):
@@ -1416,8 +1432,6 @@ def _components_netlist_payload(
 
 def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
     """Build per-component detail for a page of .asc references (editor on loop)."""
-    from ltspice_mcp.lib.symbol_geometry import get_symbol_info
-
     rows: list[dict[str, Any]] = []
     for ref in refs:
         try:
@@ -1432,13 +1446,11 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
                 entry["attributes"] = attrs
             if detail == "full":
                 pos, erot = editor.get_component_position(ref)
-                rot_str = erot.name if erot else "R0"
                 entry["symbol"] = comp.symbol
                 entry["position"] = {"x": pos.X, "y": pos.Y}
-                entry["rotation"] = rot_str
-                sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
-                if sym_info is not None:
-                    geom = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+                entry["rotation"] = erot.name if erot else "R0"
+                geom = placed_geometry(editor, ref)
+                if geom is not None:
                     entry["pins"] = geom["pins"]
                     entry["bounding_box"] = geom["bounding_box"]
         rows.append(entry)
@@ -1464,10 +1476,10 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
             refs = sorted(editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        # Filtered here as in the netlist branch: spicelib's prefix filter is
-        # case-sensitive (docs/spicelib_bugs.md).
+        # Filtered here as in the netlist branch: spicelib's prefix filter reads
+        # its argument as a set of case-sensitive first letters (docs/spicelib_bugs.md).
         if prefix is not None:
-            refs = [ref for ref in refs if ref[:1].upper() == prefix]
+            refs = [ref for ref in refs if matches_prefix(ref, prefix)]
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
         rows = _components_asc_page(editor, page["items"], detail)
     else:
@@ -1670,6 +1682,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
+    prefix = _check_prefix(q.prefix)
     profile = SemanticProfile(
         q.simulator,
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
@@ -1691,12 +1704,12 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         row
         for row in hierarchy.instances
         if tuple(p.casefold() for p in row.instance[: len(selected)]) == selected
-        and (q.prefix is None or row.element == q.prefix.upper())
+        and (prefix is None or matches_prefix(row.reference, prefix))
     ]
     identity = {
         **hierarchy.binding(),
         "instance": selected,
-        "prefix": q.prefix.upper() if q.prefix else None,
+        "prefix": prefix,
     }
     page = _paginate(rows, "hierarchy", identity, q.cursor, (), view)
     metadata = _page_meta(page, "instances")

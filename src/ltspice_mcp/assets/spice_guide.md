@@ -878,6 +878,8 @@ C1 out 0 {C}
 
 Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M90→(y,x), M180→(x,-y), M270→(-y,-x). Use `inspect(kind="symbol")` for exact positions.
 
+A pin is addressed as `REF.PIN` (`M1.D`) by its name. When no pin has that name and it is all digits, it is the pin's 1-based SpiceOrder, the terminal number a netlist uses, so `X1.2` reaches the second pin of a block whose pins are lettered. Names are matched first because some symbols name their pins `1`/`2` in an order that need not be their SpiceOrder. `inspect(kind="symbol")` lists each pin's `name` and `order`.
+
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols are 3-terminal — a MOSFET's bulk ties internally to its source, and a BJT has no separate substrate pin. When you need the body/substrate on its own net (e.g. a non-source bulk bias), use the 4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
 
 #### MOSFET orientation conventions
