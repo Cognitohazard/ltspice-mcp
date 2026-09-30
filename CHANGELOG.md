@@ -10,6 +10,16 @@ tool-surface changes.
 
 ### Fixed
 
+- `plot_waveform` drew nothing for a `.step` transient whose steps have
+  different time vectors, the usual case. Each step's trace was padded onto
+  the combined time axis with a gap wherever another step had a sample, so
+  every sample stood alone and none was drawn. Each step's trace now keeps
+  its own time vector in the chart data, and the chart aligns them with
+  uPlot's own join, which draws each trace through its own samples and
+  breaks it only at its own non-finite ones. The chart file for such a run
+  is also smaller, since no padding is written. Linear axes also printed
+  neighbouring ticks alike (0.5 ms and 1 ms both as `0.001`); they now take
+  one SI prefix per axis and the decimals the tick step needs.
 - A job replayed by `request_id` from a process that did not own it could end
   `interrupted` although it had completed. The replay saved its own copy of the
   record, read while the job was still running, and that write could land
@@ -146,6 +156,30 @@ tool-surface changes.
 
 ### Added
 
+- `plot_waveform` replies summarize each plotted trace: `min` and `max` with
+  the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
+  `final`, and the time-weighted `mean` on a transient, read from every sample
+  in the window before any decimation. An AC trace is summarized in dB with
+  its unwrapped phase at both ends; a stepped run gets one summary per step,
+  up to 32 (when there are more, `traces_truncated` gives the total and an
+  observation says so). The summaries are in `traces` and the text reply, on
+  both the in-chat widget and the terminal path, and `x_unit` names the axis
+  unit. Before, the reply held only the file path and the plot's point
+  counts.
+- `plot_waveform(attach_plot=true)` returns a PNG of the chart as an image
+  block for a vision model, and writes it beside the HTML (`image_path`,
+  with its size and `estimated_tokens` in `image`). It draws the same panels
+  as the interactive chart, is off by default, and takes its default from
+  `[analysis] attach_plot` (`LTSPICE_MCP_ATTACH_PLOT`). Rendering needs the
+  `raster` extra and the native Cairo library; without either, the reply
+  carries an `image_unavailable` observation naming the missing piece and
+  how to install it, instead of the image.
+- `plot_waveform(panels=[[...], [...]])` lays the panels out by hand, one
+  list of signals per panel (up to 8), for traces of one unit but very
+  different size.
+- `[analysis] open_plot` (`LTSPICE_MCP_OPEN_PLOT`, on by default) sets
+  whether `plot_waveform` opens its chart in a local browser window; a call's
+  `open` still wins. A terminal session can turn the windows off.
 - `run_code` has `window_and_clean` and `compute_signal_stats` in scope, so a
   derived trace's statistics are weighted by time; `np.mean` over LTspice's
   variable timestep over-weights the samples packed around edges. The guide's
@@ -218,6 +252,17 @@ tool-surface changes.
 
 ### Changed
 
+- `plot_waveform` and the `analyze_results` `plot` recipe give each declared
+  unit its own panel, so volts and amps no longer share a y-axis; an AC plot
+  gets a magnitude and phase pair per unit. Panel titles carry the unit, and
+  a `.dc` sweep's x axis is labelled with its swept source. Noise densities
+  are labelled V/√Hz or A/√Hz. Input-referred noise takes its unit from the
+  deck's `.NOISE` source, and when there is no deck to check,
+  `plot_waveform` reports a `noise_input_unit_unverified` observation. Every
+  multi-panel chart shares one x cursor, where only the two Bode panels did
+  before.
+- `plot_waveform`'s `open` defaults to `[analysis] open_plot` instead of
+  always `true`.
 - The server instructions and `analyze_results`' description say where trace
   math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
   numpy on the traces. Before, only the error after a failed expression said

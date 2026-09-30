@@ -166,6 +166,15 @@ def format_response(
     )
 
 
+def image_content(image: RenderedImage) -> types.ImageContent:
+    """A raster image as the MCP image block a model looks at."""
+    return types.ImageContent(
+        type="image",
+        data=base64.b64encode(image.data).decode("ascii"),
+        mime_type=image.mime_type,
+    )
+
+
 def image_response(
     image: RenderedImage,
     text: str,
@@ -195,13 +204,7 @@ def image_response(
 
     content: list[Any] = []
     if image.is_raster:
-        content.append(
-            types.ImageContent(
-                type="image",
-                data=base64.b64encode(image.data).decode("ascii"),
-                mime_type=image.mime_type,
-            )
-        )
+        content.append(image_content(image))
     else:
         content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
     content.append(types.TextContent(type="text", text=text))

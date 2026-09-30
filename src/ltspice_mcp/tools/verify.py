@@ -58,7 +58,6 @@ which is what makes that mode destructive.
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import functools
 import hashlib
@@ -122,6 +121,7 @@ from ltspice_mcp.tools._base import (
     comparison_mismatch,
     failures_schema,
     format_response,
+    image_content,
     make_include_resolver,
     outcome_of,
     outcome_schema,
@@ -1841,14 +1841,6 @@ def _render_payload(
     }
 
 
-def _image_content(image: RenderedImage) -> types.ImageContent:
-    return types.ImageContent(
-        type="image",
-        data=base64.b64encode(image.data).decode("ascii"),
-        mime_type=image.mime_type,
-    )
-
-
 # ---------------------------------------------------------------------------
 # outcome + hint
 # ---------------------------------------------------------------------------
@@ -2294,7 +2286,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     if evaluation.is_error:
         result.is_error = True
     if evaluation.inline_image is not None:
-        result.content.insert(0, _image_content(evaluation.inline_image))
+        result.content.insert(0, image_content(evaluation.inline_image))
     return result
 
 

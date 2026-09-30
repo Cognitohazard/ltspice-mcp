@@ -92,7 +92,7 @@ Key `lib/` modules:
 - `symbol_geometry.py`, `geometry.py` — .asy symbol parsing (pin positions, rotation transforms, bounding boxes) + shared 2D / bbox helpers
 - `observability.py` — structured job-lifecycle events on the `ltspice_mcp.events` stderr logger (the server's only log channel: the MCP logging capability is deprecated as of 2026-07-28 and is not served). `configure_stderr_logging` installs that channel, and is what both the server lifespan and the detached owner call, so every process writes the same format at the level `[logging] level` names
 
-Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `desktop.py`, `plot_html.py`) do what their names say — read them when you need them.
+Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `desktop.py`, `plot_html.py`, `plot_svg.py`) do what their names say — read them when you need them.
 
 ### Tool Module Convention
 
