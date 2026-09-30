@@ -101,13 +101,16 @@ from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     label_folded_nets,
     named_labels,
+    net_members,
     net_partition,
     netlist_card_value,
     require_asc,
     resolve_pin,
     same_instance_dropped_segments,
+    segment_json,
+    segment_text,
     wire_segments_of,
-    wires_through,
+    wires_of_one_net,
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import (
@@ -248,34 +251,22 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
 
     trace_from = start
     snapped: tuple[int, int, int, int] | None = None
-    if start not in part.members.get(part.root(start), set()) and start not in part.pin_owners:
+    if start not in part.members.get(part.root(start), set()):
         # No pin, label or wire end sits here. A point on a wire's interior is
         # still on that wire's net, since LTspice joins anything placed there,
         # so trace from the wire's end and say so.
-        through = wires_through(start, wire_segments_of(editor))
+        through = wires_of_one_net(
+            start, wire_segments_of(editor), net_of, "Trace from an end of the wire you mean."
+        )
         if not through:
             raise NetlistError(
                 f"Nothing found at ({x},{y}): no component pin, net label or wire "
                 "touches it. Use inspect(kind='components') to inspect the layout."
             )
-        if len({net_of((s[0], s[1])) for s in through}) > 1:
-            listed = "; ".join(f"({s[0]},{s[1]})->({s[2]},{s[3]})" for s in through)
-            raise NetlistError(
-                f"({x},{y}) is where wires on separate nets cross ({listed}); LTspice "
-                "does not join a crossing that no wire end, pin or label sits on, so "
-                "the point is on neither net alone. Trace from an end of the wire "
-                "you mean."
-            )
         snapped = through[0]
-        trace_from = (snapped[0], snapped[1])
+        trace_from = snapped[:2]
 
-    target_root = net_of(trace_from)
-    member_coords: set[tuple[int, int]] = set()
-    for root, coords in part.members.items():
-        if net_of(root) == target_root:
-            member_coords |= coords
-    if not member_coords:
-        member_coords = {start}
+    member_coords = net_members(part, net_of, net_of(trace_from))
 
     labels: set[str] = set()
     pins: list[dict] = []
@@ -315,10 +306,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         "is_shorted": is_shorted,
     }
     if snapped is not None:
-        data["snapped_to_wire"] = {
-            "from": {"x": snapped[0], "y": snapped[1]},
-            "to": {"x": snapped[2], "y": snapped[3]},
-        }
+        data["snapped_to_wire"] = segment_json(snapped)
     if warnings:
         data["warnings"] = warnings
 
@@ -326,8 +314,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     lines = [f"Net at ({x},{y}): {net_name}"]
     if snapped is not None:
         lines.append(
-            f"  ({x},{y}) lies on the wire ({snapped[0]},{snapped[1]})->"
-            f"({snapped[2]},{snapped[3]}); traced that wire's net."
+            f"  ({x},{y}) lies on the wire {segment_text(snapped)}; traced that wire's net."
         )
     if pins:
         lines.append("  Pins:")

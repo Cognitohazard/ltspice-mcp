@@ -202,12 +202,13 @@ def add_component(
 def wire_pins(
     state: SessionState,
     path: Path,
-    from_pin: str,
-    to_pin: str,
+    from_pin: str | dict[str, int],
+    to_pin: str | dict[str, int],
     waypoints: list[dict[str, int]] | None = None,
     **kw: Any,
 ) -> dict[str, Any]:
-    """Wire two pins through the live op runner; returns the op's facts."""
+    """Wire two endpoints (a pin, a label, or {x, y}) through the live op runner;
+    returns the op's facts."""
     op: dict[str, Any] = {"op": "wire_pins", "from_pin": from_pin, "to_pin": to_pin, **kw}
     if waypoints is not None:
         op["waypoints"] = waypoints
