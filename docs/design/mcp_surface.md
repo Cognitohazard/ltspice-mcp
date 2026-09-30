@@ -749,30 +749,26 @@ rebuild from its own ops. What is lost is a one-call "undo everything this
 session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
-**Per-op facts.** `results` carries what each op found on the sheet that its
-own arguments do not say, one entry per op, keyed by `index` and `op` like a
-`failures` entry. It is the op runner's own result minus what the response
-already carries: the op's arguments, the advisories `warnings` attributes to
-it, and `add_component`'s placed geometry, which the pin/net views and
-`inspect(kind: "components")` report. An op with nothing left has no entry, so
-a whole-circuit build pays for its routes and removals, not a line per
-component. `wire_pins` reports `wire_count` and, when they occur,
-`already_present` and `junctions`; `remove_wire`, `remove_net_label` and
-`remove_directive` report what they `removed`; `remove_component`'s
-`cleanup_wires` reports how many wires it took as `deleted_wires`. The filter
-drops named keys rather than keeping named ones, so a fact a later op result
-adds reaches the caller without a change to this tool. `results` is not a
-page: like `failures`, its length is bounded by the batch the caller sent, and
-a cursor could not resume it, since the ops it reports on do not run again.
-The Python API returns the same list, from the same evaluator.
+**Per-op facts.** `results` carries what each op found on the sheet, one entry
+per op, keyed by `index` and `op` like a `failures` entry: for `wire_pins` the
+segments it found `already_present` and the `junctions` it made, for the
+removals how much they took. Which keys of an op's result are such facts is
+declared beside the op applier, in `OP_RESULT_FACTS`; the rest restates the
+op's arguments or rides on `warnings` and the views. An op that found nothing
+has no entry, so a whole-circuit build pays for what its ops ran into, not a
+line per op. That is why a route's `wire_count` is not relayed:
+`already_present` already names what it did not draw. `results` is not a page:
+like `failures`, its length is bounded by the batch the caller sent, and a
+cursor could not resume it, since the ops it reports on do not run again. The
+Python API returns the same list, from the same evaluator.
 
 **Wire ops.** A routed segment identical to one already on the sheet is not
 drawn a second time; the op's `results` entry lists it under `already_present`,
-and its `wire_count` counts only what was drawn. Removing an exact segment that
-exists more than once removes every copy, but only when that leaves no pin
-newly floating — otherwise the op refuses, naming the pin, with nothing
-written. A segment that exists once is still removed unconditionally: that is
-an explicit disconnection, not a tidy-up. A duplicate connects nothing and is
+and only the rest of the route is drawn. Removing an exact segment that exists
+more than once removes every copy, but only when that leaves no pin newly
+floating — otherwise the op refuses, naming the pin, with nothing written. A
+segment that exists once is still removed unconditionally: that is an explicit
+disconnection, not a tidy-up. A duplicate connects nothing and is
 indistinguishable from a real second wire, so "delete the duplicate" and
 "delete the connection" were otherwise the same request.
 
