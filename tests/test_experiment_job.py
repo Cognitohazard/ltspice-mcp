@@ -1005,6 +1005,7 @@ class TestRequestBarrier:
             return real_open(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "open", sharing_violation)
+        monkeypatch.setattr("ltspice_mcp.lib.sys.platform", "win32")
         second = await _run_barrier(request("exp_second"))
         assert second.replayed
         assert second.job.job_id == first.job.job_id
