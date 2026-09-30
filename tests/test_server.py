@@ -460,6 +460,41 @@ class TestServerDispatch:
         assert "2N2222" in str(item["data"])
 
 
+def _capabilities_call() -> mcp_types.CallToolRequestParams:
+    return call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]})
+
+
+@pytest.mark.asyncio
+class TestDefaultConfigWrite:
+    """The first tool call writes a default config where none exists, unless told not to."""
+
+    async def test_first_tool_call_writes_the_default_config(self, work_dir: Path):
+        config_path = work_dir / "ltspice-mcp.toml"
+        state = SessionState.create(
+            ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], config_path=config_path),
+            available={},
+        )
+        await call_tool(fake_request_context(state), _capabilities_call())
+        assert config_path.is_file()
+
+    async def test_switched_off_the_first_tool_call_writes_nothing(self, work_dir: Path):
+        """A server that should leave the directory it was started in untouched."""
+        config_path = work_dir / "ltspice-mcp.toml"
+        state = SessionState.create(
+            ServerConfig(
+                working_dir=work_dir,
+                allowed_paths=[work_dir],
+                config_path=config_path,
+                write_config=False,
+            ),
+            available={},
+        )
+        result = await call_tool(fake_request_context(state), _capabilities_call())
+        assert not result.is_error
+        assert not config_path.exists()
+        assert list(work_dir.iterdir()) == []  # noqa: ASYNC240
+
+
 class TestLoggingCapabilityDropped:
     """The 2026-07-28 revision deprecates the whole logging capability — the
     `logging/setLevel` request, the `logging` capability, and the

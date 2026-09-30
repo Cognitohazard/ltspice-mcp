@@ -32,7 +32,7 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
-from ltspice_mcp.lib.store import SIDECAR_DIRNAME
+from ltspice_mcp.lib.store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +132,8 @@ def file_lock(
 # engine (a lib module) takes them, and a core module must not import the layer
 # that imports it. ``tools/_base`` re-exports them.
 #
-# The sidecar directory name comes from lib/store.py, which owns the layout:
-# a second declaration here is a second thing to change when it moves.
+# Where a circuit's lock file lives is lib/store.py's decision
+# (``Store.circuit_lock``); this module owns only the locking protocol.
 
 
 def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> asyncio.Lock:
@@ -154,16 +154,6 @@ def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> 
                 break
     registry[path] = asyncio.Lock()
     return registry[path]
-
-
-def circuit_lock_target(path: Path) -> Path:
-    """Anchor for the cross-process lock on one circuit file.
-
-    Lives under the circuit's ``.ltspice-mcp/locks/`` sidecar directory
-    (``file_lock`` appends ``.lock``) so user directories aren't littered
-    with lock files next to their circuits.
-    """
-    return path.parent / SIDECAR_DIRNAME / "locks" / path.name
 
 
 class _LockHandoff:
@@ -258,7 +248,9 @@ async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
     Parallel MCP server processes editing the same circuit serialize here —
     without it, the whole-file read-modify-write saves are last-writer-wins
     and a concurrent session's edit is silently lost. This is
-    ``async_file_lock`` on the circuit's lock anchor, plus the one thing that
+    ``async_file_lock`` on the circuit's lock anchor (``Store.circuit_lock``,
+    one per file for every session of this user, whatever its working
+    directory, and never beside the circuit), plus the one thing that
     is specific to a circuit: a wait that runs out says so in the caller's own
     terms. The translation is scoped to the acquire, so a ``TimeoutError`` the
     guarded work raises for its own reasons still reads as itself.
@@ -274,11 +266,11 @@ async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
     # Read at call time rather than through a default argument, so the wait
     # this states and the wait it takes cannot disagree.
     timeout = DEFAULT_TIMEOUT
+    # Naming the lock resolves the circuit's path, which is filesystem work.
+    target = await asyncio.to_thread(Store.circuit_lock, path)
     async with contextlib.AsyncExitStack() as stack:
         try:
-            await stack.enter_async_context(
-                async_file_lock(circuit_lock_target(path), acquire_timeout=timeout)
-            )
+            await stack.enter_async_context(async_file_lock(target, acquire_timeout=timeout))
         except TimeoutError as e:
             raise NetlistError(
                 f"{path.name} is locked by another ltspice-mcp process "

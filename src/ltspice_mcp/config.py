@@ -469,6 +469,13 @@ _SETTINGS: tuple[_Setting, ...] = (
         env="LTSPICE_MCP_WORKING_DIR",
         from_env=_env_path,
     ),
+    # Environment-only: the default config is written only when no file exists,
+    # so a key inside a config file could never take effect.
+    _Setting(
+        field="write_config",
+        env="LTSPICE_MCP_WRITE_CONFIG",
+        from_env=_env_bool("LTSPICE_MCP_WRITE_CONFIG"),
+    ),
 )
 
 
@@ -617,6 +624,13 @@ class ServerConfig:
     circuits (capped by ``recent.json``). Set to 0 to disable preload and
     fall back to lazy loading on first tool call. Bounded-IO; typical
     cost is a handful of millisecond-scale JSON reads."""
+
+    write_config: bool = True
+    """Write a self-documenting default config to ``config_path`` on the first
+    tool call when no file exists there. ``LTSPICE_MCP_WRITE_CONFIG=false``
+    turns it off, for a server that should leave the directory it was started
+    in untouched. Environment-only: an existing file is never rewritten, so a
+    key inside one would have nothing to switch off."""
 
     config_path: Path = field(default_factory=lambda: Path.cwd() / "ltspice-mcp.toml")
     """Path that was resolved for the config file (set by load())."""

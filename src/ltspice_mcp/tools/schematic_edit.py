@@ -38,7 +38,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, replace_file
-from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
+from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
@@ -377,15 +377,13 @@ def _commit_asc(text: str, target: Path, build_id: str, encoding: str) -> _Commi
 async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
     """Export a committed-sheet COPY to a netlist and return its text (seam).
 
-    Uses ``resolve_runnable_netlist`` — which takes its own asc_export_lock on
-    the copy's path, so there is no reentrancy with the guard-held target lock.
-    Isolated as its own function so tests can substitute a netlist without a
-    real LTspice binary.
+    Uses ``export_netlist_text`` — which takes its own asc_export_lock on the
+    copy's path, so there is no reentrancy with the guard-held target lock, and
+    keeps no snapshot: the copy and its export are removed with the build's
+    export directory. Isolated as its own function so tests can substitute a
+    netlist without a real LTspice binary.
     """
-    from ltspice_mcp.lib.encoding import read_spice_text
-
-    net_path = await resolve_runnable_netlist(str(asc_copy), state)
-    return await asyncio.to_thread(read_spice_text, net_path)
+    return await export_netlist_text(asc_copy, state)
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ separate fd — flock/msvcrt contention is per open file description, so this
 exercises the exact cross-process semantics without spawning a process.
 """
 
+import asyncio
 import hashlib
 import os
 import subprocess
@@ -37,16 +38,17 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
-from ltspice_mcp.lib.filelock import circuit_lock_target, file_lock
+from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     resolve_pin,
 )
-from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.store import Store, user_home
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 from tests._asc_ops import apply_ops, sha_of
 
 #: The line a peer session appends while holding the lock.
@@ -59,7 +61,7 @@ def _hold_lock_then_write(target: Path, content: bytes, hold_s: float) -> thread
     held = threading.Event()
 
     def peer() -> None:
-        with file_lock(circuit_lock_target(target)):
+        with file_lock(Store.circuit_lock(target)):
             held.set()
             time.sleep(hold_s)
             target.write_bytes(content)
@@ -78,7 +80,7 @@ def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading
     release = threading.Event()
 
     def peer() -> None:
-        with file_lock(circuit_lock_target(target)):
+        with file_lock(Store.circuit_lock(target)):
             held.set()
             release.wait(10)
 
@@ -201,16 +203,109 @@ class TestCircuitFileLock:
             release.set()
             t.join(5)
 
-    async def test_lock_file_lives_in_sidecar_dir_not_next_to_circuit(
-        self, asc_state: SessionState, asc_file: Path, work_dir: Path
+
+def _project_sheet(work_dir: Path) -> Path:
+    """Draft1.asc moved into its own folder, so the folder holds nothing else.
+
+    The working directory is where the store lives, so a circuit sitting there
+    cannot show whether an edit wrote beside it.
+    """
+    project = work_dir / "project"
+    project.mkdir()
+    return (work_dir / "Draft1.asc").rename(project / "Draft1.asc")
+
+
+async def _edit_in_project(state: SessionState, sheet: Path, **kw) -> dict:
+    payload = {
+        "target": str(sheet.relative_to(state.working_dir)),
+        "ops": [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
+        "expected_sha256": sha_of(sheet),
+        **kw,
+    }
+    result = await handle_edit_schematic(EditSchematicInput.model_validate(payload), state)
+    assert result.structured_content is not None
+    return dict(result.structured_content)
+
+
+@pytest.mark.asyncio
+class TestCircuitLockLocation:
+    """The lock one circuit's editors contend on is per user and per file.
+
+    Beside the circuit, it put a ``.ltspice-mcp/`` into every folder a sheet was
+    edited or exported from, a dry run and a read-only export included. Scoped
+    to a working directory, two sessions started in different directories would
+    hold different locks on the same file, and their whole-file saves would be
+    last-writer-wins.
+    """
+
+    async def test_an_edit_leaves_nothing_beside_the_circuit(
+        self, asc_state: SessionState, work_dir: Path
     ):
-        await apply_ops(
-            asc_state,
-            asc_file.name,
-            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
+        sheet = _project_sheet(work_dir)
+        data = await _edit_in_project(asc_state, sheet)
+        assert data["outcome"] == "complete"
+        assert sorted(p.name for p in sheet.parent.iterdir()) == ["Draft1.asc"]
+
+    async def test_a_dry_run_leaves_nothing_beside_the_circuit(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _project_sheet(work_dir)
+        before = sheet.read_bytes()
+        data = await _edit_in_project(asc_state, sheet, dry_run=True)
+        assert data["commit_state"] == "not_committed"
+        assert sheet.read_bytes() == before
+        assert sorted(p.name for p in sheet.parent.iterdir()) == ["Draft1.asc"]
+
+    async def test_a_session_in_another_working_directory_holds_the_same_lock(
+        self, asc_state: SessionState, work_dir: Path, tmp_path_factory, monkeypatch
+    ):
+        """A real second process, started elsewhere, naming the file its own way.
+
+        It takes the lock through the same entry point a server does, from a
+        different current directory and working directory, and names the sheet
+        by a relative path from there. Our edit must see that lock as held.
+        """
+        import ltspice_mcp.lib.filelock as lock_mod
+
+        sheet = _project_sheet(work_dir)
+        elsewhere = tmp_path_factory.mktemp("other-session")
+        holder = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import asyncio, sys\n"
+            "from pathlib import Path\n"
+            "from ltspice_mcp.lib.filelock import circuit_file_lock\n"
+            "async def hold():\n"
+            "    async with circuit_file_lock(Path(sys.argv[1])):\n"
+            "        print('held', flush=True)\n"
+            "        await asyncio.to_thread(sys.stdin.read)\n"
+            "asyncio.run(hold())\n",
+            os.path.relpath(sheet, elsewhere),  # noqa: ASYNC240 - path arithmetic only
+            cwd=elsewhere,
+            env={**os.environ, "LTSPICE_MCP_WORKING_DIR": str(elsewhere)},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
         )
-        assert (work_dir / ".ltspice-mcp" / "locks" / f"{asc_file.name}.lock").exists()
-        assert not (work_dir / f"{asc_file.name}.lock").exists()
+        try:
+            assert holder.stdout is not None
+            held = await asyncio.wait_for(holder.stdout.readline(), timeout=60)
+            assert held.strip() == b"held"
+            monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
+            with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
+                await _edit_in_project(asc_state, sheet)
+        finally:
+            await asyncio.wait_for(holder.communicate(), timeout=60)
+        assert b"2k" not in sheet.read_bytes()
+
+    async def test_the_lock_is_per_user_and_names_the_file_not_its_spelling(self, work_dir: Path):
+        sheet = work_dir / "Amp.asc"
+        sheet.write_text("Version 4\n")
+        lock = Store.circuit_lock(sheet)
+        assert lock.is_relative_to(user_home())
+        assert not lock.is_relative_to(work_dir)
+        assert Store.circuit_lock(work_dir / "sub" / ".." / "Amp.asc") == lock
+        assert Store.circuit_lock(work_dir / "AMP.ASC") == lock
+        assert Store.circuit_lock(work_dir / "Other.asc") != lock
 
 
 def _running_experiment(work_dir: Path, job_id: str, pid: int) -> ExperimentJob:
