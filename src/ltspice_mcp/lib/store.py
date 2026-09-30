@@ -26,9 +26,15 @@ The layout, rooted at the working directory::
     |   `-- {digest}.log                    that owner's stdout and stderr
     |-- verify/                             verify_circuit exports
     |-- edit-exports/{build_id}/            edit_schematic exports
+    |-- exports/{name}.run-{hash}.net       schematic exports experiments ran
+    |-- plots/                              plot_waveform charts with no out_dir
     `-- locks/                              cross-process store locks
 
-Three things live outside that root, each for a reason:
+``$LTSPICE_MCP_STORE_DIR`` moves that root, whole, to one directory per working
+directory under it (:func:`relocated_store_root`); the layout inside is the same.
+
+Nothing the server keeps is written beside a user's circuit. Two things live
+outside the root, each for a reason:
 
 * **Run artifacts may not be there at all.** On WSL with LTspice the whole
   ``runs/`` tree moves to a Windows-native temp directory: LTspice is a Windows
@@ -36,16 +42,11 @@ Three things live outside that root, each for a reason:
   SQLite — which is what ``.MEAS`` writes through — cannot write over UNC.
   :meth:`Store.artifact_base` is the single place that rule is applied; every
   writer asks it rather than re-deciding.
-* **Circuit-scoped sidecars** sit next to the user's file, because they belong
-  to that file and not to whichever directory a session was started in: the
-  export snapshots a receipt's provenance names
-  (:meth:`Store.circuit_exports`) and the plots ``plot_waveform`` writes
-  (:meth:`Store.circuit_plots`), both under
-  :meth:`Store.circuit_sidecar`. The per-circuit lock files parallel sessions
-  coordinate on live in the same sidecar, but their path is built by
-  ``lib/filelock.py``, which owns the locking protocol.
-* **The recent-circuits index is user-global** (``lib/recent.py``), so a session
-  started anywhere can surface prior work.
+* **Per-user state lives in** :func:`user_home`, shared by every session this
+  user runs wherever it was started: the recent-circuits index
+  (``lib/recent.py``), so a session can surface prior work, and one lock file
+  per circuit (:meth:`Store.circuit_lock`), so two sessions editing one file
+  contend on one lock whatever their working directories.
 
 Record shape: one schema name and one version for the whole store. Every
 durable record this build writes carries ``{"schema": "ltspice-mcp/store",
@@ -80,8 +81,8 @@ from ltspice_mcp.lib import now
 
 logger = logging.getLogger(__name__)
 
-#: The directory name every ltspice-mcp sidecar uses, working-dir or circuit.
-SIDECAR_DIRNAME = ".ltspice-mcp"
+#: The store's directory name inside a working directory.
+STORE_DIRNAME = ".ltspice-mcp"
 
 #: The one schema name every 0.6 store record carries.
 STORE_SCHEMA = "ltspice-mcp/store"
@@ -469,7 +470,7 @@ class Store:
         store_dir = os.getenv(STORE_DIR_ENV)
         if store_dir:
             return relocated_store_root(Path(store_dir).expanduser(), self.working_dir)
-        return self.working_dir / SIDECAR_DIRNAME
+        return self.working_dir / STORE_DIRNAME
 
     @property
     def manifest(self) -> Path:
@@ -752,10 +753,12 @@ class Store:
 
         Keyed by the digest of the resolved path, case-folded. Case folding
         makes two spellings of one file on a case-insensitive filesystem
-        (Windows, macOS) share their lock; on a case-sensitive one, two files
-        that differ only in case share one too, which costs at most a wait,
-        never a missed exclusion. Resolving follows symlinks and ``..``, and
-        is filesystem work, so an event-loop caller resolves this off-loop.
+        (Windows, macOS, a WSL ``/mnt/c`` mount) share their lock; on a
+        case-sensitive one, two files that differ only in case share one too.
+        That costs a wait, and past the lock's timeout the "locked, retry"
+        error, but never a missed exclusion. Resolving follows symlinks and
+        ``..``, and is filesystem work, so an event-loop caller resolves this
+        off-loop.
         """
         try:
             resolved = circuit_path.resolve()
