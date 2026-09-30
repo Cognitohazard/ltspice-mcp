@@ -66,7 +66,7 @@ import asyncio
 import copy
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
@@ -97,6 +97,7 @@ from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
+from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     named_labels,
@@ -397,12 +398,43 @@ _CURSOR_DESCRIPTION_FILE = (
 )
 
 
+#: The capabilities report's top-level keys, which are what ``fields`` selects.
+#: ``tests/test_inspect_tools.py`` holds it equal to what ``_do_capabilities``
+#: returns, so a key added to one and not the other fails there.
+CapabilityField: TypeAlias = Literal[
+    "config_path",
+    "python",
+    "simulators",
+    "default_simulator",
+    "exporter_available",
+    "render",
+    "dialects",
+    "diagnostics",
+    "ngbehavior",
+    "persist_jobs",
+    "allowed_paths",
+    "tool_profile",
+    "python_api",
+    "tool_listing",
+    "limits",
+    "linter_version",
+]
+
+
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators and their raw dialects,
     whether the .asc exporter is available, job persistence, allowed roots, the
-    configured limits, and the linter version. Takes no arguments."""
+    configured limits, and the linter version."""
 
     kind: Literal["capabilities"]
+    fields: list[CapabilityField] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Return only these keys, e.g. ['allowed_paths', 'config_path'] after "
+            "a config edit. Omit for the whole report."
+        ),
+    )
 
 
 class SymbolsQuery(StrictModel):
@@ -845,7 +877,7 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _do_capabilities(state: SessionState) -> dict[str, Any]:
+def _do_capabilities(state: SessionState, raster: RasterSupport) -> dict[str, Any]:
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
         info: dict[str, Any] = {
@@ -880,6 +912,10 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         ),
         # The .asc → LTspice netlist exporter needs LTspice itself.
         "exporter_available": "ltspice" in state.available_simulators,
+        # Whether verify_circuit can draw a PNG, the only format it returns
+        # inline. Asked here so an agent that cannot read files knows before it
+        # renders whether it will see the picture, and what to install if not.
+        "render": asdict(raster),
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
@@ -1287,11 +1323,14 @@ def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
 # ---------------------------------------------------------------------------
 
 
-def _check_prefix(prefix: str | None) -> None:
-    """Refuse a ``prefix`` no reference could start with, rather than answer
-    it with an empty list that reads as "no such components"."""
+def _check_prefix(prefix: str | None) -> str | None:
+    """The validated prefix, upper-cased: references match it without regard to case.
+
+    Refuses a prefix no reference could start with, rather than answer it with
+    an empty list that reads as "no such components".
+    """
     if prefix is None:
-        return
+        return None
     if not prefix or any(ch.isspace() for ch in prefix):
         raise _QueryError(
             "invalid_prefix",
@@ -1307,12 +1346,16 @@ def _check_prefix(prefix: str | None) -> None:
             f"prefix matches the start of a reference as plain text and takes no "
             f"wildcards; for {prefix!r}, {remedy}",
         )
+    return prefix.upper()
 
 
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """The component rows, plus the lexer's notes about how the deck read."""
+    """The component rows, plus the lexer's notes about how the deck read.
+
+    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns.
+    """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
     lexed = lex(text)
@@ -1366,13 +1409,13 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
 
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    _check_prefix(q.prefix)
+    prefix = _check_prefix(q.prefix)
     path = safe_path(q.path, state)
     # The answer rung revokes detail='full' — the one payload-growing opt-in
     # inspect has. The cursor binds the detail it actually rendered, so a page
     # taken under a budget cannot resume as an unbudgeted one at the same offset.
     detail = "list" if view.lean else q.detail
-    identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
+    identity = {"path": str(path), "prefix": prefix, "detail": detail}
     digest: str | None = None
     lex_notes: list[str] = []
 
@@ -1381,15 +1424,13 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         # Cached editor + component reads stay on the event loop.
         editor = get_asc_editor(path, state)
         try:
-            # Filtered here, not by spicelib's get_components(prefixes), which
-            # reads its argument as a set of case-sensitive first letters.
-            refs = sorted(
-                r
-                for r in editor.get_components()
-                if q.prefix is None or matches_prefix(r, q.prefix)
-            )
+            refs = sorted(editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
+        # Filtered here as in the netlist branch: spicelib's prefix filter reads
+        # its argument as a set of case-sensitive first letters (docs/spicelib_bugs.md).
+        if prefix is not None:
+            refs = [ref for ref in refs if matches_prefix(ref, prefix)]
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
         rows = _components_asc_page(editor, page["items"], detail)
     else:
@@ -1399,7 +1440,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
             raise _QueryError("read_error", str(exc)) from exc
         try:
             all_rows, lex_notes = await asyncio.to_thread(
-                _components_netlist_payload, text, q.prefix, detail
+                _components_netlist_payload, text, prefix, detail
             )
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
@@ -1592,7 +1633,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    _check_prefix(q.prefix)
+    prefix = _check_prefix(q.prefix)
     profile = SemanticProfile(
         q.simulator,
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
@@ -1614,12 +1655,12 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         row
         for row in hierarchy.instances
         if tuple(p.casefold() for p in row.instance[: len(selected)]) == selected
-        and (q.prefix is None or matches_prefix(row.reference, q.prefix))
+        and (prefix is None or matches_prefix(row.reference, prefix))
     ]
     identity = {
         **hierarchy.binding(),
         "instance": selected,
-        "prefix": q.prefix.upper() if q.prefix else None,
+        "prefix": prefix,
     }
     page = _paginate(rows, "hierarchy", identity, q.cursor, (), view)
     metadata = _page_meta(page, "instances")
@@ -1640,7 +1681,12 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        return {"data": _do_capabilities(state)}
+        # The first successful probe loads the native Cairo library.
+        report = _do_capabilities(state, await asyncio.to_thread(raster_support))
+        if query.fields is not None:
+            wanted = set(query.fields)
+            report = {key: value for key, value in report.items() if key in wanted}
+        return {"data": report}
     if isinstance(query, SymbolsQuery):
         return await _do_symbols(query, state, view)
     if isinstance(query, SymbolQuery):
