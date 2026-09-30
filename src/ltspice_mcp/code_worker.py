@@ -109,7 +109,7 @@ def _namespace(api: Any) -> dict[str, Any]:
     """
     import numpy as np
 
-    from ltspice_mcp.lib.signal_analysis import time_weighted_quantiles
+    from ltspice_mcp.api import time_weighted_quantiles
 
     return {
         "__name__": "__main__",

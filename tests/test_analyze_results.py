@@ -2670,16 +2670,16 @@ def test_include_field_bare_name_reads_under_value():
         AnalyzeInclude.model_validate({"fields": ["node.x"]})
 
 
-def _recorded_trace(raw: Path, name: str) -> tuple[Any, Any]:
-    """The time axis and one trace of a recorded LTspice raw, as stored."""
+def _recorded_traces(state: SessionState, raw: Path, *names: str) -> list[Any]:
+    """The time axis and the named traces of a raw, read the way the server reads it."""
     import numpy as np
-    from spicelib import RawRead
 
-    recorded = RawRead(str(raw), verbose=False)
-    return (
-        np.asarray(recorded.get_trace("time").get_wave(0), dtype=float),
-        np.asarray(recorded.get_trace(name).get_wave(0), dtype=float),
-    )
+    from ltspice_mcp.lib import services
+
+    loaded = services.load_raw_sync(raw, state)
+    return [np.asarray(loaded.get_axis(0), dtype=float)] + [
+        np.asarray(loaded.get_trace(name).get_wave(0), dtype=float) for name in names
+    ]
 
 
 @pytest.mark.asyncio
@@ -2692,8 +2692,7 @@ class TestSignalStatsQuantiles:
         import numpy as np
 
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        t, v_in = _recorded_trace(raw, "V(in)")
-        _, v_out = _recorded_trace(raw, "V(out)")
+        t, v_in, v_out = _recorded_traces(state_no_sim, raw, "V(in)", "V(out)")
         data = await _analyze(
             state_no_sim,
             raw,

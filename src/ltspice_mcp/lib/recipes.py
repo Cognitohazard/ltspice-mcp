@@ -88,6 +88,11 @@ MULTI_FIELD_KEYS: dict[str, dict[str, str]] = {
 QUANTILE_SPREAD_FIELD = "quantile_peak_to_peak"
 
 
+def _key_percent(level: float) -> float:
+    """A level as the percentage its key names, to 1e-4 percent (1e-6 in level)."""
+    return round(level * 100, 4)
+
+
 def quantile_key(level: float) -> str:
     """The row key a quantile level is reported under.
 
@@ -95,16 +100,25 @@ def quantile_key(level: float) -> str:
     point spelled ``_`` so the key stays one segment of a dotted row path:
     0.01 is ``q01``, 0.5 is ``q50``, 0.999 is ``q99_9``, 1.0 is ``q100``.
     """
-    whole, _, fraction = f"{round(level * 100, 4):.6g}".partition(".")
+    whole, _, fraction = f"{_key_percent(level):.6g}".partition(".")
     return f"q{whole.zfill(2)}" + (f"_{fraction}" if fraction else "")
 
 
 def quantile_fields(levels: list[float] | None) -> tuple[str, ...]:
-    """The row keys a signal_stats call with these quantile levels adds."""
+    """The row keys a signal_stats call with these (distinct) quantile levels adds."""
     if not levels:
         return ()
     keys = tuple(quantile_key(level) for level in levels)
-    return (*keys, QUANTILE_SPREAD_FIELD) if len(set(levels)) > 1 else keys
+    return (*keys, QUANTILE_SPREAD_FIELD) if len(levels) > 1 else keys
+
+
+def quantile_row(levels: list[float], values: list[float]) -> dict[str, float]:
+    """The fields :func:`quantile_fields` names, filled from the value at each level."""
+    row = {quantile_key(level): value for level, value in zip(levels, values, strict=True)}
+    if QUANTILE_SPREAD_FIELD in quantile_fields(levels):
+        top = values[levels.index(max(levels))]
+        row[QUANTILE_SPREAD_FIELD] = top - values[levels.index(min(levels))]
+    return row
 
 
 # Which transient_response fields each mode can reduce. A step response and a
@@ -406,7 +420,7 @@ class SignalStatsRecipe(MultiRecipe):
     @classmethod
     def _quantile_keys_are_distinct(cls, levels: list[float] | None) -> list[float] | None:
         for level in levels or ():
-            if abs(round(level * 100, 4) - level * 100) > 1e-9:
+            if abs(_key_percent(level) - level * 100) > 1e-9:
                 raise ValueError(
                     f"quantile level {level!r} has more than six decimal places; its "
                     "row key names a level to 1e-6"
