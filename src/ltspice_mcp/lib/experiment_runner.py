@@ -298,33 +298,38 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
             )
 
 
-def verify_replay_executable(
+def verify_replay(
     job: ExperimentJob,
-    current: SimulatorExecutable | None,
     request_id: str,
+    executable: SimulatorExecutable | None,
 ) -> None:
-    """Refuse to replay a receipt that a different simulator build produced.
+    """Refuse to replay a recorded job the request would not reproduce now.
 
-    The fingerprint hashes the request, and nothing in a request names the
-    executable: swap the simulator for another build (or change which
-    simulator is the default) and restart, and a reused request_id would hand
-    back the earlier build's numbers as the answer for this one. So the
-    program recorded at the job's submission is compared with the one this
-    request would launch now, the way ``verify_replay_sources`` compares the
-    decks, and a different build is the same conflict a changed deck is.
+    The fingerprint covers the request. This covers the server state a request
+    does not name, and is the one check both replay routes run: the tool's
+    lookup before the request gate, and the coordinator's under it.
 
-    The executable is checked beside the fingerprint rather than hashed into
-    it: it is the server's state, not the caller's request, and folding it in
-    would report a changed executable as "a different request payload". A
-    record that names no executable fails closed, as a record with no source
-    digests does.
+    First the decks (``verify_replay_sources``). Then the simulator build:
+    swap the executable for another build (or change which simulator is the
+    default) and restart, and a reused request_id would hand back the earlier
+    build's numbers as the answer for this one. So the program recorded at the
+    job's submission is compared with ``executable``, the one this request
+    would launch now, and a different build is the same conflict a changed deck
+    is. It is checked beside the fingerprint rather than hashed into it: it is
+    the server's state, not the caller's request, and folding it in would
+    report a changed executable as "a different request payload". A record
+    that names no executable fails closed, as a record with no source digests
+    does.
+
+    Blocking (the deck check re-hashes staged files): call off the loop.
     """
-    if same_executable(job.simulator_executable, current):
+    verify_replay_sources(job, request_id)
+    if same_executable(job.simulator_executable, executable):
         return
     raise IdempotencyConflictError(
         f"request_id {request_id!r} already ran experiment {job.job_id} on "
         f"{describe_executable(job.simulator_executable)}; this request would now run "
-        f"on {describe_executable(current)}. Its results cannot be shown to come from "
+        f"on {describe_executable(executable)}. Its results cannot be shown to come from "
         "the current build. Submit under a new request_id to run it on the current "
         "executable; jobs(action='status') still reads the recorded job."
     )
@@ -745,8 +750,7 @@ class ExperimentRunner(RunnerBase):
         # The cheap pre-staging replay check the caller may have run cannot see
         # a record written after it looked, so the same drift is re-checked
         # here, under the gate.
-        verify_replay_sources(existing, request.request_id)
-        verify_replay_executable(existing, request.simulator_executable, request.request_id)
+        verify_replay(existing, request.request_id, request.simulator_executable)
         if existing.restart_reconciled:
             experiment_store.save_job(existing)
         return _IndexLookup(existing=existing, dangling=False)
@@ -1381,11 +1385,8 @@ class ExperimentRunner(RunnerBase):
     @staticmethod
     def _apply_stopped_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
         """Keep post-kill diagnostics without advertising artifacts we remove."""
+        ExperimentRunner._apply_outcome(case, outcome)
         case.raw_file = None
-        case.log_file = Path(outcome.log_file) if outcome.log_file else None
-        case.simulator_version = outcome.simulator_version
-        if outcome.observations:
-            case.observations.extend(outcome.observations)
 
     def _mark_case(
         self,

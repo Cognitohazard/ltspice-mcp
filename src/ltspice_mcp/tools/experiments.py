@@ -47,8 +47,7 @@ from ltspice_mcp.lib.experiment_runner import (
     StagedDecks,
     SubmissionCommitted,
     canonical_fingerprint,
-    verify_replay_executable,
-    verify_replay_sources,
+    verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -570,9 +569,6 @@ async def handle_run_experiments(
             )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
-        # Identified once, before the request gate: the gate's replay check
-        # compares it with what a recorded job ran on, and a new job records it.
-        executable = await asyncio.to_thread(executable_identity, simulator)
         circuit_inputs = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
@@ -661,6 +657,11 @@ async def handle_run_experiments(
             return StagedDecks(cases=cases, sources=sources)
 
         analysis_request = args.strip_presentation()["analyze"]
+        # Identified once, before the request gate and after every cheap check
+        # (the first identification in a process digests the executable): the
+        # gate's replay check compares it with what a recorded job ran on, and
+        # a new job records it.
+        executable = await asyncio.to_thread(executable_identity, simulator)
         runner = state.runners.get_experiment_runner(
             loop=asyncio.get_running_loop(),
             simulator_class=simulator,
@@ -1190,14 +1191,11 @@ async def _load_matching_replay(
         raise IdempotencyConflictError(
             f"request_id {args.request_id!r} points to an inconsistent coordinator record"
         )
-    await asyncio.to_thread(verify_replay_sources, job, args.request_id)
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
     simulator = resolve_run_simulator(args.execution.simulator, state)
-    verify_replay_executable(
-        job,
-        await asyncio.to_thread(executable_identity, simulator),
-        args.request_id,
+    await asyncio.to_thread(
+        lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
     if experiment_store.note_once(
         job.observations,

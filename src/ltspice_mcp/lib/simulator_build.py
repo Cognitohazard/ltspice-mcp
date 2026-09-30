@@ -27,13 +27,11 @@ artifact, and no digest of an executable past ``_DIGEST_CAP_BYTES``.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import re
 import shutil
 import stat
-import threading
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -41,6 +39,8 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.raw_parser import raw_writer_command
 
@@ -56,10 +56,9 @@ _REPORTED_CHARS = 160
 #: of megabytes; a configured path far past that is not one, and hashing it
 #: would stall a submission for nothing.
 _DIGEST_CAP_BYTES = 512 * 1024 * 1024
-#: Distinct (path, size, mtime) digests remembered. Each entry is one build of
-#: one executable, so a handful covers every simulator a process runs.
-_DIGEST_CACHE_ENTRIES = 32
-_READ_CHUNK = 1024 * 1024
+#: Digests by executable, recomputed when the file's (mtime, size) stamp moves.
+#: Single-flight per path, so concurrent first identifications hash it once.
+_DIGESTS: FileCache[str] = FileCache(maxsize=32)
 
 # LTspice 24+: the log's first line, e.g. "LTspice 26.0.2 for Windows".
 _LTSPICE_BANNER = re.compile(r"LTspice[ \t]+\S[^\r\n]*")
@@ -104,14 +103,6 @@ class SimulatorExecutable:
             modified=modified if isinstance(modified, str) and modified else None,
         )
 
-    def describe(self) -> str:
-        """One phrase naming this executable, for a message a caller reads."""
-        if self.sha256:
-            return f"{self.path} (sha256 {self.sha256[:12]})"
-        if self.modified:
-            return f"{self.path} (modified {self.modified})"
-        return self.path
-
 
 def same_executable(
     recorded: SimulatorExecutable | None,
@@ -136,8 +127,14 @@ def same_executable(
 
 
 def describe_executable(identity: SimulatorExecutable | None) -> str:
-    """``SimulatorExecutable.describe``, with a phrase for no identity at all."""
-    return identity.describe() if identity is not None else "an unrecorded executable"
+    """One phrase naming an executable, for a message a caller reads."""
+    if identity is None:
+        return "an unrecorded executable"
+    if identity.sha256:
+        return f"{identity.path} (sha256 {identity.sha256[:12]})"
+    if identity.modified:
+        return f"{identity.path} (modified {identity.modified})"
+    return identity.path
 
 
 def executable_path(simulator_class: type | None) -> str | None:
@@ -174,51 +171,27 @@ def executable_identity(simulator_class: type | None) -> SimulatorExecutable | N
     try:
         info = os.stat(program)
     except OSError:
-        return SimulatorExecutable(path=program, sha256=None, bytes=None, modified=None)
-    if not stat.S_ISREG(info.st_mode):
+        info = None
+    if info is None or not stat.S_ISREG(info.st_mode):
         return SimulatorExecutable(path=program, sha256=None, bytes=None, modified=None)
     return SimulatorExecutable(
         path=program,
-        sha256=_digest(program, info),
+        sha256=_digest(Path(program), info.st_size),
         bytes=info.st_size,
         # In the zone every other record timestamp is written in.
         modified=datetime.fromtimestamp(info.st_mtime, tz=now().tzinfo).isoformat(),
     )
 
 
-_digests: dict[tuple[str, int, int], str] = {}
-_digests_lock = threading.Lock()
-
-
-def _digest(program: str, info: os.stat_result) -> str | None:
-    if info.st_size > _DIGEST_CAP_BYTES:
+def _digest(program: Path, size: int) -> str | None:
+    if size > _DIGEST_CAP_BYTES:
         return None
-    key = (program, info.st_size, info.st_mtime_ns)
-    with _digests_lock:
-        cached = _digests.get(key)
-    if cached is not None:
-        return cached
-    hasher = hashlib.sha256()
     try:
-        with open(program, "rb") as handle:
-            # Bounded by the size checked above, plus one chunk for a file
-            # that grew in between.
-            remaining = _DIGEST_CAP_BYTES + _READ_CHUNK
-            while remaining > 0:
-                chunk = handle.read(_READ_CHUNK)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-                remaining -= len(chunk)
+        # A read that fails raises through the cache, so it is not remembered.
+        return _DIGESTS.get(program, sha256_file)
     except OSError as exc:
         logger.debug("Could not digest simulator executable %s: %s", program, exc)
         return None
-    digest = hasher.hexdigest()
-    with _digests_lock:
-        if len(_digests) >= _DIGEST_CACHE_ENTRIES:
-            _digests.clear()
-        _digests[key] = digest
-    return digest
 
 
 def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str | None:

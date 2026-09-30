@@ -748,7 +748,11 @@ class RunnerBase:
             # This runner is fresh per submission, so active_tasks holds
             # exactly this run's task — appended before its thread starts,
             # so it is present whenever the callback can fire.
+            version: str | None = None
             try:
+                # Read here, before the callback: a stopped case's artifacts
+                # are removed once it lands. Both outcomes below carry it.
+                version = reported_build(log_file, raw_file)
                 outcome = collect_run_outcome(
                     str(raw_file) if raw_file else "",
                     str(log_file) if log_file else "",
@@ -764,21 +768,14 @@ class RunnerBase:
                     simulator_exception=getattr(
                         threading.current_thread(), "exception_text", None
                     ),
-                )
-                # Before the callback: a stopped case's artifacts are removed
-                # once it lands, and this is read from them.
-                outcome = outcome._replace(
-                    simulator_version=reported_build(
-                        Path(log_file) if log_file else None,
-                        Path(raw_file) if raw_file else None,
-                    )
-                )
+                )._replace(simulator_version=version)
             except Exception as exc:
                 outcome = RunOutcome(
                     "",
                     "",
                     0,
                     f"Simulation failed (outcome collection: {exc})",
+                    simulator_version=version,
                 )
             self._bridge(callback, outcome, context=f"run {run_filename}")
 

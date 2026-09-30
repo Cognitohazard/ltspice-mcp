@@ -1046,10 +1046,8 @@ def sniff_raw_dialect(path: Path) -> str | None:
     ``Command:`` field — there spicelib names the writer itself, and its
     answer is better than a guess.
     """
-    try:
-        with path.open("rb") as handle:
-            head = handle.read(_SNIFF_BYTES)
-    except OSError:
+    head = _read_head(path)
+    if head is None:
         return None
     if head.startswith(_RAW_HEADER_UTF16):
         return "ltspice"
@@ -1060,8 +1058,13 @@ def sniff_raw_dialect(path: Path) -> str | None:
     return "ngspice"
 
 
-_RE_HEADER_END = re.compile(r"(?im)^(?:variables|binary|values):")
-_RE_COMMAND = re.compile(r"(?im)^command:[ \t]*(\S[^\r\n]*)")
+def _read_head(path: Path) -> bytes | None:
+    """The first ``_SNIFF_BYTES`` of a file, or None when it cannot be read."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(_SNIFF_BYTES)
+    except OSError:
+        return None
 
 
 def raw_writer_command(path: Path) -> str | None:
@@ -1073,20 +1076,17 @@ def raw_writer_command(path: Path) -> str | None:
     cannot be read. Only the header text before the variables block is
     searched, and only the first ``_SNIFF_BYTES`` of the file are read.
     """
-    try:
-        with path.open("rb") as handle:
-            head = handle.read(_SNIFF_BYTES)
-    except OSError:
+    head = _read_head(path)
+    if head is None:
         return None
     if head.startswith(_RAW_HEADER_UTF16):
-        text = head[: len(head) // 2 * 2].decode("utf-16-le", errors="replace")
+        width = 2
     elif head.startswith(_RAW_HEADER_ASCII):
-        text = head.decode("latin-1")
+        width = 1
     else:
         return None
-    header_end = _RE_HEADER_END.search(text)
-    match = _RE_COMMAND.search(text, 0, header_end.start() if header_end else len(text))
-    return match[1].strip() if match else None
+    fields, _ = _parse_plot_header(head.decode(_RAW_CODECS[width], errors="replace"))
+    return fields.get("command") or None
 
 
 # ---------------------------------------------------------------------------

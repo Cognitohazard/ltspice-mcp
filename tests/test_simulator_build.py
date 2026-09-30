@@ -4,14 +4,13 @@ for another."""
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import jsonschema
 import pytest
@@ -19,7 +18,6 @@ from spicelib.sim.simulator import Simulator
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import experiment_store, store
-from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
@@ -32,7 +30,7 @@ from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experi
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
-from tests.conftest import terminal_experiment
+from tests.conftest import submit_through_spicelib, terminal_experiment
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LTSPICE_26 = "LTspice 26.0.2 for Windows"
@@ -95,7 +93,10 @@ class _RecordedLTspice26(Simulator):
     """
 
     spice_exe = []  # noqa: RUF012 - spicelib declares it unannotated
-    process_name = "recorded-ltspice"
+    process_name = "recorded-simulator"
+    log_fixture: ClassVar[str] = "ltspice_tran_rc.log"
+    raw_fixture: ClassVar[str] = "ltspice_tran_rc.raw"
+    console: ClassVar[str | None] = None
 
     @classmethod
     def run(
@@ -109,8 +110,12 @@ class _RecordedLTspice26(Simulator):
         exe_log=False,
     ) -> int:
         netlist = Path(netlist_file)
-        shutil.copy(FIXTURES / "ltspice_tran_rc.log", netlist.with_suffix(".log"))
-        shutil.copy(FIXTURES / "ltspice_tran_rc.raw", netlist.with_suffix(".raw"))
+        shutil.copy(FIXTURES / cls.log_fixture, netlist.with_suffix(".log"))
+        shutil.copy(FIXTURES / cls.raw_fixture, netlist.with_suffix(".raw"))
+        # spicelib writes the console capture only when asked to; the runner
+        # always asks.
+        if exe_log and cls.console is not None:
+            netlist.with_suffix(".exe.log").write_text(cls.console)
         return 0
 
     @classmethod
@@ -121,27 +126,9 @@ class _RecordedLTspice26(Simulator):
 class _RecordedNgspice42(_RecordedLTspice26):
     """An ngspice-shaped run: a log with no version, and the console banner."""
 
-    @classmethod
-    def run(
-        cls,
-        netlist_file,
-        cmd_line_switches=None,
-        timeout=None,
-        stdout=None,
-        stderr=None,
-        cwd=None,
-        exe_log=False,
-    ) -> int:
-        netlist = Path(netlist_file)
-        shutil.copy(FIXTURES / "ngspice_ac_no_meas.log", netlist.with_suffix(".log"))
-        # spicelib writes the console capture only when asked to; the runner
-        # always asks.
-        if exe_log:
-            netlist.with_suffix(".exe.log").write_text(NGSPICE_42_CONSOLE)
-        netlist.with_suffix(".raw").write_bytes(
-            (FIXTURES / "ngspice_noise_2plot.raw").read_bytes()
-        )
-        return 0
+    log_fixture = "ngspice_ac_no_meas.log"
+    raw_fixture = "ngspice_noise_2plot.raw"
+    console = NGSPICE_42_CONSOLE
 
 
 def _simulator(base: type, program: Path, *command: str) -> type:
@@ -149,8 +136,16 @@ def _simulator(base: type, program: Path, *command: str) -> type:
     return type(base.__name__, (base,), {"spice_exe": [*command, str(program)]})
 
 
-def _state(config: ServerConfig, simulator: type) -> SessionState:
+def _state(config: ServerConfig, program: Path, *launcher: str) -> SessionState:
+    """A session whose one simulator is a recorded LTspice 26 launching ``program``."""
+    simulator = _simulator(_RecordedLTspice26, program, *launcher)
     return SessionState.create(config, available={"ltspice": simulator})
+
+
+@pytest.fixture
+def program(work_dir: Path) -> Path:
+    """The executable most tests run: one build of LTspice."""
+    return _program(work_dir / "sim" / "LTspice.exe", b"build one")
 
 
 def _payload(deck: Path, request_id: str, **extra: Any) -> dict[str, Any]:
@@ -169,10 +164,6 @@ async def _submit(state: SessionState, payload: dict[str, Any]) -> tuple[bool, d
     assert data is not None, result.content[0].text
     jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     return bool(result.is_error), data
-
-
-def _record_path(work_dir: Path, job_id: str) -> Path:
-    return store.Store(work_dir).job_record(job_id)
 
 
 async def _runs(state: SessionState, job_id: str, **extra: Any) -> list[dict[str, Any]]:
@@ -393,26 +384,16 @@ class TestExecutableIdentity:
 # ---------------------------------------------------------------------------
 
 
-async def _one_run(tmp_path: Path, simulator: type) -> RunOutcome:
-    loop = asyncio.get_running_loop()
-    runner = RunnerBase(loop, simulator, tmp_path, max_parallel=1)
-    deck = tmp_path / "deck.cir"
-    deck.write_text(_DECK)
-    received: asyncio.Future[RunOutcome] = loop.create_future()
-    await asyncio.to_thread(runner.submit_netlist, deck, "run.cir", received.set_result)
-    return await asyncio.wait_for(received, 10)
-
-
 @pytest.mark.asyncio
 class TestRunOutcome:
     async def test_a_finished_run_carries_the_build_its_log_named(self, tmp_path: Path):
-        outcome = await _one_run(tmp_path, _RecordedLTspice26)
+        outcome = await submit_through_spicelib(tmp_path, _RecordedLTspice26)
 
         assert outcome.error is None
         assert outcome.simulator_version == LTSPICE_26
 
     async def test_an_ngspice_run_carries_its_console_banner(self, tmp_path: Path):
-        outcome = await _one_run(tmp_path, _RecordedNgspice42)
+        outcome = await submit_through_spicelib(tmp_path, _RecordedNgspice42)
 
         assert outcome.error is None
         assert outcome.simulator_version == NGSPICE_42
@@ -426,10 +407,9 @@ class TestRunOutcome:
 @pytest.mark.asyncio
 class TestRecordedBuild:
     async def test_each_run_records_the_build_it_reported(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
-        state = _state(config, _simulator(_RecordedLTspice26, program))
+        state = _state(config, program)
         deck = work_dir / "rc.cir"
         deck.write_text(_DECK)
 
@@ -445,7 +425,7 @@ class TestRecordedBuild:
         assert receipt["status"] == "completed", receipt
         # The durable record: the program at submission, the build per case.
         await state.job_registry.drain_pending()
-        record = json.loads(_record_path(work_dir, receipt["job_id"]).read_text())
+        record = json.loads(store.Store(work_dir).job_record(receipt["job_id"]).read_text())
         assert record["store_version"] == store.STORE_VERSION
         assert record["simulator_executable"]["path"] == str(program)
         assert record["simulator_executable"]["sha256"] == _sha256(program)
@@ -455,10 +435,9 @@ class TestRecordedBuild:
         assert [row["simulator_version"] for row in runs] == [LTSPICE_26] * 2
 
     async def test_the_lean_receipt_keeps_the_build_one_opt_in_away(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
-        state = _state(config, _simulator(_RecordedLTspice26, program))
+        state = _state(config, program)
         deck = work_dir / "rc.cir"
         deck.write_text(_DECK)
         receipt = await terminal_experiment(state, _payload(deck, "lean-build"))
@@ -502,7 +481,7 @@ class TestReplayAcrossBuilds:
     async def _first_run(
         self, config: ServerConfig, work_dir: Path, program: Path, request_id: str
     ) -> tuple[Path, dict[str, Any]]:
-        state = _state(config, _simulator(_RecordedLTspice26, program))
+        state = _state(config, program)
         deck = work_dir / "rc.cir"
         deck.write_text(_DECK)
         receipt = await terminal_experiment(state, _payload(deck, request_id))
@@ -512,13 +491,12 @@ class TestReplayAcrossBuilds:
         return deck, receipt
 
     async def test_a_rebuilt_executable_conflicts_after_a_restart(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
         deck, first = await self._first_run(config, work_dir, program, "rebuilt")
         _rebuild(program, b"build two")
 
-        restarted = _state(config, _simulator(_RecordedLTspice26, program))
+        restarted = _state(config, program)
         is_error, data = await _submit(restarted, _payload(deck, "rebuilt"))
 
         assert is_error
@@ -548,12 +526,11 @@ class TestReplayAcrossBuilds:
         assert str(other) in data["error"]["message"]
 
     async def test_the_same_build_still_replays_after_a_restart(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
         deck, first = await self._first_run(config, work_dir, program, "unchanged")
 
-        restarted = _state(config, _simulator(_RecordedLTspice26, program))
+        restarted = _state(config, program)
         is_error, data = await _submit(restarted, _payload(deck, "unchanged"))
 
         assert not is_error
@@ -561,12 +538,11 @@ class TestReplayAcrossBuilds:
         assert data["job_id"] == first["job_id"]
 
     async def test_a_replay_needs_the_simulator_a_fresh_run_would_use(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
         # With no simulator there is no build to compare the record with, so
         # the replay is answered as a fresh submission would be. The recorded
         # job is still readable.
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
         deck, first = await self._first_run(config, work_dir, program, "no-simulator")
 
         restarted = SessionState.create(config, available={})
@@ -583,14 +559,17 @@ class TestReplayAcrossBuilds:
         assert status.structured_content["job_id"] == first["job_id"]
 
     async def test_the_request_gate_refuses_the_same_replay(
-        self, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        program: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         # The pre-staging check runs before the request gate and cannot see a
         # record written after it looked; the gate re-checks under the lock.
         # Skipping the early lookup sends this replay to the gate alone.
         from ltspice_mcp.tools import experiments as experiments_mod
 
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
         deck, _ = await self._first_run(config, work_dir, program, "gated")
         _rebuild(program, b"build two")
 
@@ -598,7 +577,7 @@ class TestReplayAcrossBuilds:
             return None
 
         monkeypatch.setattr(experiments_mod, "_load_matching_replay", no_early_lookup)
-        restarted = _state(config, _simulator(_RecordedLTspice26, program))
+        restarted = _state(config, program)
         is_error, data = await _submit(restarted, _payload(deck, "gated"))
 
         assert is_error
@@ -606,13 +585,12 @@ class TestReplayAcrossBuilds:
         assert "sha256" in data["error"]["message"]
 
     async def test_a_version_2_record_reads_but_does_not_replay(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
         # Version 2 of the store predates both fields. Its records still load,
         # with the build unknown, and unknown cannot be shown to match.
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
         deck, first = await self._first_run(config, work_dir, program, "older-record")
-        path = _record_path(work_dir, first["job_id"])
+        path = store.Store(work_dir).job_record(first["job_id"])
         record = json.loads(path.read_text())
         record["store_version"] = 2
         del record["simulator_executable"]
@@ -625,7 +603,7 @@ class TestReplayAcrossBuilds:
         assert loaded.simulator_executable is None
         assert [case.simulator_version for case in loaded.cases] == [None]
 
-        restarted = _state(config, _simulator(_RecordedLTspice26, program))
+        restarted = _state(config, program)
         is_error, data = await _submit(restarted, _payload(deck, "older-record"))
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
@@ -640,10 +618,9 @@ class TestReplayAcrossBuilds:
 @pytest.mark.asyncio
 class TestCapabilitiesBuild:
     async def test_the_version_is_what_the_last_run_on_this_executable_reported(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
-        state = _state(config, _simulator(_RecordedLTspice26, program))
+        state = _state(config, program)
 
         before = (await _capabilities(state))["simulators"]["ltspice"]
         assert before["executable"] == str(program)
@@ -663,10 +640,9 @@ class TestCapabilitiesBuild:
         }
 
     async def test_a_run_on_another_build_does_not_speak_for_this_one(
-        self, config: ServerConfig, work_dir: Path
+        self, config: ServerConfig, work_dir: Path, program: Path
     ):
-        program = _program(work_dir / "sim" / "LTspice.exe", b"build one")
-        state = _state(config, _simulator(_RecordedLTspice26, program))
+        state = _state(config, program)
         deck = work_dir / "rc.cir"
         deck.write_text(_DECK)
         await terminal_experiment(state, _payload(deck, "old-build"))
@@ -681,7 +657,7 @@ class TestCapabilitiesBuild:
         self, config: ServerConfig, work_dir: Path
     ):
         program = _program(work_dir / "wine" / "LTspice.exe", b"build one")
-        state = _state(config, _simulator(_RecordedLTspice26, program, "wine"))
+        state = _state(config, program, "wine")
 
         caps = (await _capabilities(state))["simulators"]["ltspice"]
 

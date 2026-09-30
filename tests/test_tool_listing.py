@@ -268,7 +268,7 @@ class TestSessionStateHonoursTheListing:
         caller could only infer it from prose that is not there."""
         from ltspice_mcp.tools.inspect_tools import _do_capabilities
 
-        assert _do_capabilities(_state(work_dir, listing))["tool_listing"] == listing
+        assert _do_capabilities(_state(work_dir, listing), {})["tool_listing"] == listing
 
     def test_compact_state_serves_no_argument_prose(self, work_dir):
         state = _state(work_dir, "compact")
