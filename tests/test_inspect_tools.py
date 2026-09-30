@@ -25,6 +25,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster
+from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
@@ -181,16 +182,23 @@ async def test_capabilities_fields_returns_only_the_named_keys(cap_state: Sessio
     assert picked["data"] == {key: full["data"][key] for key in ("allowed_paths", "config_path")}
 
 
+def _executables(state: SessionState) -> dict[str, SimulatorExecutable | None]:
+    """What the capabilities query identifies for each available simulator."""
+    return {name: executable_identity(cls) for name, cls in state.available_simulators.items()}
+
+
 async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "capabilities"}])
-    assert res["data"] == insp._do_capabilities(cap_state, raster.raster_support())
+    assert res["data"] == insp._do_capabilities(
+        cap_state, raster.raster_support(), _executables(cap_state)
+    )
 
 
 def test_capabilities_field_names_are_the_report_keys(cap_state: SessionState):
     """The selector's vocabulary and the report's keys are one list: a key added
     to the report without a selector name, or the reverse, fails here."""
     assert set(typing.get_args(insp.CapabilityField)) == set(
-        insp._do_capabilities(cap_state, raster.raster_support())
+        insp._do_capabilities(cap_state, raster.raster_support(), _executables(cap_state))
     )
 
 
