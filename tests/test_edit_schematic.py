@@ -883,6 +883,38 @@ async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
     assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
 
 
+async def test_a_finding_at_a_routes_coordinate_endpoint_is_reported(asc_state, work_dir):
+    """The duplicated stub predates the edit; the route ends on its free end,
+    naming that point as surely as a waypoint or a label's x, y would."""
+    await _build_blank(
+        asc_state,
+        "dup-stub",
+        [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 300},
+            {"op": "add_component", "reference": "R2", "symbol": "res", "x": 300, "y": 300},
+        ],
+    )
+    sheet = work_dir / "dup-stub.asc"
+    # edit_schematic never draws a segment twice, so the duplicate is written raw.
+    sheet.write_bytes(sheet.read_bytes() + b"WIRE 100 252 100 200\n" * 2)
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [
+            {
+                "op": "wire_pins",
+                "from_pin": "R2.1",
+                "to_pin": {"x": 100, "y": 200},
+                "waypoints": [{"x": 300, "y": 200}],
+            }
+        ],
+    )
+
+    assert data["commit_state"] == "committed"
+    assert any(w.startswith("Duplicate wire (2×)") for w in _sheet_findings(data))
+
+
 async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-labels")
 

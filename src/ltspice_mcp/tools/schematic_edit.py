@@ -53,6 +53,7 @@ from ltspice_mcp.lib.pin_legend import (
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
     OP_RESULT_FACTS,
+    GridPoint,
     OpAddComponent,
     OpAddDirective,
     OpAddNetLabel,
@@ -706,8 +707,8 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
 
     An op's own ``x``/``y`` (a label, a directive anchor, a component origin,
     a wire's incident point), both ends of an exact wire segment, and every
-    routing waypoint. A pin endpoint names a component, not a coordinate; see
-    ``touched_refs``.
+    routing waypoint and ``{x, y}`` endpoint. A pin endpoint names a component,
+    not a coordinate; see ``touched_refs``.
     """
     coords: set[tuple[int, int]] = set()
     for op in ops:
@@ -715,8 +716,9 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
             x, y = getattr(op, xname, None), getattr(op, yname, None)
             if isinstance(x, int) and isinstance(y, int):
                 coords.add((x, y))
-        for point in getattr(op, "waypoints", None) or ():
-            coords.add((point.x, point.y))
+        points = [*(getattr(op, "waypoints", None) or ())]
+        points += [getattr(op, "from_pin", None), getattr(op, "to_pin", None)]
+        coords.update((point.x, point.y) for point in points if isinstance(point, GridPoint))
     return coords
 
 
