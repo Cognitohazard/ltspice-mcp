@@ -10,6 +10,11 @@ tool-surface changes.
 
 ### Fixed
 
+- `wire_pins` refused a route that crosses an existing wire where neither
+  ends, although LTspice leaves such a crossing unjoined (the LTspice 26.1.1
+  export in `tests/fixtures/t_junctions/crossing_wires`), so the route joins
+  nothing there. The route is now drawn and the op reports a warning naming the
+  wire and the crossing point.
 - `edit_schematic` refused a dry run, or an op-less read such as paging the
   `preexisting` view, on an existing sheet unless it carried
   `expected_sha256`. The token guards against a lost update, which only a

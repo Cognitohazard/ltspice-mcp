@@ -875,10 +875,12 @@ the op's `results` entry whose `via` says what it touched (`waypoint`,
 `wire_end`, `label` or `pin`) and whose `wire`, `label` or `pin` names it. Onto
 any other net it is refused, naming the wire and the `{x, y}` endpoint that
 makes the same T on purpose: a join no argument asked for must not pass
-silently. A route crossing a wire where neither ends is still refused, though
-LTspice would not join it, because the sheet reads ambiguously there. The
-planner's own advisories (long run, bounding-box crossing) now reach the
-response's `warnings` too; they used to stop at the op.
+silently. A route crossing a wire where neither ends is drawn with a warning
+naming the wire: LTspice leaves the crossing unjoined, so the nets stay apart,
+and the only cost is a reader taking it for a junction. It was refused until
+the LTspice export showed it joined nothing. The planner's own advisories
+(long run, bounding-box crossing) now reach the response's `warnings` too;
+they used to stop at the op.
 
 `add_net_label` calls a label floating only when it touches no wire and no pin.
 `inspect(kind: "net")` at a point on a wire's interior traces that wire's net
@@ -1400,8 +1402,8 @@ Recorded so they are not mistaken for oversights:
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
 - Two wires that cross can be joined only by ending one on the other. There
-  is no op for a junction at a crossing, and `wire_pins` refuses a route that
-  crosses a wire where neither ends, even though LTspice leaves it unjoined.
+  is no op for a junction at a crossing; `wire_pins` draws a route across a
+  wire where neither ends, unjoined as LTspice leaves it, and warns.
 - `remove_wire`'s point form removes the segments that end at the point; a
   wire whose interior passes through it stays. At a T that removes the stem
   and keeps the wire it joined, but at a pin sitting on a wire's interior it

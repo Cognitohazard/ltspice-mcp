@@ -2482,19 +2482,23 @@ class TestWirePinsTJunction:
         assert '{"x": 240, "y": 196}' in message
         assert _wire_segments(asc) == before
 
-    async def test_a_plain_crossing_is_still_refused_without_claiming_a_join(
+    async def test_a_plain_crossing_is_drawn_with_a_warning_and_joins_nothing(
         self, asc_state: SessionState, work_dir: Path
     ):
         # The same route without the waypoint crosses the rail with neither wire
         # ending there. The export leaves such a crossing unjoined
-        # (crossing_wires), so the refusal must not say the nets would merge.
+        # (crossing_wires), so the route is drawn, the nets stay apart, and the
+        # warning names the wire without saying the nets would merge.
         asc = _write_sheet(
             work_dir / "plain_cross.asc", *_RAIL, _res("R3", 240, 100), _res("R6", 240, 388)
         )
-        with pytest.raises(NetlistError, match="crosses existing wire at \\(240,196\\)") as exc:
-            wire_pins(asc_state, asc, "R3.2", "R6.1")
-        assert "unjoined" in str(exc.value)
-        assert "unintended junction" not in str(exc.value)
+        result = wire_pins(asc_state, asc, "R3.2", "R6.1")
+        (warning,) = [w for w in result["warnings"] if "crosses" in w]
+        assert "(96,196)->(288,196) at (240,196)" in warning
+        assert "unjoined" in warning
+        assert "junctions" not in result
+        assert await _net_pins(asc_state, asc, "R3.2") == {"R3.2", "R6.1"}
+        assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
 
     async def test_a_route_through_another_nets_wire_end_is_refused(
         self, asc_state: SessionState, work_dir: Path
