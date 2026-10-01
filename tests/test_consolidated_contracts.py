@@ -20,7 +20,9 @@ succeeds and ``partial`` when any isolates a failure.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Iterator
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -42,12 +44,11 @@ from ltspice_mcp.tools.jobs import _decode_jobs_cursor
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
-# CONSOLIDATED_TOOLS = the six envelope ops; REGISTERED_TOOLS adds the plot
-# widget, which is registered by ruling but predates the shared response
-# envelope — it joins the surface completeness and size pins (every client
-# pays its schema), not the envelope contract matrix. Shared in conftest so
-# every file naming the surface reads one constant.
-from tests.conftest import CONSOLIDATED_TOOLS, REGISTERED_TOOLS, schema_descriptions
+# ENVELOPE_TOOLS = the six envelope ops; REGISTERED_TOOLS adds the plot widget
+# and run_code, which join the surface completeness and size pins (every client
+# pays their schema) but not the envelope contract matrix. Shared in conftest
+# so every file naming the surface reads one constant.
+from tests.conftest import ENVELOPE_TOOLS, REGISTERED_TOOLS, schema_descriptions
 
 # The single ratified outcome vocabulary (design section 2). No per-tool dialect
 # is allowed: every outcome enum any of the six declares must be a subset.
@@ -81,6 +82,28 @@ def _output_schemas() -> dict[str, dict[str, Any]]:
 
 def _input_schemas() -> dict[str, dict[str, Any]]:
     return {name: tool_def.input_schema for name, tool_def in _registered().items()}
+
+
+# The routes a description points a caller at, matched without depending on
+# quote style or spacing.
+def _api_reference_call(tool: str) -> re.Pattern[str]:
+    return re.compile(rf"api\.reference\(\s*['\"]{re.escape(tool)}['\"]\s*\)")
+
+
+def _reference_lookup(query: str | None = None) -> re.Pattern[str]:
+    pattern = r"inspect\(\s*kind\s*=\s*['\"]reference['\"]"
+    if query is not None:
+        pattern += rf"\s*,\s*query\s*=\s*['\"]{re.escape(query)}['\"]"
+    return re.compile(pattern)
+
+
+def _names_the_guide(text: str) -> bool:
+    """The text points at the guide resource, and that resource is served."""
+    from ltspice_mcp.resources import get_static_resources
+
+    guide = "spice://guide"
+    assert guide in {str(resource.uri) for resource in get_static_resources()}
+    return guide in text
 
 
 class TestAttachedRecipeGrammar:
@@ -127,9 +150,10 @@ class TestAttachedRecipeGrammar:
     def test_the_stub_points_at_the_channels_that_carry_the_fields(self):
         items = self._attached_recipe_items(_registered()["run_experiments"].input_schema)
         description = items.get("description") or ""
+        assert "recipes" in _registered()["analyze_results"].input_schema["properties"]
         assert "analyze_results.recipes" in description
-        assert "api.reference('analyze_results')" in description
-        assert "spice://guide" in description
+        assert _api_reference_call("analyze_results").search(description)
+        assert _names_the_guide(description)
         # Permissive on purpose, like the dormant recipe stubs: a client
         # pre-validating a full recipe against this shape must still send it.
         assert "additionalProperties" not in items
@@ -230,7 +254,7 @@ def test_budget_owner_matrix_pins_the_complete_consolidated_surface():
 class TestPageObjectShape:
     """Every page declares {items, total, returned, truncated} (design section 2)."""
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_pages_declare_the_full_page_shape(self, name: str):
         schema = _output_schemas()[name]
         assert schema is not None
@@ -255,7 +279,7 @@ class TestPageObjectShape:
 class TestFindingsShape:
     """Every finding carries at + subject so an agent can locate what to fix."""
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_findings_require_at_and_subject(self, name: str):
         schema = _output_schemas()[name]
         for obj in _property_objects(schema):
@@ -275,7 +299,7 @@ class TestChannelSeparation:
     restated here, so the type that declares the envelope is what this checks.
     """
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_each_channel_is_a_separate_array(self, name: str):
         schema = _output_schemas()[name]
         for obj in _property_objects(schema):
@@ -335,7 +359,7 @@ def _tools_module_closure(seeds: Iterator[str] | list[str]) -> tuple[str, ...]:
 def _handler_modules() -> list[str]:
     """The module each registered consolidated tool's handler lives in."""
     _, dispatch = get_tools()
-    return [dispatch[name].handler.__module__.split(".")[-1] for name in CONSOLIDATED_TOOLS]
+    return [dispatch[name].handler.__module__.split(".")[-1] for name in ENVELOPE_TOOLS]
 
 
 _OUTCOME_MODULES = _tools_module_closure(_handler_modules())
@@ -463,20 +487,23 @@ class TestSharedOutcomeRule:
             "_base.outcome_of is what decides it"
         )
 
-    @pytest.mark.parametrize("module", _OUTCOME_MODULES)
-    def test_every_module_that_names_an_outcome_calls_the_shared_rule(self, module: str):
-        _, source = _module_source(module)
-        tree = ast.parse(source)
-        if not _binds_an_outcome(tree):
-            pytest.skip(f"{module} does not build an outcome")
-        called = {_call_name(node) for node in ast.walk(tree) if isinstance(node, ast.Call)}
-        assert "outcome_of" in called, f"{module} builds an outcome without calling outcome_of"
+    def test_every_module_that_names_an_outcome_calls_the_shared_rule(self):
+        trees = {module: ast.parse(_module_source(module)[1]) for module in _OUTCOME_MODULES}
+        builders = {module: tree for module, tree in trees.items() if _binds_an_outcome(tree)}
+        assert builders, "no handler module builds an outcome — the scan has rotted"
+        bypassing = sorted(
+            module
+            for module, tree in builders.items()
+            if "outcome_of"
+            not in {_call_name(node) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+        )
+        assert not bypassing, f"{bypassing} build an outcome without calling outcome_of"
 
 
 class TestOutcomeEnvelope:
     """All six tools carry a call-level outcome from the one ratified vocabulary."""
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_declares_a_non_empty_outcome_enum(self, name: str):
         schema = _output_schemas()[name]
         enums = [
@@ -487,7 +514,7 @@ class TestOutcomeEnvelope:
         assert enums, f"{name}: no outcome property declared"
         assert all(e for e in enums), f"{name}: an outcome property has an empty enum"
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_outcome_enum_is_a_subset_of_the_ratified_vocabulary(self, name: str):
         schema = _output_schemas()[name]
         declared_something = False
@@ -518,7 +545,7 @@ class TestErrorEnvelope:
 
     _FULL_ENVELOPE = frozenset({"code", "message", "stage", "retryable", "commit_state"})
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_every_top_level_error_object_is_the_full_envelope(self, name: str):
         # Uniform failure-shape contract: wherever a tool declares a top-level
         # error object it carries the full {code, message, stage, retryable,
@@ -562,13 +589,17 @@ class TestCallablePagination:
 
 
 class TestOutputSchemaCoverage:
-    """Every consolidated tool declares an outputSchema, so the session-wide
-    conformance hook (conftest, now iterating the profile union) validates every
-    structuredContent the six emit."""
+    """Every registered tool declares an outputSchema, so the session-wide
+    conformance hook (conftest) validates every structuredContent it emits."""
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
-    def test_declares_an_output_schema(self, name: str):
-        assert _output_schemas()[name] is not None
+    def test_every_registered_tool_declares_an_output_schema(self):
+        _, dispatch = get_tools()
+        missing = sorted(
+            name
+            for name, registered in dispatch.items()
+            if not registered.definition.output_schema
+        )
+        assert not missing, f"tools with no declared outputSchema: {missing}"
 
 
 # Serialized size, in characters, of each tool's advertised definition — the
@@ -719,9 +750,9 @@ class TestDormantRecipeWireStubs:
         # it is the one every client on this surface can call; and the stub
         # must stay permissive so a client pre-validating a full call against
         # the wire still sends it.
-        assert f"inspect(kind='reference', query='{metric}')" in body["description"]
-        assert "api.reference('analyze_results')" in body["description"]
-        assert "spice://guide" in body["description"]
+        assert _reference_lookup(metric).search(body["description"])
+        assert _api_reference_call("analyze_results").search(body["description"])
+        assert _names_the_guide(body["description"])
         assert "additionalProperties" not in body
 
     def test_no_branch_the_census_showed_used_is_stubbed(self):
@@ -1035,7 +1066,9 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
 
     def test_every_discriminant_appears_in_the_description(self):
         description = _registered()["analyze_results"].description or ""
-        missing = [metric for metric in DISCRIMINANTS if metric not in description]
+        missing = [
+            metric for metric in DISCRIMINANTS if not re.search(rf"\b{metric}\b", description)
+        ]
         assert not missing, (
             f"analyze_results' description does not name {', '.join(missing)}; add "
             "each with the plain words a caller would search for"
@@ -1044,7 +1077,9 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     def test_the_plain_synonyms_that_route_to_this_tool_are_present(self):
         """A sample of the words a caller types instead of a discriminant. They
         are what makes description-matching reach the right tool at all."""
-        description = (_registered()["analyze_results"].description or "").lower()
+        description = " ".join(
+            (_registered()["analyze_results"].description or "").lower().split()
+        )
         for phrase in (
             "phase margin",
             "gain margin",
@@ -1061,11 +1096,16 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
 
     def test_it_points_at_the_reference_lookup(self):
         description = _registered()["analyze_results"].description or ""
-        assert "inspect(kind='reference'" in description
+        assert _reference_lookup().search(description)
 
     def test_it_says_a_signal_is_not_an_expression(self):
-        """Names V(a,b) and where trace math goes, never the gated run_code."""
+        """Names the V(a,b) form and points at the guide's trace-math section,
+        never at the gated run_code."""
         description = _registered()["analyze_results"].description or ""
-        assert "V(a,b)" in description
-        assert "trace math" in description
-        assert "run_code" not in description
+        assert re.search(r"V\(\s*a\s*,\s*b\s*\)", description)
+        assert _names_the_guide(description)
+        guide = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
+        assert re.search(r"^#+ .*trace math", guide, re.IGNORECASE | re.MULTILINE), (
+            "the description sends trace math to a guide section that no longer exists"
+        )
+        assert not re.search(r"\brun_code\b", description)

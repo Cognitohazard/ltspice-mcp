@@ -15,13 +15,13 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import pytest
 
 import ltspice_mcp.tools  # noqa: F401  (imports trigger every registration)
 from ltspice_mcp.tools._base import registry
-from tests.conftest import TOOLS_REMOVED_IN_0_6
+from tests.conftest import DEAD_TOOL_NAMES, removed_tool_names
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,24 +30,32 @@ def _registered_names() -> set[str]:
     return {t.definition.name for t in registry._registered}
 
 
-# (doc path, count-pattern template). ``{n}`` is replaced with the registry's
-# consolidated tool count; each pattern is the exact regex the doc must match.
-_DOC_COUNT_CHECKS = (
-    ("README.md", r"{n} tools"),
-    ("CLAUDE.md", r"{n} (?:registered )?tools"),
-    ("docs/DESIGN.md", r"{n} (?:registered )?tools"),
-)
+# The docs that state this server's tool count, and the counts each may state
+# that are NOT about this server, with the reason. Any other "N tools" in these
+# files is a stale count.
+_DOC_COUNT_FILES: dict[str, dict[int, str]] = {
+    "README.md": {},
+    "CLAUDE.md": {},
+    "docs/DESIGN.md": {
+        9: "the tool count of another project in the comparison table",
+        15: "the tool-selection threshold quoted from MCP guidance",
+    },
+}
+
+_TOOL_COUNT = re.compile(r"\b(\d+)\s+(?:registered\s+)?tools\b")
 
 
 class TestToolCountInDocs:
-    @pytest.mark.parametrize(("rel", "template"), _DOC_COUNT_CHECKS)
-    def test_doc_count_matches_registry(self, rel: str, template: str) -> None:
+    @pytest.mark.parametrize("rel", sorted(_DOC_COUNT_FILES))
+    def test_doc_count_matches_registry(self, rel: str) -> None:
         n = len(registry.get_tools()[0])
         text = (ROOT / rel).read_text(encoding="utf-8")
-        assert re.search(template.format(n=n), text), (
-            f"{rel} must state the registered tool count {n} "
-            f"(expected pattern {template.format(n=n)!r}) — update every place "
-            "the count appears."
+        counts = [int(match.group(1)) for match in _TOOL_COUNT.finditer(text)]
+        assert n in counts, f"{rel} never states the registered tool count ({n} tools)"
+        stale = sorted({count for count in counts if count != n} - set(_DOC_COUNT_FILES[rel]))
+        assert not stale, (
+            f"{rel} states a tool count of {stale}, but {n} tools are registered — "
+            "update every place the count appears"
         )
 
 
@@ -61,66 +69,9 @@ DOC_PATHS = (
     "skills/spice-bench-craft/SKILL.md",
 )
 
-# Every tool name that has ever been removed from the registry: the
-# pre-consolidation removals plus the 42 v0.5 tools de-registered when the
-# consolidated profile became the product. Frozen history — grown, never
-# shrunk by hand.
-_DEAD_TOOL_NAMES: tuple[str, ...] = (
-    # Pre-0.6 consolidations (bode_metrics modes, query_value step addressing,
-    # simulation_summary, find_model, edit_directive absorbed them).
-    "measurements",
-    "model_info",
-    "add_text",
-    "step_get",
-    "filter_metrics",
-    "roll_off",
-    "gain_at",
-    "find_crossing",
-    "get_measurements",
-    "get_simulation_summary",
-    "schematic_from_netlist",
-    "pulse_response",
-    "disturbance_response",
-    # v0.5 tools removed in 0.6.0: single-homed in conftest.
-    *TOOLS_REMOVED_IN_0_6,
-)
-
-
-def _live_surface_vocabulary() -> set[str]:
-    """Every enum/const value in the registered tools' input schemas.
-
-    This is the live capability vocabulary — edit_schematic op kinds, recipe
-    metrics, inspect kinds, jobs actions. A dead TOOL name that is also one of
-    these (``wire_pins`` the op, ``signal_stats`` the metric,
-    ``operating_point`` the keyed metric) names a live capability, so docs may
-    reference it in backticks; forbidding it would forbid documenting the
-    product. Derived from the schemas rather than hand-listed so a name that
-    later stops being a live op automatically re-enters the removed-name gate.
-    """
-    vocab: set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            enum = node.get("enum")
-            if isinstance(enum, list):
-                vocab.update(v for v in enum if isinstance(v, str))
-            const = node.get("const")
-            if isinstance(const, str):
-                vocab.add(const)
-            for child in node.values():
-                walk(child)
-        elif isinstance(node, list):
-            for child in node:
-                walk(child)
-
-    for reg in registry._registered:
-        walk(reg.definition.input_schema)
-    return vocab
-
-
-# The gate's operative list: dead tool names that are NOT also live-surface
-# vocabulary. Docs may not reference these in backticked tool position.
-REMOVED_TOOL_NAMES = tuple(sorted(set(_DEAD_TOOL_NAMES) - _live_surface_vocabulary()))
+# The removed tool names with no live meaning (see conftest.removed_tool_names):
+# docs may not reference these in backticked tool position.
+REMOVED_TOOL_NAMES = tuple(sorted(removed_tool_names()))
 
 
 class TestStaleToolNamesInDocs:
@@ -149,7 +100,7 @@ class TestStaleToolNamesInDocs:
         above only covers currently-registered names, so a removed tool's
         prefixed form would otherwise slip through both guards. Dead names
         that survive as live-surface vocabulary (edit_schematic ops,
-        analyze_results metrics — see _live_surface_vocabulary) are exempt
+        analyze_results metrics — see conftest.removed_tool_names) are exempt
         by derivation, never by hand.
         """
         failures: list[str] = []
@@ -174,7 +125,7 @@ class TestStaleToolNamesInDocs:
         """A registered tool name in the dead list means the list rotted (or a
         tool was resurrected without pruning it) — either way the gate would
         forbid documenting a live tool."""
-        overlap = sorted(set(_DEAD_TOOL_NAMES) & _registered_names())
+        overlap = sorted(set(DEAD_TOOL_NAMES) & _registered_names())
         assert not overlap, f"dead-name list contains registered tools: {overlap}"
 
 
@@ -327,7 +278,16 @@ class TestRemovedToolNamesInClientReachingStrings:
         )
 
 
-class TestToolNamesInErrorStrings:
+class TestRetiredToolPrefixInSourceStrings:
+    """Tools were once registered as ``ltspice_<name>``; none is now.
+
+    So an ``ltspice_<word>`` token inside a string literal anywhere in the
+    package names a tool that no longer exists (in an error message, a
+    description, or guidance), unless it is one of the non-tool tokens below.
+    Only string literals are read, through the AST: identifiers such as
+    ``ltspice_cls`` are not tool references.
+    """
+
     # Tokens that look like ltspice_* but aren't tools:
     #   ltspice_mcp   — package name, appears in module paths and log
     #                   prefixes
@@ -337,27 +297,20 @@ class TestToolNamesInErrorStrings:
         "ltspice_event",
     }
 
-    def test_every_ltspice_name_in_strings_is_registered(self) -> None:
-        """Any `ltspice_*` token embedded in a string literal must resolve
-        to a real registered tool.
+    def test_no_tool_is_registered_under_the_prefix(self) -> None:
+        """The premise of the ban below: a tool registered as
+        ``ltspice_<name>`` again would make the ban forbid naming it."""
+        prefixed = sorted(name for name in _registered_names() if name.startswith("ltspice_"))
+        assert not prefixed, f"tools registered under the retired prefix: {prefixed}"
 
-        Catches stale tool-name references in error messages, tool
-        descriptions, and cross-reference docstrings. Aggregates failures
-        across all source files into a single report so a rename that
-        breaks many files surfaces as one readable failure instead of
-        N near-identical ones.
-        """
-        registered = _registered_names()
+    def test_no_string_literal_uses_the_retired_prefix(self) -> None:
         failures: list[str] = []
         for py_file in sorted((ROOT / "src" / "ltspice_mcp").rglob("*.py")):
             refs = _ltspice_refs_in_strings(py_file) - self._NON_TOOL_TOKENS
-            unknown = refs - registered
-            if unknown:
-                rel = py_file.relative_to(ROOT)
-                failures.append(f"  {rel}: {sorted(unknown)}")
+            if refs:
+                failures.append(f"  {py_file.relative_to(ROOT)}: {sorted(refs)}")
         assert not failures, (
-            f"{len(failures)} file(s) reference unknown tool(s) in string "
-            f"literals:\n" + "\n".join(failures) + "\n"
-            f"Either these tools were renamed, or the references are typos.\n"
-            f"Registered tools: {sorted(registered)}"
+            f"{len(failures)} file(s) name a tool with the retired ltspice_ prefix "
+            "in a string literal:\n" + "\n".join(failures) + "\nName the registered "
+            f"tool instead: {sorted(_registered_names())}"
         )
