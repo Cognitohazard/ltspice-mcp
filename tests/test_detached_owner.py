@@ -27,6 +27,7 @@ import pytest
 from ltspice_mcp.api import Api, ApiCallError, ApiValidationError, _detach
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import SyncApi, wait_until
@@ -548,9 +549,14 @@ def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
         assert cancelled["outcome"] != "failed", cancelled
 
         final = wait_until(
-            lambda: fresh.jobs(action="status", job_id=job_id),
+            lambda: (
+                status
+                if (status := fresh.jobs(action="status", job_id=job_id))["status"]
+                in TERMINAL_STATUSES
+                else None
+            ),
             timeout_s=HANDOFF_TIMEOUT_S,
-            what="the cancelled job to report",
+            what="the cancelled job to reach a terminal status",
         )
         assert final["status"] == "cancelled", final
 

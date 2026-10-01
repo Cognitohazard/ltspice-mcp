@@ -1893,28 +1893,64 @@ class TestPerCircuitFailuresAndAccounting:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        submissions: list[str] = []
-        fake_simulator(monkeypatch, submissions)
+        """Every requested run lands in exactly one counter, failures included.
+
+        Four values over two circuits: the simulator aborts two of the first
+        circuit's runs, and none of the second's reach it because its file is
+        missing. The counters account for all eight, and the outcome reports
+        the shortfall.
+        """
+        values = ["1k", "2k", "3k", "4k"]
+        aborted = {1, 3}
+        submitted: list[int] = []
+
+        def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
+            match = re.search(r"_case_(\d+)", Path(run_filename).stem)
+            assert match is not None, run_filename
+            index = int(match.group(1))
+            submitted.append(index)
+            raw, log = fake_artifact_paths(self.output_folder, run_filename)
+            if index in aborted:
+                fail = log.with_suffix(".fail")
+                fail.write_text("Fatal Error: the run aborted\n")
+                outcome = collect_run_outcome(".", str(fail))
+            else:
+                raw.write_bytes(b"Title: mock")
+                log.write_text("ok")
+                outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+            self.loop.call_soon_threadsafe(callback, outcome)
+            return object()
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
         deck = _deck(work_dir / "grid.cir")
-        args = _args(
-            deck,
-            "counter-grid",
-            variations=[
-                {
-                    "kind": "assign",
-                    "assign": {"R1": ["1k", "2k", "3k"]},
-                }
-            ],
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "counter-grid",
+                "circuits": [
+                    {"path": str(deck), "id": "grid"},
+                    {"path": str(work_dir / "missing.cir"), "id": "missing"},
+                ],
+                "variations": [{"kind": "assign", "assign": {"R1": values}}],
+                "execution": {"wait_s": 1},
+            }
         )
 
         data = _assert_schema(await handle_run_experiments(args, state_with_sim))
         counts = data["completeness"]
 
-        assert counts["expanded"] == 3
+        assert sorted(submitted) == list(range(len(values)))
+        assert counts["expanded"] == 2 * len(values)
+        assert counts["produced"] == len(values) - len(aborted)
+        assert counts["failed"] == len(aborted) + len(values)
+        assert (counts["cancelled"], counts["skipped"]) == (0, 0)
         assert (
             counts["produced"] + counts["failed"] + counts["cancelled"] + counts["skipped"]
             == counts["expanded"]
         )
+        assert data["outcome"] == "partial"
+        statuses = [item["status"] for item in data["runs"]["items"]]
+        assert statuses.count("produced") == counts["produced"]
+        assert statuses.count("failed") == counts["failed"]
 
     async def test_recent_circuit_is_noted_explicitly(
         self,
