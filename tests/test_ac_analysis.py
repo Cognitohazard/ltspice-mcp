@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.lib.ac_analysis import (
+    _find_passband_range,
     classify_filter,
     compute_filter_metrics,
     compute_resonances,
@@ -260,6 +261,16 @@ class TestDetectCrossings:
         assert len(c) == 1
         assert c[0]["direction"] == "falling"
 
+    def test_sample_exactly_on_level_counts_once(self):
+        # The middle sample sits exactly on the level and the next one leaves
+        # it: neither segment changes sign strictly, but the signal does cross,
+        # at the frequency of the on-level sample.
+        f = np.array([1.0, 10.0, 100.0])
+        c = detect_crossings(f, np.array([1.0, 0.0, -1.0]), 0.0)
+        assert len(c) == 1
+        assert c[0]["frequency_hz"] == pytest.approx(10.0)
+        assert c[0]["direction"] == "falling"
+
 
 class TestFindCrossingsAnyQuantity:
     def test_magnitude_db(self):
@@ -323,6 +334,14 @@ class TestGainAt:
         assert points[0].get("phase_deg_unwrapped") == pytest.approx(-188.97, abs=0.3)
         # Reported wrapped phase: -188.97 + 360 = +171.03, NOT ≈ -9.
         assert points[0]["phase_deg"] == pytest.approx(171.03, abs=0.3)
+
+    def test_magnitude_linear_is_the_linear_gain(self):
+        # 1-pole LPF queried on sweep samples: |H| = 1/sqrt(1 + (f/fc)^2).
+        f = _log_freqs(0, 6, 601)  # 100 points/decade, so 1k and 10k are samples
+        H = _lpf_1pole(f, 1000.0)
+        points, _ = gain_at_frequencies(f, H, [1000.0, 10000.0])
+        assert points[0]["magnitude_linear"] == pytest.approx(1 / math.sqrt(2), rel=1e-9)
+        assert points[1]["magnitude_linear"] == pytest.approx(1 / math.sqrt(101), rel=1e-9)
 
     def test_unwrapped_phase_included_on_request(self):
         f = _log_freqs(0, 6, 300)
@@ -410,10 +429,16 @@ class TestComputeFilterMetrics:
         H = _bpf(f, 100.0, 10000.0)
         m = compute_filter_metrics(f, H)
         assert m["filter_type"] == "bandpass"
-        assert m["cutoff_low_hz"] is not None
-        assert m["cutoff_high_hz"] is not None
-        # Geometric center ≈ sqrt(100*10k) = 1 kHz.
-        assert m["cutoff_low_hz"] < 1000 < m["cutoff_high_hz"]
+        # |H|^-2 = (1 + u*r)(1 + r/u) with r = 100/10k and u = (f/1 kHz)^2,
+        # peaking at u = 1. Half power below that peak solves
+        # u + 1/u = (1 + 4r + r^2)/r, so the cutoffs straddle 1 kHz
+        # geometrically, just outside 100 Hz and 10 kHz.
+        r = 100.0 / 10000.0
+        c = (1 + 4 * r + r * r) / r
+        u_hi = (c + math.sqrt(c * c - 4)) / 2
+        # 133 points/decade: log-linear interpolation is good to ~1e-4.
+        assert m["cutoff_high_hz"] == pytest.approx(1000.0 * math.sqrt(u_hi), rel=1e-3)
+        assert m["cutoff_low_hz"] == pytest.approx(1000.0 / math.sqrt(u_hi), rel=1e-3)
 
     def test_notch_with_dense_sampling(self):
         # Q=10 gives a wider notch than Q=100, so the nearest sample lands
@@ -426,6 +451,49 @@ class TestComputeFilterMetrics:
         assert m["filter_type"] == "bandstop"
         assert m["stopband_rejection_db"] is not None
         assert m["stopband_rejection_db"] > 15
+
+    def test_notch_passband_spans_both_flat_lobes(self):
+        # A notch is flat on both sides, so the passband runs from the first
+        # sweep sample to the last.
+        f = _log_freqs(0, 6, 600)
+        m = compute_filter_metrics(f, _notch(f, 1000.0, 1.0))
+        assert m["filter_type"] == "bandstop"
+        assert m["passband_low_hz"] == f[0]
+        assert m["passband_high_hz"] == f[-1]
+
+    def test_isolated_sampled_null_is_flagged_beside_a_second_dip(self):
+        # The minimum sample (-21 dB) has both direct neighbours 11 dB above it,
+        # so the true null likely falls between samples; a second dip two
+        # samples away (-20 dB) does not change that.
+        f = _log_freqs(0, 6, 61)
+        mag_db = np.zeros_like(f)
+        mag_db[28:32] = [-20.0, -10.0, -21.0, -10.0]
+        m = compute_filter_metrics(f, (10 ** (mag_db / 20)).astype(complex))
+        assert m["filter_type"] == "bandstop"
+        assert any("samples ≥11.0 dB higher" in w for w in m["warnings"])
+
+    def test_default_flatness_is_one_db(self):
+        # The auto passband runs from DC up to the last sample within the
+        # datasheet 1 dB of the plateau: for a 1-pole LPF that is
+        # fc * sqrt(10^0.1 - 1) ≈ 0.509 fc.
+        f = _log_freqs(0, 6, 601)
+        m = compute_filter_metrics(f, _lpf_1pole(f, 1000.0))
+        f_1db = 1000.0 * math.sqrt(10**0.1 - 1)
+        assert m["passband_low_hz"] == f[0]
+        assert m["passband_high_hz"] == f[f <= f_1db][-1]
+
+    @pytest.mark.parametrize("filter_type", ["bandstop", "lowpass"])
+    def test_passband_with_no_sample_in_band_is_the_whole_sweep(self, filter_type):
+        # A negative flatness admits no sample, not even the peak: rather than
+        # an empty range the passband falls back to the whole sweep at the
+        # peak gain.
+        f = _log_freqs(0, 6, 600)
+        mag_db = magnitude_db(_notch(f, 1000.0, 1.0))
+        assert _find_passband_range(f, mag_db, filter_type, flatness_db=-1.0) == (
+            f[0],
+            f[-1],
+            float(np.max(mag_db)),
+        )
 
     def test_rejects_positive_ref_db(self):
         f = _log_freqs(0, 6, 100)
@@ -561,27 +629,26 @@ class TestStabilityMetrics:
         assert r["phase_margin_worst_deg"] is not None
 
     def test_worst_phase_margin_is_most_negative_not_smallest_magnitude(self):
-        # A conditionally-stable loop crosses unity twice: once at a healthy
-        # positive phase margin and once at a deeply negative one. The "worst"
-        # scalar must be the most-negative margin (the unstable crossing), not
-        # the smallest-magnitude one — a small positive margin must never mask a
-        # large negative one.
-        margins = [
-            {"frequency_hz": 100.0, "margin_deg": 5.0, "direction": "falling"},
-            {"frequency_hz": 1000.0, "margin_deg": -170.0, "direction": "rising"},
-        ]
-        # Drive the same selection the compute function uses on its margin list.
-        worst = min(m["margin_deg"] for m in margins)
-        assert worst == -170.0
-
-        # End-to-end: build a loop whose two unity crossings straddle -180° so
-        # the per-crossover margins are sign-mixed, and confirm the reported
-        # worst margin is negative (the least-stable crossing wins).
-        f = _log_freqs(0, 8, 6000)
-        H = _three_pole_loop(f, 10000.0, 100.0, 10000.0, 1000000.0)
+        # A conditionally stable loop crossing unity at 10 Hz, 1 kHz and
+        # 100 kHz, with the phase held flat around each crossing at -120°,
+        # -200° and -175°: margins of +60°, -20° and +5°. The worst margin is
+        # the most negative one, not the one smallest in magnitude.
+        f = _log_freqs(0, 6, 600)
+        x = np.log10(f)
+        mag_db = -5.0 * (x - 1.0) * (x - 3.0) * (x - 5.0)
+        phase_deg = np.interp(
+            x, [0.0, 1.5, 2.5, 3.5, 4.5, 6.0], [-120.0, -120.0, -200.0, -200.0, -175.0, -175.0]
+        )
+        H = 10 ** (mag_db / 20) * np.exp(1j * np.deg2rad(phase_deg))
         r = compute_stability_metrics(f, H)
-        pms = [m["margin_deg"] for m in r["phase_margins"]]
-        assert r["phase_margin_worst_deg"] == pytest.approx(min(pms))
+        assert [m["frequency_hz"] for m in r["phase_margins"]] == pytest.approx(
+            [10.0, 1e3, 1e5], rel=1e-3
+        )
+        assert [m["margin_deg"] for m in r["phase_margins"]] == pytest.approx(
+            [60.0, -20.0, 5.0], abs=1e-6
+        )
+        assert r["phase_margin_worst_deg"] == pytest.approx(-20.0, abs=1e-6)
+        assert r["stability"] == "conditional"
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +705,20 @@ class TestResonance:
         assert peak["frequency_hz"] == pytest.approx(1000.0, rel=0.05)
         assert peak["q_factor"] == pytest.approx(10.0, rel=0.05)
         assert peak["bandwidth_3db_hz"] == pytest.approx(100.0, rel=0.1)
+
+    def test_sub_hertz_bandwidth_still_has_q(self):
+        # Bandpass biquad at 10 Hz with Q = 50: |H|^2 = 1/(1 + Q^2 (x - 1/x)^2)
+        # with x = f/f0, so the flanks 3 dB below the unity peak are
+        # f0 * sqrt(10^0.3 - 1)/Q apart, 0.2 Hz here.
+        f0, q = 10.0, 50.0
+        f = np.linspace(9.0, 11.0, 20001)  # 1e-4 Hz steps, f0 on the grid
+        s = 1j * 2 * np.pi * f
+        w0 = 2 * np.pi * f0
+        peak = compute_resonances(f, (w0 / q) * s / (s * s + (w0 / q) * s + w0 * w0))["peaks"][0]
+        bw = f0 * math.sqrt(10**0.3 - 1) / q
+        assert peak["frequency_hz"] == pytest.approx(f0, rel=1e-9)
+        assert peak["bandwidth_3db_hz"] == pytest.approx(bw, rel=1e-4)
+        assert peak["q_factor"] == pytest.approx(f0 / bw, rel=1e-4)
 
     def test_no_peak_on_lpf(self):
         f = _log_freqs(1, 5, 1000)
