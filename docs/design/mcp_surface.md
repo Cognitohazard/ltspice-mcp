@@ -299,7 +299,21 @@ canonical bytes and never triggers a bump.
 
 `allow_live_includes` is *not* a presentation field: a job whose
 inputs cannot be proven cannot be replayed on the strength of a stored
-fingerprint, so reusing its `request_id` runs the experiment again.
+fingerprint, so reusing its `request_id` is an `idempotency_conflict`, and a
+new `request_id` runs the experiment again.
+
+**Replay is scoped to the simulator build.** Nothing in a request names the
+simulator executable. The job therefore records the program its cases launch
+(`simulator_executable`: path, size, modification time, SHA-256). A replay
+compares it with the program the request would launch now, resolved the way a
+fresh submission resolves it, so a changed default simulator counts too. A
+different build is an `idempotency_conflict` naming both programs, the same
+answer a changed deck gets. Builds are compared by digest, or by path, size and
+time when either side has no digest. A record that names no executable (store
+version 2) fails closed the same way. The check sits beside the fingerprint, not
+inside it: the executable is server state, and hashing it in would report a
+swapped build as a different request payload. `jobs(status)` still reads the
+recorded job, and a new `request_id` runs it on the current build.
 
 **Control token.** The receipt carries an unguessable `control_token`. Cancel
 authority is the owning process *or* a presented control token, so a
@@ -423,9 +437,10 @@ and an observation says the provenance is explicitly weaker. Live references
 are enumerated, never silently trusted. Reject the fail-by-default rule and the
 hashes can lie; reject staging altogether and vendor-library decks cannot run.
 
-Provenance is opt-in on the response. Digests, staged paths, the full manifest
-and the linter version are emitted only under `provenance: true` on
-`run_experiments`, or `include.provenance: true` on `analyze_results`. The
+Provenance is opt-in on the response. Digests, staged paths, the full manifest,
+the linter version and the job's `simulator_executable` are emitted only under
+`provenance: true` on `run_experiments`, or `include.provenance: true` on
+`analyze_results` (which carries no executable). The
 lean receipt keeps `{circuit, path, simulator, dialect, staged_files}` plus
 every manifest entry that *discloses* something — live, carrying a reason, or
 otherwise not an ordinary staged reference — so it fails closed. An analysis's
@@ -511,8 +526,15 @@ advancing; that judgment, and whether to cancel, is the caller's.
 
 **RunRecord** is a standalone schema fragment shared by `run_experiments` and
 `jobs`:
-`{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?}`. The keys
-are optional because a requested run-field projection may remove any of them.
+`{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
+simulator_version?}`. The keys are optional because a requested run-field
+projection may remove any of them. `simulator_version` is the build the run
+named in its own output: the LTspice log banner (`LTspice 26.0.2 for Windows`),
+the ngspice console banner (`ngspice-42, Creation Date: ...`), or the raw
+header's `Command:` when neither exists. It is null when the output named none.
+It is recorded per case, so an executable replaced mid-job shows up as two
+builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
+`jobs(runs)` and `run_fields` return it.
 Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
@@ -756,8 +778,9 @@ ops and after them, which it holds in memory anyway — and reports a row only
 when it is new (the sheet did not have it before; any change to a row makes it
 new, since its identity is every field) or when it names a reference or a
 coordinate the batch named. A reference is named by an op's `reference` or a
-`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, or a
-waypoint. Everything else goes in the `preexisting` block:
+`REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, a
+waypoint, or an `{x, y}` endpoint. Everything else goes in the `preexisting`
+block:
 
 ```
 preexisting {count, findings, label_only_pins, cursor}
@@ -786,7 +809,9 @@ kind alone.
 Unchanged fundamentals: the commit protocol (content-hashed support assets,
 with the `.asc` rename last, so a multi-asset transaction rides a single-file
 atomic primitive); the vocabulary (grid 16; rotations `R0..M270`;
-`REF.PINNAME` pins; the legal symbol set is what `inspect` reports); the
+`REF.PIN` pins, where `PIN` is the pin's name or, when no pin has that name
+and it is all digits, its 1-based SpiceOrder, so `X1.2` works on a block whose
+pins are lettered; the legal symbol set is what `inspect` reports); the
 validation errors (unresolvable endpoint, diagonal wire, wire over a symbol
 body, pin collision, junction overlap); the wiring metric with
 `label_only_pins`; findings carrying `at` and `subject`; and the retry story —
@@ -800,15 +825,62 @@ rebuild from its own ops. What is lost is a one-call "undo everything this
 session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
+**Per-op facts.** `results` carries what each op found on the sheet, one entry
+per op, keyed by `index` and `op` like a `failures` entry: for `wire_pins` the
+segments it found `already_present` and the `junctions` it made, for the
+removals how much they took. Which keys of an op's result are such facts is
+declared beside the op applier, in `OP_RESULT_FACTS`; the rest restates the
+op's arguments or rides on `warnings` and the views. An op that found nothing
+has no entry, so a whole-circuit build pays for what its ops ran into, not a
+line per op. That is why a route's `wire_count` is not relayed:
+`already_present` already names what it did not draw. `results` is not a page:
+like `failures`, its length is bounded by the batch the caller sent, and a
+cursor could not resume it, since the ops it reports on do not run again. The
+Python API returns the same list, from the same evaluator.
+
 **Wire ops.** A routed segment identical to one already on the sheet is not
-drawn a second time; the response reports it under `already_present` and
-`wire_count` counts only what was drawn. Removing an exact segment that exists
+drawn a second time; the op's `results` entry lists it under `already_present`,
+and only the rest of the route is drawn. Removing an exact segment that exists
 more than once removes every copy, but only when that leaves no pin newly
 floating — otherwise the op refuses, naming the pin, with nothing written. A
 segment that exists once is still removed unconditionally: that is an explicit
 disconnection, not a tidy-up. A duplicate connects nothing and is
 indistinguishable from a real second wire, so "delete the duplicate" and
 "delete the connection" were otherwise the same request.
+
+**T-junctions.** LTspice's netlister joins a wire end, a pin or a label placed
+anywhere along a wire, its interior included, and leaves two wires that only
+cross unjoined; a label at a crossing joins both wires. Each case was checked
+against an LTspice 26.1.1 `-netlist` export, and the sheets and exports are
+kept in `tests/fixtures/t_junctions/`, with a test that the net trace agrees
+with every one. That is the rule `net_partition` applies for every tool that
+reads connectivity, and it means a T needs no split. `wire_pins` takes `{x, y}`
+for either endpoint; the point must touch a wire or a pin, and on a wire's
+interior the new segment ends there and the wire is left whole, so a
+`remove_wire` of that segment restores the sheet. The op's `results` entry
+names the T under `junctions` as `{x, y, via: "endpoint", wire}`, `wire` being
+the segment it joined. The leg must leave the wire at a right angle, and a
+point where wires of two nets cross is refused, since a wire ending there would
+join both.
+
+Anywhere else the route touches existing wiring — a waypoint on a wire, a
+segment passing through another wire's end or a lone label, or over a pin
+already wired to an endpoint — it joins that wiring too, so the planner checks
+it against the nets the two endpoints already join. Onto one of those it is a
+redundant junction, drawn and reported: a warning, and a `junctions` entry on
+the op's `results` entry whose `via` says what it touched (`waypoint`,
+`wire_end`, `label` or `pin`) and whose `wire`, `label` or `pin` names it. Onto
+any other net it is refused, naming the wire and the `{x, y}` endpoint that
+makes the same T on purpose: a join no argument asked for must not pass
+silently. A route crossing a wire where neither ends is still refused, though
+LTspice would not join it, because the sheet reads ambiguously there. The
+planner's own advisories (long run, bounding-box crossing) now reach the
+response's `warnings` too; they used to stop at the op.
+
+`add_net_label` calls a label floating only when it touches no wire and no pin.
+`inspect(kind: "net")` at a point on a wire's interior traces that wire's net
+and names the wire under `snapped_to_wire`; a point where two nets' wires
+cross is refused as ambiguous rather than resolved to either.
 
 **Domain rule: the AUTHOR plane edits schematics and not netlists.** Both
 `.asc` and `.cir` are text files, so the split is not about file format. The
@@ -840,8 +912,8 @@ Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
-views {touched?: Page, pin_legend?: Page, preexisting?: Page}, warnings,
-failures, observations, hint`.
+views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
+warnings, failures, observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
 
@@ -951,7 +1023,10 @@ Python API), which are never capped. The gate stays a whole-file answer.
 
 ```
 {kind: "capabilities", fields?}
-    simulators and versions, exporter presence, dialects, persistence,
+    simulators: each one's executable and its sha256, and as `version` the
+    build the latest run on that same executable reported, with
+    `version_source` naming the job and case (null until one has run; the
+    executable is never launched to ask); exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,
@@ -966,12 +1041,20 @@ Python API), which are never capped. The gate stays a whole-file answer.
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
-    .asc gives a geometric trace; a netlist gives card membership and makes
-    no geometry claims
+    .asc gives a geometric trace; an [x, y] on a wire's interior traces that
+    wire, reported as snapped_to_wire; a netlist gives card membership and
+    makes no geometry claims. On a .asc, PIN is a pin name or, failing that,
+    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
+    `prefix` keeps references that start with it, case-insensitively, on
+    both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
+    but not L1. It is plain text; a wildcard is refused with the plain
+    spelling to use
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
-    selecting a subtree, and `prefix` is a single element letter
+    selecting a subtree, and `prefix` is the `components` rule applied to
+    each instance's own reference (the last segment), so a one-letter
+    prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query; enumerate requires libs
 {kind: "reference", query?, limit? (default 5, cap 20)}
@@ -1313,6 +1396,13 @@ Recorded so they are not mistaken for oversights:
 - Re-running an attached analysis stage after a server restart.
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
+- Two wires that cross can be joined only by ending one on the other. There
+  is no op for a junction at a crossing, and `wire_pins` refuses a route that
+  crosses a wire where neither ends, even though LTspice leaves it unjoined.
+- `remove_wire`'s point form removes the segments that end at the point; a
+  wire whose interior passes through it stays. At a T that removes the stem
+  and keeps the wire it joined, but at a pin sitting on a wire's interior it
+  leaves that wire in place although the two are connected.
 
 ## Hierarchy discovery contract
 

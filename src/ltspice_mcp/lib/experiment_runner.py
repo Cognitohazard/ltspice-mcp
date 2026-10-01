@@ -10,7 +10,6 @@ import logging
 import secrets
 import shutil
 import threading
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -45,6 +44,11 @@ from ltspice_mcp.lib.runner_base import (
     inject_ngspice_control_write,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator_build import (
+    SimulatorExecutable,
+    describe_executable,
+    same_executable,
+)
 from ltspice_mcp.lib.store import Store, run_dir_in, run_filename_in, validate_job_id
 from ltspice_mcp.lib.sweep_utils import generate_id
 
@@ -88,13 +92,6 @@ StageDecks = Callable[[], Awaitable["StagedDecks"]]
 # same request_id waits for the first submission's deck copies, and a large
 # matrix takes longer to stage than an index write.
 REQUEST_GATE_TIMEOUT_S = 300.0
-
-#: Reads of an indexed record that exists but did not load. On Windows, opening
-#: a file while another thread replaces it fails with a sharing violation for a
-#: moment, and a running job rewrites its record as it goes: that is not the
-#: record being gone, and treating it as gone mints a second job for the id.
-INDEXED_RECORD_READ_ATTEMPTS = 5
-INDEXED_RECORD_RETRY_S = 0.05
 
 #: The durable replay note, written on the job record once and read by
 #: everyone who looks at the job afterwards — the original submitter included,
@@ -301,6 +298,43 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
             )
 
 
+def verify_replay(
+    job: ExperimentJob,
+    request_id: str,
+    executable: SimulatorExecutable | None,
+) -> None:
+    """Refuse to replay a recorded job the request would not reproduce now.
+
+    The fingerprint covers the request. This covers the server state a request
+    does not name, and is the one check both replay routes run: the tool's
+    lookup before the request gate, and the coordinator's under it.
+
+    First the decks (``verify_replay_sources``). Then the simulator build:
+    swap the executable for another build (or change which simulator is the
+    default) and restart, and a reused request_id would hand back the earlier
+    build's numbers as the answer for this one. So the program recorded at the
+    job's submission is compared with ``executable``, the one this request
+    would launch now, and a different build is the same conflict a changed deck
+    is. It is checked beside the fingerprint rather than hashed into it: it is
+    the server's state, not the caller's request, and folding it in would
+    report a changed executable as "a different request payload". A record
+    that names no executable fails closed, as a record with no source digests
+    does.
+
+    Blocking (the deck check re-hashes staged files): call off the loop.
+    """
+    verify_replay_sources(job, request_id)
+    if same_executable(job.simulator_executable, executable):
+        return
+    raise IdempotencyConflictError(
+        f"request_id {request_id!r} already ran experiment {job.job_id} on "
+        f"{describe_executable(job.simulator_executable)}; this request would now run "
+        f"on {describe_executable(executable)}. Its results cannot be shown to come from "
+        "the current build. Submit under a new request_id to run it on the current "
+        "executable; jobs(action='status') still reads the recorded job."
+    )
+
+
 def _already_staged() -> StagedDecks:
     """Stand-in for a staging pass that has run.
 
@@ -329,6 +363,9 @@ class ExperimentRunRequest:
     simulator: str
     stage: StageDecks
     job_id: str | None = None
+    #: The program this request's cases will launch, identified before the
+    #: request gate. Recorded on a new job and compared against a recorded one.
+    simulator_executable: SimulatorExecutable | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
     max_parallel: int | None = None
@@ -513,6 +550,7 @@ class ExperimentRunner(RunnerBase):
             cases=staged.cases,
             sources=staged.sources,
             simulator=request.simulator,
+            simulator_executable=request.simulator_executable,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
             # not the folder itself: everything this job wrote is under it, and
@@ -691,18 +729,13 @@ class ExperimentRunner(RunnerBase):
             )
         indexed_job_id = str(index.get("job_id", ""))
         try:
-            record = Store(working_dir).job_record(indexed_job_id)
+            existing = experiment_store.load_job(
+                indexed_job_id,
+                working_dir,
+                own_is_alive=True,
+            )
         except ValueError:
-            record = None
-        existing = None
-        if record is not None:
-            for _ in range(INDEXED_RECORD_READ_ATTEMPTS):
-                existing = experiment_store.load_job(
-                    indexed_job_id, working_dir, own_is_alive=True
-                )
-                if existing is not None or not record.exists():
-                    break
-                time.sleep(INDEXED_RECORD_RETRY_S)
+            existing = None
         if existing is None:
             # The index names a record that is gone; this submission recreates it.
             return _IndexLookup(existing=None, dangling=True)
@@ -717,7 +750,7 @@ class ExperimentRunner(RunnerBase):
         # The cheap pre-staging replay check the caller may have run cannot see
         # a record written after it looked, so the same drift is re-checked
         # here, under the gate.
-        verify_replay_sources(existing, request.request_id)
+        verify_replay(existing, request.request_id, request.simulator_executable)
         if existing.restart_reconciled:
             experiment_store.save_job(existing)
         return _IndexLookup(existing=existing, dangling=False)
@@ -1248,18 +1281,16 @@ class ExperimentRunner(RunnerBase):
         deadline = self.loop.time() + grace_s
         for kill_pass in range(1, KILL_MAX_PASSES + 1):
             remaining = max(0.0, deadline - self.loop.time())
-            wait = (
-                remaining
-                if kill_pass == KILL_MAX_PASSES
-                else min(remaining, KILL_RESCAN_INTERVAL_S)
-            )
+            last = kill_pass == KILL_MAX_PASSES or remaining <= KILL_RESCAN_INTERVAL_S
             try:
-                return await asyncio.wait_for(asyncio.shield(future), wait)
+                return await asyncio.wait_for(
+                    asyncio.shield(future), remaining if last else KILL_RESCAN_INTERVAL_S
+                )
             except TimeoutError:
-                # The wait that ran to the deadline ends the grace, not the clock:
-                # asyncio runs a timer up to one clock resolution early (15.6 ms on
-                # Windows), so loop.time() can still read short of the deadline.
-                if wait >= remaining:
+                # The wait to the deadline ends the grace, not a clock read after
+                # it: asyncio fires a timer up to one clock resolution early
+                # (15.6 ms on Windows), so the clock can still read short.
+                if last:
                     return None
             await kill()
         return None
@@ -1348,16 +1379,15 @@ class ExperimentRunner(RunnerBase):
     def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
+        case.simulator_version = outcome.simulator_version
         if outcome.observations:
             case.observations.extend(outcome.observations)
 
     @staticmethod
     def _apply_stopped_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
         """Keep post-kill diagnostics without advertising artifacts we remove."""
+        ExperimentRunner._apply_outcome(case, outcome)
         case.raw_file = None
-        case.log_file = Path(outcome.log_file) if outcome.log_file else None
-        if outcome.observations:
-            case.observations.extend(outcome.observations)
 
     def _mark_case(
         self,

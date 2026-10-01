@@ -6,6 +6,7 @@ through the shared op runner (``tests/_asc_ops.py``) and then read the sheet bac
 off disk, so a claim about geometry is checked against what was actually written.
 """
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -25,12 +26,14 @@ from tests._asc_ops import (
     apply_one,
     batch_view,
     blank_sheet_file,
+    build_sheet,
     components_of,
     inspect_one,
     load_editor,
     structured_warnings,
     wire_pins,
 )
+from tests._schematic_fixtures import write_file
 from tests.conftest import FIXTURES_DIR
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -494,6 +497,285 @@ def _flag_records(asc_path: Path) -> list[tuple[tuple[int, int], str]]:
             _, x, y, net = line.split(maxsplit=3)
             flags.append(((int(x), int(y)), net))
     return flags
+
+
+def _block_asy(description: str, *pins: tuple[str, int, int, int]) -> str:
+    """A CELL subcircuit symbol with a body and the given (name, SpiceOrder, x, y) pins."""
+    lines = [
+        "Version 4",
+        "SymbolType CELL",
+        "RECTANGLE Normal -16 -32 16 32",
+        "SYMATTR Prefix X",
+        f"SYMATTR Description {description}",
+    ]
+    for name, order, x, y in pins:
+        lines += [f"PIN {x} {y} NONE 0", f"PINATTR PinName {name}", f"PINATTR SpiceOrder {order}"]
+    return "\n".join(lines) + "\n"
+
+
+# A block whose pins are lettered, so its SpiceOrder is the only number a pin
+# has; and one whose digit-named pins run opposite to their SpiceOrder, the
+# case where matching a name first changes the answer.
+_LETTERED_BLOCK_ASY = _block_asy("Lettered pins", ("A", 1, 0, -48), ("B", 2, 0, 48))
+_SWAPPED_DIGITS_ASY = _block_asy("Pin 1 is SpiceOrder 2", ("2", 1, 0, -48), ("1", 2, 0, 48))
+
+
+@pytest.fixture
+def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """spicelib caches a symbol's path by file name for the whole process; keep
+    the temporary folders a test adds out of every later test."""
+    from spicelib import AscEditor
+
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
+
+
+@pytest.fixture
+def ordinal_symbols(
+    asc_symbols: Path,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_spicelib_symbol_cache: None,
+) -> Path:
+    """Put the two symbols above on the library path beside the fixture library."""
+    from spicelib import AscEditor
+
+    sym_dir = work_dir / "ordinal_syms"
+    write_file(sym_dir / "lettered_block.asy", _LETTERED_BLOCK_ASY)
+    write_file(sym_dir / "swapped_digits.asy", _SWAPPED_DIGITS_ASY)
+    monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
+    return sym_dir
+
+
+class TestPinsBySpiceOrder:
+    """'REF.<n>' reaches the pin whose SpiceOrder is n when no pin is named n.
+
+    Every surface that takes a pin goes through one resolver, so the net query
+    and each edit op that takes a pin are driven here.
+    """
+
+    async def test_net_query_finds_a_lettered_pin_by_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_net")
+        placed = add_component(asc_state, sheet, "LX1", "lettered_block", 128, 128)
+        add_net_label(asc_state, sheet, "top", pin="LX1.A")
+        pin_a = next(p for p in placed["pins"] if p["name"] == "A")
+
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "LX1.1"})
+
+        assert data["start"] == {"x": pin_a["x"], "y": pin_a["y"]}
+        assert data["labels"] == ["top"]
+
+    async def test_every_edit_op_that_takes_a_pin_takes_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_ops")
+        build = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "LX1",
+                    "symbol": "lettered_block",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "LX1.2", "to_pin": "R1.1"},
+                {"op": "add_net_label", "net": "top", "pin": "LX1.1"},
+            ],
+        )
+        assert build["saved"] is True, build["abort_reason"]
+        lx1 = {p["name"]: (p["x"], p["y"]) for p in build["results"][0]["pins"]}
+        r1 = {p["name"]: (p["x"], p["y"]) for p in build["results"][1]["pins"]}
+        assert _has_segment(_wire_segments(sheet), lx1["B"], r1["1"])
+        assert _flag_records(sheet) == [(lx1["A"], "top")]
+
+        removal = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {"op": "remove_net_label", "pin": "LX1.1"},
+                {"op": "remove_wire", "pin": "LX1.2"},
+            ],
+        )
+        assert removal["saved"] is True, removal["abort_reason"]
+        assert _flag_records(sheet) == []
+        assert _wire_segments(sheet) == []
+
+    async def test_a_pin_named_with_a_digit_wins_over_the_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_names")
+        placed = add_component(asc_state, sheet, "XS1", "swapped_digits", 128, 128)
+        named_one = next(p for p in placed["pins"] if p["name"] == "1")
+        assert named_one["order"] == 2  # the premise: name and SpiceOrder disagree
+
+        add_net_label(asc_state, sheet, "one", pin="XS1.1")
+
+        assert _flag_records(sheet) == [((named_one["x"], named_one["y"]), "one")]
+
+    async def test_an_unknown_pin_lists_each_name_with_its_spice_order(
+        self, asc_state: SessionState, ordinal_symbols: Path
+    ):
+        sheet = blank_sheet_file(asc_state, "ordinal_unknown")
+        add_component(asc_state, sheet, "LX1", "lettered_block", 128, 128)
+
+        with pytest.raises(NetlistError) as exc_info:
+            wire_pins(asc_state, sheet, "LX1.3", "LX1.A")
+
+        assert "Pin '3' not found on LX1" in str(exc_info.value)
+        assert "Available: A (1), B (2)" in str(exc_info.value)
+
+
+def _sheet_beside_symbol(folder: Path, asy: str) -> Path:
+    """``folder/top.asc`` holding X1, a ``localblk`` placed at (128, 128), with
+    ``localblk.asy`` saved beside it rather than in any library."""
+    write_file(folder / "localblk.asy", asy)
+    return write_file(
+        folder / "top.asc",
+        "Version 4\nSHEET 1 880 680\nSYMBOL localblk 128 128 R0\nSYMATTR InstName X1\n",
+    )
+
+
+async def _x1_pins(state: SessionState, sheet: Path) -> dict[str, tuple[int, int]]:
+    """X1's placed pins as ``inspect(kind="components", detail="full")`` reports them."""
+    data = await components_of(state, sheet)
+    (x1,) = data["components"]
+    return {p["name"]: (p["x"], p["y"]) for p in x1.get("pins", [])}
+
+
+@pytest.mark.usefixtures("isolated_spicelib_symbol_cache")
+class TestSheetLocalSymbols:
+    """A symbol saved beside the .asc, where LTspice looks first, gives the pin
+    geometry every pin-taking surface uses, and never another sheet's."""
+
+    async def test_net_query_resolves_a_pin_of_a_sheet_local_symbol(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "X1.B"})
+
+        assert data["start"] == {"x": 128, "y": 176}
+
+    async def test_components_full_carries_the_pins_of_a_sheet_local_symbol(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 176)}
+
+    async def test_edit_ops_place_and_wire_a_sheet_local_symbol(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        result = batch_view(
+            asc_state,
+            sheet,
+            [  # type: ignore[arg-type]  # pydantic validates dicts
+                {
+                    "op": "add_component",
+                    "reference": "X2",
+                    "symbol": "localblk",
+                    "x": 384,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "X1.B", "to_pin": "R1.1"},
+            ],
+        )
+
+        assert result["saved"] is True, result["abort_reason"]
+        x2 = {p["name"]: (p["x"], p["y"]) for p in result["results"][0]["pins"]}
+        assert x2 == {"A": (384, 80), "B": (384, 176)}
+        assert _has_segment(_wire_segments(sheet), (128, 176), (128, 272))
+
+    async def test_a_blank_build_finds_symbols_beside_its_target(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A blank build parses its editor from a template in a temporary
+        # folder; the symbols that count are the ones beside the target.
+        from tests._asc_ops import build_sheet
+
+        _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+
+        envelope = await build_sheet(
+            asc_state,
+            "proj/fresh",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "X9",
+                    "symbol": "localblk",
+                    "x": 128,
+                    "y": 128,
+                },
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 128, "y": 320},
+                {"op": "wire_pins", "from_pin": "X9.B", "to_pin": "R1.1"},
+            ],
+        )
+
+        assert envelope["outcome"] == "complete", envelope
+        fresh = work_dir / "proj" / "fresh.asc"
+        assert _has_segment(_wire_segments(fresh), (128, 176), (128, 272))
+
+    async def test_same_named_symbols_beside_two_sheets_keep_their_own_pins(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        upright = _sheet_beside_symbol(work_dir / "a", _LETTERED_BLOCK_ASY)
+        sideways = _sheet_beside_symbol(
+            work_dir / "b", _block_asy("Sideways", ("A", 1, -64, 0), ("B", 2, 64, 0))
+        )
+
+        assert await _x1_pins(asc_state, upright) == {"A": (128, 80), "B": (128, 176)}
+        assert await _x1_pins(asc_state, sideways) == {"A": (64, 128), "B": (192, 128)}
+        assert await _x1_pins(asc_state, upright) == {"A": (128, 80), "B": (128, 176)}
+
+    async def test_one_edit_looks_each_symbol_up_once(
+        self, asc_state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Every geometry pass of every op re-reads each part's symbol, and a
+        # lookup now checks the sheet's folder on disk, on the event loop. One
+        # request resolves each distinct symbol once, however many parts use it.
+        from ltspice_mcp.lib import schematic_ops
+        from tests._asc_ops import build_sheet
+
+        lookups: Counter[str] = Counter()
+        real_lookup = schematic_ops.get_symbol_info
+
+        def counting_lookup(symbol: str, asc_path: Path | None):
+            lookups[symbol] += 1
+            return real_lookup(symbol, asc_path)
+
+        monkeypatch.setattr(schematic_ops, "get_symbol_info", counting_lookup)
+        ops = [
+            {"op": "add_component", "reference": f"R{i}", "symbol": "res", "x": 128 * i, "y": 128}
+            for i in range(1, 13)
+        ]
+        ops.append({"op": "add_component", "reference": "C1", "symbol": "cap", "x": 128, "y": 400})
+        ops.append({"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"})
+        ops += [{"op": "add_net_label", "net": f"n{i}", "pin": f"R{i}.1"} for i in range(1, 13)]
+
+        envelope = await build_sheet(asc_state, "many_parts", ops)
+
+        assert envelope["outcome"] == "complete", envelope
+        assert lookups == {"res": 1, "cap": 1}
+
+    async def test_an_edited_sheet_local_symbol_is_read_again(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        sheet = _sheet_beside_symbol(work_dir / "proj", _LETTERED_BLOCK_ASY)
+        assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 176)}
+
+        write_file(
+            sheet.parent / "localblk.asy",
+            _block_asy("Longer lead", ("A", 1, 0, -48), ("B", 2, 0, 112)),
+        )
+
+        assert await _x1_pins(asc_state, sheet) == {"A": (128, 80), "B": (128, 240)}
 
 
 # Absolute pin positions expected for the fixture nmos symbol (pin offsets
@@ -1853,6 +2135,383 @@ class TestMidSegmentLabelDetected:
         assert named_labels(frozenset({"OUTP", "0"})) == {"OUTP"}
         assert named_labels(frozenset({"0"})) == set()
         assert named_labels(frozenset()) == set()
+
+
+# Sheets exported with LTspice 26.1.1 ``-netlist``, the fixture ``res.asy`` beside
+# them so the export and these tests place every pin at the same coordinate.
+# Each pins one way a wire, pin or label can touch a wire; the export's node
+# names say which ones LTspice connects.
+_T_JUNCTIONS = FIXTURES_DIR / "t_junctions"
+_T_JUNCTION_CASES = sorted(p.stem for p in _T_JUNCTIONS.glob("*.asc"))
+
+
+def _exported_nets(stem: str) -> list[set[str]]:
+    """The pins LTspice put on each node, as ``REF.PIN`` sets.
+
+    The fixture resistor's pin names equal its SpiceOrder, so the n-th node on
+    an element card is pin ``n``.
+    """
+    nodes: dict[str, set[str]] = {}
+    text = (_T_JUNCTIONS / f"{stem}.net").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if not line or line[0] in "*.":
+            continue
+        ref, first, second, _value = line.split()
+        for order, node in enumerate((first, second), start=1):
+            nodes.setdefault(node, set()).add(f"{ref}.{order}")
+    return list(nodes.values())
+
+
+def _copy_t_junction_sheet(stem: str, work_dir: Path) -> Path:
+    dest = work_dir / f"{stem}.asc"
+    dest.write_bytes((_T_JUNCTIONS / f"{stem}.asc").read_bytes())
+    return dest
+
+
+def _non_ground_flags(asc: Path) -> list[tuple[str, int, int]]:
+    flags = []
+    for line in asc.read_text(encoding="utf-8").splitlines():
+        if line.startswith("FLAG "):
+            _, x, y, name = line.split()
+            if name != "0":
+                flags.append((name, int(x), int(y)))
+    return flags
+
+
+@pytest.mark.asyncio
+class TestTJunctionGroundTruth:
+    """What connects where one wire, pin or label touches another wire, as
+    LTspice's own netlister decides it."""
+
+    @pytest.mark.parametrize("stem", _T_JUNCTION_CASES)
+    async def test_net_trace_matches_the_ltspice_export(
+        self, asc_state: SessionState, work_dir: Path, stem: str
+    ):
+        asc = _copy_t_junction_sheet(stem, work_dir)
+        for exported in _exported_nets(stem):
+            for pin in sorted(exported):
+                data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": pin})
+                traced = {f"{p['reference']}.{p['pin']}" for p in data["pins"]}
+                assert traced == exported, f"{stem}: net at {pin}"
+
+    @pytest.mark.parametrize("stem", [s for s in _T_JUNCTION_CASES if s.startswith("label_on_")])
+    async def test_a_label_on_a_wire_interior_is_not_called_floating(
+        self, asc_state: SessionState, work_dir: Path, stem: str
+    ):
+        # The export names the net after this label, so the op placing it must
+        # not say LTspice will ignore it.
+        asc = _copy_t_junction_sheet(stem, work_dir)
+        ((name, x, y),) = _non_ground_flags(asc)
+        apply_one(asc_state, asc, {"op": "remove_net_label", "x": x, "y": y})
+        result = add_net_label(asc_state, asc, name, x=x, y=y)
+        assert result.get("warnings", []) == []
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "R1.1"})
+        assert data["labels"] == [name]
+
+    async def test_a_label_touching_nothing_is_still_called_floating(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _copy_t_junction_sheet("label_on_wire_interior", work_dir)
+        result = add_net_label(asc_state, asc, "stray", x=192, y=112)
+        assert any("floating label" in w for w in result["warnings"])
+
+    @pytest.mark.parametrize(
+        ("stem", "at", "wire", "exported_pin"),
+        [
+            # Left of the label, on the one wire that carries it.
+            ("label_on_wire_interior", [144, 96], [96, 96, 288, 96], "R1.1"),
+            # Where the stem lands on the rail, on the rail's interior.
+            ("wire_end_on_wire_interior", [240, 96], [96, 96, 288, 96], "R3.1"),
+            # On the vertical wire of a crossing, off the crossing itself.
+            ("crossing_wires", [192, 64], [192, 48, 192, 176], "R3.1"),
+        ],
+    )
+    async def test_a_point_on_a_wire_interior_traces_that_wire(
+        self,
+        asc_state: SessionState,
+        work_dir: Path,
+        stem: str,
+        at: list[int],
+        wire: list[int],
+        exported_pin: str,
+    ):
+        asc = _copy_t_junction_sheet(stem, work_dir)
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": at})
+        (exported,) = [net for net in _exported_nets(stem) if exported_pin in net]
+        assert {f"{p['reference']}.{p['pin']}" for p in data["pins"]} == exported
+        assert data["start"] == {"x": at[0], "y": at[1]}
+        assert data["snapped_to_wire"] == {
+            "from": {"x": wire[0], "y": wire[1]},
+            "to": {"x": wire[2], "y": wire[3]},
+        }
+
+    async def test_a_point_on_a_wire_end_does_not_report_a_snap(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _copy_t_junction_sheet("crossing_wires", work_dir)
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": [192, 48]})
+        assert "snapped_to_wire" not in data
+        assert data["labels"] == ["b"]
+
+    async def test_a_crossing_of_two_nets_is_refused_rather_than_guessed(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The export keeps the two crossing wires on separate nets (a and b), so
+        # the crossing point belongs to neither alone.
+        from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+        asc = _copy_t_junction_sheet("crossing_wires", work_dir)
+        query = {"kind": "net", "path": str(asc), "at": [192, 96]}
+        result = await handle_inspect(InspectInput.model_validate({"queries": [query]}), asc_state)
+        assert result.structured_content is not None
+        (item,) = result.structured_content["results"]
+        assert item["ok"] is False
+        message = item["error"]["message"]
+        assert "cross" in message
+        assert "(96,96)->(288,96)" in message and "(192,48)->(192,176)" in message
+
+    async def test_a_label_at_a_crossing_joins_both_wires_so_the_point_traces(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _copy_t_junction_sheet("label_at_crossing", work_dir)
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": [192, 96]})
+        assert {f"{p['reference']}.{p['pin']}" for p in data["pins"]} == {"R1.1", "R2.1", "R3.1"}
+        assert "snapped_to_wire" not in data
+
+
+def _sheet_text(*lines: str) -> str:
+    return "Version 4\nSHEET 1 880 680\n" + "".join(f"{line}\n" for line in lines)
+
+
+def _res(ref: str, x: int, y: int) -> str:
+    """A fixture resistor at (x, y): pin 1 at (x, y-48), pin 2 at (x, y+48)."""
+    return f"SYMBOL res {x} {y} R0\nSYMATTR InstName {ref}\nSYMATTR Value 1k"
+
+
+def _pins_on_net(state: SessionState, asc: Path, at: str | list[int]) -> set[str]:
+    from ltspice_mcp.lib.schematic_ops import label_folded_nets, net_partition
+
+    editor = load_editor(state, asc)
+    part = net_partition(editor)
+    net_of = label_folded_nets(part)
+    if isinstance(at, str):
+        from ltspice_mcp.lib.schematic_ops import resolve_pin
+
+        start = resolve_pin(at, editor)
+    else:
+        start = (at[0], at[1])
+    target = net_of(start)
+    return {
+        f"{ref}.{pin}"
+        for coord, owners in part.pin_owners.items()
+        if net_of(coord) == target
+        for ref, pin in owners
+    }
+
+
+# A rail R1.1-R2.1 along y=196, with a stub hanging off its interior at x=192
+# whose lower end (192,260) touches nothing else.
+_RAIL = ("WIRE 96 196 288 196", "WIRE 192 196 192 260", _res("R1", 96, 244), _res("R2", 288, 244))
+
+
+@pytest.mark.asyncio
+class TestWirePinsTJunction:
+    """wire_pins ends on an existing wire's interior as a T-junction, and never
+    joins other wiring without saying so."""
+
+    async def test_a_coordinate_endpoint_on_a_wire_builds_the_t_ltspice_exported(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The fixture sheet without its stem is the "before"; routing R3.1 onto
+        # the rail's interior must give back exactly the fixture's wires, the
+        # shape the LTspice export puts R1, R2 and R3 on one node for.
+        fixture = _T_JUNCTIONS / "wire_end_on_wire_interior.asc"
+        lines = fixture.read_text(encoding="utf-8").splitlines()
+        before = [line for line in lines if line != "WIRE 192 176 192 96"]
+        asc = work_dir / "t_build.asc"
+        asc.write_text("\n".join(before) + "\n", encoding="utf-8", newline="\n")
+
+        result = wire_pins(asc_state, asc, "R3.1", {"x": 192, "y": 96})  # type: ignore[arg-type]
+
+        assert result["to_pin"] == "(192,96)"
+        assert result["wire_count"] == 1
+        assert result["junctions"] == [
+            {
+                "x": 192,
+                "y": 96,
+                "via": "endpoint",
+                "wire": {"from": {"x": 96, "y": 96}, "to": {"x": 288, "y": 96}},
+            }
+        ]
+        assert "warnings" not in result
+
+        def unordered(segments):
+            return {tuple(sorted(seg)) for seg in segments}
+
+        assert unordered(_wire_segments(asc)) == unordered(_wire_segments(fixture))
+        (exported,) = [net for net in _exported_nets("wire_end_on_wire_interior") if "R3.1" in net]
+        assert _pins_on_net(asc_state, asc, "R3.1") == exported
+
+    async def test_removing_the_stem_undoes_the_t(self, asc_state: SessionState, work_dir: Path):
+        asc = work_dir / "t_undo.asc"
+        asc.write_text(_sheet_text(*_RAIL, _res("R3", 240, 100)), encoding="utf-8", newline="\n")
+        before = _wire_segments(asc)
+        wire_pins(asc_state, asc, "R3.2", {"x": 240, "y": 196})  # type: ignore[arg-type]
+        assert _pins_on_net(asc_state, asc, "R3.2") == {"R1.1", "R2.1", "R3.2"}
+        apply_one(
+            asc_state, asc, {"op": "remove_wire", "x1": 240, "y1": 148, "x2": 240, "y2": 196}
+        )
+        assert _wire_segments(asc) == before
+
+    async def test_a_coordinate_endpoint_touching_nothing_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "t_nothing.asc"
+        asc.write_text(_sheet_text(*_RAIL, _res("R3", 240, 326)), encoding="utf-8", newline="\n")
+        with pytest.raises(NetlistError, match="touches no wire and no component pin"):
+            wire_pins(asc_state, asc, "R3.1", {"x": 240, "y": 230})  # type: ignore[arg-type]
+
+    async def test_a_coordinate_endpoint_at_a_wire_end_is_a_plain_join(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The stub's free lower end, approached end-on: an ordinary connection,
+        # not a T, so there is no junction to report.
+        asc = work_dir / "t_end.asc"
+        asc.write_text(_sheet_text(*_RAIL, _res("R3", 192, 356)), encoding="utf-8", newline="\n")
+        result = wire_pins(asc_state, asc, "R3.1", {"x": 192, "y": 260})  # type: ignore[arg-type]
+        assert "junctions" not in result
+        assert _pins_on_net(asc_state, asc, "R3.1") == {"R1.1", "R2.1", "R3.1"}
+
+    async def test_a_coordinate_endpoint_at_a_crossing_of_two_nets_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The export keeps the crossing wires on separate nets; a wire ending at
+        # the crossing would touch both and join them.
+        asc = _copy_t_junction_sheet("crossing_wires", work_dir)
+        add_component(asc_state, asc, "R4", "res", 400, 144)
+        before = _wire_segments(asc)
+        with pytest.raises(NetlistError, match="separate nets cross"):
+            wire_pins(asc_state, asc, "R4.1", {"x": 192, "y": 96})  # type: ignore[arg-type]
+        assert _wire_segments(asc) == before
+
+    async def test_the_leg_may_not_run_along_the_wire_it_joins(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "t_along.asc"
+        asc.write_text(_sheet_text(*_RAIL, _res("R4", 400, 244)), encoding="utf-8", newline="\n")
+        with pytest.raises(NetlistError, match="runs along the wire"):
+            wire_pins(asc_state, asc, "R4.1", {"x": 240, "y": 196})  # type: ignore[arg-type]
+
+    async def test_a_waypoint_on_another_nets_wire_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # Each leg ends on the rail's interior, which LTspice joins (see
+        # wire_end_on_wire_interior), so the route would put R3 and R6 on the
+        # rail's net. The plain crossing check never saw it: neither leg crosses.
+        asc = work_dir / "wp_other_net.asc"
+        asc.write_text(
+            _sheet_text(*_RAIL, _res("R3", 240, 100), _res("R6", 240, 388)),
+            encoding="utf-8",
+            newline="\n",
+        )
+        before = _wire_segments(asc)
+        with pytest.raises(NetlistError) as exc_info:
+            wire_pins(asc_state, asc, "R3.2", "R6.1", waypoints=[{"x": 240, "y": 196}])
+        message = str(exc_info.value)
+        assert "waypoint (240,196)" in message
+        assert "(96,196)->(288,196)" in message
+        assert '{"x": 240, "y": 196}' in message
+        assert _wire_segments(asc) == before
+
+    async def test_a_plain_crossing_is_still_refused_without_claiming_a_join(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The same route without the waypoint crosses the rail with neither wire
+        # ending there. The export leaves such a crossing unjoined
+        # (crossing_wires), so the refusal must not say the nets would merge.
+        asc = work_dir / "plain_cross.asc"
+        asc.write_text(
+            _sheet_text(*_RAIL, _res("R3", 240, 100), _res("R6", 240, 388)),
+            encoding="utf-8",
+            newline="\n",
+        )
+        with pytest.raises(NetlistError, match="crosses existing wire at \\(240,196\\)") as exc:
+            wire_pins(asc_state, asc, "R3.2", "R6.1")
+        assert "unjoined" in str(exc.value)
+        assert "unintended junction" not in str(exc.value)
+
+    async def test_a_route_through_another_nets_wire_end_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "through_end.asc"
+        asc.write_text(
+            _sheet_text(*_RAIL, _res("R4", 400, 308), _res("R5", 48, 308)),
+            encoding="utf-8",
+            newline="\n",
+        )
+        with pytest.raises(NetlistError, match=r"the end of the wire \(192,196\)->\(192,260\)"):
+            wire_pins(asc_state, asc, "R4.1", "R5.1")
+
+    async def test_a_route_through_a_lone_label_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "through_label.asc"
+        asc.write_text(
+            _sheet_text(_res("R4", 400, 308), _res("R5", 48, 308), "FLAG 192 260 vref"),
+            encoding="utf-8",
+            newline="\n",
+        )
+        with pytest.raises(NetlistError, match="net label 'vref'"):
+            wire_pins(asc_state, asc, "R4.1", "R5.1")
+
+    async def test_touching_the_routes_own_net_is_reported(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # R1.1 is on the rail, so passing through the stub's end joins the net
+        # the route already joins: allowed, and said.
+        asc = work_dir / "own_net.asc"
+        asc.write_text(_sheet_text(*_RAIL, _res("R4", 400, 308)), encoding="utf-8", newline="\n")
+        result = wire_pins(asc_state, asc, "R4.1", "R1.1", waypoints=[{"x": 96, "y": 260}])
+        assert result["junctions"] == [
+            {
+                "x": 192,
+                "y": 260,
+                "via": "wire_end",
+                "wire": {"from": {"x": 192, "y": 196}, "to": {"x": 192, "y": 260}},
+            }
+        ]
+        assert any("(192,260)" in w and "LTspice joins them" in w for w in result["warnings"])
+        assert _pins_on_net(asc_state, asc, "R4.1") == {"R1.1", "R2.1", "R4.1"}
+
+    async def test_passing_over_a_pin_already_on_the_net_is_reported(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "over_pin.asc"
+        asc.write_text(
+            _sheet_text("WIRE 96 196 288 196", _res("R1", 96, 244), _res("R2", 288, 244)),
+            encoding="utf-8",
+            newline="\n",
+        )
+        add_component(asc_state, asc, "R7", "res", 0, 244)
+        result = wire_pins(asc_state, asc, "R2.1", "R7.1")
+        assert {"x": 96, "y": 196, "via": "pin", "pin": "R1.1"} in result["junctions"]
+        assert any("R1.1" in w and "already wired" in w for w in result["warnings"])
+
+    async def test_route_warnings_reach_the_edit_response(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The planner's advisories (here a long run) used to stop at the op.
+        envelope = await build_sheet(
+            asc_state,
+            "long_run",
+            [
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 0, "y": 100},
+                {"op": "add_component", "reference": "R2", "symbol": "res", "x": 640, "y": 100},
+                {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"},
+            ],
+        )
+        assert envelope["outcome"] == "complete"
+        assert any("op 2 (wire_pins): Long wire run" in w for w in envelope["warnings"])
 
 
 # Relocated regression coverage from a retired test module.

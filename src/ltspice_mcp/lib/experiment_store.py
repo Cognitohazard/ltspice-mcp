@@ -16,7 +16,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import now, parse_iso_datetime
+from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
@@ -31,6 +31,7 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
+from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
     KIND_CANCELLATION,
     KIND_CIRCUIT_INDEX,
@@ -193,6 +194,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 "native_statistics": (
                     case.native_statistics.to_record() if case.native_statistics else None
                 ),
+                "simulator_version": case.simulator_version,
             }
         )
 
@@ -237,6 +239,9 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
         error=job.error,
         output_folder=str(job.output_folder) if job.output_folder else None,
+        simulator_executable=(
+            job.simulator_executable.to_record() if job.simulator_executable else None
+        ),
         completeness=asdict(job.completeness),
         cases=cases,
         sources=sources,
@@ -398,7 +403,12 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
             if data.get("native_statistics") is not None
             else None
         ),
+        simulator_version=_optional_str(data.get("simulator_version")),
     )
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _analysis_stage(data: dict[str, Any] | None) -> AnalysisStage:
@@ -502,6 +512,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
                 raw_file=raw,
                 log_file=log,
                 completed_at=case.completed_at or now(),
+                simulator_version=case.simulator_version or reported_build(log, raw),
             )
             recovered.append(promoted)
             reconciled.append(promoted)
@@ -589,6 +600,7 @@ def _deserialize_job(
         completed_at=parse_iso_datetime(data.get("completed_at")),
         error=data.get("error"),
         output_folder=_path_or_none(data.get("output_folder")),
+        simulator_executable=SimulatorExecutable.from_record(data.get("simulator_executable")),
         failures=list(data.get("failures") or []),
         observations=list(data.get("observations") or []),
         artifacts=list(data.get("artifacts") or []),
@@ -639,8 +651,7 @@ def load_job_from_path(
 
 def _read_job_record(path: Path) -> dict[str, Any] | None:
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
+        data = json.loads(read_text_file(path))
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:

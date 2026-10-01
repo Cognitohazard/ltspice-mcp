@@ -787,14 +787,14 @@ class TestIdempotency:
         running.owner_pid = live_peer_pid
         experiment_store.save_job(running)
 
-        def owner_finishes_meanwhile(job, request_id: str) -> None:
+        def owner_finishes_meanwhile(job, request_id: str, executable) -> None:
             deadline = time.monotonic() + 10
             while on_disk_status() != "completed":
                 assert time.monotonic() < deadline, "the owner never completed"
                 time.sleep(0.02)
-            experiment_runner_mod.verify_replay_sources(job, request_id)
+            experiment_runner_mod.verify_replay(job, request_id, executable)
 
-        monkeypatch.setattr(experiments_mod, "verify_replay_sources", owner_finishes_meanwhile)
+        monkeypatch.setattr(experiments_mod, "verify_replay", owner_finishes_meanwhile)
         replay = _assert_schema(await handle_run_experiments(args, replayer))
         await replayer.job_registry.drain_pending()
 

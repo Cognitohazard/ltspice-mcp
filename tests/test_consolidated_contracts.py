@@ -653,15 +653,22 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # caller checking a config edit wanted two keys and was sent the whole
     # report. Most of it is the enum of report keys, which is also what a
     # compact-listing client reads in place of the stripped description.
-    "inspect": 8620,
+    # Raised by about 40 characters so the capabilities description says it
+    # reports each simulator's executable and the build its last run reported:
+    # that report is where a caller finds which build this server runs.
+    # Measured 8,657.
+    "inspect": 8660,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
     # compare is verify_circuit's spec: the mode field rides along.
     # Raised by about 200 characters for the 'preexisting' view and its cursor:
     # an edit to an existing sheet reports only what the batch introduced or
-    # named, and those two are how the rest is listed.
-    "edit_schematic": 12000,
+    # named, and those two are how the rest is listed. Raised by about 40 more
+    # for wire_pins' {x, y} endpoint, the one way to end a route on a wire's
+    # interior (a T-junction), which from_pin names beside the SpiceOrder form.
+    # Measured 12,038.
+    "edit_schematic": 12040,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
