@@ -79,7 +79,20 @@ applies to both the server and the library. Relevant considerations:
   not start. `allow_live_includes=true` overrides that refusal: the file is
   then read in place at run time, and the response records that its content is
   not covered by the deck's snapshot hash. Include recursion is bounded at 8
-  levels by default.
+  levels by default. A schematic runs as the netlist LTspice exports from it,
+  which the server keeps in its store; that export is admitted because the
+  schematic is, and its relative references resolve from the schematic's own
+  folder, so the store itself need not be inside `allowed_paths`.
+- **Where the server writes** — the working directory's `.ltspice-mcp/` store
+  (or, with `LTSPICE_MCP_STORE_DIR`, a per-working-directory store under that
+  directory, which may sit outside `allowed_paths`), the run directory above,
+  and a per-user home (`%LOCALAPPDATA%\ltspice-mcp` on Windows, the XDG state
+  directory elsewhere, `LTSPICE_MCP_HOME` to override) holding the
+  recent-circuits index and one lock file per circuit ever edited, named by a
+  digest of its path. Nothing is written beside a circuit except what a caller
+  asks for: an edited sheet, a `verify_circuit` `sidecar` export, a
+  `plot_waveform` `out_dir`, and the `<name>.net` LTspice's own exporter
+  writes beside a schematic it is asked to run.
 - **`plot_waveform` opens a local window by default** — where the client
   cannot render the chart in-chat, the tool writes an HTML file and, with
   `open` (default `true`), spawns a detached local process to display it in a

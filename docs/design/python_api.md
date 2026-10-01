@@ -609,3 +609,12 @@ shared records. A `request_id` reused from the other process replays only when
 both processes launch the same build; otherwise it is an
 `idempotency_conflict` (`docs/design/mcp_surface.md`, "Replay is scoped to the
 simulator build").
+
+The records are shared through the working directory's store, which is
+`<working_dir>/.ltspice-mcp/` unless `LTSPICE_MCP_STORE_DIR` moves it. With the
+setting, the store is one directory per working directory under the named
+directory, so the working directory still scopes the records, but a script
+finds the server's jobs (and replays its `request_id`s) only when it carries
+the same setting: an `Api` started without it opens
+`<working_dir>/.ltspice-mcp/` and sees none of them. A detached owner and a
+`run_code` worker inherit it from the process that starts them.

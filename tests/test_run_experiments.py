@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -46,7 +47,9 @@ from ltspice_mcp.tools.jobs import (
     handle_jobs,
 )
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
+from tests._fake_netlister import install_fixed_exporter
 from tests.conftest import (
+    FakeSim,
     await_until,
     fake_artifact_paths,
     fake_simulator,
@@ -1417,6 +1420,134 @@ class TestReplayRejectsChangedSources:
         # manifest cannot report that it did.
         assert "changed since" not in message
         assert len(submissions) == 1
+
+
+# An export whose relative include names a file beside the schematic.
+_INCLUDING_EXPORT = ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
+
+
+def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Path, Path]:
+    """A schematic whose export includes ``models.inc`` from its own folder."""
+    models = project_dir / "models.inc"
+    models.write_text(".param rval=1k\n")
+    install_fixed_exporter(state, _INCLUDING_EXPORT)
+    return _schematic(project_dir / "amp.asc", "1k"), models
+
+
+@pytest.mark.asyncio
+class TestSchematicExportsLiveInTheStore:
+    """The netlist a schematic runs as is kept in the store, not in the author's folder.
+
+    LTspice writes ``<name>.net`` beside the schematic; that one is its choice.
+    What the server kept besides — a ``.ltspice-mcp/exports/`` snapshot, or a
+    ``<name>.run-<hash>.net`` sibling whenever the export had a relative
+    include — is bookkeeping, and lives beside the job records that name it.
+    """
+
+    async def test_a_schematic_run_leaves_only_ltspices_own_export_beside_it(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        project_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        schematic = _schematic(project_dir / "amp.asc", "1k")
+        _asc_exporter(state_with_sim)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(schematic, "export-in-store", provenance=True), state_with_sim
+            )
+        )
+
+        assert data["outcome"] == "complete"
+        assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
+        exports = Store(work_dir).exports_dir
+        snapshots = [
+            Path(entry["path"])
+            for entry in data["source"][0]["manifest"]
+            if Path(entry["path"]).parent == exports
+        ]
+        assert [p.name.split(".run-")[0] for p in snapshots] == ["amp"]
+        assert snapshots[0].is_file()
+
+    async def test_a_relative_include_resolves_from_the_schematics_folder(
+        self,
+        state_with_sim: SessionState,
+        project_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The schematic's ``.include models.inc`` names a file in its own folder.
+
+        The export no longer sits in that folder, so staging has to resolve the
+        reference against the schematic, and digest the file it finds there.
+        """
+        fake_simulator(monkeypatch)
+        schematic, models = _schematic_with_include(state_with_sim, project_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(schematic, "relative-include", provenance=True), state_with_sim
+            )
+        )
+
+        assert data["outcome"] == "complete", data
+        assert sorted(p.name for p in project_dir.iterdir()) == [  # noqa: ASYNC240
+            "amp.asc",
+            "amp.net",
+            "models.inc",
+        ]
+        (entry,) = [e for e in data["source"][0]["manifest"] if e["path"] == str(models)]
+        assert entry["staged"] is True
+        assert entry["sha256"] == sha256_file(models)
+        staged_deck = Path(data["source"][0]["staged_deck"]).read_text()  # noqa: ASYNC240
+        assert f".include {entry['staged_path']}" in staged_deck
+
+    async def test_an_edited_include_of_a_schematic_blocks_its_replay(
+        self,
+        state_with_sim: SessionState,
+        project_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        schematic, models = _schematic_with_include(state_with_sim, project_dir)
+        args = _args(schematic, "edited-include")
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        models.write_text(".param rval=2k\n")
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert first["outcome"] == "complete"
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(models) in data["error"]["message"]
+        assert len(submissions) == 1
+
+    async def test_a_store_outside_the_sandbox_still_runs_a_schematic(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        project_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The sandbox admits the schematic; its export is the server's own file."""
+        fake_simulator(monkeypatch)
+        schematic = _schematic(project_dir / "amp.asc", "1k")
+        state = SessionState.create(
+            dataclasses.replace(
+                config, allowed_paths=[project_dir], config_path=work_dir / "absent.toml"
+            ),
+            available={"fake": FakeSim},
+        )
+        _asc_exporter(state)
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(schematic, "store-outside-sandbox"), state)
+        )
+
+        assert data["outcome"] == "complete", data
+        assert not Store(work_dir).root.is_relative_to(project_dir)
 
 
 @pytest.mark.asyncio

@@ -40,7 +40,7 @@ from spicelib import AscEditor
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, replace_file
 from ltspice_mcp.lib.cursor_codec import canonical_json
-from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
+from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
@@ -503,15 +503,13 @@ def _commit_asc(text: str, target: Path, build_id: str, encoding: str) -> _Commi
 async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
     """Export a committed-sheet COPY to a netlist and return its text (seam).
 
-    Uses ``resolve_runnable_netlist`` — which takes its own asc_export_lock on
-    the copy's path, so there is no reentrancy with the guard-held target lock.
-    Isolated as its own function so tests can substitute a netlist without a
-    real LTspice binary.
+    Uses ``export_netlist_text`` — which takes its own asc_export_lock on the
+    copy's path, so there is no reentrancy with the guard-held target lock, and
+    keeps no snapshot: the copy and its export are removed with the build's
+    export directory. Isolated as its own function so tests can substitute a
+    netlist without a real LTspice binary.
     """
-    from ltspice_mcp.lib.encoding import read_spice_text
-
-    net_path = await resolve_runnable_netlist(str(asc_copy), state)
-    return await asyncio.to_thread(read_spice_text, net_path)
+    return await export_netlist_text(asc_copy, state)
 
 
 # ---------------------------------------------------------------------------
@@ -792,7 +790,7 @@ async def _exported_reference(
     ref_copy = export_root / "reference.asc"
     await asyncio.to_thread(shutil.copyfile, ref, ref_copy)
     try:
-        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state))
+        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state), base_dir=ref.parent)
     except Exception as exc:  # broad by design — export failure is a reported fact
         return ReferenceNetlist(
             None, f"the reference {ref.name} could not be exported to a netlist: {exc}"
@@ -849,8 +847,9 @@ async def _run_reference_stage(
             ref_netlist.source,
             netlist_text,
             ref_source,
-            copy_asc.with_suffix(".net"),
+            target,
             state,
+            ref_base_dir=ref_netlist.base_dir,
         )
         verification["_warnings"] = cmp_warnings + [
             f"{f.get('rule_id')}: {(f.get('evidence') or {}).get('detail') or f.get('subject')}"

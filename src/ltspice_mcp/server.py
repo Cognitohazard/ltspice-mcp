@@ -378,11 +378,11 @@ async def call_tool(
     # folder of anyone who has the plugin installed. Attempted at most once per
     # session: the flag also stops a read-only dir from rebuilding+rewriting the
     # config doc on every call. Best-effort — a write failure must not break the
-    # tool call.
+    # tool call. ``write_config`` switches it off entirely.
     if not state.config_write_attempted:
         state.config_write_attempted = True
         cfg_path = state.config.config_path
-        if not cfg_path.exists():
+        if state.config.write_config and not cfg_path.exists():
             with suppress(OSError):
                 generate_default_config(cfg_path)
 

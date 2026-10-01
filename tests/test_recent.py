@@ -37,6 +37,15 @@ class TestIndexPath:
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
         assert isolated != recent.index_path()
 
+    def test_windows_uses_local_appdata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Local, not roaming, and not a POSIX dot-directory in the profile."""
+        monkeypatch.delenv("LTSPICE_MCP_HOME", raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        monkeypatch.setattr(store.sys, "platform", "win32")
+        assert recent.index_path() == tmp_path / "Local" / "ltspice-mcp" / "recent.json"
+
 
 class TestTouch:
     def test_touch_circuit_file(self, tmp_path: Path, recent_home: Path) -> None:
