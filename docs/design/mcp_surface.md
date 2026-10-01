@@ -339,9 +339,11 @@ request_id           str, optional      idempotency key; minted when omitted
 circuits             list[{path, id?}]  .cir / .net / .sp / .asc
 variations           list[Variation]    Appendix A.1. assign entries combine by
                                         cartesian product; AT MOST ONE random
-                                        entry per call (the product of two
-                                        random families is ill-defined).
-                                        [] = one plain run per circuit
+                                        entry per circuit (the product of two
+                                        random families on one deck is
+                                        ill-defined); entries whose applies_to
+                                        name different circuits run side by
+                                        side. [] = one plain run per circuit
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
@@ -1299,7 +1301,7 @@ what produced the only measured argument failures.
   See the native PDK contract below for the supported profile and authored deck.
 
 {kind: "random", id?, runs: int >= 1, seed?: int, applies_to?: [circuit id],
- rules: [RandomRule]}          at most ONE random entry per call
+ rules: [RandomRule]}          at most ONE random entry per circuit
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:

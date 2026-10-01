@@ -332,11 +332,33 @@ class TestPdkNativeExpansion:
 
 
 class TestRandomExpansion:
-    def test_only_one_random_entry_is_allowed(self, tmp_path: Path):
+    def test_only_one_random_entry_per_circuit_is_allowed(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")
 
-        with pytest.raises(VariationError, match="At most one random"):
+        with pytest.raises(VariationError, match="at most one") as exc_info:
             expand_variations([circuit], [_random(), _random(seed=8)])
+        assert exc_info.value.code == "multiple_random_variations"
+
+    def test_random_entries_on_different_circuits_each_run(self, tmp_path: Path):
+        # The rule was one random entry per call, so two designs could not be
+        # Monte-Carlo'd in one job although neither deck saw two families.
+        first = _deck(tmp_path / "a.cir", "a")
+        second = _deck(tmp_path / "b.cir", "b")
+
+        cases = expand_variations(
+            [first, second],
+            [_random(seed=3, runs=2, applies_to=["a"]), _random(seed=8, runs=3, applies_to=["b"])],
+        )
+
+        assert [(case.circuit_id, case.random_index) for case in cases] == [
+            ("a", 0),
+            ("a", 1),
+            ("b", 0),
+            ("b", 1),
+            ("b", 2),
+        ]
+        seeds = {case.circuit_id: case.random.seed for case in cases if case.random is not None}
+        assert seeds == {"a": 3, "b": 8}
 
     def test_seed_is_repeatable_with_distinct_case_streams(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")

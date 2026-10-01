@@ -91,6 +91,7 @@ from ltspice_mcp.lib.variations import (
     Variation,
     VariationError,
     check_case_cap,
+    check_random_families,
     expand_variations,
     format_case_id,
     materialize_variants,
@@ -585,11 +586,7 @@ async def handle_run_experiments(
                     _native_request(native, circuit.circuit_id, native.sample_start),
                     backend=simulator_dialect(simulator) or "",
                 )
-        if sum(isinstance(item, RandomVariation) for item in args.variations) > 1:
-            raise VariationError(
-                "multiple_random_variations",
-                "At most one random variation entry is allowed per run_experiments call",
-            )
+        check_random_families([circuit.circuit_id for circuit in circuit_inputs], args.variations)
         projected = sum(
             projected_case_count(circuit.circuit_id, args.variations) for circuit in circuit_inputs
         )

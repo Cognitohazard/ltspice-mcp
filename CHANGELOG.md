@@ -10,6 +10,12 @@ tool-surface changes.
 
 ### Fixed
 
+- `run_experiments` refused two `random` variation entries in one call even
+  when their `applies_to` lists named different circuits, so two designs could
+  not be Monte-Carlo'd in one job. The rule it enforces is per circuit: the
+  product of two random families on one deck is ill-defined, so a circuit still
+  takes at most one (`multiple_random_variations`, now naming the circuit), but
+  entries on different circuits each run with their own seed.
 - `add_net_label` refused any second name on a net that already had one, even
   a name no other net carries, which joins nothing. It now refuses only a label
   that would join two named nets: a name another net already has, or a new

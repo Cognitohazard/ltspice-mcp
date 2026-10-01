@@ -591,6 +591,28 @@ def validate_variation_circuit_ids(
                 )
 
 
+def check_random_families(circuit_ids: Sequence[str], variations: Sequence[Variation]) -> None:
+    """Refuse a circuit that two random entries apply to.
+
+    The product of two random families on one deck is ill-defined, so a circuit
+    takes at most one. Entries whose ``applies_to`` lists are disjoint run
+    side by side in one call, each circuit drawing from its own entry.
+    """
+    random_entries = [item for item in variations if isinstance(item, RandomVariation)]
+    for circuit_id in circuit_ids:
+        applying = [item for item in random_entries if _applies(item, circuit_id)]
+        if len(applying) > 1:
+            names = ", ".join(
+                repr(item.id) if item.id else "an unnamed entry" for item in applying
+            )
+            raise VariationError(
+                "multiple_random_variations",
+                f"Circuit {circuit_id!r} has {len(applying)} random variation entries "
+                f"applying to it ({names}); a circuit takes at most one. Give each "
+                "entry an applies_to list naming different circuits.",
+            )
+
+
 def assignment_family_size(variation: AssignVariation) -> int:
     """Return one assign entry's expansion size without reading a deck."""
     sizes = [len(values) for values in variation.assign.values()] + [
@@ -648,11 +670,7 @@ def expand_variations(
     native_entries = [item for item in variations if isinstance(item, PdkNativeVariation)]
     if len({item.id.casefold() for item in native_entries}) != len(native_entries):
         raise VariationError("duplicate_native_family", "native family ids must be unique")
-    if len(random_entries) > 1:
-        raise VariationError(
-            "multiple_random_variations",
-            "At most one random variation entry is allowed per run_experiments call",
-        )
+    check_random_families([circuit.circuit_id for circuit in circuits], random_entries)
     projected = sum(projected_case_count(circuit.circuit_id, variations) for circuit in circuits)
     check_case_cap(projected, max_cases)
 

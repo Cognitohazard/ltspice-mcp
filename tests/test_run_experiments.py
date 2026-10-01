@@ -2921,6 +2921,60 @@ class TestVariationsReachIntoIncludes:
         assert len(set(values)) == 2
         assert all(float(value) != 1000.0 for value in values)
 
+    async def test_random_entries_on_different_circuits_share_one_job(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # Refused per call before, so two designs could not be Monte-Carlo'd
+        # in one job; one random entry per circuit is the rule that holds.
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        first, second = _deck(work_dir / "a.cir"), _deck(work_dir / "b.cir")
+
+        def entry(circuit: str, runs: int) -> dict[str, Any]:
+            return {
+                "kind": "random",
+                "runs": runs,
+                "seed": 5,
+                "applies_to": [circuit],
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    first,
+                    "random-per-circuit",
+                    lint="off",
+                    circuits=[{"path": str(first), "id": "a"}, {"path": str(second), "id": "b"}],
+                    variations=[entry("a", 2), entry("b", 3)],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "error" not in data, data.get("error")
+        assert data["completeness"]["produced"] == 5
+        assert len(submitted) == 5
+
+        refused = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    first,
+                    "random-same-circuit",
+                    lint="off",
+                    circuits=[{"path": str(first), "id": "a"}, {"path": str(second), "id": "b"}],
+                    variations=[entry("a", 2), {**entry("b", 2), "applies_to": ["a", "b"]}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert refused["error"]["code"] == "multiple_random_variations"
+        assert "'a'" in refused["error"]["message"]
+        assert len(submitted) == 5
+
     async def test_two_level_include_chain_resolves_and_is_rewired(
         self,
         state_with_sim: SessionState,
