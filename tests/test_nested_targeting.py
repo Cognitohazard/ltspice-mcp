@@ -115,30 +115,30 @@ def test_structured_grid_clones_selected_ancestry_and_preserves_peer(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("attribute", "parameter", "value"),
+    ("attribute", "parameter", "value", "reason"),
     [
-        ("model", None, "n w=2u"),
-        ("model", None, "n\n.end"),
-        ("parameter", "w", "1u l=9u"),
-        ("parameter", "w", "{1} l=9u"),
-        ("parameter", "w", "1}"),
-        ("parameter", "w", "'1"),
-        ("parameter", "w", "1; ignored"),
-        ("parameter", "w", "1$ignored"),
-        ("parameter", "w", float("inf")),
-        ("parameter", "w", float("nan")),
-        ("value", "w", "1"),
-        ("parameter", None, "1"),
-        ("parameter", "w=x", "1"),
-        ("model", None, "n\r.end"),
-        ("parameter", "w", "1)"),
-        ("parameter", "w", "{1}junk"),
+        ("model", None, "n w=2u", "model must be one legal model reference token"),
+        ("model", None, "n\n.end", "single-line"),
+        ("parameter", "w", "1u l=9u", "parameter payload must be one expression"),
+        ("parameter", "w", "{1} l=9u", "parameter payload must be one expression"),
+        ("parameter", "w", "1}", r"unexpected '\}' \(no matching opener\)"),
+        ("parameter", "w", "'1", "unterminated quoted string"),
+        ("parameter", "w", "1; ignored", "comment-free"),
+        ("parameter", "w", "1$ignored", "comment-free"),
+        ("parameter", "w", float("inf"), "assignment must be finite"),
+        ("parameter", "w", float("nan"), "assignment must be finite"),
+        ("value", "w", "1", "parameter is required iff attribute is parameter"),
+        ("parameter", None, "1", "parameter is required iff attribute is parameter"),
+        ("parameter", "w=x", "1", "parameter must be an identifier"),
+        ("model", None, "n\r.end", "single-line"),
+        ("parameter", "w", "1)", r"unexpected '\)' \(no matching opener\)"),
+        ("parameter", "w", "{1}junk", "parameter payload must be one expression"),
     ],
 )
-def test_structured_payload_refuses_slot_escape(attribute, parameter, value):
+def test_structured_payload_refuses_slot_escape(attribute, parameter, value, reason):
     from ltspice_mcp.lib.variations import InstanceAssignment
 
-    with pytest.raises(ValueError, match=r"."):
+    with pytest.raises(ValueError, match=reason):
         InstanceAssignment(
             instance=["XA", "M0"], attribute=attribute, parameter=parameter, values=[value]
         )
