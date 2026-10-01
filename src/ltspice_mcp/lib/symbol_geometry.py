@@ -143,17 +143,21 @@ def bbox_from_elements(
 
 @dataclass(frozen=True)
 class SymbolInfo:
-    """Parsed symbol metadata: pins, bounding box, description.
+    """Parsed symbol metadata: pins, bounding box, description, netlist prefix.
 
     The bounding box is in the symbol's local coordinate space. LTspice
     symbols are typically centered around the origin, so ``bbox.x1`` and
-    ``bbox.y1`` are usually negative.
+    ``bbox.y1`` are usually negative. ``prefix`` is the symbol's
+    ``SYMATTR Prefix`` (``R``, ``QN``, ``MN``, ``X``...), empty when it has
+    none; its first letter is the element class LTspice netlists the part as,
+    whatever the instance is named.
     """
 
     name: str
     description: str
     pins: tuple[PinInfo, ...]
     bbox: BBox
+    prefix: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -229,6 +233,7 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
 
     pins: list[PinInfo] = []
     description = ""
+    prefix = ""
     elements: list[Element] = []
 
     i = 0
@@ -262,6 +267,8 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
 
         if line.startswith("SYMATTR Description"):
             description = line.split(None, 2)[2] if len(line.split(None, 2)) > 2 else ""
+        elif line.startswith("SYMATTR Prefix"):
+            prefix = line.split(None, 2)[2].strip() if len(line.split(None, 2)) > 2 else ""
 
         i += 1
 
@@ -274,6 +281,7 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
         description=description,
         pins=tuple(pins),
         bbox=bbox,
+        prefix=prefix,
     )
 
 

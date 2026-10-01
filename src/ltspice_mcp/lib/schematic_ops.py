@@ -245,15 +245,77 @@ _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 _LEVEL_LABEL_RE = re.compile(r"^\s*level\.\d+\s*$", re.IGNORECASE)
 
 
-def _validate_component_value(reference: str, value: str) -> None:
+# A SPICE number with an optional scale suffix (``2``, ``0.5``, ``1e-3``,
+# ``10u``): the positional area factor a BJT, JFET or diode takes after its
+# model name.
+_SPICE_NUMBER_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[a-zA-Zµμ]*")
+
+# Element classes with exactly two terminals before a value that runs to the
+# end of the line: an independent source's spec (``DC 5 AC 1``) and a
+# behavioural source's expression (``V=V(a) + V(b)``). LTspice writes the
+# nodes from the symbol's pins, so nothing in the value can be read as a node.
+_SPEC_VALUE_CLASSES = frozenset("VIB")
+
+# Element classes whose model name may be followed by an area factor and
+# ``off``: ``Q1 c b e 2N3904 2 off``, ``J1 d g s NJF 2``, ``D1 a k 1N4148 2``.
+# A MOSFET takes ``off`` but no positional area.
+_AREA_CLASSES = frozenset("QJD")
+_OFF_CLASSES = frozenset("QJDM")
+
+_TOKEN_KINDS_OK = (
+    TokenKind.BARE,
+    TokenKind.PARENED,
+    TokenKind.QUOTED,
+    TokenKind.BRACED,
+    TokenKind.KEY_VALUE,
+)
+
+
+def _device_tail_ok(element: str, tokens: list) -> bool:
+    """Whether ``tokens`` read as ``MODEL [area] [off] [KEY=VALUE ...]`` for ``element``.
+
+    The model name comes first; after it come at most one area factor (a number
+    or a braced expression, for the classes that take one), at most one
+    ``off``, and any ``KEY=VALUE`` instance parameters.
+    """
+    if not tokens or tokens[0].kind not in (TokenKind.BARE, TokenKind.QUOTED):
+        return False
+    area = off = 0
+    for tok in tokens[1:]:
+        if tok.kind == TokenKind.KEY_VALUE:
+            continue
+        text = tok.text
+        if element in _OFF_CLASSES and tok.kind == TokenKind.BARE and text.lower() == "off":
+            off += 1
+        elif element in _AREA_CLASSES and (
+            tok.kind == TokenKind.BRACED
+            or (tok.kind == TokenKind.BARE and _SPICE_NUMBER_RE.fullmatch(text))
+        ):
+            area += 1
+        else:
+            return False
+    return area <= 1 and off <= 1
+
+
+def _validate_component_value(reference: str, value: str, element: str | None = None) -> None:
     """Reject values that would corrupt the netlist line on write.
 
-    spicelib writes the value verbatim into the component line; spaces in
-    a non-parameterised, non-quoted value bleed into a phantom node and
-    irrecoverably break the netlist. The check is permissive of:
-    - SPICE expressions in braces (``{1/(2*pi*RC)}``) — braces protect spaces
-    - quoted strings (``"a b"``)
-    - ``KEY=VALUE`` parameter lists (handled by ``_apply_component_value``)
+    LTspice writes the Value verbatim after the symbol's pins. A space in a
+    single-token value (a resistor's ``1 k``, a subcircuit's ``opamp 2``)
+    splits it into two tokens, and the netlist reader then takes the first as
+    another node. ``element`` is the element class letter the part netlists
+    as (the symbol's prefix, else the reference's first letter); the shapes
+    that cannot do that are accepted:
+
+    - SPICE expressions in braces (``{1/(2*pi*RC)}``) and quoted strings;
+    - ``[MODEL] KEY=VALUE ...`` parameter lists (split by ``_apply_component_value``);
+    - waveform functions (``PULSE(...)``, ``SIN(...) AC 1``), whose parentheses
+      protect their spaces;
+    - for an independent or behavioural source, any well-formed run of tokens
+      (``AC 1``, ``DC 5 AC 1``, ``V=V(a) + V(b)``): the value follows exactly
+      two nodes and runs to the end of the line;
+    - for a BJT, JFET or diode, a model name followed by an area factor and/or
+      ``off`` (``2N3904 2``, ``NPN 8 off``); for a MOSFET, a model name and ``off``.
     """
     if not isinstance(value, str):  # type: ignore[reportUnnecessaryIsInstance]
         # Pydantic should have rejected non-strings already, but guard
@@ -269,10 +331,26 @@ def _validate_component_value(reference: str, value: str) -> None:
             f"Component '{reference}' value must be a single line; "
             f"got embedded newline in {value!r}"
         )
+    if not any(c.isspace() for c in stripped):
+        return
     # Brace-balanced expression or quoted literal — spaces are safe.
     if (stripped.startswith("{") and stripped.endswith("}")) or (
         stripped.startswith('"') and stripped.endswith('"')
     ):
+        return
+    element = (element or reference[:1]).upper()
+    # A behavioural source's expression may carry anything its own grammar
+    # allows (comparison operators, a ternary); it cannot reach a node slot.
+    if element == "B":
+        return
+    try:
+        toks = [t for t in tokenize_body(stripped) if t.kind != TokenKind.COMMENT_TRAIL]
+    except SpiceLexError:
+        toks = []
+    well_formed = bool(toks) and all(t.kind in _TOKEN_KINDS_OK for t in toks)
+    if well_formed and element in _SPEC_VALUE_CLASSES:
+        return
+    if well_formed and element in _OFF_CLASSES and _device_tail_ok(element, toks):
         return
     # Independent-source waveform spec: ``PULSE(...)``, ``SIN(...)``,
     # ``EXP(...)``, ``PWL(...)``, ``SFFM(...)``, ``TABLE(...)``, ``AM(...)``,
@@ -280,10 +358,6 @@ def _validate_component_value(reference: str, value: str) -> None:
     # group whose parens protect the embedded whitespace. Optionally
     # preceded by a DC magnitude (``"1 PULSE(...)"``) and followed by an
     # ``AC <mag>`` annotation (``"PULSE(...) AC 1"``).
-    try:
-        toks = tokenize_body(stripped)
-    except SpiceLexError:
-        toks = []
     if toks and any(t.kind == TokenKind.PARENED for t in toks):
         # If the body is a sequence of BARE/PARENED tokens (no stray
         # equals signs, no unbalanced quotes), the parens protect their
@@ -308,13 +382,18 @@ def _validate_component_value(reference: str, value: str) -> None:
             and all(bool(_PARAM_TOKEN_RE.fullmatch(tok)) for tok in rest)
         ):
             return
-    if any(c.isspace() for c in stripped):
-        raise NetlistError(
-            f"Component '{reference}' value {value!r} contains whitespace. "
-            "Wrap SPICE expressions in braces ({...}) or use the parameter "
-            "form (e.g. 'NMOS1 W=10u L=1u'). A bare space-separated value "
-            "would corrupt the netlist line."
-        )
+    if element in _AREA_CLASSES:
+        shape = "a model name, then an optional area factor and 'off' (e.g. '2N3904 2 off')"
+    elif element == "M":
+        shape = "a model name, then optional 'off' and KEY=VALUE parameters"
+    else:
+        shape = "a single token"
+    raise NetlistError(
+        f"Component '{reference}' value {value!r} contains whitespace where a "
+        f"{element}-class value is {shape}; LTspice would read the extra token "
+        "as another node. Wrap SPICE expressions in braces ({...}) or use the "
+        "parameter form (e.g. 'NMOS1 W=10u L=1u')."
+    )
 
 
 def _asc_component_value(editor, reference: str) -> str | None:
@@ -388,7 +467,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str) -> None:
+def _apply_component_value(editor, reference: str, value: str, element: str | None = None) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -399,21 +478,22 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     tokens and route them through ``set_component_parameters``, keeping
     the model/value field for ``set_component_value``.
 
-    Token-based split via ``spice_lex.tokenize_body``: head is every
-    ``BARE`` / ``QUOTED`` / ``BRACED`` token before any ``KEY_VALUE``
-    token; params are the ``KEY_VALUE`` tokens. The classified-token
+    Token-based split via ``spice_lex.tokenize_body``: params are the
+    ``KEY_VALUE`` tokens and the head is the rest of the value as written
+    (``2N3904 2 off``, ``PULSE(0 1 0 1n 1n 5n 10n)``). The classified-token
     layer knows model-name vs param-name by construction, so adversarial
     cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
-    _validate_component_value(reference, value)
+    element = (element or reference[:1]).upper()
+    _validate_component_value(reference, value, element)
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
     # split below would route it to set_component_parameters, which the .asc
     # editor writes into SpiceLine while the stale expression stays in Value:
     # the netlisted B-line then carries two expressions ("No such node")
     # behind a success message.
-    if reference[:1].upper() == "B" or "=" not in value:
+    if element == "B" or "=" not in value:
         _set_or_create_value(editor, reference, value)
         return
     try:
@@ -422,17 +502,22 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
         raise NetlistError(f"Component '{reference}' value {value!r} failed to parse: {e}") from e
     params: dict[str, str] = {}
     head_parts: list[str] = []
+    # The head is the value with its KEY=VALUE spans cut out, each remaining
+    # run kept as written: a source spec's ``PULSE(0 1 0 1n 1n 5n 10n)`` is a
+    # BARE name and a PARENED group that must stay joined.
+    cursor, end = 0, len(value)
     for tok in tokens:
+        if tok.kind == TokenKind.COMMENT_TRAIL:
+            end = tok.body_offset
+            break
         if tok.kind == TokenKind.KEY_VALUE:
             assert tok.key is not None
             assert tok.value is not None
             params[tok.key] = tok.value
-        elif tok.kind in (TokenKind.BARE, TokenKind.QUOTED, TokenKind.BRACED):
-            head_parts.append(tok.text)
-        # COMMENT_TRAIL / EQUALS / PARENED outside KEY_VALUE: ignore
-        # for value-setting purposes — _validate_component_value
-        # already rejected the shapes that would corrupt the netlist.
-    head = " ".join(head_parts)
+            head_parts.append(value[cursor : tok.body_offset].strip())
+            cursor = tok.body_end
+    head_parts.append(value[cursor:end].strip())
+    head = " ".join(part for part in head_parts if part)
     if head:
         _set_or_create_value(editor, reference, head)
     if params:
@@ -472,6 +557,21 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
         return None
     pos, erot = editor.get_component_position(reference)
     return compute_placed_geometry(info, int(pos.X), int(pos.Y), erot.name if erot else "R0")
+
+
+def element_class(editor: AscEditor, reference: str) -> str:
+    """The element letter a placed part netlists as.
+
+    LTspice takes it from the symbol's ``Prefix`` (``QN`` → ``Q``) and prepends
+    that letter to an instance name that does not already start with it, so a
+    part named ``Vin`` on a resistor symbol is a resistor. Falls back to the
+    reference's own first letter when the symbol does not resolve.
+    """
+    comp = editor.components.get(reference)
+    symbol = getattr(comp, "symbol", None)
+    info = symbol_info_for(editor, symbol) if symbol else None
+    prefix = info.prefix if info is not None and info.prefix else reference
+    return prefix[:1].upper()
 
 
 def collect_component_geometry(editor: AscEditor) -> list[dict]:
@@ -2358,7 +2458,7 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
-        _apply_component_value(editor, op.reference, op.value)
+        _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result = {"op": "set_component_value", "reference": op.reference, "value": op.value}
         if lint:
             result["warnings"] = [lint]

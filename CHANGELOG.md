@@ -10,6 +10,18 @@ tool-surface changes.
 
 ### Fixed
 
+- `edit_schematic`'s `set_component_value` refused any value with a space
+  outside braces, quotes, a waveform's parentheses or a `MODEL KEY=VALUE` list,
+  so a source's `AC 1` or `DC 5 AC 1`, a BJT's `2N3904 2` or `NPN 8`, and a
+  behavioural source's `V=V(a) + V(b)` were refused, although `add_component`
+  writes the same values and none of them can reach a node slot. The refusal
+  now applies only where a space would split the value into an extra node: a
+  resistor, capacitor, inductor or subcircuit value, a MOSFET value other than
+  a model name and `off`, and a BJT, JFET or diode value other than a model
+  name, an area factor and `off`. The element class is the symbol's `Prefix`,
+  as LTspice netlists it, not the instance name. A waveform followed by a
+  parameter (`PULSE(...) Rser=1`) keeps its parentheses in Value and puts the
+  parameter in SpiceLine.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
