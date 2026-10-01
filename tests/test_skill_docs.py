@@ -15,6 +15,10 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
+from ltspice_mcp.lib.response_budget import BUDGET_MIN_TOKENS
+from ltspice_mcp.tools import get_tools
+
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = ROOT / "skills" / "spice-experiments" / "SKILL.md"
 BENCH_SKILL_PATH = ROOT / "skills" / "spice-bench-craft" / "SKILL.md"
@@ -57,6 +61,15 @@ def _text() -> str:
     return SKILL_PATH.read_text(encoding="utf-8")
 
 
+def _section(text: str, topic: str) -> str:
+    """The body of the first markdown section whose heading mentions ``topic``,
+    up to the next heading of the same or a higher level."""
+    match = re.search(rf"^(#+)[^\n]*{re.escape(topic)}[^\n]*\n", text, re.IGNORECASE | re.M)
+    assert match, f"no section heading mentions {topic!r}"
+    end = re.compile(rf"^#{{1,{len(match.group(1))}}}\s", re.M).search(text, match.end())
+    return text[match.end() : end.start() if end else len(text)]
+
+
 @pytest.mark.parametrize(("path", "budget"), SKILL_BUDGETS)
 def test_skill_size_is_pinned(path: Path, budget: int):
     text = path.read_text(encoding="utf-8")
@@ -82,44 +95,70 @@ class TestSpiceExperimentsSkill:
         # Idiom 1: scalars come from .MEAS authored in the deck, read back
         # through the measurements recipe. Idiom 2: device small-signal params
         # come from a .op run with .options logopinfo, read back through the
-        # operating_point recipe. Pin the mechanism words, not just the
-        # headings, so gutting either idiom's teaching content fails.
+        # operating_point recipe. Pin the mechanism words, not the headings,
+        # and the recipes against the live union so a rename fails here.
         text = _text()
         assert ".meas" in text.lower()
-        assert "measurements" in text
-        assert "logopinfo" in text
-        assert "operating_point" in text
+        assert "logopinfo" in text.lower()
+        for recipe in ("measurements", "operating_point"):
+            assert recipe in DISCRIMINANTS, f"{recipe} is no longer a recipe"
+            assert re.search(rf"\b{recipe}\b", text), f"the skill never names {recipe}"
 
     def test_teaches_response_budget(self):
-        # The caller-set response cap: pin the parameter name, its unit
-        # convention, and the floor, so the section can't be gutted silently.
-        text = _text()
-        assert "`budget`" in text
-        budget_section = text.split("## Cap a reply with `budget`", 1)[1].split("##", 1)[0]
-        assert "`run_experiments`" in budget_section
-        assert "estimated tokens" in text
-        assert "500" in text
+        # The caller-set response cap: the section that teaches it names every
+        # tool that takes it, its unit, and its floor — each read off the code,
+        # so the section can neither be gutted nor fall behind the surface.
+        owners = {
+            name
+            for name, registered in get_tools()[1].items()
+            if "budget" in registered.definition.input_schema.get("properties", {})
+        }
+        assert owners, "no tool takes a budget any more"
+        section = _section(_text(), "budget")
+        missing = sorted(tool for tool in owners if not re.search(rf"\b{tool}\b", section))
+        assert not missing, f"the budget section never names {missing}"
+        assert "token" in section.lower()
+        assert re.search(rf"\b{BUDGET_MIN_TOKENS}\b", section), "the budget floor is not stated"
 
 
 class TestSpiceBenchCraftSkill:
     def test_trigger_covers_each_bench_need(self):
+        # The words a client matches a request against to load this skill.
+        # Hyphens, case and line wrapping in the frontmatter are not the point.
         text = BENCH_SKILL_PATH.read_text(encoding="utf-8")
-        description = text.split("---", 2)[1].lower()
-        for trigger in ("authoring", "servo-loop", "dc-servo", "biasing", "template"):
-            assert trigger in description
+        description = " ".join(text.split("---", 2)[1].lower().replace("-", " ").split())
+        for trigger in ("authoring", "servo loop", "dc servo", "biasing", "template"):
+            assert trigger in description, f"the skill's trigger never says {trigger!r}"
 
     def test_vendored_notes_are_pinned(self):
         digest = hashlib.sha256(BENCH_NOTES_PATH.read_bytes()).hexdigest()
         assert digest == "61917d4b411659b53a77d162af5f2e9c53405a1f3fb41c26a1abba89596fd4a1"
 
-    def test_teaches_servo_templates_and_ngspice_output(self):
+    def test_teaches_the_dc_servo_element(self):
+        # The DC-only feedback inductor that closes the loop at DC.
         text = BENCH_SKILL_PATH.read_text(encoding="utf-8")
-        assert "LFB  out  inn  1T" in text
-        assert "Operating-point and supply-current archetype" in text
-        assert "Open-loop AC archetype" in text
-        assert "Closed-loop transient and load-step archetype" in text
-        assert "dot-less interactive `meas`" in text
-        assert "scale, v(out), scale, i(VDD)" in text
+        assert re.search(r"^\s*LFB\s+out\s+inn\s+1T\b", text, re.IGNORECASE | re.MULTILINE)
+
+    def test_ships_a_bench_template_per_analysis(self):
+        # An operating-point, an open-loop AC and a closed-loop transient bench,
+        # each as a complete deck an agent can render.
+        decks = re.findall(
+            r"```spice\n(.*?)```", BENCH_SKILL_PATH.read_text(encoding="utf-8"), re.S
+        )
+        for analysis in (".op", ".ac", ".tran"):
+            assert any(
+                re.search(rf"^{re.escape(analysis)}\b", deck, re.IGNORECASE | re.MULTILINE)
+                and re.search(r"^\.end\s*$", deck, re.IGNORECASE | re.MULTILINE)
+                for deck in decks
+            ), f"no complete {analysis} bench template"
+
+    def test_teaches_ngspice_batch_output(self):
+        text = BENCH_SKILL_PATH.read_text(encoding="utf-8")
+        # Under -b -r a measurement goes in .control as the dot-less command.
+        controls = re.findall(r"^\.control\b(.*?)^\.endc\b", text, re.S | re.M | re.I)
+        assert any(re.search(r"^meas\s", block, re.M | re.I) for block in controls)
+        # wrdata repeats the scale column before every dumped vector.
+        assert re.search(r"scale\s*,\s*v\(out\)\s*,\s*scale\s*,\s*i\(vdd\)", text, re.I)
 
 
 @pytest.mark.parametrize(
