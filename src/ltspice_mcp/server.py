@@ -25,6 +25,7 @@ from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.observability import configure_stderr_logging
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
     get_resource_templates,
     get_static_resources,
@@ -193,15 +194,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
                 is_default = cls == state.default_simulator
                 default_marker = " (default)" if is_default else ""
                 logger.info(f"  - {name}{default_marker}")
-                try:
-                    # Try to get executable path if available
-                    if hasattr(cls, "spice_exe"):
-                        exe_path = (
-                            cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
-                        )
-                        logger.info(f"    Executable: {exe_path}")
-                except Exception:
-                    pass
+                # The simulator itself, not its launcher: under Wine the
+                # launch command starts with "wine".
+                exe_path = executable_path(cls)
+                if exe_path is not None:
+                    logger.info(f"    Executable: {exe_path}")
         else:
             logger.warning(
                 "No simulators detected. Circuit editing will work but simulation tools will return errors."

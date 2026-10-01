@@ -28,12 +28,12 @@ tool-surface changes.
   Seen with two scripts detaching the same request. Only the owning process
   writes a job's record now; the caller that replayed still gets the
   `idempotent_replay` observation in its receipt.
-- On Windows, a second `run_experiments` call carrying the same `request_id`
-  could mint a second job instead of replaying the first. Opening a job record
-  while its running job rewrites it fails with a sharing violation for a
-  moment, and the request gate read that as a missing record and recreated the
-  submission. The gate now re-reads a record that exists, and treats only a
-  record that is actually gone as missing.
+- On Windows, a job record read while its running job rewrote it could read as
+  missing: opening a file at the instant a rename replaces it fails with access
+  denied for a moment. The request gate then minted a second job for a repeated
+  `request_id` instead of replaying the first, and a lookup, a listing or a
+  cancel could report a live job as not found. Reading a job record now retries
+  that denial on the same short schedule writing one already did.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call
@@ -42,6 +42,26 @@ tool-surface changes.
   loop clock reads past the deadline. asyncio fires a timer up to one clock
   resolution early (15.6 ms on Windows), so the clock could read short of a
   deadline the wait had reached and the coordinator killed again.
+- A `wire_pins` waypoint on an existing wire, or a route passing through
+  another wire's end or a lone net label, joined that wiring without a word:
+  the crossing check only looked at crossings strictly inside both wires, and
+  LTspice joins anything that ends on a wire. The contact is now refused when
+  it would merge a net neither endpoint is on, naming the wire and the `{x, y}`
+  endpoint that makes the same T on purpose, and reported as a warning when it
+  touches a net the route already joins. Passing over a pin already wired to
+  an endpoint is reported the same way.
+- `add_net_label` warned that LTspice would ignore a label placed on a wire's
+  interior. LTspice names the wire's net after it, as the net trace and the
+  post-edit `dangling_label` check already assumed; the warning now fires only
+  for a label that touches no wire and no pin.
+- `wire_pins`' own advisories (a long run, a wire through a component's
+  bounding box) reach the `edit_schematic` response's `warnings` again. Since
+  the op replaced the standalone tool they had stopped at the op.
+- The refusal of a route crossing a wire where neither ends no longer claims
+  the crossing would join them; LTspice leaves a plain crossing unjoined.
+- Under Wine, `inspect(kind="capabilities")` reported `wine` as the LTspice
+  executable, because it read the first word of the launch command. It now
+  reports the simulator itself, e.g. `.../LTspice.exe`.
 - `verify_circuit`'s default `managed` export is documented to leave the
   caller's files untouched, but it created a `.ltspice-mcp/locks/` directory
   beside the schematic, as did every `edit_schematic` call, dry runs included.
@@ -163,6 +183,17 @@ tool-surface changes.
   inline. It runs about 600 bytes a component, which costs more than the PNG
   past a handful of parts, and structured-only clients drop the text channel
   it would ride on.
+- A symbol saved in the same folder as its `.asc`, where LTspice looks first and
+  where a hand-drawn subcircuit symbol usually lives, was not found for pin
+  positions. `inspect(kind="symbol")` and rendering found it, but
+  `inspect(kind="net")` on its pins failed with "symbol not found",
+  `inspect(kind="components", detail="full")` left out its pins and bounding
+  box, and `add_component`, `wire_pins` and the other ops that take a pin
+  refused it. Pin positions now come from the sheet's own folder first, then
+  the libraries, so a local symbol wins over a same-named library one and two
+  sheets in different folders each keep their own. A redrawn local symbol is
+  read again. A `base="blank"` build looks beside its target, not beside the
+  temporary template it starts from.
 
 ### Added
 
@@ -194,6 +225,27 @@ tool-surface changes.
   derived trace's statistics are weighted by time; `np.mean` over LTspice's
   variable timestep over-weights the samples packed around edges. The guide's
   trace-math example goes on to them.
+- T-junctions onto an existing wire. `wire_pins` takes `{x, y}` for
+  `from_pin` or `to_pin`; the point must touch a wire or a pin, and on a
+  wire's interior the new segment ends there with the wire left whole, as
+  LTspice's netlister needs no split to join it. The op reports the T under
+  `junctions`. A leg running along the wire it joins, or an endpoint where
+  wires of two nets cross, is refused. `inspect(kind: "net")` at a point on a
+  wire's interior traces that wire's net and names the wire under
+  `snapped_to_wire`, where it used to answer "Nothing found"; a point where
+  two nets' wires cross is refused as ambiguous. The connectivity rule was
+  checked against LTspice 26.1.1 exports of a label, a pin and a wire end on
+  a wire's interior, a plain crossing and a label at a crossing, recorded in
+  `tests/fixtures/t_junctions/`.
+- `edit_schematic` returns what each op found on the sheet in a `results`
+  list, one entry per op keyed by `index` and `op`. `wire_pins` gives the
+  requested segments that were `already_present` and not redrawn and the
+  `junctions` its route made; `remove_wire`, `remove_net_label` and
+  `remove_component`'s wire cleanup give how much they removed. These facts
+  used to stop at the op runner, so a caller saw a redundant junction only as
+  warning text and a skipped segment not at all, though the design doc said
+  `already_present` was reported. An op that found nothing has no entry.
+  `Api.edit_schematic` returns the same list.
 - `LTSPICE_MCP_WRITE_CONFIG=false` stops the first tool call from writing a
   default `ltspice-mcp.toml` into a directory that has none. It is read from
   the environment only: a config file that exists is never rewritten, so a key
@@ -266,6 +318,20 @@ tool-surface changes.
   remedy}`. It says whether `verify_circuit` can make the PNG it returns
   inline and, if not, whether the `raster` extra or the native Cairo library is
   missing and how to install it, before anything is drawn.
+- Results record which simulator build produced them. A job records the
+  executable its cases launch: path, size, modification time and SHA-256.
+  Each case records the build the simulator named in its own output: the
+  LTspice log banner (`LTspice 26.0.2 for Windows`), the ngspice console
+  banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:`
+  when neither exists (LTspice XVII). Run rows carry it as `simulator_version`.
+  `jobs(runs)` and `run_fields` return it, and the lean receipt drops it from
+  produced rows along with their artifact paths. `provenance: true` adds the
+  job's `simulator_executable` to the receipt. Only the first few kilobytes of
+  each artifact are read, whatever its size.
+- `inspect(kind="capabilities")` reports each simulator's `executable_sha256`.
+  Its `version` is now the build that the latest run on that same executable
+  reported, with `version_source` naming the job and case; it was always
+  null. The executable is never launched to ask.
 
 - `inspect(kind="capabilities")` takes an optional `fields` list naming the
   top-level keys to return, such as `["allowed_paths", "config_path"]` after a
@@ -273,6 +339,13 @@ tool-surface changes.
 - `edit_schematic` has a `preexisting` view, which lists what an edit counted
   under `preexisting` (see Changed). Name it in `return_views`, or echo
   `preexisting.cursor` as `view_cursors.preexisting`.
+- A `.asc` pin can be addressed by its 1-based SpiceOrder: `X1.2` reaches the
+  second pin of a block whose pins are named `A`/`B`, the same terminal number
+  a netlist `inspect(kind="net")` query takes. Pin names are matched first,
+  because some symbols name their pins `1`/`2` in an order that need not be
+  their SpiceOrder. This works everywhere a pin is taken: `inspect(kind="net")`,
+  the `wire_pins` op, and the `pin` of `add_net_label`, `remove_net_label` and
+  `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
 
@@ -291,6 +364,16 @@ tool-surface changes.
   math goes: a recipe's signal is one trace or `V(a,b)`, and anything else is
   numpy on the traces. Before, only the error after a failed expression said
   so. That error's example is now a product, not a difference `V(a,b)` reads.
+- Reusing a `request_id` returns an `idempotency_conflict` when the job ran on
+  a different simulator build than the request would launch now, just as it
+  does for an edited deck. Before, swapping the simulator executable (or the
+  default simulator) and restarting replayed the earlier build's results under
+  the same id. A job record that names no executable is refused the same way.
+  A replay therefore needs the requested simulator to be available, as a fresh
+  submission does; `jobs(action="status")` reads the recorded job without one.
+- The store format is version 3. Job records gained the simulator executable
+  and each case's reported build. Version 2 records still load, with both
+  unknown; version 1 records (0.6.1) are not read.
 - A session no longer writes bookkeeping into the folders of the circuits it
   touches. What it wrote there, and where it goes now:
   - the cross-process lock taken for every edit and export
@@ -323,7 +406,7 @@ tool-surface changes.
   returned page. Sample validation reuses unchanged original model parsing
   within each circuit while retaining per-case checks.
 - Job run listings accept field projection, including explicit full native
-  statistical provenance. The store format is version 2.
+  statistical provenance.
 - A case has no time limit unless one is set. Before, every case was capped
   at spicelib's hidden 600 s. Now a case runs until it ends or is cancelled,
   unless the request sets `execution.run_timeout_s` or the operator sets the
@@ -364,6 +447,15 @@ tool-surface changes.
 - An `edit_schematic` view cursor now returns its view even when
   `return_views` does not name it. A `pin_legend` or `touched` cursor sent with
   the default `return_views` used to be accepted and then ignored.
+- `prefix` on `inspect(kind="components")` and `inspect(kind="hierarchy")` is
+  a case-insensitive prefix of the reference rather than a single letter:
+  `"LX"` keeps LX1 and LX2 but not L1, and `"MXO"` keeps MXO1. A one-letter
+  prefix still selects an element type. On `hierarchy` it reads each
+  instance's own reference, the last segment of its path. It is plain text:
+  a prefix with a wildcard is refused with the plain spelling to use
+  (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
+  too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
+  `invalid_query`.
 
 ### Security
 

@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_types import ExperimentJob, failure_row
 from ltspice_mcp.lib.pdk_native import (
     NativeCaseError,
@@ -20,18 +17,19 @@ from ltspice_mcp.lib.pdk_native import (
     prepare_launch,
     validate_seed_collisions,
 )
+from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import Store
 
 
 def observe_simulator(simulator: type) -> SimulatorFacts:
     """Record the actual executable and its reported build once per job."""
     command = list(getattr(simulator, "spice_exe", ()))
-    digest = version = build = None
+    version = build = None
+    # The same cached digest the job record carries, so one job never holds
+    # two hashes of its simulator taken by two routes.
+    identity = executable_identity(simulator)
+    digest = identity.sha256 if identity is not None else None
     if command:
-        executable = shutil.which(command[0])
-        if executable:
-            with contextlib.suppress(OSError):
-                digest = sha256_file(Path(executable))
         try:
             completed = subprocess.run(
                 [*command, "-n", "--version"],

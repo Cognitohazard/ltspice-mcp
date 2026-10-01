@@ -7,6 +7,7 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,8 @@ from ltspice_mcp.lib import (
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
+    read_text_file,
+    replace_file,
 )
 
 # ---------------------------------------------------------------------------
@@ -416,6 +419,86 @@ class TestExclusiveCreate:
             atomic_write_text(path, "data", overwrite=False)
         mock_link.assert_called_once()
         mock_rename.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Windows' transient access denial — one retry schedule for readers and writers
+# ---------------------------------------------------------------------------
+
+
+class TestWindowsTransientRefusal:
+    @staticmethod
+    def _denying_open(target: Path, denials: int) -> tuple[list[Path], Any]:
+        opened: list[Path] = []
+        real_open = Path.open
+
+        def fake_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+            if self == target:
+                opened.append(self)
+                if len(opened) <= denials:
+                    raise PermissionError(13, "Permission denied", str(self))
+            return real_open(self, *args, **kwargs)
+
+        return opened, fake_open
+
+    def test_read_outlasts_a_brief_denial_on_windows(self, tmp_path: Path) -> None:
+        path = tmp_path / "record.json"
+        atomic_write_text(path, "data")
+        opened, fake_open = self._denying_open(path, denials=2)
+        with (
+            patch("ltspice_mcp.lib.sys.platform", "win32"),
+            patch.object(Path, "open", fake_open),
+        ):
+            assert read_text_file(path) == "data"
+        assert len(opened) == 3
+
+    def test_read_gives_up_on_the_writers_schedule(self, tmp_path: Path) -> None:
+        path = tmp_path / "record.json"
+        atomic_write_text(path, "data")
+        opened, fake_open = self._denying_open(path, denials=6)
+        sleeps: list[float] = []
+        with (
+            patch("ltspice_mcp.lib.sys.platform", "win32"),
+            patch.object(Path, "open", fake_open),
+            patch("ltspice_mcp.lib.time.sleep", side_effect=sleeps.append),
+            pytest.raises(PermissionError),
+        ):
+            read_text_file(path)
+        assert len(opened) == 6
+        assert sleeps == pytest.approx([0.01, 0.02, 0.04, 0.08, 0.16])
+
+    def test_read_is_direct_off_windows(self, tmp_path: Path) -> None:
+        path = tmp_path / "record.json"
+        atomic_write_text(path, "data")
+        opened, fake_open = self._denying_open(path, denials=1)
+        with (
+            patch("ltspice_mcp.lib.sys.platform", "linux"),
+            patch.object(Path, "open", fake_open),
+            pytest.raises(PermissionError),
+        ):
+            read_text_file(path)
+        assert len(opened) == 1
+
+    def test_replace_outlasts_a_brief_denial_on_windows(self, tmp_path: Path) -> None:
+        src, dst = tmp_path / "new", tmp_path / "record.json"
+        src.write_text("new")
+        dst.write_text("old")
+        real_replace = os.replace
+        attempts: list[Any] = []
+
+        def denying_replace(a: Any, b: Any) -> None:
+            attempts.append(a)
+            if len(attempts) <= 2:
+                raise PermissionError(13, "Permission denied", str(b))
+            real_replace(a, b)
+
+        with (
+            patch("ltspice_mcp.lib.sys.platform", "win32"),
+            patch("ltspice_mcp.lib.os.replace", side_effect=denying_replace),
+        ):
+            replace_file(src, dst)
+        assert len(attempts) == 3
+        assert dst.read_text() == "new"
 
 
 # ---------------------------------------------------------------------------

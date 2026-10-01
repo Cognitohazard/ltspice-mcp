@@ -16,7 +16,8 @@ and the circuits it can reach. Each query is one of eight kinds:
 * ``symbol`` — one symbol's pin positions per rotation (``R0``…``M270``),
   bounding box, and origin (the ``symbol_info`` geometry internals).
 * ``net`` — everything on a net. On a ``.asc`` this is a geometric trace
-  (``trace_net`` internals: pins, wire vertices, labels, shorts). On a
+  (``trace_net`` internals: pins, wire vertices, labels, shorts); an ``[x, y]``
+  on a wire's interior traces that wire and reports it as ``snapped_to_wire``. On a
   ``.cir``/``.net``/``.sp`` netlist it is card-membership — which element cards
   reference the node — carrying **no geometry** at all.
 * ``components`` — the component list (``detail:"list"``) or full per-component
@@ -65,7 +66,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
@@ -95,17 +96,21 @@ from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
+from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
+    label_folded_nets,
     named_labels,
     net_partition,
     netlist_card_value,
+    placed_geometry,
     require_asc,
     resolve_pin,
     same_instance_dropped_segments,
     wire_segments_of,
+    wires_through,
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import (
@@ -114,6 +119,11 @@ from ltspice_mcp.lib.simulator import (
     dialect_for_simulator_name,
     simulator_library_roots,
     simulator_remediation,
+)
+from ltspice_mcp.lib.simulator_build import (
+    SimulatorExecutable,
+    executable_identity,
+    same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -144,8 +154,9 @@ class TraceNetInput(ToolInput):
     pin: str | None = Field(
         default=None,
         description=(
-            "Pin or net reference to start from: 'Ref.Pin' (e.g. 'M1.D'), "
-            "'net:NAME' (e.g. 'net:VDD'), or omit and pass x/y."
+            "Pin or net reference to start from: 'Ref.Pin', the pin by name or "
+            "1-based SpiceOrder (e.g. 'M1.D', 'X1.2'), 'net:NAME' (e.g. "
+            "'net:VDD'), or omit and pass x/y."
         ),
     )
     x: int | None = Field(default=None, description="X coordinate (with y) to trace from")
@@ -185,6 +196,23 @@ class TraceNetInput(ToolInput):
                 },
             },
             "is_shorted": {"type": "boolean"},
+            "snapped_to_wire": {
+                "type": "object",
+                "description": (
+                    "Present when the start point lies on a wire's interior: the "
+                    "wire whose net was traced."
+                ),
+                "properties": {
+                    "from": {
+                        "type": "object",
+                        "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                    },
+                    "to": {
+                        "type": "object",
+                        "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                    },
+                },
+            },
             "warnings": WARNINGS_SCHEMA,
         },
     }
@@ -221,44 +249,39 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
 
     part = net_partition(editor)
     start = (x, y)
-    physical_members = part.members.get(part.root(start), set())
-    if start not in physical_members and start not in part.pin_owners:
-        # The coordinate isn't on any pin/label/wire endpoint — an empty point
-        # (or a bare mid-wire span carrying nothing).
-        raise NetlistError(
-            f"Nothing found at ({x},{y}): no component pin, net label, or wire "
-            "vertex sits there. Use inspect(kind='components') to inspect the layout."
-        )
 
     # The physical partition connects by wire only; LTspice also makes FLAGs
-    # with the same NAME electrically common. Fold physical nets that share a
-    # label name together (a second union-find over physical roots) so
-    # trace_net answers "what's on net X" on label-wired schematics,
-    # not just wire-routed ones.
-    root_parent: dict[tuple[int, int], tuple[int, int]] = {}
+    # with the same NAME electrically common, so trace_net answers "what's on
+    # net X" on label-wired schematics, not just wire-routed ones.
+    net_of = label_folded_nets(part)
 
-    def _rfind(r: tuple[int, int]) -> tuple[int, int]:
-        root_parent.setdefault(r, r)
-        while root_parent[r] != r:
-            root_parent[r] = root_parent[root_parent[r]]
-            r = root_parent[r]
-        return r
+    trace_from = start
+    snapped: tuple[int, int, int, int] | None = None
+    if start not in part.members.get(part.root(start), set()) and start not in part.pin_owners:
+        # No pin, label or wire end sits here. A point on a wire's interior is
+        # still on that wire's net, since LTspice joins anything placed there,
+        # so trace from the wire's end and say so.
+        through = wires_through(start, wire_segments_of(editor))
+        if not through:
+            raise NetlistError(
+                f"Nothing found at ({x},{y}): no component pin, net label or wire "
+                "touches it. Use inspect(kind='components') to inspect the layout."
+            )
+        if len({net_of((s[0], s[1])) for s in through}) > 1:
+            listed = "; ".join(f"({s[0]},{s[1]})->({s[2]},{s[3]})" for s in through)
+            raise NetlistError(
+                f"({x},{y}) is where wires on separate nets cross ({listed}); LTspice "
+                "does not join a crossing that no wire end, pin or label sits on, so "
+                "the point is on neither net alone. Trace from an end of the wire "
+                "you mean."
+            )
+        snapped = through[0]
+        trace_from = (snapped[0], snapped[1])
 
-    label_first: dict[str, tuple[int, int]] = {}
-    for root, coords in part.members.items():
-        for coord in coords:
-            for lbl in part.label_texts.get(coord, ()):
-                if lbl in label_first:
-                    ra, rb = _rfind(label_first[lbl]), _rfind(root)
-                    if ra != rb:
-                        root_parent[ra] = rb
-                else:
-                    label_first[lbl] = root
-
-    target_root = _rfind(part.root(start))
+    target_root = net_of(trace_from)
     member_coords: set[tuple[int, int]] = set()
     for root, coords in part.members.items():
-        if _rfind(root) == target_root:
+        if net_of(root) == target_root:
             member_coords |= coords
     if not member_coords:
         member_coords = {start}
@@ -300,11 +323,21 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         "coordinates": [{"x": cx, "y": cy} for cx, cy in coords],
         "is_shorted": is_shorted,
     }
+    if snapped is not None:
+        data["snapped_to_wire"] = {
+            "from": {"x": snapped[0], "y": snapped[1]},
+            "to": {"x": snapped[2], "y": snapped[3]},
+        }
     if warnings:
         data["warnings"] = warnings
 
     net_name = ", ".join(sorted(labels)) if labels else "<unnamed>"
     lines = [f"Net at ({x},{y}): {net_name}"]
+    if snapped is not None:
+        lines.append(
+            f"  ({x},{y}) lies on the wire ({snapped[0]},{snapped[1]})->"
+            f"({snapped[2]},{snapped[3]}); traced that wire's net."
+        )
     if pins:
         lines.append("  Pins:")
         for p in pins:
@@ -419,9 +452,10 @@ CapabilityField: TypeAlias = Literal[
 
 
 class CapabilitiesQuery(StrictModel):
-    """What this server can do: detected simulators and their raw dialects,
-    whether the .asc exporter is available, job persistence, allowed roots, the
-    configured limits, and the linter version."""
+    """What this server can do: detected simulators with their executables, last
+    reported builds and raw dialects, whether the .asc exporter is available,
+    job persistence, allowed roots, the configured limits, and the linter
+    version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -479,9 +513,10 @@ class NetQuery(StrictModel):
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
     at: str | list[int] = Field(
         description=(
-            "Where the net is: 'REF.PIN' (e.g. 'M1.D'), 'net:NAME', or [x, y]; "
-            "on a netlist, which has no geometry, it takes 'net:NAME', a node "
-            "name, or 'REF.<terminal-number>' and rejects a coordinate."
+            "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
+            "(e.g. 'M1.D', 'X1.2'), 'net:NAME', or [x, y]; on a netlist, which "
+            "has no geometry, it takes 'net:NAME', a node name, or "
+            "'REF.<terminal-number>' and rejects a coordinate."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -496,18 +531,20 @@ class NetQuery(StrictModel):
         return self
 
 
+#: One filter rule for both kinds that list references. On ``hierarchy`` it
+#: reads each instance's own reference, the last segment of its path.
+_PREFIX_DESCRIPTION = (
+    "Keep only references starting with this, case-insensitively: 'M' for "
+    "every MOSFET, 'LX' for LX1, LX2…. Plain text, not a glob."
+)
+
+
 class ComponentsQuery(StrictModel):
     """The components of a .asc schematic or a .cir/.net/.sp netlist."""
 
     kind: Literal["components"]
     path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
-    prefix: str | None = Field(
-        default=None,
-        description=(
-            "Keep only components whose reference starts with this element letter "
-            "('R', 'C', 'M', …). A single letter; anything longer is rejected."
-        ),
-    )
+    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     detail: Literal["list", "full"] = Field(
         default="list",
         description=(
@@ -538,9 +575,7 @@ class HierarchyQuery(StrictModel):
         max_length=33,
         description="Exact reference segments selecting a subtree, matched case-insensitively.",
     )
-    prefix: str | None = Field(
-        default=None, pattern="^[A-Za-z]$", description="Single element letter to retain."
-    )
+    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     cursor: str | None = Field(
         default=None,
         description="Resume token bound to captured dependency content, profile and filters.",
@@ -873,20 +908,63 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _do_capabilities(state: SessionState, raster: RasterSupport) -> dict[str, Any]:
+def _reported_version(
+    state: SessionState,
+    executable: SimulatorExecutable | None,
+) -> tuple[str, dict[str, str]] | None:
+    """The build the latest run on this same executable reported, and which run.
+
+    Read from the jobs this session holds, its own and the recent ones loaded
+    at startup, so it is a run's own output rather than a probe: asking the
+    executable would launch the simulator. None until a run on this build has
+    finished and named itself.
+    """
+    if executable is None:
+        return None
+    latest = max(
+        (
+            (case.completed_at or job.started_at, job, case)
+            for job in state.all_jobs.values()
+            if same_executable(job.simulator_executable, executable)
+            for case in job.cases
+            if case.simulator_version
+        ),
+        key=lambda run: run[0],
+        default=None,
+    )
+    if latest is None:
+        return None
+    _, job, case = latest
+    assert case.simulator_version is not None
+    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
+
+
+def _do_capabilities(
+    state: SessionState,
+    raster: RasterSupport,
+    executables: Mapping[str, SimulatorExecutable | None],
+) -> dict[str, Any]:
+    """The capabilities report. ``raster`` and ``executables`` (each available
+    simulator's ``executable_identity``) are computed off the loop by the
+    caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
+        executable = executables.get(name)
+        reported = _reported_version(state, executable)
         info: dict[str, Any] = {
             "available": True,
             "default": cls is state.default_simulator,
-            # Version is not probed (that would run the executable); the raw
-            # dialect spicelib parses results with is the cheap, honest fact.
-            "version": None,
+            # What a run on this same executable said about itself; nothing
+            # is launched to ask. Null until one has run.
+            "version": reported[0] if reported else None,
+            "version_source": reported[1] if reported else None,
             "dialect": dialect_for_simulator_name(cls.__name__),
         }
-        exe = getattr(cls, "spice_exe", None)
-        if exe is not None:
-            info["executable"] = str(exe[0] if isinstance(exe, list) else exe)
+        if executable is not None:
+            # The simulator itself, not its launcher: under Wine the command
+            # starts with "wine".
+            info["executable"] = executable.path
+            info["executable_sha256"] = executable.sha256
         simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that
     # would turn it on — the config self-diagnosis surface. Detection runs at
@@ -1288,6 +1366,8 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
         "returned_coordinates": page["secondary_returned"],
         "coordinates_truncated": page["secondary_truncated"],
     }
+    if "snapped_to_wire" in tdata:
+        data["snapped_to_wire"] = tdata["snapped_to_wire"]
     if page["secondary_truncated"]:
         data["hint"] = (
             f"{page['secondary_returned']} of {page['secondary_total']} wire-vertex "
@@ -1320,13 +1400,27 @@ def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
 
 
 def _check_prefix(prefix: str | None) -> str | None:
-    """The validated prefix, upper-cased: references match it without regard to case."""
+    """The validated prefix, upper-cased: references match it without regard to case.
+
+    Refuses a prefix no reference could start with, rather than answer it with
+    an empty list that reads as "no such components".
+    """
     if prefix is None:
         return None
-    if len(prefix) != 1 or not prefix.isalpha():
+    if not prefix or any(ch.isspace() for ch in prefix):
         raise _QueryError(
             "invalid_prefix",
-            f"component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}",
+            f"prefix must be the start of a reference, without spaces (e.g. 'R', "
+            f"'LX'), got {prefix!r}",
+        )
+    wildcard = next((i for i, ch in enumerate(prefix) if ch in "*?["), None)
+    if wildcard is not None:
+        stem = prefix[:wildcard]
+        remedy = f"use prefix='{stem}'" if stem else "omit it to list every reference"
+        raise _QueryError(
+            "invalid_prefix",
+            f"prefix matches the start of a reference as plain text and takes no "
+            f"wildcards; for {prefix!r}, {remedy}",
         )
     return prefix.upper()
 
@@ -1336,7 +1430,7 @@ def _components_netlist_payload(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The component rows, plus the lexer's notes about how the deck read.
 
-    ``prefix`` is the upper-cased letter :func:`_check_prefix` returns.
+    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns.
     """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
@@ -1346,9 +1440,7 @@ def _components_netlist_payload(
     rows: list[dict[str, Any]] = []
     for card in by_ref.values():
         ref = card.name
-        if not ref:
-            continue
-        if prefix is not None and ref[:1].upper() != prefix:
+        if not ref or (prefix is not None and not matches_prefix(ref, prefix)):
             continue
         entry: dict[str, Any] = {"reference": ref, "value": netlist_card_value(card)}
         if detail == "full" and not body_has_stray_kv_remnant(card.body):
@@ -1367,8 +1459,6 @@ def _components_netlist_payload(
 
 def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
     """Build per-component detail for a page of .asc references (editor on loop)."""
-    from ltspice_mcp.lib.symbol_geometry import get_symbol_info
-
     rows: list[dict[str, Any]] = []
     for ref in refs:
         try:
@@ -1383,13 +1473,11 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
                 entry["attributes"] = attrs
             if detail == "full":
                 pos, erot = editor.get_component_position(ref)
-                rot_str = erot.name if erot else "R0"
                 entry["symbol"] = comp.symbol
                 entry["position"] = {"x": pos.X, "y": pos.Y}
-                entry["rotation"] = rot_str
-                sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
-                if sym_info is not None:
-                    geom = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+                entry["rotation"] = erot.name if erot else "R0"
+                geom = placed_geometry(editor, ref)
+                if geom is not None:
                     entry["pins"] = geom["pins"]
                     entry["bounding_box"] = geom["bounding_box"]
         rows.append(entry)
@@ -1415,10 +1503,10 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
             refs = sorted(editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        # Filtered here as in the netlist branch: spicelib's prefix filter is
-        # case-sensitive (docs/spicelib_bugs.md).
+        # Filtered here as in the netlist branch: spicelib's prefix filter reads
+        # its argument as a set of case-sensitive first letters (docs/spicelib_bugs.md).
         if prefix is not None:
-            refs = [ref for ref in refs if ref[:1].upper() == prefix]
+            refs = [ref for ref in refs if matches_prefix(ref, prefix)]
         page = _paginate(refs, "components", identity, q.cursor, [path], view)
         rows = _components_asc_page(editor, page["items"], detail)
     else:
@@ -1621,6 +1709,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
+    prefix = _check_prefix(q.prefix)
     profile = SemanticProfile(
         q.simulator,
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
@@ -1642,12 +1731,12 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         row
         for row in hierarchy.instances
         if tuple(p.casefold() for p in row.instance[: len(selected)]) == selected
-        and (q.prefix is None or row.element == q.prefix.upper())
+        and (prefix is None or matches_prefix(row.reference, prefix))
     ]
     identity = {
         **hierarchy.binding(),
         "instance": selected,
-        "prefix": q.prefix.upper() if q.prefix else None,
+        "prefix": prefix,
     }
     page = _paginate(rows, "hierarchy", identity, q.cursor, (), view)
     metadata = _page_meta(page, "instances")
@@ -1668,10 +1757,22 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
-        # The first successful probe loads the native Cairo library.
-        report = _do_capabilities(state, await asyncio.to_thread(raster_support))
-        if query.fields is not None:
-            wanted = set(query.fields)
+        wanted = set(query.fields) if query.fields is not None else None
+        # Executables are identified only for a report that shows them.
+        simulators = (
+            dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
+        )
+
+        def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
+            # Off the loop: the first successful raster probe loads the native
+            # Cairo library, and the first identification of an executable
+            # digests it.
+            identities = {name: executable_identity(cls) for name, cls in simulators.items()}
+            return raster_support(), identities
+
+        raster, executables = await asyncio.to_thread(probe)
+        report = _do_capabilities(state, raster, executables)
+        if wanted is not None:
             report = {key: value for key, value in report.items() if key in wanted}
         return {"data": report}
     if isinstance(query, SymbolsQuery):
