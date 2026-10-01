@@ -1488,11 +1488,14 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:
     """Validate placing net label ``net`` at ``(x, y)``.
 
-    Raises ``NetlistError`` if a non-ground label would merge two different named
-    nets (a short at netlist time) — a structural error, refused outright.
-    Returns advisory warnings (duplicate name, floating placement) as plain
-    facts for the caller to surface; placing labels before wiring them is a
-    legitimate workflow, so those are warnings, not refusals.
+    Raises ``NetlistError`` if a non-ground label would join two nets that each
+    carry a name (a short at netlist time) — a structural error, refused
+    outright. That happens when the network here is named and ``net`` already
+    names a different one, or when the label lands where two named networks
+    cross and joins both. Returns advisory warnings (duplicate name, a second
+    name for an already-named net, floating placement) as plain facts for the
+    caller to surface; placing labels before wiring them is a legitimate
+    workflow, so those are warnings, not refusals.
     """
     warnings: list[str] = []
     if net != "0":
@@ -1510,16 +1513,20 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                     "connect to a component pin (Ref.Pin) instead."
                 )
                 break
-        # Net-label conflict: a non-ground label on a network that already
-        # carries a different named net shorts the two at netlist time. Refuse.
-        nets = trace_nets(editor)
-        other_labels = {n for n in _net_label_at(nets, (x, y)) if n != net and n != "0"}
-        if other_labels:
+        joined = _label_join(editor, net, x, y)
+        if len(joined) > 1:
+            listed = "; ".join(f"{sorted(names)}" for names in joined)
             raise NetlistError(
-                f"Refused to add net '{net}' at ({x},{y}): the wire network at this "
-                f"coordinate already carries the label(s) {sorted(other_labels)}. Adding "
-                f"'{net}' would short those nets together. Remove the existing label(s) "
-                f"first or pick a different coordinate."
+                f"Refused to add net '{net}' at ({x},{y}): the label would join nets "
+                f"that each carry a name ({listed}), shorting them together. To join "
+                "them on purpose, give both the same name: remove one side's labels "
+                "with remove_net_label and label it with the other's name."
+            )
+        if joined and net not in joined[0]:
+            warnings.append(
+                f"({x},{y}) is on the net already labelled {sorted(joined[0])}; '{net}' "
+                "becomes a second name for it. LTspice netlists the node under one name, "
+                "so a directive or probe that uses another may not find it."
             )
     # Floating label: a FLAG touching no wire and no component pin names
     # nothing at netlist time. A FLAG anywhere along a wire, its interior
@@ -1533,6 +1540,42 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
             "this floating label until you wire it up."
         )
     return warnings
+
+
+def _label_join(editor: AscEditor, net: str, x: int, y: int) -> list[frozenset[str]]:
+    """The named nets placing label ``net`` at ``(x, y)`` would make one node.
+
+    Each comes back as its set of names, ground excluded, read off the sheet
+    before the label against the sheet with it: the label joins the wiring it
+    touches (both wires at a crossing) and, by name, every net already called
+    ``net``. Two or more is a short. The label goes on a copy of the label
+    list, so the editor is unchanged on return.
+    """
+    before = net_partition(editor)
+    node_before = label_folded_nets(before)
+    original = editor.labels
+    editor.labels = [
+        *original,
+        Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL),
+    ]
+    try:
+        after = net_partition(editor)
+    finally:
+        editor.labels = original
+    node_after = label_folded_nets(after)
+    here = node_after((x, y))
+    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
+    for coord, texts in before.label_texts.items():
+        names_by_node[node_before(coord)].update(named_labels(frozenset(texts)))
+    # The before-nodes the after-node is made of. A point the sheet did not have
+    # before (the label itself, off any vertex) reads as its own unnamed node.
+    nodes = {
+        node_before(c)
+        for root, coords in after.members.items()
+        if node_after(root) == here
+        for c in coords
+    }
+    return [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
 
 
 class _ConnectPlan(NamedTuple):
@@ -1875,9 +1918,9 @@ def _plan_connect_route(
                 f"Net-label conflict — {from_name} is on net "
                 f"{sorted(from_labels_before)} and {to_name} is on net "
                 f"{sorted(to_labels_before)}. Connecting them would short "
-                f"the two named nets. Pick one labelling and rewire, or "
-                f"use the edit_schematic add_net_label op to merge them "
-                f"deliberately."
+                f"the two named nets. To join them on purpose, give both the "
+                f"same name: remove one side's labels with remove_net_label "
+                f"and label it with the other's name; no wire is needed."
             )
         nets_after = trace_nets(editor, extra_segments=segments)
         from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))

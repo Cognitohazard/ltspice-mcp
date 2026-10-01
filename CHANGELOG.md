@@ -10,6 +10,17 @@ tool-surface changes.
 
 ### Fixed
 
+- `add_net_label` refused any second name on a net that already had one, even
+  a name no other net carries, which joins nothing. It now refuses only a label
+  that would join two named nets: a name another net already has, or a new
+  name placed where two named nets cross (a label at a crossing joins both
+  wires, which the old check missed). A second name for one net is placed with
+  a warning that the node now has two names. `wire_pins`' refusal to join two
+  named nets pointed at `add_net_label` "to merge them deliberately", which
+  refused the same merge; it now names the relabelling that works.
+- `inspect(kind="net")` read a bare `at: "out"` as a node name on a netlist but
+  refused it on a schematic. On a schematic it now names the net label, as
+  `net:out` does.
 - `wire_pins` refused a route that crosses an existing wire where neither
   ends, although LTspice leaves such a crossing unjoined (the LTspice 26.1.1
   export in `tests/fixtures/t_junctions/crossing_wires`), so the route joins

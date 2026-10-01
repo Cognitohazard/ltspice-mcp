@@ -501,9 +501,9 @@ class NetQuery(StrictModel):
     at: str | list[int] = Field(
         description=(
             "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
-            "(e.g. 'M1.D', 'X1.2'), 'net:NAME', or [x, y]; on a netlist, which "
-            "has no geometry, it takes 'net:NAME', a node name, or "
-            "'REF.<terminal-number>' and rejects a coordinate."
+            "(e.g. 'M1.D', 'X1.2'), 'net:NAME' or a bare net name, or [x, y]; "
+            "on a netlist, which has no geometry, PIN is a terminal number and "
+            "a coordinate is rejected."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -1371,14 +1371,13 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
 
 
 def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
+    """The trace a schematic ``at`` names. A bare name is a net label, as
+    ``net:NAME`` spells it and as a netlist reads the same bare node name."""
     if isinstance(at, list):
         return TraceNetInput(path=path, x=at[0], y=at[1])
     if at.startswith("net:") or "." in at:
         return TraceNetInput(path=path, pin=at)
-    raise _QueryError(
-        "invalid_at",
-        "'at' on a schematic must be 'REF.PIN', 'net:NAME', or [x, y]",
-    )
+    return TraceNetInput(path=path, pin=f"net:{at}")
 
 
 # ---------------------------------------------------------------------------
