@@ -235,15 +235,26 @@ class TestAnalyzeEdge:
         assert result["transition_time"] == pytest.approx(0.6e-3, rel=1e-3)
 
     def test_level_override_corrects_biased_auto(self):
-        # Rise 0→1 but with a 0.1V pedestal in the first 10% (mimicking the
-        # rise-from-rail clustering that biases the auto low level). Override
-        # forces the true rails so the 10-90 window is computed correctly.
-        t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
-        y = y + 0.0  # ensure float array
+        # Rise 0→1 over [1 ms, 2 ms] sampled the way an adaptive timestep
+        # samples it: sparse on the flat rails, dense along the ramp. The
+        # leading 10% of samples then reaches ~0.09 V up the ramp, so the auto
+        # low level sits above the true 0 V rail and shortens the 10-90 time.
+        # Overriding the rails restores the exact 0.8 ms.
+        t = np.concatenate(
+            [
+                np.linspace(0.9e-3, 1e-3, 20, endpoint=False),
+                np.linspace(1e-3, 2e-3, 2001),
+                np.linspace(2e-3, 2.1e-3, 21)[1:],
+            ]
+        )
+        y = np.clip((t - 1e-3) / 1e-3, 0.0, 1.0)
+        auto = analyze_edge(t, y)
+        assert auto["low_level"] > 0.03
+        assert auto["transition_time"] < 0.78e-3
         result = analyze_edge(t, y, low_level=0.0, high_level=1.0)
         assert result["low_level"] == pytest.approx(0.0, abs=1e-9)
         assert result["high_level"] == pytest.approx(1.0, abs=1e-9)
-        assert result["transition_time"] == pytest.approx(0.8e-3, rel=1e-3)
+        assert result["transition_time"] == pytest.approx(0.8e-3, rel=1e-6)
 
     def test_level_override_rejects_inverted(self):
         t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
@@ -651,6 +662,21 @@ class TestAnalyzePulseResponse:
         with pytest.raises(ValueError, match="must be positive"):
             analyze_pulse_response(t, y, settling_tolerance_pct=-1.0)
 
+    @pytest.mark.parametrize("tolerance_pct", [2.0, 0.5])
+    def test_first_order_settling_time_matches_analytic(self, tolerance_pct: float):
+        # y = 1 - exp(-(t - t0)/tau) enters the ±p% band at tau*ln(100/p)
+        # after the step. The window starts at the step edge t0 = 5 ms, not at
+        # t = 0, and settling_time is measured from the window start.
+        tau, t0 = 1e-4, 5e-3
+        t = t0 + np.linspace(0.0, 10 * tau, 10001)
+        y = 1.0 - np.exp(-(t - t0) / tau)
+        result = analyze_pulse_response(
+            t, y, initial_value=0.0, final_value=1.0, settling_tolerance_pct=tolerance_pct
+        )
+        assert result["settling_time"] == pytest.approx(
+            tau * math.log(100 / tolerance_pct), rel=1e-6
+        )
+
 
 # ---------------------------------------------------------------------------
 # analyze_timing_between
@@ -758,6 +784,15 @@ class TestAnalyzeTimingBetween:
         with pytest.raises(ValueError, match="nth=2 is unavailable"):
             analyze_timing_between(t, ya, yb, nth=2)
 
+    def test_nth_rejects_crossing_missing_only_on_signal_b(self):
+        # signal_a has two rising edges and signal_b one: the second pair
+        # does not exist, which is the documented ValueError, not an IndexError.
+        t = np.linspace(0, 1, 10001)
+        ya = (((t >= 0.1) & (t < 0.2)) | ((t >= 0.5) & (t < 0.6))).astype(float)
+        yb = np.where(t < 0.3, 0.0, 1.0)
+        with pytest.raises(ValueError, match="nth=2 is unavailable"):
+            analyze_timing_between(t, ya, yb, nth=2)
+
 
 # ---------------------------------------------------------------------------
 # analyze_periodic
@@ -824,24 +859,23 @@ class TestAnalyzePeriodic:
             analyze_periodic(t, y, threshold=5.0)
 
     def test_jitter_measurement(self):
-        # Inject known period variation
-        freq = 1000.0
-        period = 1.0 / freq
-        # Generate edges with known jitter
+        # Edge-to-edge intervals drawn from N(1 ms, 10 us); the signal is high
+        # between edges 0-1, 2-3, ... so the rising edges are edges[0::2] and
+        # jitter_rms is the population std of the periods between them.
+        interval = 1e-3
         rng = np.random.default_rng(42)
-        n_periods = 50
-        jitter_std = period * 0.01  # 1% jitter
-        edges = np.cumsum(rng.normal(period, jitter_std, n_periods))
-        t = np.linspace(0, edges[-1] + period, 200001)
-        # Build square wave from edges
+        edges = np.cumsum(rng.normal(interval, interval * 0.01, 50))
+        t = np.linspace(0, edges[-1] + interval, 200001)
         y = np.zeros_like(t)
         for i in range(0, len(edges) - 1, 2):
-            mask = (t >= edges[i]) & (t < edges[i + 1])
-            y[mask] = 1.0
+            y[(t >= edges[i]) & (t < edges[i + 1])] = 1.0
+        injected_periods = np.diff(edges[0::2])
         result = analyze_periodic(t, y, min_periods=5)
-        # Jitter std on rising edges ≈ sqrt(2) * underlying edge jitter for
-        # period-to-period variation; just check it's in the right ballpark.
-        assert result["jitter_rms"] > 0
+        assert result["num_periods_measured"] == len(injected_periods)
+        assert result["period"] == pytest.approx(np.mean(injected_periods), rel=1e-4)
+        # Each recovered edge sits within half a sample (~0.13 us) of the
+        # injected one, against an injected period spread of ~10 us.
+        assert result["jitter_rms"] == pytest.approx(np.std(injected_periods), rel=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1503,48 @@ class TestAnalyzeThd:
         r = analyze_thd(t, y, fundamental=f0, n_harmonics=3, max_fft=512)
         assert any("alias" in w.lower() for w in r["warnings"])
 
+    def test_window_of_whole_cycles_uses_every_cycle(self):
+        # Samples at both ends of exactly 20 periods: the span is 20/f0, so the
+        # coherent record holds all 20 cycles.
+        f0 = 1000.0
+        t = np.linspace(0.0, 20 / f0, 4001)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, fundamental=f0, n_harmonics=3)
+        assert r["n_cycles"] == 20.0
+        assert r["coherent"] is True
+        assert r["thd_ratio"] == pytest.approx(0.1, rel=1e-3)
+
+    def test_hann_thd_n_equals_thd_without_noise(self):
+        # Only harmonic distortion, no noise: THD+N must equal THD. The guard
+        # bins around the fundamental keep its own Hann lobe out of the sum.
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, fundamental=f0, window="hann", n_harmonics=3)
+        # The residual is the linear-interpolation resample (~3e-4 relative).
+        assert r["thd_n_ratio"] == pytest.approx(0.1, rel=1e-3)
+
+    def test_dc_offset_is_neither_distortion_nor_noise(self):
+        # A 2.5 V offset on the same signal leaves THD and THD+N unchanged; on
+        # the Hann path an unremoved DC term would leak into bin 1 and count
+        # as noise.
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y + 2.5, fundamental=f0, window="hann", n_harmonics=3)
+        assert r["thd_ratio"] == pytest.approx(0.1, rel=1e-3)
+        assert r["thd_n_ratio"] == pytest.approx(0.1, rel=1e-3)
+
+    def test_fundamental_past_the_end_of_the_spectrum_is_refused(self):
+        # 16 samples over 15/16 s: the Hann spectrum's last bin is 8 cycles per
+        # window. 9.6 Hz is 9 cycles, one bin past the end, so there is no bin
+        # to read it from and it must be refused rather than read off an
+        # aliased neighbour.
+        t = np.arange(16) / 16.0
+        y = np.sin(2 * np.pi * 9.6 * t)
+        with pytest.raises(ValueError, match="zero magnitude"):
+            analyze_thd(t, y, fundamental=9.6, window="hann")
+
 
 class TestDisturbanceResponse:
     """LDO/PMIC load-transient metrics: droop/overshoot vs a baseline and
@@ -1494,6 +1570,14 @@ class TestDisturbanceResponse:
         # 1% band = 0.033; excursion re-enters just before 1.835 ms.
         assert r["recovery_time"] == pytest.approx(1.835e-3, abs=5e-5)
         assert not r["warnings"]
+
+    def test_recovery_time_is_measured_from_window_start(self):
+        # The same dip on an axis starting at 2 ms: the 1% band (0.033 V) is
+        # re-entered where the triangle is back to 0.33 of its depth, 1.835 ms
+        # after the window start.
+        t, y = self._dip()
+        r = analyze_disturbance_response(t + 2e-3, y, settle_band_pct=1.0)
+        assert r["recovery_time"] == pytest.approx(1.835e-3, rel=1e-6)
 
     def test_explicit_baseline(self):
         t, y = self._dip(base=3.3)
