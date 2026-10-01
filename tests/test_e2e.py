@@ -31,7 +31,7 @@ from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
 from pydantic import BaseModel, ConfigDict
 
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, REGISTERED_TOOLS, SERVED_WITHOUT_RUN_CODE
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,17 +40,6 @@ from tests.conftest import FIXTURES_DIR
 TOOL_TIMEOUT = 20.0
 
 SYMBOL_FIXTURES = FIXTURES_DIR / "symbols"
-
-# The seven tools the consolidated profile puts on the wire.
-CONSOLIDATED_TOOLS = {
-    "run_experiments",
-    "jobs",
-    "analyze_results",
-    "inspect",
-    "edit_schematic",
-    "verify_circuit",
-    "plot_waveform",
-}
 
 
 class _WireResult(BaseModel):
@@ -368,10 +357,11 @@ class TestServerLifecycle:
     async def test_list_tools_is_exactly_the_consolidated_surface(
         self, shared_session: ClientSession
     ):
-        """The wire answers the seven consolidated tools and nothing else."""
+        """With run_code switched off (as these sessions run), the wire answers
+        every other registered tool and nothing else."""
         result = await shared_session.list_tools()
         names = {t.name for t in result.tools}
-        assert names == CONSOLIDATED_TOOLS
+        assert names == set(SERVED_WITHOUT_RUN_CODE)
         # Each carries a display title, and none of them is the wire name.
         for tool in result.tools:
             assert tool.title and tool.title != tool.name
@@ -788,7 +778,7 @@ class TestInspectCapabilities:
 
 
 class TestRunCode:
-    async def test_off_by_default_the_name_is_unknown(self, shared_session: ClientSession):
+    async def test_switched_off_the_name_is_unknown(self, shared_session: ClientSession):
         # Not a tool result flagged as an error: a name the session does not
         # serve is a lookup failure, answered as an invalid-params error.
         with pytest.raises(MCPError, match="Unknown tool: run_code"):
@@ -797,7 +787,7 @@ class TestRunCode:
     async def test_on_the_tool_is_advertised_last_and_runs_with_the_engine(self, tmp_path):
         async with mcp_session(tmp_path, run_code=True) as session:
             names = [t.name for t in (await session.list_tools()).tools]
-            assert set(names) == CONSOLIDATED_TOOLS | {"run_code"}
+            assert set(names) == set(REGISTERED_TOOLS)
             assert names[-1] == "run_code"
             caps = _data(await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]}))[
                 "results"
@@ -966,8 +956,8 @@ class TestErrorHandling:
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         message = excinfo.value.message
         assert "totally_fake_tool" in message
-        for name in CONSOLIDATED_TOOLS:
-            assert name in message
+        for tool in (await shared_session.list_tools()).tools:
+            assert tool.name in message
 
     async def test_missing_required_arg_returns_validation_error(
         self, shared_session: ClientSession

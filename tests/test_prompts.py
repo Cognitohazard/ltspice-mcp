@@ -6,8 +6,9 @@ import pytest
 from mcp import types
 
 from ltspice_mcp import prompts
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import get_tools
-from tests.test_consolidated_profile import TOOLS_REMOVED_IN_0_6
+from tests.conftest import removed_tool_names
 
 _STARTERS = {"characterize_filter", "run_and_plot", "step_response"}
 _SAMPLE = {"path": "c.cir", "node": "out", "signal": "out"}
@@ -17,6 +18,16 @@ def _text(result: types.GetPromptResult) -> str:
     content = result.messages[0].content
     assert isinstance(content, types.TextContent)
     return content.text
+
+
+def _names(text: str, word: str) -> bool:
+    return re.search(rf"\b{re.escape(word)}\b", text) is not None
+
+
+def _routes_to_tool(text: str, tool: str) -> bool:
+    """The prompt names ``tool``, and ``tool`` is one the registry serves."""
+    assert tool in {t.name for t in get_tools()[0]}, f"{tool} is not a registered tool"
+    return _names(text, tool)
 
 
 class TestListPrompts:
@@ -33,7 +44,8 @@ class TestGetPrompt:
     def test_interpolates_path_and_names_tools(self):
         text = _text(prompts.get_prompt("characterize_filter", {"path": "rc.cir"}))
         assert "rc.cir" in text
-        assert "run_experiments" in text and "analyze_results" in text
+        assert _routes_to_tool(text, "run_experiments")
+        assert _routes_to_tool(text, "analyze_results")
 
     def test_optional_node_selects_the_measured_signal(self):
         """The optional argument is read where it matters — it picks the signal
@@ -70,41 +82,33 @@ class TestEveryWorkflowUsesTheLiveTools:
     @pytest.mark.parametrize("name", sorted(_STARTERS))
     def test_routes_through_run_experiments_and_the_follow_up_tools(self, name: str):
         text = _text(prompts.get_prompt(name, _SAMPLE))
-        assert "run_experiments" in text
-        assert "analyze_results" in text
-        assert "jobs(" in text
+        for tool in ("run_experiments", "analyze_results", "jobs"):
+            assert _routes_to_tool(text, tool), f"prompt {name!r} never names {tool}"
 
     def test_the_ac_workflow_asks_for_the_bode_recipe(self):
         text = _text(prompts.get_prompt("characterize_filter", _SAMPLE))
-        assert "bode_filter" in text, "the AC recipe is what replaced the bode_metrics call"
+        assert "bode_filter" in DISCRIMINANTS
+        assert _names(text, "bode_filter"), "the AC workflow no longer asks for bode_filter"
 
 
 class TestPromptsNameOnlyLiveTools:
     """A prompt's text must never instruct a tool the client cannot call — the
-    workflow would dead-end on the first call. The tools deleted in 0.6.0 are
-    the live risk: they read exactly like a real call, and several of them
-    survive as recipe metric names that a rewrite could confuse for one."""
+    workflow would dead-end on the first call. The removed tools are the live
+    risk: they read exactly like a real call. Names that live on as a recipe or
+    an op (``signal_stats``, ``thd``) are not in the removed set, so the recipe
+    payloads a prompt carries are scanned along with its prose."""
 
     def test_no_prompt_names_a_removed_tool(self):
-        visible = {t.name for t in get_tools()[0]}
-        uncallable = TOOLS_REMOVED_IN_0_6 - visible
-        assert uncallable, "the removed-tool list no longer names anything uncallable"
-
+        removed = removed_tool_names()
         for p in prompts.list_prompts():
-            # Quoted spans are argument payloads (recipe metric names, signals,
-            # paths), not calls — several recipe names mirror a removed tool
-            # name on purpose.
-            text = re.sub(r'"[^"]*"', "", _text(prompts.get_prompt(p.name, _SAMPLE)))
-            for tool in uncallable:
-                assert not re.search(rf"\b{re.escape(tool)}\b", text), (
-                    f"prompt {p.name!r} names {tool!r}, which no longer exists"
-                )
+            text = _text(prompts.get_prompt(p.name, _SAMPLE))
+            named = sorted(tool for tool in removed if _names(text, tool))
+            assert not named, f"prompt {p.name!r} names removed tools {named}"
 
-    def test_every_prompt_still_names_a_callable_tool(self):
-        """Guards the check above from passing vacuously: stripping the quoted
-        spans must not strip the prompt's actual instructions with them."""
+    def test_every_prompt_names_a_callable_tool(self):
         visible = {t.name for t in get_tools()[0]}
         for p in prompts.list_prompts():
-            text = re.sub(r'"[^"]*"', "", _text(prompts.get_prompt(p.name, _SAMPLE)))
-            named = {tool for tool in visible if re.search(rf"\b{re.escape(tool)}\b", text)}
-            assert named, f"prompt {p.name!r} names no callable tool once quotes are stripped"
+            text = _text(prompts.get_prompt(p.name, _SAMPLE))
+            assert any(_names(text, tool) for tool in visible), (
+                f"prompt {p.name!r} names no callable tool"
+            )
