@@ -1221,6 +1221,98 @@ class TestSetComponentValueBehavioralSource:
 
 
 @pytest.mark.asyncio
+class TestSetComponentValueMultiTokenValues:
+    """A space in a value was refused unless it sat inside braces, quotes,
+    parentheses or a ``head KEY=VALUE`` list, so a source's ``AC 1`` and a
+    BJT's area factor were refused although ``add_component`` writes them and
+    they cannot reach a node slot. Only a class whose value is one token
+    (R/C/L, a subcircuit) keeps the refusal; the class is the symbol's prefix."""
+
+    def _sheet(self, work_dir: Path, symbol: str, ref: str, value: str) -> Path:
+        asc = work_dir / f"{ref.lower()}_{symbol}.asc"
+        asc.write_text(
+            "Version 4\n"
+            "SHEET 1 880 680\n"
+            f"SYMBOL {symbol} 100 100 R0\n"
+            f"SYMATTR InstName {ref}\n"
+            f"SYMATTR Value {value}\n"
+        )
+        return asc
+
+    def _set(self, state: SessionState, asc: Path, ref: str, value: str) -> str:
+        from spicelib import AscEditor
+
+        apply_one(state, asc, {"op": "set_component_value", "reference": ref, "value": value})
+        return str(AscEditor(str(asc)).get_component_value(ref))
+
+    @pytest.mark.parametrize("value", ["AC 1", "DC 5 AC 1", "1 AC 1 90"])
+    async def test_source_spec_accepted(self, asc_state: SessionState, work_dir: Path, value: str):
+        asc = self._sheet(work_dir, "voltage", "V1", "1")
+        assert self._set(asc_state, asc, "V1", value) == value
+
+    async def test_current_source_spec_accepted(self, asc_state: SessionState, work_dir: Path):
+        asc = self._sheet(work_dir, "current", "I1", "1m")
+        assert self._set(asc_state, asc, "I1", "DC 1m AC 1") == "DC 1m AC 1"
+
+    async def test_waveform_with_series_resistance_keeps_its_parentheses(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        from spicelib import AscEditor
+
+        asc = self._sheet(work_dir, "voltage", "V1", "1")
+        value = self._set(asc_state, asc, "V1", "PULSE(0 1 0 1n 1n 5n 10n) Rser=1")
+        assert value == "PULSE(0 1 0 1n 1n 5n 10n)"
+        attrs = AscEditor(str(asc)).get_component("V1").attributes
+        assert "Rser=1" in attrs["SpiceLine"]
+
+    @pytest.mark.parametrize("value", ["NPN 8", "2N3904 2", "2N3904 2 off", "NPN {area}"])
+    async def test_bjt_area_and_off_accepted(
+        self, asc_state: SessionState, work_dir: Path, value: str
+    ):
+        asc = self._sheet(work_dir, "npn", "Q1", "NPN")
+        assert self._set(asc_state, asc, "Q1", value) == value
+
+    async def test_mosfet_off_accepted_but_not_an_area(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = self._sheet(work_dir, "nmos4", "M1", "NMOS")
+        assert self._set(asc_state, asc, "M1", "NMOS off") == "NMOS off"
+        with pytest.raises(NetlistError, match="whitespace"):
+            self._set(asc_state, asc, "M1", "NMOS 2")
+
+    async def test_diode_area_accepted(self, asc_state: SessionState, work_dir: Path):
+        asc = self._sheet(work_dir, "diode", "D1", "1N4148")
+        assert self._set(asc_state, asc, "D1", "1N4148 2") == "1N4148 2"
+
+    async def test_spaced_behavioural_expression_accepted(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = self._sheet(work_dir, "bv", "B1", "V=1")
+        value = "V=V(a) + V(b)"
+        assert self._set(asc_state, asc, "B1", value) == value
+        assert "SpiceLine" not in asc.read_text()
+
+    @pytest.mark.parametrize("value", ["1 k", "10k 2", "AC 1"])
+    async def test_resistor_still_refuses_whitespace(
+        self, asc_state: SessionState, work_dir: Path, value: str
+    ):
+        asc = self._sheet(work_dir, "res", "R1", "1k")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match="whitespace"):
+            self._set(asc_state, asc, "R1", value)
+        assert asc.read_bytes() == before
+
+    async def test_class_comes_from_the_symbol_not_the_name(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # LTspice netlists a res symbol named "Vload" as resistor "RVload", so a
+        # source spec on it would put "AC" in the value slot and "1" past it.
+        asc = self._sheet(work_dir, "res", "Vload", "1k")
+        with pytest.raises(NetlistError, match="R-class"):
+            self._set(asc_state, asc, "Vload", "AC 1")
+
+
+@pytest.mark.asyncio
 class TestSetComponentValueCreatesMissingValue:
     """Regression: set_component_value on a component added without a Value slot
     used to fail 'Component(s) not found' (the component existed). It must create
