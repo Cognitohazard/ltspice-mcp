@@ -10,6 +10,15 @@ tool-surface changes.
 
 ### Fixed
 
+- The `value` recipe of `analyze_results` reported input-referred noise
+  (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
+  `.NOISE` input source is a current source, where the density is A/√Hz.
+  LTspice declares that trace a voltage regardless of the source type, and
+  `value` took the declared unit without reading the deck, so it disagreed with
+  `noise_integral` on the same trace. `value` now takes the input-referred unit
+  from the deck's `.NOISE` source, as `noise_integral` does, and when there is
+  no deck to check (a bare raw path) it carries the same "Could not verify the
+  input-referred noise unit" warning.
 - `plot_waveform` drew nothing for a `.step` transient whose steps have
   different time vectors, the usual case. Each step's trace was padded onto
   the combined time axis with a gap wherever another step had a sample, so

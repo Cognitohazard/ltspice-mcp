@@ -897,6 +897,20 @@ def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[st
     return unit, False
 
 
+def unverified_input_noise_warning(unit: str | None) -> str:
+    """The caveat on an input-referred noise unit the deck did not confirm.
+
+    One text for every reader that reports the unit, so the ``value`` and
+    ``noise_integral`` recipes word the same fact the same way.
+    """
+    return (
+        "Could not verify the input-referred noise unit against the "
+        f"deck's .NOISE source; assuming {unit or 'V'!r}. Analyze a run "
+        "whose deck is known so the .NOISE line can be checked "
+        "(V-source -> V, I-source -> A)."
+    )
+
+
 def query_x_label(raw, sim_type: str) -> str:
     """Axis label for a point read: ``f`` for AC, ``t`` for transient, and the
     swept variable's own name for a .dc sweep (not a misleading ``t``)."""
@@ -1207,12 +1221,23 @@ async def point_value(
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
-    value_unit = trace_unit(raw, sig.trace)
-    if value_unit and is_noise_analysis(sim_type):
+    unit_warnings: list[str] = []
+    if is_noise_analysis(sim_type):
         # .noise traces are amplitude spectral density (V/√Hz, A/√Hz), not the
         # plain V/A the trace's whattype declares — match noise_integral and the
-        # raw's own "Noise Spectral Density" plotname.
-        value_unit = f"{value_unit}/√Hz"
+        # raw's own "Noise Spectral Density" plotname. The input-referred trace
+        # takes its unit from the deck's .NOISE source, as noise_integral does.
+        value_unit, verified = noise_trace_unit(
+            raw,
+            sig.trace,
+            noise_input_source_unit(source.netlist) if is_input_noise(sig.trace) else None,
+        )
+        if not verified:
+            unit_warnings.append(unverified_input_noise_warning(value_unit))
+        if value_unit:
+            value_unit = f"{value_unit}/√Hz"
+    else:
+        value_unit = trace_unit(raw, sig.trace)
 
     # The query snaps to the nearest sample; flag when that snap moved the
     # requested point. On a coarse sweep this matters — e.g. a .dc temp sweep
@@ -1222,7 +1247,9 @@ async def point_value(
     data: MetricValue = {"signal": sig.name, **result_data, "exact_match": exact_match}
     if value_unit:
         data["unit"] = value_unit
-    data.setdefault("warnings", []).extend(await signal_log_warnings(source, sig.name))
+    warnings = data.setdefault("warnings", [])
+    warnings.extend(unit_warnings)
+    warnings.extend(await signal_log_warnings(source, sig.name))
     return data
 
 
@@ -1932,12 +1959,7 @@ async def noise_integral(
         noise_input_source_unit(source.netlist) if is_input_noise(signal) else None,
     )
     if not verified:
-        data.setdefault("warnings", []).append(
-            "Could not verify the input-referred noise unit against the "
-            f"deck's .NOISE source; assuming {unit or 'V'!r}. Analyze a run "
-            "whose deck is known so the .NOISE line can be checked "
-            "(V-source -> V, I-source -> A)."
-        )
+        data.setdefault("warnings", []).append(unverified_input_noise_warning(unit))
     data["signal"] = signal
     data["unit"] = unit or ""
     data["density_unit"] = f"{unit}/√Hz" if unit else "amplitude/√Hz"
