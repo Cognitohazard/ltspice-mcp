@@ -491,6 +491,45 @@ async def test_crash_before_rename_leaves_the_target_and_writes_nothing_else(
     # response names the stage that failed.
     assert not list(work_dir.glob("crash.asc.staging-*"))
     assert not list(work_dir.glob("crash.draft-*.asc"))
+    # The cached editor the ops mutated is evicted, so the next read parses the
+    # untouched file instead of returning the uncommitted R3.
+    assert "R3" not in _cached_refs(asc_state, work_dir / "crash.asc")
+
+
+def _cached_refs(state: SessionState, path: Path) -> set[str]:
+    """References on the editor the session cache hands the next caller."""
+    return {c.reference for c in get_asc_editor(path, state).components.values()}
+
+
+async def test_render_failure_leaves_the_target_and_evicts_the_edited_editor(
+    asc_state, work_dir, monkeypatch
+):
+    first = await _build_blank(asc_state, "render", _DIVIDER_OPS)
+    target = work_dir / "render.asc"
+    original = target.read_bytes()
+
+    def partial_then_fail(_editor, sink):
+        # Write a truncated sheet to whatever sink the tool hands over, then
+        # fail, so a sink that is the target itself would corrupt it.
+        partial = "Version 4\nSHEET 1 0 0\n"
+        if hasattr(sink, "write"):
+            sink.write(partial)
+        else:
+            Path(sink).write_text(partial, encoding="utf-8", newline="\n")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(AscEditor, "save_netlist", partial_then_fail)
+    op = {"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}
+    with pytest.raises(OSError, match="disk full"):
+        await handle_edit_schematic(
+            _edit_input(target="render.asc", expected_sha256=first["sha256"], ops=[op]),
+            asc_state,
+        )
+    monkeypatch.undo()
+
+    assert target.read_bytes() == original
+    assert not list(work_dir.glob("render.asc.staging-*"))
+    assert "R3" not in _cached_refs(asc_state, target)
 
 
 async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypatch):
