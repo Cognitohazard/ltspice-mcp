@@ -1719,17 +1719,18 @@ def _endpoint_name(endpoint: "str | GridPoint") -> str:
     return endpoint if isinstance(endpoint, str) else f"({endpoint.x},{endpoint.y})"
 
 
-def _crossing_error(x: int, y: int) -> str:
-    """Why a route may not cross a wire where neither one ends.
+def _crossing_warning(x: int, y: int, wire: tuple[int, int, int, int]) -> str:
+    """The advisory for a route that crosses a wire where neither one ends.
 
     LTspice leaves such a crossing unjoined (``tests/fixtures/t_junctions/``
-    ``crossing_wires``), so it creates no connection; it is refused because the
-    sheet reads ambiguously there, not because the nets would merge.
+    ``crossing_wires``), so the route creates no connection there and the nets
+    stay apart. It is reported, not refused: the only cost is a reader taking
+    the crossing for a junction.
     """
     return (
-        f"Wire crosses existing wire at ({x},{y}): LTspice leaves a plain crossing "
-        "unjoined, and the sheet reads ambiguously there; route around it, or end "
-        "the route on that wire to join it"
+        f"The route crosses the wire {segment_text(wire)} at ({x},{y}) where neither "
+        "ends; LTspice leaves a plain crossing unjoined, so the two stay separate "
+        "nets. To join them, end the route on that wire instead."
     )
 
 
@@ -1966,7 +1967,8 @@ def _plan_connect_route(
 
     # Wire-junction check: forbid overlaps with existing wires unless the
     # existing wire already terminates at one of our endpoints (intended
-    # T-junction).
+    # T-junction). A plain crossing, where neither wire ends, is only
+    # reported: LTspice leaves it unjoined.
     flagged: set[int] = set()
     for sx1, sy1, sx2, sy2 in segments:
         for ext_index, (ex1, ey1, ex2, ey2) in enumerate(existing_wires):
@@ -2006,8 +2008,7 @@ def _plan_connect_route(
                     and ext_min < cross_x < ext_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    flagged.add(ext_index)
-                    errors.append(_crossing_error(cross_x, cross_y))
+                    warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
             elif sy1 == sy2 and ex1 == ex2:
                 cross_x, cross_y = ex1, sy1
                 new_min, new_max = min(sx1, sx2), max(sx1, sx2)
@@ -2017,8 +2018,7 @@ def _plan_connect_route(
                     and new_min < cross_x < new_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    flagged.add(ext_index)
-                    errors.append(_crossing_error(cross_x, cross_y))
+                    warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
 
     # An endpoint on a wire's interior is a T-junction onto that wire. Its leg
     # must leave the wire: one running along it overlaps the wire it joins,
