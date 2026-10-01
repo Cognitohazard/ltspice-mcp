@@ -473,6 +473,27 @@ async def test_components_list_netlist(netlist: Path, state_no_sim: SessionState
         assert "nodes" not in c
 
 
+async def test_components_through_a_parent_segment_inside_the_sandbox(
+    netlist: Path, state_no_sim: SessionState, work_dir: Path
+):
+    """A path is judged by where it lands: ``sub/../amp.cir`` is the deck itself."""
+    await asyncio.to_thread((work_dir / "sub").mkdir)
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": "sub/../amp.cir"}])
+    assert res["ok"] is True, res
+    assert {c["reference"] for c in res["data"]["components"]} == {"C1", "R1", "R2", "V1", "X1"}
+
+
+async def test_components_of_a_spice_suffixed_netlist(
+    netlist: Path, state_no_sim: SessionState, work_dir: Path
+):
+    """``.spice`` is what xschem and the sky130 testbenches write."""
+    deck = work_dir / "amp.spice"
+    await asyncio.to_thread(deck.write_bytes, await asyncio.to_thread(netlist.read_bytes))
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(deck)}])
+    assert res["ok"] is True, res
+    assert {c["reference"] for c in res["data"]["components"]} == {"C1", "R1", "R2", "V1", "X1"}
+
+
 async def test_components_full_netlist(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(
         state_no_sim, [{"kind": "components", "path": str(netlist), "detail": "full"}]
@@ -644,6 +665,117 @@ async def test_model_search_with_libs(libfile: Path, state_no_sim: SessionState)
     )
     assert res["ok"] is True
     assert res["data"]["results"][0]["name"] == "MyNPN"
+
+
+@pytest.fixture
+def simulator_library(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A detected simulator's own model library, outside the sandbox root."""
+    lib = tmp_path_factory.mktemp("simulator_install") / "lib"
+    (lib / "cmp").mkdir(parents=True)
+    (lib / "cmp" / "standard.bjt").write_text(
+        ".model 2N3904 NPN(BF=300)\n.model 2N3906 PNP(BF=200)\n"
+    )
+    (lib / "sub").mkdir()
+    (lib / "sub" / "LT1001.sub").write_text(".subckt LT1001 in out\nR1 in out 1k\n.ends\n")
+    # Not a library file, so a search never reads it.
+    (lib / "sub" / "readme.txt").write_text(".model 2N3905 NPN(BF=1)\n")
+    return lib
+
+
+@pytest.fixture
+def library_state(
+    config: ServerConfig, simulator_library: Path, monkeypatch: pytest.MonkeyPatch
+) -> SessionState:
+    """A session whose detected LTspice reports ``simulator_library`` as its own
+    library; that report is the environment, what the server does with it is
+    under test."""
+
+    class InstalledLT(FakeLT):
+        pass
+
+    monkeypatch.setattr(
+        InstalledLT,
+        "get_default_library_paths",
+        classmethod(lambda _cls: [str(simulator_library)]),
+        raising=False,
+    )
+    return SessionState.create(config, available={"ltspice": InstalledLT})
+
+
+async def test_model_enumerate_reads_the_simulators_own_library(
+    simulator_library: Path, library_state: SessionState
+):
+    """Staging, the include resolver and the hierarchy reader all read the
+    detected simulator's library under a default sandbox; a model lookup into
+    it must not be the one read that is refused."""
+    shipped = simulator_library / "cmp" / "standard.bjt"
+    (res,) = await _run(
+        library_state, [{"kind": "model", "mode": "enumerate", "libs": [str(shipped)]}]
+    )
+    assert res["ok"] is True, res
+    assert {r["name"] for r in res["data"]["results"]} == {"2N3904", "2N3906"}
+
+
+async def test_model_libs_outside_the_sandbox_and_the_simulator_library_denied(
+    library_state: SessionState, tmp_path_factory: pytest.TempPathFactory
+):
+    stray = tmp_path_factory.mktemp("elsewhere") / "parts.lib"
+    await asyncio.to_thread(stray.write_text, ".model STRAY NPN(BF=1)\n")
+    (res,) = await _run(
+        library_state, [{"kind": "model", "mode": "enumerate", "libs": [str(stray)]}]
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "path_denied"
+
+
+async def test_model_search_without_libs_searches_the_simulators_own_library(
+    simulator_library: Path, library_state: SessionState
+):
+    """With 'libs' omitted the search reads the detected simulator's library,
+    and every file it names can be read back through 'libs'."""
+    (res,) = await _run(library_state, [{"kind": "model", "mode": "search", "query": "2N3905"}])
+    assert res["ok"] is True, res
+    rows = res["data"]["results"]
+    assert [r["name"] for r in rows[:2]] == ["2N3904", "2N3906"]
+    assert {r["name"] for r in rows}.isdisjoint({"LT1001"})
+    source = rows[0]["source_path"]
+    assert Path(source) == (simulator_library / "cmp" / "standard.bjt").resolve()
+
+    (back,) = await _run(library_state, [{"kind": "model", "mode": "enumerate", "libs": [source]}])
+    assert back["ok"] is True, back
+    assert "2N3904" in {r["name"] for r in back["data"]["results"]}
+
+
+async def test_model_search_without_libs_rejects_a_cursor_after_a_library_edit(
+    simulator_library: Path, library_state: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """The rows come out of the simulator's library files, so the cursor binds
+    their revision as it binds the files named in 'libs'."""
+    monkeypatch.setattr(insp, "_PAGE_SIZE", 1)
+    query = {"kind": "model", "mode": "search", "query": "2N3905"}
+    (first,) = await _run(library_state, [query])
+    assert first["ok"] is True, first
+    cursor = first["next_cursor"]
+    assert cursor is not None
+
+    shipped = simulator_library / "cmp" / "standard.bjt"
+    await asyncio.to_thread(
+        shipped.write_text,
+        ".model 2N3903 NPN(BF=250)\n.model 2N3904 NPN(BF=300)\n.model 2N3906 PNP(BF=200)\n",
+    )
+
+    (res,) = await _run(library_state, [{**query, "cursor": cursor}])
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_cursor"
+
+
+async def test_model_search_without_libs_or_a_simulator_finds_nothing(
+    state_no_sim: SessionState,
+):
+    (res,) = await _run(state_no_sim, [{"kind": "model", "mode": "search", "query": "2N3904"}])
+    assert res["ok"] is True, res
+    assert res["data"]["results"] == []
+    assert res["data"]["total"] == 0
 
 
 async def test_model_search_requires_query(state_no_sim: SessionState):

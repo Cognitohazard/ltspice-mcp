@@ -1,10 +1,8 @@
 """SPICE library session management with built-in detection."""
 
 import logging
-import os
 import re
-import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from rapidfuzz import fuzz
@@ -17,6 +15,7 @@ from ltspice_mcp.lib.library_parser import (
     ModelEntry,
     parse_library_file,
 )
+from ltspice_mcp.lib.simulator import simulator_library_roots
 from ltspice_mcp.lib.wsl import is_wsl, to_windows_path
 
 logger = logging.getLogger(__name__)
@@ -26,8 +25,8 @@ logger = logging.getLogger(__name__)
 # third-party packs (``.sub`` holds the subcircuit decks that make up the bulk
 # of LTspice's bundled vendor models); ``standard.bjt`` / ``.mos`` / ``.dio`` /
 # ``.jft`` (and the device-default ``.cap`` / ``.ind`` / ``.res`` / ``.bead``)
-# are LTspice's bundled stock decks under ``lib/cmp``. Shared by the builtin
-# detection walk AND the explicit ``load_library`` directory scan so the two
+# are LTspice's bundled stock decks under ``lib/cmp``. Shared by the built-in
+# library walk AND the explicit ``load_library`` directory scan so the two
 # agree on what a "library file" is.
 _SPICE_LIB_SUFFIXES = frozenset(
     {".lib", ".mod", ".sub", ".bjt", ".mos", ".dio", ".cap", ".ind", ".res", ".jft", ".bead"}
@@ -112,6 +111,24 @@ def _shared_prefix_len(a: str, b: str) -> int:
 _library_file_cache: FileCache[LibraryIndex] = FileCache(maxsize=64)
 
 
+def _library_files_under(roots: Sequence[Path]) -> list[Path]:
+    """Every SPICE library file under ``roots``, in a stable order.
+
+    Library files are named by ``_SPICE_LIB_SUFFIXES``, the set the explicit
+    ``load_library`` scan uses too. Sorted per root, because ``rglob`` order
+    is whatever the filesystem returns and a paged search must not reorder
+    between pages.
+    """
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if path.suffix.lower() in _SPICE_LIB_SUFFIXES and path not in seen and path.is_file():
+                seen.add(path)
+                files.append(path)
+    return files
+
+
 def parse_library_file_cached(path: Path) -> LibraryIndex:
     """Parse a library file through a shared (mtime, size) cache.
 
@@ -138,179 +155,48 @@ class LibraryManager:
         self._user_libs: FileCache[LibraryIndex] = FileCache()
         self._builtin_libs: FileCache[LibraryIndex] = FileCache()
         self._builtin_paths: list[Path] | None = None
+        self._builtin_roots: tuple[Path, ...] | None = None
         self._available_simulators = available_simulators
 
     def __len__(self) -> int:
         """Return number of loaded user libraries."""
         return len(self._user_libs)
 
-    def _detect_builtin_paths(self) -> list[Path]:
-        """Detect built-in library directories for available simulators.
+    def library_roots(self) -> list[Path]:
+        """The detected simulators' own model-library directories.
 
-        Returns:
-            List of library file paths found in built-in directories
+        ``simulator.simulator_library_roots`` for every detected simulator, in
+        detection order and without repeats: the directories staging, the
+        include resolver and the hierarchy reader already read under a default
+        sandbox, so a built-in search finds only files a run can stage and a
+        model query can read back. Recomputed on every call (a few stats; the
+        WSL probe behind it is memoized) because LTspice extracts its library
+        on first launch, and a server started before that must see it appear.
         """
-        if self._builtin_paths is not None:
-            return self._builtin_paths
+        roots: list[Path] = []
+        for simulator_class in self._available_simulators.values():
+            for root in simulator_library_roots(simulator_class):
+                if root not in roots:
+                    roots.append(root)
+        return roots
 
-        all_lib_files = []
+    def builtin_library_files(self) -> list[Path]:
+        """Every library file under ``library_roots()``, the set a built-in
+        search reads.
 
-        # Detect LTSpice libraries
-        if "ltspice" in self._available_simulators:
-            ltspice_files = self._detect_ltspice_paths()
-            all_lib_files.extend(ltspice_files)
-            if ltspice_files:
-                logger.info(f"Found {len(ltspice_files)} LTSpice library files")
-
-        # Detect NGspice libraries
-        if "ngspice" in self._available_simulators:
-            ngspice_files = self._detect_ngspice_paths()
-            all_lib_files.extend(ngspice_files)
-            if ngspice_files:
-                logger.info(f"Found {len(ngspice_files)} NGspice library files")
-
-        if not all_lib_files:
-            logger.debug("No built-in libraries found")
-
-        self._builtin_paths = all_lib_files
-        return all_lib_files
-
-    def _detect_ltspice_paths(self) -> list[Path]:
-        """Detect LTSpice library files on current platform.
-
-        LTspice's stock parts live in ``lib/cmp/standard.{bjt,mos,dio,cap,ind,...}``
-        — those files do NOT have a ``.lib`` extension. We accept them by
-        suffix list rather than only ``*.lib`` so ``find_model(include_builtin=
-        True)`` actually surfaces ``2N3904`` etc.
-
-        We also probe both the legacy ``LTspiceXVII`` install paths and the
-        modern ADI LTspice 26+ paths (``%LOCALAPPDATA%/LTspice/lib`` plus the
-        system-wide ``Program Files/ADI/LTspice/lib`` directory).
+        The walk is kept for as long as the roots are the same directories: a
+        full LTspice install holds thousands of files, and walking them again
+        on every page of a search would cost more than the search.
         """
-        candidates: list[Path] = []
-
-        if is_wsl():
-            users_dir = Path("/mnt/c/Users")
-            if users_dir.exists():
-                for user_path in users_dir.iterdir():
-                    if not user_path.is_dir():
-                        continue
-                    for rel in (
-                        "Documents/LTspiceXVII/lib",
-                        "AppData/Local/Programs/ADI/LTspice/lib",
-                        "AppData/Local/LTspice/lib",  # ADI LTspice 26+ user
-                    ):
-                        lp = user_path / rel
-                        if lp.exists():
-                            candidates.append(lp)
-            # System-wide install (ADI LTspice 26+)
-            for sys_path in (
-                Path("/mnt/c/Program Files/ADI/LTspice/lib"),
-                Path("/mnt/c/Program Files (x86)/ADI/LTspice/lib"),
-            ):
-                if sys_path.exists():
-                    candidates.append(sys_path)
-
-        elif sys.platform == "win32":
-            home = Path.home()
-            candidates.extend(
-                [
-                    home / "Documents/LTspiceXVII/lib",
-                    home / "AppData/Local/Programs/ADI/LTspice/lib",
-                    home / "AppData/Local/LTspice/lib",
-                    Path("C:/Program Files/ADI/LTspice/lib"),
-                    Path("C:/Program Files (x86)/ADI/LTspice/lib"),
-                ]
-            )
-
-        else:
-            wine_prefixes = [
-                Path.home() / ".wine/drive_c/Program Files/ADI/LTspice/lib",
-                Path.home() / ".wine/drive_c/Program Files (x86)/ADI/LTspice/lib",
-            ]
-            candidates.extend(wine_prefixes)
-
-        # Suffixes treated as SPICE library files — see _SPICE_LIB_SUFFIXES.
-        accepted_suffixes = _SPICE_LIB_SUFFIXES
-        lib_files: list[Path] = []
-        seen: set[Path] = set()
-        for candidate in candidates:
-            if not (candidate.exists() and candidate.is_dir()):
-                continue
-            for f in candidate.rglob("*"):
-                if not f.is_file():
-                    continue
-                if f.suffix.lower() not in accepted_suffixes:
-                    continue
-                if f in seen:
-                    continue
-                seen.add(f)
-                lib_files.append(f)
-                logger.debug("Found LTSpice library: %s", f)
-
-        return lib_files
-
-    def _detect_ngspice_paths(self) -> list[Path]:
-        """Detect NGspice library files on current platform.
-
-        Returns:
-            List of library file paths
-        """
-        candidates = []
-
-        if env_path := os.getenv("SPICE_LIB_DIR"):
-            path = Path(env_path)
-            if path.exists() and path.is_dir():
-                candidates.append(path)
-
-        if sys.platform == "win32" or is_wsl():
-            if is_wsl():
-                candidates.extend(
-                    [
-                        Path("/mnt/c/Spice/share/ngspice"),
-                        Path("/mnt/c/Program Files/ngspice/share/ngspice"),
-                    ]
-                )
+        roots = tuple(self.library_roots())
+        if self._builtin_paths is None or roots != self._builtin_roots:
+            self._builtin_paths = _library_files_under(roots)
+            self._builtin_roots = roots
+            if self._builtin_paths:
+                logger.info(f"Found {len(self._builtin_paths)} simulator library files")
             else:
-                candidates.extend(
-                    [
-                        Path("C:/Spice/share/ngspice"),
-                        Path("C:/Program Files/ngspice/share/ngspice"),
-                    ]
-                )
-
-        candidates.extend(
-            [
-                Path("/usr/share/ngspice"),
-                Path("/usr/local/share/ngspice"),
-                Path("/opt/ngspice/share/ngspice"),
-                # Debian/Ubuntu ship the example model libraries here, with no
-                # share/ngspice/lib subdir (the old code required one and so
-                # found nothing on a stock apt install).
-                Path("/usr/share/doc/ngspice/examples"),
-                Path("/usr/local/share/doc/ngspice/examples"),
-            ]
-        )
-
-        lib_files: list[Path] = []
-        seen: set[Path] = set()
-        for candidate in candidates:
-            if not (candidate.exists() and candidate.is_dir()):
-                continue
-            # Prefer a conventional <candidate>/lib subdir, but fall back to
-            # scanning the candidate tree directly — the Debian package layout
-            # has no /lib subdir and keeps .lib/.mod files under examples/**.
-            scan_root = candidate / "lib"
-            if not scan_root.is_dir():
-                scan_root = candidate
-            for pattern in ["*.lib", "*.mod"]:
-                for lib_file in scan_root.rglob(pattern):
-                    if lib_file.is_file() and lib_file not in seen:
-                        seen.add(lib_file)
-                        lib_files.append(lib_file)
-                        logger.debug(f"Found NGspice library: {lib_file}")
-
-        return lib_files
+                logger.debug("No built-in libraries found")
+        return self._builtin_paths
 
     def load_library(self, path: Path) -> dict:
         """Load a library file or directory of library files.
@@ -464,7 +350,7 @@ class LibraryManager:
 
     def _iter_builtin_indexes(self) -> Iterator[LibraryIndex]:
         """Yield each built-in LibraryIndex via the mtime cache, skipping parse failures."""
-        for lib_path in self._detect_builtin_paths():
+        for lib_path in self.builtin_library_files():
             try:
                 yield self._builtin_libs.get(lib_path, parse_library_file)
             except Exception as e:

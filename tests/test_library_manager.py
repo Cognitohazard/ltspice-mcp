@@ -13,6 +13,26 @@ def empty_manager() -> LibraryManager:
     return LibraryManager(available_simulators={})
 
 
+def _installed(*library_dirs: Path) -> type:
+    """A detected simulator whose own model library is ``library_dirs``.
+
+    What the install reports is the environment; which files the manager
+    reads because of it is what the tests below pin.
+    """
+
+    class InstalledSim:
+        @classmethod
+        def get_default_library_paths(cls) -> list[str]:
+            return [str(path) for path in library_dirs]
+
+    return InstalledSim
+
+
+def _with_builtin(library_file: Path) -> LibraryManager:
+    """A manager whose detected simulator ships ``library_file``'s folder."""
+    return LibraryManager(available_simulators={"sim": _installed(library_file.parent)})
+
+
 @pytest.fixture
 def lib_file(tmp_path: Path) -> Path:
     p = tmp_path / "models.lib"
@@ -184,18 +204,15 @@ class TestGetModelInfo:
         empty_manager.load_library(lib_file)
         assert empty_manager.get_model_info("NOPE") is None
 
-    def test_falls_back_to_builtin(self, empty_manager: LibraryManager, lib_file: Path):
-        # Empty user libs, but builtin path resolves to our lib
-        empty_manager._builtin_paths = [lib_file]
-        info = empty_manager.get_model_info("D1N4148")
+    def test_falls_back_to_builtin(self, lib_file: Path):
+        # Empty user libs, but the detected simulator's library holds our lib
+        info = _with_builtin(lib_file).get_model_info("D1N4148")
         assert info is not None
         assert info["name"] == "D1N4148"
 
-    def test_include_builtin_false_skips_builtin(
-        self, empty_manager: LibraryManager, lib_file: Path
-    ):
-        empty_manager._builtin_paths = [lib_file]
-        assert empty_manager.get_model_info("D1N4148", include_builtin=False) is None
+    def test_include_builtin_false_skips_builtin(self, lib_file: Path):
+        manager = _with_builtin(lib_file)
+        assert manager.get_model_info("D1N4148", include_builtin=False) is None
 
     def test_case_insensitive(self, empty_manager: LibraryManager, lib_file: Path):
         empty_manager.load_library(lib_file)
@@ -272,10 +289,10 @@ class TestFindSimilarModels:
     def test_empty_when_no_libs_loaded(self, empty_manager: LibraryManager):
         assert empty_manager.find_similar_models("anything") == []
 
-    def test_include_builtin_walks_builtin(self, empty_manager: LibraryManager, fuzzy_lib: Path):
-        empty_manager._builtin_paths = [fuzzy_lib]
-        no_builtin = empty_manager.find_similar_models("2N3905", include_builtin=False)
-        with_builtin = empty_manager.find_similar_models("2N3905", include_builtin=True)
+    def test_include_builtin_walks_builtin(self, fuzzy_lib: Path):
+        manager = _with_builtin(fuzzy_lib)
+        no_builtin = manager.find_similar_models("2N3905", include_builtin=False)
+        with_builtin = manager.find_similar_models("2N3905", include_builtin=True)
         assert no_builtin == []
         assert len(with_builtin) > 0
 
@@ -435,58 +452,53 @@ class TestListLibraries:
         assert str(lib_file) in libs[0]
 
 
-class TestDetectBuiltinPaths:
+class TestBuiltinLibraryFiles:
+    """The built-in set is every library file under the detected simulators'
+    own library directories: the directories staging and the model query's
+    'libs' admit, so a built-in row always names a file both will read."""
+
     def test_caches_result(self, empty_manager: LibraryManager):
-        first = empty_manager._detect_builtin_paths()
-        second = empty_manager._detect_builtin_paths()
+        first = empty_manager.builtin_library_files()
+        second = empty_manager.builtin_library_files()
         assert first is second  # cached identical list object
 
-    def test_with_ltspice_calls_detector(self, monkeypatch, tmp_path: Path):
-        mgr = LibraryManager(available_simulators={"ltspice": object})
-        sentinel = [tmp_path / "x.lib"]
-        monkeypatch.setattr(mgr, "_detect_ltspice_paths", lambda: sentinel)
-        result = mgr._detect_builtin_paths()
-        assert result == sentinel
+    def test_files_under_every_detected_simulators_library(self, tmp_path: Path):
+        first = tmp_path / "first" / "lib"
+        (first / "cmp").mkdir(parents=True)
+        (first / "cmp" / "standard.bjt").write_text(".model Q1 NPN\n")
+        (first / "sub").mkdir()
+        (first / "sub" / "LT1001.sub").write_text(".subckt LT1001 a b\n.ends\n")
+        (first / "sym").mkdir()
+        (first / "sym" / "res.asy").write_text("Version 4\n")
+        second = tmp_path / "second"
+        second.mkdir()
+        (second / "models.lib").write_text(".model D1 D\n")
+        (second / "notes.txt").write_text(".model D2 D\n")
 
-    def test_with_ngspice_calls_detector(self, monkeypatch, tmp_path: Path):
-        mgr = LibraryManager(available_simulators={"ngspice": object})
-        sentinel = [tmp_path / "x.lib"]
-        monkeypatch.setattr(mgr, "_detect_ngspice_paths", lambda: sentinel)
-        result = mgr._detect_builtin_paths()
-        assert result == sentinel
+        manager = LibraryManager(
+            available_simulators={"a": _installed(first), "b": _installed(second)}
+        )
 
+        assert manager.library_roots() == [first.resolve(), second.resolve()]
+        assert manager.builtin_library_files() == [
+            first.resolve() / "cmp" / "standard.bjt",
+            first.resolve() / "sub" / "LT1001.sub",
+            second.resolve() / "models.lib",
+        ]
 
-class TestDetectLtspicePaths:
-    def test_no_paths_on_empty_system(self, monkeypatch):
-        mgr = LibraryManager(available_simulators={})
-        # Force is_wsl=False, sys.platform=linux
-        import sys
+    def test_a_library_that_appears_later_is_found(self, tmp_path: Path):
+        """LTspice extracts its library on first launch, which can be after the
+        server started; the walk follows the roots instead of freezing them."""
+        lib = tmp_path / "lib"
+        manager = LibraryManager(available_simulators={"sim": _installed(lib)})
+        assert manager.builtin_library_files() == []
 
-        monkeypatch.setattr("ltspice_mcp.lib.library_manager.is_wsl", lambda: False)
-        monkeypatch.setattr(sys, "platform", "linux")
-        result = mgr._detect_ltspice_paths()
-        # No Wine prefix on test system
-        assert isinstance(result, list)
+        lib.mkdir()
+        (lib / "standard.dio").write_text(".model D1 D\n")
 
-    def test_wsl_path_branch(self, monkeypatch, tmp_path: Path):
-        mgr = LibraryManager(available_simulators={})
-        monkeypatch.setattr("ltspice_mcp.lib.library_manager.is_wsl", lambda: True)
-        # The /mnt/c/Users dir won't exist on test system → returns empty
-        result = mgr._detect_ltspice_paths()
-        assert isinstance(result, list)
+        assert manager.builtin_library_files() == [lib.resolve() / "standard.dio"]
 
-
-class TestDetectNgspicePaths:
-    def test_with_env_var(self, monkeypatch, tmp_path: Path):
-        env_lib = tmp_path / "ngspice_lib"
-        env_lib.mkdir()
-        monkeypatch.setenv("SPICE_LIB_DIR", str(env_lib))
-        mgr = LibraryManager(available_simulators={})
-        result = mgr._detect_ngspice_paths()
-        assert isinstance(result, list)
-
-    def test_default_paths(self, monkeypatch):
-        monkeypatch.delenv("SPICE_LIB_DIR", raising=False)
-        mgr = LibraryManager(available_simulators={})
-        result = mgr._detect_ngspice_paths()
-        assert isinstance(result, list)
+    def test_simulator_without_a_library_contributes_nothing(self):
+        manager = LibraryManager(available_simulators={"ngspice": object})
+        assert manager.library_roots() == []
+        assert manager.builtin_library_files() == []

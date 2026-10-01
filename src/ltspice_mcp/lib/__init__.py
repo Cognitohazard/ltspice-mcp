@@ -25,6 +25,12 @@ _EST = timezone(timedelta(hours=-5), name="EST")
 # circuits tracker, sidecar loaders, and the netlist resource listing.
 CIRCUIT_EXTENSIONS: frozenset[str] = frozenset({".asc", ".net", ".sp", ".cir", ".spice"})
 
+# The netlists among them: every circuit file read as SPICE text rather than
+# as a schematic. One set for every surface that takes a deck, so a suffix one
+# of them reads (``.spice`` is what xschem and the sky130 testbenches write)
+# is never refused by another.
+NETLIST_SUFFIXES: frozenset[str] = CIRCUIT_EXTENSIONS - {".asc"}
+
 # macOS-only: fcntl.F_FULLFSYNC forces a platter-level flush. Plain fsync on
 # APFS/HFS+ stops at the drive's write cache, so durability-critical writes
 # need this. SQLite, Postgres, and git all use it on Darwin.
@@ -308,6 +314,7 @@ def atomic_write_json(
 
 __all__ = [
     "CIRCUIT_EXTENSIONS",
+    "NETLIST_SUFFIXES",
     "O_BINARY",
     "atomic_write",
     "atomic_write_bytes",

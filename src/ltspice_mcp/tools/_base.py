@@ -1163,9 +1163,12 @@ def resolve_reference(reference: str, state: SessionState) -> str | Path:
 # are MUTABLE and entangled with per-session snapshots — concurrent edits
 # would be last-writer-wins data loss; worst case is a cold .asc parse over
 # /mnt/c, ~1 s), job sidecar JSON loads (small per-circuit files), config
-# saves (durable=False), log-file reads (KB scale), and library .lib parses
-# (LibraryManager sessions are loop-owned mutable state; worst case ~1 s for
-# a multi-MB vendor library).
+# saves (durable=False), log-file reads (KB scale), and loading or unloading
+# a user library (LibraryManager's loaded set is loop-owned mutable state;
+# worst case ~1 s for a multi-MB vendor library). A search over the
+# simulator's own libraries is the exception and is offloaded: it parses the
+# whole install on first use, and it only reads that loaded set and fills
+# thread-safe parse caches of immutable values.
 # ---------------------------------------------------------------------------
 
 
