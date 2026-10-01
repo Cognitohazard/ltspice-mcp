@@ -713,23 +713,29 @@ class TestSummaryAcWithMetrics:
 
 @pytest.mark.asyncio
 class TestSummarySuggestions:
-    """When the run's errors name unresolved models, model-resolution help is
-    both attached to structuredContent (``suggestions``, declared in the
-    output_schema) and rendered into the text lines."""
+    """When the run's errors name unresolved models, the summary carries
+    model-resolution help from the loaded libraries (``suggestions``)."""
 
-    async def test_suggestions_in_schema_and_text(
-        self, state_no_sim: SessionState, fake_raw: Path, monkeypatch
+    async def test_missing_model_error_yields_library_suggestions(
+        self, state_no_sim: SessionState, work_dir: Path, fake_raw: Path
     ):
-        import ltspice_mcp.lib.metrics as metrics_mod
-
-        fake = {"MYMODEL": [{"name": "MyModel", "score": 88, "source_path": "/libs/foo.lib"}]}
-        monkeypatch.setattr(
-            metrics_mod.services,
-            "suggestions_from_errors",
-            lambda errors, libraries: fake,
+        lib = work_dir / "sw.lib"
+        lib.write_text(".MODEL SW VSWITCH(VT=1)\n", encoding="utf-8")
+        state_no_sim.libraries.load_library(lib)
+        # The raw's sibling log, which a bare raw path picks up.
+        fake_raw.with_suffix(".log").write_text(
+            'Error on line 2 : s1 0 0 swx Unable to find definition of model "swx"\n',
+            encoding="utf-8",
         )
         data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
-        assert data["suggestions"] == fake
+        assert any('model "swx"' in e for e in data["errors"])
+        assert [m["name"] for m in data["suggestions"]["swx"]] == ["SW"]
+
+    async def test_clean_run_carries_no_suggestions(
+        self, state_no_sim: SessionState, fake_raw: Path
+    ):
+        data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
+        assert "suggestions" not in data
 
 
 @pytest.mark.asyncio
@@ -783,7 +789,9 @@ class TestEdgeMetrics:
         )
         assert data["is_rise_time"] is True
         assert data["signal"] == "V(out)"
-        assert data["transition_time"] > 0
+        # Linear 0→1 V ramp over 0.1 ms: 10-90% takes 80 us, slewing 0.8 V in it.
+        assert data["transition_time"] == pytest.approx(80e-6, rel=1e-3)
+        assert data["slew_rate"] == pytest.approx(1e4, rel=1e-3)
 
     async def test_ac_rejected(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "ac.raw"
@@ -816,8 +824,12 @@ class TestEdgeMetrics:
             )
 
     async def test_window_propagated(self, state_no_sim: SessionState, work_dir: Path):
+        # A pulse rising over 0.5-0.6 ms and falling over 1.5-1.6 ms. The
+        # window covers only the fall, so the edge found is the falling one,
+        # centred at 1.55 ms; unwindowed, the rising edge comes first.
         raw_file = work_dir / "edge.raw"
-        t, y = _step_waveform()
+        t = np.linspace(0, 2e-3, 5001)
+        y = np.clip((t - 0.5e-3) / 0.1e-3, 0.0, 1.0) - np.clip((t - 1.5e-3) / 0.1e-3, 0.0, 1.0)
         raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
@@ -825,10 +837,13 @@ class TestEdgeMetrics:
             state_no_sim,
             raw_file.name,
             EdgesRecipe(
-                key="edges", metric="edges", signal="V(out)", window=Window(start="100u", end="1m")
+                key="edges", metric="edges", signal="V(out)", window=Window(start="1m", end="2m")
             ),
         )
-        assert result["is_rise_time"] is True
+        assert result["edge_direction"] == "falling"
+        assert result["num_edges_in_window"] == 1
+        assert result["t_mid_crossing"] == pytest.approx(1.55e-3, rel=1e-4)
+        assert result["transition_time"] == pytest.approx(80e-6, rel=1e-3)
 
     async def test_invalid_t_start(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "edge.raw"
@@ -883,7 +898,11 @@ class TestPulseResponse:
         sc = result
         assert sc is not None
         assert sc["direction"] == "rising"
-        assert sc["overshoot_pct"] > 0
+        # Second-order step: overshoot exp(-pi*zeta/sqrt(1 - zeta^2)) ≈ 37.2 %
+        # at the first peak, t = pi/wd.
+        expected_pct = 100 * np.exp(-np.pi * zeta / np.sqrt(1 - zeta**2))
+        assert sc["overshoot_pct"] == pytest.approx(expected_pct, rel=1e-3)
+        assert sc["peak_time"] == pytest.approx(np.pi / wd, rel=1e-3)
         assert sc["initial_value"] == 0.0
         assert sc["steady_state_value"] == 1.0
 
@@ -1056,9 +1075,9 @@ class TestPeriodicMetrics:
 @pytest.mark.asyncio
 class TestMeasurementStats:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
-        # Use the same single-measurement log format validated by the log
-        # parser tests — ensures the plumbing works. Multi-step aggregation
-        # logic is covered by test_waveform_analysis.TestComputeMeasurementStats.
+        # One .MEAS result from a single run reaches the stats block intact.
+        # Multi-step aggregation is covered by
+        # tests/test_signal_analysis.py::TestComputeMeasurementStats.
         log = work_dir / "meas.log"
         log.write_text(
             "Circuit: * test\n"
@@ -1071,10 +1090,13 @@ class TestMeasurementStats:
         result = await _metric(
             state_no_sim, log.name, MeasurementsRecipe(key="measurements", metric="measurements")
         )
-        assert result is not None
-        assert "stats" in result
-        # Should have exactly one measurement aggregated
-        assert len(result["stats"]) >= 1
+        assert list(result["stats"]) == ["fc"]
+        entry = result["stats"]["fc"]
+        assert entry["valid_count"] == 1
+        assert entry["mean"] == pytest.approx(0.707)
+        assert entry["aggregated_field"] == "value"
+        # A single-run AT measurement also echoes where it was taken.
+        assert entry["at"] == pytest.approx(1591.5)
 
     async def test_missing_log_file(self, state_no_sim: SessionState, work_dir: Path):
         with pytest.raises(ResultError):
@@ -1281,8 +1303,12 @@ class TestStabilityMetricsTool:
             StabilityRecipe(key="stability", metric="stability", signal="V(loop)"),
         )
         sc = result
-        assert sc["stability"] in ("unconditional", "stable")
-        assert sc["phase_margin_worst_deg"] is not None
+        assert sc["stability"] == "unconditional"
+        # |H| = 1 where (1 + 1e4 u)(1 + u) = 1e6 with u = (f / 100 kHz)^2.
+        u = (-10001 + np.sqrt(10001**2 + 4e4 * (1e6 - 1))) / 2e4
+        f_unity = 1e5 * np.sqrt(u)
+        pm = 180 - np.degrees(np.arctan(f_unity / 1e3) + np.arctan(f_unity / 1e5))
+        assert sc["phase_margin_worst_deg"] == pytest.approx(pm, abs=0.01)
         # 60 dB DC gain.
         assert sc["dc_gain_db"] == pytest.approx(60.0, abs=0.1)
 
@@ -1458,7 +1484,9 @@ class TestBodeMetrics:
             "bode.raw",
             BodePointRecipe(key="p", metric="bode_point", signal="V(out)", at_hz="1k"),
         )
-        assert "points" in data
+        # |H(1 kHz)| of the 1-pole LPF at fc = 1591.5 Hz.
+        expected_db = -10 * np.log10(1 + (1000 / 1591.5) ** 2)
+        assert data["points"][0]["magnitude_db"] == pytest.approx(expected_db, abs=0.01)
 
     async def test_crossing_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode2.raw"
@@ -1481,8 +1509,9 @@ class TestBodeMetrics:
                 key="s", metric="bode_slope", signal="V(out)", from_hz="10k", to_hz="100k"
             ),
         )
-        # First-order LPF stopband ≈ -20 dB/decade.
-        assert data["slope_db_per_decade"] < -15
+        # The 1-pole LPF's exact gain change over that one decade.
+        g10k, g100k = (-10 * np.log10(1 + (f / 1591.5) ** 2) for f in (1e4, 1e5))
+        assert data["slope_db_per_decade"] == pytest.approx(g100k - g10k, abs=0.01)
 
     async def test_filter_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode4.raw"
@@ -1492,7 +1521,11 @@ class TestBodeMetrics:
             "bode4.raw",
             BodeFilterRecipe(key="f", metric="bode_filter", signal="V(out)"),
         )
-        assert "filter_type" in data
+        assert data["filter_type"] == "lowpass"
+        # The recipe's cutoff sits 3.0 dB below the plateau, where the 1-pole
+        # LPF is at fc * sqrt(10^0.3 - 1); 40 points/decade bound the rest.
+        assert data["cutoff_high_hz"] == pytest.approx(1591.5 * np.sqrt(10**0.3 - 1), rel=2e-3)
+        assert data["estimated_order"] == 1
 
 
 # ---------------------------------------------------------------------------
