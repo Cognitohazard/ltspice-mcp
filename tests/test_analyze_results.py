@@ -1170,6 +1170,86 @@ async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
     assert "no readable runs yet" in missing["detail"]
 
 
+_UNVERIFIED_INOISE_UNIT = "Could not verify the input-referred noise unit"
+
+
+@pytest.mark.asyncio
+async def test_value_takes_the_input_noise_unit_from_the_decks_noise_source(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """LTspice declares ``V(inoise)`` a voltage even when the ``.NOISE`` input
+    source is a current source, where the density is really A/√Hz. The value
+    recipe reads the deck's ``.NOISE`` line for that trace, as noise_integral
+    does, so the two report the same unit for the same trace."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
+    job = make_experiment_job(state_no_sim, job_id="exp_inoise", raw=raw)
+    job.cases[0].staged_deck.write_text(
+        "* current-driven RC\nI1 0 in AC 1\nR1 in out 1k\nC1 out 0 1n\n"
+        ".noise V(out) I1 dec 10 1 100k\n.end\n",
+        encoding="utf-8",
+    )
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"job_id": job.job_id, "label": "noise"}],
+            "recipes": [
+                {"key": "density", "metric": "value", "expr": "V(inoise)", "at": "1k"},
+                {
+                    "key": "total",
+                    "metric": "noise_integral",
+                    "signal": "V(inoise)",
+                    "from_hz": "10",
+                    "to_hz": "10k",
+                },
+            ],
+        }
+    )
+    result = await handle_analyze_results(args, state_no_sim)
+    data = result.structured_content
+    assert data is not None
+    assert data["failures"] == []
+    density = data["results"]["density"]
+    total = data["results"]["total"]
+    assert density["values"][0]["value"]["unit"] == "A/√Hz"
+    assert total["values"][0]["value"]["unit"] == "A"
+    assert not [w for w in density["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
+
+
+@pytest.mark.asyncio
+async def test_value_says_when_the_input_noise_unit_is_unchecked(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A bare raw path names no deck, so the input-referred trace keeps the
+    simulator's declared unit and carries the same caveat noise_integral adds.
+    The output-referred trace is not affected by the ``.NOISE`` source type and
+    carries no caveat."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {"key": "input", "metric": "value", "expr": "V(inoise)", "at": "1k"},
+            {"key": "output", "metric": "value", "expr": "V(onoise)", "at": "1k"},
+            {
+                "key": "total",
+                "metric": "noise_integral",
+                "signal": "V(inoise)",
+                "from_hz": "10",
+                "to_hz": "10k",
+            },
+        ],
+    )
+    assert data["failures"] == []
+    results = data["results"]
+    assert results["input"]["values"][0]["value"]["unit"] == "V/√Hz"
+    assert results["output"]["values"][0]["value"]["unit"] == "V/√Hz"
+    (input_caveat,) = [w for w in results["input"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
+    (integral_caveat,) = [w for w in results["total"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
+    assert input_caveat == integral_caveat
+    assert not [w for w in results["output"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
+
+
 @pytest.mark.asyncio
 async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
     state_no_sim: SessionState,
