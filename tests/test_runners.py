@@ -1,9 +1,9 @@
-"""Direct unit tests for SimulationRunner / SweepRunner / MonteCarloRunner internals.
+"""Unit tests for the Monte Carlo perturbation engine and the runner scaffolding.
 
-These tests bypass the spicelib SimRunner machinery and exercise the
-event-loop callback handlers (_handle_completion, _handle_run_completion,
-_handle_sweep_completion, etc.) and cancel() methods, all of which are
-pure logic operating on BatchJob/SimulationJob state.
+The sampler, tolerance and mismatch math in ``montecarlo``, the card edits the
+variation engine applies to a lexed deck, and the parts of ``runner_base`` that
+run without a simulator: outcome classification, generated-netlist cleanup,
+releasing a spicelib runner, and the bound put on the simulator process.
 """
 
 import asyncio
@@ -27,30 +27,6 @@ from ltspice_mcp.lib.runner_base import (
 )
 from ltspice_mcp.lib.spice_lex import lex
 from tests.conftest import submit_through_spicelib
-
-
-class FakeSim:
-    """Minimal simulator stub."""
-
-
-class FakeStepper:
-    """Minimal SimStepper stand-in; ``run_all`` behavior injected per test."""
-
-    def __init__(self, run_all=None):
-        self._run_all = run_all
-
-    def add_value_sweep(self, *a, **k):
-        pass
-
-    def add_param_sweep(self, *a, **k):
-        pass
-
-    def total_number_of_simulations(self):
-        return 0
-
-    def run_all(self, **kwargs):
-        if self._run_all is not None:
-            self._run_all(**kwargs)
 
 
 @pytest.fixture
@@ -623,20 +599,13 @@ class TestTruncatedGaussian:
         assert 3.0 < sigma_est < 3.5
 
 
-class TestMCRunnerCardFlowIntegration:
-    """Integration coverage for the per-run card-mutation hot path.
+class TestCardEditPrimitives:
+    """The card edits a variation case is built from, on one lexed deck.
 
-    ``execute_montecarlo`` is an async closure inside ``MonteCarloRunner``
-    that's hard to unit-test directly. These tests exercise the same
-    composition (lex → build lookup dicts → Phase 1/2/3 mutations →
-    emit) the runner uses, so a regression in any of:
-
-    - lookup-dict construction
-    - per-key shifts after sequential setters
-    - variant-card injection updating the model dict
-    - emit pushing back to the right shape
-
-    is caught here rather than only at simulation time.
+    A model parameter set in place, a variant model card injected before
+    ``.END`` with an instance repointed at it, and a ``.PARAM`` value set in
+    place. How the variation engine composes them on a real case is covered in
+    ``test_variations.py`` (``TestRulesReadWhatEarlierRulesWrote``).
     """
 
     def _baseline_netlist(self) -> str:
@@ -725,60 +694,6 @@ class TestMCRunnerCardFlowIntegration:
         out = emit(cards)
         assert "Vdd=3.3" in out
         assert "Vdd=5" not in out
-
-    def test_full_run_compose_phases_in_order(self):
-        # Replicates execute_montecarlo's per-run flow: build lookup
-        # dicts once after lex, apply all three phases, emit. Verifies
-        # the composition produces a self-consistent netlist with all
-        # mutations present.
-        from ltspice_mcp.lib.montecarlo import (
-            render_variant_model_card,
-            variant_model_name,
-        )
-        from ltspice_mcp.lib.spice_lex import SpiceCard, emit
-        from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
-        from ltspice_mcp.lib.spice_lex_views import (
-            InstanceLine,
-            ModelCard,
-            ParamCard,
-        )
-
-        cards = lex(self._baseline_netlist()).cards
-        model_by_name: dict[str, SpiceCard] = {
-            c.name.lower(): c for c in cards if c.kind == "model" and c.name
-        }
-        instance_by_ref: dict[str, SpiceCard] = {
-            c.name.lower(): c for c in cards if c.kind == "instance" and c.name
-        }
-        param_by_name: dict[str, SpiceCard] = {
-            c.name.lower(): c for c in cards if c.kind == "param" and c.name
-        }
-
-        # Phase 1
-        ModelCard.from_card(model_by_name["nmos1"]).set_param("VTO", 0.71)
-
-        # Phase 2 — variant for M1 only
-        base = model_by_name["nmos1"]
-        variant = variant_model_name("NMOS1", "M1")
-        variant_text = render_variant_model_card("".join(base.raw_lines), variant, {"VTO": 0.72})
-        new_card = inject_card_before_end(cards, variant_text)
-        if new_card.name:
-            model_by_name[new_card.name.lower()] = new_card
-        InstanceLine.from_card(instance_by_ref["m1"]).set_model(variant)
-
-        # Phase 3
-        ParamCard.from_card(param_by_name["vdd"]).set_value(3.3)
-
-        out = emit(cards)
-        # All three phases visible.
-        assert "VTO=0.71" in out  # Phase 1
-        assert variant in out  # Phase 2 variant card
-        assert "Vdd=3.3" in out  # Phase 3
-        # Re-parse to confirm the result is structurally valid.
-        re_cards = lex(out).cards
-        models = [c.name for c in re_cards if c.kind == "model"]
-        assert "NMOS1" in models
-        assert variant in models
 
 
 class TestHierarchicalMcDoesNotJoinSpiceCircuits:
