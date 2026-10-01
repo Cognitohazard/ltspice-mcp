@@ -459,6 +459,18 @@ class TestDanglingNodes:
         issues = self._dangling("V1 in 0 1\nT1 in 0 out 0 Td=10n Z0=50\nR1 out 0 50\n.end")
         assert issues == []
 
+    def test_lossy_line_counts_exactly_four_port_nodes(self):
+        # O: two port pairs, then the model. A dangling far end is warned,
+        # while a stray positional between the ports and the model (here a
+        # mistyped length) is not a fifth terminal: it feeds the suppressor
+        # set, so a mis-modelled shape can only hide a warning.
+        dangling = self._dangling("V1 in 0 1\nO1 in 0 out 0 LTRA\n.end")
+        assert len(dangling) == 1
+        assert "'out'" in str(dangling[0]["message"])
+        assert "O1" in str(dangling[0]["message"])
+        stray = self._dangling("V1 in 0 1\nO1 in 0 out 0 10m LTRA\nR1 out 0 50\n.end")
+        assert stray == []
+
     def test_w_switch_controlling_ref_and_model_not_counted(self):
         # W's third positional is the controlling V-source name, then the
         # model — only n+ and n- are terminals.
@@ -745,6 +757,27 @@ class TestBiasTopology:
         issues = self._bias("V1 in 0 1\nR1 in 0 1k\nC1 m1 m2 1u\nC2 m2 0 1u\nR2 m1 m3 1k\n.op")
         assert len(issues) == 1, issues
         assert "m3" not in str(issues[0]["message"])
+
+    def test_value_text_in_a_node_slot_is_not_a_wire(self):
+        # Both resistors lost a node, so the same braced value lands in each
+        # one's second node slot. Shared value text is not a net: it must not
+        # carry 'a' to ground through R2.
+        issues = self._bias("V1 in 0 1\nC1 in a 1u\nR1 a {rload}\nR2 0 {rload}\n.op")
+        assert len(issues) == 1, issues
+        assert "'a'" in str(issues[0]["message"])
+
+    def test_port_grounded_through_a_later_defined_subckt_clean(self):
+        # OUTER grounds its port only through INNER, which is defined after
+        # it, so the first pass over OUTER does not yet know INNER is
+        # grounded. The fixed point must take a second pass to carry it up.
+        deck = (
+            ".subckt OUTER p\nX1 p INNER\n.ends\n"
+            ".subckt INNER q\nR1 q 0 1k\n.ends\n"
+            "V1 vin 0 AC 1\nC1 vin n1 1u\nX1 n1 OUTER\n.op"
+        )
+        assert self._bias(deck) == []
+        # Control: with nothing grounding INNER's port, n1 really floats.
+        assert len(self._bias(deck.replace("R1 q 0 1k", "C2 q 0 1n"))) == 1
 
     # --- behavioral B-source: I= is a current source (no DC voltage path) ---
 
