@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Fixed
 
+- `edit_schematic` refused a dry run, or an op-less read such as paging the
+  `preexisting` view, on an existing sheet unless it carried
+  `expected_sha256`. The token guards against a lost update, which only a
+  write can cause, so it is now required only to commit. A dry run returns the
+  sheet's current `sha256` (and names it in `hint`), and a token it is given
+  that does not match is reported in `observations` rather than refused; a
+  commit quoting that token is still `revision_conflict`.
 - `edit_schematic`'s `set_component_value` refused any value with a space
   outside braces, quotes, a waveform's parentheses or a `MODEL KEY=VALUE` list,
   so a source's `AC 1` or `DC 5 AC 1`, a BJT's `2N3904 2` or `NPN 8`, and a
