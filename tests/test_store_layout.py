@@ -39,6 +39,8 @@ DECLARED_ROOTS: dict[str, str] = {
     "detached": "hand-off files and console logs for per-job detached owners",
     "verify": "verify_circuit exports and scratch",
     "edit-exports": "edit_schematic exports",
+    "exports": "the schematic exports experiments ran, named by their job records",
+    "plots": "plot_waveform charts written without an out_dir",
     "locks": "cross-process store locks",
 }
 
@@ -64,6 +66,44 @@ def _tree(store: Store, job_id: str) -> set[str]:
     }
 
 
+def _write_deck(work_dir: Path) -> Path:
+    deck = work_dir / "dut.cir"
+    deck.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    return deck
+
+
+async def _submit(state: SessionState, deck: Path, request_id: str) -> dict[str, Any]:
+    submitted = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": request_id,
+                "circuits": [{"path": str(deck), "id": "dut"}],
+                "execution": {"wait_s": 5.0},
+            }
+        ),
+        state,
+    )
+    receipt = submitted.structured_content
+    assert receipt is not None, submitted.content[0].text
+    return receipt
+
+
+async def _run_and_analyze(state: SessionState, deck: Path, request_id: str) -> str:
+    """Run ``deck`` and read one result set from the run; return its job id."""
+    job_id = (await _submit(state, deck, request_id))["job_id"]
+    analyzed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": job_id, "label": "dut"}],
+                "recipes": [{"key": "vin", "metric": "value", "expr": "V(in)"}],
+            }
+        ),
+        state,
+    )
+    assert analyzed.structured_content is not None
+    return job_id
+
+
 @pytest.mark.asyncio
 async def test_a_finished_run_creates_only_declared_roots(
     state_with_sim: SessionState,
@@ -79,33 +119,7 @@ async def test_a_finished_run_creates_only_declared_roots(
     # the one store record that lives outside the working directory.
     monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
     fake_simulator(monkeypatch)
-    deck = work_dir / "dut.cir"
-    deck.write_text("V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
-
-    submitted = await handle_run_experiments(
-        RunExperimentsInput.model_validate(
-            {
-                "request_id": "store-layout",
-                "circuits": [{"path": str(deck), "id": "dut"}],
-                "execution": {"wait_s": 5.0},
-            }
-        ),
-        state_with_sim,
-    )
-    receipt = submitted.structured_content
-    assert receipt is not None, submitted.content[0].text
-    job_id = receipt["job_id"]
-
-    analyzed = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                "sources": [{"job_id": job_id, "label": "dut"}],
-                "recipes": [{"key": "vin", "metric": "value", "expr": "V(in)"}],
-            }
-        ),
-        state_with_sim,
-    )
-    assert analyzed.structured_content is not None
+    job_id = await _run_and_analyze(state_with_sim, _write_deck(work_dir), "store-layout")
 
     tree = _tree(Store(work_dir), job_id)
     top_level = {entry.split("/")[0] for entry in tree}
@@ -142,6 +156,59 @@ async def test_a_finished_run_creates_only_declared_roots(
     assert not list(Store(work_dir).runs_root().glob("*.raw"))
 
 
+@pytest.mark.asyncio
+async def test_a_relocated_store_leaves_the_working_directory_alone(
+    state_with_sim: SessionState,
+    work_dir: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``LTSPICE_MCP_STORE_DIR`` moves the whole store, and nothing else changes.
+
+    The working directory keeps the deck and nothing more; the records, the
+    run, the result set and the request index land in the relocated store,
+    which still answers a repeated request_id with the job it already ran.
+    """
+    store_dir = tmp_path_factory.mktemp("stores")
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(store_dir))
+    fake_simulator(monkeypatch)
+    deck = _write_deck(work_dir)
+
+    job_id = await _run_and_analyze(state_with_sim, deck, "relocated")
+    replay = await _submit(state_with_sim, deck, "relocated")
+
+    assert sorted(p.name for p in work_dir.iterdir()) == ["dut.cir"]  # noqa: ASYNC240
+    store = Store(work_dir)
+    assert store.root.parent == store_dir
+    assert store.job_record(job_id).is_file()
+    assert {"experiments", "runs", "results"} <= {p.name for p in store.root.iterdir()}
+    assert replay["job_id"] == job_id
+    assert replay["replayed"] is True
+
+
+def test_a_relocated_store_is_one_per_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relocating keeps what the working directory scopes scoped to it."""
+    store_dir = tmp_path / "stores"
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", str(store_dir))
+    project = tmp_path / "project"
+    other = tmp_path / "other"
+    project.mkdir()
+    other.mkdir()
+
+    root = Store(project).root
+    assert root.parent == store_dir
+    assert root.name.startswith("project-")
+    assert Store(project / "sub" / "..").root == root
+    assert Store(other).root != root
+
+    # A relative setting is read from the working directory, the one thing every
+    # process sharing these records has in common.
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", "stores")
+    assert Store(project).root.parent == project / "stores"
+
+
 # Placeholder arguments for every path-returning member of Store, so each can
 # be called and asked which root it lands in. A member missing from this table
 # fails the test below by name: that is the prompt to decide, deliberately,
@@ -172,13 +239,16 @@ _PATH_MEMBERS: dict[str, Any] = {
     "result_artifacts": ("rs_" + "0" * 32,),
     "verify_artifact": ("export",),
     "edit_export": ("build_1",),
+    "exports_dir": (),
+    "export_snapshot": ("amp.run-0123456789ab.net",),
+    "plots_dir": (),
 }
 
 # Paths that deliberately live outside the working-directory store, and why.
 _OUTSIDE_THE_STORE: dict[str, str] = {
-    "circuit_sidecar": "belongs to the user's circuit, not to a session",
-    "circuit_exports": "a receipt's provenance names it; it outlives the session",
-    "circuit_plots": "a plot belongs beside the circuit it was made from",
+    "circuit_lock": (
+        "per user: every session editing the file contends on it, whatever its working directory"
+    ),
     "artifact_base": "returns the routing decision, not a path",
 }
 

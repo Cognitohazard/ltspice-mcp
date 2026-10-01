@@ -1,12 +1,9 @@
 """Global index of recently-touched circuit files.
 
-The index lives in a user-global state directory so a new session can
-surface prior work no matter which project it was started in. Resolution
-order (first match wins):
-
-1. ``$LTSPICE_MCP_HOME/recent.json`` (tests and explicit overrides).
-2. ``$XDG_STATE_HOME/ltspice-mcp/recent.json`` (XDG Base Directory).
-3. ``~/.local/state/ltspice-mcp/recent.json`` (XDG default base).
+The index lives in the per-user home (``store.user_home``) so a new session
+can surface prior work no matter which project it was started in:
+``$LTSPICE_MCP_HOME`` if set, else ``%LOCALAPPDATA%\\ltspice-mcp`` on Windows
+and the XDG state directory elsewhere.
 
 Writes are serialised across processes via ``file_lock`` — parallel MCP
 sessions sharing a machine won't lose entries to read-modify-write races.
@@ -18,12 +15,11 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 from pathlib import Path
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, atomic_write_json, now
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.store import KIND_RECENT, accept, envelope
+from ltspice_mcp.lib.store import KIND_RECENT, accept, envelope, user_home
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +28,8 @@ INDEX_FILENAME = "recent.json"
 
 
 def index_path() -> Path:
-    """Resolve the global recent-circuits file path.
-
-    See module docstring for the full resolution order. In short: explicit
-    ``$LTSPICE_MCP_HOME`` always wins; otherwise the XDG state directory
-    (``$XDG_STATE_HOME`` or the ``~/.local/state`` default) is used.
-    """
-    override = os.getenv("LTSPICE_MCP_HOME")
-    if override:
-        return Path(override) / INDEX_FILENAME
-    xdg = os.getenv("XDG_STATE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / "ltspice-mcp" / INDEX_FILENAME
+    """The global recent-circuits file, in the per-user home."""
+    return user_home() / INDEX_FILENAME
 
 
 def is_circuit_file(path: Path) -> bool:

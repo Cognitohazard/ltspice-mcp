@@ -62,6 +62,16 @@ tool-surface changes.
 - Under Wine, `inspect(kind="capabilities")` reported `wine` as the LTspice
   executable, because it read the first word of the launch command. It now
   reports the simulator itself, e.g. `.../LTspice.exe`.
+- `verify_circuit`'s default `managed` export is documented to leave the
+  caller's files untouched, but it created a `.ltspice-mcp/locks/` directory
+  beside the schematic, as did every `edit_schematic` call, dry runs included.
+  Circuit locks now live in the per-user home (see Changed).
+- A relative `.include` in a compared export was resolved against the scratch
+  copy the export was made from, not the schematic's folder. With the store
+  outside `allowed_paths` it was refused and reported as a `path_denied` error
+  on the author's own library. `verify_circuit` and `edit_schematic`'s
+  reference check now resolve each side's relative includes from the folder
+  of the file the caller named, as LTspice does.
 - Variation conflict checks treat component references case-insensitively and
   preserve parameter assignment followed by random variation when an unrelated
   nested-device edit is also requested.
@@ -236,6 +246,20 @@ tool-surface changes.
   warning text and a skipped segment not at all, though the design doc said
   `already_present` was reported. An op that found nothing has no entry.
   `Api.edit_schematic` returns the same list.
+- `LTSPICE_MCP_WRITE_CONFIG=false` stops the first tool call from writing a
+  default `ltspice-mcp.toml` into a directory that has none. It is read from
+  the environment only: a config file that exists is never rewritten, so a key
+  inside one would have nothing to switch off.
+- `LTSPICE_MCP_STORE_DIR` keeps each working directory's store under another
+  directory (for example a cache directory) instead of in
+  `<working_dir>/.ltspice-mcp/`: one store per working directory, named for it
+  and keyed by its resolved path, so idempotency, job listings and result sets
+  stay scoped to the working directory as before. The trade-off: records are
+  no longer found by the working directory alone. A server, Python script or
+  `run_code` worker that does not carry the same setting looks in
+  `<working_dir>/.ltspice-mcp/` and sees none of them, and a `request_id`
+  submitted from there runs again rather than replaying. Detached owners and
+  `run_code` workers inherit the setting from the process that starts them.
 - A `partial_progress` observation for every case the coordinator stops and
   whose simulator exit is seen. It gives the plot, its axis, the complete
   points on disk and the last axis value reached, read from the partial raw
@@ -350,6 +374,31 @@ tool-surface changes.
 - The store format is version 3. Job records gained the simulator executable
   and each case's reported build. Version 2 records still load, with both
   unknown; version 1 records (0.6.1) are not read.
+- A session no longer writes bookkeeping into the folders of the circuits it
+  touches. What it wrote there, and where it goes now:
+  - the cross-process lock taken for every edit and export
+    (`<circuit dir>/.ltspice-mcp/locks/`) is in the per-user home, one lock
+    per file keyed by the digest of its resolved, case-folded path. Sessions
+    started in different working directories still contend on the same lock;
+  - the export snapshot an experiment runs a schematic from
+    (`<circuit dir>/.ltspice-mcp/exports/`, or a `<name>.run-<hash>.net`
+    sibling whenever the export had a relative `.include`) is in the store's
+    `exports/`, beside the job records that name it. Staging resolves the
+    snapshot's relative includes from the schematic's folder, so the sibling
+    exception is gone;
+  - the ngspice-scrubbed `<name>.ngspice.net` twin is written straight into
+    that snapshot;
+  - `plot_waveform` charts written without an `out_dir`
+    (`<circuit or raw dir>/.ltspice-mcp/plots/`) are in the store's `plots/`.
+
+  LTspice's own `<name>.net` beside a schematic it exports is its exporter's
+  choice and stays. `edit_schematic`'s reference check keeps no export
+  snapshot at all. Existing `.ltspice-mcp/` folders beside circuits are not
+  read or removed.
+- The per-user home is `%LOCALAPPDATA%\ltspice-mcp` on Windows (it was
+  `~/.local/state/ltspice-mcp` on every platform), and the XDG state directory
+  elsewhere; `LTSPICE_MCP_HOME` still overrides it. On Windows the
+  recent-circuits index starts empty once and refills as circuits are touched.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.

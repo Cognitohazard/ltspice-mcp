@@ -26,9 +26,15 @@ The layout, rooted at the working directory::
     |   `-- {digest}.log                    that owner's stdout and stderr
     |-- verify/                             verify_circuit exports
     |-- edit-exports/{build_id}/            edit_schematic exports
+    |-- exports/{name}.run-{hash}.net       schematic exports experiments ran
+    |-- plots/                              plot_waveform charts with no out_dir
     `-- locks/                              cross-process store locks
 
-Three things live outside that root, each for a reason:
+``$LTSPICE_MCP_STORE_DIR`` moves that root, whole, to one directory per working
+directory under it (:func:`relocated_store_root`); the layout inside is the same.
+
+Nothing the server keeps is written beside a user's circuit. Two things live
+outside the root, each for a reason:
 
 * **Run artifacts may not be there at all.** On WSL with LTspice the whole
   ``runs/`` tree moves to a Windows-native temp directory: LTspice is a Windows
@@ -36,16 +42,11 @@ Three things live outside that root, each for a reason:
   SQLite — which is what ``.MEAS`` writes through — cannot write over UNC.
   :meth:`Store.artifact_base` is the single place that rule is applied; every
   writer asks it rather than re-deciding.
-* **Circuit-scoped sidecars** sit next to the user's file, because they belong
-  to that file and not to whichever directory a session was started in: the
-  export snapshots a receipt's provenance names
-  (:meth:`Store.circuit_exports`) and the plots ``plot_waveform`` writes
-  (:meth:`Store.circuit_plots`), both under
-  :meth:`Store.circuit_sidecar`. The per-circuit lock files parallel sessions
-  coordinate on live in the same sidecar, but their path is built by
-  ``lib/filelock.py``, which owns the locking protocol.
-* **The recent-circuits index is user-global** (``lib/recent.py``), so a session
-  started anywhere can surface prior work.
+* **Per-user state lives in** :func:`user_home`, shared by every session this
+  user runs wherever it was started: the recent-circuits index
+  (``lib/recent.py``), so a session can surface prior work, and one lock file
+  per circuit (:meth:`Store.circuit_lock`), so two sessions editing one file
+  contend on one lock whatever their working directories.
 
 Record shape: one schema name and one version for the whole store. Every
 durable record this build writes carries ``{"schema": "ltspice-mcp/store",
@@ -59,11 +60,13 @@ version this build does not read is skipped with a warning, never guessed at.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
 import os
 import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -78,8 +81,8 @@ from ltspice_mcp.lib import now
 
 logger = logging.getLogger(__name__)
 
-#: The directory name every ltspice-mcp sidecar uses, working-dir or circuit.
-SIDECAR_DIRNAME = ".ltspice-mcp"
+#: The store's directory name inside a working directory.
+STORE_DIRNAME = ".ltspice-mcp"
 
 #: The one schema name every 0.6 store record carries.
 STORE_SCHEMA = "ltspice-mcp/store"
@@ -169,6 +172,75 @@ def path_digest(value: str) -> str:
     and far longer than a filename may be).
     """
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+#: Overrides :func:`user_home` wherever the platform default would be.
+USER_HOME_ENV = "LTSPICE_MCP_HOME"
+
+#: Keeps each working directory's store under this directory instead of in it.
+STORE_DIR_ENV = "LTSPICE_MCP_STORE_DIR"
+
+_APP_DIRNAME = "ltspice-mcp"
+
+
+def user_home() -> Path:
+    """The per-user directory: what every session this user runs shares.
+
+    Resolution order, first match wins:
+
+    1. ``$LTSPICE_MCP_HOME`` (tests, and anyone who wants it elsewhere).
+    2. On Windows, ``%LOCALAPPDATA%\\ltspice-mcp`` — local rather than roaming,
+       because nothing here should follow the user to another machine.
+    3. ``$XDG_STATE_HOME/ltspice-mcp``, else ``~/.local/state/ltspice-mcp``.
+
+    Read on every call rather than once, so a test's environment override
+    applies to the call it wraps.
+    """
+    override = os.getenv(USER_HOME_ENV)
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        local = os.getenv("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / _APP_DIRNAME
+    xdg = os.getenv("XDG_STATE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
+    return base / _APP_DIRNAME
+
+
+def _resolved(path: Path) -> Path:
+    """``path`` resolved, or made absolute when it cannot be (a symlink loop)."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return path.absolute()
+
+
+@functools.lru_cache(maxsize=64)
+def relocated_store_root(store_dir: Path, working_dir: Path) -> Path:
+    """One working directory's store, kept under ``store_dir`` instead of inside it.
+
+    One store per working directory, named for the directory and keyed by the
+    digest of its resolved path, so everything the working directory scopes
+    stays scoped to it: the request index behind idempotency, the job listing,
+    the result sets. What changes is who finds them. A process looks here only
+    if it carries the same ``$LTSPICE_MCP_STORE_DIR``; one that does not — a
+    script started without it, a server started from another client config —
+    looks in ``{working_dir}/.ltspice-mcp`` and sees none of these records. The
+    detached owners and ``run_code`` workers a session starts inherit its
+    environment, so they follow it.
+
+    A relative ``store_dir`` is taken from the working directory, so every
+    process sharing that directory reads it the same way. Cached, because the
+    working directory is resolved to name the store and this is asked for on
+    every store path.
+    """
+    from ltspice_mcp.lib.sweep_utils import sanitize_stem
+
+    base = store_dir if store_dir.is_absolute() else working_dir / store_dir
+    resolved = _resolved(working_dir)
+    readable = sanitize_stem(resolved.name) or "root"
+    return base / f"{readable}-{path_digest(os.path.normcase(str(resolved)))[:16]}"
 
 
 # ---------------------------------------------------------------------------
@@ -392,8 +464,15 @@ class Store:
 
     @property
     def root(self) -> Path:
-        """The working directory's store root."""
-        return self.working_dir / SIDECAR_DIRNAME
+        """The working directory's store root.
+
+        ``{working_dir}/.ltspice-mcp`` unless ``$LTSPICE_MCP_STORE_DIR`` names a
+        directory to keep stores in (see :func:`relocated_store_root`).
+        """
+        store_dir = os.getenv(STORE_DIR_ENV)
+        if store_dir:
+            return relocated_store_root(Path(store_dir).expanduser(), self.working_dir)
+        return self.working_dir / STORE_DIRNAME
 
     @property
     def manifest(self) -> Path:
@@ -631,43 +710,52 @@ class Store:
         """One ``edit_schematic`` export directory."""
         return self.root / "edit-exports" / _validate_name(build_id, "build id")
 
-    # -- circuit-scoped sidecars -------------------------------------------
+    @property
+    def exports_dir(self) -> Path:
+        """The netlists exported from schematics that experiments ran.
+
+        In the store, beside the job records that name them: a receipt's replay
+        identity names one of these files, so it lives exactly as long as the
+        records do, and no schematic's folder collects one per distinct edit.
+        Staging resolves a snapshot's relative includes beside its schematic
+        (``deck_staging.stage_deck``).
+        """
+        return self.root / "exports"
+
+    def export_snapshot(self, name: str) -> Path:
+        """One content-addressed export snapshot."""
+        return self.exports_dir / _validate_name(name, "export snapshot name")
+
+    @property
+    def plots_dir(self) -> Path:
+        """Where ``plot_waveform`` writes a chart when the caller names no ``out_dir``.
+
+        The response carries the path, and ``out_dir`` puts a chart beside the
+        circuit for a caller who wants it there.
+        """
+        return self.root / "plots"
+
+    # -- per-user ----------------------------------------------------------
     #
-    # These belong to the user's file rather than to a session's working
-    # directory, so they are static: any Store can name them, and a session
-    # whose working directory is elsewhere still finds them.
+    # Shared by every session this user runs, whatever its working directory,
+    # so these are static: any Store names the same path.
 
     @staticmethod
-    def circuit_sidecar(circuit_path: Path) -> Path:
-        """The sidecar directory beside one circuit file."""
-        return circuit_path.parent / SIDECAR_DIRNAME
+    def circuit_lock(circuit_path: Path) -> Path:
+        """Anchor for the cross-process lock on one circuit file (``file_lock`` appends .lock).
 
-    @staticmethod
-    def circuit_exports(circuit_path: Path) -> Path:
-        """Content-addressed deck snapshots an experiment's provenance names.
+        Per user, so sessions started in different working directories contend
+        on one lock per file, and nothing is written beside the circuit.
 
-        Beside the circuit, not in the working-dir store: a receipt's replay
-        identity names one of these files, so it has to outlive the session,
-        and it belongs to the schematic it was exported from.
+        Keyed by the digest of the resolved path, case-folded so two spellings
+        of one file on a case-insensitive filesystem (Windows, macOS, a WSL
+        ``/mnt/c`` mount) share their lock. On a case-sensitive one, two files
+        differing only in case share one too: a wait, and past the timeout the
+        "locked, retry" error, never a missed exclusion. Resolving is filesystem
+        work, so an event-loop caller runs this off-loop.
         """
-        return Store.circuit_sidecar(circuit_path) / "exports"
-
-    @staticmethod
-    def circuit_plots(anchor_dir: Path) -> Path:
-        """Where ``plot_waveform`` writes its interactive chart.
-
-        Takes the DIRECTORY the plot belongs beside — the circuit's, or the
-        raw's when the caller named a raw directly. Beside the circuit rather
-        than in the working-dir store: a plot belongs to the file it was made
-        from, and that is where an agent looks for it. A directory already
-        inside a sidecar tree (a job-run raw passed by path, whose directory is
-        under ``runs/``) takes the plots directory there rather than nesting a
-        second ``.ltspice-mcp/`` inside the first.
-        """
-        sidecar = (
-            anchor_dir if SIDECAR_DIRNAME in anchor_dir.parts else anchor_dir / SIDECAR_DIRNAME
-        )
-        return sidecar / "plots"
+        resolved = _resolved(circuit_path)
+        return user_home() / "locks" / "circuits" / path_digest(str(resolved).casefold())
 
 
 def run_dir_in(runs_root: Path, job_id: str) -> Path:

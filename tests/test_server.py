@@ -1,6 +1,7 @@
 """Tests for server.py — error hints, asc editor configuration, and dispatch."""
 
 import io
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -459,6 +460,26 @@ class TestServerDispatch:
         item = result.structured_content["results"][0]
         assert item["ok"] is True
         assert "2N2222" in str(item["data"])
+
+
+def _capabilities_call() -> mcp_types.CallToolRequestParams:
+    return call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write_config", [True, False])
+async def test_the_first_tool_call_writes_a_default_config_unless_switched_off(
+    config: ServerConfig, work_dir: Path, write_config: bool
+):
+    """Switched off, a server leaves the directory it was started in untouched."""
+    config_path = work_dir / "ltspice-mcp.toml"
+    state = SessionState.create(
+        replace(config, config_path=config_path, write_config=write_config), available={}
+    )
+    result = await call_tool(fake_request_context(state), _capabilities_call())
+    assert not result.is_error
+    written = [p.name for p in work_dir.iterdir()]  # noqa: ASYNC240
+    assert written == (["ltspice-mcp.toml"] if write_config else [])
 
 
 class TestLoggingCapabilityDropped:

@@ -639,6 +639,19 @@ def work_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def project_dir(work_dir: Path) -> Path:
+    """A circuit folder inside the working directory but apart from its store.
+
+    A circuit sitting in the working directory itself shares a folder with the
+    ``.ltspice-mcp/`` store, so a test there cannot see what was written beside
+    the circuit. One here can: the folder holds only what the test put in it.
+    """
+    project = work_dir / "project"
+    project.mkdir()
+    return project
+
+
+@pytest.fixture
 def config(work_dir: Path) -> ServerConfig:
     """ServerConfig pointing at tmp working directory."""
     return ServerConfig(

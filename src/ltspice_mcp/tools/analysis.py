@@ -74,7 +74,6 @@ from ltspice_mcp.lib.signal_analysis import (
     downsample_minmax,
     summarize_trace,
 )
-from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
@@ -141,52 +140,6 @@ async def _experiment_case(
             "case_id selects a run_experiments case; pass it with that job's job_id."
         )
     return None
-
-
-async def _resolve_artifact_dest(
-    *,
-    out_dir: str | None,
-    job_id: str | None,
-    raw_file: str | None,
-    filename: str,
-    artifact: str,
-    state: SessionState,
-    circuit_dir: Path | None = None,
-) -> Path:
-    """Resolve where a generated artifact (the plot HTML) is written.
-
-    An explicit ``out_dir`` (validated via ``safe_path``) wins; otherwise the
-    destination is ``Store.circuit_plots`` of a Linux-side anchor — the CIRCUIT
-    for a job_id, the raw's own directory for a raw_file, because a job-run raw
-    can live in a Windows temp under /mnt/c the client cannot Read. A caller
-    that already resolved the circuit (an experiment case, whose job has no
-    single netlist) passes it as ``circuit_dir``. Server-artifact paths skip
-    ``safe_path`` except the out_dir override; the resolved path must stay under
-    its anchor (a symlinked sidecar would otherwise redirect the write out).
-    """
-    if out_dir:
-        dest_anchor = safe_path(out_dir, state)
-        out_path = (dest_anchor / filename).resolve()
-    else:
-        if circuit_dir is not None:
-            dest_anchor = circuit_dir
-        elif job_id:
-            # Only a caller that resolved the run itself can name a circuit
-            # directory (``circuit_dir`` above); a bare job_id cannot, because
-            # an experiment spans several decks.
-            raise ResultError(
-                "Pass out_dir, or resolve the run first — a job id alone does not "
-                "name one circuit directory to write beside."
-            )
-        else:
-            dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
-        out_path = (Store.circuit_plots(dest_anchor) / filename).resolve()
-    if not out_path.is_relative_to(dest_anchor.resolve()):
-        raise ResultError(
-            f"Refusing to write the {artifact} outside the destination directory "
-            "(a symlinked .ltspice-mcp/ sidecar would redirect it)."
-        )
-    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -1107,8 +1060,8 @@ class PlotWaveformInput(ToolInput):
         default=None,
         description=(
             "Directory for the HTML (under an allowed path; created if needed). "
-            "Default: a '.ltspice-mcp/plots/' sidecar next to the circuit or "
-            "the raw file."
+            "Default: the server's store, '.ltspice-mcp/plots/' in the working "
+            "directory unless LTSPICE_MCP_STORE_DIR moves it."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -1142,8 +1095,8 @@ _IMAGE_SCHEMA: dict[str, Any] = {
         "AC Bode, noise), a .step or Monte Carlo run overlays every step, and each "
         "unit gets its own panel.\n\n"
         "Writes a self-contained HTML file and returns its path — into "
-        "``out_dir`` if given, else a '.ltspice-mcp/plots/' sidecar next to the "
-        "circuit or the raw. On a host that supports MCP Apps the chart is also "
+        "``out_dir`` if given, else the server's store. On a host that "
+        "supports MCP Apps the chart is also "
         "embedded as an in-chat widget; otherwise it opens in your local "
         "browser. The reply summarizes each trace (min and max and where, first "
         "and final value, mean on a transient); attach_plot adds a PNG.\n\n"
@@ -1275,15 +1228,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         annotate=args.annotate,
     )
 
-    out_path = await _resolve_artifact_dest(
-        out_dir=args.out_dir,
-        job_id=args.job_id,
-        raw_file=args.raw_file,
-        filename=_plot_filename(raw_path, analysis_type, args.job_id, run_index),
-        artifact="plot",
-        state=state,
-        circuit_dir=case.circuit_path.parent if case is not None else None,
-    )
+    # Into ``out_dir`` when named, else the store: never beside a raw the
+    # caller named, which on WSL can sit in a Windows temp the client cannot read.
+    dest_dir = safe_path(args.out_dir, state) if args.out_dir else state.store.plots_dir
+    out_path = dest_dir / _plot_filename(raw_path, analysis_type, args.job_id, run_index)
 
     title = f"{raw_path.stem} — {analysis_type}"
     try:

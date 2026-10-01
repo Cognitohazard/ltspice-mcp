@@ -602,6 +602,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_RUN_CODE": "off",
     "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "7",
+    "LTSPICE_MCP_WRITE_CONFIG": "off",
 }
 
 # One TOML naming every key the loader reads, with values distinct from both
@@ -698,6 +699,7 @@ class TestLoadCoversEveryKey:
             "run_code": True,
             "persist_jobs": False,
             "preload_recent_count": 3,
+            "write_config": True,
             "config_path": toml_path,
         }
 
@@ -733,6 +735,7 @@ class TestLoadCoversEveryKey:
             "run_code": False,
             "persist_jobs": True,
             "preload_recent_count": 7,
+            "write_config": False,
             "config_path": toml_path,
         }
 

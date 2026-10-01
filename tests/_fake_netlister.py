@@ -70,6 +70,25 @@ async def export_asc_to_netlist(asc_copy: Path, _state) -> str:
     return netlist_text(asc_copy)
 
 
+def install_fixed_exporter(state, netlist: str) -> None:
+    """Make ``state``'s LTspice export every schematic as ``netlist``.
+
+    The netlist lands in ``<name>.net`` beside the schematic, where LTspice's
+    ``-netlist`` writes it; everything after that is the server's own code.
+    Written as bytes, so the file holds exactly ``netlist`` on every platform:
+    text mode would turn each newline into ``\r\n`` on Windows.
+    """
+
+    class _Exporter:
+        @staticmethod
+        def create_netlist(path: str, timeout: float | None = None) -> str:
+            exported = Path(path).with_suffix(".net")
+            exported.write_bytes(netlist.encode("utf-8"))
+            return str(exported)
+
+    state.available_simulators["ltspice"] = _Exporter
+
+
 # An amplifier sheet with what makes a schematic and its export differ in
 # representation: a MOSFET whose SpiceLine the exporter appends, and one TEXT
 # block holding a .model split over a continuation line plus a .param, which the
