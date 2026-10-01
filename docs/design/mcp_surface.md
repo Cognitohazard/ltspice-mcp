@@ -336,7 +336,7 @@ Input:
 
 ```
 request_id           str, optional      idempotency key; minted when omitted
-circuits             list[{path, id?}]  .cir / .net / .sp / .asc
+circuits             list[{path, id?}]  .cir / .net / .sp / .spice / .asc
 variations           list[Variation]    Appendix A.1. assign entries combine by
                                         cartesian product; AT MOST ONE random
                                         entry per call (the product of two
@@ -1056,7 +1056,10 @@ Python API), which are never capped. The gate stays a whole-file answer.
     each instance's own reference (the last segment), so a one-letter
     prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
-    search requires query; enumerate requires libs
+    search requires query; enumerate requires libs. A search without libs
+    reads the detected simulators' own model libraries; libs may name a file
+    inside the sandbox or inside one of those libraries, so every source_path
+    a search returns can be read back through libs
 {kind: "reference", query?, limit? (default 5, cap 20)}
     the tools' own vocabulary: each tool's top-level arguments, plus the
     branches — recipes, ops, variation kinds, query kinds, checks and job

@@ -10,6 +10,36 @@ tool-surface changes.
 
 ### Fixed
 
+- A path containing `..` was refused before it was resolved, even when it
+  landed inside the sandbox. A deck in a subfolder with
+  `.include ../models/x.lib` got an error-severity `path_denied` finding from
+  `verify_circuit` and from `edit_schematic`'s compare, saying the include
+  resolved outside the allowed roots, although `run_experiments` staged the
+  same include. `inspect` and `verify_circuit` also refused
+  `path="sub/../x.asc"`. A path is now judged by where it resolves, with
+  symlinks followed; a `..` that climbs out of the sandbox is still refused,
+  as outside the allowed directories.
+- `inspect` model queries refused a `libs` file inside the detected
+  simulator's own model library (LTspice's `lib/cmp/standard.bjt`, say) under
+  the default sandbox, although staging, the include resolver and the
+  hierarchy reader all read that library. These reads now admit it too.
+- An `inspect` model search with `libs` omitted always returned nothing: it
+  searched only libraries loaded through a call nothing makes any more. It now
+  searches the detected simulators' own model libraries, which are the
+  directories a `libs` entry may name, so every `source_path` it returns can
+  be read back through `libs` and staged by a run. The first such search
+  parses the whole install, in a worker thread so other requests are not held
+  up. The run-failure hints for a missing model point there instead of at
+  loaded libraries.
+- `run_experiments`, `verify_circuit` and the `inspect` net, components and
+  hierarchy queries refused `.spice` netlists, the extension xschem and the
+  sky130 testbenches write. Every surface that reads a netlist now takes
+  `.cir`, `.net`, `.sp` and `.spice`; a run hands the simulator a `.cir` copy
+  of a `.spice` deck, so a simulator that needs a known extension still
+  reads it.
+- The `circuits[].path` description of `run_experiments` told agents to export
+  an `.asc` through LTspice first. An `.asc` is accepted and exported
+  automatically, and the description now says so.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.

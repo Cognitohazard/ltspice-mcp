@@ -433,24 +433,17 @@ class TestServerDispatch:
         )
         assert len(result.contents) > 0
 
-    async def test_error_with_suggestions_returns_structured_result(
+    async def test_model_search_near_miss_returns_structured_result(
         self, state_no_sim: SessionState, tmp_path
     ):
-        """LibraryError with suggestions should surface as is_error=True + structuredContent.
-
-        The fuzzy-match suggestion path now lives behind inspect's model
-        search query.
-        """
+        """A near-miss part name comes back as a fuzzy match in structuredContent."""
         lib = state_no_sim.working_dir / "mini.lib"
         lib.write_text(".MODEL 2N2222 NPN(BF=200)\n")
-        state_no_sim.libraries.load_library(lib)
 
+        query = {"kind": "model", "mode": "search", "query": "2N2223", "libs": [str(lib)]}
         result = await call_tool(
             fake_request_context(state_no_sim),
-            call_tool_params(
-                "inspect",
-                {"queries": [{"kind": "model", "mode": "search", "query": "2N2223"}]},
-            ),
+            call_tool_params("inspect", {"queries": [query]}),
         )
         assert isinstance(result, mcp_types.CallToolResult)
         # The model search returns success with fuzzy matches rather than an

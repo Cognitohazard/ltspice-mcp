@@ -129,8 +129,8 @@ def attach_suggestions_to_failure(
         f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
         "auto-included in the run. For each, call "
         'inspect(kind="model", mode="search", query="<ref>") to locate its '
-        'definition in the loaded libraries — or mode="enumerate" with "libs" '
-        "to read a specific stock library file — then add the returned .include "
+        "definition in the simulator's own libraries — or pass libs to search or "
+        "enumerate a specific library file — then add the returned .include "
         "directive to the netlist and rerun."
     )
     return f"{error_msg}{block}"

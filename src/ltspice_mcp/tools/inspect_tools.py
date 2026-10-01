@@ -36,8 +36,12 @@ Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
 is what lets a first edit commit in one call; an edit attempted without it is
 refused with the current digest attached, so that path costs one retry rather
 than a hunt.
-* ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
-  ``enumerate`` lists every model defined in the given ``libs``.
+* ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``
+  in the given ``libs``, or in the detected simulators' own model libraries
+  when ``libs`` is omitted; ``enumerate`` lists every model defined in the
+  given ``libs``. A ``libs`` file may sit inside the sandbox or inside one of
+  those simulator libraries, so every ``source_path`` a search returns reads
+  back.
 * ``reference`` — the tools' own branch vocabulary (``tools/reference_index.py``):
   a plain-words ``query`` returns the closest analysis recipes, schematic ops,
   variation kinds, checks and job actions with their full field tables, and no
@@ -87,16 +91,21 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib import NETLIST_SUFFIXES, response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
-from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
+from ltspice_mcp.lib.library_manager import (
+    LibraryManager,
+    parse_library_file_cached,
+    part_aware_score,
+)
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
+from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
@@ -350,8 +359,6 @@ _PAGE_SIZE = 100
 # Larger than the pin page because a coordinate is two integers.
 _COORD_PAGE_SIZE = 500
 
-NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
-
 
 @dataclass(frozen=True)
 class _View:
@@ -491,13 +498,17 @@ class SymbolQuery(StrictModel):
     )
 
 
+#: The circuit file a net or components query reads.
+_CIRCUIT_PATH_DESCRIPTION = "The .asc schematic, or .cir/.net/.sp/.spice netlist, to read."
+
+
 class NetQuery(StrictModel):
     """Everything on one net. On a .asc this is a geometric trace — pins, wire
     vertices, net labels, and whether two labels short the net. On a netlist it
     is card membership, with no geometry."""
 
     kind: Literal["net"]
-    path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
+    path: str = Field(description=_CIRCUIT_PATH_DESCRIPTION)
     at: str | list[int] = Field(
         description=(
             "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
@@ -527,10 +538,10 @@ _PREFIX_DESCRIPTION = (
 
 
 class ComponentsQuery(StrictModel):
-    """The components of a .asc schematic or a .cir/.net/.sp netlist."""
+    """The components of a .asc schematic or a netlist."""
 
     kind: Literal["components"]
-    path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
+    path: str = Field(description=_CIRCUIT_PATH_DESCRIPTION)
     prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     detail: Literal["list", "full"] = Field(
         default="list",
@@ -547,7 +558,7 @@ class HierarchyQuery(StrictModel):
     """Resolve repeated netlist instances, ports, parameters and backend device addresses."""
 
     kind: Literal["hierarchy"]
-    path: str = Field(description="Netlist .cir/.net/.sp; explicitly export a schematic first.")
+    path: str = Field(description="Netlist .cir/.net/.sp/.spice; export a schematic first.")
     simulator: Literal["ltspice", "ngspice"] = Field(
         description="Offline semantic backend; installation is not required."
     )
@@ -596,14 +607,14 @@ class ModelQuery(StrictModel):
         default=None,
         description=(
             "Library files to read: required by 'enumerate', optional for "
-            "'search', which searches the session's loaded libraries when omitted."
+            "'search', which searches the simulator's own libraries when omitted."
         ),
     )
     cursor: str | None = Field(
         default=None,
         description=(
-            _CURSOR_DESCRIPTION_FILE + " The files are those named in 'libs'; "
-            "with 'libs' omitted it binds the query alone."
+            _CURSOR_DESCRIPTION_FILE + " The files are those named in 'libs', "
+            "or the simulator's own when it is omitted."
         ),
     )
 
@@ -1244,7 +1255,7 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     raise _QueryError(
         "unsupported_file",
         f"'{suffix}' is not a circuit file; {query} queries take a .asc "
-        "schematic or a .cir / .net / .sp netlist",
+        "schematic or a .cir / .net / .sp / .spice netlist",
     )
 
 
@@ -1576,13 +1587,45 @@ def _search_libs(lib_paths: list[Path], query: str, cutoff: float = 0.6) -> list
     return [row for _, row in scored]
 
 
+def _search_simulator_libraries(
+    libraries: LibraryManager, query: str
+) -> tuple[list[dict[str, Any]], list[list[Any]]]:
+    """Fuzzy-match ``query`` across the detected simulators' own libraries.
+
+    Returns the rows and the revision of every file searched. The revision is
+    taken here, in the worker, because a full install is thousands of files
+    and the cursor binding would otherwise stat them all on the event loop.
+    """
+    rows = libraries.find_similar_models(
+        query, exact=False, limit=10_000, cutoff=0.6, include_builtin=True
+    )
+    searched = [path for path, _ in libraries.get_loaded_libraries()]
+    searched += libraries.builtin_library_files()
+    return rows, [[str(path), _file_stamp(path)] for path in searched]
+
+
+async def _admit_libs(libs: list[str], state: SessionState) -> list[Path]:
+    """Resolve the named library files: each must lie inside the sandbox or
+    inside a detected simulator's own library.
+
+    The second set is the trust class staging, the include resolver and the
+    hierarchy reader already admit: the model library shipped with the
+    simulator the server runs. Without it a part a run can include from the
+    stock library could not be looked up there, and a file the search below
+    returns could not be read back through 'libs'.
+    """
+    roots = await asyncio.to_thread(state.libraries.library_roots)
+    allowed = state.allowed_paths() + roots
+    return [resolve_safe_path(lib, allowed) for lib in libs]
+
+
 async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str, Any]:
     # The library files these rows were read from, so the cursor binds their
     # revision: an edited library must reject a stale token, not page into the
     # re-parsed list at the old offset.
     sources: list[Path] = []
     if q.mode == "enumerate":
-        sources = [safe_path(lib, state) for lib in (q.libs or [])]
+        sources = await _admit_libs(q.libs or [], state)
         try:
             rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
@@ -1590,24 +1633,25 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
         identity: dict[str, Any] = {"mode": "enumerate", "libs": [str(p) for p in sources]}
     else:
         assert q.query is not None  # guaranteed by the model validator
+        identity = {"mode": "search", "query": q.query, "libs": q.libs}
         if q.libs:
-            sources = [safe_path(lib, state) for lib in q.libs]
+            sources = await _admit_libs(q.libs, state)
             try:
                 rows = await asyncio.to_thread(_search_libs, sources, q.query)
             except OSError as exc:
                 raise _QueryError("read_error", str(exc)) from exc
         else:
-            # No libs given: fall back to the session's loaded libraries (loop-owned
-            # mutable state — read inline, never offloaded). Those rows come from
-            # the session's own load/unload state and the stock library tree, not
-            # from files this query names, so there is nothing to stamp.
+            # No libs given: search the detected simulators' own libraries,
+            # the directories _admit_libs accepts, so every source_path in the
+            # rows reads back through 'libs'. Offloaded because the first search
+            # parses the whole install. The searched files' revision rides in
+            # the identity rather than in ``sources`` (see the helper).
             try:
-                rows = state.libraries.find_similar_models(
-                    q.query, exact=False, limit=10_000, cutoff=0.6
+                rows, identity["searched"] = await asyncio.to_thread(
+                    _search_simulator_libraries, state.libraries, q.query
                 )
             except Exception as exc:
                 raise _QueryError("search_error", str(exc)) from exc
-        identity = {"mode": "search", "query": q.query, "libs": q.libs}
 
     page = _paginate(rows, "model", identity, q.cursor, sources, view)
     return {

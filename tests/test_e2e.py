@@ -603,7 +603,7 @@ class TestSchematicTools:
 class TestSecurity:
     async def test_path_traversal_blocked(self, shared_session: ClientSession):
         result = await _call(shared_session, "verify_circuit", {"path": "../../../etc/passwd"})
-        _assert_tool_error(result, "not allowed")
+        _assert_tool_error(result, "outside allowed directories")
         finding = _data(result)["findings"][0]
         assert finding["rule_id"] == "path_denied"
 
