@@ -105,16 +105,19 @@ class TestEveryToolCarriesADisplayTitle:
     """
 
     @pytest.mark.parametrize("listing", ["full", "compact"])
-    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
-    def test_title_is_present_and_readable(self, listing: ToolListing, name: str):
-        definition = {d.name: d for d in get_tools(listing)[0]}[name]
-        assert definition.title, f"{name} advertises no display title"
-        assert definition.title != name, (
-            f"{name}: the title repeats the wire name, so it tells a reader nothing new"
-        )
-        # A label, not a sentence: a client renders it inline in a tool list.
-        assert len(definition.title) <= 40
-        assert not definition.title.endswith(".")
+    def test_title_is_present_and_readable(self, listing: ToolListing):
+        problems = []
+        for definition in get_tools(listing)[0]:
+            title = definition.title or ""
+            if not title:
+                problems.append(f"{definition.name}: no display title")
+            elif title == definition.name:
+                # Repeating the wire name tells a reader nothing new.
+                problems.append(f"{definition.name}: the title is the wire name")
+            # A label, not a sentence: a client renders it inline in a tool list.
+            elif len(title) > 40 or title.endswith("."):
+                problems.append(f"{definition.name}: {title!r} reads as a sentence")
+        assert not problems, problems
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_every_argument_description_is_gone(self, name: str):

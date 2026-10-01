@@ -485,8 +485,32 @@ class TestDetectNgspicePaths:
         result = mgr._detect_ngspice_paths()
         assert isinstance(result, list)
 
-    def test_default_paths(self, monkeypatch):
+    def test_default_paths(self, monkeypatch, tmp_path: Path):
+        """On Linux the stock share directories are scanned: a conventional
+        ``lib/`` subdir when there is one (and only it), else the whole tree,
+        which is the Debian package layout. The absolute candidates are
+        re-rooted under tmp_path so the result depends on nothing installed."""
+        import sys
+        from pathlib import PurePosixPath
+
+        from ltspice_mcp.lib import library_manager
+
         monkeypatch.delenv("SPICE_LIB_DIR", raising=False)
-        mgr = LibraryManager(available_simulators={})
-        result = mgr._detect_ngspice_paths()
-        assert isinstance(result, list)
+        monkeypatch.setattr(library_manager, "is_wsl", lambda: False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            library_manager,
+            "Path",
+            lambda raw: tmp_path.joinpath(*PurePosixPath(raw).parts[1:]),
+        )
+        share = tmp_path / "usr" / "share" / "ngspice"
+        (share / "lib").mkdir(parents=True)
+        (share / "lib" / "models.lib").write_text(".model d1 D\n")
+        (share / "outside_lib.mod").write_text(".model d2 D\n")  # shadowed by lib/
+        examples = tmp_path / "usr" / "share" / "doc" / "ngspice" / "examples" / "bjt"
+        examples.mkdir(parents=True)
+        (examples / "q.mod").write_text(".model q1 NPN\n")
+        (examples / "notes.txt").write_text("not a library\n")
+
+        result = LibraryManager(available_simulators={})._detect_ngspice_paths()
+        assert set(result) == {share / "lib" / "models.lib", examples / "q.mod"}
