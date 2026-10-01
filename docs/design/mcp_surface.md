@@ -705,10 +705,13 @@ target              .asc path (created if absent)
 base                "existing" (default) | "blank"
                     blank = treat the sheet as empty before applying ops;
                     existing = deltas preserving untouched content
-expected_sha256     REQUIRED whenever target exists, under either base;
-                    a mismatch is revision_conflict and nothing is written.
-                    Both refusals — missing and mismatched — report the
-                    target's current sha256, so a retry needs no extra read
+expected_sha256     REQUIRED to commit to an existing target, under either
+                    base; a mismatch is revision_conflict and nothing is
+                    written. Both refusals — missing and mismatched — report
+                    the target's current sha256, so a retry needs no extra
+                    read. A dry run (an op-less read is one) writes nothing,
+                    so it needs no token: it returns the current sha256 and
+                    reports a mismatched token in observations
 ops                 list[Op] — Appendix A.4
 compare             {reference, anchors?, rtol, mode?} — post-commit netlist
                     compare ("equivalence" | "structural_diff"), inside
