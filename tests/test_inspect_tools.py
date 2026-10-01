@@ -335,6 +335,25 @@ async def test_net_asc_geometric(asc_file: Path, asc_state: SessionState):
     assert isinstance(data["pins"], list)
 
 
+async def test_net_asc_takes_a_bare_label_name_as_a_netlist_does(
+    asc_file: Path, asc_state: SessionState
+):
+    """A bare ``at: "filtered"`` was refused on a schematic while a netlist read
+    the same bare name as a node; it now names the net label, as ``net:`` does."""
+    bare, spelled = await _run(
+        asc_state,
+        [
+            {"kind": "net", "path": str(asc_file), "at": "filtered"},
+            {"kind": "net", "path": str(asc_file), "at": "net:filtered"},
+        ],
+    )
+    assert bare["ok"] is True, bare
+    assert bare["data"] == spelled["data"]
+    (missing,) = await _run(asc_state, [{"kind": "net", "path": str(asc_file), "at": "nosuch"}])
+    assert missing["ok"] is False
+    assert "nosuch" in missing["error"]["message"]
+
+
 async def test_net_netlist_has_no_geometry_keys(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(netlist), "at": "net:out"}])
     assert res["ok"] is True

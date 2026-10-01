@@ -883,6 +883,12 @@ the LTspice export showed it joined nothing. The planner's own advisories
 they used to stop at the op.
 
 `add_net_label` calls a label floating only when it touches no wire and no pin.
+It refuses a label that would join two nets that each carry a name — a name
+another net already has, or a new name placed where two named nets cross —
+because that is a short at netlist time. A new name on a net that is already
+named joins nothing; it is placed with a warning that the node now has two
+names. `wire_pins`' refusal to join two named nets names the remedy that op
+accepts: relabel one side with the other's name.
 `inspect(kind: "net")` at a point on a wire's interior traces that wire's net
 and names the wire under `snapped_to_wire`; a point where two nets' wires
 cross is refused as ambiguous rather than resolved to either.
@@ -1045,11 +1051,13 @@ Python API), which are never capped. The gate stays a whole-file answer.
     directories to the reported precedence
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
-{kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
+{kind: "net", path, at: "REF.PIN" | "net:NAME" | "NAME" | [x, y], cursor?}
     .asc gives a geometric trace; an [x, y] on a wire's interior traces that
     wire, reported as snapped_to_wire; a netlist gives card membership and
     makes no geometry claims. On a .asc, PIN is a pin name or, failing that,
-    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number
+    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number.
+    A bare NAME is read as net:NAME on both: a net label on a .asc, a node
+    name on a netlist
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2

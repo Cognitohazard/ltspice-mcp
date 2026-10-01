@@ -1538,6 +1538,71 @@ class TestNetConflictInWirePins:
         with pytest.raises(NetlistError, match="Net-label conflict"):
             wire_pins(asc_state, _sheet("net_conflict_test.asc"), "R1.1", "R2.1")
 
+    async def test_the_named_remedy_is_one_add_net_label_accepts(self, asc_state: SessionState):
+        # The refusal used to send the caller to add_net_label "to merge them
+        # deliberately", which refuses the same merge. The remedy it names now
+        # is one the label op carries out.
+        blank_sheet_file(asc_state, "net_remedy")
+        sheet = _sheet("net_remedy.asc")
+        add_component(asc_state, sheet, "R1", "res", 100, 100)
+        add_component(asc_state, sheet, "R2", "res", 300, 100)
+        left = add_net_label(asc_state, sheet, "LEFT", pin="R1.1")
+        add_net_label(asc_state, sheet, "RIGHT", pin="R2.1")
+        with pytest.raises(NetlistError) as exc_info:
+            wire_pins(asc_state, sheet, "R1.1", "R2.1")
+        assert "add_net_label op to merge" not in str(exc_info.value)
+        assert "remove_net_label" in str(exc_info.value)
+        with pytest.raises(NetlistError, match="shorting them together"):
+            add_net_label(asc_state, sheet, "RIGHT", pin="R1.1")
+        apply_one(asc_state, sheet, {"op": "remove_net_label", "x": left["x"], "y": left["y"]})
+        add_net_label(asc_state, sheet, "RIGHT", pin="R1.1")
+        assert await _net_pins(asc_state, sheet, "R1.1") == {"R1.1", "R2.1"}
+
+
+@pytest.mark.asyncio
+class TestAddNetLabelJoins:
+    """add_net_label refused any second name on a labelled network, even one
+    that names nothing else and so shorts nothing. It now refuses only a label
+    that joins two named nets."""
+
+    async def test_a_second_name_for_a_net_is_accepted_with_a_warning(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "alias.asc", *_RAIL)
+        add_net_label(asc_state, asc, "rail", x=96, y=196)
+        result = add_net_label(asc_state, asc, "vdd_alias", x=288, y=196)
+        (warning,) = [w for w in result["warnings"] if "second name" in w]
+        assert "['rail']" in warning
+        assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
+
+    async def test_a_name_another_net_carries_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "merge.asc", *_RAIL, _res("R3", 400, 100))
+        add_net_label(asc_state, asc, "rail", x=96, y=196)
+        add_net_label(asc_state, asc, "other", pin="R3.1")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match="shorting them together") as exc_info:
+            add_net_label(asc_state, asc, "other", x=288, y=196)
+        assert "['other']" in str(exc_info.value) and "['rail']" in str(exc_info.value)
+        assert asc.read_bytes() == before
+
+    async def test_a_label_at_a_crossing_of_two_named_nets_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A label at a crossing joins both wires (t_junctions/label_at_crossing),
+        # so a new name there shorts the two named nets even though neither
+        # carried it.
+        asc = _write_sheet(
+            work_dir / "cross_label.asc",
+            "WIRE 0 96 192 96",
+            "WIRE 96 0 96 192",
+            "FLAG 0 96 h_net",
+            "FLAG 96 0 v_net",
+        )
+        with pytest.raises(NetlistError, match="shorting them together"):
+            add_net_label(asc_state, asc, "joined", x=96, y=96)
+
 
 # Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
@@ -2049,8 +2114,9 @@ class TestAddNetLabelOpValidation:
     async def test_short_refused_via_batch(self, asc_state: SessionState):
 
         blank_sheet_file(asc_state, "lbl_short")
-        # Two different named labels on the same pin coordinate would merge the
-        # nets at netlist time; the second must be refused, not silently saved.
+        # A label named after another net, placed on a net that already has a
+        # name, merges the two at netlist time; it must be refused, not silently
+        # saved. A name no other net carries only gives R1.1's net a second name.
         res = batch_view(
             asc_state,
             _sheet("lbl_short.asc"),
@@ -2062,15 +2128,27 @@ class TestAddNetLabelOpValidation:
                     "x": 128,
                     "y": 128,
                 },
+                {
+                    "op": "add_component",
+                    "reference": "R2",
+                    "symbol": "res",
+                    "x": 400,
+                    "y": 128,
+                },
                 {"op": "add_net_label", "net": "a", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "b", "pin": "R2.1"},
                 {"op": "add_net_label", "net": "b", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "c", "pin": "R1.1"},
             ],
             stop_on_error=False,
         )
         results = {r["index"]: r for r in res["results"]}
-        assert results[1]["ok"] is True  # net "a" placed
-        assert results[2]["ok"] is False  # net "b" would short — refused
-        assert "short" in results[2]["error"].lower()
+        assert results[2]["ok"] is True  # net "a" placed
+        assert results[3]["ok"] is True  # net "b" placed on R2
+        assert results[4]["ok"] is False  # "b" on R1's net "a" would short — refused
+        assert "short" in results[4]["error"].lower()
+        assert results[5]["ok"] is True  # "c" names nothing else — a second name
+        assert any("second name" in w for w in results[5]["warnings"])
 
     async def test_floating_label_warning_via_batch(self, asc_state: SessionState):
 
