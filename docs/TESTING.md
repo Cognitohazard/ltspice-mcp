@@ -260,8 +260,9 @@ Enable the repository hooks once per clone with
 annotated tag messages, filenames and each file revision being introduced,
 including content added in one commit and removed in a later one. It checks
 the receiving remote's current refs for new branches and refuses to proceed
-when the required history cannot be inspected. Findings name their category
-and location without printing the matched private value.
+when the required history cannot be inspected. Unrelated remote refs absent
+locally contribute no exclusions; they do not require an extra fetch. Findings
+name their category and location without printing the matched private value.
 
 Run `uv run python scripts/privacy_scan.py tracked` to check the tracked working
 tree, or `uv run python scripts/privacy_scan.py local` to preview unpublished

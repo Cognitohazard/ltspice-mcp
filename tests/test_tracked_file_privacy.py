@@ -39,6 +39,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _run(repo, "git", "init", "-q")
+    (repo / ".gitignore").write_text("__pycache__/\n")
     (repo / "scripts").mkdir()
     (repo / ".githooks").mkdir()
     if not (ROOT / "scripts/privacy_scan.py").exists():
@@ -254,10 +255,7 @@ def test_push_scans_annotated_tag_messages(repo: Path, nested: bool) -> None:
     assert token.encode() not in result.stderr
 
 
-def test_push_rejects_unavailable_advertised_object(repo: Path) -> None:
-    (repo / "safe.txt").write_text("ordinary text")
-    base = _commit(repo, "Base")
-    remote = _bare_remote(repo, base)
+def _remote_only_commit(remote: Path, base: str, ref: str = "refs/heads/other") -> str:
     remote_only = (
         _run(
             remote,
@@ -276,8 +274,86 @@ def test_push_rejects_unavailable_advertised_object(repo: Path) -> None:
         .decode()
         .strip()
     )
-    _run(remote, "git", "update-ref", "refs/heads/other", remote_only)
-    update = f"refs/heads/topic {base} refs/heads/topic {'0' * 40}\n".encode()
+    _run(remote, "git", "update-ref", ref, remote_only)
+    return remote_only
+
+
+@pytest.mark.parametrize("target", ["main", "topic"])
+def test_push_accepts_clean_range_with_unavailable_unrelated_ref(repo: Path, target: str) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    remote_only = _remote_only_commit(remote, base, "refs/pull/1/head")
+    (repo / "safe.txt").write_text("ordinary update")
+    new = _commit(repo, "Update")
+
+    result = _push(repo, f"HEAD:refs/heads/{target}")
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert _run(remote, "git", "rev-parse", f"refs/heads/{target}").decode().strip() == new
+    with pytest.raises(privacy_scan.ScanError):
+        privacy_scan.commit_exists(remote_only)
+
+
+def test_push_checks_deleted_private_revision_with_unknown_unrelated_ref(repo: Path) -> None:
+    safe = repo / "safe.txt"
+    safe.write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    _remote_only_commit(remote, base)
+    unsafe = repo / "artifact.txt"
+    token = "sk-" + "W" * 32
+    unsafe.write_bytes(token.encode("utf-16-be"))
+    introduced = _commit(repo, "Add artifact")
+    unsafe.unlink()
+    _commit(repo, "Remove artifact")
+
+    result = _push(repo, "HEAD:refs/heads/topic")
+    assert result.returncode != 0
+    assert b"OpenAI token" in result.stderr
+    assert introduced.encode() in result.stderr
+    assert token.encode() not in result.stderr
+    assert _run(remote, "git", "for-each-ref", "refs/heads/topic") == b""
+    assert _run(remote, "git", "rev-parse", "refs/heads/main").decode().strip() == base
+
+
+def test_push_requires_old_target_even_when_other_refs_are_unknown(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    _remote_only_commit(remote, base)
+    previous = _remote_only_commit(remote, base, "refs/heads/main")
+    update = f"refs/heads/main {base} refs/heads/main {previous}\n".encode()
+    result = _cli(repo, remote, update)
+    assert result.returncode == 2
+    assert b"range error" in result.stderr
+
+
+def test_push_refuses_a_changed_target_with_an_unknown_unrelated_ref(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    (repo / "safe.txt").write_text("ordinary update")
+    new = _commit(repo, "Update")
+    _remote_only_commit(remote, base)
+    # Both expected objects exist, but the receiver still advertises base.
+    update = f"refs/heads/main {new} refs/heads/main {new}\n".encode()
+    result = _cli(repo, remote, update)
+    assert result.returncode == 2
+    assert b"remote ref changed" in result.stderr
+
+
+def test_push_refuses_missing_introduced_content_with_unknown_unrelated_ref(repo: Path) -> None:
+    (repo / "safe.txt").write_text("ordinary text")
+    base = _commit(repo, "Base")
+    remote = _bare_remote(repo, base)
+    _remote_only_commit(remote, base)
+    (repo / "safe.txt").write_text("ordinary update")
+    new = _commit(repo, "Update")
+    blob = _run(repo, "git", "rev-parse", f"{new}:safe.txt").decode().strip()
+    blob_path = repo / ".git" / "objects" / blob[:2] / blob[2:]
+    blob_path.chmod(0o600)
+    blob_path.unlink()
+    update = f"refs/heads/main {new} refs/heads/main {base}\n".encode()
     result = _cli(repo, remote, update)
     assert result.returncode == 2
     assert b"range error" in result.stderr
