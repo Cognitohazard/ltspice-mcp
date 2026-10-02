@@ -29,7 +29,6 @@ from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-NETLIST_EXTENSIONS = CIRCUIT_EXTENSIONS
 RouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
 
 
@@ -272,7 +271,7 @@ def _read_netlists_list(
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
         for f in working_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in CIRCUIT_EXTENSIONS
     ]
     netlists.sort(key=lambda x: x["name"])
     data = {"netlists": netlists, "count": len(netlists)}
@@ -298,8 +297,8 @@ def _read_netlist_content(
     """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.allowed_paths())
-    if resolved.suffix.lower() not in NETLIST_EXTENSIONS:
-        allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
+    if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
+        allowed = ", ".join(sorted(CIRCUIT_EXTENSIONS))
         raise ValueError(
             f"Not a netlist file: {filename!r}. This resource serves netlist "
             f"text ({allowed}); simulation artifacts are read via analyze_results "

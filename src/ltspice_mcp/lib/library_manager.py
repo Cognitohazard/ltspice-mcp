@@ -1,9 +1,10 @@
 """The detected simulators' own model libraries, and the one ranking and row
 shape every model lookup uses."""
 
+import functools
 import logging
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -64,24 +65,41 @@ def _device_usage(device_type: str, name: str) -> str:
     return template.replace("<name>", name)
 
 
-def part_aware_score(query_lower: str, candidate_lower: str) -> float:
+#: Added to a candidate whose first word token matches the query's.
+_FIRST_TOKEN_BONUS = 0.05
+
+
+def _first_token(text: str) -> str | None:
+    match = _WORD_TOK.search(text)
+    return match.group() if match else None
+
+
+def part_aware_score(query_lower: str, candidate_lower: str, *, cutoff: float = 0.0) -> float:
     """Similarity in [0.0, 1.0] biased for part-number-style names.
 
     Base is ``rapidfuzz.fuzz.ratio`` — a length-aware (Levenshtein) whole-string
     similarity. ``WRatio`` was used previously, but its partial-ratio path scores
     any short candidate that is a *substring* of the query at ~0.90, so 1-2 char
     model names ('NI', 'MP', '1') flooded the results and buried the genuine
-    match (F4). ``ratio`` keeps typo tolerance ('LTC3406'/'LTC3406A' ~0.93) while
+    match. ``ratio`` keeps typo tolerance ('LTC3406'/'LTC3406A' ~0.93) while
     scoring those short substrings low (<0.3). A small bonus applies when the
     first word token of both strings matches — e.g. 'LTC3406' / 'LTC3406A' share
     'ltc', '2N3904' / '2N3906' share '2n' — to keep near-neighbour siblings
     ranked above cross-family matches with similar edit distance.
+
+    ``cutoff`` is the score the caller filters at. A candidate whose edit
+    similarity cannot reach it even with the bonus scores 0.0 without being
+    tokenized, which for any one query is most of a simulator's library.
     """
-    base = fuzz.ratio(query_lower, candidate_lower) / 100.0
-    q_toks = _WORD_TOK.findall(query_lower)
-    c_toks = _WORD_TOK.findall(candidate_lower)
-    if q_toks and c_toks and q_toks[0] == c_toks[0]:
-        base = min(1.0, base + 0.05)
+    # A hair under the exact floor, so float rounding in ``cutoff - bonus``
+    # never drops a candidate the bonus would have lifted to the cutoff.
+    floor = max((cutoff - _FIRST_TOKEN_BONUS) * 100 - 1e-9, 0.0)
+    base = fuzz.ratio(query_lower, candidate_lower, score_cutoff=floor) / 100.0
+    if not base:
+        return 0.0
+    query_token = _first_token(query_lower)
+    if query_token is not None and query_token == _first_token(candidate_lower):
+        base = min(1.0, base + _FIRST_TOKEN_BONUS)
     return base
 
 
@@ -101,20 +119,25 @@ def _shared_prefix_len(a: str, b: str) -> int:
     return n
 
 
-# Process-wide (mtime, size) cache of parsed library files, so callers that
-# parse a library file by path repeatedly — e.g. the inspect model queries
-# enumerating or searching the same .lib across paged calls — reuse one parse
-# instead of re-reading and re-lexing it every time. The values are immutable
-# and re-derivable, so bounded LRU eviction is safe.
-_library_file_cache: FileCache[LibraryIndex] = FileCache(maxsize=64)
+# Process-wide (mtime, size) cache of parsed library files. Every model lookup
+# reads through it, whether a caller named the file or a search walked it out
+# of a simulator's library, so a file found by one route and read back by the
+# other is parsed once. Unbounded because a search of the simulator's library
+# reads the whole install on every page, and an LRU smaller than the install
+# would re-parse all of it each time; what it holds is bounded by the install
+# plus the files callers name, and the values are immutable.
+_library_file_cache: FileCache[LibraryIndex] = FileCache()
 
 
-def _library_files_under(roots: Sequence[Path]) -> list[Path]:
+@functools.lru_cache(maxsize=1)
+def _library_files_under(roots: tuple[Path, ...]) -> tuple[Path, ...]:
     """Every SPICE library file under ``roots``, in a stable order.
 
     Library files are named by ``_SPICE_LIB_SUFFIXES``. Sorted per root,
     because ``rglob`` order is whatever the filesystem returns and a paged
-    search must not reorder between pages.
+    search must not reorder between pages. Kept for as long as the roots are
+    the same directories: a full LTspice install holds thousands of files,
+    and walking them on every page of a search would cost more than the search.
     """
     files: list[Path] = []
     seen: set[Path] = set()
@@ -123,15 +146,15 @@ def _library_files_under(roots: Sequence[Path]) -> list[Path]:
             if path.suffix.lower() in _SPICE_LIB_SUFFIXES and path not in seen and path.is_file():
                 seen.add(path)
                 files.append(path)
-    return files
+    if files:
+        logger.info(f"Found {len(files)} simulator library files")
+    return tuple(files)
 
 
 def parse_library_file_cached(path: Path) -> LibraryIndex:
-    """Parse a library file through a shared (mtime, size) cache.
+    """Parse a library file through the process-wide (mtime, size) cache.
 
-    Public accessor over the same ``FileCache``-backed parse the built-in
-    library index uses, for any caller that parses a library file by path more
-    than once. A stale entry (the file's mtime or size changed) re-parses.
+    A stale entry (the file's mtime or size changed) re-parses.
     """
     return _library_file_cache.get(path, parse_library_file)
 
@@ -189,7 +212,7 @@ def rank_models(
     candidates: list[tuple[float, ModelEntry]] = []
     for index in indexes:
         for entry in index.models:
-            score = part_aware_score(query_lower, entry.name_lower)
+            score = part_aware_score(query_lower, entry.name_lower, cutoff=cutoff)
             if score >= cutoff:
                 candidates.append((score, entry))
     candidates.sort(
@@ -213,11 +236,8 @@ def rank_models(
 
 class LibraryManager:
     """The detected simulators' own model libraries: where they are, and a
-    search over them.
-
-    The parses are kept in a ``FileCache`` of immutable indexes, so a search
-    may run on a worker thread: the first one parses the whole install.
-    """
+    search over them that may run on a worker thread (the first one parses
+    the whole install, into the shared cache of immutable indexes)."""
 
     def __init__(self, available_simulators: dict[str, type]) -> None:
         """Initialize library manager.
@@ -225,21 +245,16 @@ class LibraryManager:
         Args:
             available_simulators: Dictionary of detected simulators from state
         """
-        self._builtin_libs: FileCache[LibraryIndex] = FileCache()
-        self._builtin_paths: list[Path] | None = None
-        self._builtin_roots: tuple[Path, ...] | None = None
         self._available_simulators = available_simulators
 
     def library_roots(self) -> list[Path]:
         """The detected simulators' own model-library directories.
 
         ``simulator.simulator_library_roots`` for every detected simulator, in
-        detection order and without repeats: the directories staging, the
-        include resolver and the hierarchy reader already read under a default
-        sandbox, so a built-in search finds only files a run can stage and a
-        model query can read back. Recomputed on every call (a few stats; the
-        WSL probe behind it is memoized) because LTspice extracts its library
-        on first launch, and a server started before that must see it appear.
+        detection order and without repeats. Recomputed on every call (a few
+        stats; the WSL probe behind it is memoized) because LTspice extracts
+        its library on first launch, and a server started before that must
+        see it appear.
         """
         roots: list[Path] = []
         for simulator_class in self._available_simulators.values():
@@ -248,37 +263,31 @@ class LibraryManager:
                     roots.append(root)
         return roots
 
-    def builtin_library_files(self) -> list[Path]:
-        """Every library file under ``library_roots()``, the set a built-in
-        search reads.
+    def builtin_library_files(self) -> tuple[Path, ...]:
+        """Every library file under ``library_roots()``, the set a search reads."""
+        return _library_files_under(tuple(self.library_roots()))
 
-        The walk is kept for as long as the roots are the same directories: a
-        full LTspice install holds thousands of files, and walking them again
-        on every page of a search would cost more than the search.
+    def search(
+        self, query: str
+    ) -> tuple[list[dict[str, Any]], list[tuple[str, tuple[int, int] | None]]]:
+        """``rank_models`` over every library file the detected simulators
+        ship, and the revision of each file it read.
+
+        A revision is the stamp the parse cache checked for that file, so a
+        paged caller binds its cursor to exactly what was searched without a
+        second ``stat`` of the install. A file that cannot be read or parsed is
+        skipped with a warning rather than failing the search: an install holds
+        thousands of vendor files, and the caller named none of them.
         """
-        roots = tuple(self.library_roots())
-        if self._builtin_paths is None or roots != self._builtin_roots:
-            self._builtin_paths = _library_files_under(roots)
-            self._builtin_roots = roots
-            if self._builtin_paths:
-                logger.info(f"Found {len(self._builtin_paths)} simulator library files")
-            else:
-                logger.debug("No built-in libraries found")
-        return self._builtin_paths
-
-    def _iter_builtin_indexes(self) -> Iterator[LibraryIndex]:
-        """Yield each built-in LibraryIndex via the mtime cache, skipping parse failures."""
-        for lib_path in self.builtin_library_files():
+        indexes: list[LibraryIndex] = []
+        revisions: list[tuple[str, tuple[int, int] | None]] = []
+        for path in self.builtin_library_files():
             try:
-                yield self._builtin_libs.get(lib_path, parse_library_file)
-            except Exception as e:
-                logger.warning(f"Failed to search built-in library {lib_path}: {e}")
-
-    def search(self, query: str, *, cutoff: float = 0.6) -> list[dict[str, Any]]:
-        """``rank_models`` over every library file the detected simulators ship.
-
-        A file that cannot be read or parsed is skipped with a warning rather
-        than failing the search: an install holds thousands of vendor files,
-        and the caller named none of them.
-        """
-        return rank_models(self._iter_builtin_indexes(), query, cutoff=cutoff)
+                stamp, index = _library_file_cache.get_stamped(path, parse_library_file)
+            except Exception as exc:
+                logger.warning(f"Failed to search simulator library {path}: {exc}")
+                revisions.append((str(path), None))
+                continue
+            indexes.append(index)
+            revisions.append((str(path), stamp))
+        return rank_models(indexes, query), revisions

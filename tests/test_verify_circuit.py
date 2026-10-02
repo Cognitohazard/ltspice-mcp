@@ -896,24 +896,28 @@ def test_structural_compare_refuses_a_schematic(work_dir):
 # ---------------------------------------------------------------------------
 
 
-async def test_escaping_include_denied_no_read(state_no_sim, work_dir):
-    # Canary lives OUTSIDE the single allowed root (work_dir).
+@pytest.mark.parametrize("spelling", ["absolute", "parent-relative"])
+async def test_escaping_include_denied_no_read(state_no_sim, work_dir, spelling):
+    """An include outside the single allowed root (work_dir) is denied and never
+    read, whether it names the file outright or climbs to it through ``..``:
+    a path is judged by where it lands, not by how it is spelled."""
     outside = work_dir.parent / "outside_roots"
     outside.mkdir(exist_ok=True)
     canary = outside / "canary.lib"
     canary.write_text(".subckt CANARY 1 2\nR9 1 2 1\n.ends\n")
+    include = str(canary) if spelling == "absolute" else f"../{outside.name}/canary.lib"
 
     deck = _write(
         work_dir,
         "cand.cir",
-        f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {canary}\n.end\n",
+        f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {include}\n.end\n",
     )
     ref = _write(work_dir, "ref.cir", "* r\nR1 in out 1k\n.end\n")
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
     denied = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
     assert denied, "the escaping include must surface a path_denied finding"
-    assert str(canary) in denied[0]["subject"]
+    assert include in denied[0]["subject"]
     assert denied[0]["at"]["file"] == str(deck)
     # NO read: the CANARY subckt was never loaded, so it stays unresolved.
     unresolved = {u["name"].upper() for u in data["comparison"]["unresolved_subckts"]}
@@ -940,29 +944,6 @@ async def test_parent_relative_include_inside_the_roots_is_read(state_no_sim, wo
     assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"], data["findings"]
     assert data["comparison"]["unresolved_subckts"] == []
     assert data["comparison"]["equivalent"] is True
-
-
-async def test_parent_relative_include_escaping_the_roots_is_denied_no_read(
-    state_no_sim, work_dir
-):
-    """Dropping the lexical ``..`` refusal must not open a way out: an include
-    that climbs past the root is judged where it lands, and is never read."""
-    outside = work_dir.parent / "outside_roots_relative"
-    outside.mkdir(exist_ok=True)
-    (outside / "canary.lib").write_text(".subckt CANARY 1 2\nR9 1 2 1\n.ends\n")
-    include = f"../{outside.name}/canary.lib"
-    deck = _write(
-        work_dir, "cand.cir", f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {include}\n.end\n"
-    )
-    ref = _write(work_dir, "ref.cir", "* r\nR1 in out 1k\n.end\n")
-
-    data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
-
-    denied = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
-    assert denied, "the escaping include must surface a path_denied finding"
-    assert include in denied[0]["subject"]
-    unresolved = {u["name"].upper() for u in data["comparison"]["unresolved_subckts"]}
-    assert "CANARY" in unresolved
 
 
 async def test_simulator_library_include_is_read_though_the_sandbox_denies_it(

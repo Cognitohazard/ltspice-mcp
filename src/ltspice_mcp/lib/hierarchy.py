@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import NETLIST_SUFFIXES
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
@@ -389,7 +389,7 @@ def load_hierarchy(
     root = resolve_safe_path(path, allowed_roots)
     if root.suffix.casefold() not in NETLIST_SUFFIXES:
         raise NetlistError(
-            "hierarchy requires a .cir/.net/.sp/.spice netlist; explicitly export .asc first"
+            f"hierarchy requires a {NETLIST_SUFFIX_TEXT} netlist; explicitly export .asc first"
         )
     files: dict[Path, CapturedFile] = {}
     total = 0
