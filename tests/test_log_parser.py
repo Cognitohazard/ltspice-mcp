@@ -335,6 +335,28 @@ class TestExtractLogDiagnostics:
         # The same error is also present in the generic errors list.
         assert len(result["errors"]) == 1
 
+    def test_meas_error_on_find_at_form(self, tmp_path: Path):
+        """The FIND ... AT=<x> form, reported against a Windows deck path: one
+        caret error, also recorded as a .MEAS error with the vdb suggestion."""
+        log = tmp_path / "find_at.log"
+        log.write_text(
+            "LTspice 26.0.1\n"
+            "Circuit: test.cir\n"
+            "C:\\tmp\\test.cir(38): No such function defined.\n"
+            ".meas AC gain_db FIND Vdb(outp) AT=1\n"
+            "                      ^^^\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+        assert "No such function defined" in result["errors"][0]
+        assert "^^^" in result["errors"][0]
+        assert result["warnings"] == []
+        (me,) = result["meas_errors"]
+        assert me["directive"] == ".meas AC gain_db FIND Vdb(outp) AT=1"
+        assert me["suggestion"] is not None
+        assert "mag" in me["suggestion"].lower()
+
     def test_meas_error_without_known_pattern(self, tmp_path: Path):
         """A .MEAS error that doesn't match a validator rule still gets
         captured in meas_errors but with suggestion=None."""
@@ -490,6 +512,55 @@ class TestParseFourierData:
         )
         result = parse_fourier_data(log)
         assert result == []
+
+    def test_log_with_fourier_data(self, tmp_path: Path):
+        """Parse a log file containing .FOUR results — real LTspice format.
+
+        ``reader.fourier[signal]`` is a ``list[FourierData]`` (one per .step),
+        not a single instance; treating the list as one entry returned every
+        entry with thd=None and harmonics=[].
+        """
+        log = tmp_path / "fourier_real.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "\n"
+            "Fourier components of V(out)\n"
+            "N-Period=1\n"
+            "DC component:-3.7386e-07\n"
+            "\n"
+            "Harmonic\tFrequency\t Fourier \tNormalized\t Phase  \tNormalized\n"
+            " Number \t  [Hz]   \tComponent\t Component\t[degree]\tPhase [deg]\n"
+            "    1   \t 1.000e+03\t 8.464e-01\t 1.000e+00\t  122.15\u00b0\t    0.00\u00b0\n"
+            "    2   \t 2.000e+03\t 7.414e-07\t 8.760e-07\t  177.22\u00b0\t   55.07\u00b0\n"
+            "Partial Harmonic Distortion: 0.000251%\n"
+            "Total Harmonic Distortion:   0.014047%\n"
+            "\n"
+            "Total elapsed time: 0.001 seconds.\n",
+            encoding="utf-8",
+        )
+        result = parse_fourier_data(log)
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["signal"] == "V(out)"
+        assert entry["thd"] == pytest.approx(0.014047)
+        assert entry["thd_unit"] == "%"
+        assert entry["fundamental_frequency"] == pytest.approx(1000.0)
+        assert entry["harmonics"] == [
+            {
+                "number": 1,
+                "frequency": pytest.approx(1000.0),
+                "magnitude": pytest.approx(0.8464),
+                "phase": pytest.approx(122.15),
+            },
+            {
+                "number": 2,
+                "frequency": pytest.approx(2000.0),
+                "magnitude": pytest.approx(7.414e-07),
+                "phase": pytest.approx(177.22),
+            },
+        ]
 
 
 class TestParseMeasurementsValid:
