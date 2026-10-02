@@ -99,8 +99,9 @@ from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
+    model_row,
     parse_library_file_cached,
-    part_aware_score,
+    rank_models,
 )
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
@@ -1547,44 +1548,22 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
 # ---------------------------------------------------------------------------
 
 
-def _model_entry(entry: Any) -> dict[str, Any]:
-    return {
-        "name": entry.name,
-        "type": entry.model_type,
-        "source_path": str(entry.source_path),
-        "ports": list(entry.ports),
-        "params": dict(entry.params),
-    }
-
-
 def _enumerate_libs(lib_paths: list[Path]) -> list[dict[str, Any]]:
     """Every model/subcircuit defined across the given library files (immutable parse)."""
-    rows: list[dict[str, Any]] = []
-    for lib in lib_paths:
-        index = parse_library_file_cached(lib)
-        for entry in index.models:
-            rows.append(_model_entry(entry))
+    rows = [
+        model_row(entry) for lib in lib_paths for entry in parse_library_file_cached(lib).models
+    ]
     rows.sort(key=lambda r: (r["name"].lower(), r["source_path"]))
     return rows
 
 
-def _search_libs(lib_paths: list[Path], query: str, cutoff: float = 0.6) -> list[dict[str, Any]]:
-    """Fuzzy-match ``query`` against the models defined in the given library files."""
-    query_lower = query.lower()
-    scored: list[tuple[float, dict[str, Any]]] = []
-    seen: set[str] = set()
-    for lib in lib_paths:
-        index = parse_library_file_cached(lib)
-        for entry in index.models:
-            score = part_aware_score(query_lower, entry.name_lower)
-            if score < cutoff or entry.name_lower in seen:
-                continue
-            seen.add(entry.name_lower)
-            row = _model_entry(entry)
-            row["score"] = round(score, 3)
-            scored.append((score, row))
-    scored.sort(key=lambda pair: (-pair[0], pair[1]["name"].lower()))
-    return [row for _, row in scored]
+def _search_libs(lib_paths: list[Path], query: str) -> list[dict[str, Any]]:
+    """Fuzzy-match ``query`` against the models defined in the given library files.
+
+    The ranking and the row are the ones a search of the simulator's own
+    libraries returns, so the two routes differ only in which files they read.
+    """
+    return rank_models((parse_library_file_cached(lib) for lib in lib_paths), query)
 
 
 def _search_simulator_libraries(
@@ -1596,12 +1575,8 @@ def _search_simulator_libraries(
     taken here, in the worker, because a full install is thousands of files
     and the cursor binding would otherwise stat them all on the event loop.
     """
-    rows = libraries.find_similar_models(
-        query, exact=False, limit=10_000, cutoff=0.6, include_builtin=True
-    )
-    searched = [path for path, _ in libraries.get_loaded_libraries()]
-    searched += libraries.builtin_library_files()
-    return rows, [[str(path), _file_stamp(path)] for path in searched]
+    rows = libraries.search(query)
+    return rows, [[str(path), _file_stamp(path)] for path in libraries.builtin_library_files()]
 
 
 async def _admit_libs(libs: list[str], state: SessionState) -> list[Path]:

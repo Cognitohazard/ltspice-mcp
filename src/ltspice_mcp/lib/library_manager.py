@@ -1,22 +1,21 @@
-"""SPICE library session management with built-in detection."""
+"""The detected simulators' own model libraries, and the one ranking and row
+shape every model lookup uses."""
 
 import logging
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
+from typing import Any
 
 from rapidfuzz import fuzz
 
-from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.library_parser import (
-    ENCRYPTED_MODEL_TYPE,
     LibraryIndex,
     ModelEntry,
     parse_library_file,
 )
 from ltspice_mcp.lib.simulator import simulator_library_roots
-from ltspice_mcp.lib.wsl import is_wsl, to_windows_path
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +24,8 @@ logger = logging.getLogger(__name__)
 # third-party packs (``.sub`` holds the subcircuit decks that make up the bulk
 # of LTspice's bundled vendor models); ``standard.bjt`` / ``.mos`` / ``.dio`` /
 # ``.jft`` (and the device-default ``.cap`` / ``.ind`` / ``.res`` / ``.bead``)
-# are LTspice's bundled stock decks under ``lib/cmp``. Shared by the built-in
-# library walk AND the explicit ``load_library`` directory scan so the two
-# agree on what a "library file" is.
+# are LTspice's bundled stock decks under ``lib/cmp``. What the walk over a
+# simulator's library directories counts as a library file.
 _SPICE_LIB_SUFFIXES = frozenset(
     {".lib", ".mod", ".sub", ".bjt", ".mos", ".dio", ".cap", ".ind", ".res", ".jft", ".bead"}
 )
@@ -114,10 +112,9 @@ _library_file_cache: FileCache[LibraryIndex] = FileCache(maxsize=64)
 def _library_files_under(roots: Sequence[Path]) -> list[Path]:
     """Every SPICE library file under ``roots``, in a stable order.
 
-    Library files are named by ``_SPICE_LIB_SUFFIXES``, the set the explicit
-    ``load_library`` scan uses too. Sorted per root, because ``rglob`` order
-    is whatever the filesystem returns and a paged search must not reorder
-    between pages.
+    Library files are named by ``_SPICE_LIB_SUFFIXES``. Sorted per root,
+    because ``rglob`` order is whatever the filesystem returns and a paged
+    search must not reorder between pages.
     """
     files: list[Path] = []
     seen: set[Path] = set()
@@ -139,11 +136,87 @@ def parse_library_file_cached(path: Path) -> LibraryIndex:
     return _library_file_cache.get(path, parse_library_file)
 
 
-class LibraryManager:
-    """Manage loaded SPICE libraries for the session.
+def model_row(entry: ModelEntry) -> dict[str, Any]:
+    """One model or subcircuit as every model lookup reports it.
 
-    Provides library loading/unloading, search across user-loaded and built-in
-    libraries, and model lookup with .include directive generation.
+    ``include_directive`` names ``source_path`` as this process sees it, which
+    is the spelling the rest of the server reads: staging rewrites every
+    reference the root deck carries to its staged copy, in the simulator's own
+    form (Windows form for LTspice reached across WSL), and the include
+    resolvers behind ``verify_circuit`` and the hierarchy reader resolve it
+    the way staging does. A Windows spelling made here would cost a ``wslpath``
+    process per row and, for a file on the Linux side of WSL, give a
+    ``\\\\wsl.localhost`` path those resolvers cannot map back. The path is
+    always quoted: a simulator's library usually sits under a directory with a
+    space in it, and an unquoted ``.include`` stops at the first one.
+
+    A ``.MODEL`` also carries its device token and the connection order that
+    token dictates: the card gives parameters but not node order, and wiring
+    the part in the wrong order simulates silently wrong.
+    """
+    row: dict[str, Any] = {
+        "name": entry.name,
+        "type": entry.model_type,
+        "source_path": str(entry.source_path),
+        "include_directive": f'.include "{entry.source_path}"',
+        "ports": list(entry.ports),
+        "params": dict(entry.params),
+    }
+    if entry.device_type:
+        row["device_type"] = entry.device_type
+        usage = _device_usage(entry.device_type, entry.name)
+        if usage:
+            row["usage"] = usage
+    return row
+
+
+def rank_models(
+    indexes: Iterable[LibraryIndex], query: str, *, cutoff: float = 0.6
+) -> list[dict[str, Any]]:
+    """Every model in ``indexes`` whose name scores at least ``cutoff``
+    against ``query``, best first, one row per name, each with its ``score``.
+
+    Scored by ``part_aware_score``; equal scores go to the longer shared
+    prefix (the nearest part-number sibling) before the alphabet, so an
+    unrelated name that merely sorts earlier cannot bury the neighbour. A name
+    defined in several files is reported once, from the first index that
+    defines it (the sort is stable): vendor libraries repeat short helper
+    subcircuits, and one name would otherwise fill a page. An index that
+    raises while being read propagates, so a caller decides whether one
+    unreadable file fails its lookup.
+    """
+    query_lower = query.lower()
+    candidates: list[tuple[float, ModelEntry]] = []
+    for index in indexes:
+        for entry in index.models:
+            score = part_aware_score(query_lower, entry.name_lower)
+            if score >= cutoff:
+                candidates.append((score, entry))
+    candidates.sort(
+        key=lambda pair: (
+            -pair[0],
+            -_shared_prefix_len(query_lower, pair[1].name_lower),
+            pair[1].name_lower,
+        )
+    )
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for score, entry in candidates:
+        if entry.name_lower in seen:
+            continue
+        seen.add(entry.name_lower)
+        row = model_row(entry)
+        row["score"] = round(score, 3)
+        rows.append(row)
+    return rows
+
+
+class LibraryManager:
+    """The detected simulators' own model libraries: where they are, and a
+    search over them.
+
+    The parses are kept in a ``FileCache`` of immutable indexes, so a search
+    may run on a worker thread: the first one parses the whole install.
     """
 
     def __init__(self, available_simulators: dict[str, type]) -> None:
@@ -152,15 +225,10 @@ class LibraryManager:
         Args:
             available_simulators: Dictionary of detected simulators from state
         """
-        self._user_libs: FileCache[LibraryIndex] = FileCache()
         self._builtin_libs: FileCache[LibraryIndex] = FileCache()
         self._builtin_paths: list[Path] | None = None
         self._builtin_roots: tuple[Path, ...] | None = None
         self._available_simulators = available_simulators
-
-    def __len__(self) -> int:
-        """Return number of loaded user libraries."""
-        return len(self._user_libs)
 
     def library_roots(self) -> list[Path]:
         """The detected simulators' own model-library directories.
@@ -198,156 +266,6 @@ class LibraryManager:
                 logger.debug("No built-in libraries found")
         return self._builtin_paths
 
-    def load_library(self, path: Path) -> dict:
-        """Load a library file or directory of library files.
-
-        Args:
-            path: Path to .lib file or directory containing .lib files
-
-        Returns:
-            Summary dict with path, files_loaded, models, subcircuits counts
-
-        Raises:
-            LibraryError: If path doesn't exist or no valid library files found
-        """
-        if not path.exists():
-            raise LibraryError(f"Library path does not exist: {path}")
-
-        files_to_load = []
-
-        if path.is_file():
-            files_to_load.append(path)
-        elif path.is_dir():
-            # Scan recursively for any SPICE library file, using the SAME suffix
-            # set as the builtin LTspice walk (_SPICE_LIB_SUFFIXES). Previously
-            # only *.lib/*.mod were globbed, so pointing this at LTspice's
-            # lib/cmp (standard.bjt/.mos/.dio/.jft) found nothing and raised.
-            files_to_load.extend(
-                f
-                for f in path.rglob("*")
-                if f.is_file() and f.suffix.lower() in _SPICE_LIB_SUFFIXES
-            )
-        else:
-            raise LibraryError(f"Library path is not a file or directory: {path}")
-
-        if not files_to_load:
-            raise LibraryError(f"No library files found in {path}")
-
-        total_models = 0
-        total_subcircuits = 0
-        total_encrypted = 0
-
-        for lib_file in files_to_load:
-            try:
-                index = parse_library_file(lib_file)
-                # Store in cache
-                self._user_libs.set(lib_file, index)
-
-                # Count models vs subcircuits vs encrypted-only stubs.
-                for model in index.models:
-                    if model.model_type == ".MODEL":
-                        total_models += 1
-                    elif model.model_type == ENCRYPTED_MODEL_TYPE:
-                        total_encrypted += 1
-                    else:
-                        total_subcircuits += 1
-
-                logger.info(f"Loaded library: {lib_file} ({len(index.models)} entries)")
-            except Exception as e:
-                logger.warning(f"Failed to parse library file {lib_file}: {e}")
-
-        if total_models == 0 and total_subcircuits == 0 and total_encrypted == 0:
-            raise LibraryError(f"No valid models or subcircuits found in {path}")
-
-        return {
-            "path": str(path),
-            "files_loaded": len(files_to_load),
-            "models": total_models,
-            "subcircuits": total_subcircuits,
-            "encrypted": total_encrypted,
-        }
-
-    def unload_library(self, path: Path) -> dict:
-        """Remove a library from the session.
-
-        Args:
-            path: Library path to unload
-
-        Returns:
-            Dict with path, removed status, and optional warning
-        """
-        # If it's a directory, remove all files under it
-        if path.is_dir():
-            removed_count = 0
-            for cached_path in self._user_libs.keys():  # noqa: SIM118
-                if cached_path.is_relative_to(path):
-                    self._user_libs.invalidate(cached_path)
-                    removed_count += 1
-
-            return {"path": str(path), "removed": removed_count > 0, "warning": None}
-        else:
-            # Single file
-            if path in self._user_libs:
-                self._user_libs.invalidate(path)
-                return {"path": str(path), "removed": True, "warning": None}
-            else:
-                return {"path": str(path), "removed": False, "warning": "Library not loaded"}
-
-    def get_loaded_libraries(self) -> list[tuple[Path, LibraryIndex]]:
-        """Return all loaded user libraries as (path, index) pairs.
-
-        Returns:
-            List of (path, LibraryIndex) tuples for all loaded libraries
-        """
-        return [(path, entry[1]) for path, entry in self._user_libs.items()]
-
-    def list_libraries(self) -> list[str]:
-        """List all loaded user library paths.
-
-        Returns:
-            List of library path strings
-        """
-        return [str(path) for path, _ in self.get_loaded_libraries()]
-
-    def search_user_libraries(self, query: str, offset: int = 0, limit: int = 50) -> dict:
-        """Search across all loaded user libraries.
-
-        Args:
-            query: Case-insensitive substring to search for
-            offset: Number of results to skip
-            limit: Maximum results to return
-
-        Returns:
-            Dict with results, total, offset, limit
-        """
-        all_matches = []
-
-        # Search each loaded library
-        for _, index in self.get_loaded_libraries():
-            matches, _ = index.search(query, offset=0, limit=999999)  # Get all matches
-            all_matches.extend(matches)
-
-        # Sort all matches alphabetically
-        all_matches.sort(key=lambda m: m.name_lower)
-
-        # Apply pagination
-        total = len(all_matches)
-        page = all_matches[offset : offset + limit]
-
-        # Format results
-        results = [
-            {
-                "name": m.name,
-                "type": m.model_type,
-                "source_path": str(m.source_path),
-                "ports": m.ports,
-                "params": m.params,
-            }
-            for m in page
-        ]
-
-        return {"results": results, "total": total, "offset": offset, "limit": limit}
-
     def _iter_builtin_indexes(self) -> Iterator[LibraryIndex]:
         """Yield each built-in LibraryIndex via the mtime cache, skipping parse failures."""
         for lib_path in self.builtin_library_files():
@@ -356,142 +274,11 @@ class LibraryManager:
             except Exception as e:
                 logger.warning(f"Failed to search built-in library {lib_path}: {e}")
 
-    def find_similar_models(
-        self,
-        name: str,
-        *,
-        exact: bool = False,
-        limit: int = 5,
-        cutoff: float = 0.6,
-        include_builtin: bool = False,
-    ) -> list[dict]:
-        """Return candidate matches for ``name``, each annotated with a ``score`` in [0.0, 1.0].
+    def search(self, query: str, *, cutoff: float = 0.6) -> list[dict[str, Any]]:
+        """``rank_models`` over every library file the detected simulators ship.
 
-        With ``exact=True`` returns at most one entry (score 1.0) when the
-        name matches case-insensitively. Otherwise fuzzy-ranks via
-        ``part_aware_score`` (rapidfuzz ratio + first-word-token bonus).
-
-        ``include_builtin=True`` lazy-parses every built-in .lib on first
-        call — hundreds of ms on a full LTspice install.
+        A file that cannot be read or parsed is skipped with a warning rather
+        than failing the search: an install holds thousands of vendor files,
+        and the caller named none of them.
         """
-        if exact:
-            info = self.get_model_info(name, full=False, include_builtin=include_builtin)
-            if info is None:
-                return []
-            info["score"] = 1.0
-            return [info]
-
-        query_lower = name.lower()
-
-        def score(entry: ModelEntry) -> float:
-            return part_aware_score(query_lower, entry.name_lower)
-
-        candidates: list[tuple[float, ModelEntry]] = []
-
-        def collect(index: LibraryIndex) -> None:
-            for entry in index.models:
-                s = score(entry)
-                if s >= cutoff:
-                    candidates.append((s, entry))
-
-        for _, index in self.get_loaded_libraries():
-            collect(index)
-        if include_builtin:
-            for index in self._iter_builtin_indexes():
-                collect(index)
-
-        # Tiebreak equal scores by shared-prefix length (nearest part-number
-        # sibling) before falling back to alphabetical, so an unrelated name
-        # that merely sorts earlier can't bury the advertised neighbour.
-        candidates.sort(
-            key=lambda pair: (
-                -pair[0],
-                -_shared_prefix_len(query_lower, pair[1].name_lower),
-                pair[1].name_lower,
-            )
-        )
-
-        # Dedup by model name — the same part can appear in several libraries
-        # (and vendor libs repeat short helper subckts), which would otherwise
-        # fill the limited result list with duplicates of one name (F4).
-        results = []
-        seen: set[str] = set()
-        for s, entry in candidates:
-            if entry.name_lower in seen:
-                continue
-            seen.add(entry.name_lower)
-            info = self._format_model_info(entry, full=False)
-            info["score"] = round(s, 3)
-            results.append(info)
-            if len(results) >= limit:
-                break
-        return results
-
-    def get_model_info(
-        self, name: str, full: bool = False, include_builtin: bool = True
-    ) -> dict | None:
-        """Look up a model/subcircuit by exact case-insensitive name.
-
-        Searches loaded user libraries first, then built-in libraries unless
-        ``include_builtin=False``. Returns ``None`` if no exact match exists.
-        """
-        for _, index in self.get_loaded_libraries():
-            model = index.get_model(name)
-            if model:
-                return self._format_model_info(model, full)
-
-        if not include_builtin:
-            return None
-
-        for index in self._iter_builtin_indexes():
-            model = index.get_model(name)
-            if model:
-                return self._format_model_info(model, full)
-
-        return None
-
-    def _format_model_info(self, model: ModelEntry, full: bool) -> dict:
-        """Format ModelEntry as info dict.
-
-        Args:
-            model: ModelEntry to format
-            full: Include raw_text if True
-
-        Returns:
-            Formatted model info dict
-        """
-        # The .include directive is handed to the simulator, so it must use the
-        # path form the simulator understands. On WSL the libraries live on the
-        # Windows filesystem but are discovered as ``/mnt/c/...`` Linux paths;
-        # LTspice.exe runs Windows-side and rejects those, and the runner only
-        # translates the netlist file it launches — never .include bodies. So
-        # convert to a Windows path here. ``source_path`` below stays native for
-        # filesystem access from this process.
-        dir_path = to_windows_path(model.source_path) if is_wsl() else str(model.source_path)
-        # Always quote: built-in libraries commonly live under a path with a space
-        # (e.g. ``C:\Program Files\...`` or ``C:\Users\...\AppData\Local\LTspice``),
-        # and an unquoted .include is parsed only up to the first space.
-        include_directive = f'.include "{dir_path}"'
-
-        info = {
-            "name": model.name,
-            "type": model.model_type,
-            "source_path": str(model.source_path),
-            "include_directive": include_directive,
-            "ports": model.ports,
-            "params": model.params,
-        }
-
-        # For .MODEL devices, surface the parsed device token and its
-        # connection order — a .MODEL conveys parameters but not node order,
-        # and wiring the part in the wrong order simulates silently wrong.
-        if model.device_type:
-            info["device_type"] = model.device_type
-            usage = _device_usage(model.device_type, model.name)
-            if usage:
-                info["usage"] = usage
-
-        if full:
-            info["raw_text"] = model.raw_text
-
-        return info
+        return rank_models(self._iter_builtin_indexes(), query, cutoff=cutoff)

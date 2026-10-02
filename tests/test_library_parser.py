@@ -281,8 +281,8 @@ class TestParseLibraryFile:
 
     def test_utf16_le_without_bom(self, tmp_path: Path):
         """Some LTspice 26+ installs ship ``standard.{mos,bjt}`` as UTF-16 LE
-        WITHOUT a BOM. ``load_library`` returned 0 models for those
-        files. Heuristic null-byte detection picks them up now."""
+        WITHOUT a BOM, and parsing them returned 0 models. Heuristic
+        null-byte detection picks them up now."""
         lib = tmp_path / "no_bom.mos"
         text = ".MODEL NMOS_NB NMOS(VTO=2.0 KP=0.05)\n.MODEL PMOS_NB PMOS(VTO=-1.5)\n"
         lib.write_bytes(text.encode("utf-16-le"))
