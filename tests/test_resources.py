@@ -88,10 +88,28 @@ class TestReadResource:
         assert isinstance(contents, TextResourceContents)
         assert contents.mime_type == "text/markdown"
         text = contents.text
-        # Both strings come from the real SKILL.md body, proving the packaged
-        # guide is served (not a placeholder).
-        assert "Schematic layout best practices" in text
-        assert "means milli" in text
+        # The core: a rule from its own text, and the index generated from the
+        # sections' front matter, proving the packaged guide is served.
+        assert "`M` is milli, not mega" in text
+        assert "## Index" in text and "- `schematics`:" in text
+        assert state_no_sim.guide_read
+
+    def test_read_guide_section(self, state_no_sim: SessionState):
+        contents = handle_read_resource("spice://guide/schematics", state_no_sim).contents[0]
+        assert isinstance(contents, TextResourceContents)
+        assert contents.mime_type == "text/markdown"
+        assert "Schematic layout best practices" in contents.text
+
+    def test_read_a_file_inside_a_skill(self, state_no_sim: SessionState):
+        """A skill's further file is named by a path, so its URI spans segments."""
+        uri = "spice://guide/skill:spice-bench-craft/references/BENCH_NOTES.md"
+        contents = handle_read_resource(uri, state_no_sim).contents[0]
+        assert isinstance(contents, TextResourceContents)
+        assert contents.text.strip()
+
+    def test_unknown_guide_section_names_the_known_ones(self, state_no_sim: SessionState):
+        with pytest.raises(ValueError, match="name one of: python, tools"):
+            handle_read_resource("spice://guide/nope", state_no_sim)
 
     def test_unknown_uri_raises(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):

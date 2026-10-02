@@ -251,9 +251,11 @@ run a batch for an assistant to analyze later.
 
 **An assistant can use either.** Over MCP it calls the six tools; where it can
 execute code it can drive the same engine in Python instead, through `run_code`
-or an installed package (see below). Either way it can read the full argument
-tree for itself — `inspect(kind="reference")` over MCP, `api.reference()` in
-Python.
+or an installed package (see below). Either way it starts from the server's
+guide — a short core, then the section or task skill a job needs —
+`inspect(kind="guide")` over MCP, `api.guide()` in Python, and reads the full
+argument tree for itself — `inspect(kind="reference")` over MCP,
+`api.reference()` in Python.
 
 ## Driving it from code
 
@@ -291,8 +293,9 @@ the minimum and maximum cutoff frequencies with their assignments. `rc.cir` is
 the RC low-pass deck printed under
 [the tool-level loop](#under-the-hood-the-tool-level-loop) above.
 `api.reference()` lists the six operations. `api.reference("run_experiments")`
-prints that operation's full argument tree. From a shell, use
-`python -m ltspice_mcp.api reference [op]`. `api.load_raw()` returns numpy
+prints that operation's full argument tree, and `api.guide("python")` the
+guide's section on this interface. From a shell, use
+`python -m ltspice_mcp.api reference [op]` or `python -m ltspice_mcp.api guide [section]`. `api.load_raw()` returns numpy
 arrays for direct waveform access.
 
 ### Using both at once
