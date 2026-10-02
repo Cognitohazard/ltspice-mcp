@@ -91,7 +91,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import NETLIST_SUFFIXES, response_budget, services
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -106,7 +106,6 @@ from ltspice_mcp.lib.library_manager import (
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.schematic_ops import (
@@ -156,6 +155,7 @@ from ltspice_mcp.tools._base import (
     outcome_schema,
     registry,
     resolve_response_budget,
+    safe_library_path,
     safe_path,
     symbol_resolver_for,
 )
@@ -500,7 +500,7 @@ class SymbolQuery(StrictModel):
 
 
 #: The circuit file a net or components query reads.
-_CIRCUIT_PATH_DESCRIPTION = "The .asc schematic, or .cir/.net/.sp/.spice netlist, to read."
+_CIRCUIT_PATH_DESCRIPTION = f"The .asc schematic, or {NETLIST_SUFFIX_TEXT} netlist, to read."
 
 
 class NetQuery(StrictModel):
@@ -559,7 +559,7 @@ class HierarchyQuery(StrictModel):
     """Resolve repeated netlist instances, ports, parameters and backend device addresses."""
 
     kind: Literal["hierarchy"]
-    path: str = Field(description="Netlist .cir/.net/.sp/.spice; export a schematic first.")
+    path: str = Field(description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first.")
     simulator: Literal["ltspice", "ngspice"] = Field(
         description="Offline semantic backend; installation is not required."
     )
@@ -725,7 +725,12 @@ class InspectInput(ToolInput):
 # ---------------------------------------------------------------------------
 
 
-def _binding(kind: str, identity: dict[str, Any], sources: Sequence[Path]) -> str:
+def _binding(
+    kind: str,
+    identity: dict[str, Any],
+    sources: Sequence[Path],
+    revision: str | None = None,
+) -> str:
     """The cursor's view binding: the paginated ``kind``, this query's identity,
     and the revision of every file the rows were derived from.
 
@@ -740,12 +745,16 @@ def _binding(kind: str, identity: dict[str, Any], sources: Sequence[Path]) -> st
 
     ``sources`` is required rather than opt-in so a new file-backed kind cannot
     forget it; a kind that pages something the server does not read off named
-    files passes ``()`` on purpose. Stat granularity bounds the guarantee: a
-    rewrite of identical size within one filesystem clock tick still reads as
+    files passes ``()`` on purpose. ``revision`` stands in for the stamps of a
+    file set too large to stat on the event loop: a digest of them, taken off
+    the loop where the files were read. Stat granularity bounds the guarantee:
+    a rewrite of identical size within one filesystem clock tick still reads as
     unchanged.
     """
     bound = dict(identity)
-    if sources:
+    if revision is not None:
+        bound["sources"] = revision
+    elif sources:
         bound["sources"] = [[str(path), _file_stamp(path)] for path in sources]
     return f"{kind}:{canonical_hash(bound)}"
 
@@ -770,9 +779,11 @@ def _paginate(
     cursor: str | None,
     sources: Sequence[Path],
     view: _View,
+    revision: str | None = None,
 ) -> dict[str, Any]:
     """Page ``items`` through the shared paginator, bound to this query's identity
-    and to the revision of the ``sources`` the rows came from.
+    and to the revision of the ``sources`` the rows came from (or ``revision``,
+    see ``_binding``).
 
     The limit comes from ``view``, so a budget that shrinks the page shrinks it
     HERE — before the cursor is minted — and the token the caller gets back
@@ -780,7 +791,7 @@ def _paginate(
     """
     try:
         return paginate_view(
-            items, _binding(kind, identity, sources), cursor=cursor, limit=view.limit
+            items, _binding(kind, identity, sources, revision), cursor=cursor, limit=view.limit
         )
     except PageCursorError as exc:
         raise _invalid_cursor(exc) from exc
@@ -1256,7 +1267,7 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     raise _QueryError(
         "unsupported_file",
         f"'{suffix}' is not a circuit file; {query} queries take a .asc "
-        "schematic or a .cir / .net / .sp / .spice netlist",
+        f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
     )
 
 
@@ -1566,32 +1577,21 @@ def _search_libs(lib_paths: list[Path], query: str) -> list[dict[str, Any]]:
     return rank_models((parse_library_file_cached(lib) for lib in lib_paths), query)
 
 
-def _search_simulator_libraries(
-    libraries: LibraryManager, query: str
-) -> tuple[list[dict[str, Any]], list[list[Any]]]:
+def _search_simulator_libraries(libraries: LibraryManager, query: str) -> tuple[list[dict], str]:
     """Fuzzy-match ``query`` across the detected simulators' own libraries.
 
-    Returns the rows and the revision of every file searched. The revision is
-    taken here, in the worker, because a full install is thousands of files
-    and the cursor binding would otherwise stat them all on the event loop.
+    Returns the rows and a digest of the revisions of the files searched,
+    hashed here in the worker because a full install is thousands of files.
     """
-    rows = libraries.search(query)
-    return rows, [[str(path), _file_stamp(path)] for path in libraries.builtin_library_files()]
+    rows, revisions = libraries.search(query)
+    return rows, canonical_hash(revisions)
 
 
 async def _admit_libs(libs: list[str], state: SessionState) -> list[Path]:
-    """Resolve the named library files: each must lie inside the sandbox or
-    inside a detected simulator's own library.
-
-    The second set is the trust class staging, the include resolver and the
-    hierarchy reader already admit: the model library shipped with the
-    simulator the server runs. Without it a part a run can include from the
-    stock library could not be looked up there, and a file the search below
-    returns could not be read back through 'libs'.
-    """
-    roots = await asyncio.to_thread(state.libraries.library_roots)
-    allowed = state.allowed_paths() + roots
-    return [resolve_safe_path(lib, allowed) for lib in libs]
+    """Resolve the named library files through ``safe_library_path``, off the
+    loop: a path outside the sandbox is checked against the simulators'
+    library directories, which may sit on a slow WSL mount."""
+    return await asyncio.to_thread(lambda: [safe_library_path(lib, state) for lib in libs])
 
 
 async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -1599,6 +1599,7 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
     # revision: an edited library must reject a stale token, not page into the
     # re-parsed list at the old offset.
     sources: list[Path] = []
+    revision: str | None = None
     if q.mode == "enumerate":
         sources = await _admit_libs(q.libs or [], state)
         try:
@@ -1619,16 +1620,15 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
             # No libs given: search the detected simulators' own libraries,
             # the directories _admit_libs accepts, so every source_path in the
             # rows reads back through 'libs'. Offloaded because the first search
-            # parses the whole install. The searched files' revision rides in
-            # the identity rather than in ``sources`` (see the helper).
+            # parses the whole install.
             try:
-                rows, identity["searched"] = await asyncio.to_thread(
+                rows, revision = await asyncio.to_thread(
                     _search_simulator_libraries, state.libraries, q.query
                 )
             except Exception as exc:
                 raise _QueryError("search_error", str(exc)) from exc
 
-    page = _paginate(rows, "model", identity, q.cursor, sources, view)
+    page = _paginate(rows, "model", identity, q.cursor, sources, view, revision)
     return {
         "data": {
             "mode": q.mode,

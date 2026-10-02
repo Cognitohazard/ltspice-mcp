@@ -29,7 +29,13 @@ from ltspice_mcp.errors import (
     SimulationError,
     raise_site_code,
 )
-from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, experiment_store, now, response_budget
+from ltspice_mcp.lib import (
+    CIRCUIT_EXTENSIONS,
+    NETLIST_SUFFIX_TEXT,
+    experiment_store,
+    now,
+    response_budget,
+)
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -154,7 +160,7 @@ class _CircuitPreparation:
 class ExperimentCircuit(StrictModel):
     path: str = Field(
         description=(
-            "Deck to run: .cir/.net/.sp/.spice, or an .asc, which LTspice exports. "
+            f"Deck to run: {NETLIST_SUFFIX_TEXT}, or an .asc, which LTspice exports. "
             "It is staged content-addressed at submission, so later edits to the "
             "file cannot change what this job ran."
         ),
@@ -830,7 +836,7 @@ async def _prepare_circuit(
                 "unsupported_variant",
                 f"Circuit {circuit_id!r} uses unsupported extension "
                 f"{source_path.suffix or '<none>'!r}; supported extensions are "
-                ".cir, .net, .sp, .spice, and .asc",
+                f"{NETLIST_SUFFIX_TEXT} and .asc",
             )
         if not await asyncio.to_thread(source_path.is_file):
             raise FileNotFoundError(f"Circuit file not found: {source_path}")

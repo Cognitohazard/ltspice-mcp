@@ -22,7 +22,10 @@ tool-surface changes.
 - `inspect` model queries refused a `libs` file inside the detected
   simulator's own model library (LTspice's `lib/cmp/standard.bjt`, say) under
   the default sandbox, although staging, the include resolver and the
-  hierarchy reader all read that library. These reads now admit it too.
+  hierarchy reader all read that library. These reads now admit it too, and
+  `verify_circuit`'s compare reads an include into any detected simulator's
+  library rather than only the default simulator's, so the two agree on every
+  file a model search names.
 - An `inspect` model search with `libs` omitted always returned nothing: it
   searched only libraries loaded through a call nothing makes any more. It now
   searches the detected simulators' own model libraries, which are the

@@ -32,7 +32,7 @@ from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_iden
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import needs_raster, symlink_or_skip
+from tests.conftest import installed_simulator, needs_raster, symlink_or_skip
 
 
 class FakeLT:
@@ -463,9 +463,21 @@ async def test_net_netlist_coordinates_rejected(netlist: Path, state_no_sim: Ses
 # ---------------------------------------------------------------------------
 
 
-async def test_components_list_netlist(netlist: Path, state_no_sim: SessionState):
-    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(netlist)}])
-    assert res["ok"] is True
+@pytest.mark.parametrize(
+    "spelling",
+    ["amp.cir", "sub/../amp.cir", "amp.spice"],
+    ids=["path", "parent-segment", "spice-suffix"],
+)
+async def test_components_list_netlist(
+    netlist: Path, state_no_sim: SessionState, work_dir: Path, spelling: str
+):
+    """A path is judged by where it lands (``sub/../amp.cir`` is the deck
+    itself), and ``.spice`` is what xschem and the sky130 testbenches write."""
+    await asyncio.to_thread((work_dir / "sub").mkdir)
+    spice = work_dir / "amp.spice"
+    await asyncio.to_thread(spice.write_bytes, await asyncio.to_thread(netlist.read_bytes))
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": spelling}])
+    assert res["ok"] is True, res
     data = res["data"]
     assert data["detail"] == "list"
     refs = [c["reference"] for c in data["components"]]
@@ -474,27 +486,6 @@ async def test_components_list_netlist(netlist: Path, state_no_sim: SessionState
     # list detail carries value only, never full-detail keys.
     for c in data["components"]:
         assert "nodes" not in c
-
-
-async def test_components_through_a_parent_segment_inside_the_sandbox(
-    netlist: Path, state_no_sim: SessionState, work_dir: Path
-):
-    """A path is judged by where it lands: ``sub/../amp.cir`` is the deck itself."""
-    await asyncio.to_thread((work_dir / "sub").mkdir)
-    (res,) = await _run(state_no_sim, [{"kind": "components", "path": "sub/../amp.cir"}])
-    assert res["ok"] is True, res
-    assert {c["reference"] for c in res["data"]["components"]} == {"C1", "R1", "R2", "V1", "X1"}
-
-
-async def test_components_of_a_spice_suffixed_netlist(
-    netlist: Path, state_no_sim: SessionState, work_dir: Path
-):
-    """``.spice`` is what xschem and the sky130 testbenches write."""
-    deck = work_dir / "amp.spice"
-    await asyncio.to_thread(deck.write_bytes, await asyncio.to_thread(netlist.read_bytes))
-    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(deck)}])
-    assert res["ok"] is True, res
-    assert {c["reference"] for c in res["data"]["components"]} == {"C1", "R1", "R2", "V1", "X1"}
 
 
 async def test_components_full_netlist(netlist: Path, state_no_sim: SessionState):
@@ -686,23 +677,11 @@ def simulator_library(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def library_state(
-    config: ServerConfig, simulator_library: Path, monkeypatch: pytest.MonkeyPatch
-) -> SessionState:
+def library_state(config: ServerConfig, simulator_library: Path) -> SessionState:
     """A session whose detected LTspice reports ``simulator_library`` as its own
-    library; that report is the environment, what the server does with it is
-    under test."""
-
-    class InstalledLT(FakeLT):
-        pass
-
-    monkeypatch.setattr(
-        InstalledLT,
-        "get_default_library_paths",
-        classmethod(lambda _cls: [str(simulator_library)]),
-        raising=False,
-    )
-    return SessionState.create(config, available={"ltspice": InstalledLT})
+    library."""
+    installed = installed_simulator(simulator_library, base=FakeLT)
+    return SessionState.create(config, available={"ltspice": installed})
 
 
 async def test_model_enumerate_reads_the_simulators_own_library(

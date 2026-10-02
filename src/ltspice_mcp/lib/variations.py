@@ -24,7 +24,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import atomic_write_text, component_value
+from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_text, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
@@ -760,9 +760,7 @@ def materialize_variants(
 ) -> list[MaterializedCase]:
     """Write stable ``case-NNNN`` deck variants into a staged circuit directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = (
-        circuit.path.suffix if circuit.path.suffix.lower() in {".cir", ".net", ".sp"} else ".cir"
-    )
+    suffix = circuit.path.suffix if circuit.path.suffix.lower() in RUN_DECK_SUFFIXES else ".cir"
     closure = _build_closure(circuit)
     captured_digests = {
         file.path.resolve(): file.sha256 or hashlib.sha256(file.text.encode("utf-8")).hexdigest()

@@ -13,22 +13,12 @@ import pytest
 
 from ltspice_mcp.lib.library_manager import LibraryManager, model_row, rank_models
 from ltspice_mcp.lib.library_parser import parse_library_file
+from tests.conftest import installed_simulator
 
 
 @pytest.fixture
 def empty_manager() -> LibraryManager:
     return LibraryManager(available_simulators={})
-
-
-def _installed(*library_dirs: Path) -> type:
-    """A detected simulator whose own model library is ``library_dirs``."""
-
-    class InstalledSim:
-        @classmethod
-        def get_default_library_paths(cls) -> list[str]:
-            return [str(path) for path in library_dirs]
-
-    return InstalledSim
 
 
 def _install(root: Path, files: dict[str, str]) -> LibraryManager:
@@ -38,7 +28,12 @@ def _install(root: Path, files: dict[str, str]) -> LibraryManager:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
-    return LibraryManager(available_simulators={"sim": _installed(root)})
+    return LibraryManager(available_simulators={"sim": installed_simulator(root)})
+
+
+def _search(manager: LibraryManager, query: str) -> list[dict]:
+    rows, _revisions = manager.search(query)
+    return rows
 
 
 def _rank(tmp_path: Path, text: str, query: str, cutoff: float = 0.6) -> list[dict]:
@@ -61,11 +56,11 @@ class TestSearch:
 
     def test_finds_a_near_miss_in_the_simulators_library(self, tmp_path: Path):
         manager = _install(tmp_path / "lib", {"cmp/standard.bjt": _FUZZY})
-        names = [r["name"] for r in manager.search("2N3905")]
+        names = [r["name"] for r in _search(manager, "2N3905")]
         assert names[:2] == ["2N3904", "2N3906"]
 
     def test_without_a_simulator_library_finds_nothing(self, empty_manager: LibraryManager):
-        assert empty_manager.search("2N3904") == []
+        assert empty_manager.search("2N3904") == ([], [])
 
     def test_sub_subcircuit_libraries_are_searched(self, tmp_path: Path):
         # ``.sub`` files hold the bulk of LTspice's bundled vendor subcircuit
@@ -73,7 +68,7 @@ class TestSearch:
         manager = _install(
             tmp_path / "lib", {"sub/vendor.sub": ".SUBCKT MYPART in out\nR1 in out 1k\n.ENDS\n"}
         )
-        (row,) = manager.search("MYPART")
+        (row,) = _search(manager, "MYPART")
         assert row["type"] == ".SUBCKT"
 
     def test_stock_component_decks_are_searched(self, tmp_path: Path):
@@ -86,8 +81,22 @@ class TestSearch:
                 "cmp/standard.mos": ".MODEL MSTD NMOS(KP=2e-5)\n",
             },
         )
-        assert manager.search("QSTD")[0]["source_path"].endswith("standard.bjt")
-        assert manager.search("MSTD")[0]["source_path"].endswith("standard.mos")
+        assert _search(manager, "QSTD")[0]["source_path"].endswith("standard.bjt")
+        assert _search(manager, "MSTD")[0]["source_path"].endswith("standard.mos")
+
+    def test_revisions_name_every_file_searched(self, tmp_path: Path):
+        """A paged caller binds its cursor to these, so they must cover every
+        file the search read, matched or not, with the stamp it was read at."""
+        manager = _install(
+            tmp_path / "lib",
+            {"cmp/standard.bjt": _FUZZY, "sub/LT1001.sub": ".SUBCKT LT1001 a b\n.ENDS\n"},
+        )
+        _rows, revisions = manager.search("2N3904")
+        files = manager.builtin_library_files()
+        assert [path for path, _stamp in revisions] == [str(path) for path in files]
+        for (_path, stamp), path in zip(revisions, files, strict=True):
+            stat = path.stat()
+            assert stamp == (stat.st_mtime_ns, stat.st_size)
 
     def test_an_encrypted_vendor_part_is_found_by_name(self, tmp_path: Path):
         # An encrypted library carries no plaintext card, so the part is
@@ -96,7 +105,7 @@ class TestSearch:
             tmp_path / "lib",
             {"sub/PART_A_enc.lib": "* LTspice Encrypted File\n* Begin:\n 05 AC A3 C2\n"},
         )
-        (row,) = manager.search("PART_A_enc")
+        (row,) = _search(manager, "PART_A_enc")
         assert row["type"] == ".ENCRYPTED"
 
 
@@ -229,29 +238,32 @@ class TestBuiltinLibraryFiles:
         (second / "notes.txt").write_text(".model D2 D\n")
 
         manager = LibraryManager(
-            available_simulators={"a": _installed(first), "b": _installed(second)}
+            available_simulators={
+                "a": installed_simulator(first),
+                "b": installed_simulator(second),
+            }
         )
 
         assert manager.library_roots() == [first.resolve(), second.resolve()]
-        assert manager.builtin_library_files() == [
+        assert manager.builtin_library_files() == (
             first.resolve() / "cmp" / "standard.bjt",
             first.resolve() / "sub" / "LT1001.sub",
             second.resolve() / "models.lib",
-        ]
+        )
 
     def test_a_library_that_appears_later_is_found(self, tmp_path: Path):
         """LTspice extracts its library on first launch, which can be after the
         server started; the walk follows the roots instead of freezing them."""
         lib = tmp_path / "lib"
-        manager = LibraryManager(available_simulators={"sim": _installed(lib)})
-        assert manager.builtin_library_files() == []
+        manager = LibraryManager(available_simulators={"sim": installed_simulator(lib)})
+        assert manager.builtin_library_files() == ()
 
         lib.mkdir()
         (lib / "standard.dio").write_text(".model D1 D\n")
 
-        assert manager.builtin_library_files() == [lib.resolve() / "standard.dio"]
+        assert manager.builtin_library_files() == (lib.resolve() / "standard.dio",)
 
     def test_simulator_without_a_library_contributes_nothing(self):
         manager = LibraryManager(available_simulators={"ngspice": object})
         assert manager.library_roots() == []
-        assert manager.builtin_library_files() == []
+        assert manager.builtin_library_files() == ()

@@ -10,6 +10,11 @@ from ltspice_mcp.lib.library_parser import (
 )
 
 
+def _model(index, name: str):
+    """The entry named ``name``, case-insensitively, or ``None``."""
+    return next((m for m in index.models if m.name_lower == name.lower()), None)
+
+
 class TestMergeContinuationLines:
     def test_basic(self):
         lines = [".MODEL Q1 NPN", "+ BF=200 IS=1e-14"]
@@ -135,11 +140,11 @@ class TestParseLibraryFile:
         assert "NPN1" in names
         assert "CLEAN" in names
 
-        recovered = index.get_model("NPN1")
+        recovered = _model(index, "NPN1")
         assert recovered is not None
         assert recovered.model_type == ".MODEL"
         # The well-formed model keeps its parameters.
-        clean = index.get_model("CLEAN")
+        clean = _model(index, "CLEAN")
         assert clean is not None
         assert clean.params["BF"] == "200"
 
@@ -162,8 +167,8 @@ class TestParseLibraryFile:
         assert m.name == "2SA2206_enc"
         assert m.model_type == ENCRYPTED_MODEL_TYPE
         assert m.ports == []
-        # Reachable by exact name lookup through the normal index.
-        assert index.get_model("2sa2206_enc") is not None
+        # Reachable by its name, case-insensitively, like any other entry.
+        assert _model(index, "2sa2206_enc") is not None
 
     def test_parse_subckt_missing_ends(self, tmp_path: Path):
         lib = tmp_path / "broken.lib"
@@ -218,27 +223,6 @@ class TestParseLibraryFile:
         assert len(index.models) == 2
         types = {m.model_type for m in index.models}
         assert types == {".MODEL", ".SUBCKT"}
-
-    def test_search_pagination(self, tmp_path: Path):
-        lib = tmp_path / "many.lib"
-        lines = [f".MODEL M{i:02d} NPN(BF={100 + i})\n" for i in range(10)]
-        lib.write_text("".join(lines))
-
-        index = parse_library_file(lib)
-        assert len(index.models) == 10
-
-        page, total = index.search("M", offset=3, limit=4)
-        assert total == 10
-        assert len(page) == 4
-
-    def test_get_model_case_insensitive(self, tmp_path: Path):
-        lib = tmp_path / "case.lib"
-        lib.write_text(".MODEL 2N2222 NPN(BF=200)\n")
-
-        index = parse_library_file(lib)
-        result = index.get_model("2n2222")
-        assert result is not None
-        assert result.name == "2N2222"
 
     def test_utf16_le_with_bom(self, tmp_path: Path):
         """LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are
