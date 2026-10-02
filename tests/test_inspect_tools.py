@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import sys
 import typing
 from dataclasses import asdict
 from pathlib import Path
@@ -24,7 +26,8 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import raster
+from ltspice_mcp.lib import raster, wsl
+from ltspice_mcp.lib.deck_staging import stage_deck
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
@@ -744,6 +747,70 @@ async def test_model_search_without_libs_searches_the_simulators_own_library(
     (back,) = await _run(library_state, [{"kind": "model", "mode": "enumerate", "libs": [source]}])
     assert back["ok"] is True, back
     assert "2N3904" in {r["name"] for r in back["data"]["results"]}
+
+
+async def test_model_rows_have_one_shape_on_every_route(
+    simulator_library: Path, library_state: SessionState
+):
+    """A search naming 'libs', a search of the simulator's own libraries and
+    an enumerate report the same part the same way, so what a caller can do
+    with a row does not depend on how it asked."""
+    shipped = simulator_library / "cmp" / "standard.bjt"
+    results = await _run(
+        library_state,
+        [
+            {"kind": "model", "mode": "search", "query": "2N3904", "libs": [str(shipped)]},
+            {"kind": "model", "mode": "search", "query": "2N3904"},
+            {"kind": "model", "mode": "enumerate", "libs": [str(shipped)]},
+        ],
+    )
+    named, installed, enumerated = (
+        next(row for row in res["data"]["results"] if row["name"] == "2N3904") for res in results
+    )
+    assert named == installed
+    assert {key: value for key, value in named.items() if key != "score"} == enumerated
+    assert enumerated["include_directive"] == f'.include "{shipped.resolve()}"'
+    assert enumerated["usage"] == "Qxxx C B E 2N3904"
+
+
+@pytest.fixture
+def on_wsl(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The environment of a WSL session: detection says WSL, and a wslpath on
+    PATH spells a Linux-side file the way the real one does."""
+    if sys.platform == "win32":
+        pytest.skip("WSL interop runs on the Linux side; native Windows has no wslpath")
+    bin_dir = tmp_path_factory.mktemp("bin")
+    wslpath = bin_dir / "wslpath"
+    wslpath.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "print('\\\\\\\\wsl.localhost\\\\Distro' + sys.argv[-1].replace('/', '\\\\'))\n"
+    )
+    wslpath.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(wsl, "_is_wsl_cached", True)
+
+
+@pytest.mark.usefixtures("on_wsl")
+async def test_model_include_directive_is_staged_on_wsl(
+    simulator_library: Path, library_state: SessionState, work_dir: Path
+):
+    """On WSL the directive names the file as the server sees it, which is
+    what staging reads. A Windows spelling made per row cost a wslpath process
+    each, and for a file on the Linux side came back as a wsl.localhost path
+    that staging cannot map back, so the directive a search handed out named
+    nothing a run could stage."""
+    (res,) = await _run(library_state, [{"kind": "model", "mode": "search", "query": "2N3904"}])
+    assert res["ok"] is True, res
+    directive = res["data"]["results"][0]["include_directive"]
+    deck = work_dir / "tb.cir"
+    await asyncio.to_thread(deck.write_text, f"* tb\nQ1 c b 0 2N3904\n{directive}\n.end\n")
+    library = await asyncio.to_thread(simulator_library.resolve)
+
+    staged = await asyncio.to_thread(
+        stage_deck, deck, work_dir / "staged", [work_dir], origin=deck, simulator_roots=[library]
+    )
+
+    assert library / "cmp" / "standard.bjt" in {included.source for included in staged.includes}
 
 
 async def test_model_search_without_libs_rejects_a_cursor_after_a_library_edit(

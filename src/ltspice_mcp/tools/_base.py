@@ -232,24 +232,6 @@ HINT_SCHEMA: dict[str, str] = {"type": "string"}
 # lib/result_observations.py).
 WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 
-# Fuzzy library matches for unresolved model/subcircuit references, keyed by
-# the missing ref: ``{ref: [{name, score, source_path}, ...]}`` (produced by
-# services.suggestions_from_errors / attach_suggestions_to_failure).
-SUGGESTIONS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "score": {"type": "number"},
-                "source_path": {"type": "string"},
-            },
-        },
-    },
-}
-
 PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -1163,12 +1145,9 @@ def resolve_reference(reference: str, state: SessionState) -> str | Path:
 # are MUTABLE and entangled with per-session snapshots — concurrent edits
 # would be last-writer-wins data loss; worst case is a cold .asc parse over
 # /mnt/c, ~1 s), job sidecar JSON loads (small per-circuit files), config
-# saves (durable=False), log-file reads (KB scale), and loading or unloading
-# a user library (LibraryManager's loaded set is loop-owned mutable state;
-# worst case ~1 s for a multi-MB vendor library). A search over the
-# simulator's own libraries is the exception and is offloaded: it parses the
-# whole install on first use, and it only reads that loaded set and fills
-# thread-safe parse caches of immutable values.
+# saves (durable=False), and log-file reads (KB scale). Library parses are
+# offloaded instead: a search over the simulator's own libraries parses the
+# whole install on first use, into thread-safe caches of immutable indexes.
 # ---------------------------------------------------------------------------
 
 

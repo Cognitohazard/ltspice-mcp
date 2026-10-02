@@ -2199,6 +2199,10 @@ class TestFailureChannel:
         row = data["failures"][0]
         assert row["code"] == "missing_model"
         assert row["evidence"] == {"missing_refs": ["mystery"]}
+        # The recovery is a model search over the simulator's own libraries,
+        # which the failure names rather than running on the agent's behalf.
+        assert "model query" in row["hint"]
+        assert "simulator's own libraries" in row["hint"]
 
 
 @pytest.mark.asyncio

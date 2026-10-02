@@ -712,27 +712,6 @@ class TestSummaryAcWithMetrics:
 
 
 @pytest.mark.asyncio
-class TestSummarySuggestions:
-    """When the run's errors name unresolved models, model-resolution help is
-    both attached to structuredContent (``suggestions``, declared in the
-    output_schema) and rendered into the text lines."""
-
-    async def test_suggestions_in_schema_and_text(
-        self, state_no_sim: SessionState, fake_raw: Path, monkeypatch
-    ):
-        import ltspice_mcp.lib.metrics as metrics_mod
-
-        fake = {"MYMODEL": [{"name": "MyModel", "score": 88, "source_path": "/libs/foo.lib"}]}
-        monkeypatch.setattr(
-            metrics_mod.services,
-            "suggestions_from_errors",
-            lambda errors, libraries: fake,
-        )
-        data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
-        assert data["suggestions"] == fake
-
-
-@pytest.mark.asyncio
 class TestQueryStepRange:
     async def test_step_out_of_range(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="out of range"):

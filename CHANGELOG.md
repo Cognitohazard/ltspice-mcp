@@ -29,8 +29,20 @@ tool-surface changes.
   directories a `libs` entry may name, so every `source_path` it returns can
   be read back through `libs` and staged by a run. The first such search
   parses the whole install, in a worker thread so other requests are not held
-  up. The run-failure hints for a missing model point there instead of at
-  loaded libraries.
+  up. The `missing_model` failure hint points there instead of at loaded
+  libraries.
+- `inspect` model rows differed by route: a search or enumerate naming `libs`
+  returned name, type, source_path, ports and params, while a search of the
+  simulator's libraries also returned `include_directive`, `device_type` and
+  `usage`, and ranked equal scores differently. Every route now returns the
+  same row from the same ranking, so a `.MODEL` found through `libs` carries
+  its connection order too.
+- On WSL a model row's `include_directive` was converted to a Windows path
+  with one `wslpath` process per row, thousands on a search of a full install,
+  and a library on the Linux side came back as a `\\wsl.localhost` path that
+  staging and `verify_circuit` cannot resolve. It now names `source_path` as
+  the server sees it, which is what staging reads; staging already hands
+  LTspice its staged copy in Windows form.
 - `run_experiments`, `verify_circuit` and the `inspect` net, components and
   hierarchy queries refused `.spice` netlists, the extension xschem and the
   sky130 testbenches write. Every surface that reads a netlist now takes
@@ -495,6 +507,19 @@ tool-surface changes.
   (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
   too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
   `invalid_query`.
+
+### Removed
+
+- The `spice://models/` resource. It listed libraries loaded through
+  `load_library`, which was removed in 0.6.0, so it has answered with an empty
+  list since. `inspect(kind="model", mode="search")` searches the simulator's
+  own libraries, and its `libs` names any other file.
+- The `suggestions` key of the `analyze_results` summary recipe, and the fuzzy
+  matching behind it, which searched the same loaded libraries and so never
+  produced one. A failed run's receipt already names the unresolved models
+  (`missing_model`, with `evidence.missing_refs`) and the model search that
+  finds them. The server does not run that search itself on a failure path:
+  the first search parses the whole install, which takes seconds.
 
 ### Security
 
