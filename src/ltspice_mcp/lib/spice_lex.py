@@ -208,6 +208,8 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
             yield _Atom(TokenKind.COMMENT_TRAIL.value, body[i:], i)
             return
 
+        # Double-quoted strings, and single-quoted expressions (ngspice
+        # numparam: rth='(expr)'): consume to the matching closing quote.
         if c in ('"', "'"):
             quote = c
             end = body.find(quote, i + 1)
@@ -217,23 +219,7 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
                     "unterminated quoted string",
                     position=i,
                     body=body,
-                    suggestion='add a closing " after the opening quote',
-                )
-            yield _Atom(TokenKind.QUOTED.value, body[i : end + 1], i)
-            i = end + 1
-            continue
-
-        # Single-quoted expressions (ngspice numparam: rth='(expr)').
-        # Treat like double-quoted strings — consume to the closing quote.
-        if c == "'":
-            end = body.find("'", i + 1)
-            if end < 0:
-                raise SpiceLexError(
-                    SpiceLexErrorCategory.UNTERMINATED_QUOTE,
-                    "unterminated single-quoted string",
-                    position=i,
-                    body=body,
-                    suggestion="add a closing ' after the opening quote",
+                    suggestion=f"add a closing {quote} after the opening quote",
                 )
             yield _Atom(TokenKind.QUOTED.value, body[i : end + 1], i)
             i = end + 1
@@ -873,10 +859,23 @@ def _extract_param_name(body: str) -> str | None:
     """Pull the param name from a ``.PARAM NAME=VALUE`` body.
 
     Handles whitespace around the ``=`` sign. Returns ``None`` for
-    multi-param ``.PARAM`` lines (rare; handled at typed-view layer).
+    multi-param ``.PARAM`` lines (rare; handled at typed-view layer), where
+    no one name identifies the card.
     """
     rest = body.split(None, 1)
     if len(rest) < 2:
+        return None
+    try:
+        # Each assignment is one KEY=VALUE token, or a standalone "=" when
+        # spaced; an "=" inside braces or quotes belongs to its value.
+        assignments = sum(
+            1
+            for token in tokenize_body(body)[1:]
+            if token.kind in (TokenKind.KEY_VALUE, TokenKind.EQUALS)
+        )
+    except SpiceLexError:
+        assignments = 1  # malformed: keep the plain first-word reading
+    if assignments > 1:
         return None
     tail = rest[1]
     eq = tail.find("=")
