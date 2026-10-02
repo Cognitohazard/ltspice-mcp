@@ -243,7 +243,12 @@ def push_findings(remote_url: str, updates: bytes) -> list[str]:
     excluded = []
     known_tags = set()
     for value in dict.fromkeys(advertised.values()):
-        commit, tags = peel_tags(value)
+        try:
+            commit, tags = peel_tags(value)
+        except ScanError:
+            # An optional exclusion we cannot inspect excludes nothing. The
+            # actual target and introduced history are still required below.
+            continue
         excluded.append(commit)
         known_tags.update(tags)
 
