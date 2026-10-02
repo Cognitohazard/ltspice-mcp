@@ -1024,7 +1024,7 @@ async def test_reference_says_so_when_nothing_matches(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "reference", "query": "zzz quuxbar"}])
     data = res["data"]
     assert data["matches"] == [] and data["total_matches"] == 0
-    assert "spice://guide" in data["hint"]
+    assert "inspect(kind='guide')" in data["hint"]
 
 
 async def test_reference_limit_above_the_cap_is_rejected_for_that_item_only(

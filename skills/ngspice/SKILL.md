@@ -236,8 +236,8 @@ X1 input output myfilter rval=1k cval=1n
   `operating_point(device='M1')` gives the bias snapshot of one device. Address
   an internal by the `m1.gm` shorthand or the literal `@m1[gm]` (the tools resolve
   the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read
-  sequence is how to build a gm/ID characterization table; see the
-  `spice://guide` resource.
+  sequence is how to build a gm/ID characterization table; see guide section
+  'operating-points'.
 
 ### .control / .endc Blocks
 

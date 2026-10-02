@@ -75,9 +75,11 @@ class TestServerInstructions:
 
     def test_instructions_cover_key_workflow_guidance(self):
         text = CONSOLIDATED_INSTRUCTIONS
-        # deck-authoring default + the three planes + the result-trust tail
+        # the guide first, the deck-authoring default, the one tool that owns
+        # .asc edits, and the result-trust tail; the per-tool map is the
+        # guide's, read on demand
+        assert 'inspect(queries=[{"kind": "guide"}])' in text
         assert "deck" in text.lower()
-        assert "run_experiments" in text and "analyze_results" in text
         assert "edit_schematic" in text
         assert "status completed and still hold a degenerate result" in text
         # must name no tool the surface does not expose
@@ -142,7 +144,7 @@ class TestBuildInstructions:
             # one combination the three cases above never form, and the branch
             # that shipped truncated in v0.5.0.
             build_instructions({"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG),
-            # The run_code edition swaps the code-loop clause for a longer one.
+            # The run_code edition swaps the Python clause for a longer one.
             build_instructions(
                 {"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG, served={"run_code"}
             ),
@@ -181,7 +183,7 @@ class TestBuildInstructions:
     def test_run_code_is_named_only_when_it_is_served(self):
         default = build_instructions({"ltspice": _LT}, _LT)
         silent = build_instructions({"ltspice": _LT}, _LT, served=())
-        assert "run_code runs Python with api in scope" in default
+        assert "run_code runs a snippet with api in scope" in default
         assert "run_code" not in silent
         # Neither edition loses the library door, or says trace math goes there.
         assert "from ltspice_mcp.api import Api" in silent
