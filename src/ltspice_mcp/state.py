@@ -100,6 +100,12 @@ class SessionState:
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
     """Whether the lazy default-config write has been tried this session (once)."""
+    guide_read: bool = field(default=False, repr=False)
+    """Whether this session has read the guide, through an ``inspect`` guide
+    query or a ``spice://guide`` resource. Until it has, the first tool reply
+    carries one reminder to read the core (``server.call_tool``)."""
+    guide_reminded: bool = field(default=False, repr=False)
+    """Whether that one reminder has been sent."""
     code_worker: "CodeWorker | None" = field(default=None, repr=False)
     """The ``run_code`` worker supervisor, created on the first call and
     closed at shutdown."""
