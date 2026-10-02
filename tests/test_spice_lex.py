@@ -203,8 +203,9 @@ class TestTokenizeBody:
             tokenize_body(".MODEL FOO NMOS (VTO=0.7")
 
     def test_unterminated_quote_raises(self) -> None:
-        with pytest.raises(SpiceLexError):
+        with pytest.raises(SpiceLexError) as ei:
             tokenize_body('M1 d g s "unterminated W=10u')
+        assert ei.value.suggestion == 'add a closing " after the opening quote'
 
     def test_single_quoted_expression_is_one_value(self) -> None:
         # ngspice numparam spells expressions in single quotes; the spaces and
@@ -222,6 +223,8 @@ class TestTokenizeBody:
             tokenize_body(body)
         assert ei.value.category == SpiceLexErrorCategory.UNTERMINATED_QUOTE
         assert ei.value.position == body.index("'")
+        # The hint names the quote that was opened, not a double quote.
+        assert ei.value.suggestion == "add a closing ' after the opening quote"
 
     def test_stray_close_brace_raises(self) -> None:
         with pytest.raises(SpiceLexError):
@@ -493,6 +496,15 @@ class TestSpiceCardTypedAccessors:
 
     def test_param_name_missing_before_equals_is_none(self) -> None:
         assert lex(".PARAM =5\n").cards[0].param_name is None
+
+    @pytest.mark.parametrize("line", [".PARAM a=1 b=2", ".param a = 1 b = 2", ".param a=1, b=2"])
+    def test_multi_param_line_has_no_single_name(self, line: str) -> None:
+        # No one name identifies a card that defines two parameters.
+        assert lex(line + "\n").cards[0].param_name is None
+
+    @pytest.mark.parametrize("line", [".PARAM a={x==1 ? 2 : 3}", ".param a='b=1'"])
+    def test_an_equals_inside_the_value_is_not_a_second_parameter(self, line: str) -> None:
+        assert lex(line + "\n").cards[0].param_name == "a"
 
     def test_single_quoted_semicolon_is_not_comment(self) -> None:
         cards = lex(".PARAM x='a;b'\n").cards

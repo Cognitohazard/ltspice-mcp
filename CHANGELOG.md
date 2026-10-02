@@ -24,6 +24,10 @@ tool-surface changes.
   The permits are now rebuilt only when the cap actually changed and nothing
   holds or waits for one, and a lowered cap takes effect as soon as the runner
   drains rather than at the next submission.
+- An unterminated single quote in a netlist was reported with the hint "add a
+  closing \" after the opening quote". The hint now names the quote that was
+  opened.
+
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
