@@ -110,14 +110,16 @@ class TestAcStructureLib:
         assert _corner_near(result, 1e3, decades=0.25) is not None
         assert _has_review_obs(result)
 
-    def test_rlc_complex_pair_with_q(self):
-        result = analyze_ac_structure(FREQS, rlc(1e4, 5.0))
+    @pytest.mark.parametrize("q_true", [2.0, 5.0, 10.0])
+    def test_rlc_complex_pair_with_q(self, q_true: float):
+        result = analyze_ac_structure(FREQS, rlc(1e4, q_true))
         assert result["net_order"] == 2
         assert result["non_minimum_phase"] is False
         corner = _corner_near(result, 1e4, decades=0.25, kind="complex_pair")
         assert corner is not None
-        assert corner["q"] is not None
-        assert 2.0 <= corner["q"] <= 10.0
+        # The rational fit recovers a pure second-order section's pole pair, so
+        # Q = |p| / (2 |Re p|) from the fitted root is exact to rounding.
+        assert corner["q"] == pytest.approx(q_true, rel=1e-6)
         assert _has_review_obs(result)
 
     def test_rhp_zero_is_non_minimum_phase(self):
