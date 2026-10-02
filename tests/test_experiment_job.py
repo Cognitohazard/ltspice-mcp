@@ -43,11 +43,12 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
+from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR, staged_decks, symlink_or_skip
+from tests.conftest import FIXTURES_DIR, staged_decks, symlink_or_skip, wait_until
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -134,10 +135,16 @@ def _barrier_process(
     request_id: str,
     fingerprint: str,
     job_id: str,
+    ready: Any,
     start: Any,
+    entered: Any,
     result: Any,
 ) -> None:
-    """Process worker exercising the real request lock and durable barrier."""
+    """Process worker exercising the real request lock and durable barrier.
+
+    Reports on ``ready`` once its request is built, waits for ``start``, and
+    counts itself into ``entered`` just before it submits.
+    """
     working = Path(working_dir)
     circuit = Path(circuit_path)
     state = SimpleNamespace(working_dir=working)
@@ -149,7 +156,12 @@ def _barrier_process(
         simulator="FakeSim",
         job_id=job_id,
     )
-    start.wait(10)
+    ready.put(job_id)
+    if not start.wait(60):
+        result.put((None, None, "start was never released"))
+        return
+    with entered.get_lock():
+        entered.value += 1
     try:
         barrier = asyncio.run(_run_barrier(request))
         result.put((barrier.job.job_id, barrier.replayed, None))
@@ -887,10 +899,19 @@ class TestExperimentDiscovery:
 
 class TestRequestBarrier:
     def test_two_processes_same_request_create_one_coordinator(self, work_dir: Path):
+        """Both submissions are in flight together while the gate is closed.
+
+        Each process reports ready once it has started up, and this test holds
+        the request's gate while it releases them and until both have entered
+        their submission. Neither can finish before the gate opens, so the two
+        meet there rather than running one after the other.
+        """
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         context = multiprocessing.get_context("spawn")
+        ready = context.Queue()
         start = context.Event()
+        entered = context.Value("i", 0)
         result = context.Queue()
         processes = [
             context.Process(
@@ -901,7 +922,9 @@ class TestRequestBarrier:
                     "shared-request",
                     "a" * 64,
                     f"exp_process_{index}",
+                    ready,
                     start,
+                    entered,
                     result,
                 ),
             )
@@ -909,8 +932,18 @@ class TestRequestBarrier:
         ]
         for process in processes:
             process.start()
-        start.set()
-        outcomes = [result.get(timeout=20) for _ in processes]
+        for _ in processes:
+            ready.get(timeout=60)
+        gate_store = Store(work_dir)
+        gate_store.ensure_root()
+        with file_lock(gate_store.request_lock("shared-request")):
+            start.set()
+            wait_until(
+                lambda: entered.value == len(processes),
+                timeout_s=60,
+                what="both processes to enter their submission",
+            )
+        outcomes = [result.get(timeout=60) for _ in processes]
         for process in processes:
             process.join(20)
             assert process.exitcode == 0

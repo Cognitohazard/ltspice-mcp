@@ -27,6 +27,7 @@ import pytest
 from ltspice_mcp.api import Api, ApiCallError, ApiValidationError, _detach
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
+from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -125,18 +126,22 @@ def _pause_simulator(owner_pid: int) -> psutil.Process:
     return wait_until(pause_child, timeout_s=30, what="the owner to start its simulator")
 
 
-def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> None:
+def _detach_worker(
+    work_dir: str, deck: str, request_id: str, ready, start, entered, result
+) -> None:
     """One caller process: open an engine, detach the shared request, report back.
 
     A separate process because the engine lease is per process — two callers
     sharing a working directory is what this exercises, and it is what the
-    idempotent-replay contract invites a user to do.
+    idempotent-replay contract invites a user to do. Reports on ``ready`` once
+    its engine is open, waits for ``start``, and counts itself into ``entered``
+    just before it detaches.
     """
     from ltspice_mcp.api import Api
 
     work = Path(work_dir)
-    start.wait(60)
     api = None
+    reported_ready = False
     try:
         api = Api(
             working_dir=work,
@@ -144,6 +149,12 @@ def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> 
             allowed_paths=[work],
             max_parallel_sims=1,
         )
+        ready.put(None)
+        reported_ready = True
+        if not start.wait(HANDOFF_TIMEOUT_S):
+            raise TimeoutError("start was never released")
+        with entered.get_lock():
+            entered.value += 1
         receipt = api.run_experiments(
             wait=False,
             detach=True,
@@ -153,6 +164,8 @@ def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> 
         note = next(item for item in receipt["observations"] if item["code"] == "detached_owner")
         result.put((receipt["job_id"], note["evidence"]["log_file"], None))
     except Exception as exc:
+        if not reported_ready:
+            ready.put(None)
         result.put((None, None, f"{type(exc).__name__}: {exc}"))
     finally:
         if api is not None:
@@ -493,18 +506,32 @@ def test_two_callers_detaching_one_request_id_do_not_trade_reports(
     deck = str(work_dir / "shared.cir")
     (work_dir / "shared.cir").write_text(FAST_DECK)
     context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
     start = context.Event()
+    entered = context.Value("i", 0)
     result = context.Queue()
     callers = [
         context.Process(
             target=_detach_worker,
-            args=(str(work_dir), deck, "detach-shared", start, result),
+            args=(str(work_dir), deck, "detach-shared", ready, start, entered, result),
         )
         for _ in range(2)
     ]
     for caller in callers:
         caller.start()
-    start.set()
+    for _ in callers:
+        ready.get(timeout=HANDOFF_TIMEOUT_S)
+    # Neither caller can be answered while the request's gate is held, so
+    # holding it until both have started detaching puts both in flight at once.
+    gate_store = Store(work_dir)
+    gate_store.ensure_root()
+    with file_lock(gate_store.request_lock("detach-shared")):
+        start.set()
+        wait_until(
+            lambda: entered.value == len(callers),
+            timeout_s=HANDOFF_TIMEOUT_S,
+            what="both callers to start detaching",
+        )
     outcomes = [result.get(timeout=HANDOFF_TIMEOUT_S) for _ in callers]
     for caller in callers:
         caller.join(HANDOFF_TIMEOUT_S)
