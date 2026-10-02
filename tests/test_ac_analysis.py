@@ -470,7 +470,17 @@ class TestComputeFilterMetrics:
         mag_db[28:32] = [-20.0, -10.0, -21.0, -10.0]
         m = compute_filter_metrics(f, (10 ** (mag_db / 20)).astype(complex))
         assert m["filter_type"] == "bandstop"
-        assert any("samples ≥11.0 dB higher" in w for w in m["warnings"])
+        assert any("sample 11.0 dB higher" in w for w in m["warnings"])
+
+    def test_null_midway_between_two_samples_is_flagged(self):
+        # At 10 points per decade offset by half a step, 1 kHz falls midway
+        # (in log f) between two samples. Both read the same finite level while
+        # the true null is infinitely deep, and the sample beyond each is
+        # several dB higher: the reported rejection is only a lower bound.
+        f = np.logspace(0.05, 6.05, 61)
+        m = compute_filter_metrics(f, _notch(f, 1000.0, 1.0))
+        assert m["filter_type"] == "bandstop"
+        assert any("falls between samples" in w for w in m["warnings"])
 
     def test_default_flatness_is_one_db(self):
         # The auto passband runs from DC up to the last sample within the

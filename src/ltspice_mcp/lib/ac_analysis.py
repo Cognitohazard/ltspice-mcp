@@ -1032,17 +1032,19 @@ def compute_filter_metrics(
     # Notch under-sampling check: a sharp null can fall BETWEEN samples,
     # leaving stopband_rejection_db as a lower bound only. If either
     # sample flanking the minimum is noticeably above it, the true null
-    # is likely deeper than reported.
+    # is likely deeper than reported. Either, not both: a null midway
+    # between two samples leaves them reading the same level, so the
+    # minimum's neighbour on the null side is no higher than the minimum.
     idx_min = int(np.argmin(mag_db))
     if 0 < idx_min < len(mag_db) - 1:
-        neighbor_gap = min(
+        neighbor_gap = max(
             float(mag_db[idx_min - 1] - mag_db[idx_min]),
             float(mag_db[idx_min + 1] - mag_db[idx_min]),
         )
         if neighbor_gap > _NOTCH_UNDERSAMPLED_GAP_DB and filter_type in ("bandstop", "unknown"):
             warnings.append(
-                f"Minimum at {float(freqs[idx_min]):.6g} Hz is flanked by "
-                f"samples ≥{neighbor_gap:.1f} dB higher — the true null likely "
+                f"Minimum at {float(freqs[idx_min]):.6g} Hz has a neighbouring "
+                f"sample {neighbor_gap:.1f} dB higher — the true null likely "
                 "falls between samples and stopband_rejection_db is a lower "
                 "bound only. Re-sweep with denser spacing around this frequency "
                 "(e.g. add a linear sweep band around the notch)."

@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Fixed
 
+- A notch whose null fell midway between two sweep samples was reported
+  without the under-sampling warning. Those two samples read the same level,
+  so the check, which wanted both neighbours of the lowest sample well above
+  it, never fired, and `stopband_rejection_db` came back as a finite figure
+  (12.96 dB for an ideal notch at 10 points per decade) with nothing saying it
+  was only a lower bound. The warning now fires when either neighbour is more
+  than 3 dB higher, as its description always said.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
