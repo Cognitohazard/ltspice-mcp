@@ -164,6 +164,53 @@ class TestCapChangeOnTheRealRunner:
         assert await admitted_without_waiting(runner)
         runner.release_launch_slot()
 
+    async def test_a_lowered_cap_applies_once_the_runner_drains(self):
+        mgr = RunnerManager()
+        loop = asyncio.get_running_loop()
+        sim_cls = type("FakeSim", (), {})
+        runner = mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=2)
+        await runner.acquire_launch_slot()
+        await runner.acquire_launch_slot()
+        mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=1)
+        runner.release_launch_slot()
+        runner.release_launch_slot()
+
+        # No further submission: draining alone puts the lowered cap in force.
+        await runner.acquire_launch_slot()
+        second = asyncio.ensure_future(runner.acquire_launch_slot())
+        await asyncio.sleep(0)
+        assert not second.done(), "a second run started under a cap of one"
+        second.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await second
+        runner.release_launch_slot()
+
+    async def test_a_lookup_while_a_permit_is_handed_over_keeps_the_cap(self):
+        """Releasing the only permit wakes the next run in line, which has not
+        counted itself yet. A submission that looks the runner up in that gap
+        must not reset the permits, or the woken run and a new one would both
+        launch under a cap of one."""
+        mgr = RunnerManager()
+        loop = asyncio.get_running_loop()
+        sim_cls = type("FakeSim", (), {})
+        runner = mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=1)
+        await runner.acquire_launch_slot()
+        woken = asyncio.ensure_future(runner.acquire_launch_slot())
+        await asyncio.sleep(0)
+        assert not woken.done()
+
+        runner.release_launch_slot()  # hands the permit to the waiting run
+        assert mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=1) is runner
+        await woken
+
+        newcomer = asyncio.ensure_future(runner.acquire_launch_slot())
+        await asyncio.sleep(0)
+        assert not newcomer.done(), "a second run started under a cap of one"
+        newcomer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await newcomer
+        runner.release_launch_slot()
+
 
 class TestCapEviction:
     """The LRU cap must never evict a runner with in-flight work — dropping it

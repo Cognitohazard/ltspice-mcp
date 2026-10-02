@@ -17,6 +17,13 @@ tool-surface changes.
   (12.96 dB for an ideal notch at 10 points per decade) with nothing saying it
   was only a lower bound. The warning now fires when either neighbour is more
   than 3 dB higher, as its description always said.
+- A runner's cap on simulators in flight could be exceeded by one. Each new
+  submission rebuilt the runner's launch permits whenever none were out, and
+  that included the moment a released permit had been handed to a waiting run
+  that had not yet resumed; the woken run and a newcomer then both launched.
+  The permits are now rebuilt only when the cap actually changed and nothing
+  holds or waits for one, and a lowered cap takes effect as soon as the runner
+  drains rather than at the next submission.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
