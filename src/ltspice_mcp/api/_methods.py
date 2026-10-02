@@ -703,6 +703,23 @@ class ApiMethodsMixin(ABC):
         """
         return _reference.reference(op)
 
+    @staticmethod
+    def guide(section: str | None = None) -> str:
+        """Return the guide: its core and index, or one section or task skill.
+
+        ``guide()`` is the core a session reads first — how to work here,
+        Python or tools, the rules that cause silent errors — ending in an index
+        of the topic sections and task skills. ``guide('ltspice')`` or
+        ``guide('skill:spice-experiments')`` returns one of them. The same text
+        ``inspect(kind='guide')`` serves over MCP.
+
+        A static method for the same reason as :meth:`reference`: reading the
+        guide must not require an engine session.
+        """
+        from ltspice_mcp.lib import guide as _guide
+
+        return _guide.read(section)
+
     @abstractmethod
     def _check_process_and_thread(self) -> None:
         """Reject calls from an inherited process or the private loop thread."""

@@ -53,7 +53,12 @@ class TestToolCountInDocs:
 
 DOC_PATHS = (
     "README.md",
-    "src/ltspice_mcp/assets/spice_guide.md",
+    # The guide's core and every topic section, found rather than listed, so a
+    # section added later is gated without an edit here.
+    *sorted(
+        str(path.relative_to(ROOT).as_posix())
+        for path in (ROOT / "src" / "ltspice_mcp" / "assets" / "guide").glob("*.md")
+    ),
     "docs/DESIGN.md",
     "skills/ltspice/SKILL.md",
     "skills/ngspice/SKILL.md",

@@ -1,65 +1,187 @@
-"""Tests for the 3-channel schematic/authoring guidance delivery.
+"""The guide reaches the model through every door, and the doors agree.
 
-The guidance must reach the consuming LLM without relying on a client-side
-skill being installed: an always-on floor (server instructions + tool
-descriptions), a just-in-time checklist (create_schematic result), and the
-single-sourced ``spice://guide`` resource.
+The guide is a core every session reads plus topic sections and task skills
+read on demand (``lib/guide.py``). These tests pin its structure (the section
+list is the files present, the index is the front matter), its delivery (the
+``inspect`` guide kind, ``Api.guide()``, the ``spice://guide`` resources serve
+the same text), the instructions that send a model there, and the one reminder
+a session gets when it skipped them.
 """
 
+import os
 import re
-from importlib.resources import files
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 from mcp import types
 
+from ltspice_mcp.api import Api
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import guide
 from ltspice_mcp.lib.variations import MismatchRule
 from ltspice_mcp.resources import handle_read_resource
-from ltspice_mcp.server import CONSOLIDATED_INSTRUCTIONS
+from ltspice_mcp.server import (
+    CONSOLIDATED_INSTRUCTIONS,
+    GUIDE_REMINDER,
+    build_instructions,
+    call_tool,
+)
 from ltspice_mcp.state import SessionState
+from tests.conftest import call_tool_params, fake_request_context
 
-_GUIDE_ASSET = files("ltspice_mcp") / "assets" / "spice_guide.md"
+ROOT = Path(__file__).resolve().parents[1]
+GUIDE_DIR = ROOT / "src" / "ltspice_mcp" / "assets" / "guide"
+
+#: The core is read every session, so its size is a per-session cost. About
+#: 2.5k tokens with its generated index; growth has to be a deliberate edit to
+#: this number, and a section is where depth goes.
+CORE_BUDGET_CHARS = 10_000
 
 
-class TestServerInstructionsFloor:
-    def test_names_the_planes_and_keeps_the_result_trust_tail(self):
-        # Always-on floor: even with no client-side skill installed, the
-        # handshake teaches the three planes and ends on the result-trust
-        # guidance (the tail is what Claude Code's 2048-char truncation
-        # would eat first, so its presence is the budget test's partner).
+def _all_sections() -> str:
+    return "\n".join(guide.read(name) for name in guide.SECTION_ORDER)
+
+
+def _state(work_dir: Path) -> SessionState:
+    config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir])
+    return SessionState.create(config, available={})
+
+
+class TestServerInstructions:
+    def test_send_the_model_to_the_guide_first(self):
+        assert 'inspect(queries=[{"kind": "guide"}])' in CONSOLIDATED_INSTRUCTIONS
+        assert "Read the guide first, every session" in CONSOLIDATED_INSTRUCTIONS
+
+    def test_keep_the_rules_that_cost_a_wrong_answer(self):
+        # The tail is what a client's 2048-character truncation would eat
+        # first; test_server pins every prefix shape under the budget.
+        text = CONSOLIDATED_INSTRUCTIONS
+        assert "edit_schematic" in text
+        assert "status completed and still hold a degenerate result" in text
+        assert "a refused path names the config line that widens it" in text
+
+    def test_state_both_doors_and_their_tradeoffs(self):
+        served = build_instructions({}, None)
+        library = build_instructions({}, None, served=())
+        for text in (served, library):
+            assert "from ltspice_mcp.api import Api" in text
+            assert "detach=True" in text
+            assert "Tools: one sandboxed step per call" in text
+        assert "outside the sandbox" in served
+        # run_code off: the library runs with the caller's own authority, so
+        # the authority warning that belongs to run_code is not stated.
+        assert "run_code" not in library and "outside the sandbox" not in library
+
+
+class TestGuideStructure:
+    def test_the_section_list_is_the_files_present(self):
+        present = {path.stem for path in GUIDE_DIR.glob("*.md")} - {"core"}
+        assert set(guide.SECTION_ORDER) == present
+        assert len(guide.SECTION_ORDER) == len(set(guide.SECTION_ORDER))
+
+    @pytest.mark.parametrize("name", guide.SECTION_ORDER)
+    def test_each_section_names_itself_and_says_when_to_read_it(self, name: str):
+        fields, body = guide.split_front_matter((GUIDE_DIR / f"{name}.md").read_text("utf-8"))
+        assert fields.get("name") == name
+        assert fields.get("description")
+        assert body.startswith("# "), "a section opens with its title"
+
+    def test_the_index_lists_every_section_and_skill(self):
+        core = guide.read()
+        index = core[core.index("## Index") :]
+        for name in guide.SECTION_ORDER:
+            assert f"- `{name}`:" in index
+        skill_dirs = {path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")}
+        assert skill_dirs, "the repository's skills directory is empty"
+        for skill in skill_dirs:
+            assert f"- `skill:{skill}`:" in index
+
+    def test_the_core_fits_its_budget(self):
+        core = guide.read()
+        assert len(core) <= CORE_BUDGET_CHARS, (
+            f"the guide core grew to {len(core)} characters (limit {CORE_BUDGET_CHARS})"
+        )
+
+    def test_an_unknown_name_lists_the_known_ones(self):
+        with pytest.raises(guide.UnknownGuideSection) as caught:
+            guide.read("nope")
+        assert caught.value.known == guide.names()
+
+    def test_a_skill_file_outside_its_listing_is_not_read(self):
+        """Only files the skill listing found are served: a path that climbs
+        out of the skill's directory names nothing."""
+        with pytest.raises(guide.UnknownGuideSection):
+            guide.read("skill:spice-bench-craft/../ltspice/SKILL.md")
+
+    def test_a_skill_lists_its_further_files_by_their_readable_names(self):
+        text = guide.read("skill:spice-bench-craft")
+        assert "`skill:spice-bench-craft/references/BENCH_NOTES.md`" in text
+        assert guide.read("skill:spice-bench-craft/references/BENCH_NOTES.md").strip()
+
+
+#: Where a pointer to a section can appear: the code that writes descriptions
+#: and hints, the guide itself, and the skills.
+_POINTER_SOURCES = (
+    *sorted((ROOT / "src" / "ltspice_mcp").rglob("*.py")),
+    *sorted(GUIDE_DIR.glob("*.md")),
+    *sorted((ROOT / "skills").rglob("*.md")),
+)
+
+
+def test_every_section_pointer_resolves():
+    """A "guide section 'x'" pointer is how descriptions, hints and the
+    sections themselves send a reader on; one naming no section is a dead end
+    the reader cannot recover from."""
+    names = set(guide.names())
+    dangling = []
+    for path in _POINTER_SOURCES:
+        text = path.read_text(encoding="utf-8")
+        for name in re.findall(r"guide section\s+'([^']+)'", text):
+            if name not in names:
+                dangling.append(f"{path.relative_to(ROOT)}: {name!r}")
+    assert not dangling, "pointers to sections the guide does not have:\n" + "\n".join(dangling)
+
+
+class TestSectionContent:
+    """Coverage anchors, not a byte-mirror: each flags a section that went
+    missing in a reorganisation."""
+
+    @pytest.mark.parametrize(
+        ("section", "anchor"),
+        [
+            ("fundamentals", "## Value Notation — CRITICAL"),
+            ("fundamentals", "ngspice skips `.meas` under the server's"),
+            ("ltspice", "## Other LTspice Quirks"),
+            ("ngspice", "## .control / .endc Blocks"),
+            ("ngspice", "## XSPICE"),
+            ("ngspice", "## .save Directive"),
+            ("ngspice", "LTspice vs ngspice"),
+            ("schematics", "## Building and editing a sheet"),
+            ("schematics", '`edit_schematic(target=..., base="blank")` starts a new sheet'),
+            ("python", "detach=True"),
+        ],
+    )
+    def test_anchor(self, section: str, anchor: str):
+        assert anchor in guide.read(section)
+
+    def test_the_tools_section_maps_the_six_tools(self):
+        text = guide.read("tools")
         for tool in (
             "run_experiments",
             "jobs",
             "analyze_results",
+            "inspect",
             "edit_schematic",
             "verify_circuit",
-            "inspect",
         ):
-            assert tool in CONSOLIDATED_INSTRUCTIONS
-        assert "status completed and still hold a degenerate result" in CONSOLIDATED_INSTRUCTIONS
+            assert tool in text, f"the tools section never names {tool}"
 
-
-class TestGuideIsEngineGeneral:
-    """The packaged guide is the union of both engines (the per-engine skills
-    stay engine-specific). These are coverage checks, not a byte-mirror — the
-    guide is hand-authored, so its per-engine sections duplicate the skills'
-    and can drift; the anchors below flag a section that went missing.
-    """
-
-    def test_covers_both_engines_and_fundamentals(self):
-        guide = _GUIDE_ASSET.read_text("utf-8")
-        assert "# SPICE Circuit Simulation Guide" in guide
-        assert "## SPICE Fundamentals" in guide
-        assert "## LTspice-Specific" in guide
-        assert "## ngspice-Specific" in guide
-        assert "LTspice vs ngspice" in guide  # the differences table
-
-    def test_includes_each_engines_distinctive_sections(self):
-        guide = _GUIDE_ASSET.read_text("utf-8")
-        ltspice_anchors = ("### .asc Schematics", "### Other LTspice Quirks")
-        ngspice_anchors = ("### .control / .endc Blocks", "### XSPICE", "### .save Directive")
-        for anchor in ltspice_anchors + ngspice_anchors:
-            assert anchor in guide, f"guide is missing section: {anchor}"
+    def test_the_core_states_the_micro_sign_rule_by_version(self):
+        core = " ".join(guide.read().split())
+        assert "LTspice 24 writes µ in UTF-8 and reads it back" in core
+        assert "LTspice XVII misreads that µ and drops the scale" in core
 
 
 class TestMismatchExemplarMatchesTheEngineUnit:
@@ -77,8 +199,8 @@ class TestMismatchExemplarMatchesTheEngineUnit:
     _PLAUSIBLE_V_UM = (1e-4, 1e-1)
 
     def test_exemplar_value_is_in_the_engines_unit(self):
-        guide = _GUIDE_ASSET.read_text("utf-8")
-        values = [float(match) for match in re.findall(r'"AVT":\s*([0-9.eE+-]+)', guide)]
+        text = _all_sections()
+        values = [float(match) for match in re.findall(r'"AVT":\s*([0-9.eE+-]+)', text)]
         assert values, "the guide no longer ships a worked AVT exemplar"
         low, high = self._PLAUSIBLE_V_UM
         for value in values:
@@ -88,48 +210,144 @@ class TestMismatchExemplarMatchesTheEngineUnit:
             )
 
     def test_guide_and_engine_name_the_same_unit(self):
-        guide = _GUIDE_ASSET.read_text("utf-8")
         engine_description = MismatchRule.model_fields["AVT"].description or ""
         assert "V·µm" in engine_description
-        assert "V·µm" in guide, "the guide states the exemplar's unit nowhere"
+        assert "V·µm" in _all_sections(), "the guide states the exemplar's unit nowhere"
 
 
-def _served_guide(work_dir: Path) -> str:
-    """The guide as a client receives it, through the resource route."""
-    config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir])
-    state = SessionState.create(config, available={})
-    contents = handle_read_resource("spice://guide", state).contents[0]
+def _resource_text(uri: str, state: SessionState) -> str:
+    contents = handle_read_resource(uri, state).contents[0]
     assert isinstance(contents, types.TextResourceContents)
     return contents.text
 
 
-class TestTheServedGuide:
-    """One document: the SPICE facts and the passages naming this server's
-    tools reach every client, and no client may be told to call a tool it
-    cannot see."""
+async def _inspect_guide(state: SessionState, section: str | None = None) -> dict:
+    query: dict = {"kind": "guide"}
+    if section is not None:
+        query["section"] = section
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("inspect", {"queries": [query]})
+    )
+    assert not result.is_error
+    assert result.structured_content is not None
+    return result.structured_content
 
-    def test_simulator_facts_are_served(self, work_dir: Path):
-        guide = _served_guide(work_dir)
-        for anchor in (
-            "### Value Notation — CRITICAL",
-            "ngspice skips `.meas` under the server's",
-            "### .control / .endc Blocks",
-            "### .asc Schematics",
-            "LTspice vs ngspice",
-        ):
-            assert anchor in guide, f"the served guide is missing shared content: {anchor}"
 
-    def test_it_maps_the_six_tools_and_replaces_the_asc_entry(self, work_dir: Path):
-        guide = _served_guide(work_dir)
-        assert "## Tool surface on this profile" in guide
-        for tool in (
-            "run_experiments",
-            "jobs",
-            "analyze_results",
-            "inspect",
-            "edit_schematic",
-            "verify_circuit",
-        ):
-            assert tool in guide, f"the guide never names {tool}"
-        assert "use the server's schematic tools (`create_schematic`" not in guide
-        assert '`edit_schematic(target=..., base="blank")` starts a new sheet' in guide
+class TestTheDoorsAgree:
+    @pytest.mark.parametrize("section", [None, "ltspice", "skill:spice-experiments"])
+    async def test_inspect_api_and_resource_serve_one_text(
+        self, work_dir: Path, section: str | None
+    ):
+        state = _state(work_dir)
+        data = (await _inspect_guide(state, section))["results"][0]["data"]
+        uri = "spice://guide" if section is None else f"spice://guide/{section}"
+        assert data["text"] == Api.guide(section) == _resource_text(uri, state)
+        assert data["section"] == section
+        assert data["title"] == guide.title_of(section)
+
+    async def test_an_unknown_section_fails_only_its_item(self, work_dir: Path):
+        state = _state(work_dir)
+        result = await call_tool(
+            fake_request_context(state),
+            call_tool_params(
+                "inspect",
+                {"queries": [{"kind": "guide", "section": "nope"}, {"kind": "guide"}]},
+            ),
+        )
+        assert result.structured_content is not None
+        bad, good = result.structured_content["results"]
+        assert bad["ok"] is False and bad["error"]["code"] == "unknown_section"
+        assert "skill:spice-experiments" in bad["error"]["supported"]
+        assert good["ok"] is True
+
+    def test_the_guide_reads_without_starting_the_engine(self, tmp_path: Path):
+        """``python -m ltspice_mcp.api guide`` is the shell door; like the
+        catalogue it must not pay for the engine, which a cold process proves."""
+        probe = (
+            "import runpy, sys\n"
+            "sys.argv = ['ltspice_mcp.api', 'guide', 'python']\n"
+            "try:\n"
+            "    runpy.run_module('ltspice_mcp.api', run_name='__main__')\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "heavy = sorted({m.split('.')[0] for m in sys.modules} & {'scipy', 'mcp', 'pydantic'})\n"
+            "print('HEAVY', heavy)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            # A Windows pipe would otherwise encode with the ANSI code page.
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert "# Working in Python" in proc.stdout, proc.stdout + proc.stderr
+        assert "HEAVY []" in proc.stdout, proc.stdout + proc.stderr
+
+
+    def test_a_code_page_pipe_still_gets_the_whole_text(self, tmp_path: Path):
+        """A Windows pipe encodes with the ANSI code page, which has no Γ: the
+        shell door falls back to UTF-8 rather than failing mid-print."""
+        proc = subprocess.run(
+            [sys.executable, "-m", "ltspice_mcp.api", "guide", "rf"],
+            capture_output=True,
+            env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+        assert "Γ" in proc.stdout.decode("utf-8")
+
+
+class TestTheReadTheGuideReminder:
+    async def test_the_first_reply_of_a_session_that_skipped_the_guide_carries_it(
+        self, work_dir: Path
+    ):
+        state = _state(work_dir)
+        args = {"queries": [{"kind": "capabilities", "fields": ["tool_profile"]}]}
+        first = await call_tool(fake_request_context(state), call_tool_params("inspect", args))
+        second = await call_tool(fake_request_context(state), call_tool_params("inspect", args))
+        # Both channels: a structured-aware client reads only the hint.
+        assert first.structured_content is not None
+        assert GUIDE_REMINDER in first.structured_content["hint"]
+        assert any(
+            isinstance(block, types.TextContent) and block.text == GUIDE_REMINDER
+            for block in first.content
+        )
+        # Once a session: the second reply is the tool's own.
+        assert second.structured_content is not None
+        assert GUIDE_REMINDER not in second.structured_content.get("hint", "")
+        assert all(GUIDE_REMINDER not in getattr(block, "text", "") for block in second.content)
+
+    async def test_a_session_that_read_the_guide_is_not_reminded(self, work_dir: Path):
+        state = _state(work_dir)
+        reply = await _inspect_guide(state)
+        assert GUIDE_REMINDER not in reply.get("hint", "")
+        after = await call_tool(
+            fake_request_context(state),
+            call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]}),
+        )
+        assert after.structured_content is not None
+        assert GUIDE_REMINDER not in after.structured_content.get("hint", "")
+
+    async def test_reading_the_guide_resource_counts(self, work_dir: Path):
+        state = _state(work_dir)
+        _resource_text("spice://guide/ngspice", state)
+        after = await call_tool(
+            fake_request_context(state),
+            call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]}),
+        )
+        assert after.structured_content is not None
+        assert GUIDE_REMINDER not in after.structured_content.get("hint", "")
+
+    async def test_an_error_reply_carries_it_too(self, work_dir: Path):
+        """A session whose first call fails still learns where the guide is:
+        a failed first call is exactly when it is needed."""
+        state = _state(work_dir)
+        result = await call_tool(
+            fake_request_context(state), call_tool_params("run_experiments", {"missing": 1})
+        )
+        assert result.is_error
+        assert any(GUIDE_REMINDER in getattr(block, "text", "") for block in result.content)

@@ -625,7 +625,7 @@ def compute_return_loss(
         warnings.append(
             "Zin has a negative real part — check the probe orientation (the 1 A "
             "source's '+' node at the DUT, ground at the far side); a reversed probe "
-            "flips the impedance sign. See spice://guide."
+            "flips the impedance sign. See guide section 'rf'."
         )
 
     # A worst-match pick that lands on a nearly purely reactive point is a

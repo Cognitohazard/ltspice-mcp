@@ -355,7 +355,7 @@ _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "description": (
         "One entry of analyze_results.recipes: same grammar, same metrics, "
         "validated at submission. Fields per metric: "
-        "api.reference('analyze_results') or spice://guide."
+        "api.reference('analyze_results') or guide section 'tools'."
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},

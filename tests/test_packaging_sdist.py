@@ -4,7 +4,8 @@ carries its runtime resources.
 An explicit sdist include list can silently drop a file the package reads at
 runtime while ``twine check`` stays green, so this builds the sdist, builds a
 wheel FROM that sdist, installs it into a fresh interpreter environment, and
-reads both packaged resources through the installed package.
+reads the packaged resources — the guide, the skills it serves, and the widget
+assets — through the installed package.
 """
 
 from __future__ import annotations
@@ -38,8 +39,14 @@ def test_sdist_builds_a_wheel_that_installs_with_its_resources(tmp_path: Path) -
         "from importlib.resources import files\n"
         "import ltspice_mcp, ltspice_mcp.api\n"
         "assets = files('ltspice_mcp') / 'assets'\n"
-        "guide = (assets / 'spice_guide.md').read_text(encoding='utf-8')\n"
-        "assert '### .asc Schematics' in guide\n"
+        "from ltspice_mcp.lib import guide\n"
+        "assert '## Building and editing a sheet' in guide.read('schematics')\n"
+        "assert '## Index' in guide.read()\n"
+        # The skills ship inside the package (a wheel force-include), not
+        # only beside it in the repository where the plugin loads them.
+        "assert (files('ltspice_mcp') / 'skills' / 'spice-experiments' / 'SKILL.md').is_file()\n"
+        "assert 'skill:spice-experiments' in guide.names()\n"
+        "assert guide.read('skill:spice-bench-craft/references/BENCH_NOTES.md')\n"
         "assert (assets / 'uplot' / 'uPlot.iife.min.js').is_file()\n"
         "assert (assets / 'ext-apps' / 'app-with-deps.js').is_file()\n"
         "print('ok')\n"
