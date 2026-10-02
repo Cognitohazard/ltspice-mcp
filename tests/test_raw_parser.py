@@ -1,4 +1,4 @@
-"""Tests for raw_parser operating-point trace classification."""
+"""Tests for raw_parser: reading raws, classifying traces, and the run summary."""
 
 from __future__ import annotations
 
@@ -6,20 +6,30 @@ import struct
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from spicelib import RawRead
 
-from ltspice_mcp.lib import raw_parser
+from ltspice_mcp.lib import raw_parser, services
 from ltspice_mcp.lib.raw_parser import (
+    build_simulation_summary,
+    compute_ac_bandwidth_metrics,
+    detect_sim_type,
     extract_operating_point,
+    get_step_count,
+    is_ac_analysis,
+    is_dc_analysis,
     nearest_index,
+    query_point_value,
     read_partial_raw_progress,
+    sample_to_dict,
     trace_unit,
     whattype_unit,
 )
-from tests.conftest import FIXTURES_DIR, ngspice_binary_raw
+from ltspice_mcp.state import SessionState
+from tests.conftest import FIXTURES_DIR, ngspice_binary_raw, stage_recorded_fixture
 
 
 class TestNearestIndex:
@@ -827,3 +837,457 @@ class TestPartialRawProgress:
         assert read_partial_raw_progress(other) is None
         with pytest.raises(FileNotFoundError):
             read_partial_raw_progress(tmp_path / "missing.raw")
+
+
+# ---------------------------------------------------------------------------
+# Raw metadata, point reads, AC bandwidth and the run summary
+# ---------------------------------------------------------------------------
+
+
+def _make_raw_mock(
+    trace_names: list[str],
+    axis: np.ndarray,
+    waves: dict[str, np.ndarray],
+    plotname: str = "Transient Analysis",
+    steps: list[int] | None = None,
+) -> MagicMock:
+    """A RawRead stand-in with controllable traces; no trace declares a type."""
+    raw = MagicMock()
+    raw.get_raw_property.return_value = plotname
+    raw.get_trace_names.return_value = trace_names
+    raw.get_trace.return_value.whattype = None
+    raw.get_steps.return_value = steps if steps is not None else [0]
+    raw.get_axis.return_value = axis
+
+    def get_wave(name, step=0):
+        return waves[name]
+
+    raw.get_wave = get_wave
+    return raw
+
+
+def _recorded(name: str) -> RawRead:
+    return RawRead(str(FIXTURES_DIR / f"{name}.raw"), traces_to_read="*", dialect="ltspice")
+
+
+class TestDetectSimType:
+    @pytest.mark.parametrize(
+        ("fixture", "plotname"),
+        [("ltspice_tran_rc", "Transient Analysis"), ("ltspice_ac_rc", "AC Analysis")],
+    )
+    def test_reads_the_plotname_of_a_recorded_raw(self, fixture: str, plotname: str):
+        assert detect_sim_type(_recorded(fixture)) == plotname
+
+    def test_fallback_on_error(self):
+        # ValueError is what spicelib raises for a property the raw doesn't
+        # carry. The fallback is for that shape, not for an arbitrary fault:
+        # anything else propagates rather than being reported as "Unknown".
+        raw = MagicMock()
+        raw.get_raw_property.side_effect = ValueError("no property")
+        assert detect_sim_type(raw) == "Unknown"
+
+
+class TestIsAcAnalysis:
+    def test_ac_variants(self):
+        assert is_ac_analysis("AC Analysis") is True
+        assert is_ac_analysis("ac analysis") is True
+
+    def test_non_ac(self):
+        assert is_ac_analysis("Transient Analysis") is False
+        assert is_ac_analysis("DC sweep") is False
+
+
+class TestIsDcAnalysis:
+    def test_dc_analysis_variants(self):
+        assert is_dc_analysis("DC transfer characteristic") is True
+        assert is_dc_analysis("DC sweep") is True
+
+    def test_dc_analysis_non_dc(self):
+        assert is_dc_analysis("Transient Analysis") is False
+        assert is_dc_analysis("AC Analysis") is False
+        assert is_dc_analysis("Noise Spectral Density") is False
+
+    def test_dc_analysis_word_boundary(self):
+        # "dc" appearing only inside a word (substring present, no word
+        # boundary) must not match — these discriminate \bDC\b from `"dc" in s`.
+        assert is_dc_analysis("abcdc") is False
+        assert is_dc_analysis("adc") is False
+
+
+class TestGetStepCount:
+    @pytest.mark.parametrize(
+        ("fixture", "steps"), [("ltspice_tran_rc", 1), ("ltspice_step_tran", 3)]
+    )
+    def test_counts_the_steps_of_a_recorded_raw(self, fixture: str, steps: int):
+        # ltspice_step_tran stepped r over 1, 22 and 680 (see its .log).
+        assert get_step_count(_recorded(fixture)) == steps
+
+    def test_error_returns_1(self):
+        # A lookup miss inside the raw, not an arbitrary fault — see the note
+        # on detect_sim_type's fallback above.
+        raw = MagicMock()
+        raw.get_steps.side_effect = IndexError("no steps")
+        assert get_step_count(raw) == 1
+
+
+class TestSteppedTransientAxes:
+    """Per-step structure of a real stepped ``.tran`` raw."""
+
+    def test_each_step_has_a_distinct_time_vector(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A stepped ``.tran`` run stores a different time vector per step.
+
+        LTspice's adaptive timestep yields a different sample count for each
+        ``.step`` value, so the steps cannot share one x-axis. This pins the
+        contract behind writing stepped runs in a tidy/long layout (one row
+        per step+sample) instead of a wide shared-x table. Recorded from a
+        real stepped-damping RLC transient (underdamped -> overdamped).
+        """
+        raw_path = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        raw = services.load_raw_sync(raw_path, state_no_sim)
+
+        n_steps = get_step_count(raw)
+        assert n_steps > 1, "fixture must be a multi-step run"
+
+        lengths = [len(np.asarray(raw.get_axis(step=s))) for s in range(n_steps)]
+        assert len(set(lengths)) > 1, (
+            f"per-step time vectors should differ in length; got {lengths}"
+        )
+
+
+class TestQueryPointValue:
+    def test_exact_match(self):
+        axis = np.array([0.0, 1.0, 2.0, 3.0])
+        wave = np.array([10.0, 20.0, 30.0, 40.0])
+        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+
+        result = query_point_value(raw, "V(out)", 2.0)
+        assert result["actual_x"] == pytest.approx(2.0)
+        assert result["value"] == pytest.approx(30.0)
+        assert result["trace"] == "V(out)"
+
+    def test_nearest_neighbor(self):
+        axis = np.array([0.0, 1.0, 2.0, 3.0])
+        wave = np.array([10.0, 20.0, 30.0, 40.0])
+        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+
+        result = query_point_value(raw, "V(out)", 1.3)
+        assert result["actual_x"] == pytest.approx(1.0)
+        assert result["value"] == pytest.approx(20.0)
+
+    def test_beyond_range_start(self):
+        axis = np.array([1.0, 2.0, 3.0])
+        wave = np.array([10.0, 20.0, 30.0])
+        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+
+        result = query_point_value(raw, "V(out)", 0.0)
+        assert result["actual_x"] == pytest.approx(1.0)
+
+    def test_beyond_range_end(self):
+        axis = np.array([1.0, 2.0, 3.0])
+        wave = np.array([10.0, 20.0, 30.0])
+        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+
+        result = query_point_value(raw, "V(out)", 100.0)
+        assert result["actual_x"] == pytest.approx(3.0)
+
+    def test_complex_returns_db_and_phase(self):
+        axis = np.array([100.0, 1000.0, 10000.0])
+        # Unity gain at all freqs, 0 phase
+        wave = np.array([1.0 + 0j, 1.0 + 0j, 1.0 + 0j])
+        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+
+        result = query_point_value(raw, "V(out)", 1000.0)
+        assert "magnitude_db" in result
+        assert result["magnitude_db"] == pytest.approx(0.0, abs=0.01)
+        assert "phase_deg" in result
+        assert "value" not in result  # complex path doesn't set "value"
+
+
+class TestSampleToDict:
+    def test_complex_sample_has_magnitude_linear(self):
+        d = sample_to_dict(complex(0.0, 1.0))
+        assert d["magnitude_linear"] == pytest.approx(1.0)
+        assert d["magnitude_db"] == pytest.approx(0.0, abs=1e-9)
+        assert d["phase_deg"] == pytest.approx(90.0)
+
+    def test_real_sample_unchanged(self):
+        d = sample_to_dict(3.5)
+        assert d == {"value": 3.5}
+        assert "magnitude_linear" not in d
+
+
+class TestComputeAcBandwidthMetrics:
+    def test_lowpass_bandwidth(self):
+        """The -3 dB bandwidth of a 1-pole RC lowpass is its corner frequency."""
+        freqs = np.logspace(0, 6, 1000)  # 1Hz to 1MHz
+        fc = 1000  # 1kHz cutoff
+        wave = 1 / (1 + 1j * freqs / fc)
+        raw = _make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
+
+        metrics = compute_ac_bandwidth_metrics(raw, "V(out)")
+        # Referenced to the 1 Hz sample (a 1e-6 power ratio below DC); at 166
+        # points/decade the log-linear crossing lands within ~3e-5 of fc.
+        assert metrics["bandwidth_3db"] == pytest.approx(fc, rel=1e-4)
+
+    def test_unity_gain_freq(self):
+        """Lowpass with DC gain > 1 should have a unity gain frequency."""
+        freqs = np.logspace(0, 8, 2000)
+        fc = 1000
+        gain = 100  # 40dB DC gain
+        wave = gain / (1 + 1j * freqs / fc)
+        raw = _make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
+
+        metrics = compute_ac_bandwidth_metrics(raw, "V(out)")
+        # |H(f)| = 1 at f = fc * sqrt(gain^2 - 1); the response is a straight
+        # -20 dB/decade line there, so 250 points/decade interpolate it closely.
+        assert metrics["unity_gain_freq"] == pytest.approx(fc * np.sqrt(gain**2 - 1), rel=1e-4)
+
+
+class TestOpSteppingFailureRawGate:
+    """An OP 'gmin/source stepping failed' error is a recoverable ladder rung.
+    The log-only converged-check keys on LTspice's success wording, so an
+    ngspice run that recovered via an unannounced fallback leaves a false hard
+    error — gated on raw validity: finite node data demotes it to a warning, a
+    rail-pinned/NaN raw keeps it an error, and always-terminal failures don't
+    qualify at all."""
+
+    def _summary(self, tmp_path: Path, node_wave: np.ndarray, phrase: str) -> dict:
+        log = tmp_path / "op.log"
+        # No recognized LTspice success line follows, so extract_log_diagnostics
+        # classifies the phrase as an error before the raw gate runs.
+        log.write_text(f"ngspice-42\n{phrase}\n")
+        axis = np.array([0.0, 1e-3, 2e-3])
+        raw = _make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
+        return build_simulation_summary(raw, log)
+
+    @staticmethod
+    def _op_raw(trace: str) -> MagicMock:
+        # A real .op raw has no axis — get_axis raises "does not have an axis".
+        raw = _make_raw_mock(
+            [trace], np.array([0.0]), {trace: np.array([1.0])}, plotname="Operating Point"
+        )
+        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
+        return raw
+
+    def test_finite_data_demotes_to_warning(self, tmp_path: Path):
+        s = self._summary(tmp_path, np.array([1.0, 1.01, 0.99]), "gmin stepping failed")
+        assert "errors" not in s
+        assert any("gmin stepping failed" in w for w in s.get("warnings", []))
+
+    def test_railed_data_keeps_error(self, tmp_path: Path):
+        s = self._summary(tmp_path, np.array([1e30, 1e30, 1e30]), "source stepping failed")
+        assert any("source stepping failed" in e for e in s.get("errors", []))
+        assert not any("source stepping failed" in w for w in s.get("warnings", []))
+
+    def test_iteration_limit_never_demoted(self, tmp_path: Path):
+        # Always-terminal — not a stepping-failure candidate even with clean data.
+        s = self._summary(tmp_path, np.array([1.0, 1.0, 1.0]), "iteration limit reached")
+        assert any("iteration limit" in e for e in s.get("errors", []))
+
+    def test_stepped_op_keeps_error_for_later_step(self, tmp_path: Path):
+        # A stepped .op solves the bias point per step but LTspice writes only
+        # step 0 to the .raw. Step 0's finite data can't clear a stepping failure
+        # that belongs to a later step the raw never carries — keep it an error.
+        log = tmp_path / "op.log"
+        log.write_text(".step v1=1\n.step v1=2\nngspice-42\ngmin stepping failed\n")
+        s = build_simulation_summary(self._op_raw("v(out)"), log)
+        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+        assert any("Stepped .op detected" in w for w in s.get("warnings", []))
+
+    def test_stepped_op_later_step_fails_without_step_markers(self, tmp_path: Path):
+        # LTspice stepped .op emits no ".step name=value" markers — the only
+        # signal is the per-step "Direct Newton iteration" line. Step 0 succeeds
+        # (one line) and step 1 fails (a second attempt + gmin failure): two
+        # solve blocks, so step 0's finite raw can't vouch for step 1's failure.
+        log = tmp_path / "op.log"
+        log.write_text(
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Direct Newton iteration failed to find operating point.\n"
+            "gmin stepping failed\n"
+        )
+        s = build_simulation_summary(self._op_raw("v(out)"), log)
+        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+
+    def test_current_only_raw_keeps_error(self, tmp_path: Path):
+        # A finite branch current can't vouch for a solved bias point: a failing
+        # .op may still write i(V1) while the node voltage sits at NaN/rail. Only
+        # a finite node VOLTAGE demotes; a current-only raw keeps the error.
+        log = tmp_path / "op.log"
+        log.write_text("ngspice-42\ngmin stepping failed\n")
+        s = build_simulation_summary(self._op_raw("i(v1)"), log)
+        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+
+    def test_single_step_op_still_demotes(self, tmp_path: Path):
+        # An unstepped .op (one bias point) with finite data and no success line
+        # still demotes — the guard must not over-suppress the single-block case.
+        log = tmp_path / "op.log"
+        log.write_text("ngspice-42\ngmin stepping failed\n")
+        s = build_simulation_summary(self._op_raw("v(out)"), log)
+        assert "errors" not in s
+        assert any("gmin stepping failed" in w for w in s.get("warnings", []))
+
+
+class TestBuildSimulationSummary:
+    def test_transient_summary(self):
+        axis = np.linspace(0, 0.01, 1000)  # 10ms transient
+        wave = np.sin(2 * np.pi * 1000 * axis)
+        raw = _make_raw_mock(
+            ["time", "V(out)", "I(R1)"],
+            axis,
+            {"V(out)": wave, "I(R1)": wave * 0.001, "time": axis},
+            plotname="Transient Analysis",
+        )
+
+        summary = build_simulation_summary(raw, log_path=None)
+
+        assert summary["sim_type"] == "Transient Analysis"
+        assert summary["point_count"] == 1000
+        assert summary["step_count"] == 1
+        assert summary["signals"] == ["time", "V(out)", "I(R1)"]
+        assert summary["range"] == {"time_start": 0.0, "time_end": pytest.approx(0.01)}
+        # No log provided — no measurements, warnings, or fourier
+        assert "measurements" not in summary
+        assert "warnings" not in summary
+        assert "fourier" not in summary
+
+    def test_ac_summary(self):
+        freqs = np.logspace(0, 6, 500)
+        fc = 1000
+        wave = 1 / (1 + 1j * freqs / fc)
+        raw = _make_raw_mock(
+            ["frequency", "V(out)"],
+            freqs,
+            {"V(out)": wave, "frequency": freqs},
+            plotname="AC Analysis",
+        )
+
+        summary = build_simulation_summary(raw, log_path=None)
+
+        assert summary["sim_type"] == "AC Analysis"
+        assert summary["point_count"] == 500
+        assert summary["range"] == {"freq_start": 1.0, "freq_end": pytest.approx(1e6)}
+
+    def test_dc_sweep_summary(self):
+        sweep = np.linspace(0, 5, 100)
+        wave = sweep * 2  # linear gain
+        raw = _make_raw_mock(
+            ["V(in)", "V(out)"],
+            sweep,
+            {"V(in)": sweep, "V(out)": wave},
+            plotname="DC sweep",
+        )
+
+        summary = build_simulation_summary(raw, log_path=None)
+
+        assert summary["sim_type"] == "DC sweep"
+        assert summary["range"] == {"sweep_start": 0.0, "sweep_end": 5.0}
+
+    def test_summary_with_duration(self):
+        axis = np.linspace(0, 0.001, 100)
+        raw = _make_raw_mock(
+            ["time", "V(out)"],
+            axis,
+            {"V(out)": np.ones(100), "time": axis},
+        )
+
+        summary = build_simulation_summary(raw, log_path=None, duration=1.23)
+
+        assert summary["duration"] == pytest.approx(1.23)
+
+    def test_summary_with_log_measurements(self, work_dir: Path):
+        """Summary includes .MEAS results when the log file has measurements."""
+        axis = np.linspace(0, 0.01, 100)
+        raw = _make_raw_mock(
+            ["time", "V(out)"],
+            axis,
+            {"V(out)": np.sin(2 * np.pi * 100 * axis), "time": axis},
+        )
+        log = work_dir / "sim.log"
+        log.write_text(
+            "Circuit: test.cir\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "vpk: MAX(V(out) )=0.9997 FROM 0 TO 0.01\n"
+            "Total elapsed time: 0.5 seconds.\n"
+        )
+
+        summary = build_simulation_summary(raw, log)
+
+        assert list(summary["measurements"]) == ["vpk"]
+        entry = summary["measurements"]["vpk"]
+        assert entry["values"][0] == pytest.approx(0.9997)
+        assert entry.get("range_to") == pytest.approx(0.01)
+
+    def test_summary_with_log_but_no_measurements(self, work_dir: Path):
+        """A log that parses but holds no .MEAS lines adds no measurements key."""
+        axis = np.linspace(0, 0.01, 100)
+        raw = _make_raw_mock(
+            ["time", "V(out)"],
+            axis,
+            {"V(out)": np.sin(2 * np.pi * 100 * axis), "time": axis},
+        )
+        log = work_dir / "sim.log"
+        log.write_text(
+            "Circuit: test.cir\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "Total elapsed time: 0.5 seconds.\n"
+        )
+
+        summary = build_simulation_summary(raw, log)
+
+        assert "measurements" not in summary
+        assert "warnings" not in summary
+
+    def test_summary_with_log_warnings(self, work_dir: Path):
+        """Summary includes warnings from log file."""
+        axis = np.linspace(0, 0.01, 100)
+        raw = _make_raw_mock(
+            ["time", "V(out)"],
+            axis,
+            {"V(out)": np.ones(100), "time": axis},
+        )
+
+        log = work_dir / "warn.log"
+        log.write_text(
+            "Circuit: test.cir\n"
+            "Warning: node N001 is floating\n"
+            "Warning: less than 2 connections to node VCC\n"
+            "Total elapsed time: 0.1 seconds.\n"
+        )
+
+        summary = build_simulation_summary(raw, log)
+
+        assert len(summary["warnings"]) == 2
+        assert any("N001" in w for w in summary["warnings"])
+        assert any("VCC" in w for w in summary["warnings"])
+
+    def test_summary_multi_step(self):
+        axis = np.linspace(0, 0.01, 100)
+        raw = _make_raw_mock(
+            ["time", "V(out)"],
+            axis,
+            {"V(out)": np.ones(100), "time": axis},
+            steps=[0, 1, 2],
+        )
+
+        summary = build_simulation_summary(raw, log_path=None)
+
+        assert summary["step_count"] == 3
+
+    def test_all_values_are_python_types(self):
+        """Ensure no numpy scalars leak into the summary."""
+        axis = np.linspace(0, 0.005, 50)
+        raw = _make_raw_mock(
+            ["time", "V(out)"],
+            axis,
+            {"V(out)": np.sin(axis * 1000), "time": axis},
+        )
+
+        summary = build_simulation_summary(raw, log_path=None)
+
+        # Check numeric values are Python types
+        assert type(summary["point_count"]) is int
+        assert type(summary["step_count"]) is int
+        assert type(summary["range"]["time_start"]) is float
+        assert type(summary["range"]["time_end"]) is float
