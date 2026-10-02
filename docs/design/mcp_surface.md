@@ -1104,7 +1104,7 @@ symbol browser.
 
 | tool | readOnly | destructive | idempotent | openWorld |
 |-|-|-|-|-|
-| `run_experiments` | false | false | true (via request_id) | true |
+| `run_experiments` | false | false | false (without a repeated `request_id` the same arguments start new work; with one, the original job is replayed) | true |
 | `jobs` | false | true (cancel) | true | false |
 | `analyze_results` | false (artifact writes) | false | true | false |
 | `edit_schematic` | false | true | false | false |
