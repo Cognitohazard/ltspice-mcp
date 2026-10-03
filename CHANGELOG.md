@@ -21,9 +21,9 @@ tool-surface changes.
   submission rebuilt the runner's launch permits whenever none were out, and
   that included the moment a released permit had been handed to a waiting run
   that had not yet resumed; the woken run and a newcomer then both launched.
-  The permits are now rebuilt only when the cap actually changed and nothing
-  holds or waits for one, and a lowered cap takes effect as soon as the runner
-  drains rather than at the next submission.
+  The permits are now rebuilt only when nothing holds or waits for one, and a
+  lowered cap takes effect as soon as the runner drains rather than at the next
+  submission.
 - An unterminated single quote in a netlist was reported with the hint "add a
   closing \" after the opening quote". The hint now names the quote that was
   opened.
