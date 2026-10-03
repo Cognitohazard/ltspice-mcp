@@ -1833,6 +1833,68 @@ class TestPerCircuitFailuresAndAccounting:
         assert [item["run_index"] for item in data["runs"]["items"]] == [0, 1]
         assert data["failures"][0]["case_id"] == "missing-case-0000"
 
+    async def test_ids_from_file_stems_are_made_valid_and_unique(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # A stem was refused as invalid_circuit_id ("amp.v2") or as
+        # duplicate_circuit_id (two "amp" files), although the caller never
+        # wrote an id. The server picked the name, so it now makes one that
+        # works and says which.
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        (work_dir / "a").mkdir()
+        (work_dir / "b").mkdir()
+        first = _deck(work_dir / "a" / "amp.cir")
+        second = _deck(work_dir / "b" / "amp.cir")
+        dotted = _deck(work_dir / "amp.v2.cir")
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "stem-ids",
+                "circuits": [{"path": str(p)} for p in (first, second, dotted)],
+                "execution": {"wait_s": 1},
+            }
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert "error" not in data, data.get("error")
+        assert len(submissions) == 3
+        assert [item["circuit"] for item in data["runs"]["items"]] == ["amp", "amp-2", "amp_v2"]
+        derived = {
+            item["evidence"]["circuit_id"]: item["detail"]
+            for item in data["observations"]
+            if item["code"] == "circuit_id_derived"
+        }
+        assert set(derived) == {"amp-2", "amp_v2"}
+        assert "'amp' is another circuit's id" in derived["amp-2"]
+        assert "'amp.v2' is not a valid id" in derived["amp_v2"]
+
+    async def test_an_id_the_caller_wrote_is_still_validated(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "amp.cir")
+        for circuits, code in (
+            ([{"path": str(deck), "id": "amp.v2"}], "invalid_circuit_id"),
+            (
+                [{"path": str(deck), "id": "amp"}, {"path": str(deck), "id": "AMP"}],
+                "duplicate_circuit_id",
+            ),
+        ):
+            args = RunExperimentsInput.model_validate(
+                {"request_id": f"caller-id-{code}", "circuits": circuits}
+            )
+            data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+            assert data["error"]["code"] == code
+        assert submissions == []
+
     async def test_case_deck_keeps_staged_relative_includes_reachable(
         self,
         state_with_sim: SessionState,

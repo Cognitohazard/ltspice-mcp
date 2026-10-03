@@ -10,6 +10,15 @@ tool-surface changes.
 
 ### Fixed
 
+- `run_experiments` refused a circuit whose id came from its file stem when the
+  stem was not a valid id (`amp.v2.cir`, `my amp.cir`: `invalid_circuit_id`) or
+  when two files shared a stem (`a/amp.cir` and `b/amp.cir`:
+  `duplicate_circuit_id`), with no word that the caller had written no id. The
+  server chose that name, so it now makes it valid (`amp_v2`, `my_amp`) and
+  unique against every other id in the call (`amp`, `amp-2`), and each such
+  circuit's cases carry a new `circuit_id_derived` observation naming the id
+  it ran under and why. An id the caller writes is still refused when invalid
+  or duplicated, and an unknown `applies_to` id now lists the ids in the call.
 - `run_experiments` refused two `random` variation entries in one call even
   when their `applies_to` lists named different circuits, so two designs could
   not be Monte-Carlo'd in one job. The rule it enforces is per circuit: the

@@ -92,6 +92,7 @@ from ltspice_mcp.lib.variations import (
     VariationError,
     check_case_cap,
     check_random_families,
+    derive_circuit_ids,
     expand_variations,
     format_case_id,
     materialize_variants,
@@ -163,8 +164,8 @@ class ExperimentCircuit(StrictModel):
     id: str | None = Field(
         default=None,
         description=(
-            "Short name for this circuit, used to scope a variation's 'applies_to' "
-            "and to label its rows. Defaults to the file stem."
+            "Names this circuit in a variation's 'applies_to' and in its rows. "
+            "Default: the file stem, made valid and unique."
         ),
     )
 
@@ -571,7 +572,7 @@ async def handle_run_experiments(
             )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
-        circuit_inputs = _circuit_decks_for_validation(args.circuits)
+        circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
         native_ids = [
@@ -643,8 +644,11 @@ async def handle_run_experiments(
                 lint_by_circuit[preparation.circuit_id] = preparation.lint_findings
                 if preparation.source is not None:
                     sources.append(preparation.source)
+                id_note = id_notes.get(preparation.circuit_id)
                 for case in preparation.cases:
                     case.run_index = len(cases)
+                    if id_note is not None:
+                        case.observations.append(copy.deepcopy(id_note))
                     cases.append(case)
 
             if len(cases) != projected:
@@ -1128,16 +1132,33 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     return run_attached_analysis
 
 
-def _circuit_decks_for_validation(circuits: list[ExperimentCircuit]) -> list[CircuitDeck]:
-    return [
-        CircuitDeck(
-            circuit_id=circuit.id or Path(circuit.path).stem,
-            path=Path(circuit.path),
-            text="",
-            id_from_file_stem=not circuit.id,
-        )
-        for circuit in circuits
+def _circuit_decks_for_validation(
+    circuits: list[ExperimentCircuit],
+) -> tuple[list[CircuitDeck], dict[str, dict[str, Any]]]:
+    """The circuits as decks to validate, and an observation per derived id.
+
+    A circuit with no ``id`` takes its file stem, made valid and unique rather
+    than refused (see ``derive_circuit_ids``); the observation, keyed by the id
+    it ran under, says so on every case of that circuit.
+    """
+    derived = derive_circuit_ids(
+        [circuit.path for circuit in circuits], [circuit.id for circuit in circuits]
+    )
+    decks = [
+        CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text="")
+        for circuit, (circuit_id, _note) in zip(circuits, derived, strict=True)
     ]
+    notes = {
+        circuit_id: {
+            "code": "circuit_id_derived",
+            "kind": "provenance",
+            "detail": note,
+            "evidence": {"path": circuit.path, "circuit_id": circuit_id},
+        }
+        for circuit, (circuit_id, note) in zip(circuits, derived, strict=True)
+        if note is not None
+    }
+    return decks, notes
 
 
 async def _load_matching_replay(

@@ -336,7 +336,13 @@ Input:
 
 ```
 request_id           str, optional      idempotency key; minted when omitted
-circuits             list[{path, id?}]  .cir / .net / .sp / .asc
+circuits             list[{path, id?}]  .cir / .net / .sp / .asc. An id the
+                                        caller writes must be valid and unique
+                                        or the call is refused; with none, the
+                                        file stem is made valid and unique
+                                        (amp.v2 -> amp_v2; two amp files ->
+                                        amp, amp-2) and a circuit_id_derived
+                                        observation names the id it ran as
 variations           list[Variation]    Appendix A.1. assign entries combine by
                                         cartesian product; AT MOST ONE random
                                         entry per circuit (the product of two
