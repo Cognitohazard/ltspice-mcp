@@ -87,6 +87,38 @@ def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]:
     return raw.decode("utf-8", errors="replace"), "utf-8"
 
 
+#: The codecs a rewritten deck keeps. Each is ASCII-compatible, so every
+#: directive keeps its bytes and the byte-level edits made to a deck at run time
+#: (``runner_base``'s injected ``.options``/``write`` lines) still land.
+_KEPT_CODECS = frozenset({"utf-8", "utf-8-sig", "cp1252"})
+
+
+def rewrite_codec(raw: bytes) -> str:
+    """The codec a rewritten copy of the deck ``raw`` is written in.
+
+    The codec it was read with, so the characters a rewrite does not touch keep
+    their bytes: a ``§`` in a cp1252 deck stays the one byte A7 LTspice XVII
+    reads, rather than becoming the two UTF-8 bytes it reads as ``Â§``. A UTF-16
+    or UTF-32 deck is rewritten as UTF-8, which spells every character it held
+    and is what every simulator here reads.
+    """
+    _, encoding = decode_spice_bytes_with_encoding(raw)
+    return encoding if encoding in _KEPT_CODECS else "utf-8"
+
+
+def encode_spice_text(text: str, codec: str) -> bytes:
+    """``text`` in ``codec`` (a ``rewrite_codec`` name), else as UTF-8.
+
+    UTF-8 is the fallback for text the codec cannot spell, such as a rewritten
+    include path naming a character outside cp1252: it is the encoding LTspice
+    24 and later write and read.
+    """
+    try:
+        return text.encode(codec)
+    except UnicodeEncodeError:
+        return text.encode("utf-8")
+
+
 def decode_spice_bytes(raw: bytes) -> str:
     """Decode a SPICE-text byte string with BOM sniffing + UTF-16 heuristic."""
     return decode_spice_bytes_with_encoding(raw)[0]

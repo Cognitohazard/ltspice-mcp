@@ -37,8 +37,11 @@ from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
 from ltspice_mcp.errors import PathSecurityError, SimulationError
+from ltspice_mcp.lib.encoding import decode_spice_bytes, encode_spice_text, rewrite_codec
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.spice_lex import emit, lex
+from ltspice_mcp.lib.spice_lex_ops import strip_instance_section_signs
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import sanitize_stem
 from ltspice_mcp.state import SessionState
@@ -96,24 +99,32 @@ async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
 def _read_export(net_path: Path, *, for_ngspice: bool) -> tuple[str, bytes]:
     """The deck a run of this export reads: the stem it is named by, and its bytes.
 
-    For ngspice it is scrubbed first. LTspice's exporter appends ``.backanno`` —
-    an LTspice-only dot command ngspice aborts on ("unimplemented dot
-    command") — and can emit its private ``§`` name-prefix character and ``µ``
-    unit suffix, neither of which ngspice's parser accepts. The scrub never
-    rewrites the shared ``.net`` in place: a concurrent LTspice-target run of
-    the same schematic regenerates it after the export lock releases, and an
-    in-place rewrite would hand one of the two runs the other simulator's deck.
-    It goes straight into the snapshot, under a stem naming the simulator.
-    """
-    if not for_ngspice:
-        return net_path.stem, net_path.read_bytes()
-    from ltspice_mcp.lib.encoding import read_spice_text
-    from ltspice_mcp.lib.format import fold_micro_sign
+    For ngspice two things are changed first. LTspice's exporter appends
+    ``.backanno``, an LTspice-only dot command ngspice aborts on
+    ("unimplemented dot command"), and names an instance whose name does not
+    start with its element letter with LTspice's private ``§`` (``R§Load``),
+    which ngspice's parser does not accept. The card is dropped and the ``§``
+    leaves those instance names (``strip_instance_section_signs``); comments,
+    quoted strings and include paths keep every character, and the deck keeps
+    its encoding. A micro-sign value suffix is left to staging, which spells it
+    ``u`` for every simulator without touching a path.
 
-    text = read_spice_text(net_path)
-    lines = [ln for ln in text.splitlines() if ln.strip().lower() != ".backanno"]
-    cleaned = fold_micro_sign("\n".join(lines).replace("§", ""))
-    return f"{net_path.stem}.ngspice", (cleaned + "\n").encode("utf-8")
+    The scrub never rewrites the shared ``.net`` in place: a concurrent
+    LTspice-target run of the same schematic regenerates it after the export
+    lock releases, and an in-place rewrite would hand one of the two runs the
+    other simulator's deck. It goes straight into the snapshot, under a stem
+    naming the simulator.
+    """
+    data = net_path.read_bytes()
+    if not for_ngspice:
+        return net_path.stem, data
+    cards = [
+        card
+        for card in lex(decode_spice_bytes(data)).cards
+        if card.body.strip().casefold() != ".backanno"
+    ]
+    strip_instance_section_signs(cards)
+    return f"{net_path.stem}.ngspice", encode_spice_text(emit(cards), rewrite_codec(data))
 
 
 async def _export_schematic(
@@ -209,8 +220,6 @@ async def export_netlist_text(asc_path: Path, state: SessionState) -> str:
     admitted, so no sandbox check runs (the store need not sit inside
     ``allowed_paths``), and no snapshot is kept, because nothing will name it.
     """
-    from ltspice_mcp.lib.encoding import decode_spice_bytes
-
     _stem, data = await _export_schematic(asc_path, state, None)
     return decode_spice_bytes(data)
 

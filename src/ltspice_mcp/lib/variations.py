@@ -24,13 +24,14 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import atomic_write_text, component_value
+from ltspice_mcp.lib import atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
     rewrite_staged_reference_cards,
     staged_reference_targets,
 )
+from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.instance_targeting import (
@@ -371,6 +372,8 @@ class DeckFile:
     text: str
     # Digest of exact staged bytes, which may use an encoding other than UTF-8.
     sha256: str = ""
+    # The codec a case copy of this file is written in (``StagedFile.codec``).
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -391,6 +394,8 @@ class CircuitDeck:
     id_from_file_stem: bool = False
     semantic_profile: SemanticProfile | None = None
     record_source_lineage: bool = False
+    # The codec a case deck is written in (``StagedDeck.codec``).
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -482,6 +487,8 @@ class _ClosureFile:
     path: Path
     text: str
     targets: _DeckTargets
+    # The codec a case copy of this file is written in.
+    codec: str = "utf-8"
 
     @property
     def depth(self) -> int:
@@ -765,7 +772,8 @@ def materialize_variants(
     )
     closure = _build_closure(circuit)
     captured_digests = {
-        file.path.resolve(): file.sha256 or hashlib.sha256(file.text.encode("utf-8")).hexdigest()
+        file.path.resolve(): file.sha256
+        or hashlib.sha256(encode_spice_text(file.text, file.codec)).hexdigest()
         for file in circuit.includes
     }
     materialized: list[MaterializedCase] = []
@@ -892,7 +900,9 @@ def materialize_variants(
                 destination = source
                 digest = captured_digests[source]
             else:
-                digest = hashlib.sha256(texts[file.index].encode("utf-8")).hexdigest()
+                digest = hashlib.sha256(
+                    encode_spice_text(texts[file.index], file.codec)
+                ).hexdigest()
             file_digests.append((destination, digest))
         lineage = tuple(
             SourceLineage(
@@ -906,7 +916,9 @@ def materialize_variants(
             )
             for item in lineage
         )
-        atomic_write_text(path, text, durable=True)
+        atomic_write_bytes(
+            path, encode_spice_text(text, case_closure.files[0].codec), durable=True
+        )
         materialized.append(
             MaterializedCase(
                 case_id=case.case_id,
@@ -974,10 +986,11 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
             path=path,
             text=text,
             targets=_deck_targets(text, path, closure_depth(index)),
+            codec=codec,
         )
-        for index, (path, text) in enumerate(
-            [(circuit.path, circuit.text)]
-            + [(include.path, include.text) for include in circuit.includes]
+        for index, (path, text, codec) in enumerate(
+            [(circuit.path, circuit.text, circuit.codec)]
+            + [(include.path, include.text, include.codec) for include in circuit.includes]
         )
     ]
     return _DeckClosure(
@@ -1832,8 +1845,9 @@ def _write_case_includes(
     under it. Every file on the include chain above an edited one is copied too
     — otherwise the copy would be written and nothing would point at it.
 
-    Every copy is UTF-8, so each spells a micro-sign suffix ``u``: staging did
-    so for the files it wrote, but an assigned value can bring the sign back.
+    Every copy is written in its staged file's codec and spells a micro-sign
+    suffix ``u``: staging did so for the files it wrote, but an assigned value
+    can bring the sign back.
     """
     edited = {index for index, text in texts.items() if text != closure.files[index].text}
     copies = {0}
@@ -1863,7 +1877,7 @@ def _write_case_includes(
             continue
         destination = file.path.with_name(renames[file.path.resolve()])
         destination.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(destination, texts[index], durable=True)
+        atomic_write_bytes(destination, encode_spice_text(texts[index], file.codec), durable=True)
     return texts[0]
 
 
@@ -2563,7 +2577,12 @@ def _case_closure(closure: _DeckClosure, files: Sequence[ClosureFile]) -> _DeckC
         closure,
         files=tuple(
             _ClosureFile(
-                file.index, file.path, file.text, _deck_targets(file.text, file.path, file.depth)
+                file.index,
+                file.path,
+                file.text,
+                _deck_targets(file.text, file.path, file.depth),
+                # A file a structured edit cloned is new, and written as UTF-8.
+                closure.files[file.index].codec if file.index < len(closure.files) else "utf-8",
             )
             for file in files
         ),

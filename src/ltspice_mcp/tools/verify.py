@@ -64,6 +64,7 @@ import hashlib
 import re
 import shutil
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,8 +99,10 @@ from ltspice_mcp.lib.schematic_scene import (
     layout_issues,
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
+from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
-from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
@@ -977,26 +980,94 @@ def _rule_finding(
     )
 
 
+#: The two value-suffix rules, both under ``FINDING_RULE_CAP``: one deck can
+#: spell every value of a sheet with the same character.
+_VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_nonascii")
+
+# The codec LTspice XVII and earlier decode a deck as. A micro sign written in
+# it is the one byte B5, which those builds read as micro.
+_CP1252 = "cp1252"
+
+
+def _micro_sign_observation(
+    sites: list[ValueSuffixSite],
+    path: Path,
+    encoding: str,
+    generated_by: str | None,
+) -> dict[str, Any]:
+    """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
+    if encoding.startswith("utf-8"):
+        readers = (
+            "LTspice 24 and later read it as micro. LTspice XVII decodes a deck as "
+            "cp1252 and would read these two bytes as 'Âµ', dropping the scale"
+        )
+    elif encoding == _CP1252:
+        readers = "LTspice XVII, which decodes a deck as cp1252, reads it as micro"
+    else:
+        readers = f"A reader that decodes this file as {encoding} reads it as micro"
+    evidence: dict[str, Any] = {
+        "count": len(sites),
+        "lines": [site.line for site in sites],
+        "tokens": [site.token for site in sites],
+        "encoding": encoding,
+        "reason": (
+            f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
+            f"{encoding} file. {readers}. 'u' is micro in every encoding and to "
+            "every simulator."
+        ),
+    }
+    if generated_by is not None:
+        evidence["generated_by"] = generated_by
+    return _finding(
+        rule_id="value_suffix_micro_sign",
+        severity="observation",
+        at={"file": str(path), "line": sites[0].line},
+        subject=path.name,
+        evidence=evidence,
+    )
+
+
 def _value_suffix_findings(
-    cards: list[SpiceCard], path: Path, text: str, encoding: str
+    cards: list[SpiceCard],
+    path: Path,
+    text: str,
+    encoding: str,
+    cp1252_reader: str | None = None,
 ) -> list[dict[str, Any]]:
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
     One scan and one evidence builder with the ``run_experiments`` linter's
-    ``value-suffix-nonascii`` rule, so both surfaces say the same thing. A micro sign
-    is a warning: it is micro to a reader that decodes the file in the encoding
-    it was written in, which LTspice XVII does not do for a UTF-8 file. Any
-    other character is an error: it is never a scale, so the deck runs at the
-    bare number. ``encoding`` is the codec the file decoded as, which decides
-    which reader misreads it. ``cards`` has its title card dropped already.
+    ``value-suffix-nonascii`` rule, so both surfaces say the same thing. Any
+    character other than a micro sign is an error per value: it is never a
+    scale, so the deck runs at the bare number.
+
+    A micro sign is micro to a reader that decodes the file in the encoding it
+    was written in. It is a warning per value only when a reader this server
+    knows of decodes it otherwise: an LTspice XVII the session drives
+    (``cp1252_reader``, from ``services.cp1252_ltspice``) or one the deck's own
+    header names as its writer, reading a file that is not cp1252. Otherwise
+    the file's micro signs are one observation, with their count and lines,
+    which leaves the outcome alone. ``encoding`` is the codec the file decoded
+    as. ``cards`` has its title card dropped already.
     """
     sites = value_suffix_sites(cards)
-    generated_by = deck_generator(text) if sites else None
+    if not sites:
+        return []
+    generated_by = deck_generator(text)
+    if cp1252_reader is None and generated_by and is_cp1252_ltspice_build(generated_by):
+        cp1252_reader = generated_by
+    misread = cp1252_reader is not None and encoding != _CP1252
     findings: list[dict[str, Any]] = []
+    micro: list[ValueSuffixSite] = []
     for site in sites:
+        if site.micro and not misread:
+            micro.append(site)
+            continue
         evidence = value_suffix_evidence(site, generated_by=generated_by)
         evidence["card"] = site.card.body
         evidence["encoding"] = encoding
+        if site.micro:
+            evidence["reader"] = cp1252_reader
         findings.append(
             _finding(
                 rule_id="value_suffix_micro_sign" if site.micro else "value_suffix_nonascii",
@@ -1006,18 +1077,20 @@ def _value_suffix_findings(
                 evidence=evidence,
             )
         )
+    if micro:
+        findings.append(_micro_sign_observation(micro, path, encoding, generated_by))
     return findings
 
 
 def _syntax_findings(
-    text: str, path: Path, deck: _LexedDeck, encoding: str
+    text: str, path: Path, deck: _LexedDeck, encoding: str, cp1252_reader: str | None = None
 ) -> list[dict[str, Any]]:
     """Directive, lex, element-arity and value-suffix findings in a netlist.
 
     Everything here changes what the simulator reads, so every finding is an
-    error except a micro-sign suffix, which is a warning because whether it is
-    read as micro depends on the reader (see ``_value_suffix_findings``). The
-    facts that are legal-but-notable live in the quality check.
+    error except a micro-sign suffix, whose meaning depends on the reader (see
+    ``_value_suffix_findings``). The facts that are legal-but-notable live in
+    the quality check.
     """
     findings: list[dict[str, Any]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -1052,7 +1125,7 @@ def _syntax_findings(
         _rule_finding(issue, path, rule_id="element_arity", severity="error")
         for issue in validate_netlist_arity(deck.cards)
     )
-    findings.extend(_value_suffix_findings(deck.cards, path, text, encoding))
+    findings.extend(_value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader))
     return findings
 
 
@@ -1335,7 +1408,9 @@ def _file_digest(path: Path, length: int | None = None) -> str | None:
     return digest[:length] if length is not None else digest
 
 
-def _exported_value_suffix_findings(net_path: Path) -> list[dict[str, Any]]:
+def _exported_value_suffix_findings(
+    net_path: Path, cp1252_reader: str | None = None
+) -> list[dict[str, Any]]:
     """Value-suffix findings over an exported netlist.
 
     LTspice 24 and later write the export as UTF-8, a micro sign as C2 B5, and
@@ -1345,7 +1420,7 @@ def _exported_value_suffix_findings(net_path: Path) -> list[dict[str, Any]]:
         text, encoding = read_spice_text_with_encoding(net_path)
     except OSError:
         return []
-    return _value_suffix_findings(_lex_deck(text).cards, net_path, text, encoding)
+    return _value_suffix_findings(_lex_deck(text).cards, net_path, text, encoding, cp1252_reader)
 
 
 class _MeasuredNetlist(NamedTuple):
@@ -1357,7 +1432,7 @@ class _MeasuredNetlist(NamedTuple):
     findings: list[dict[str, Any]]
 
 
-def _measure_netlist(net_path: Path) -> _MeasuredNetlist | None:
+def _measure_netlist(net_path: Path, cp1252_reader: str | None = None) -> _MeasuredNetlist | None:
     """Component count, net count, digest and value-suffix findings of a
     just-exported netlist.
 
@@ -1374,7 +1449,10 @@ def _measure_netlist(net_path: Path) -> _MeasuredNetlist | None:
         return None
     components, nets = _netlist_counts(net_path)
     return _MeasuredNetlist(
-        components, nets, _file_digest(net_path), _exported_value_suffix_findings(net_path)
+        components,
+        nets,
+        _file_digest(net_path),
+        _exported_value_suffix_findings(net_path, cp1252_reader),
     )
 
 
@@ -1390,7 +1468,11 @@ class _ExportOutcome(NamedTuple):
 
 
 async def _run_export(
-    asc_path: Path, state: SessionState, export_to: str, simulator_cls: Any
+    asc_path: Path,
+    state: SessionState,
+    export_to: str,
+    simulator_cls: Any,
+    cp1252_reader: str | None = None,
 ) -> _ExportOutcome:
     """Export a schematic to a netlist, managed (scratch copy) or sidecar (in place).
 
@@ -1432,7 +1514,7 @@ async def _run_export(
                     )
                     warnings.extend(diff_warnings)
                 net_path = new_path
-                measured = await asyncio.to_thread(_measure_netlist, net_path)
+                measured = await asyncio.to_thread(_measure_netlist, net_path, cp1252_reader)
         else:
             scratch = (
                 _scratch_dir(state, "export") / f"{asc_path.stem}.{_file_digest(asc_path, 8)}"
@@ -1444,7 +1526,7 @@ async def _run_export(
                 net_path = await asyncio.to_thread(
                     _create_netlist, simulator_cls, staged_asc, timeout
                 )
-                measured = await asyncio.to_thread(_measure_netlist, net_path)
+                measured = await asyncio.to_thread(_measure_netlist, net_path, cp1252_reader)
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         return _ExportOutcome(
             payload,
@@ -1920,7 +2002,7 @@ def _hint(data: dict[str, Any]) -> str:
     observations = [f for f in data["findings"] if f["severity"] == "observation"]
     if observations and not parts:
         parts.append(
-            f"{len(observations)} layout/quality observation(s): "
+            f"{len(observations)} observation(s): "
             + ", ".join(sorted({f["rule_id"] for f in observations}))
             + " (facts, not a verdict)"
         )
@@ -2088,9 +2170,15 @@ async def evaluate_verify_circuit(
         deck = await asyncio.to_thread(_lex_deck, text)
         observation_events.extend(deck.notes)
 
+    # The LTspice this session drives, when it decodes decks as cp1252: the one
+    # reader known to misread a UTF-8 micro sign.
+    cp1252_reader = cp1252_ltspice(state)
+
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
-        findings.extend(await asyncio.to_thread(_syntax_findings, text, path, deck, encoding))
+        findings.extend(
+            await asyncio.to_thread(_syntax_findings, text, path, deck, encoding, cp1252_reader)
+        )
         checks_run.append("syntax")
 
     if wanted.get("quality") and deck is not None and kind == "netlist":
@@ -2165,7 +2253,9 @@ async def evaluate_verify_circuit(
             if simulator_cls is None:
                 skip("export", "LTspice not detected")
             else:
-                export = await _run_export(path, state, args.export_to, simulator_cls)
+                export = await _run_export(
+                    path, state, args.export_to, simulator_cls, cp1252_reader
+                )
                 observation_events.extend(export.observations)
                 warnings.extend(export.warnings)
                 findings.extend(export.findings)
@@ -2230,6 +2320,15 @@ async def evaluate_verify_circuit(
         if render_task is not None:
             render_task.cancel()
         raise
+
+    # A sheet can spell every value with the same character, so the two
+    # value-suffix rules are capped like the layout rules.
+    suffix_totals = Counter(
+        str(f["rule_id"]) for f in findings if f["rule_id"] in _VALUE_SUFFIX_RULES
+    )
+    if suffix_totals:
+        capped_rules.update(suffix_totals)
+        observation_events.append(_FindingCapSummary(dict(suffix_totals)))
 
     # --- render -------------------------------------------------------------
     inline_image: RenderedImage | None = None
