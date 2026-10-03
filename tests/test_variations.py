@@ -19,6 +19,7 @@ from ltspice_mcp.lib.variations import (
     RandomVariation,
     Variation,
     VariationError,
+    derive_circuit_ids,
     expand_variations,
     materialize_variants,
     normalize_circuit_decks,
@@ -237,6 +238,35 @@ class TestCrossCircuitValidation:
 
         with pytest.raises(VariationError, match="duplicated"):
             expand_variations([first, second], [])
+
+    def test_stem_ids_are_sanitised_and_disambiguated(self):
+        ids = derive_circuit_ids(
+            ["a/amp.cir", "b/amp.cir", "my amp.cir", "_x.cir", "AMP-2.cir", "plain.cir"],
+            [None, None, None, None, None, None],
+        )
+        assert [name for name, _ in ids] == ["amp", "amp-2", "my_amp", "x", "AMP-2-2", "plain"]
+        assert ids[0][1] is None and ids[5][1] is None
+        assert all(note is not None for _, note in ids[1:5])
+
+    def test_a_caller_id_is_kept_and_reserved_before_stems(self):
+        ids = derive_circuit_ids(["amp.cir", "other.cir"], [None, "amp"])
+        assert ids == [
+            ("amp-2", ids[0][1]),
+            ("amp", None),
+        ]
+        assert "'amp' is another circuit's id" in str(ids[0][1])
+
+    def test_a_stem_with_nothing_valid_left_gets_a_generic_id(self):
+        ((name, note),) = derive_circuit_ids(["___.cir"], [None])
+        assert name == "circuit"
+        assert note is not None
+
+    def test_unknown_applies_to_names_the_ids_in_the_call(self, tmp_path: Path):
+        circuit = _deck(tmp_path / "a.cir", "amp_v2")
+        variation = AssignVariation(kind="assign", applies_to=["amp.v2"], assign={"R1": [1]})
+
+        with pytest.raises(VariationError, match="'amp_v2'"):
+            expand_variations([circuit], [variation])
 
     def test_missing_applies_to_id_is_rejected(self, tmp_path: Path):
         circuit = _deck(tmp_path / "a.cir", "a")
@@ -1665,28 +1695,17 @@ class TestCaseBundleIsWrittenWhole:
 
 
 class TestCircuitIdRejection:
-    def test_a_derived_id_says_where_it_came_from_and_how_to_override(self, tmp_path: Path):
-        """A caller who never wrote the id cannot connect the rule to a fix.
+    def test_a_derived_id_is_made_valid_and_says_where_it_came_from(self):
+        """A file named ``_truth_op.asc`` used to be refused because its stem
+        is not a valid id, although the caller never wrote one. The stem is
+        now made valid, and the note names the file and how to override it."""
+        ((name, note),) = derive_circuit_ids(["_truth_op.asc"], [None])
 
-        The refusal reports the id, not the argument, so a file named
-        ``_truth_op.asc`` reads as an unusable file rather than a missing
-        ``id``.
-        """
-        deck = CircuitDeck(
-            "_truth_op",
-            tmp_path / "_truth_op.asc",
-            "",
-            (),
-            True,
-        )
-
-        with pytest.raises(VariationError) as excinfo:
-            normalize_circuit_decks([deck])
-
-        message = str(excinfo.value)
-        assert "_truth_op.asc" in message
-        assert "id=" in message
-        assert "id='truth_op'" in message
+        assert name == "truth_op"
+        assert note is not None
+        assert "_truth_op.asc" in note
+        assert "'truth_op'" in note
+        assert "'id'" in note
 
     def test_an_explicit_id_is_not_blamed_on_the_filename(self, tmp_path: Path):
         deck = CircuitDeck("_chosen", tmp_path / "amp.asc", "")

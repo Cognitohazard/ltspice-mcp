@@ -399,6 +399,7 @@ FROZEN_ERROR_CODES = (
     "case_cap",
     "case_cap_exceeded",
     "case_not_found",
+    "circuit_id_derived",
     "circuits_empty",
     "clone_include_unsupported",
     "commit_failed",

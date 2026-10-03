@@ -384,11 +384,6 @@ class CircuitDeck:
     # against every file in it, so factoring a circuit into a reusable core
     # does not put that core's components out of a sweep's reach.
     includes: tuple[DeckFile, ...] = ()
-    # True when ``circuit_id`` was taken from the file stem because the caller
-    # named none. Carried on the deck so the one validator can say where a
-    # rejected id came from: the rule is about the id, but the fix is about the
-    # argument, and a caller who never wrote an id cannot see the connection.
-    id_from_file_stem: bool = False
     semantic_profile: SemanticProfile | None = None
     record_source_lineage: bool = False
 
@@ -525,16 +520,62 @@ class _DeckClosure:
         return all(file.text is self.files[file.index].text for file in files)
 
 
-def _id_suggestion(circuit_id: str) -> str:
-    """A valid id built out of the rejected one, or '' when nothing survives.
+def sanitize_circuit_id(text: str) -> str:
+    """A valid circuit id built out of ``text``, or ``"circuit"`` when nothing survives.
 
-    Offered rather than imposed: silently repairing the id would run the file
-    under a name the caller never chose and cannot predict.
+    Each run of characters an id may not hold becomes one underscore
+    (``amp.v2`` → ``amp_v2``, ``my amp`` → ``my_amp``), a leading underscore or
+    hyphen is dropped, and the result is cut to the 64-character limit.
     """
-    cleaned = "".join(
-        char for char in circuit_id if char.isascii() and (char.isalnum() or char in "_-")
-    )
-    return cleaned.lstrip("_-")[:64]
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", text).lstrip("_-")[:64]
+    return cleaned or "circuit"
+
+
+def derive_circuit_ids(
+    paths: Sequence[str | Path], given: Sequence[str | None]
+) -> list[tuple[str, str | None]]:
+    """Each circuit's id, plus why a derived one is not its file stem.
+
+    An id the caller gave is used as given, and validated later. A circuit with
+    none takes its file stem, made valid with :func:`sanitize_circuit_id` and
+    made unique against every other id in the call, case-insensitively, by a
+    ``-2``, ``-3``... suffix (``a/amp.cir`` and ``b/amp.cir`` run as ``amp`` and
+    ``amp-2``). Ids the caller gave are reserved first, so a derived id never
+    displaces one. The second element is ``None`` when the id is the caller's
+    or the stem unchanged, else a sentence saying which id the circuit runs
+    under and why.
+    """
+    taken = {name.casefold() for name in given if name}
+    derived: list[tuple[str, str | None]] = []
+    for path, name in zip(paths, given, strict=True):
+        if name:
+            derived.append((name, None))
+            continue
+        stem = Path(path).stem
+        base = sanitize_circuit_id(stem)
+        candidate, counter = base, 2
+        while candidate.casefold() in taken:
+            suffix = f"-{counter}"
+            candidate = base[: 64 - len(suffix)] + suffix
+            counter += 1
+        taken.add(candidate.casefold())
+        if candidate == stem:
+            derived.append((candidate, None))
+            continue
+        reasons = []
+        if base != stem:
+            reasons.append(f"its file stem {stem!r} is not a valid id")
+        if candidate != base:
+            reasons.append(f"{base!r} is another circuit's id in this call")
+        derived.append(
+            (
+                candidate,
+                f"{Path(path).name} carried no id, so it runs as circuit id {candidate!r}: "
+                + " and ".join(reasons)
+                + ". Pass 'id' to choose the name.",
+            )
+        )
+    return derived
 
 
 def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
@@ -551,16 +592,7 @@ def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
                 "invalid_circuit_id",
                 f"Circuit id {circuit_id!r} must be 1-64 characters long, start "
                 "with a letter or digit, and use only letters, digits, "
-                "underscores and hyphens after that"
-                + (
-                    f". This id was derived from the file stem of {circuit.path.name!r} "
-                    "because the circuit carried no 'id'; pass one explicitly "
-                    "(e.g. id='"
-                    + (_id_suggestion(circuit_id) or "amp")
-                    + "') to run this file under a valid id without renaming it"
-                    if circuit.id_from_file_stem
-                    else ""
-                ),
+                f"underscores and hyphens after that (e.g. {sanitize_circuit_id(circuit_id)!r})",
             )
         folded = circuit_id.casefold()
         if folded in seen:
@@ -587,7 +619,8 @@ def validate_variation_circuit_ids(
                 raise VariationError(
                     "missing_circuit_id",
                     f"Variation {variation.id or variation.kind!r} applies_to unknown "
-                    f"circuit id {circuit_id!r}",
+                    f"circuit id {circuit_id!r}; the circuit ids in this call are "
+                    + ", ".join(repr(name) for name in known.values()),
                 )
 
 
