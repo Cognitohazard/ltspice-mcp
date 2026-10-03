@@ -6,6 +6,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_validator import (
+    ARITY_CHECKS,
     estimate_analysis_points,
     list_rules,
     validate_directive,
@@ -299,6 +300,43 @@ class TestElementArity:
             "C1" not in str(i["message"]) and "L1" not in str(i["message"]) for i in issues
         ), issues
 
+    @pytest.mark.parametrize(
+        "card",
+        [
+            # A comma-continued key=value is one value: initial conditions and
+            # temperature coefficients are written this way.
+            "M1 d g s s N1 L=1u W=1u IC=1,2,3",
+            "Q1 c b e QN IC=0.7,5",
+            "R1 a 0 1k tc=0.001,1e-6",
+            # LTspice's behavioural resistor and power forms (spice_guide.md,
+            # Behavioral Sources).
+            "B1 a 0 R=V(a)*1k",
+            "B1 a 0 P=1",
+            # The value lives in a keyword: a charge-defined capacitor, a
+            # flux-defined inductor, a source playing a .wav file.
+            "C1 a 0 Q=1n*x",
+            "L1 b 0 Flux=1m*tanh(I(L1))",
+            'V1 a 0 wavefile="in.wav" chan=0',
+        ],
+    )
+    def test_valid_ltspice_cards_raise_no_issue(self, card):
+        assert validate_netlist_arity(lex(f"{card}\n.end\n").cards) == []
+
+    def test_b_source_resistor_and_power_forms_are_ltspice_only(self):
+        # ngspice's B-source takes V= or I= only.
+        cards = lex("B1 a 0 R=V(a)*1k\nB2 b 0 P=1\n.end\n").cards
+        issues = validate_netlist_arity(cards, simulator="ngspice")
+        assert [i["check"] for i in issues] == ["bsource-value-prefix"] * 2
+
+    def test_every_issue_names_its_check_and_severity(self):
+        # One card per check, so each check's issues are told apart by the
+        # check that raised them, and each carries the severity it declares.
+        cards = lex("R1 a 1k\nB1 b 0 {V(a)}\nC1 c d C=1n\nB2 e 0 V = V(a) + V(b)\n.end\n").cards
+        issues = validate_netlist_arity(cards)
+        assert sorted(str(i["check"]) for i in issues) == sorted(ARITY_CHECKS)
+        for issue in issues:
+            assert issue["severity"] == ARITY_CHECKS[str(issue["check"])]
+
 
 class TestControlBlockIsOpaque:
     """ngspice ``.control`` commands collide with SPICE element prefixes
@@ -413,6 +451,12 @@ class TestDanglingNodes:
         # Positional tokens between the refdes and the subckt name are
         # nodes; the subckt name and trailing k=v params are not.
         issues = self._dangling("X1 a b myamp gain=2\nR1 a b 1k\n.end")
+        assert issues == []
+
+    def test_x_card_params_keyword_does_not_make_the_subckt_name_a_node(self):
+        # ``params:`` introduces the overrides; it is not the subckt name, so
+        # the name before it must not be read as a node wired once.
+        issues = self._dangling("V1 a 0 1\nX1 a 0 myamp params: gain=2\n.end")
         assert issues == []
 
     def test_f_source_controlling_ref_not_counted(self):

@@ -983,12 +983,15 @@ def _value_suffix_findings(
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
     One scan and one evidence builder with the ``run_experiments`` linter's
-    ``value-suffix-nonascii`` rule, so both surfaces say the same thing. A micro sign
+    ``value-suffix-*`` rules, so both surfaces say the same thing. A micro sign
     is a warning: it is micro to a reader that decodes the file in the encoding
-    it was written in, which LTspice XVII does not do for a UTF-8 file. Any
-    other character is an error: it is never a scale, so the deck runs at the
-    bare number. ``encoding`` is the codec the file decoded as, which decides
-    which reader misreads it. ``cards`` has its title card dropped already.
+    it was written in, which LTspice XVII does not do for a UTF-8 file. A
+    suffix that shows the file was decoded in an encoding it was not written
+    in (``Âµ``) is an error: the deck runs at the bare number, and a micro sign
+    lost that way is a factor of 1e6. Any other symbol (``10Ω``) is a warning:
+    it is read as the bare number, which is usually what it means.
+    ``encoding`` is the codec the file decoded as, which decides which reader
+    misreads it. ``cards`` has its title card dropped already.
     """
     sites = value_suffix_sites(cards)
     generated_by = deck_generator(text) if sites else None
@@ -997,10 +1000,16 @@ def _value_suffix_findings(
         evidence = value_suffix_evidence(site, generated_by=generated_by)
         evidence["card"] = site.card.body
         evidence["encoding"] = encoding
+        if site.micro:
+            rule_id, severity = "value_suffix_micro_sign", "warning"
+        elif site.mojibake:
+            rule_id, severity = "value_suffix_mojibake", "error"
+        else:
+            rule_id, severity = "value_suffix_nonascii", "warning"
         findings.append(
             _finding(
-                rule_id="value_suffix_micro_sign" if site.micro else "value_suffix_nonascii",
-                severity="warning" if site.micro else "error",
+                rule_id=rule_id,
+                severity=severity,
                 at={"file": str(path), "line": site.line},
                 subject=site.token,
                 evidence=evidence,
@@ -1010,21 +1019,25 @@ def _value_suffix_findings(
 
 
 def _syntax_findings(
-    text: str, path: Path, deck: _LexedDeck, encoding: str
+    text: str, path: Path, deck: _LexedDeck, encoding: str, simulator: str
 ) -> list[dict[str, Any]]:
     """Directive, lex, element-arity and value-suffix findings in a netlist.
 
-    Everything here changes what the simulator reads, so every finding is an
-    error except a micro-sign suffix, which is a warning because whether it is
-    read as micro depends on the reader (see ``_value_suffix_findings``). The
-    facts that are legal-but-notable live in the quality check.
+    Everything here changes what the simulator reads. A finding is an error
+    unless its rule says the deck still runs as meant: an element-arity issue
+    carries the severity its validator check declares, and a suffix finding
+    is a warning except for a mis-decoded file (see
+    ``_value_suffix_findings``). ``simulator`` is the one the session runs
+    decks on, ``"LTspice"`` or ``"ngspice"``: some directive and element forms
+    are a fault for one and valid for the other. The facts that are
+    legal-but-notable live in the quality check.
     """
     findings: list[dict[str, Any]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line.startswith("."):
             continue
-        err = validate_directive(line)
+        err = validate_directive(line, simulator)
         if err is None:
             continue
         detail = err.message + (f" {err.suggestion}" if err.suggestion else "")
@@ -1049,8 +1062,8 @@ def _syntax_findings(
             )
         )
     findings.extend(
-        _rule_finding(issue, path, rule_id="element_arity", severity="error")
-        for issue in validate_netlist_arity(deck.cards)
+        _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
+        for issue in validate_netlist_arity(deck.cards, simulator=simulator)
     )
     findings.extend(_value_suffix_findings(deck.cards, path, text, encoding))
     return findings
@@ -2090,7 +2103,11 @@ async def evaluate_verify_circuit(
 
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
-        findings.extend(await asyncio.to_thread(_syntax_findings, text, path, deck, encoding))
+        # The simulator a run_experiments call with no override would use.
+        simulator = "ngspice" if state.raw_dialect == "ngspice" else "LTspice"
+        findings.extend(
+            await asyncio.to_thread(_syntax_findings, text, path, deck, encoding, simulator)
+        )
         checks_run.append("syntax")
 
     if wanted.get("quality") and deck is not None and kind == "netlist":

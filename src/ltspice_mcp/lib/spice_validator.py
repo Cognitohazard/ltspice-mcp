@@ -346,24 +346,77 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     return None
 
 
+# The checks ``validate_netlist_arity`` runs, each with the severity of every
+# issue it reports. Each check is its own lint rule id, with the disposition
+# its severity names, so suppressing one never silences another:
+#
+# ``element-arity`` — fewer positional nodes than the element has terminals
+# (``R1 out 1k``); the simulator refuses the card.
+# ``bsource-value-prefix`` — a B-source whose expression has no V=/I= key
+# (LTspice also takes R= and P=); the simulator refuses the card.
+# ``value-keyword-ltspice`` — C=/L= as a capacitor's or inductor's primary
+# value, which LTspice 26 rejects as an unknown parameter (ngspice accepts it).
+# ``value-expression-remnant`` — tokens left over after the first key=value.
+# The deck may well run (``V = V(a) + V(b)``); what is certain is that a value
+# edit would rewrite only the first span, so it is a warning.
+ARITY_CHECKS: dict[str, Literal["error", "warning"]] = {
+    "element-arity": "error",
+    "bsource-value-prefix": "error",
+    "value-keyword-ltspice": "error",
+    "value-expression-remnant": "warning",
+}
+
+# Keywords that carry a two-terminal element's value, so every positional
+# token on the card is a node: the primary-value keys (``R1 a b R=1k``), and
+# LTspice's charge-defined capacitor (``C1 a b Q=...``), flux-defined inductor
+# (``L1 a b Flux=...``) and a source playing a .wav file
+# (``V1 a b wavefile="in.wav"``).
+_VALUE_KEYWORDS: dict[str, frozenset[str]] = {
+    "R": frozenset({"r"}),
+    "C": frozenset({"c", "q"}),
+    "L": frozenset({"l", "flux"}),
+    "V": frozenset({"wavefile"}),
+    "I": frozenset({"wavefile"}),
+}
+
+# The keys a B-source's expression may sit under. LTspice adds a behavioural
+# resistor (R=) and a power sink (P=) to the voltage and current forms
+# ngspice also has.
+_BSOURCE_KEYS: dict[str, tuple[str, ...]] = {"LTspice": ("V", "I", "R", "P")}
+_BSOURCE_KEYS_DEFAULT = ("V", "I")
+
+
 def _card_directive(card: SpiceCard) -> str:
     """Source-form display text of a card for issue payloads."""
     return card.raw_lines[0].rstrip() if card.raw_lines else card.body.strip()
 
 
+def _arity_issue(check: str, card: SpiceCard, message: str, **extra: str) -> dict[str, object]:
+    """One ``validate_netlist_arity`` issue, carrying its check and severity."""
+    return {
+        "check": check,
+        "severity": ARITY_CHECKS[check],
+        "line": card.line_start,
+        "directive": _card_directive(card),
+        "message": message,
+        **extra,
+    }
+
+
 def validate_netlist_arity(
     cards: list[SpiceCard], *, simulator: str = "LTspice"
 ) -> list[dict[str, object]]:
-    """Flag instance cards whose positional-node count is below the per-
-    element minimum, and B-sources missing the ``V=``/``I=`` prefix.
+    """Flag instance cards the simulator cannot read as written.
 
     Returns dicts matching the existing ``handle_validate_netlist`` issue
-    shape: ``{line, directive, message, suggestion}``. The node-count and
-    B-source checks are simulator-agnostic. ``simulator`` gates the one
-    LTspice-only rule (the ``C=``/``L=`` primary-value rejection): under a
-    non-LTspice target it is suppressed, since ngspice accepts those forms.
+    shape, ``{line, directive, message, suggestion}``, plus ``check`` (a key of
+    ``ARITY_CHECKS``) and the ``severity`` that check declares; a caller
+    reports each issue at that severity. ``simulator`` gates the rules one
+    simulator's reading decides: the C=/L= primary-value rejection is
+    LTspice's, and B-source R=/P= are LTspice forms.
     """
     issues: list[dict[str, object]] = []
+    bsource_keys = _BSOURCE_KEYS.get(simulator, _BSOURCE_KEYS_DEFAULT)
     for card in cards:
         if card.kind != "instance":
             continue
@@ -375,8 +428,6 @@ def validate_netlist_arity(
         spec = ELEMENT_SPECS.get(prefix)
         if spec is None:
             continue
-
-        directive = _card_directive(card)
 
         # E/G/F/H carry two body shapes:
         #   - positional gain (``E1 out 0 in 0 10``) — needs spec.min_nodes
@@ -390,68 +441,58 @@ def validate_netlist_arity(
         has_kv = bool(inst.params)
         required = 2 if spec.kind_for(has_kv=has_kv) == "params_only" else spec.min_nodes
 
-        # Some SPICE dialects accept keyed primary-value forms
-        # (``R1 a b R=1k`` / ``C1 a b C=1n`` / ``L1 a b L=1u``), where all
-        # positional tokens after the ref are nodes. Re-count from the raw
-        # token stream when such a primary-value KV is present so arity checks
-        # do not confuse the last node with a positional value.
+        # A value carried by a keyword (``R1 a b R=1k``, ``C1 a b Q=...``)
+        # leaves every positional token after the ref a node. Re-count from
+        # the raw token stream so the last node is not read as a positional
+        # value.
         node_count = len(inst.nodes)
-        primary_value_key = next(
-            (key for key in inst.params if key.upper() == prefix),
-            None,
-        )
-        if prefix in ("R", "C", "L") and primary_value_key is not None:
-            positionals_after_ref = sum(
+        value_keys = _VALUE_KEYWORDS.get(prefix, frozenset())
+        if any(key.casefold() in value_keys for key in inst.params):
+            node_count = sum(
                 1
                 for tok in tokenize_body(card.body)[1:]
                 if tok.kind not in (TokenKind.KEY_VALUE, TokenKind.COMMENT_TRAIL)
             )
-            node_count = positionals_after_ref
-            # Real LTspice 26 accepts R=<value>, but rejects C=<value> and
-            # L=<value> as unknown parameters. ngspice accepts all three, so
-            # this rejection only applies to the LTspice target. (The
-            # node-count recompute above stays for both — it keeps the keyed
-            # value from being miscounted as a node either way.)
-            if prefix in ("C", "L") and simulator == "LTspice":
-                rewrite = " ".join([inst.ref, *inst.nodes, inst.value or ""])
-                issues.append(
-                    {
-                        "line": card.line_start,
-                        "directive": directive,
-                        "message": (
-                            f"{inst.ref}: LTspice does not accept {prefix}= as "
-                            f"the primary value for a {prefix}-element; use the "
-                            "positional value form instead."
-                        ),
-                        "suggestion": f"Rewrite as `{rewrite}`.",
-                    }
+        primary_value_key = next(
+            (key for key in inst.params if key.upper() == prefix),
+            None,
+        )
+        # Real LTspice 26 accepts R=<value>, but rejects C=<value> and
+        # L=<value> as unknown parameters. ngspice accepts all three, so this
+        # rejection only applies to the LTspice target.
+        if prefix in ("C", "L") and primary_value_key is not None and simulator == "LTspice":
+            rewrite = " ".join([inst.ref, *inst.nodes, inst.value or ""])
+            issues.append(
+                _arity_issue(
+                    "value-keyword-ltspice",
+                    card,
+                    f"{inst.ref}: LTspice does not accept {prefix}= as "
+                    f"the primary value for a {prefix}-element; use the "
+                    "positional value form instead.",
+                    suggestion=f"Rewrite as `{rewrite}`.",
                 )
+            )
 
         if node_count < required:
             issues.append(
-                {
-                    "line": card.line_start,
-                    "directive": directive,
-                    "message": (
-                        f"{inst.ref}: expected at least {required} "
-                        f"positional node(s) for a {prefix}-element, got {node_count}"
-                    ),
-                }
+                _arity_issue(
+                    "element-arity",
+                    card,
+                    f"{inst.ref}: expected at least {required} "
+                    f"positional node(s) for a {prefix}-element, got {node_count}",
+                )
             )
 
-        if prefix == "B":
-            kv_keys = {k.upper() for k in inst.params}
-            if "V" not in kv_keys and "I" not in kv_keys:
-                issues.append(
-                    {
-                        "line": card.line_start,
-                        "directive": directive,
-                        "message": (
-                            f"{inst.ref}: B-source requires V= or I= prefix on the expression "
-                            f"(got params {sorted(inst.params)})"
-                        ),
-                    }
+        if prefix == "B" and not {k.upper() for k in inst.params} & set(bsource_keys):
+            accepted = " or ".join(f"{key}=" for key in bsource_keys)
+            issues.append(
+                _arity_issue(
+                    "bsource-value-prefix",
+                    card,
+                    f"{inst.ref}: B-source requires {accepted} prefix on the expression "
+                    f"for {simulator} (got params {sorted(inst.params)})",
                 )
+            )
 
         # An expression with whitespace around its operators (``V = V(a) + V(b)``)
         # leaves orphan tokens after the first key=value: the lexer re-joins only
@@ -461,21 +502,17 @@ def validate_netlist_arity(
         # that a schematic value-edit would rewrite only the first key=value span
         # and drop the rest. Warning, not error: it would over-block a valid
         # deck, and the edit path (set_component_value) hard-errors on it anyway.
-        # ``severity`` set here overrides the caller's default error wrap.
         if body_has_stray_kv_remnant(card.body):
             issues.append(
-                {
-                    "severity": "warning",
-                    "line": card.line_start,
-                    "directive": directive,
-                    "message": (
-                        f"{inst.ref}: value expression is not fully parsed — orphan "
-                        "tokens after the first key=value. It cannot be value-edited "
-                        "via the schematic tools (only the first key=value span is "
-                        "rewritten). If this is a valid multi-term expression, wrap it "
-                        "in braces (e.g. V={...}); if a term was mistyped, fix the syntax."
-                    ),
-                }
+                _arity_issue(
+                    "value-expression-remnant",
+                    card,
+                    f"{inst.ref}: value expression is not fully parsed — orphan "
+                    "tokens after the first key=value. It cannot be value-edited "
+                    "via the schematic tools (only the first key=value span is "
+                    "rewritten). If this is a valid multi-term expression, wrap it "
+                    "in braces (e.g. V={...}); if a term was mistyped, fix the syntax.",
+                )
             )
 
     return issues
