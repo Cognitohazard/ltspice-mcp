@@ -251,6 +251,28 @@ tool-surface changes.
 
 ### Added
 
+- The guide is now a short core plus topic sections and the task skills, and
+  every interface can read it. `inspect` has a `guide` query kind: with no
+  `section` it returns the core (how to work with the server, when to use
+  Python or the tools, the rules that cause silent errors) ending in an index
+  of the sections and skills; `section` reads one (`"ltspice"`,
+  `"skill:spice-experiments"`). The Python API has the same text as
+  `Api.guide(section=None)`, a static method that needs no engine session, and
+  `python -m ltspice_mcp.api guide [SECTION]` prints it without starting the
+  engine. The resources are `spice://guide` (the core) and
+  `spice://guide/{section}`. A client that could not read resources had no way
+  to reach the guide before.
+- The guide has a section on working in Python: where `api` comes from, the six
+  operations as methods, waiting on jobs, raw traces and measurements, the
+  analysis primitives, errors, detached jobs, and running a second LTspice
+  build. The design document that held this is not in the package, so a model
+  had no way to read it.
+- The wheel carries the task skills (`ltspice_mcp/skills`), so the guide can
+  serve them to a client that installed only the package.
+- The first tool reply of a session that has not read the guide carries a
+  one-time reminder to read its core, on the text channel and in the
+  structured `hint`. Reading the guide through `inspect` or a `spice://guide`
+  resource retires it.
 - `plot_waveform` replies summarize each plotted trace: `min` and `max` with
   the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
   `final`, and the time-weighted `mean` on a transient, read from every sample
@@ -403,6 +425,18 @@ tool-surface changes.
 
 ### Changed
 
+- The server instructions send the model to the guide first, say when to use
+  Python and when the tools (Python for anything past a single call: loops and
+  complete results in one call; tools for one sandboxed step, charts, and jobs
+  the server owns), and keep the rules that cost a wrong answer. The per-tool
+  map they carried moved to the guide's core.
+- `spice://guide` returns the guide's core and index rather than the whole
+  guide; each section is `spice://guide/{section}`. The packaged file
+  `assets/spice_guide.md` became `assets/guide/`, one file per section. Pointers
+  in tool descriptions and hints name the section they mean
+  (`guide section 'signals'`).
+- `plot_waveform`'s output schema declares `hint`, which carries the guide
+  reminder when that is the session's first reply.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and

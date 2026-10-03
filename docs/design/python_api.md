@@ -221,8 +221,16 @@ engine session nor take the process's single session lease, so
 `Api.reference('inspect')` works before anything is opened. It renders from the
 same Pydantic models the call validates against, so it cannot drift.
 
+**`Api.guide(section=None) -> str`** is the guide the MCP server serves
+(`lib/guide.py`): with no argument, the core a session reads first and its index
+of topic sections and task skills; with a name from that index, that part. A
+staticmethod for the same reason as `reference()`, and the same text as
+`inspect(kind: "guide")` and the `spice://guide` resources. The guide carries
+this interface's usage (its `python` section), because this document is not in
+the package and a model cannot read it.
+
 `python -m ltspice_mcp.api reference [OP]` prints the same catalogue with no
-engine boot. The package's lazy `__init__` (PEP 562) plus a stdlib-and-pydantic
+engine boot, and `python -m ltspice_mcp.api guide [SECTION]` the guide. The package's lazy `__init__` (PEP 562) plus a stdlib-and-pydantic
 catalogue module keep scipy and the MCP SDK out of the interpreter; a
 cold-subprocess test pins that they stay out of `sys.modules`.
 
@@ -587,7 +595,7 @@ hand.
 The design intent is that the Python API and the MCP server share one
 working directory and one set of job records, and that a long-lived server
 process is the owner of jobs that must outlive a call, the provider of
-resources (`spice://guide`, job resources), and the renderer of the
+resources (the guide, job resources), and the renderer of the
 waveform widget — while scripts use the API for loops and complete results.
 A job either interface starts is readable by the other by `job_id`.
 

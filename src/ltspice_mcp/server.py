@@ -32,7 +32,7 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import path_denied_text
+from ltspice_mcp.tools._base import RegisteredTool, path_denied_text
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
@@ -236,27 +236,22 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 
 # Server-level guidance surfaced to the consuming LLM at the MCP initialize
 # handshake (forwarded by ``create_initialization_options`` ->
-# ``InitializationOptions.instructions``). Cross-cutting workflow guidance
-# only — per-tool detail stays in the individual tool descriptions, which
-# remain the contract (client injection of this string is not guaranteed).
-# Six tools over three planes; terse, because the client re-reads it each
-# turn. Kept under _INSTRUCTIONS_BUDGET including the runtime simulator
-# prefix: Claude Code silently truncates server instructions at 2048 chars,
-# and the tail (the result-trust paragraph) is the part that must survive.
+# ``InitializationOptions.instructions``). It is the one text every client
+# shows a model without being asked, so it does three things only: send the
+# model to the guide (``lib/guide.py``), say when to use Python and when the
+# tools, and carry the rules that cost a wrong answer when missed. Everything
+# else lives in the guide, which is read on demand. Kept under
+# _INSTRUCTIONS_BUDGET including the runtime simulator prefix: Claude Code
+# silently truncates server instructions at 2048 chars, and the tail (the
+# result-trust and sandbox rules) is the part that must survive.
 _INSTRUCTIONS_TEMPLATE = """\
-For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Write .cir/.net/.sp decks with your own file tools; the six tools below run them, analyze results, check circuits, and edit .asc geometry; plot_waveform draws plots. Routing: run quick one-off ngspice jobs yourself and bring the .raw; analyze_results raw_path parses runs this server never executed. Use run_experiments for LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
+SPICE simulation with LTspice and ngspice, and LTspice .asc schematic editing.
 
-Runs are cheap: simulate instead of reasoning it out.
+Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) returns its core (how to work here, the Python API, the rules that cause silent errors) and an index of topic sections and task skills; add "section" to read one. Read the section or skill for a task before starting it.
 
-EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. Loops, trace math: {code_loops}
+{python_door} Tools: one sandboxed step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
 
-UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check by plain words ('phase margin').
-
-AUTHOR — edit_schematic: typed op batch on one .asc sheet; transactional, revision-guarded (expected_sha256); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare, optional render.
-
-A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings, and per-item failures. Match the recipe to the run type (.AC vs .tran) or analyze_results errors.
-
-Paths must lie in the sandbox; a refused path names the config line that widens it.
+Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures. Paths must lie in the sandbox; a refused path names the config line that widens it.
 """
 
 # Claude Code's client truncates MCP server instructions at 2048 characters;
@@ -268,14 +263,34 @@ _INSTRUCTIONS_BUDGET = 2048
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
-#: The code-loop clause, in its two editions: the library alone, or the tool
-#: in front of it when the operator turned run_code on.
-_CODE_LOOPS_LIBRARY = "from ltspice_mcp.api import Api, the same ops in-process."
-_CODE_LOOPS_TOOL = "run_code runs Python with api in scope, or from ltspice_mcp.api import Api."
+#: The Python door, in its two editions: run_code in front of the library when
+#: the operator serves it, the library alone when ``[tools] run_code = false``.
+_PYTHON_DOOR_TOOL = (
+    "Python: run_code runs a snippet with api in scope (in your own Python, from "
+    "ltspice_mcp.api import Api), so loops, decisions, trace math and complete results "
+    "take one call and far fewer tokens than a tool call per step. run_code has the "
+    "server's own file and process authority, outside the sandbox, and a job it owns "
+    "stops if its worker restarts unless submitted with detach=True."
+)
+_PYTHON_DOOR_LIBRARY = (
+    "Python: from ltspice_mcp.api import Api gives the same operations in your own "
+    "Python, so loops, decisions, trace math and complete results take one call and far "
+    "fewer tokens than a tool call per step. A job it owns stops when your process "
+    "exits unless submitted with detach=True."
+)
 
-#: The guide as the default configuration serves it (run_code on) — the static
-#: default the Server is constructed with, and what the tests pin.
-CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(code_loops=_CODE_LOOPS_TOOL)
+#: The instructions as the default configuration serves them (run_code on) —
+#: the static default the Server is constructed with, and what the tests pin.
+CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(python_door=_PYTHON_DOOR_TOOL)
+
+#: Sent once, on the first tool reply of a session that has not read the guide.
+#: The instructions ask for the read up front, but a client is not obliged to
+#: show them, and a model that skipped them meets this instead.
+GUIDE_REMINDER = (
+    'This session has not read the guide. Read its core first: inspect(queries=[{"kind": '
+    '"guide"}]), or api.guide() in Python. Its index names the section or skill for '
+    "this task."
+)
 
 
 def build_instructions(
@@ -290,10 +305,10 @@ def build_instructions(
     otherwise read the LTspice-centric name and the "symbols disabled" log as
     degradation. Stating the active engine up front removes that ambiguity.
     ``served`` is the session's tool set (the default configuration's surface
-    when not given); the code-loop clause names run_code only when it is in it.
+    when not given); the Python clause names run_code only when it is in it.
     """
     instructions = _INSTRUCTIONS_TEMPLATE.format(
-        code_loops=_CODE_LOOPS_TOOL if "run_code" in served else _CODE_LOOPS_LIBRARY
+        python_door=_PYTHON_DOOR_TOOL if "run_code" in served else _PYTHON_DOOR_LIBRARY
     )
     if not available:
         # The short no-simulator form: the long one plus the guide would
@@ -408,6 +423,39 @@ async def call_tool(
     # the index write runs as a background task so it never gates dispatch.
     await _notice_circuit(arguments, state)
 
+    return _with_guide_reminder(await _invoke(registered, name, arguments, state), state)
+
+
+def _with_guide_reminder(
+    result: types.CallToolResult, state: SessionState
+) -> types.CallToolResult:
+    """Add the read-the-guide reminder to the first reply of a session that has
+    not read the guide, once.
+
+    The reminder rides the text channel and ``structuredContent["hint"]`` both,
+    because a structured-aware client shows only the latter. The result is
+    copied, never edited in place: a replayed receipt's payload can be shared.
+    """
+    if state.guide_read or state.guide_reminded:
+        return result
+    state.guide_reminded = True
+    update: dict[str, Any] = {
+        "content": [*result.content, types.TextContent(type="text", text=GUIDE_REMINDER)]
+    }
+    structured = result.structured_content
+    if structured is not None:
+        hint = structured.get("hint")
+        update["structured_content"] = {
+            **structured,
+            "hint": f"{hint} {GUIDE_REMINDER}" if hint else GUIDE_REMINDER,
+        }
+    return result.model_copy(update=update)
+
+
+async def _invoke(
+    registered: RegisteredTool, name: str, arguments: dict[str, Any] | None, state: SessionState
+) -> types.CallToolResult:
+    """Run one tool's handler, turning every failure into an error result."""
     # Invoke handler — enrich known errors with actionable guidance, and report
     # every failure as an is_error result rather than a JSON-RPC error, so the
     # calling model reads the message and can act on it.

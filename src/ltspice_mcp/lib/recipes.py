@@ -153,7 +153,7 @@ TRANSIENT_FIELDS_BY_MODE: dict[str, frozenset[str]] = {
 # not a per-call-site convention.
 _DORMANT_POINTER = (
     " Full arguments: inspect(kind='reference', query='{metric}'), "
-    "api.reference('analyze_results'), or spice://guide."
+    "api.reference('analyze_results'), or guide section 'tools'."
 )
 
 
@@ -391,7 +391,7 @@ class MeasurementsRecipe(KeyedRecipe):
 class ValueRecipe(ScalarRecipe):
     metric: Literal["value"]
     expr: str = Field(
-        description="One trace, or a node pair 'V(a,b)'; trace math: spice://guide.",
+        description="One trace, or a node pair 'V(a,b)'; trace math: guide section 'signals'.",
     )
     at: float | str | None = Field(
         default=None,

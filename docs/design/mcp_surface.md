@@ -188,9 +188,10 @@ shown. The listing is paid for once per session whether or not a tool is
 called, so each description is written short — one or two sentences carrying
 the unit, the sign or direction convention, the default, and how the field
 interacts with its siblings. Anything longer than that belongs here or in
-`spice://guide`, with a pointer on the field. `api.reference('<tool>')` and
-`spice://guide` render the same model descriptions, so a sentence written for
-the wire is the one those two channels also serve.
+a section of the guide, with a pointer on the field naming it
+(`guide section 'signals'`). `api.reference('<tool>')` and
+`inspect(kind: "reference")` render the same model descriptions, so a sentence
+written for the wire is the one those two channels also serve.
 `tests/test_consolidated_contracts.py` holds both ends: the advertised
 descriptions must equal the source ones, and each tool's serialized definition
 has an upper size bound.
@@ -1068,10 +1069,24 @@ Python API), which are never capped. The gate stays a whole-file answer.
     branches — recipes, ops, variation kinds, query kinds, checks and job
     actions. A plain-words `query` returns the closest entries with their full
     field tables; no `query` returns the table of contents, one line per entry
+{kind: "guide", section?}
+    the packaged guide (`lib/guide.py`): no `section` returns the core a
+    session reads first, ending in an index of the topic sections and task
+    skills; a `section` from that index returns that part. An unknown name
+    fails the item as `unknown_section`, listing the names that exist
 ```
 
-`path` is required except on `capabilities`, `symbols`, `symbol` and
-`reference`.
+`path` is required except on `capabilities`, `symbols`, `symbol`,
+`reference` and `guide`.
+
+**Why the guide is a query kind.** The instructions send every session to the
+guide's core first, and the one door every client has is a tool call: some
+clients cannot read resources, and the Python API's own door, `Api.guide()`,
+has no session to ask. So the guide is served three ways from one module — this
+kind, `Api.guide()`, and the `spice://guide` resources — and the tests hold the
+three to one text. A read through this kind or a resource is recorded on the
+session, because the first tool reply of a session that has not read the guide
+carries one reminder to read it, in its text and its structured `hint`.
 
 **Why the vocabulary needs a lookup of its own.** Each tool holds many
 capabilities behind a discriminator, and a host choosing a tool sees only tool

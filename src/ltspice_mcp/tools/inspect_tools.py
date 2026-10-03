@@ -1,7 +1,7 @@
 """inspect — the consolidated read-only UNDERSTAND surface.
 
 One tool answers a batch of independent read-only ``queries`` about the server
-and the circuits it can reach. Each query is one of eight kinds:
+and the circuits it can reach. Each query is one of nine kinds:
 
 * ``capabilities`` — detected simulators + dialects, exporter presence, job
   persistence, allowed roots, the active profile and which of the two tool
@@ -49,6 +49,10 @@ than a hunt.
   gives me phase margin" and to "what does this branch take" on the ``compact``
   tool listing, where per-argument descriptions are not on the wire at all. It
   reads no file and touches no session state.
+* ``guide`` — the packaged guide (``lib/guide.py``): with no ``section``, the
+  core a session reads first and the index of topic sections and task skills;
+  with one, that section or skill. It records on the session that the guide
+  was read, which retires the one read-the-guide reminder.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
@@ -91,7 +95,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, response_budget, services
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, guide, response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -656,6 +660,19 @@ class ReferenceQuery(StrictModel):
     )
 
 
+class GuideQuery(StrictModel):
+    """Read the guide: its core and index, or one topic section or task skill."""
+
+    kind: Literal["guide"]
+    section: str | None = Field(
+        default=None,
+        description=(
+            "A name from the core's index ('ltspice', 'skill:spice-experiments'). "
+            "Omit it for the core and the index."
+        ),
+    )
+
+
 Query: TypeAlias = Annotated[
     CapabilitiesQuery
     | SymbolsQuery
@@ -664,7 +681,8 @@ Query: TypeAlias = Annotated[
     | ComponentsQuery
     | HierarchyQuery
     | ModelQuery
-    | ReferenceQuery,
+    | ReferenceQuery
+    | GuideQuery,
     Field(discriminator="kind"),
 ]
 
@@ -1690,7 +1708,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
     if not matches:
         data["hint"] = (
             f"Nothing matched {q.query!r}. Call inspect(kind='reference') with no "
-            "query for the whole vocabulary, or read spice://guide."
+            "query for the whole vocabulary, or read the guide: inspect(kind='guide')."
         )
     elif total > len(matches):
         # Name the lever that is actually free. Under a response budget the
@@ -1707,6 +1725,26 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
             lever = f"'limit' is already at its cap of {REFERENCE_LIMIT_CAP}; narrow the query."
         data["hint"] = f"{total} branches matched; the {len(matches)} closest are shown. {lever}"
     return {"data": data}
+
+
+# ---------------------------------------------------------------------------
+# guide
+# ---------------------------------------------------------------------------
+
+
+def _do_guide(q: GuideQuery, state: SessionState) -> dict[str, Any]:
+    """Serve the guide's core and index, or one section, skill or skill file.
+
+    The text is packaged and read once per process (``lib/guide.py``), so
+    nothing is offloaded. A read here is what the session's read-the-guide
+    reminder waits for, whichever section it names.
+    """
+    try:
+        text = guide.read(q.section)
+    except guide.UnknownGuideSection as exc:
+        raise _QueryError("unknown_section", str(exc), supported=list(exc.known)) from exc
+    state.guide_read = True
+    return {"data": {"section": q.section, "title": guide.title_of(q.section), "text": text}}
 
 
 # ---------------------------------------------------------------------------
@@ -1793,6 +1831,8 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return await asyncio.to_thread(_hierarchy_page, query, state, view)
     if isinstance(query, ReferenceQuery):
         return _do_reference(query, view, frozenset(state.tool_dispatch))
+    if isinstance(query, GuideQuery):
+        return _do_guide(query, state)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -1886,6 +1926,17 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     },
 }
 
+#: The ``guide`` kind's payload: the text itself, and which part of the guide
+#: it is. Like the reference names above, no other kind returns these keys.
+_GUIDE_DATA_PROPERTIES: dict[str, Any] = {
+    "section": {
+        "type": ["string", "null"],
+        "description": "The section read; null for the core and its index.",
+    },
+    "title": {"type": "string"},
+    "text": {"type": "string", "description": "Markdown."},
+}
+
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -1908,10 +1959,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "error": _ERROR_SCHEMA,
                     # Kind-specific payload; its shape is documented per kind in
                     # the module docstring and stays open here by design. The
-                    # reference lookup's two collections are named because
-                    # nothing else on this tool returns them, so declaring them
-                    # constrains that kind without constraining any other.
-                    "data": {"type": "object", "properties": _REFERENCE_DATA_PROPERTIES},
+                    # reference lookup's collections and the guide's text are
+                    # named because nothing else on this tool returns them, so
+                    # declaring them constrains those kinds without constraining
+                    # any other.
+                    "data": {
+                        "type": "object",
+                        "properties": {**_REFERENCE_DATA_PROPERTIES, **_GUIDE_DATA_PROPERTIES},
+                    },
                     "next_cursor": {"type": ["string", "null"]},
                     "page": {
                         "type": "object",
@@ -1988,9 +2043,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'hierarchy', 'model', 'reference' — each with its own arguments, described "
-    "on its branch of the query schema. 'reference' searches every tool's "
-    "recipes, ops, checks and their fields in plain words ('phase margin'). A "
+    "'components', 'hierarchy', 'model', 'reference', 'guide' — each with its own arguments, "
+    "described on its branch of the query schema. 'reference' searches every tool's "
+    "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
+    "returns the guide's core, or one 'section' its index names. A "
     "denied path, a stale cursor, an unknown kind, or a malformed query fails "
     "only that item; every other query still returns, and paginated kinds resume "
     "via 'cursor'. It is the only tool on this surface that never writes."
