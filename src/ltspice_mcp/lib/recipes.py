@@ -294,20 +294,19 @@ class ScalarRecipe(RecipeBase):
 class MultiRecipe(RecipeBase):
     # The rule the validator below enforces, stated in the schema itself so a
     # listing that strips descriptions still carries it.
-    model_config = ConfigDict(
-        json_schema_extra={"dependentRequired": {"reduce": ["field"], "spec": ["field"]}}
-    )
+    model_config = ConfigDict(json_schema_extra={"dependentRequired": {"spec": ["field"]}})
     reduce: list[ReduceStat] = Field(default_factory=list)
     field: str | None = Field(
         default=None,
         description=(
             "Which of this recipe's numbers a 'reduce' or a 'spec' reads (e.g. "
-            "'phase_margin_deg'); required as soon as either is given."
+            "'phase_margin_deg'). Required when 'spec' is given; without it, "
+            "'reduce' covers every field."
         ),
     )
     spec: SpecLimits | None = None
 
-    def _reducible_fields(self) -> tuple[str, ...]:
+    def reducible_fields(self) -> tuple[str, ...]:
         """The numbers 'field' may name. A recipe whose row keys depend on its
         own arguments extends this with them."""
         # ``metric`` is the Literal discriminant every concrete subclass sets;
@@ -316,15 +315,15 @@ class MultiRecipe(RecipeBase):
 
     @model_validator(mode="after")
     def _field_for_cross_run_work(self) -> MultiRecipe:
-        wants_reduction = bool(self.reduce) or self.spec is not None
-        if wants_reduction and self.field is None:
+        # A spec is one verdict on one number. A reduction is per field, so
+        # without 'field' it covers every one, as a keyed recipe's does.
+        if self.spec is not None and self.field is None:
             raise ValueError(
-                "this recipe returns multiple fields; set 'field' to the one "
-                "the reduction or spec should read"
+                "this recipe returns multiple fields; set 'field' to the one the spec should read"
             )
         if self.field is not None:
             metric: str = getattr(self, "metric")  # noqa: B009
-            fields = self._reducible_fields()
+            fields = self.reducible_fields()
             if self.field not in fields:
                 keys = MULTI_FIELD_KEYS.get(metric, {})
                 by_key = [name for name in fields if keys.get(name) == self.field]
@@ -430,8 +429,8 @@ class SignalStatsRecipe(MultiRecipe):
             raise ValueError("quantile levels must be distinct")
         return levels
 
-    def _reducible_fields(self) -> tuple[str, ...]:
-        return (*super()._reducible_fields(), *quantile_fields(self.quantiles))
+    def reducible_fields(self) -> tuple[str, ...]:
+        return (*super().reducible_fields(), *quantile_fields(self.quantiles))
 
 
 class Levels(StrictModel):

@@ -1688,6 +1688,34 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 _WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
 
 
+def _multi_fields(recipe: MultiRecipe, value: dict[str, Any]) -> list[tuple[str, str]]:
+    """The (field, row key) pairs a multi-field recipe's reduction reads in one row.
+
+    With 'field' set, that one. Without it, every reducible field, each row key
+    read once: two names for one key (a disturbance's 'deviation' and
+    'undershoot') are one number, reported under the first in table order. An
+    edge's transition time is reported as the rise or the fall time the row
+    measured.
+    """
+    # ``metric`` is the discriminant every concrete subclass sets; the base
+    # does not declare it.
+    metric: str = getattr(recipe, "metric")  # noqa: B009
+    keys = MULTI_FIELD_KEYS.get(metric, {})
+    if recipe.field:
+        return [(recipe.field, keys.get(recipe.field, recipe.field))]
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name in recipe.reducible_fields():
+        actual = keys.get(name, name)
+        if actual in seen:
+            continue
+        seen.add(actual)
+        if metric == "edges" and actual == "transition_time":
+            name = "rise_time" if value.get("is_rise_time", True) else "fall_time"
+        pairs.append((name, actual))
+    return pairs
+
+
 def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Record, float]]]:
     # The reducer category is the base the recipe inherits (exactly one); a
     # variable-length recipe matches none and yields no samples.
@@ -1708,9 +1736,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
             if number is not None:
                 out.setdefault(field, []).append((record, number))
         elif isinstance(recipe, MultiRecipe):
-            field = recipe.field
-            if field:
-                actual = MULTI_FIELD_KEYS.get(recipe.metric, {}).get(field, field)
+            for field, actual in _multi_fields(recipe, value):
                 number = _number(value.get(actual))
                 if number is not None:
                     out.setdefault(field, []).append((record, number))

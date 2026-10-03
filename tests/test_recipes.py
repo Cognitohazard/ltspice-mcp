@@ -147,10 +147,16 @@ def test_a_multi_field_recipe_names_its_field_once_for_reduce_and_spec():
     )
     assert isinstance(recipe, SignalStatsRecipe)
     assert recipe.field == "mean"
+    # A spec is one verdict on one number, so it needs the field named...
     with pytest.raises(ValidationError, match="set 'field'"):
         validate_recipe(
-            {"key": "s", "metric": "signal_stats", "signal": "V(out)", "reduce": ["max"]}
+            {"key": "s", "metric": "signal_stats", "signal": "V(out)", "spec": {"min": 0.0}}
         )
+    # ...while a reduction without one covers every field, as on a keyed recipe.
+    bare = validate_recipe(
+        {"key": "s", "metric": "signal_stats", "signal": "V(out)", "reduce": ["max"]}
+    )
+    assert bare.field is None
 
 
 def test_stability_reduces_its_crossover_frequency_and_dc_gain():
@@ -266,8 +272,9 @@ def test_field_accepts_the_result_rows_own_key():
 
 
 def test_field_dependency_rides_the_advertised_schema():
-    """'field' is required once 'reduce' or 'spec' is given. The rule is stated
-    in the schema itself (dependentRequired), so a listing that strips every
+    """'field' is required once 'spec' is given, on a multi-field and a keyed
+    recipe alike; a bare 'reduce' covers every field. The rule is stated in the
+    schema itself (dependentRequired), so a listing that strips every
     description still carries it and a caller need not learn it from an error."""
     import json
 
@@ -275,11 +282,10 @@ def test_field_dependency_rides_the_advertised_schema():
     from ltspice_mcp.tools.analyze import AnalyzeResultsInput
 
     schema = build_input_schema(AnalyzeResultsInput)
-    multi = '"dependentRequired": {"reduce": ["field"], "spec": ["field"]}'
-    keyed = '"dependentRequired": {"spec": ["field"]}'
+    spec_only = '"dependentRequired": {"spec": ["field"]}'
     for text in (json.dumps(schema), json.dumps(strip_argument_descriptions(schema))):
-        assert multi in text
-        assert keyed in text
+        assert spec_only in text
+        assert '"reduce": ["field"]' not in text
 
 
 class TestSignalStatsQuantiles:
