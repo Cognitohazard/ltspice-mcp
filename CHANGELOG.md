@@ -26,7 +26,9 @@ tool-surface changes.
   submission.
 - An unterminated single quote in a netlist was reported with the hint "add a
   closing \" after the opening quote". The hint now names the quote that was
-  opened.
+  opened, and a quote left open inside a braced or parenthesized expression is
+  reported at the quote, with the same hint, rather than at the enclosing
+  bracket with none.
 
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's

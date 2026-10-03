@@ -211,16 +211,7 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
         # Double-quoted strings, and single-quoted expressions (ngspice
         # numparam: rth='(expr)'): consume to the matching closing quote.
         if c in ('"', "'"):
-            quote = c
-            end = body.find(quote, i + 1)
-            if end < 0:
-                raise SpiceLexError(
-                    SpiceLexErrorCategory.UNTERMINATED_QUOTE,
-                    "unterminated quoted string",
-                    position=i,
-                    body=body,
-                    suggestion=f"add a closing {quote} after the opening quote",
-                )
+            end = _closing_quote(body, i)
             yield _Atom(TokenKind.QUOTED.value, body[i : end + 1], i)
             i = end + 1
             continue
@@ -260,6 +251,25 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
         yield _Atom(TokenKind.BARE.value, body[start:i], start)
 
 
+def _closing_quote(body: str, i: int, where: str = "") -> int:
+    """Index of the quote that closes the one at ``body[i]``.
+
+    Raises ``SpiceLexError`` at the opening quote, naming that quote, when
+    nothing closes it. ``where`` adds context to the message.
+    """
+    quote = body[i]
+    end = body.find(quote, i + 1)
+    if end < 0:
+        raise SpiceLexError(
+            SpiceLexErrorCategory.UNTERMINATED_QUOTE,
+            f"unterminated quoted string{where}",
+            position=i,
+            body=body,
+            suggestion=f"add a closing {quote} after the opening quote",
+        )
+    return end
+
+
 def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     """Return the index of the matching ``closer`` for ``body[start] == opener``.
 
@@ -274,15 +284,7 @@ def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     while i < n:
         c = body[i]
         if c == '"' or c == "'":
-            end = body.find(c, i + 1)
-            if end < 0:
-                raise SpiceLexError(
-                    SpiceLexErrorCategory.UNTERMINATED_QUOTE,
-                    f"unterminated quoted string inside {opener}...{closer}",
-                    position=start,
-                    body=body,
-                )
-            i = end + 1
+            i = _closing_quote(body, i, f" inside {opener}...{closer}") + 1
             continue
         if c == opener:
             depth += 1
@@ -417,7 +419,8 @@ class SpiceCard:
     re-parse every card. The exact meaning depends on ``kind``:
 
     - ``"model"`` — model name (``.MODEL <name> ...``)
-    - ``"param"`` — first param name (``.PARAM <name>=...``)
+    - ``"param"`` — param name (``.PARAM <name>=...``); ``None`` on a line
+      that defines several
     - ``"instance"`` — instance ref (``Rxxx``, ``M1``, ...)
     - ``"subckt"`` — subcircuit name (``.SUBCKT <name> ...``)
     - ``"ends"`` — matching subckt name on ``.ENDS [name]``, else ``None``
@@ -865,23 +868,33 @@ def _extract_param_name(body: str) -> str | None:
     rest = body.split(None, 1)
     if len(rest) < 2:
         return None
-    try:
-        # Each assignment is one KEY=VALUE token, or a standalone "=" when
-        # spaced; an "=" inside braces or quotes belongs to its value.
-        assignments = sum(
-            1
-            for token in tokenize_body(body)[1:]
-            if token.kind in (TokenKind.KEY_VALUE, TokenKind.EQUALS)
-        )
-    except SpiceLexError:
-        assignments = 1  # malformed: keep the plain first-word reading
-    if assignments > 1:
+    # Two assignments need two "=", so most lines are settled by the count.
+    if body.count("=") > 1 and _assigns_twice(body):
         return None
     tail = rest[1]
     eq = tail.find("=")
     if eq < 0:
         return tail.split(None, 1)[0]
     return tail[:eq].strip().split(None, 1)[0] if tail[:eq].strip() else None
+
+
+def _assigns_twice(body: str) -> bool:
+    """Whether a ``.PARAM`` body assigns more than one parameter.
+
+    Every assignment has exactly one top-level ``=`` atom; an ``=`` inside
+    quotes, braces or parentheses is part of its value's atom. The walk stops
+    at the second, so a long parameter block is not tokenized to its end.
+    """
+    seen = 0
+    try:
+        for atom in _iter_atoms(body):
+            if atom.kind == _EQUALS:
+                seen += 1
+                if seen > 1:
+                    return True
+    except SpiceLexError:
+        return False  # malformed: keep the plain first-word reading
+    return False
 
 
 def _extract_instance_ref(body: str) -> str | None:
