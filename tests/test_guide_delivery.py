@@ -20,6 +20,8 @@ from mcp import types
 from ltspice_mcp.api import Api
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import guide
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
+from ltspice_mcp.lib.response_budget import BUDGET_MIN_TOKENS
 from ltspice_mcp.lib.variations import MismatchRule
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.server import (
@@ -29,6 +31,8 @@ from ltspice_mcp.server import (
     call_tool,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import get_tools
+from tests._text import names, section
 from tests.conftest import call_tool_params, fake_request_context
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,21 +182,62 @@ class TestSectionContent:
             # another section, leaving it to start mid-sentence.
             ("tools", "Three recipes appear in the tool schema by name only"),
             ("tools", "## A sweep in one call"),
-            ("tools", '"metric": "measurements"'),
-            ("tools", "## The response budget"),
-            ("tools", "estimated tokens (compact characters / 4, minimum 500)"),
-            ("operating-points", "logopinfo"),
-            ("operating-points", '{"metric": "operating_point", "device": "M1"}'),
-            ("bench-craft", "LFB out inn 1T"),
-            ("bench-craft", "### Operating-point and supply-current archetype"),
-            ("bench-craft", "### Open-loop AC archetype"),
-            ("bench-craft", "### Closed-loop transient and load-step archetype"),
-            ("bench-craft", "dot-less interactive `meas`"),
-            ("bench-craft", "`scale, V(out), scale, I(VDD)`"),
         ],
     )
     def test_anchor(self, section: str, anchor: str):
         assert anchor in " ".join(guide.read(section).split())
+
+    def test_teaches_both_measurement_idioms(self):
+        # Scalars come from a .meas in the deck, read back by the measurements
+        # recipe; device small-signal parameters come from a .op run with
+        # .options logopinfo, read back by operating_point. The recipes are
+        # checked against the live union, so a rename fails here.
+        tools, op = guide.read("tools"), guide.read("operating-points")
+        assert ".meas" in tools.lower()
+        assert "logopinfo" in op.lower()
+        for text, recipe in ((tools, "measurements"), (op, "operating_point")):
+            assert recipe in DISCRIMINANTS, f"{recipe} is no longer a recipe"
+            assert names(text, recipe), f"the guide never names {recipe} where it teaches it"
+
+    def test_teaches_the_response_budget(self):
+        # The budget section names every tool that takes one, its unit and its
+        # floor, each read off the code, so it can neither be gutted nor fall
+        # behind the surface.
+        owners = {
+            name
+            for name, registered in get_tools()[1].items()
+            if "budget" in registered.definition.input_schema.get("properties", {})
+        }
+        assert owners, "no tool takes a budget any more"
+        budget = section(guide.read("tools"), "budget")
+        missing = sorted(tool for tool in owners if not names(budget, tool))
+        assert not missing, f"the budget section never names {missing}"
+        assert "token" in budget.lower()
+        assert names(budget, str(BUDGET_MIN_TOKENS)), "the budget floor is not stated"
+
+    def test_the_bench_playbook_closes_a_dc_servo(self):
+        # The DC-only feedback inductor that closes the loop at DC.
+        text = guide.read("bench-craft")
+        assert re.search(r"^\s*LFB\s+out\s+inn\s+1T\b", text, re.IGNORECASE | re.MULTILINE)
+
+    def test_the_bench_playbook_ships_a_template_per_analysis(self):
+        # An operating-point, an open-loop AC and a closed-loop transient bench,
+        # each a complete deck an agent can render.
+        decks = re.findall(r"```spice\n(.*?)```", guide.read("bench-craft"), re.S)
+        for analysis in (".op", ".ac", ".tran"):
+            assert any(
+                re.search(rf"^{re.escape(analysis)}\b", deck, re.IGNORECASE | re.MULTILINE)
+                and re.search(r"^\.end\s*$", deck, re.IGNORECASE | re.MULTILINE)
+                for deck in decks
+            ), f"no complete {analysis} bench template"
+
+    def test_the_bench_playbook_teaches_ngspice_batch_output(self):
+        text = guide.read("bench-craft")
+        # Under -b -r a measurement goes in .control as the dot-less command.
+        controls = re.findall(r"^\.control\b(.*?)^\.endc\b", text, re.S | re.M | re.I)
+        assert any(re.search(r"^meas\s", block, re.M | re.I) for block in controls)
+        # wrdata repeats the scale column before every dumped vector.
+        assert re.search(r"scale\s*,\s*v\(out\)\s*,\s*scale\s*,\s*i\(vdd\)", text, re.I)
 
     def test_the_bench_playbook_is_a_task(self):
         (entry,) = [entry for entry in guide.sections() if entry.name == "bench-craft"]

@@ -120,8 +120,8 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "and read signals with analyze_results."
     ),
     _err.LibraryError: (
-        'Use inspect with a model query (mode:"enumerate") to see loaded '
-        "libraries, or add .lib/.include directives to the netlist directly."
+        'Use inspect with a model query (mode:"search") to find the part in the '
+        "simulator's own libraries, or add .lib/.include directives to the netlist."
     ),
 }
 

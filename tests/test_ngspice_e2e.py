@@ -11,6 +11,7 @@ lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 """
 
 import asyncio
+import math
 import shutil
 from pathlib import Path
 
@@ -487,6 +488,19 @@ async def test_transient_runs_and_parses(ngspice_state: SessionState, work_dir: 
     receipt = await _run_one(ngspice_state, "ng-transient", net)
     summary = await _summary(ngspice_state, receipt["job_id"])
     assert "Transient" in summary["sim_type"]
+
+    # A 1 V step into a 1k/1uF RC (tau = 1 ms) charges as 1 - exp(-t/tau).
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [
+            {"key": f"at_{at}", "metric": "value", "expr": "v(out)", "at": at}
+            for at in ("1m", "3m")
+        ],
+    )
+    for at, tau_count in (("1m", 1), ("3m", 3)):
+        value = data["results"][f"at_{at}"]["values"][0]["value"]["value"]
+        assert value == pytest.approx(1 - math.exp(-tau_count), rel=1e-2), at
 
 
 async def test_control_script_deck_produces_readable_raw(
