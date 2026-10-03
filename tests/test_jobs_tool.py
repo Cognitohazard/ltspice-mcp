@@ -1236,17 +1236,27 @@ class TestCancellationAuthority:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        """Ownership, or the receipt's token, is what reaches the coordinator.
+
+        The coordinator is a stand-in so the test observes the call itself: an
+        owned job and a foreign job named with its token both arrive there with
+        the caller's token, a wrong token never does, and the rows the
+        coordinator reports are the rows the reply carries.
+        """
         circuit = _circuit(work_dir)
-        job = _experiment(work_dir, circuit, status="running")
-        state_no_sim.all_jobs[job.job_id] = job
+        owned = _experiment(work_dir, circuit, status="running")
+        foreign = _experiment(
+            work_dir,
+            circuit,
+            job_id="exp_jobs_token",
+            request_id="token-request",
+            status="running",
+        )
+        foreign.owner_pid = -1
+        for job in (owned, foreign):
+            state_no_sim.all_jobs[job.job_id] = job
 
         async def cancel(candidate, *, control_token=None):
-            assert candidate is job
-            candidate.cases[0].status = "cancelled"
-            candidate.completeness.recount(candidate.cases)
-            candidate.status = "cancelled"
-            candidate.runs_done_event.set()
-            candidate.done_event.set()
             return [cancel_receipt_row(candidate.cases[0], "running", "cancelled")]
 
         runner = SimpleNamespace(cancel=AsyncMock(side_effect=cancel))
@@ -1256,33 +1266,29 @@ class TestCancellationAuthority:
             lambda _job: runner,
         )
 
-        owner = _assert_jobs_schema(
-            await handle_jobs(_args("cancel", job_id=job.job_id), state_no_sim)
+        by_owner = _assert_jobs_schema(
+            await handle_jobs(_args("cancel", job_id=owned.job_id), state_no_sim)
         )
-        assert owner["status"] == "cancelled"
-        runner.cancel.assert_awaited_once()
+        runner.cancel.assert_awaited_once_with(owned, control_token=None)
+        assert [row["case_id"] for row in by_owner["items"]] == [owned.cases[0].case_id]
 
-        token_job = _experiment(
-            work_dir,
-            circuit,
-            job_id="exp_jobs_token",
-            request_id="token-request",
-            status="running",
+        runner.cancel.reset_mock()
+        wrong = await handle_jobs(
+            _args("cancel", job_id=foreign.job_id, control_token="not-its-token"),
+            state_no_sim,
         )
-        token_job.owner_pid = -1
-        state_no_sim.all_jobs[token_job.job_id] = token_job
-        job = token_job
-        token = _assert_jobs_schema(
+        assert wrong.is_error
+        assert _assert_jobs_schema(wrong)["error"]["code"] == "cancel_not_authorized"
+        runner.cancel.assert_not_awaited()
+
+        by_token = _assert_jobs_schema(
             await handle_jobs(
-                _args(
-                    "cancel",
-                    job_id=token_job.job_id,
-                    control_token=token_job.control_token,
-                ),
+                _args("cancel", job_id=foreign.job_id, control_token=foreign.control_token),
                 state_no_sim,
             )
         )
-        assert token["status"] == "cancelled"
+        runner.cancel.assert_awaited_once_with(foreign, control_token=foreign.control_token)
+        assert [row["case_id"] for row in by_token["items"]] == [foreign.cases[0].case_id]
 
     async def test_a_second_foreign_cancel_reports_no_transition(
         self,

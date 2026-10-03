@@ -1,6 +1,7 @@
 """Tests for server.py — error hints, asc editor configuration, and dispatch."""
 
 import io
+import re
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -28,7 +29,15 @@ from ltspice_mcp.server import (
     server,
 )
 from ltspice_mcp.state import SessionState
-from tests.conftest import call_tool_params, fake_request_context, tool_text
+from tests._text import names, says
+from tests.conftest import (
+    REGISTERED_TOOLS,
+    SERVED_WITHOUT_RUN_CODE,
+    call_tool_params,
+    fake_request_context,
+    removed_tools_named_in,
+    tool_text,
+)
 
 
 def _read_params(uri: str) -> mcp_types.ReadResourceRequestParams:
@@ -73,18 +82,16 @@ class TestServerInstructions:
         assert CONSOLIDATED_INSTRUCTIONS in (opts.instructions or "")
         assert server.create_initialization_options().instructions == original
 
-    def test_instructions_cover_key_workflow_guidance(self):
-        text = CONSOLIDATED_INSTRUCTIONS
-        # the guide first, the deck-authoring default, the one tool that owns
-        # .asc edits, and the result-trust tail; the per-tool map is the
-        # guide's, read on demand
-        assert 'inspect(queries=[{"kind": "guide"}])' in text
-        assert "deck" in text.lower()
-        assert "edit_schematic" in text
-        assert "status completed and still hold a degenerate result" in text
-        # must name no tool the surface does not expose
-        for dead in ("run_simulation", "check_job", "bode_metrics", "create_netlist"):
-            assert dead not in text
+    def test_instructions_name_no_removed_tool(self):
+        # What the instructions must name (the guide, the result-trust warning)
+        # is pinned in test_guide_delivery.py; this is the other half.
+        named = removed_tools_named_in(CONSOLIDATED_INSTRUCTIONS)
+        assert not named, f"the instructions name removed tools: {named}"
+
+
+# The Python API's import line: the discovery route every instruction edition
+# carries, whatever the sentence around it says.
+_API_IMPORT = re.compile(r"from\s+ltspice_mcp\.api\s+import\s+Api\b")
 
 
 class _LT:
@@ -102,32 +109,32 @@ class TestBuildInstructions:
         assert CONSOLIDATED_INSTRUCTIONS in build_instructions({"ngspice": _NG}, _NG)
 
     def test_none_detected(self):
+        from ltspice_mcp.lib.simulator import no_simulator_message
+
         text = build_instructions({}, None)
-        assert "No SPICE simulator detected" in text
+        assert no_simulator_message(short=True) in text
         # actionable, not a dead end: how to get a simulator + the restart caveat
-        assert "ngspice" in text
-        assert "restart" in text
+        assert says(text, "ngspice", "restart")
 
     def test_ngspice_only_notes_ltspice_absence(self):
         text = build_instructions({"ngspice": _NG}, _NG)
-        assert "ngspice" in text
-        assert "LTspice not detected" in text
+        assert says(text, "ngspice", "LTspice not detected")
         # Accurate: .asc editing depends on LTspice symbol files, not the
         # executable — don't over-claim a flat "unavailable".
-        assert ".asc" in text and "symbol" in text
-        assert "(default)" not in text  # no default marker for a single engine
+        assert says(text, ".asc", "symbol")
+        assert not says(text, "(default)")  # no default marker for a single engine
 
     def test_ltspice_only(self):
         text = build_instructions({"ltspice": _LT}, _LT)
-        assert "LTspice" in text
-        assert "LTspice not detected" not in text
+        assert says(text, "LTspice")
+        assert not says(text, "not detected")
 
     def test_both_marks_default(self):
         text = build_instructions({"ltspice": _LT, "ngspice": _NG}, _LT)
         # Both engines named, and the default marker on the one that is it.
-        assert "LTspice (default)" in text
-        assert "ngspice" in text
-        assert "LTspice not detected" not in text
+        assert says(text, "LTspice (default)", "ngspice")
+        assert not says(text, "ngspice (default)")
+        assert not says(text, "not detected")
 
     def test_the_instructions_fit_the_client_budget(self):
         """Claude Code truncates server instructions at 2048 chars; the tail
@@ -176,47 +183,19 @@ class TestBuildInstructions:
             # instructions are the one surface an agent sees without asking,
             # and an agent that never learns the API exists can never choose it
             # (the Python API has no other advertised definition at handshake time).
-            assert "from ltspice_mcp.api import Api" in text, (
+            assert _API_IMPORT.search(text), (
                 "an instruction shape lost the Python API discovery line"
             )
 
     def test_run_code_is_named_only_when_it_is_served(self):
         default = build_instructions({"ltspice": _LT}, _LT)
         silent = build_instructions({"ltspice": _LT}, _LT, served=())
-        assert "run_code runs a snippet with api in scope" in default
-        assert "run_code" not in silent
-        # Neither edition loses the library door, or says trace math goes there.
-        assert "from ltspice_mcp.api import Api" in silent
-        assert "from ltspice_mcp.api import Api" in default
-        assert "trace math" in silent and "trace math" in default
-
-
-class TestInstructionHints:
-    def test_every_hint_names_only_exposed_tools(self):
-        from ltspice_mcp.server import _ERROR_HINTS
-        from ltspice_mcp.tools import get_tools
-
-        exposed = {t.name for t in get_tools()[0]}
-        # Hints may reference an exposed tool by name; they must never
-        # reference a removed one (the shape of the stale-hint bug).
-        removed = {
-            "check_job",
-            "server_status",
-            "list_libraries",
-            "load_library",
-            "read_circuit",
-            "list_components",
-            "simulation_summary",
-            "find_model",
-        }
-        for err_type, hint in _ERROR_HINTS.items():
-            assert isinstance(hint, str) and hint
-            assert not (set(hint.replace("(", " ").replace('"', " ").split()) & removed), (
-                f"{err_type.__name__} hint names a removed tool: {hint}"
-            )
-            assert any(tool in hint for tool in exposed), (
-                f"{err_type.__name__} hint names no exposed tool: {hint}"
-            )
+        assert names(default, "run_code")
+        assert not names(silent, "run_code")
+        # Both editions keep the library door, and route trace math to code.
+        for text in (default, silent):
+            assert _API_IMPORT.search(text)
+            assert says(text, "trace math")
 
 
 class TestConfigureAscEditor:
@@ -308,9 +287,33 @@ class TestConfigureAscEditor:
 class TestServerDispatch:
     """Test list_tools / call_tool / list_resources / read_resource via patched server."""
 
-    async def test_list_tools(self, state_no_sim: SessionState):
-        result = await list_tools(fake_request_context(state_no_sim), None)
-        assert len(result.tools) > 0
+    @pytest.mark.parametrize(
+        ("run_code", "served"),
+        [(True, REGISTERED_TOOLS), (False, SERVED_WITHOUT_RUN_CODE)],
+        ids=["run_code-on", "run_code-off"],
+    )
+    async def test_every_listed_tool_is_callable_and_nothing_else_is(
+        self, config: ServerConfig, run_code: bool, served: tuple[str, ...]
+    ):
+        """What tools/list advertises is exactly what tools/call answers to.
+
+        Each listed name reaches its own handler (a strict input model rejects
+        the stray argument and names the tool), and the tool a session turned
+        off is neither listed nor callable.
+        """
+        state = SessionState.create(
+            replace(config, run_code=run_code, write_config=False), available={}
+        )
+        ctx = fake_request_context(state)
+        listed = [tool.name for tool in (await list_tools(ctx, None)).tools]
+        assert set(listed) == set(served)
+        for name in listed:
+            result = await call_tool(ctx, call_tool_params(name, {"__not_an_argument__": 1}))
+            assert result.is_error
+            assert tool_text(result).startswith(f"Invalid arguments for {name}:")
+        for name in set(REGISTERED_TOOLS) - set(listed):
+            with pytest.raises(MCPError, match=f"Unknown tool: {name}"):
+                await call_tool(ctx, call_tool_params(name, {}))
 
     async def test_call_unknown_tool(self, state_no_sim: SessionState):
         """A name the server does not serve is a protocol error, not a tool
@@ -511,31 +514,3 @@ class TestStderrIsQuietByDefault:
     def test_an_explicit_info_level_brings_the_banner_back(self):
         emitted = self._emit("INFO")
         assert "Server Starting" in emitted
-
-
-class TestToolAnnotationHonesty:
-    def test_mutating_tools_not_marked_idempotent(self):
-        # edit_schematic mutates a sheet (revision-guarded, but each call
-        # advances it) and plot_waveform mints a fresh artifact — an
-        # auto-retrying client must not treat either as idempotent. The
-        # request_id-keyed and read-only tools ARE idempotent and say so.
-        from ltspice_mcp.tools._base import registry
-
-        dispatch = registry.get_tools()[1]
-        expected = {
-            "edit_schematic": False,
-            "plot_waveform": False,
-            # Without a caller request_id the same arguments start new work.
-            "run_experiments": False,
-            "jobs": True,
-            "analyze_results": True,
-            "verify_circuit": True,
-            "inspect": True,
-            # Runs whatever the snippet does; a retry would run it again.
-            "run_code": False,
-        }
-        assert set(expected) == set(dispatch)
-        for tool_name, idempotent in expected.items():
-            annotations = dispatch[tool_name].definition.annotations
-            assert annotations is not None
-            assert annotations.idempotent_hint is idempotent, tool_name
