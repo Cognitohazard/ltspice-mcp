@@ -21,13 +21,9 @@ import pytest
 
 import ltspice_mcp.tools  # noqa: F401  (imports trigger every registration)
 from ltspice_mcp.tools._base import registry
-from tests.conftest import DEAD_TOOL_NAMES, removed_tool_names
+from tests.conftest import DEAD_TOOL_NAMES, registered_tool_names, removed_tool_names
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def _registered_names() -> set[str]:
-    return {t.definition.name for t in registry._registered}
 
 
 # The docs that state this server's tool count, and the counts each may state
@@ -78,7 +74,7 @@ class TestStaleToolNamesInDocs:
     def test_no_prefixed_tool_names_in_docs(self) -> None:
         """Tools were renamed from `ltspice_<name>` to bare `<name>`; no doc
         may still use the prefixed form of any registered tool."""
-        registered = _registered_names()
+        registered = registered_tool_names()
         failures: list[str] = []
         for rel in DOC_PATHS:
             text = (ROOT / rel).read_text(encoding="utf-8")
@@ -125,7 +121,7 @@ class TestStaleToolNamesInDocs:
         """A registered tool name in the dead list means the list rotted (or a
         tool was resurrected without pruning it) — either way the gate would
         forbid documenting a live tool."""
-        overlap = sorted(set(DEAD_TOOL_NAMES) & _registered_names())
+        overlap = sorted(set(DEAD_TOOL_NAMES) & registered_tool_names())
         assert not overlap, f"dead-name list contains registered tools: {overlap}"
 
 
@@ -300,7 +296,7 @@ class TestRetiredToolPrefixInSourceStrings:
     def test_no_tool_is_registered_under_the_prefix(self) -> None:
         """The premise of the ban below: a tool registered as
         ``ltspice_<name>`` again would make the ban forbid naming it."""
-        prefixed = sorted(name for name in _registered_names() if name.startswith("ltspice_"))
+        prefixed = sorted(name for name in registered_tool_names() if name.startswith("ltspice_"))
         assert not prefixed, f"tools registered under the retired prefix: {prefixed}"
 
     def test_no_string_literal_uses_the_retired_prefix(self) -> None:
@@ -312,5 +308,5 @@ class TestRetiredToolPrefixInSourceStrings:
         assert not failures, (
             f"{len(failures)} file(s) name a tool with the retired ltspice_ prefix "
             "in a string literal:\n" + "\n".join(failures) + "\nName the registered "
-            f"tool instead: {sorted(_registered_names())}"
+            f"tool instead: {sorted(registered_tool_names())}"
         )

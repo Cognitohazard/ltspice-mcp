@@ -29,12 +29,13 @@ from ltspice_mcp.server import (
     server,
 )
 from ltspice_mcp.state import SessionState
+from tests._text import names, says
 from tests.conftest import (
     REGISTERED_TOOLS,
     SERVED_WITHOUT_RUN_CODE,
     call_tool_params,
     fake_request_context,
-    removed_tool_names,
+    removed_tools_named_in,
     tool_text,
 )
 
@@ -84,18 +85,8 @@ class TestServerInstructions:
     def test_instructions_name_no_removed_tool(self):
         # What the instructions must name (every envelope tool, the result-trust
         # warning) is pinned in test_guide_delivery.py; this is the other half.
-        named = sorted(
-            name
-            for name in removed_tool_names()
-            if re.search(rf"\b{re.escape(name)}\b", CONSOLIDATED_INSTRUCTIONS)
-        )
+        named = removed_tools_named_in(CONSOLIDATED_INSTRUCTIONS)
         assert not named, f"the instructions name removed tools: {named}"
-
-
-def _says(text: str, *facts: str) -> bool:
-    """True when ``text`` states every fact, ignoring case and line wrapping."""
-    flat = " ".join(text.split()).lower()
-    return all(" ".join(fact.split()).lower() in flat for fact in facts)
 
 
 # The Python API's import line: the discovery route every instruction edition
@@ -123,27 +114,27 @@ class TestBuildInstructions:
         text = build_instructions({}, None)
         assert no_simulator_message(short=True) in text
         # actionable, not a dead end: how to get a simulator + the restart caveat
-        assert _says(text, "ngspice", "restart")
+        assert says(text, "ngspice", "restart")
 
     def test_ngspice_only_notes_ltspice_absence(self):
         text = build_instructions({"ngspice": _NG}, _NG)
-        assert _says(text, "ngspice", "LTspice not detected")
+        assert says(text, "ngspice", "LTspice not detected")
         # Accurate: .asc editing depends on LTspice symbol files, not the
         # executable — don't over-claim a flat "unavailable".
-        assert _says(text, ".asc", "symbol")
-        assert not _says(text, "(default)")  # no default marker for a single engine
+        assert says(text, ".asc", "symbol")
+        assert not says(text, "(default)")  # no default marker for a single engine
 
     def test_ltspice_only(self):
         text = build_instructions({"ltspice": _LT}, _LT)
-        assert _says(text, "LTspice")
-        assert not _says(text, "not detected")
+        assert says(text, "LTspice")
+        assert not says(text, "not detected")
 
     def test_both_marks_default(self):
         text = build_instructions({"ltspice": _LT, "ngspice": _NG}, _LT)
         # Both engines named, and the default marker on the one that is it.
-        assert _says(text, "LTspice (default)", "ngspice")
-        assert not _says(text, "ngspice (default)")
-        assert not _says(text, "not detected")
+        assert says(text, "LTspice (default)", "ngspice")
+        assert not says(text, "ngspice (default)")
+        assert not says(text, "not detected")
 
     def test_the_instructions_fit_the_client_budget(self):
         """Claude Code truncates server instructions at 2048 chars; the tail
@@ -199,12 +190,12 @@ class TestBuildInstructions:
     def test_run_code_is_named_only_when_it_is_served(self):
         default = build_instructions({"ltspice": _LT}, _LT)
         silent = build_instructions({"ltspice": _LT}, _LT, served=())
-        assert re.search(r"\brun_code\b", default)
-        assert not re.search(r"\brun_code\b", silent)
+        assert names(default, "run_code")
+        assert not names(silent, "run_code")
         # Both editions keep the library door, and route trace math to code.
         for text in (default, silent):
             assert _API_IMPORT.search(text)
-            assert _says(text, "trace math")
+            assert says(text, "trace math")
 
 
 class TestConfigureAscEditor:

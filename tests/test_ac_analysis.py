@@ -722,9 +722,7 @@ class TestResonance:
         # f0 * sqrt(10^0.3 - 1)/Q apart, 0.2 Hz here.
         f0, q = 10.0, 50.0
         f = np.linspace(9.0, 11.0, 20001)  # 1e-4 Hz steps, f0 on the grid
-        s = 1j * 2 * np.pi * f
-        w0 = 2 * np.pi * f0
-        peak = compute_resonances(f, (w0 / q) * s / (s * s + (w0 / q) * s + w0 * w0))["peaks"][0]
+        peak = compute_resonances(f, 1 - _notch(f, f0, q))["peaks"][0]
         bw = f0 * math.sqrt(10**0.3 - 1) / q
         assert peak["frequency_hz"] == pytest.approx(f0, rel=1e-9)
         assert peak["bandwidth_3db_hz"] == pytest.approx(bw, rel=1e-4)

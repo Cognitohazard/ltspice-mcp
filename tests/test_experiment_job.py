@@ -43,12 +43,17 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR, staged_decks, symlink_or_skip, wait_until
+from tests.conftest import (
+    FIXTURES_DIR,
+    check_in,
+    release_into_held_request_gate,
+    staged_decks,
+    symlink_or_skip,
+)
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -142,8 +147,7 @@ def _barrier_process(
 ) -> None:
     """Process worker exercising the real request lock and durable barrier.
 
-    Reports on ``ready`` once its request is built, waits for ``start``, and
-    counts itself into ``entered`` just before it submits.
+    Checks in (``check_in``) once its request is built.
     """
     working = Path(working_dir)
     circuit = Path(circuit_path)
@@ -156,13 +160,8 @@ def _barrier_process(
         simulator="FakeSim",
         job_id=job_id,
     )
-    ready.put(job_id)
-    if not start.wait(60):
-        result.put((None, None, "start was never released"))
-        return
-    with entered.get_lock():
-        entered.value += 1
     try:
+        check_in(ready, start, entered, 60)
         barrier = asyncio.run(_run_barrier(request))
         result.put((barrier.job.job_id, barrier.replayed, None))
     except Exception as exc:
@@ -932,17 +931,9 @@ class TestRequestBarrier:
         ]
         for process in processes:
             process.start()
-        for _ in processes:
-            ready.get(timeout=60)
-        gate_store = Store(work_dir)
-        gate_store.ensure_root()
-        with file_lock(gate_store.request_lock("shared-request")):
-            start.set()
-            wait_until(
-                lambda: entered.value == len(processes),
-                timeout_s=60,
-                what="both processes to enter their submission",
-            )
+        release_into_held_request_gate(
+            work_dir, "shared-request", ready, start, entered, len(processes), 60
+        )
         outcomes = [result.get(timeout=60) for _ in processes]
         for process in processes:
             process.join(20)

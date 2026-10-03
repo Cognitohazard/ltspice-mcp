@@ -97,7 +97,6 @@ _SEED_CASES = [
         "LTspice",
     ),
 ]
-_CASE_FIELDS = ("rule_id", "deck", "dialect", "simulator")
 _CASE_IDS = [case[0] for case in _SEED_CASES]
 
 
@@ -105,7 +104,7 @@ def test_every_seed_rule_has_a_case():
     assert sorted(_CASE_IDS) == sorted(rule.rule_id for rule in RULES)
 
 
-@pytest.mark.parametrize(_CASE_FIELDS, _SEED_CASES, ids=_CASE_IDS)
+@pytest.mark.parametrize(("rule_id", "deck", "dialect", "simulator"), _SEED_CASES, ids=_CASE_IDS)
 def test_each_seed_rule_fires(
     rule_id: str,
     deck: str,
@@ -124,16 +123,20 @@ def test_each_seed_rule_fires(
     )
 
 
-@pytest.mark.parametrize(_CASE_FIELDS, _SEED_CASES, ids=_CASE_IDS)
+# Each rule runs on the clean deck under the dialect and simulator where it
+# can fire, in place of its own trigger deck.
+@pytest.mark.parametrize(
+    ("rule_id", "dialect", "simulator"),
+    [(rule_id, dialect, simulator) for rule_id, _deck, dialect, simulator in _SEED_CASES],
+    ids=_CASE_IDS,
+)
 def test_each_seed_rule_stays_quiet_on_clean_deck(
     rule_id: str,
-    deck: str,
     dialect: str | None,
     simulator: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    del deck  # the clean deck replaces the rule's own trigger
     monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
 
     assert rule_id not in _ids(_CLEAN, tmp_path, dialect=dialect, simulator=simulator)

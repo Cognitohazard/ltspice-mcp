@@ -48,6 +48,7 @@ from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 # and run_code, which join the surface completeness and size pins (every client
 # pays their schema) but not the envelope contract matrix. Shared in conftest
 # so every file naming the surface reads one constant.
+from tests._text import flat, has_heading, names
 from tests.conftest import ENVELOPE_TOOLS, REGISTERED_TOOLS, schema_descriptions
 
 # The single ratified outcome vocabulary (design section 2). No per-tool dialect
@@ -1066,9 +1067,7 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
 
     def test_every_discriminant_appears_in_the_description(self):
         description = _registered()["analyze_results"].description or ""
-        missing = [
-            metric for metric in DISCRIMINANTS if not re.search(rf"\b{metric}\b", description)
-        ]
+        missing = [metric for metric in DISCRIMINANTS if not names(description, metric)]
         assert not missing, (
             f"analyze_results' description does not name {', '.join(missing)}; add "
             "each with the plain words a caller would search for"
@@ -1077,9 +1076,7 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     def test_the_plain_synonyms_that_route_to_this_tool_are_present(self):
         """A sample of the words a caller types instead of a discriminant. They
         are what makes description-matching reach the right tool at all."""
-        description = " ".join(
-            (_registered()["analyze_results"].description or "").lower().split()
-        )
+        description = flat(_registered()["analyze_results"].description or "")
         for phrase in (
             "phase margin",
             "gain margin",
@@ -1105,7 +1102,7 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
         assert re.search(r"V\(\s*a\s*,\s*b\s*\)", description)
         assert _names_the_guide(description)
         guide = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
-        assert re.search(r"^#+ .*trace math", guide, re.IGNORECASE | re.MULTILINE), (
+        assert has_heading(guide, "trace math"), (
             "the description sends trace math to a guide section that no longer exists"
         )
-        assert not re.search(r"\brun_code\b", description)
+        assert not names(description, "run_code")

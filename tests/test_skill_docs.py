@@ -18,6 +18,7 @@ import pytest
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.lib.response_budget import BUDGET_MIN_TOKENS
 from ltspice_mcp.tools import get_tools
+from tests._text import flat, names, section
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = ROOT / "skills" / "spice-experiments" / "SKILL.md"
@@ -61,15 +62,6 @@ def _text() -> str:
     return SKILL_PATH.read_text(encoding="utf-8")
 
 
-def _section(text: str, topic: str) -> str:
-    """The body of the first markdown section whose heading mentions ``topic``,
-    up to the next heading of the same or a higher level."""
-    match = re.search(rf"^(#+)[^\n]*{re.escape(topic)}[^\n]*\n", text, re.IGNORECASE | re.M)
-    assert match, f"no section heading mentions {topic!r}"
-    end = re.compile(rf"^#{{1,{len(match.group(1))}}}\s", re.M).search(text, match.end())
-    return text[match.end() : end.start() if end else len(text)]
-
-
 @pytest.mark.parametrize(("path", "budget"), SKILL_BUDGETS)
 def test_skill_size_is_pinned(path: Path, budget: int):
     text = path.read_text(encoding="utf-8")
@@ -102,7 +94,7 @@ class TestSpiceExperimentsSkill:
         assert "logopinfo" in text.lower()
         for recipe in ("measurements", "operating_point"):
             assert recipe in DISCRIMINANTS, f"{recipe} is no longer a recipe"
-            assert re.search(rf"\b{recipe}\b", text), f"the skill never names {recipe}"
+            assert names(text, recipe), f"the skill never names {recipe}"
 
     def test_teaches_response_budget(self):
         # The caller-set response cap: the section that teaches it names every
@@ -114,11 +106,11 @@ class TestSpiceExperimentsSkill:
             if "budget" in registered.definition.input_schema.get("properties", {})
         }
         assert owners, "no tool takes a budget any more"
-        section = _section(_text(), "budget")
-        missing = sorted(tool for tool in owners if not re.search(rf"\b{tool}\b", section))
+        budget = section(_text(), "budget")
+        missing = sorted(tool for tool in owners if not names(budget, tool))
         assert not missing, f"the budget section never names {missing}"
-        assert "token" in section.lower()
-        assert re.search(rf"\b{BUDGET_MIN_TOKENS}\b", section), "the budget floor is not stated"
+        assert "token" in budget.lower()
+        assert names(budget, str(BUDGET_MIN_TOKENS)), "the budget floor is not stated"
 
 
 class TestSpiceBenchCraftSkill:
@@ -126,7 +118,7 @@ class TestSpiceBenchCraftSkill:
         # The words a client matches a request against to load this skill.
         # Hyphens, case and line wrapping in the frontmatter are not the point.
         text = BENCH_SKILL_PATH.read_text(encoding="utf-8")
-        description = " ".join(text.split("---", 2)[1].lower().replace("-", " ").split())
+        description = flat(text.split("---", 2)[1].replace("-", " "))
         for trigger in ("authoring", "servo loop", "dc servo", "biasing", "template"):
             assert trigger in description, f"the skill's trigger never says {trigger!r}"
 

@@ -20,23 +20,10 @@ from ltspice_mcp.server import CONSOLIDATED_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import ENVELOPE_CHANNELS
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
+from tests._text import flat, has_heading, names
 from tests.conftest import ENVELOPE_TOOLS
 
 _GUIDE_ASSET = files("ltspice_mcp") / "assets" / "spice_guide.md"
-
-
-def _flat(text: str) -> str:
-    """Lower-cased, with line wrapping and repeated spaces collapsed."""
-    return " ".join(text.split()).lower()
-
-
-def _headings(text: str) -> list[str]:
-    return [line.lstrip("#").strip().lower() for line in text.splitlines() if line.startswith("#")]
-
-
-def _has_heading(text: str, *words: str) -> bool:
-    """Some markdown heading mentions every one of ``words``."""
-    return any(all(word.lower() in heading for word in words) for heading in _headings(text))
 
 
 def _has_engine_comparison_table(text: str) -> bool:
@@ -56,8 +43,8 @@ class TestServerInstructionsFloor:
         # 2048-char truncation would eat first, so its presence is the budget
         # test's partner).
         for tool in ENVELOPE_TOOLS:
-            assert re.search(rf"\b{tool}\b", CONSOLIDATED_INSTRUCTIONS), tool
-        text = _flat(CONSOLIDATED_INSTRUCTIONS)
+            assert names(CONSOLIDATED_INSTRUCTIONS, tool), tool
+        text = flat(CONSOLIDATED_INSTRUCTIONS)
         assert "completed" in text and "degenerate" in text
         for channel in ENVELOPE_CHANNELS:
             assert channel in text, f"the result-trust warning never names {channel}"
@@ -73,15 +60,15 @@ class TestGuideIsEngineGeneral:
 
     def test_covers_both_engines_and_their_differences(self):
         guide = _GUIDE_ASSET.read_text("utf-8")
-        assert _has_heading(guide, "fundamentals")
-        assert _has_heading(guide, "ltspice")
-        assert _has_heading(guide, "ngspice")
+        assert has_heading(guide, "fundamentals")
+        assert has_heading(guide, "ltspice")
+        assert has_heading(guide, "ngspice")
         assert _has_engine_comparison_table(guide), "the differences table is gone"
 
     def test_includes_each_engines_distinctive_sections(self):
         guide = _GUIDE_ASSET.read_text("utf-8")
         for construct in (".asc", ".control", "xspice", ".save"):
-            assert _has_heading(guide, construct), f"no guide section covers {construct}"
+            assert has_heading(guide, construct), f"no guide section covers {construct}"
 
 
 class TestMismatchExemplarMatchesTheEngineUnit:
@@ -141,13 +128,13 @@ class TestTheServedGuide:
         # The server runs ngspice in -b -r batch mode, which affects .meas.
         assert any("ngspice" in line and ".meas" in line and "-b -r" in line for line in lines)
         for construct in (".control", ".asc"):
-            assert _has_heading(guide, construct), f"no served section covers {construct}"
+            assert has_heading(guide, construct), f"no served section covers {construct}"
         assert _has_engine_comparison_table(guide)
 
     def test_it_maps_the_six_tools_and_how_to_start_a_sheet(self, work_dir: Path):
         guide = _served_guide(work_dir)
         for tool in ENVELOPE_TOOLS:
-            assert re.search(rf"\b{tool}\b", guide), f"the guide never names {tool}"
+            assert names(guide, tool), f"the guide never names {tool}"
         # A new schematic is an edit_schematic call on a blank base; the value
         # is read off the live model so the guide cannot teach a stale one.
         base = EditSchematicInput.model_fields["base"].annotation

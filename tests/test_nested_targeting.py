@@ -908,6 +908,10 @@ def test_profiled_flat_mismatch_retains_model_clone_engine(tmp_path, simulator):
     assert left.model_source in {item.case_source for item in case.source_lineage}
 
 
+# The seed the flat mismatch case runs with, which _drawn_mismatch replays.
+_FLAT_MISMATCH_SEED = 13
+
+
 def _flat_mismatch_case(tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=100u)"):
     from ltspice_mcp.lib.variations import CircuitDeck
 
@@ -920,7 +924,14 @@ def _flat_mismatch_case(tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=
     (case,) = materialize(
         circuit,
         tmp_path,
-        [{"kind": "random", "runs": 1, "seed": 13, "rules": [{"rule": "mismatch", **rule}]}],
+        [
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": _FLAT_MISMATCH_SEED,
+                "rules": [{"rule": "mismatch", **rule}],
+            }
+        ],
     )
     assert circuit.semantic_profile is not None
     hierarchy = load_hierarchy(str(case.path), [tmp_path], circuit.semantic_profile)
@@ -940,7 +951,7 @@ def _drawn_mismatch(avt=0.0, ak=0.0):
     )
 
     return sample_instance_mismatch(
-        MCSampler(13).derive("bench:case0:run1"),
+        MCSampler(_FLAT_MISMATCH_SEED).derive("bench:case0:run1"),
         InstanceGeometry(canonical_target(("M1",), "mismatch"), "n", 2e-6, 1e-6),
         MismatchRule(prefix="M1", avt=avt, ak=ak),
     )

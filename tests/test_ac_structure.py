@@ -17,7 +17,8 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.recipes import AcStructureRecipe
 from ltspice_mcp.state import SessionState
-from tests.test_analysis_tools import _inject_raw_mock, _make_raw_mock, _metric
+from tests.conftest import make_raw_mock
+from tests.test_analysis_tools import _inject_raw_mock, _metric
 
 # Shared log-spaced sweep: 1 Hz .. 10 MHz, dense enough to read corners.
 FREQS = np.logspace(0, 7, 351)
@@ -166,7 +167,7 @@ class TestAcStructureLib:
 def _inject_ac(state: SessionState, work_dir: Path, name: str, H: np.ndarray) -> str:
     """Inject an AC complex raw at ``work_dir/name`` and return the file name."""
     raw_file = work_dir / name
-    raw = _make_raw_mock(
+    raw = make_raw_mock(
         plotname="AC Analysis",
         trace_names=["frequency", "V(out)"],
         waves={"frequency": FREQS, "V(out)": H},
@@ -232,7 +233,7 @@ class TestAcStructureRejection:
     async def test_transient_raw_rejected(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "tran.raw"
         t = np.linspace(0, 1e-3, 200)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Transient Analysis",
             trace_names=["time", "V(out)"],
             waves={"time": t, "V(out)": np.sin(2 * np.pi * 1e3 * t)},
