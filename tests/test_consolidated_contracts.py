@@ -663,7 +663,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # reports each simulator's executable and the build its last run reported:
     # that report is where a caller finds which build this server runs.
     # Raised by about 480 characters for the 'guide' kind, the MCP door to the
-    # guide's core, sections and skills: a client that cannot read resources
+    # guide's core and sections: a client that cannot read resources
     # had no way to reach the guide at all. Measured 9,138.
     "inspect": 9140,
     # The typed op union — eleven ops, each its own branch — plus the compare

@@ -206,12 +206,12 @@ tool-surface changes.
 
 ### Added
 
-- The guide is now a short core plus topic sections and the task skills, and
+- The guide is now a short core plus topic sections and task playbooks, and
   every interface can read it. `inspect` has a `guide` query kind: with no
   `section` it returns the core (how to work with the server, when to use
   Python or the tools, the rules that cause silent errors) ending in an index
-  of the sections and skills; `section` reads one (`"ltspice"`,
-  `"skill:spice-experiments"`). The Python API has the same text as
+  of the sections, grouped as topics and tasks; `section` reads one
+  (`"ltspice"`, `"bench-craft"`). The Python API has the same text as
   `Api.guide(section=None)`, a static method that needs no engine session, and
   `python -m ltspice_mcp.api guide [SECTION]` prints it without starting the
   engine. The resources are `spice://guide` (the core) and
@@ -222,8 +222,6 @@ tool-surface changes.
   analysis primitives, errors, detached jobs, and running a second LTspice
   build. The design document that held this is not in the package, so a model
   had no way to read it.
-- The wheel carries the task skills (`ltspice_mcp/skills`), so the guide can
-  serve them to a client that installed only the package.
 - The first tool reply of a session that has not read the guide carries a
   one-time reminder to read its core, on the text channel and in the
   structured `hint`. Reading the guide through `inspect` or a `spice://guide`
@@ -380,6 +378,19 @@ tool-surface changes.
 
 ### Changed
 
+- The Claude Code plugin ships one skill, `spice-guide`, in place of
+  `spice-experiments`, `ltspice`, `ngspice` and `spice-bench-craft`. Those four
+  were hand-kept copies of what the guide says, and had drifted from it: the
+  `ngspice` skill said a `GND` node floats unless declared global (ngspice
+  converts `gnd` to node 0 by default) and that a `.step` line is rejected (lint
+  warns, and ngspice runs the deck once), the `ltspice` skill listed five of
+  the seven pin transforms, and the workflow skill's `verify_circuit` example
+  passed `reference` at the top level instead of inside `compare`. Their
+  content now lives only in the guide, with what the guide lacked moved into
+  it (a sweep-in-one-call example and per-tool notes in `tools`, more on
+  ngspice's `.meas` types, statistical functions and `.control` variables).
+  `spice-guide` loads on circuit and SPICE work and tells the session to read
+  the guide.
 - The server instructions send the model to the guide first, say when to use
   Python and when the tools (Python for anything past a single call: loops and
   complete results in one call; tools for one sandboxed step, charts, and jobs

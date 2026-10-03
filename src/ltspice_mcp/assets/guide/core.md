@@ -2,8 +2,8 @@
 
 This is the core: how to work with this server, when to use Python or the
 tools, the rules that cause silent errors, and an index of the topic sections
-and task skills. Before you start a task, read the section or skill whose line
-in the index matches it.
+and task playbooks. Before you start a task, read the section or playbook whose
+line in the index matches it.
 
 Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 `api.guide("<name>")` in Python. A pointer elsewhere such as

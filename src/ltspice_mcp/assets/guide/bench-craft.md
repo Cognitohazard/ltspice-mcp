@@ -1,12 +1,17 @@
 ---
 name: bench-craft
+kind: task
 description: >
-  Characterizing an amplifier: the operating point first, a DC servo for
-  open-loop AC, checking the result, parameterized bench templates, ngspice
-  batch output.
+  Measuring an amplifier's open-loop gain, bandwidth, phase margin, supply
+  current or step response: establish the operating point, close a DC servo
+  for open-loop AC, check the result, render benches from one parameter
+  dictionary, and get measurements out of ngspice.
 ---
 
 # Measurement bench craft
+
+Author the bench from one parameter dictionary, establish the operating point,
+then measure.
 
 ## The operating point comes first
 

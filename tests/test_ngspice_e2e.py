@@ -522,6 +522,26 @@ async def test_control_script_deck_produces_readable_raw(
     assert data["results"]["vout"]["values"][0]["value"]["value"] > 0.9
 
 
+async def test_a_gnd_node_is_ground(ngspice_state: SessionState, work_dir: Path):
+    # The guide says ngspice converts a node named gnd to node 0 by default
+    # (`set no_auto_gnd` turns it off); a skill once said the opposite, that
+    # gnd floats unless declared global. A divider referenced only to gnd
+    # settles at half the supply only if gnd is ground; a floating gnd leaves
+    # the circuit with no DC path to node 0.
+    net = _write(
+        work_dir,
+        "gnddiv.cir",
+        "* divider referenced to gnd\nV1 in gnd 10\nR1 in out 1k\nR2 out gnd 1k\n.op\n.end\n",
+    )
+    receipt = await _run_one(ngspice_state, "ng-gnd-is-ground", net)
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [{"key": "vout", "metric": "value", "expr": "v(out)"}],
+    )
+    assert data["results"]["vout"]["values"][0]["value"]["value"] == pytest.approx(5.0, rel=1e-6)
+
+
 async def test_dc_sweep_endpoint_value(ngspice_state: SessionState, work_dir: Path):
     # .dc sweep of a 1k/1k divider: at V1=5 the output must be exactly half.
     # Exercises the DC branch of sim-type detection AND a real numeric value
