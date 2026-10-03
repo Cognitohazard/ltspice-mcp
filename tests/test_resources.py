@@ -100,13 +100,6 @@ class TestReadResource:
         assert contents.mime_type == "text/markdown"
         assert "Schematic layout best practices" in contents.text
 
-    def test_read_a_file_inside_a_skill(self, state_no_sim: SessionState):
-        """A skill's further file is named by a path, so its URI spans segments."""
-        uri = "spice://guide/skill:spice-bench-craft/references/BENCH_NOTES.md"
-        contents = handle_read_resource(uri, state_no_sim).contents[0]
-        assert isinstance(contents, TextResourceContents)
-        assert contents.text.strip()
-
     def test_unknown_guide_section_names_the_known_ones(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="name one of: python, tools"):
             handle_read_resource("spice://guide/nope", state_no_sim)

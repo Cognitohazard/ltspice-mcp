@@ -1,9 +1,9 @@
 ---
 name: tools
 description: >
-  Calling the tools directly: which tool does what, progress on a running
-  job, the reference lookup, the recipes the schema lists by name only, and
-  the response budget.
+  Calling the tools directly: which tool does what, a sweep in one call,
+  notes per tool, progress on a running job, the reference lookup, the
+  recipes the schema lists by name only, and the response budget.
 ---
 
 # Using the tools
@@ -48,8 +48,59 @@ returns the closest ones with their fields, types, defaults and units. With no
 name or re-reading the guide, and always when the server is serving the
 compact tool listing, where the per-argument descriptions are not on the wire.
 
+## A sweep in one call
+
+Put the scalar in the deck as a `.meas`, sweep with an `assign` variation, and
+attach the recipe that reads it back:
+
+```spice
+.param ILOAD=1m
+.meas tran vout_dc AVG V(out) FROM 4m TO 5m
+```
+
+```json
+{"request_id": "ldo-load-1", "circuits": [{"path": "ldo.cir"}],
+ "variations": [{"kind": "assign", "assign": {"ILOAD": ["1m", "10m", "100m"]}}],
+ "analyze": {"recipes": [{"key": "v", "metric": "measurements", "names": ["vout_dc"]}],
+             "group_by": ["ILOAD"]}}
+```
+
+The cases run as one batch, and other sessions can run beside it. The
+simulator computes the scalar and the `measurements` recipe reads it back from
+the log, parsed and with SI units. An `assign` target must exist in the deck.
+If the deck restricts what it saves, `.save` every signal a `.meas` uses; lint
+blocks a mismatch. A case that produced nothing is counted in `completeness`,
+and `outcome` is `"partial"`.
+
+## Notes per tool
+
+- `run_experiments`: the same `request_id` with the same arguments returns the
+  original receipt instead of running again. Decks are content-addressed, so
+  editing one afterwards does not change what ran, and different arguments
+  under a used id return `idempotency_conflict`. A `skipped` case means lint
+  blocked its deck: fix the deck, or drop that one rule with `suppress` (the
+  `rule_id` from the finding, such as `"save-meas-coverage"`) rather than
+  setting `lint: "warn"`.
+- `jobs`: `{"action": "status", "request_id": "ldo-load-1"}` finds a job whose
+  id you lost. A `wait` that returns `timed_out` ended the wait, not the job.
+- `analyze_results`: the default reply is the answer (`results`, `coverage`,
+  `observations`, `failures`); ask for more under `include` (`fields`,
+  `per_run`, `outliers`, `signals_available`). `group_by` is a top-level
+  argument, never inside a recipe. Results of the `operating_point` recipe are
+  in `device_op_points`, keyed by the simulator's literal names (`@m1[gm]`).
+- `inspect` reads decks, schematics and libraries, never results:
+  `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
+- `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`
+  when the sheet exists (`inspect` reports it). `verify_circuit` checks a
+  schematic against a netlist with
+  `{"path": "amp.asc", "compare": {"reference": "golden.net"}}`.
+- Charts: `plot_waveform` draws an interactive chart (`attach_plot` adds a PNG
+  you can look at); the `plot` recipe writes a static chart file.
+
 ## Recipes the schema lists by name only
 
+Three recipes appear in the tool schema by name only; their arguments are
+documented here (every other recipe field — `key`, `sources`, `reduce`,
 `field`, `spec` — applies to them unchanged; as with any multi-field recipe,
 `reduce`/`spec` on `periodic` or `return_loss` needs `field`):
 

@@ -24,8 +24,14 @@ ngspice shares guide section 'fundamentals', with these deltas:
   warns (`step-ngspice`) rather than letting that pass silently.
 - `gnd` is auto-converted to ground (node `0`) by default; disable with
   `set no_auto_gnd` if you need `gnd` to be a distinct net.
-- Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
-  `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
+- Extra `.meas` types: `MIN_AT`/`MAX_AT` return where the minimum or maximum
+  falls (the time or frequency), not its value; `DERIV` is the derivative at a
+  point or where a condition is met; `param='expr'` evaluates an expression
+  over `.param` values and earlier `.meas` results; `par('expr')` is an inline
+  expression on output variables. `.meas ... FIND` takes `V(out)` (no `mag()`
+  wrapper). Inside `.control`, `param` and `par` are not available: compute
+  with `let`. The interactive `meas` command also takes an `SP` analysis, for
+  measurements on a spectrum.
 - `.meas` is suppressed only when batch mode (`-b`) and a command-line `-r
   rawfile` are combined — ngspice prints "No .measure possible in batch mode
   (-b) with -r rawfile set!" (the invocation this server uses). It is not a
@@ -58,6 +64,7 @@ ngspice shares guide section 'fundamentals', with these deltas:
   reserved words: `time`, `temper`, `hertz`, `not`, `and`, `or`, `div`, `mod`,
   `sqr`, `sqrt`, `sin`, `cos`, `exp`, `ln`, `log`, `log10`, `arctan`, `abs`,
   `pwr`, `defined`.
+- String-valued params are supported, with limited concatenation.
 
 **Three separate expression parsers exist in ngspice** — a known source of
 confusion:
@@ -128,6 +135,9 @@ use `time` or expressions as the independent variable.
 - `exp()` is internally capped at argument=14 — beyond that it becomes linear.
 - `log`/`ln`/`sqrt` of negatives use `fabs()` automatically — no error.
 - Division by zero or `log(0)` causes an error.
+- `par('expression')` works in `.plot`/`.print` output lines too.
+- Non-linear R, L and C can be built from B sources; the ngspice manual gives
+  the subcircuit templates.
 
 ## Subcircuits
 
@@ -210,11 +220,13 @@ Monte Carlo loop: `write` captures the current plot only.
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.
 - `let` creates numeric vectors: `let x = 2*pi` — access `$&x` to get a number.
+- Mixing up `set` and `let` fails silently.
 - `$&param` dereferences a circuit `.param` into a control variable.
 
 **Control structures:** `while`/`end`, `repeat`/`end`, `foreach`/`end`,
 `if`/`else`/`end`, `dowhile`, `break [n]`, `continue [n]`, `label`, `goto`.
-`foreach` values are space-separated (no commas).
+`foreach` values are space-separated (no commas); `foreach var $myvariable`
+expands a variable into the list.
 
 **Key commands:** `run`, `plot`, `print`, `let`, `set`, `write`, `wrdata`,
 `alter`, `altermod`, `echo`, `meas`, `linearize`, `fft`, `define`, `source`.
@@ -225,7 +237,10 @@ ngspice has **no `.mc` directive**. Two idioms:
 
 **(1) Per-device statistical functions (primary, simplest).** Put `agauss`/
 `gauss`/`unif`/`aunif`/`limit` directly in a `.param` or a device/B-source value,
-in `'…'` or `{…}`. Each device card draws a fresh value at parse time:
+in `'…'` or `{…}`. `gauss(nom, rvar, sigma)` and `unif(nom, rvar)` take a
+relative variation, `agauss(nom, avar, sigma)` and `aunif(nom, avar)` an
+absolute one, and `limit(nom, avar)` gives `nom+avar` or `nom-avar`. Each
+device card draws a fresh value at parse time:
 
 ```spice
 R1 a b 'agauss(10k, 500, 3)'      $ 10k, ±500 absolute, /3 sigma

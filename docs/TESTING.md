@@ -198,8 +198,9 @@ above assumes them:
 - **Drift guards.** `tests/test_doc_drift.py` checks documented tool counts and
   names against the registry; `tests/test_guide_delivery.py` pins the guide's
   structure (the section list is the files present, the index lists every
-  section and skill, every "guide section" pointer resolves) and that its
-  doors serve one text.
+  section under its kind, every pointer to a section resolves) and that its
+  doors serve one text; `tests/test_skill_docs.py` keeps the plugin to the one
+  skill that points at the guide.
 
 See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
 `docs/DESIGN.md` for the architecture and the end-to-end verification recipe.

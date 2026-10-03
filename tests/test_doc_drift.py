@@ -60,10 +60,9 @@ DOC_PATHS = (
         for path in (ROOT / "src" / "ltspice_mcp" / "assets" / "guide").glob("*.md")
     ),
     "docs/DESIGN.md",
-    "skills/ltspice/SKILL.md",
-    "skills/ngspice/SKILL.md",
-    "skills/spice-experiments/SKILL.md",
-    "skills/spice-bench-craft/SKILL.md",
+    *sorted(
+        str(path.relative_to(ROOT).as_posix()) for path in (ROOT / "skills").glob("*/SKILL.md")
+    ),
 )
 
 # Every tool name that has ever been removed from the registry: the
@@ -183,17 +182,17 @@ class TestStaleToolNamesInDocs:
         assert not overlap, f"dead-name list contains registered tools: {overlap}"
 
 
-class TestConsolidatedSkillDocCoverage:
-    def test_experiment_skill_doc_names_every_consolidated_tool(self) -> None:
-        # Derived from the registry, not hand-copied: adding a tool to the
-        # consolidated profile fails here until the skill doc teaches it (or
-        # this pin is deliberately revisited).
+class TestGuideCoreToolCoverage:
+    def test_the_guide_core_names_every_registered_tool(self) -> None:
+        # Derived from the registry, not hand-copied: adding a tool fails here
+        # until the core's tool map names it (or this pin is deliberately
+        # revisited). The core is what every session reads first.
         tool_defs, _ = registry.get_tools()
         names = sorted(t.name for t in tool_defs)
         assert names, "consolidated profile registered no tools"
-        text = (ROOT / "skills/spice-experiments/SKILL.md").read_text(encoding="utf-8")
+        text = (ROOT / "src/ltspice_mcp/assets/guide/core.md").read_text(encoding="utf-8")
         missing = [name for name in names if name not in text]
-        assert not missing, f"skills/spice-experiments/SKILL.md never mentions {missing}"
+        assert not missing, f"the guide core never mentions {missing}"
 
 
 def _ltspice_refs_in_strings(py_path: Path) -> set[str]:

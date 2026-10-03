@@ -1066,7 +1066,7 @@ Python API), which are never capped. The gate stays a whole-file answer.
 {kind: "guide", section?}
     the packaged guide (`lib/guide.py`): no `section` returns the core a
     session reads first, ending in an index of the topic sections and task
-    skills; a `section` from that index returns that part. An unknown name
+    playbooks; a `section` from that index returns that part. An unknown name
     fails the item as `unknown_section`, listing the names that exist
 ```
 

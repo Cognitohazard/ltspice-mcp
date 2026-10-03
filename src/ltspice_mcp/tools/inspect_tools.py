@@ -46,8 +46,8 @@ than a hunt.
   tool listing, where per-argument descriptions are not on the wire at all. It
   reads no file and touches no session state.
 * ``guide`` — the packaged guide (``lib/guide.py``): with no ``section``, the
-  core a session reads first and the index of topic sections and task skills;
-  with one, that section or skill. It records on the session that the guide
+  core a session reads first and the index of topic sections and task
+  playbooks; with one, that section. It records on the session that the guide
   was read, which retires the one read-the-guide reminder.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
@@ -649,13 +649,13 @@ class ReferenceQuery(StrictModel):
 
 
 class GuideQuery(StrictModel):
-    """Read the guide: its core and index, or one topic section or task skill."""
+    """Read the guide: its core and index, or one topic section or task playbook."""
 
     kind: Literal["guide"]
     section: str | None = Field(
         default=None,
         description=(
-            "A name from the core's index ('ltspice', 'skill:spice-experiments'). "
+            "A name from the core's index ('ltspice', 'bench-craft'). "
             "Omit it for the core and the index."
         ),
     )
@@ -1714,7 +1714,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 def _do_guide(q: GuideQuery, state: SessionState) -> dict[str, Any]:
-    """Serve the guide's core and index, or one section, skill or skill file.
+    """Serve the guide's core and index, or one section.
 
     The text is packaged and read once per process (``lib/guide.py``), so
     nothing is offloaded. A read here is what the session's read-the-guide

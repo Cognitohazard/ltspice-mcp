@@ -77,10 +77,7 @@ class ResourceRouter:
         for part in parts:
             if not part:
                 continue
-            if part.startswith("{+") and part.endswith("}"):
-                # RFC 6570 reserved expansion: the value may span segments.
-                pattern += f"(?P<{part[2:-1]}>.+)"
-            elif part.startswith("{") and part.endswith("}"):
+            if part.startswith("{") and part.endswith("}"):
                 name = part[1:-1]
                 pattern += f"(?P<{name}>[^/]+)"
             else:
@@ -150,7 +147,7 @@ def get_static_resources() -> list[types.Resource]:
             description=(
                 "Read first: the guide's core (how to work with this server, Python or "
                 "tools, the rules that cause silent errors) and an index of its topic "
-                "sections and task skills, each readable as spice://guide/{section}."
+                "sections and task playbooks, each readable as spice://guide/{section}."
             ),
         ),
     ]
@@ -163,8 +160,8 @@ def get_resource_templates() -> list[types.ResourceTemplate]:
             name="guide_section",
             uri_template="spice://guide/{section}",
             description=(
-                "One part of the guide, named as the core's index names it: a topic "
-                "section ('ltspice') or a task skill ('skill:spice-experiments')."
+                "One section of the guide, named as the core's index names it: a "
+                "topic ('ltspice') or a task playbook ('bench-craft')."
             ),
             mime_type="text/markdown",
         ),
@@ -237,18 +234,18 @@ def _read_plot_widget(
 def _read_guide(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Serve the guide's core and its index of sections and skills."""
+    """Serve the guide's core and its index of sections."""
     del params
     text = guide.read()
     state.guide_read = True
     return _make_result(uri_str, text, mime="text/markdown")
 
 
-@_router.route("spice://guide/{+section}")
+@_router.route("spice://guide/{section}")
 def _read_guide_section(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Serve one section, skill, or skill file of the guide by its index name."""
+    """Serve one section of the guide by its index name."""
     text = guide.read(params["section"])
     state.guide_read = True
     return _make_result(uri_str, text, mime="text/markdown")

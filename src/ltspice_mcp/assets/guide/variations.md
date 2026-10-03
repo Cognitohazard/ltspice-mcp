@@ -31,5 +31,3 @@ cartesian with each other.
 ```
 
 runs two cases (1k/1.8 and 10k/3.3), not four.
-
-Three recipes appear in the tool schema by name only; their arguments are

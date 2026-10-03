@@ -20,7 +20,8 @@ comes back whole: no pages, no cursors, no response budget.
 `api` already open on the server's working directory. Also in scope: `np`,
 `load_raw`, `measurements`, `reference`, `window_and_clean`,
 `compute_signal_stats` and `time_weighted_quantiles`. `print()` output and the
-repr of a trailing expression come back. Each call is a fresh namespace around
+repr of a trailing expression come back, so print the result you need, such as
+the crossing or the worst corner, rather than the whole table. Each call is a fresh namespace around
 the same engine, so keep state on disk: a file, or a job you find again by its
 `request_id`. A snippet is bounded by `timeout_s` (60 s by default, 600 at
 most), and one runs at a time. It runs with the server process's own file and
