@@ -360,8 +360,9 @@ def validate_netlist_arity(
     Returns dicts matching the existing ``handle_validate_netlist`` issue
     shape: ``{line, directive, message, suggestion}``. The node-count and
     B-source checks are simulator-agnostic. ``simulator`` gates the one
-    LTspice-only rule (the ``C=``/``L=`` primary-value rejection): under a
-    non-LTspice target it is suppressed, since ngspice accepts those forms.
+    LTspice-only rule (the ``C=``/``L=`` primary-value rejection): under any
+    non-LTspice target it is suppressed, since the rejection was established
+    against LTspice and is its own (ngspice accepts those forms).
     """
     issues: list[dict[str, object]] = []
     for card in cards:

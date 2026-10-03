@@ -12,13 +12,15 @@ was found, and the same file moved elsewhere is still the same build.
 
 **The reported build** is what each run says about itself in its own output,
 read after the run ends (``reported_build``). LTspice 24 and later name their
-version on the first line of the log (``LTspice 26.0.2 for Windows``); ngspice
-prints a banner to its console, which the runner captures in the run's
-``.exe.log`` (``** ngspice-42 : Circuit level simulation program``); and the
-raw header's ``Command:`` field names the writer where neither does (LTspice
-XVII, which writes no log banner). It is recorded per case because a case is
-the unit that ran: an executable replaced while a job is in flight shows up as
-two builds in one job.
+version on the first line of the log (``LTspice 26.0.2 for Windows``); Xyce
+opens the log it is told to write with a banner naming its release
+(``***** This is version Xyce Release 7.8.0-opensource``); ngspice prints a
+banner to its console, which the runner captures in the run's ``.exe.log``
+(``** ngspice-42 : Circuit level simulation program``); and the raw header's
+``Command:`` field names the writer where none of those does (LTspice XVII,
+which writes no log banner, and QSPICE). It is recorded per case because a case
+is the unit that ran: an executable replaced while a job is in flight shows up
+as two builds in one job.
 
 Everything read here is simulator output or a file the configuration points at,
 so every read is bounded: a fixed number of bytes from the head of each
@@ -47,7 +49,7 @@ from ltspice_mcp.lib.raw_parser import raw_writer_command
 logger = logging.getLogger(__name__)
 
 #: Bytes read from the head of a log or console capture when looking for its
-#: banner. Both simulators write it before anything the deck can make them print.
+#: banner. Each simulator writes it before anything the deck can make it print.
 _HEAD_BYTES = 8 * 1024
 #: Longest reported build kept. A banner is one short line; anything past this
 #: is not one.
@@ -62,6 +64,8 @@ _DIGESTS: FileCache[str] = FileCache(maxsize=32)
 
 # LTspice 24+: the log's first line, e.g. "LTspice 26.0.2 for Windows".
 _LTSPICE_BANNER = re.compile(r"LTspice[ \t]+\S[^\r\n]*")
+# Xyce's log banner, e.g. "***** This is version Xyce Release 7.8.0-opensource".
+_XYCE_BANNER = re.compile(r"^\*+[ \t]*This is version[ \t]+(Xyce\b[^\r\n]*)", re.MULTILINE)
 # ngspice's console banner, e.g. "** ngspice-42 : Circuit level simulation program".
 _NGSPICE_BANNER = re.compile(r"^\*\*[ \t]*(ngspice-[^\s:]+)", re.MULTILINE)
 _NGSPICE_CREATED = re.compile(r"^\*\*[ \t]*Creation Date:[ \t]*(\S[^\r\n]*)", re.MULTILINE)
@@ -198,21 +202,26 @@ def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str |
     """The build a run named in its own output, or None when it named none.
 
     Sources, first match wins: the LTspice banner on the log's first line; the
-    ngspice banner in the console capture beside the log (``.exe.log``), with
-    its creation date when the banner has one; the raw header's ``Command:``.
-    The first two come before the raw so that a run which failed without a raw
-    reports the same string as one that produced it.
+    Xyce banner in the head of the log; the ngspice banner in the console
+    capture beside the log (``.exe.log``), with its creation date when the
+    banner has one; the raw header's ``Command:``. The logs come before the raw
+    so that a run which failed without a raw reports the same string as one
+    that produced it.
 
     Never raises: an artifact that is missing or unreadable answers None.
     """
     try:
         if log_file is not None:
+            log_head = _head_text(log_file)
             first_line = next(
-                (line.strip() for line in _head_text(log_file).splitlines() if line.strip()),
+                (line.strip() for line in log_head.splitlines() if line.strip()),
                 "",
             )
             if _LTSPICE_BANNER.fullmatch(first_line):
                 return _clean(first_line)
+            xyce = _XYCE_BANNER.search(log_head)
+            if xyce is not None:
+                return _clean(xyce[1])
             console = _head_text(log_file.with_suffix(".exe.log"))
             banner = _NGSPICE_BANNER.search(console)
             if banner is not None:

@@ -3,12 +3,13 @@
 One tool answers a batch of independent read-only ``queries`` about the server
 and the circuits it can reach. Each query is one of nine kinds:
 
-* ``capabilities`` — detected simulators + dialects, exporter presence, job
-  persistence, allowed roots, the active profile and which of the two tool
-  listings this session was served, the configured limits, the
-  linter version, and ``diagnostics``: the startup notes (bad configured
-  simulator path, a requested engine that fell back, WSL auto-detection) that
-  say whether this server started degraded. Pulled from
+* ``capabilities`` — detected simulators + dialects and whether a run can
+  select each (``selectable``, with the ``refusal`` when this host cannot run
+  that family), exporter presence, job persistence, allowed roots, the active
+  profile and which of the two tool listings this session was served, the
+  configured limits, the linter version, and ``diagnostics``: the startup
+  notes (bad configured simulator path, a requested engine that fell back, WSL
+  auto-detection) that say whether this server started degraded. Pulled from
   ``state``/``config``/``lint_rules``; nothing is probed.
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
   precedence they resolve through. A ``path`` adds that schematic's own
@@ -133,6 +134,8 @@ from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
     dialect_for_simulator_name,
+    family_refusal,
+    run_refusal,
     simulator_library_roots,
     simulator_remediation,
 )
@@ -452,9 +455,9 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, whether the .asc exporter is available,
-    job persistence, allowed roots, the configured limits, and the linter
-    version."""
+    reported builds and raw dialects, and which a run can select; whether the
+    .asc exporter is available, job persistence, allowed roots, the configured
+    limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -979,8 +982,12 @@ def _do_capabilities(
     for name, cls in state.available_simulators.items():
         executable = executables.get(name)
         reported = _reported_version(state, executable)
+        refusal = run_refusal(cls)
         info: dict[str, Any] = {
             "available": True,
+            # Whether run_experiments' execution.simulator may name it: detected
+            # is not enough when this host cannot run the family at all.
+            "selectable": refusal is None,
             "default": cls is state.default_simulator,
             # What a run on this same executable said about itself; nothing
             # is launched to ask. Null until one has run.
@@ -988,6 +995,8 @@ def _do_capabilities(
             "version_source": reported[1] if reported else None,
             "dialect": dialect_for_simulator_name(cls.__name__),
         }
+        if refusal is not None:
+            info["refusal"] = refusal
         if executable is not None:
             # The simulator itself, not its launcher: under Wine the command
             # starts with "wine".
@@ -1002,8 +1011,12 @@ def _do_capabilities(
         if name not in simulators:
             simulators[name] = {
                 "available": False,
+                "selectable": False,
                 "remediation": simulator_remediation(name, state.config),
             }
+            refusal = family_refusal(name)
+            if refusal is not None:
+                simulators[name]["refusal"] = refusal
 
     return {
         "config_path": str(state.config.config_path),

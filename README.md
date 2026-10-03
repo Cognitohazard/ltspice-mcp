@@ -121,7 +121,7 @@ An agent with a shell can run quick one-off ngspice simulations directly. Local 
 |-|-|
 | LTspice | Primary. Windows native, WSL2 (Windows LTspice.exe via interop), Linux via Wine. Required for `.asc` schematic editing (needs `.asy` symbol libraries). |
 | ngspice | Supports simulation, parsing, diagnostics, and analysis. Does not require LTspice. |
-| QSPICE, Xyce | Supported but secondary. |
+| QSPICE, Xyce | Supported but secondary. A run selects either with `execution.simulator`; QSPICE only when the server runs natively on Windows. Both take a hand-written netlist, not a `.asc`. |
 
 ## Configuration
 

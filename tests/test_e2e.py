@@ -758,8 +758,11 @@ class TestInspectCapabilities:
             assert caps["simulators"], "degraded state must still list known simulators"
             for name, info in caps["simulators"].items():
                 assert info["available"] is False, name
+                assert info["selectable"] is False, name
                 assert info["remediation"]["config_key"] == "simulator.path"
-                assert "restart" in info["remediation"]["action"]
+                # A family this host cannot run says so in place of a restart.
+                expected = info.get("refusal") or "restart"
+                assert expected in info["remediation"]["action"], name
             assert caps["config_path"].endswith("ltspice-mcp.toml")
             assert caps["python"]["executable"]
             assert caps["default_simulator"] is None
