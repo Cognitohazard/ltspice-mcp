@@ -10,6 +10,12 @@ tool-surface changes.
 
 ### Fixed
 
+- `analyze_results` refused `reduce` without `field` on a multi-field recipe
+  (`{metric: "stability", reduce: ["min"]}`), while a keyed recipe's bare
+  `reduce` covered every key. A bare `reduce` now covers every field the recipe
+  reports, one row per field and statistic, each the number a reduction naming
+  that field gives; `spec` still needs `field`. `edges` reports its transition
+  time as `rise_time` or `fall_time` by the edge each row measured.
 - `run_experiments` refused a circuit whose id came from its file stem when the
   stem was not a valid id (`amp.v2.cir`, `my amp.cir`: `invalid_circuit_id`) or
   when two files shared a stem (`a/amp.cir` and `b/amp.cir`:

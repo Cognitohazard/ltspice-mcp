@@ -1347,10 +1347,14 @@ selection is not among them; it is one call-level choice (§3.3).
 or a `spec` reads. It was two — `reduce_field` beside a `spec.field` — and the
 validator demanded they agree, so the second spelling could only ever restate
 the first or be refused. It also means one thing on every category. A
-multi-field recipe requires it as soon as either `reduce` or `spec` is given; a
-keyed recipe requires it for `spec`, and when it is given it narrows the
-`reduce` to that key too — without it, `reduce` covers every key; a scalar
-recipe takes none, having one number.
+multi-field or keyed recipe requires it for `spec`, which is one verdict on one
+number, and when it is given it narrows the `reduce` to that field too; without
+it, `reduce` covers every field or key, one row per field and statistic. A
+multi-field recipe used to require it for `reduce` as well, while a keyed one
+reduced every key; the two categories now agree. Two names for one number
+(`edges`' `rise_time` and `fall_time`, a disturbance's `deviation` and
+`undershoot`) reduce once: an edge under the direction its row measured, the
+others under the first name. A scalar recipe takes none, having one number.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|

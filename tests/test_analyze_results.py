@@ -2599,6 +2599,51 @@ async def test_field_narrows_a_keyed_recipes_reduction_to_that_key(
     assert {row["field"] for row in every["results"]["m"]["reduced"]} == {"vfinal", "tcross"}
 
 
+@pytest.mark.asyncio
+async def test_a_bare_reduce_on_a_multi_field_recipe_covers_every_field(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A multi-field recipe refused 'reduce' without 'field' while a keyed one
+    reduced every key. It now reduces every field it reports, each the same
+    number a reduction naming that field gives."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    stats = {"metric": "signal_stats", "signal": "V(out)"}
+
+    every = await _analyze(
+        state_no_sim, raw, [{"key": "s", **stats, "reduce": ["max"]}], all_steps=True
+    )
+    rows = {row["field"]: row["value"] for row in every["results"]["s"]["reduced"]}
+    assert set(rows) == {"min", "max", "mean", "rms", "peak_to_peak", "stddev"}
+    for field in ("mean", "stddev"):
+        named = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "s", **stats, "field": field, "reduce": ["max"]}],
+            all_steps=True,
+        )
+        (row,) = named["results"]["s"]["reduced"]
+        assert rows[field] == row["value"]
+
+
+@pytest.mark.asyncio
+async def test_a_bare_reduce_reports_an_edge_by_the_direction_it_measured(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    # rise_time and fall_time both read the row's transition time; the row
+    # says which one it measured, so a rising edge is not also a fall time.
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "e", "metric": "edges", "signal": "V(out)", "edge": "rising", "reduce": ["max"]}],
+    )
+    fields = {row["field"] for row in data["results"]["e"]["reduced"]}
+    assert "rise_time" in fields
+    assert "fall_time" not in fields
+
+
 # ---------------------------------------------------------------------------
 # artifact handles reach the caller
 # ---------------------------------------------------------------------------
