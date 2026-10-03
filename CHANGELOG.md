@@ -464,6 +464,7 @@ tool-surface changes.
   both target 3.11, and the lockfile resolves one package set for 3.11 through
   3.13. The Linux test legs run the suite on one xdist worker per core, which
   takes about 90 s on a four-core machine instead of about 200 s serially. The
+  Windows leg still runs serially, so it now sets how long the checks take. The
   existing status-check contexts keep their names.
 - The alias publish workflow no longer runs its own copy of the checks. An
   alias already waits for the canonical `ltspice-mcp` release to appear on

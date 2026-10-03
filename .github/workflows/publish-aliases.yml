@@ -86,12 +86,13 @@ jobs:
       - name: Wait for ltspice-mcp ${{ steps.version.outputs.version }} on PyPI
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          for attempt in $(seq 1 60); do
+          ATTEMPTS=60  # 30 s apart: 30 minutes
+          for attempt in $(seq 1 "$ATTEMPTS"); do
             if curl -fsSL "https://pypi.org/pypi/ltspice-mcp/${VERSION}/json" >/dev/null 2>&1; then
               echo "ltspice-mcp ${VERSION} is available on PyPI."
               exit 0
             fi
-            echo "Attempt ${attempt}/60: ltspice-mcp ${VERSION} not on PyPI yet; retrying in 30s."
+            echo "Attempt ${attempt}/${ATTEMPTS}: ltspice-mcp ${VERSION} not on PyPI yet; retrying in 30s."
             sleep 30
           done
           echo "ltspice-mcp ${VERSION} never appeared on PyPI; aborting alias publish." >&2
