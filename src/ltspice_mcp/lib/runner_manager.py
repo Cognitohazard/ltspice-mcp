@@ -68,7 +68,7 @@ class RunnerManager:
             # different cap. Update it in place: each batch rebuilds its
             # spicelib SimRunner from ``self.max_parallel`` at launch, and the
             # launch permits that enforce the cap across jobs follow it as soon
-            # as the runner is idle (``RunnerBase._apply_cap_if_idle``).
+            # as the runner is idle (``RunnerBase._rebuild_slots_if_idle``).
             # Updating the attribute (vs. recreating the instance) preserves
             # the per-job cancel-event / live-process map that an in-flight
             # batch — and cancel_job — depend on.

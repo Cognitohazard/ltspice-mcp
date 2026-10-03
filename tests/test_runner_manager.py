@@ -116,6 +116,29 @@ class TestRunnerManager:
         assert mgr._loop is None
 
 
+def _submitter():
+    """A fresh manager's lookup for one simulator and folder, by cap."""
+    mgr = RunnerManager()
+    loop = asyncio.get_running_loop()
+    sim_cls = type("FakeSim", (), {})
+    return lambda max_parallel: mgr.get_experiment_runner(
+        loop, sim_cls, Path("runs"), max_parallel=max_parallel
+    )
+
+
+async def _admitted_without_waiting(runner) -> bool:
+    """Whether one more launch permit is granted at once. A granted permit is
+    left held; a wait is cancelled."""
+    attempt = asyncio.ensure_future(runner.acquire_launch_slot())
+    await asyncio.sleep(0)
+    if attempt.done():
+        return True
+    attempt.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await attempt
+    return False
+
+
 class TestCapChangeOnTheRealRunner:
     """A later submission's cap, applied in place by the real runner's setter.
 
@@ -127,24 +150,7 @@ class TestCapChangeOnTheRealRunner:
     real_runners = True
 
     async def test_a_lowered_cap_waits_for_held_permits_then_holds(self):
-        mgr = RunnerManager()
-        loop = asyncio.get_running_loop()
-        sim_cls = type("FakeSim", (), {})
-        out = Path("runs")
-
-        def submit(max_parallel: int):
-            return mgr.get_experiment_runner(loop, sim_cls, out, max_parallel=max_parallel)
-
-        async def admitted_without_waiting(runner) -> bool:
-            attempt = asyncio.ensure_future(runner.acquire_launch_slot())
-            await asyncio.sleep(0)
-            if attempt.done():
-                return True
-            attempt.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await attempt
-            return False
-
+        submit = _submitter()
         runner = submit(2)
         await runner.acquire_launch_slot()
         await runner.acquire_launch_slot()
@@ -152,37 +158,55 @@ class TestCapChangeOnTheRealRunner:
         assert submit(1) is runner
         assert runner.max_parallel == 1
         # The two admitted runs keep their permits, and nothing joins them.
-        assert not await admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner)
         runner.release_launch_slot()
         runner.release_launch_slot()
 
         # The next submission finds the runner idle, and the cap now holds.
         assert submit(1) is runner
-        assert await admitted_without_waiting(runner)
-        assert not await admitted_without_waiting(runner)
+        assert await _admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner)
         runner.release_launch_slot()
-        assert await admitted_without_waiting(runner)
+        assert await _admitted_without_waiting(runner)
         runner.release_launch_slot()
 
     async def test_a_lowered_cap_applies_once_the_runner_drains(self):
-        mgr = RunnerManager()
-        loop = asyncio.get_running_loop()
-        sim_cls = type("FakeSim", (), {})
-        runner = mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=2)
+        submit = _submitter()
+        runner = submit(2)
         await runner.acquire_launch_slot()
         await runner.acquire_launch_slot()
-        mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=1)
+        submit(1)
         runner.release_launch_slot()
         runner.release_launch_slot()
 
         # No further submission: draining alone puts the lowered cap in force.
+        assert await _admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner), (
+            "a second run started under a cap of one"
+        )
+        runner.release_launch_slot()
+
+    async def test_a_lowered_cap_applies_when_the_last_waiter_gives_up(self):
+        """The last claim on a permit can end in a cancelled wait instead of a
+        release: a waiter handed the final permit, cancelled before it resumes.
+        The runner is idle then too, so the lowered cap applies."""
+        submit = _submitter()
+        runner = submit(2)
         await runner.acquire_launch_slot()
-        second = asyncio.ensure_future(runner.acquire_launch_slot())
+        await runner.acquire_launch_slot()
+        waiter = asyncio.ensure_future(runner.acquire_launch_slot())
         await asyncio.sleep(0)
-        assert not second.done(), "a second run started under a cap of one"
-        second.cancel()
+        submit(1)
+        runner.release_launch_slot()  # hands this permit to the waiter
+        runner.release_launch_slot()
+        waiter.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await second
+            await waiter
+
+        assert await _admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner), (
+            "a second run started under a cap of one"
+        )
         runner.release_launch_slot()
 
     async def test_a_lookup_while_a_permit_is_handed_over_keeps_the_cap(self):
@@ -190,25 +214,19 @@ class TestCapChangeOnTheRealRunner:
         counted itself yet. A submission that looks the runner up in that gap
         must not reset the permits, or the woken run and a new one would both
         launch under a cap of one."""
-        mgr = RunnerManager()
-        loop = asyncio.get_running_loop()
-        sim_cls = type("FakeSim", (), {})
-        runner = mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=1)
+        submit = _submitter()
+        runner = submit(1)
         await runner.acquire_launch_slot()
         woken = asyncio.ensure_future(runner.acquire_launch_slot())
         await asyncio.sleep(0)
         assert not woken.done()
 
         runner.release_launch_slot()  # hands the permit to the waiting run
-        assert mgr.get_experiment_runner(loop, sim_cls, Path("runs"), max_parallel=1) is runner
+        assert submit(1) is runner
         await woken
-
-        newcomer = asyncio.ensure_future(runner.acquire_launch_slot())
-        await asyncio.sleep(0)
-        assert not newcomer.done(), "a second run started under a cap of one"
-        newcomer.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await newcomer
+        assert not await _admitted_without_waiting(runner), (
+            "a second run started under a cap of one"
+        )
         runner.release_launch_slot()
 
 
