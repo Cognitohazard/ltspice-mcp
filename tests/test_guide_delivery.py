@@ -1,6 +1,6 @@
 """The guide reaches the model through every door, and the doors agree.
 
-The guide is a core every session reads plus topic sections and task skills
+The guide is a core every session reads plus topic sections and task playbooks
 read on demand (``lib/guide.py``). These tests pin its structure (the section
 list is the files present, the index is the front matter), its delivery (the
 ``inspect`` guide kind, ``Api.guide()``, the ``spice://guide`` resources serve
@@ -20,6 +20,8 @@ from mcp import types
 from ltspice_mcp.api import Api
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import guide
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
+from ltspice_mcp.lib.response_budget import BUDGET_MIN_TOKENS
 from ltspice_mcp.lib.variations import MismatchRule
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.server import (
@@ -29,6 +31,8 @@ from ltspice_mcp.server import (
     call_tool,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import get_tools
+from tests._text import names, section
 from tests.conftest import call_tool_params, fake_request_context
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,15 +92,23 @@ class TestGuideStructure:
         assert fields.get("description")
         assert body.startswith("# "), "a section opens with its title"
 
-    def test_the_index_lists_every_section_and_skill(self):
+    @pytest.mark.parametrize("name", guide.SECTION_ORDER)
+    def test_each_section_is_a_known_kind(self, name: str):
+        fields, _ = guide.split_front_matter((GUIDE_DIR / f"{name}.md").read_text("utf-8"))
+        assert fields.get("kind", "topic") in guide.KINDS
+
+    def test_the_index_lists_every_section_under_its_kind(self):
         core = guide.read()
         index = core[core.index("## Index") :]
-        for name in guide.SECTION_ORDER:
-            assert f"- `{name}`:" in index
-        skill_dirs = {path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")}
-        assert skill_dirs, "the repository's skills directory is empty"
-        for skill in skill_dirs:
-            assert f"- `skill:{skill}`:" in index
+        for entry in guide.sections():
+            heading = index.index(guide.KINDS[entry.kind])
+            line = index.index(f"- `{entry.name}`:")
+            later = [
+                index.index(other)
+                for kind, other in guide.KINDS.items()
+                if kind != entry.kind and other in index and index.index(other) > heading
+            ]
+            assert heading < line < min(later, default=len(index)), entry.name
 
     def test_the_core_fits_its_budget(self):
         core = guide.read()
@@ -109,20 +121,15 @@ class TestGuideStructure:
             guide.read("nope")
         assert caught.value.known == guide.names()
 
-    def test_a_skill_file_outside_its_listing_is_not_read(self):
-        """Only files the skill listing found are served: a path that climbs
-        out of the skill's directory names nothing."""
+    def test_a_path_names_no_section(self):
+        """Sections are names, never paths: nothing outside the guide's own
+        files can be read through it."""
         with pytest.raises(guide.UnknownGuideSection):
-            guide.read("skill:spice-bench-craft/../ltspice/SKILL.md")
-
-    def test_a_skill_lists_its_further_files_by_their_readable_names(self):
-        text = guide.read("skill:spice-bench-craft")
-        assert "`skill:spice-bench-craft/references/BENCH_NOTES.md`" in text
-        assert guide.read("skill:spice-bench-craft/references/BENCH_NOTES.md").strip()
+            guide.read("../guide/core")
 
 
 #: Where a pointer to a section can appear: the code that writes descriptions
-#: and hints, the guide itself, and the skills.
+#: and hints, the guide itself, and the plugin's skill.
 _POINTER_SOURCES = (
     *sorted((ROOT / "src" / "ltspice_mcp").rglob("*.py")),
     *sorted(GUIDE_DIR.glob("*.md")),
@@ -130,17 +137,27 @@ _POINTER_SOURCES = (
 )
 
 
+#: The ways a text names a section: the prose pointer, and the two calls that
+#: read one. A placeholder such as "<name>" is not a name.
+_POINTER_PATTERNS = (
+    r"guide section\s+'([^'<]+)'",
+    r'"section":\s*"([^"<]+)"',
+    r"""guide\(["']([^"'<]+)["']\)""",
+)
+
+
 def test_every_section_pointer_resolves():
-    """A "guide section 'x'" pointer is how descriptions, hints and the
-    sections themselves send a reader on; one naming no section is a dead end
-    the reader cannot recover from."""
+    """A pointer is how descriptions, hints, the sections themselves and the
+    plugin's skill send a reader on; one naming no section is a dead end the
+    reader cannot recover from."""
     names = set(guide.names())
     dangling = []
     for path in _POINTER_SOURCES:
-        text = path.read_text(encoding="utf-8")
-        for name in re.findall(r"guide section\s+'([^']+)'", text):
-            if name not in names:
-                dangling.append(f"{path.relative_to(ROOT)}: {name!r}")
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for pattern in _POINTER_PATTERNS:
+            for name in re.findall(pattern, text):
+                if name not in names:
+                    dangling.append(f"{path.relative_to(ROOT)}: {name!r}")
     assert not dangling, "pointers to sections the guide does not have:\n" + "\n".join(dangling)
 
 
@@ -151,8 +168,8 @@ class TestSectionContent:
     @pytest.mark.parametrize(
         ("section", "anchor"),
         [
-            ("fundamentals", "## Value Notation — CRITICAL"),
-            ("fundamentals", "ngspice skips `.meas` under the server's"),
+            ("fundamentals", "## Value suffixes"),
+            ("fundamentals", "On ngspice, `run_experiments` refuses a top-level `.meas`"),
             ("ltspice", "## Other LTspice Quirks"),
             ("ngspice", "## .control / .endc Blocks"),
             ("ngspice", "## XSPICE"),
@@ -161,10 +178,85 @@ class TestSectionContent:
             ("schematics", "## Building and editing a sheet"),
             ("schematics", '`edit_schematic(target=..., base="blank")` starts a new sheet'),
             ("python", "detach=True"),
+            # The paragraph opening this subsection was once split off into
+            # another section, leaving it to start mid-sentence.
+            ("tools", "Three recipes appear in the tool schema by name only"),
+            ("tools", "## A sweep in one call"),
         ],
     )
     def test_anchor(self, section: str, anchor: str):
-        assert anchor in guide.read(section)
+        assert anchor in " ".join(guide.read(section).split())
+
+    def test_teaches_both_measurement_idioms(self):
+        # Scalars come from a .meas in the deck, read back by the measurements
+        # recipe; device small-signal parameters come from a .op run with
+        # .options logopinfo, read back by operating_point. The recipes are
+        # checked against the live union, so a rename fails here.
+        tools, op = guide.read("tools"), guide.read("operating-points")
+        assert ".meas" in tools.lower()
+        assert "logopinfo" in op.lower()
+        for text, recipe in ((tools, "measurements"), (op, "operating_point")):
+            assert recipe in DISCRIMINANTS, f"{recipe} is no longer a recipe"
+            assert names(text, recipe), f"the guide never names {recipe} where it teaches it"
+
+    def test_teaches_the_response_budget(self):
+        # The budget section names every tool that takes one, its unit and its
+        # floor, each read off the code, so it can neither be gutted nor fall
+        # behind the surface.
+        owners = {
+            name
+            for name, registered in get_tools()[1].items()
+            if "budget" in registered.definition.input_schema.get("properties", {})
+        }
+        assert owners, "no tool takes a budget any more"
+        budget = section(guide.read("tools"), "budget")
+        missing = sorted(tool for tool in owners if not names(budget, tool))
+        assert not missing, f"the budget section never names {missing}"
+        assert "token" in budget.lower()
+        assert names(budget, str(BUDGET_MIN_TOKENS)), "the budget floor is not stated"
+
+    def test_the_bench_playbook_closes_a_dc_servo(self):
+        # The DC-only feedback inductor that closes the loop at DC.
+        text = guide.read("bench-craft")
+        assert re.search(r"^\s*LFB\s+out\s+inn\s+1T\b", text, re.IGNORECASE | re.MULTILINE)
+
+    def test_the_bench_playbook_ships_a_template_per_analysis(self):
+        # An operating-point, an open-loop AC and a closed-loop transient bench,
+        # each a complete deck an agent can render.
+        decks = re.findall(r"```spice\n(.*?)```", guide.read("bench-craft"), re.S)
+        for analysis in (".op", ".ac", ".tran"):
+            assert any(
+                re.search(rf"^{re.escape(analysis)}\b", deck, re.IGNORECASE | re.MULTILINE)
+                and re.search(r"^\.end\s*$", deck, re.IGNORECASE | re.MULTILINE)
+                for deck in decks
+            ), f"no complete {analysis} bench template"
+
+    def test_the_bench_playbook_teaches_ngspice_batch_output(self):
+        text = guide.read("bench-craft")
+        # Under -b -r a measurement goes in .control as the dot-less command.
+        controls = re.findall(r"^\.control\b(.*?)^\.endc\b", text, re.S | re.M | re.I)
+        assert any(re.search(r"^meas\s", block, re.M | re.I) for block in controls)
+        # wrdata repeats the scale column before every dumped vector.
+        assert re.search(r"scale\s*,\s*v\(out\)\s*,\s*scale\s*,\s*i\(vdd\)", text, re.I)
+
+    def test_the_bench_playbook_is_a_task(self):
+        (entry,) = [entry for entry in guide.sections() if entry.name == "bench-craft"]
+        assert entry.kind == "task"
+
+    def test_names_no_absent_or_withheld_surface(self):
+        """Two rules share this denylist. Absent behavior: "rerun", "case_axis"
+        and "columnar" name things this surface does not have, and a guide that
+        names them teaches calls that do not exist. Withheld knobs: the
+        control token stays scoped to the submitting session, and the
+        analysis_budget_s deferral knob is not taught."""
+        text = "\n".join([guide.read(), _all_sections()])
+        for term in ("rerun", "columnar", "case_axis", "control_token", "analysis_budget_s"):
+            pattern = re.compile(
+                r"\b" + r"[\s_-]?".join(re.escape(p) for p in term.split("_")) + r"\b",
+                re.IGNORECASE,
+            )
+            hit = pattern.search(text)
+            assert hit is None, f"the guide names {term!r} as {hit.group(0)!r}"
 
     def test_the_tools_section_maps_the_six_tools(self):
         text = guide.read("tools")
@@ -234,7 +326,7 @@ async def _inspect_guide(state: SessionState, section: str | None = None) -> dic
 
 
 class TestTheDoorsAgree:
-    @pytest.mark.parametrize("section", [None, "ltspice", "skill:spice-experiments"])
+    @pytest.mark.parametrize("section", [None, "ltspice", "bench-craft"])
     async def test_inspect_api_and_resource_serve_one_text(
         self, work_dir: Path, section: str | None
     ):
@@ -257,7 +349,7 @@ class TestTheDoorsAgree:
         assert result.structured_content is not None
         bad, good = result.structured_content["results"]
         assert bad["ok"] is False and bad["error"]["code"] == "unknown_section"
-        assert "skill:spice-experiments" in bad["error"]["supported"]
+        assert "bench-craft" in bad["error"]["supported"]
         assert good["ok"] is True
 
     def test_the_guide_reads_without_starting_the_engine(self, tmp_path: Path):

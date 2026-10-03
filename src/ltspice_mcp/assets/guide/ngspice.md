@@ -10,36 +10,39 @@ description: >
 
 ngspice shares guide section 'fundamentals', with these deltas:
 
-- Inline comment is `$`, not `;`.
-- MOSFETs need 4 terminals (`M1 d g s b`) — the bulk is **not** auto-connected
-  to the source. (LTspice auto-ties bulk→source only for 3-terminal VDMOS power
-  symbols; a generic monolithic NMOS/PMOS needs the 4th node there too.)
+- A MOSFET line needs 4 nodes (`M1 d g s b`); ngspice never connects the bulk
+  for you. (An LTspice netlist needs them too, except for a VDMOS; it is
+  LTspice's 3-pin `nmos`/`pmos` schematic symbols that tie bulk to source when
+  they export.)
 - No `startup` keyword on `.tran`. (`.option ramptime` is only a DC source-
   stepping convergence aid in standard builds, not a transient soft-start — the
   true supply-ramp needs an `XSPICE_EXP` build. Ramp a source by hand with a
   PWL/PULSE rise instead.)
 - No native `.step`. Run parametric sweeps as `run_experiments` `variations`
   (one netlist per value); ngspice ignores a `.step` line in batch mode, so a
-  deck that carries one runs once at the base value with no error. The lint
-  warns (`step-ngspice`) rather than letting that pass silently.
+  deck that carries one runs once at the base value with no error; the lint
+  warns (`step-ngspice`).
 - `gnd` is auto-converted to ground (node `0`) by default; disable with
   `set no_auto_gnd` if you need `gnd` to be a distinct net.
-- Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
-  `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
-- `.meas` is suppressed only when batch mode (`-b`) and a command-line `-r
-  rawfile` are combined — ngspice prints "No .measure possible in batch mode
-  (-b) with -r rawfile set!" (the invocation this server uses). It is not a
-  blanket batch limitation: move the measurement into a `.control ... run ...
-  .endc` block and write it as the dot-less interactive `meas` command (e.g.
-  `meas tran vmax MAX V(out)` — no leading dot; a dotted `.meas` inside
-  `.control` is not a valid ngspice command and computes nothing). The result
-  prints to the run's log. (`set measoutfile` / `.option measoutfile` does not
-  help here — the `-b -r` combination suppresses the measurement before any
-  output routing, so no file is written.) For named signals and device
-  operating-point params you usually need none of this — `.save` them and read
-  the raw back with `run_experiments` plus the `waveform`, `value`, or
-  `operating_point` recipe. Reserve `.control` / `wrdata` for in-engine computation you
-  cannot express as a saved signal.
+- Extra `.meas` types: `MIN_AT`/`MAX_AT` return where the minimum or maximum
+  falls (the time or frequency), not its value; `DERIV` is the derivative at a
+  point or where a condition is met; `param='expr'` evaluates an expression
+  over `.param` values and earlier `.meas` results; `par('expr')` is an inline
+  expression on output variables. `.meas ... FIND` takes `V(out)` (no `mag()`
+  wrapper). Inside `.control`, `param` and `par` are not available: compute
+  with `let`. The interactive `meas` command also takes an `SP` analysis, for
+  measurements on a spectrum.
+- `run_experiments` refuses a deck with a top-level `.meas` on ngspice (lint
+  `meas-ngspice-batch`; the case reports `skipped`), because ngspice run in
+  batch mode with a raw output (`-b -r`, as the server runs it) does not
+  evaluate `.meas`. Read the trace with a recipe instead (`waveform`, `value`,
+  `operating_point`), or measure inside a `.control ... run ... .endc` block
+  with the dot-less interactive `meas` command (`meas tran vmax MAX V(out)`),
+  whose result prints to the run's log. A dotted `.meas` inside `.control` is
+  not a command and computes nothing.
+- `.backanno` is LTspice-only: ngspice rejects it ("unimplemented dot command
+  '.backanno'") and aborts the run. Probe currents with
+  `.options savecurrents` or `.probe` instead.
 
 ## Parameters and Expressions
 
@@ -52,15 +55,19 @@ ngspice shares guide section 'fundamentals', with these deltas:
 
 - Expressions in braces `{expr}` or single quotes `'expr'` — both work.
 - Expressions without delimiters work only when spaces are absent:
-  `.param c=a+123` OK, `.param c = a + 123` fails silently (assigns first token).
+  `.param c=a+123` works, `.param c = a + 123` fails silently (it assigns the
+  first token).
 - Self-referential params fail silently: `.param x = {x+3}` does not work.
 - Parameter names must start with alpha; may contain `! # $ % [ ] _`. Cannot use
   reserved words: `time`, `temper`, `hertz`, `not`, `and`, `or`, `div`, `mod`,
   `sqr`, `sqrt`, `sin`, `cos`, `exp`, `ln`, `log`, `log10`, `arctan`, `abs`,
   `pwr`, `defined`.
+- String-valued params are supported, with limited concatenation.
+- `.func` cannot be recursive: it expands textually, so a self-reference
+  expands without bound.
 
-**Three separate expression parsers exist in ngspice** — a known source of
-confusion:
+ngspice has three expression parsers, with slightly different functions and
+precedence:
 1. **Front-end** (`.param`, brace expressions) — evaluated at netlist expansion.
 2. **B source / behavioral** — evaluated during simulation (no braces).
 3. **`.control` block** — operates on its own vectors/variables.
@@ -83,8 +90,10 @@ Braces `{...}` are "compile-time"; bare expressions in B sources are "run-time".
 | `c ? x : y` | 8 | ternary |
 
 **`^` behavior depends on compatibility mode:**
-- Default (`hs` compat): `x^y` = `pow(fabs(x), y)` for x>0; rounds y for x<0; 0 for x=0.
-- LTspice compat (`lt`): `x^y` = `pow(x, y)` if y is close to integer; else 0 for x<0.
+- Default (`hs` compat): `x^y` = `pow(fabs(x), y)` for x>0; rounds y for x<0;
+  0 for x=0.
+- LTspice compat (`lt`): `x^y` = `pow(x, y)` if y is close to an integer; else
+  0 for x<0.
 
 **Built-in functions (.param):**
 - Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `arctan`
@@ -94,8 +103,7 @@ Braces `{...}` are "compile-time"; bare expressions in B sources are "run-time".
 - Rounding: `nint` (nearest, half to even), `int` (toward 0), `floor`, `ceil`
 - Selection: `min`, `max`, `sgn`
 - Conditional: `ternary_fcn(x,y,z)` (= `x ? y : z`)
-- **Statistical:** `gauss(nom,rvar,sigma)`, `agauss(nom,avar,sigma)`,
-  `unif(nom,rvar)`, `aunif(nom,avar)`, `limit(nom,avar)`
+- Statistical: `gauss`, `agauss`, `unif`, `aunif`, `limit` (see Monte Carlo)
 - Special: `var(name)` (interpreter variable), `vec(name)` (vector value)
 
 ## Behavioral Sources (B sources)
@@ -111,8 +119,8 @@ Nested ternaries need explicit parentheses.
 
 **Functions (B source context):** `cos`, `sin`, `tan`, `acos`, `asin`, `atan`,
 `cosh`, `sinh`, `acosh`, `asinh`, `atanh`, `exp`, `ln`, `log`, `log10`, `abs`,
-`sqrt`, `u` (unit step), `u2` (ramp 0-1), `uramp`, `floor`, `ceil`, `min`, `max`,
-`pow`, `**`, `pwr`, `^`, `i(device)`.
+`sqrt`, `u` (unit step), `u2` (ramp 0-1), `uramp`, `floor`, `ceil`, `min`,
+`max`, `pow`, `**`, `pwr`, `^`, `i(device)`.
 
 **Special variables:** `time` (transient), `temper` (circuit temp in C), `hertz`
 (AC frequency). `time` is zero during AC; `hertz` is zero during transient.
@@ -128,6 +136,9 @@ use `time` or expressions as the independent variable.
 - `exp()` is internally capped at argument=14 — beyond that it becomes linear.
 - `log`/`ln`/`sqrt` of negatives use `fabs()` automatically — no error.
 - Division by zero or `log(0)` causes an error.
+- `par('expression')` works in `.plot`/`.print` output lines too.
+- Non-linear R, L and C can be built from B sources; the ngspice manual gives
+  the subcircuit templates.
 
 ## Subcircuits
 
@@ -144,21 +155,22 @@ X1 input output myfilter rval=1k cval=1n
   `name=value` after the nodes.
 - `.lib` loading depends on ngspice's compatibility mode, and no single `.lib`
   form works in every mode — so for unconditional whole-file inclusion use
-  `.include <file>`, which resolves in every mode (verified on ngspice-42). If
-  you use `.lib`:
+  `.include <file>`, which resolves in every mode. If you use `.lib`:
   - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>`
     pulls just that `.lib section … .endl` block; a bare `.lib <file>` with no
     section does not load the file's models.
   - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
     mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a
-    sectioned `.lib <file> <section>` (the PDK corner idiom) is mis-split by the
-    `lt`/`ps` tokens into two plain includes that drop the section — the run
-    fails with "could not find include file". Set `[simulator] ngbehavior =
-    "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to
-    parse the section correctly.
+    sectioned `.lib <file> <section>` (the PDK corner idiom) is split by the
+    `lt`/`ps` tokens into two plain includes that drop the section.
+    `run_experiments` refuses such a deck (lint `lib-section-ngspice`); run
+    elsewhere, it fails with "could not find include file". Set
+    `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or
+    `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section.
   `.lib` also differs from `.include` in scope — it skips global-scope circuit
   elements.
-- `.param` inside subcircuits is local scope (masks globals). Nesting to 10 levels.
+- `.param` inside a subcircuit is local (it masks globals). Subcircuits nest
+  up to 10 levels.
 - Subcircuit and model names are global — must be unique across the netlist.
 
 ## .save Directive
@@ -169,19 +181,17 @@ X1 input output myfilter rval=1k cval=1n
 .save all @m2[vdsat]              $ save defaults plus extras
 ```
 
-- Without `.save`, all node voltages and source currents are saved (huge files).
+- Without `.save`, every node voltage and source current is saved (large
+  files).
 - Adding even one `.save` line drops all defaults — only listed signals saved.
 - Resistor current is the internal vector `@r1[i]` (via `.save @r1[i]` or
   `.options savecurrents`); under this path the `i(r1)` read-function does not
   resolve it — `i()`/`I()` only resolve `name#branch` vectors (voltage sources,
   and the sense source a separate `.probe I(R1)` directive inserts). This server
   reads the `@r1[i]` form.
-- Saved device operating-point params (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
-  by the `operating_point` recipe in a `device_op_points` bucket (a bare `.op`),
-  and on a `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — the
-  `value`, `signal_stats`, and `waveform` recipes accept `m1.gm` and resolve it
-  to the actual trace. This is the gm/ID idiom: `.dc Vg …` + `.save @m1[gm] @m1[id]`, then read
-  `m1.gm`/`m1.id` per sweep point.
+- Saved device operating-point parameters (`@m1[gm]`, `@m1[id]`, …) are read
+  back by name, at one bias or across a `.dc` sweep (guide section
+  'operating-points').
 
 ## .control / .endc Blocks
 
@@ -210,11 +220,13 @@ Monte Carlo loop: `write` captures the current plot only.
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.
 - `let` creates numeric vectors: `let x = 2*pi` — access `$&x` to get a number.
+- Mixing up `set` and `let` fails silently.
 - `$&param` dereferences a circuit `.param` into a control variable.
 
 **Control structures:** `while`/`end`, `repeat`/`end`, `foreach`/`end`,
 `if`/`else`/`end`, `dowhile`, `break [n]`, `continue [n]`, `label`, `goto`.
-`foreach` values are space-separated (no commas).
+`foreach` values are space-separated (no commas); `foreach var $myvariable`
+expands a variable into the list.
 
 **Key commands:** `run`, `plot`, `print`, `let`, `set`, `write`, `wrdata`,
 `alter`, `altermod`, `echo`, `meas`, `linearize`, `fft`, `define`, `source`.
@@ -224,8 +236,11 @@ Monte Carlo loop: `write` captures the current plot only.
 ngspice has **no `.mc` directive**. Two idioms:
 
 **(1) Per-device statistical functions (primary, simplest).** Put `agauss`/
-`gauss`/`unif`/`aunif`/`limit` directly in a `.param` or a device/B-source value,
-in `'…'` or `{…}`. Each device card draws a fresh value at parse time:
+`gauss`/`unif`/`aunif`/`limit` directly in a `.param` or a device/B-source
+value, in `'…'` or `{…}`. `gauss(nom, rvar, sigma)` and `unif(nom, rvar)` take
+a relative variation, `agauss(nom, avar, sigma)` and `aunif(nom, avar)` an
+absolute one, and `limit(nom, avar)` gives `nom+avar` or `nom-avar`. Each
+device card draws a fresh value at parse time:
 
 ```spice
 R1 a b 'agauss(10k, 500, 3)'      $ 10k, ±500 absolute, /3 sigma
@@ -237,10 +252,10 @@ not in the nutmeg/`.control` interpreter. For a distribution, re-run the deck N
 times (set `.options seed=<value>`); a `run_experiments` random `variations`
 entry automates the N-run draw + aggregation.
 
-**(2) `.control` loop with `alter`** — vary within one ngspice invocation. Inside
-`.control` only `sgauss(0)` (Gaussian, mean 0, σ 1) and `sunif(0)` (uniform
-[-1,1]) are built in — scale them yourself (`agauss`/`gauss` are not nutmeg
-functions here unless you `define` them first):
+**(2) `.control` loop with `alter`** — vary within one ngspice invocation.
+Inside `.control` only `sgauss(0)` (Gaussian, mean 0, σ 1) and `sunif(0)`
+(uniform [-1,1]) are built in — scale them yourself (`agauss`/`gauss` are not
+nutmeg functions here unless you `define` them first):
 
 ```spice
 .control
@@ -287,10 +302,10 @@ transient once all `.meas` conditions are satisfied.
 
 ## XSPICE
 
-Mixed-signal simulation with code models. XSPICE is enabled by default in the
-official ngspice Windows binaries (and this Linux build — verified: an `A`-device
-`gain` code model runs); only the experimental `XSPICE_EXP` extras (e.g. the
-capacitor/inductor code models and transient supply-ramping) need a custom build.
+Mixed-signal simulation with code models: A-devices (the `A` prefix) are the
+XSPICE code-model primitives. XSPICE is enabled in stock ngspice builds; only
+the experimental `XSPICE_EXP` extras (such as the capacitor and inductor code
+models and transient supply ramping) need a custom build.
 
 ```spice
 A1 [in] [out] lut1
@@ -309,7 +324,7 @@ Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
 | Inline comment | `;` | `$` |
 | B-source conditional | `IF(c,a,b)` | ternary `c ? a : b` |
 | `^` operator | XOR (power is `**`) | power |
-| MOSFET bulk | auto-tied to source only on 3-term VDMOS symbols | required 4th terminal |
+| MOSFET bulk | 4th node in a netlist (VDMOS: 3); the 3-pin schematic symbols tie it to source | always a 4th node |
 | `GND` node | alias for `0` | auto-converted to `0` (disable: `set no_auto_gnd`) |
 | `.tran startup` | supported | not supported (no transient soft-start) |
 | Parameter sweep | `.step` | `run_experiments` `variations` (no `.step`) |
@@ -318,10 +333,3 @@ Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
 | Default saving | saves all | `.save` (one line drops defaults; `.save all` keeps) |
 | `.raw` format | mixed precision | all doubles |
 | Unicode mu | replaces `u` with µ | preserves `u` |
-
-Other ngspice notes: A-devices are the XSPICE code-model primitives (the `A`
-prefix — available in stock builds, see XSPICE); `.func` cannot be recursive
-(textual expansion, so a self-reference expands without bound). `.backanno` is
-an LTspice-only directive — ngspice rejects it ("unimplemented dot command
-'.backanno'") and aborts the run; ngspice current probing uses `.options
-savecurrents` / `.probe` instead.

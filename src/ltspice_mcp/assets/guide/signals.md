@@ -23,10 +23,10 @@ read a quantity the simulator did not write as a trace of its own:
 `value` reads the sample nearest `at` on the run's axis, without
 interpolation, and needs `at` whenever that axis has more than one sample.
 
+## Trace math in Python
+
 Any other trace math — a sum, a product, a function of a trace — is numpy on
-the traces. `run_code` runs Python with `api` in scope; where it is turned off,
-`from ltspice_mcp.api import Api; api = Api(working_dir=...)` gives the same
-`api` in your own Python:
+the traces, in Python (guide section 'python'):
 
 ```python
 r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
@@ -43,33 +43,30 @@ an axis of their own, so never combine traces across steps.
 Take statistics of a derived trace with `compute_signal_stats` and
 `time_weighted_quantiles`, not `np.mean`, `np.std` or `np.percentile` over the
 samples. LTspice varies its timestep and packs samples around every edge, so a
-plain sample average or percentile over-weights the edges; `compute_signal_stats`
-weights mean, RMS and standard deviation by time, the way `signal_stats` does
-(its `min`, `max` and `pk_pk` are the sample extremes), and
-`time_weighted_quantiles` does the same for quantiles. `window_and_clean` cuts
-the window and drops non-finite samples first. All three are in `run_code`'s
-scope; in your own Python, `from ltspice_mcp.api import compute_signal_stats,
-time_weighted_quantiles, window_and_clean`.
+plain sample average or percentile over-weights the edges.
+`compute_signal_stats` weights mean, RMS and standard deviation by time, the
+way the `signal_stats` recipe does (its `min`, `max` and `pk_pk` are the sample
+extremes). `time_weighted_quantiles(t, y, [0.01, 0.5, 0.99])["values"]` gives
+one time-weighted quantile per level, in the order given. `window_and_clean`
+cuts the window and drops non-finite samples first. All three are importable
+from `ltspice_mcp.api` and in `run_code`'s scope.
 
-```python
-q = time_weighted_quantiles(t_w, p_w, [0.01, 0.5, 0.99])
-q["values"]  # one per level, in the order given
-```
+## Quantiles in the `signal_stats` recipe
 
 The `signal_stats` recipe keeps `min`, `max` and `peak_to_peak` as the sample
-extremes, so a narrow spike or an edge's overshoot is never averaged away. For
-a spread that leaves out the few edges of a switching train, which no single
-window can skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`,
-`q99` and `quantile_peak_to_peak` (highest level minus lowest), each a name
-`field` can reduce or spec. A key is the level as a percentage with `_` for
-the decimal point, so 0.999 is `q99_9`. `q99` is the smallest value the signal
-spends 99% of the window at or below.
+extremes, so a narrow spike or an edge's overshoot stays in them. For a spread
+that leaves out the few edges of a switching train, which no single window can
+skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`, `q99` and
+`quantile_peak_to_peak` (highest level minus lowest), each a name `field` can
+reduce or spec. A key is the level as a percentage with `_` for the decimal
+point, so 0.999 is `q99_9`. `q99` is the smallest value the signal spends 99%
+of the window at or below.
 
 ## Reading a deck that carries `.step`
 
 A `.step` directive puts several sweeps inside one `.raw`, and by default
-`analyze_results` reads the first of them. Two call-level arguments say
-otherwise, and both apply to every recipe in the call: `step`
+`analyze_results` reads the first of them. Two call-level arguments change
+that, and both apply to every recipe in the call: `step`
 (`{"axis": "temp", "value": 27}`) reads the one iteration whose axis value you
 name, and `all_steps: true` evaluates every recipe at every iteration. They are
 mutually exclusive. `run_experiments`' attached `analyze` block takes the same
