@@ -27,7 +27,6 @@ from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-NETLIST_EXTENSIONS = CIRCUIT_EXTENSIONS
 RouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
 
 
@@ -91,7 +90,7 @@ _router = ResourceRouter()
 def get_static_resources() -> list[types.Resource]:
     """Return the static resources always present on this server.
 
-    (netlists, results, models, config, recent, and the plot_widget UI renderer.)
+    (netlists, results, config, recent, the guide, and the plot_widget UI renderer.)
     """
     return [
         types.Resource(
@@ -104,12 +103,6 @@ def get_static_resources() -> list[types.Resource]:
             name="results",
             uri="spice://results/",
             description="List of all simulation jobs and their status",
-            mime_type="application/json",
-        ),
-        types.Resource(
-            name="models",
-            uri="spice://models/",
-            description="User-loaded SPICE model libraries and their models",
             mime_type="application/json",
         ),
         types.Resource(
@@ -289,7 +282,7 @@ def _read_netlists_list(
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
         for f in working_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in CIRCUIT_EXTENSIONS
     ]
     netlists.sort(key=lambda x: x["name"])
     data = {"netlists": netlists, "count": len(netlists)}
@@ -315,8 +308,8 @@ def _read_netlist_content(
     """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.allowed_paths())
-    if resolved.suffix.lower() not in NETLIST_EXTENSIONS:
-        allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
+    if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
+        allowed = ", ".join(sorted(CIRCUIT_EXTENSIONS))
         raise ValueError(
             f"Not a netlist file: {filename!r}. This resource serves netlist "
             f"text ({allowed}); simulation artifacts are read via analyze_results "
@@ -429,36 +422,6 @@ def _read_recent(
         "note": (
             'Use jobs (action:"status" or "runs") with a job_id to inspect '
             "a specific job; interrupted jobs were running when the server last stopped."
-        ),
-    }
-    return _make_result(uri_str, json.dumps(data, indent=2))
-
-
-@_router.route("spice://models/")
-def _read_models(
-    uri_str: str, params: dict[str, str], state: SessionState
-) -> types.ReadResourceResult:
-    """List user-loaded libraries and their models (not built-ins)."""
-    del params
-    libraries: list[dict] = []
-
-    for path, index in state.libraries.get_loaded_libraries():
-        models = [
-            {
-                "name": m.name,
-                "type": m.model_type,
-                "ports": m.ports,
-                "params": m.params,
-            }
-            for m in index.models
-        ]
-        libraries.append({"path": str(path), "models": models})
-
-    data = {
-        "libraries": libraries,
-        "note": (
-            'Use inspect with a model query (kind:"model", mode:"search") to '
-            "fuzzy-match a part name against these libraries."
         ),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))

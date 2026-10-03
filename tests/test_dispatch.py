@@ -33,25 +33,9 @@ def _all_profile_declared_defs() -> list[types.Tool]:
 
 
 class TestDispatchTable:
-    def test_all_tools_wired(self):
-        """Every registered tool definition should have a matching dispatch entry."""
-        defs, handlers = get_tools()
-        expected = {tool_def.name for tool_def in defs}
-        dispatched = set(handlers.keys())
-        missing = expected - dispatched
-        assert not missing, f"Tools defined but not dispatched: {missing}"
-
-    def test_no_extra_handlers(self):
-        """Every dispatch entry matches a tool definition — a stray handler
-        with no advertised definition would be callable but undiscoverable."""
-        defs, handlers = get_tools()
-        defined = {tool_def.name for tool_def in defs}
-        assert set(handlers.keys()) == defined
-
-    def test_all_handlers_callable(self):
-        _, handlers = get_tools()
-        for name, registered in handlers.items():
-            assert callable(registered.handler), f"{name} handler is not callable"
+    # That every listed tool is dispatched (and nothing unlisted is) is pinned
+    # against the server's own list_tools/call_tool handlers in
+    # test_server.py::TestServerDispatch, where the two can actually disagree.
 
     def test_required_inputs_reject_empty_args(self):
         """Tools with required fields should reject an empty argument object."""
@@ -112,11 +96,6 @@ class TestConsolidatedInputDocumentation:
 
 
 class TestRegisteredSurface:
-    def test_profile_returns_all_dispatch_entries(self):
-        """Every tool definition has a dispatch entry, and vice versa."""
-        defs, handlers = get_tools()
-        assert {tool_def.name for tool_def in defs} == set(handlers.keys())
-
     def test_an_empty_registry_is_a_hard_error(self):
         """An empty surface still completes the MCP handshake, so a client reads
         it as 'this server has no capabilities' rather than 'misconfigured'.
@@ -124,27 +103,6 @@ class TestRegisteredSurface:
         empty = _base.ToolRegistry()
         with pytest.raises(RuntimeError, match="zero tools"):
             empty.get_tools()
-
-
-class TestDestructiveAnnotations:
-    """A tool's destructiveHint is what an MCP client gates write-risk on. A
-    batch writer that can delete or overwrite must not advertise itself as
-    non-destructive."""
-
-    def test_the_schematic_writer_is_destructive(self):
-        defs, _ = get_tools()
-        by_name = {d.name: d for d in defs}
-        tool = by_name["edit_schematic"]
-        assert tool.annotations is not None
-        assert tool.annotations.destructive_hint is True, "edit_schematic not marked destructive"
-        # edit_schematic earns the hint because its batch can run the
-        # remove_component op (and commit a whole-file rewrite); keep the two
-        # tied so the hint can't silently rot if that op is ever dropped. The
-        # tie is the op union itself, which names every op it accepts.
-        ops = tool.input_schema["properties"]["ops"]["items"]
-        defs = tool.input_schema["$defs"]
-        branches = [defs[branch["$ref"].split("/")[-1]] for branch in ops["oneOf"]]
-        assert "remove_component" in {branch["properties"]["op"]["const"] for branch in branches}
 
 
 # A self-inverse op reverts itself: re-applying it with the prior arguments

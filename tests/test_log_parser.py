@@ -11,7 +11,7 @@ from ltspice_mcp.lib.log_parser import (
     count_op_iterations,
     extract_error_context,
     extract_log_diagnostics,
-    extract_missing_refs,
+    missing_refs_from_text,
     parse_fourier_data,
     parse_measurements,
     parse_step_iterations,
@@ -20,61 +20,48 @@ from ltspice_mcp.lib.log_parser import (
 )
 
 
-class TestExtractMissingRefs:
-    def test_missing_model_quoted_name(self, tmp_path: Path):
-        log = tmp_path / "missing_model.log"
-        log.write_text(
-            'Error on line 2 : s1 n003 n001 n002 0 sw Unable to find definition of model "sw"\n'
-        )
-        assert extract_missing_refs(log) == ["sw"]
+class TestMissingRefsFromText:
+    def test_missing_model_quoted_name(self):
+        text = 'Error on line 2 : s1 n003 n001 n002 0 sw Unable to find definition of model "sw"\n'
+        assert missing_refs_from_text(text) == ["sw"]
 
-    def test_missing_model_dialog_variant(self, tmp_path: Path):
-        log = tmp_path / "missing_model.log"
-        log.write_text('Can\'t find definition of model "NMOS_3v3"\n')
-        assert extract_missing_refs(log) == ["NMOS_3v3"]
+    def test_missing_model_dialog_variant(self):
+        text = 'Can\'t find definition of model "NMOS_3v3"\n'
+        assert missing_refs_from_text(text) == ["NMOS_3v3"]
 
-    def test_ngspice_undefined_model_unquoted(self, tmp_path: Path):
+    def test_ngspice_undefined_model_unquoted(self):
         # ngspice phrases an unresolved model reference differently (no quotes).
-        log = tmp_path / "ngspice.log"
-        log.write_text("Error: undefined model 2n2222\n")
-        assert extract_missing_refs(log) == ["2n2222"]
+        text = "Error: undefined model 2n2222\n"
+        assert missing_refs_from_text(text) == ["2n2222"]
 
-    def test_unknown_subcircuit_last_token(self, tmp_path: Path):
-        log = tmp_path / "missing_subckt.log"
-        log.write_text("Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n")
-        assert extract_missing_refs(log) == ["lm741"]
+    def test_unknown_subcircuit_last_token(self):
+        text = "Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n"
+        assert missing_refs_from_text(text) == ["lm741"]
 
-    def test_missing_subckt_ngspice_phrasing(self, tmp_path: Path):
+    def test_missing_subckt_ngspice_phrasing(self):
         # ngspice phrases a missing subcircuit differently from LTspice; without
-        # its own pattern the name was never captured, so find_model recovery
-        # hints stayed empty for ngspice missing-subckt failures.
-        log = tmp_path / "ng_subckt.log"
-        log.write_text("Error: unable to find subcircuit named 'lm741'\n")
-        assert extract_missing_refs(log) == ["lm741"]
+        # its own pattern the name was never captured, so an ngspice
+        # missing-subckt failure named no unresolved reference.
+        text = "Error: unable to find subcircuit named 'lm741'\n"
+        assert missing_refs_from_text(text) == ["lm741"]
 
-    def test_dedupes_repeated_refs(self, tmp_path: Path):
-        log = tmp_path / "dupes.log"
-        log.write_text(
+    def test_dedupes_repeated_refs(self):
+        text = (
             'Error on line 2 : s1 n003 n001 0 sw Unable to find definition of model "sw"\n'
             'Error on line 3 : s2 n004 n002 0 sw Unable to find definition of model "sw"\n'
         )
-        assert extract_missing_refs(log) == ["sw"]
+        assert missing_refs_from_text(text) == ["sw"]
 
-    def test_both_kinds_in_same_log(self, tmp_path: Path):
-        log = tmp_path / "both.log"
-        log.write_text(
+    def test_both_kinds_in_same_log(self):
+        text = (
             'Error on line 2 : s1 n1 n2 n3 0 sw Unable to find definition of model "sw"\n'
             "Fatal Error: Unknown subcircuit called in: xu1 n1 n2 n3 lm741\n"
         )
-        assert set(extract_missing_refs(log)) == {"sw", "lm741"}
+        assert set(missing_refs_from_text(text)) == {"sw", "lm741"}
 
-    def test_clean_log_returns_empty(self, tmp_path: Path):
-        log = tmp_path / "clean.log"
-        log.write_text("Total elapsed time: 0.01 seconds.\n")
-        assert extract_missing_refs(log) == []
-
-    def test_missing_file_returns_empty(self, tmp_path: Path):
-        assert extract_missing_refs(tmp_path / "nope.log") == []
+    def test_clean_log_returns_empty(self):
+        text = "Total elapsed time: 0.01 seconds.\n"
+        assert missing_refs_from_text(text) == []
 
 
 class TestExtractLogDiagnostics:
@@ -335,6 +322,28 @@ class TestExtractLogDiagnostics:
         # The same error is also present in the generic errors list.
         assert len(result["errors"]) == 1
 
+    def test_meas_error_on_find_at_form(self, tmp_path: Path):
+        """The FIND ... AT=<x> form, reported against a Windows deck path: one
+        caret error, also recorded as a .MEAS error with the vdb suggestion."""
+        log = tmp_path / "find_at.log"
+        log.write_text(
+            "LTspice 26.0.1\n"
+            "Circuit: test.cir\n"
+            "C:\\tmp\\test.cir(38): No such function defined.\n"
+            ".meas AC gain_db FIND Vdb(outp) AT=1\n"
+            "                      ^^^\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+        assert "No such function defined" in result["errors"][0]
+        assert "^^^" in result["errors"][0]
+        assert result["warnings"] == []
+        (me,) = result["meas_errors"]
+        assert me["directive"] == ".meas AC gain_db FIND Vdb(outp) AT=1"
+        assert me["suggestion"] is not None
+        assert "mag" in me["suggestion"].lower()
+
     def test_meas_error_without_known_pattern(self, tmp_path: Path):
         """A .MEAS error that doesn't match a validator rule still gets
         captured in meas_errors but with suggestion=None."""
@@ -490,6 +499,55 @@ class TestParseFourierData:
         )
         result = parse_fourier_data(log)
         assert result == []
+
+    def test_log_with_fourier_data(self, tmp_path: Path):
+        """Parse a log file containing .FOUR results — real LTspice format.
+
+        ``reader.fourier[signal]`` is a ``list[FourierData]`` (one per .step),
+        not a single instance; treating the list as one entry returned every
+        entry with thd=None and harmonics=[].
+        """
+        log = tmp_path / "fourier_real.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "\n"
+            "Fourier components of V(out)\n"
+            "N-Period=1\n"
+            "DC component:-3.7386e-07\n"
+            "\n"
+            "Harmonic\tFrequency\t Fourier \tNormalized\t Phase  \tNormalized\n"
+            " Number \t  [Hz]   \tComponent\t Component\t[degree]\tPhase [deg]\n"
+            "    1   \t 1.000e+03\t 8.464e-01\t 1.000e+00\t  122.15\u00b0\t    0.00\u00b0\n"
+            "    2   \t 2.000e+03\t 7.414e-07\t 8.760e-07\t  177.22\u00b0\t   55.07\u00b0\n"
+            "Partial Harmonic Distortion: 0.000251%\n"
+            "Total Harmonic Distortion:   0.014047%\n"
+            "\n"
+            "Total elapsed time: 0.001 seconds.\n",
+            encoding="utf-8",
+        )
+        result = parse_fourier_data(log)
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["signal"] == "V(out)"
+        assert entry["thd"] == pytest.approx(0.014047)
+        assert entry["thd_unit"] == "%"
+        assert entry["fundamental_frequency"] == pytest.approx(1000.0)
+        assert entry["harmonics"] == [
+            {
+                "number": 1,
+                "frequency": pytest.approx(1000.0),
+                "magnitude": pytest.approx(0.8464),
+                "phase": pytest.approx(122.15),
+            },
+            {
+                "number": 2,
+                "frequency": pytest.approx(2000.0),
+                "magnitude": pytest.approx(7.414e-07),
+                "phase": pytest.approx(177.22),
+            },
+        ]
 
 
 class TestParseMeasurementsValid:

@@ -17,6 +17,70 @@ tool-surface changes.
   ngspice session to put scalars in `.meas`. It also counted six tools where
   there are eight, and described the ngspice build it was checked on as the
   reader's.
+- A path containing `..` was refused before it was resolved, even when it
+  landed inside the sandbox. A deck in a subfolder with
+  `.include ../models/x.lib` got an error-severity `path_denied` finding from
+  `verify_circuit` and from `edit_schematic`'s compare, saying the include
+  resolved outside the allowed roots, although `run_experiments` staged the
+  same include. `inspect` and `verify_circuit` also refused
+  `path="sub/../x.asc"`. A path is now judged by where it resolves, with
+  symlinks followed; a `..` that climbs out of the sandbox is still refused,
+  as outside the allowed directories.
+- `inspect` model queries refused a `libs` file inside the detected
+  simulator's own model library (LTspice's `lib/cmp/standard.bjt`, say) under
+  the default sandbox, although staging, the include resolver and the
+  hierarchy reader all read that library. These reads now admit it too, and
+  `verify_circuit`'s compare reads an include into any detected simulator's
+  library rather than only the default simulator's, so the two agree on every
+  file a model search names.
+- An `inspect` model search with `libs` omitted always returned nothing: it
+  searched only libraries loaded through a call nothing makes any more. It now
+  searches the detected simulators' own model libraries, which are the
+  directories a `libs` entry may name, so every `source_path` it returns can
+  be read back through `libs` and staged by a run. The first such search
+  parses the whole install, in a worker thread so other requests are not held
+  up. The `missing_model` failure hint points there instead of at loaded
+  libraries.
+- `inspect` model rows differed by route: a search or enumerate naming `libs`
+  returned name, type, source_path, ports and params, while a search of the
+  simulator's libraries also returned `include_directive`, `device_type` and
+  `usage`, and ranked equal scores differently. Every route now returns the
+  same row from the same ranking, so a `.MODEL` found through `libs` carries
+  its connection order too.
+- On WSL a model row's `include_directive` was converted to a Windows path
+  with one `wslpath` process per row, thousands on a search of a full install,
+  and a library on the Linux side came back as a `\\wsl.localhost` path that
+  staging and `verify_circuit` cannot resolve. It now names `source_path` as
+  the server sees it, which is what staging reads; staging already hands
+  LTspice its staged copy in Windows form.
+- `run_experiments`, `verify_circuit` and the `inspect` net, components and
+  hierarchy queries refused `.spice` netlists, the extension xschem and the
+  sky130 testbenches write. Every surface that reads a netlist now takes
+  `.cir`, `.net`, `.sp` and `.spice`; a run hands the simulator a `.cir` copy
+  of a `.spice` deck, so a simulator that needs a known extension still
+  reads it.
+- The `circuits[].path` description of `run_experiments` told agents to export
+  an `.asc` through LTspice first. An `.asc` is accepted and exported
+  automatically, and the description now says so.
+- A notch whose null fell midway between two sweep samples was reported
+  without the under-sampling warning. Those two samples read the same level,
+  so the check, which wanted both neighbours of the lowest sample well above
+  it, never fired, and `stopband_rejection_db` came back as a finite figure
+  (12.96 dB for an ideal notch at 10 points per decade) with nothing saying it
+  was only a lower bound. The warning now fires when either neighbour is more
+  than 3 dB higher, as its description always said.
+- A runner's cap on simulators in flight could be exceeded by one. Each new
+  submission rebuilt the runner's launch permits whenever none were out, and
+  that included the moment a released permit had been handed to a waiting run
+  that had not yet resumed; the woken run and a newcomer then both launched.
+  The permits are now rebuilt only when nothing holds or waits for one, and a
+  lowered cap takes effect as soon as the runner drains rather than at the next
+  submission.
+- An unterminated single quote in a netlist was reported with the hint "add a
+  closing \" after the opening quote". The hint now names the quote that was
+  opened, and a quote left open inside a braced or parenthesized expression is
+  reported at the quote, with the same hint, rather than at the enclosing
+  bracket with none.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -496,6 +560,18 @@ tool-surface changes.
   ships, so PNG rendering was impossible through them; installing native Cairo
   is now the only step. The README documents the extra and the per-platform
   Cairo install.
+- CI: lint and type check run once, in a new `checks / static` job, instead of
+  on every interpreter. They gave the same answer on each: ruff and pyright
+  both target 3.11, and the lockfile resolves one package set for 3.11 through
+  3.13. The Linux test legs run the suite on one xdist worker per core, which
+  takes about 90 s on a four-core machine instead of about 200 s serially. The
+  Windows leg still runs serially, so it now sets how long the checks take. The
+  existing status-check contexts keep their names.
+- The alias publish workflow no longer runs its own copy of the checks. An
+  alias already waits for the canonical `ltspice-mcp` release to appear on
+  PyPI, and that release publishes only after the checks pass, so the second
+  run doubled every release's test matrix without gating anything more. The
+  wait now allows 30 minutes, long enough to cover the checks.
 
 - An `edit_schematic` call on an existing sheet reports only the sheet findings
   in `warnings` (floating pins, dangling labels, duplicate wires, a label
@@ -522,6 +598,19 @@ tool-surface changes.
   (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
   too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
   `invalid_query`.
+
+### Removed
+
+- The `spice://models/` resource. It listed libraries loaded through
+  `load_library`, which was removed in 0.6.0, so it has answered with an empty
+  list since. `inspect(kind="model", mode="search")` searches the simulator's
+  own libraries, and its `libs` names any other file.
+- The `suggestions` key of the `analyze_results` summary recipe, and the fuzzy
+  matching behind it, which searched the same loaded libraries and so never
+  produced one. A failed run's receipt already names the unresolved models
+  (`missing_model`, with `evidence.missing_refs`) and the model search that
+  finds them. The server does not run that search itself on a failure path:
+  the first search parses the whole install, which takes seconds.
 
 ### Security
 

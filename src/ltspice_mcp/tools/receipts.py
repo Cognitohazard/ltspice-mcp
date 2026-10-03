@@ -131,7 +131,7 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
     ),
     "missing_model": (
         'Use inspect with a model query (mode:"search") to fuzzy-match against '
-        "loaded libraries, or add a .lib/.include for it to the deck."
+        "the simulator's own libraries, or add a .lib/.include for it to the deck."
     ),
     "missing_include": (
         "The deck names an .include or .lib file the simulator could not open. "
