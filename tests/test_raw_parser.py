@@ -29,7 +29,17 @@ from ltspice_mcp.lib.raw_parser import (
     whattype_unit,
 )
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR, ngspice_binary_raw, stage_recorded_fixture
+from tests.conftest import (
+    FIXTURES_DIR,
+    make_raw_mock,
+    ngspice_binary_raw,
+    stage_recorded_fixture,
+)
+
+
+def _recorded(name: str) -> RawRead:
+    """One of the recorded LTspice fixtures, every trace read."""
+    return RawRead(str(FIXTURES_DIR / f"{name}.raw"), traces_to_read="*", dialect="ltspice")
 
 
 class TestNearestIndex:
@@ -334,12 +344,7 @@ class TestSummarySurfacesParserFaults:
 
     @staticmethod
     def _tran_fixture() -> tuple[RawRead, Path]:
-        from tests.conftest import FIXTURES_DIR
-
-        raw = RawRead(
-            str(FIXTURES_DIR / "ltspice_tran_rc.raw"), traces_to_read="*", dialect="ltspice"
-        )
-        return raw, FIXTURES_DIR / "ltspice_tran_rc.log"
+        return _recorded("ltspice_tran_rc"), FIXTURES_DIR / "ltspice_tran_rc.log"
 
     @staticmethod
     def _raiser(exc: Exception):
@@ -459,11 +464,7 @@ class TestAcBandwidthMetricsSurfaceFaults:
 
     @staticmethod
     def _ac_raw() -> RawRead:
-        from tests.conftest import FIXTURES_DIR
-
-        return RawRead(
-            str(FIXTURES_DIR / "ltspice_ac_rc.raw"), traces_to_read="*", dialect="ltspice"
-        )
+        return _recorded("ltspice_ac_rc")
 
     def test_unity_gain_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
         from ltspice_mcp.lib import ac_analysis
@@ -844,32 +845,6 @@ class TestPartialRawProgress:
 # ---------------------------------------------------------------------------
 
 
-def _make_raw_mock(
-    trace_names: list[str],
-    axis: np.ndarray,
-    waves: dict[str, np.ndarray],
-    plotname: str = "Transient Analysis",
-    steps: list[int] | None = None,
-) -> MagicMock:
-    """A RawRead stand-in with controllable traces; no trace declares a type."""
-    raw = MagicMock()
-    raw.get_raw_property.return_value = plotname
-    raw.get_trace_names.return_value = trace_names
-    raw.get_trace.return_value.whattype = None
-    raw.get_steps.return_value = steps if steps is not None else [0]
-    raw.get_axis.return_value = axis
-
-    def get_wave(name, step=0):
-        return waves[name]
-
-    raw.get_wave = get_wave
-    return raw
-
-
-def _recorded(name: str) -> RawRead:
-    return RawRead(str(FIXTURES_DIR / f"{name}.raw"), traces_to_read="*", dialect="ltspice")
-
-
 class TestDetectSimType:
     @pytest.mark.parametrize(
         ("fixture", "plotname"),
@@ -960,7 +935,7 @@ class TestQueryPointValue:
     def test_exact_match(self):
         axis = np.array([0.0, 1.0, 2.0, 3.0])
         wave = np.array([10.0, 20.0, 30.0, 40.0])
-        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave})
 
         result = query_point_value(raw, "V(out)", 2.0)
         assert result["actual_x"] == pytest.approx(2.0)
@@ -970,7 +945,7 @@ class TestQueryPointValue:
     def test_nearest_neighbor(self):
         axis = np.array([0.0, 1.0, 2.0, 3.0])
         wave = np.array([10.0, 20.0, 30.0, 40.0])
-        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave})
 
         result = query_point_value(raw, "V(out)", 1.3)
         assert result["actual_x"] == pytest.approx(1.0)
@@ -979,7 +954,7 @@ class TestQueryPointValue:
     def test_beyond_range_start(self):
         axis = np.array([1.0, 2.0, 3.0])
         wave = np.array([10.0, 20.0, 30.0])
-        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave})
 
         result = query_point_value(raw, "V(out)", 0.0)
         assert result["actual_x"] == pytest.approx(1.0)
@@ -987,7 +962,7 @@ class TestQueryPointValue:
     def test_beyond_range_end(self):
         axis = np.array([1.0, 2.0, 3.0])
         wave = np.array([10.0, 20.0, 30.0])
-        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave})
 
         result = query_point_value(raw, "V(out)", 100.0)
         assert result["actual_x"] == pytest.approx(3.0)
@@ -996,7 +971,7 @@ class TestQueryPointValue:
         axis = np.array([100.0, 1000.0, 10000.0])
         # Unity gain at all freqs, 0 phase
         wave = np.array([1.0 + 0j, 1.0 + 0j, 1.0 + 0j])
-        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave})
 
         result = query_point_value(raw, "V(out)", 1000.0)
         assert "magnitude_db" in result
@@ -1024,7 +999,7 @@ class TestComputeAcBandwidthMetrics:
         freqs = np.logspace(0, 6, 1000)  # 1Hz to 1MHz
         fc = 1000  # 1kHz cutoff
         wave = 1 / (1 + 1j * freqs / fc)
-        raw = _make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
 
         metrics = compute_ac_bandwidth_metrics(raw, "V(out)")
         # Referenced to the 1 Hz sample (a 1e-6 power ratio below DC); at 166
@@ -1037,7 +1012,7 @@ class TestComputeAcBandwidthMetrics:
         fc = 1000
         gain = 100  # 40dB DC gain
         wave = gain / (1 + 1j * freqs / fc)
-        raw = _make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
 
         metrics = compute_ac_bandwidth_metrics(raw, "V(out)")
         # |H(f)| = 1 at f = fc * sqrt(gain^2 - 1); the response is a straight
@@ -1059,13 +1034,13 @@ class TestOpSteppingFailureRawGate:
         # classifies the phrase as an error before the raw gate runs.
         log.write_text(f"ngspice-42\n{phrase}\n")
         axis = np.array([0.0, 1e-3, 2e-3])
-        raw = _make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
+        raw = make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
         return build_simulation_summary(raw, log)
 
     @staticmethod
     def _op_raw(trace: str) -> MagicMock:
         # A real .op raw has no axis — get_axis raises "does not have an axis".
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             [trace], np.array([0.0]), {trace: np.array([1.0])}, plotname="Operating Point"
         )
         raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
@@ -1133,7 +1108,7 @@ class TestBuildSimulationSummary:
     def test_transient_summary(self):
         axis = np.linspace(0, 0.01, 1000)  # 10ms transient
         wave = np.sin(2 * np.pi * 1000 * axis)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)", "I(R1)"],
             axis,
             {"V(out)": wave, "I(R1)": wave * 0.001, "time": axis},
@@ -1156,7 +1131,7 @@ class TestBuildSimulationSummary:
         freqs = np.logspace(0, 6, 500)
         fc = 1000
         wave = 1 / (1 + 1j * freqs / fc)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["frequency", "V(out)"],
             freqs,
             {"V(out)": wave, "frequency": freqs},
@@ -1172,7 +1147,7 @@ class TestBuildSimulationSummary:
     def test_dc_sweep_summary(self):
         sweep = np.linspace(0, 5, 100)
         wave = sweep * 2  # linear gain
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["V(in)", "V(out)"],
             sweep,
             {"V(in)": sweep, "V(out)": wave},
@@ -1186,7 +1161,7 @@ class TestBuildSimulationSummary:
 
     def test_summary_with_duration(self):
         axis = np.linspace(0, 0.001, 100)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"],
             axis,
             {"V(out)": np.ones(100), "time": axis},
@@ -1199,7 +1174,7 @@ class TestBuildSimulationSummary:
     def test_summary_with_log_measurements(self, work_dir: Path):
         """Summary includes .MEAS results when the log file has measurements."""
         axis = np.linspace(0, 0.01, 100)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"],
             axis,
             {"V(out)": np.sin(2 * np.pi * 100 * axis), "time": axis},
@@ -1222,7 +1197,7 @@ class TestBuildSimulationSummary:
     def test_summary_with_log_but_no_measurements(self, work_dir: Path):
         """A log that parses but holds no .MEAS lines adds no measurements key."""
         axis = np.linspace(0, 0.01, 100)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"],
             axis,
             {"V(out)": np.sin(2 * np.pi * 100 * axis), "time": axis},
@@ -1242,7 +1217,7 @@ class TestBuildSimulationSummary:
     def test_summary_with_log_warnings(self, work_dir: Path):
         """Summary includes warnings from log file."""
         axis = np.linspace(0, 0.01, 100)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"],
             axis,
             {"V(out)": np.ones(100), "time": axis},
@@ -1264,7 +1239,7 @@ class TestBuildSimulationSummary:
 
     def test_summary_multi_step(self):
         axis = np.linspace(0, 0.01, 100)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"],
             axis,
             {"V(out)": np.ones(100), "time": axis},
@@ -1278,7 +1253,7 @@ class TestBuildSimulationSummary:
     def test_all_values_are_python_types(self):
         """Ensure no numpy scalars leak into the summary."""
         axis = np.linspace(0, 0.005, 50)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"],
             axis,
             {"V(out)": np.sin(axis * 1000), "time": axis},

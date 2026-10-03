@@ -27,11 +27,9 @@ import pytest
 from ltspice_mcp.api import Api, ApiCallError, ApiValidationError, _detach
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
-from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import SyncApi, wait_until
+from tests.conftest import SyncApi, check_in, release_into_held_request_gate, wait_until
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ngspice") is None,
@@ -133,9 +131,8 @@ def _detach_worker(
 
     A separate process because the engine lease is per process — two callers
     sharing a working directory is what this exercises, and it is what the
-    idempotent-replay contract invites a user to do. Reports on ``ready`` once
-    its engine is open, waits for ``start``, and counts itself into ``entered``
-    just before it detaches.
+    idempotent-replay contract invites a user to do. Checks in (``check_in``)
+    once its engine is open.
     """
     from ltspice_mcp.api import Api
 
@@ -149,12 +146,8 @@ def _detach_worker(
             allowed_paths=[work],
             max_parallel_sims=1,
         )
-        ready.put(None)
         reported_ready = True
-        if not start.wait(HANDOFF_TIMEOUT_S):
-            raise TimeoutError("start was never released")
-        with entered.get_lock():
-            entered.value += 1
+        check_in(ready, start, entered, HANDOFF_TIMEOUT_S)
         receipt = api.run_experiments(
             wait=False,
             detach=True,
@@ -519,19 +512,9 @@ def test_two_callers_detaching_one_request_id_do_not_trade_reports(
     ]
     for caller in callers:
         caller.start()
-    for _ in callers:
-        ready.get(timeout=HANDOFF_TIMEOUT_S)
-    # Neither caller can be answered while the request's gate is held, so
-    # holding it until both have started detaching puts both in flight at once.
-    gate_store = Store(work_dir)
-    gate_store.ensure_root()
-    with file_lock(gate_store.request_lock("detach-shared")):
-        start.set()
-        wait_until(
-            lambda: entered.value == len(callers),
-            timeout_s=HANDOFF_TIMEOUT_S,
-            what="both callers to start detaching",
-        )
+    release_into_held_request_gate(
+        work_dir, "detach-shared", ready, start, entered, len(callers), HANDOFF_TIMEOUT_S
+    )
     outcomes = [result.get(timeout=HANDOFF_TIMEOUT_S) for _ in callers]
     for caller in callers:
         caller.join(HANDOFF_TIMEOUT_S)
@@ -575,16 +558,8 @@ def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
         cancelled = fresh.jobs(action="cancel", job_id=job_id, control_token=control_token)
         assert cancelled["outcome"] != "failed", cancelled
 
-        final = wait_until(
-            lambda: (
-                status
-                if (status := fresh.jobs(action="status", job_id=job_id))["status"]
-                in TERMINAL_STATUSES
-                else None
-            ),
-            timeout_s=HANDOFF_TIMEOUT_S,
-            what="the cancelled job to reach a terminal status",
-        )
+        final = fresh.wait(job_id, timeout=HANDOFF_TIMEOUT_S)
+        assert not final.get("timed_out"), final
         assert final["status"] == "cancelled", final
 
     wait_until(

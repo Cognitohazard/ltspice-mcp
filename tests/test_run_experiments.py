@@ -1904,24 +1904,11 @@ class TestPerCircuitFailuresAndAccounting:
         aborted = {1, 3}
         submitted: list[int] = []
 
-        def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
-            match = re.search(r"_case_(\d+)", Path(run_filename).stem)
-            assert match is not None, run_filename
-            index = int(match.group(1))
+        def log_for(index: int) -> str | None:
             submitted.append(index)
-            raw, log = fake_artifact_paths(self.output_folder, run_filename)
-            if index in aborted:
-                fail = log.with_suffix(".fail")
-                fail.write_text("Fatal Error: the run aborted\n")
-                outcome = collect_run_outcome(".", str(fail))
-            else:
-                raw.write_bytes(b"Title: mock")
-                log.write_text("ok")
-                outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
-            self.loop.call_soon_threadsafe(callback, outcome)
-            return object()
+            return "Fatal Error: the run aborted\n" if index in aborted else None
 
-        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+        _per_case_simulator(monkeypatch, log_for)
         deck = _deck(work_dir / "grid.cir")
         args = RunExperimentsInput.model_validate(
             {
@@ -1992,10 +1979,11 @@ def _failing_simulator(
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
 
 
-def _per_case_failing_simulator(
-    monkeypatch: pytest.MonkeyPatch, log_for: Callable[[int], str]
+def _per_case_simulator(
+    monkeypatch: pytest.MonkeyPatch, log_for: Callable[[int], str | None]
 ) -> None:
-    """Every case aborts with its OWN log, the way a real Monte Carlo aborts.
+    """Every case aborts with its OWN log, the way a real Monte Carlo aborts,
+    except where ``log_for`` returns None: that case produces.
 
     Each case runs a different deck, so each writes a different abort time and a
     different node-voltage dump. A stub that hands every case one fixed string
@@ -2011,9 +1999,17 @@ def _per_case_failing_simulator(
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         stem = Path(run_filename).stem
         match = re.search(r"_case_(\d+)", stem)
-        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
-        log.write_text(log_for(int(match.group(1)) if match else next(counter)))
-        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
+        text = log_for(int(match.group(1)) if match else next(counter))
+        if text is None:
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        else:
+            fail = log.with_suffix(".fail")
+            fail.write_text(text)
+            outcome = collect_run_outcome(".", str(fail))
+        self.loop.call_soon_threadsafe(callback, outcome)
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
@@ -2082,7 +2078,7 @@ class TestFailureChannel:
         never byte-identical, and a verbatim key groups nothing. One cause has
         to arrive as one row whatever the numbers in it say.
         """
-        _per_case_failing_simulator(monkeypatch, _convergence_abort_log)
+        _per_case_simulator(monkeypatch, _convergence_abort_log)
         deck = _deck(work_dir / "diverging.cir")
         args = _args(
             deck,
@@ -2118,7 +2114,7 @@ class TestFailureChannel:
                 'Unable to find definition of model "mystery"\n'
             )
 
-        _per_case_failing_simulator(monkeypatch, log_for)
+        _per_case_simulator(monkeypatch, log_for)
         deck = _deck(work_dir / "mixed-causes.cir")
         args = _args(
             deck,

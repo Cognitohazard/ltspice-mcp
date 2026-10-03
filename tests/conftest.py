@@ -213,6 +213,20 @@ def removed_tool_names() -> frozenset[str]:
     return frozenset(DEAD_TOOL_NAMES) - live_surface_vocabulary()
 
 
+def removed_tools_named_in(text: str) -> list[str]:
+    """The removed tool names ``text`` mentions as whole words, sorted."""
+    from tests._text import names
+
+    return sorted(name for name in removed_tool_names() if names(text, name))
+
+
+def registered_tool_names() -> frozenset[str]:
+    """Every registered tool's wire name, whether or not a session serves it."""
+    from ltspice_mcp.tools._base import registry
+
+    return frozenset(registered.definition.name for registered in registry._registered)
+
+
 class FakeSim:
     """Stub simulator class for tests that need a default simulator."""
 
@@ -514,6 +528,88 @@ def patch_stub_bootstrap(monkeypatch: pytest.MonkeyPatch, state: object) -> None
 #: How often a waiting test looks again. Short enough that a test that is
 #: about to pass does not pay for the poll, long enough not to spin.
 _POLL_INTERVAL_S = 0.01
+
+
+def make_raw_mock(
+    trace_names: list[str] | None = None,
+    axis: typing.Any = None,
+    waves: dict[str, typing.Any] | None = None,
+    plotname: str = "Transient Analysis",
+    *,
+    steps: list[int] | None = None,
+    dialect: str = "ltspice",
+) -> typing.Any:
+    """A RawRead stand-in with controllable traces; no trace declares a type.
+
+    With nothing given it is a 100-point transient sine on ``V(out)``; the axis
+    defaults to the ``time`` wave.
+    """
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    if waves is None:
+        t = np.linspace(0, 1, 100)
+        waves = {"time": t, "V(out)": np.sin(2 * np.pi * t)}
+    raw = MagicMock()
+    raw.dialect = dialect
+    raw.get_raw_property.return_value = plotname
+    raw.get_trace_names.return_value = (
+        trace_names if trace_names is not None else ["time", "V(out)"]
+    )
+    raw.get_steps.return_value = steps if steps is not None else [0]
+    raw.get_axis.return_value = (
+        axis if axis is not None else waves.get("time", np.linspace(0, 1, 100))
+    )
+    raw.get_trace.return_value.whattype = None
+    raw.get_wave = lambda name, step=0: waves[name]
+    return raw
+
+
+def check_in(ready: typing.Any, start: typing.Any, entered: typing.Any, timeout_s: float) -> None:
+    """A child process's half of ``release_into_held_request_gate``.
+
+    Reports on ``ready``, waits for ``start``, then counts itself into
+    ``entered`` just before it submits. Raises ``TimeoutError`` when ``start``
+    is never set.
+    """
+    ready.put(None)
+    if not start.wait(timeout_s):
+        raise TimeoutError("start was never released")
+    with entered.get_lock():
+        entered.value += 1
+
+
+def release_into_held_request_gate(
+    work_dir: Path,
+    request_id: str,
+    ready: typing.Any,
+    start: typing.Any,
+    entered: typing.Any,
+    count: int,
+    timeout_s: float,
+) -> None:
+    """Put ``count`` child processes in flight on one request at once.
+
+    Waits for every child to report ready (``check_in``), then holds the
+    request's gate while it releases them and until all have counted in. No
+    submission can complete while the gate is held, so they meet there rather
+    than running one after the other.
+    """
+    from ltspice_mcp.lib.filelock import file_lock
+    from ltspice_mcp.lib.store import Store
+
+    for _ in range(count):
+        ready.get(timeout=timeout_s)
+    store = Store(work_dir)
+    store.ensure_root()
+    with file_lock(store.request_lock(request_id)):
+        start.set()
+        wait_until(
+            lambda: entered.value == count,
+            timeout_s=timeout_s,
+            what=f"all {count} processes to enter their submission",
+        )
 
 
 def wait_until(
@@ -922,6 +1018,9 @@ def _isolated_state_home(tmp_path_factory: pytest.TempPathFactory) -> Iterator[N
 # Output-schema conformance hook
 # ---------------------------------------------------------------------------
 
+# How many frames above a response helper the hook searches for the handler.
+_FRAME_WINDOW = 25
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
@@ -938,10 +1037,10 @@ def _enforce_output_schema_conformance():
     an output schema (``@registry.tool`` or ``@declare_output_schema``), and
     that schema is enforced at the moment of emission.
 
-    The walk looks at most 25 frames above the response helper. An emission
-    with no schema-declaring frame inside that window is not validated and
-    not reported: a response built outside any declared handler, or one
-    nested more than 25 frames deep, passes unchecked.
+    The walk looks at most ``_FRAME_WINDOW`` frames above the response
+    helper. An emission with no schema-declaring frame inside that window is
+    not validated and not reported: a response built outside any declared
+    handler, or one nested deeper than the window, passes unchecked.
     """
     import sys
 
@@ -982,9 +1081,8 @@ def _enforce_output_schema_conformance():
             return
         # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.
         frame = sys._getframe(2)
-        for _ in range(25):
+        for _ in range(_FRAME_WINDOW):
             if frame is None:
-                # No declared handler on the stack: nothing to validate against.
                 return
             contract = contracts.get(frame.f_code)
             if contract is not None:
@@ -997,7 +1095,6 @@ def _enforce_output_schema_conformance():
                     )
                 return
             frame = frame.f_back
-        # Window exhausted without a declared handler: left unvalidated.
 
     original_format = base_mod.format_response
     original_json = base_mod.json_response

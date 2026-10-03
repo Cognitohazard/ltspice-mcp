@@ -4,17 +4,16 @@ error hints that never name a tool a caller cannot call.
 
 from __future__ import annotations
 
-import re
-
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
 from ltspice_mcp.tools import get_tools
-from tests.conftest import REGISTERED_TOOLS, removed_tool_names
-
-
-def _registered_names() -> set[str]:
-    return {tool_def.name for tool_def in get_tools()[0]}
-
+from tests._text import names
+from tests.conftest import (
+    REGISTERED_TOOLS,
+    registered_tool_names,
+    removed_tools_named_in,
+    resolve_local_ref,
+)
 
 # The one annotation table for the surface, each row
 # (readOnlyHint, destructiveHint, idempotentHint, openWorldHint).
@@ -47,7 +46,7 @@ class TestExposureCounts:
     def test_the_registry_is_exactly_the_declared_surface(self):
         # The envelope six, the plot widget, and run_code (served only while
         # the operator leaves it on, but registered always).
-        assert _registered_names() == set(REGISTERED_TOOLS)
+        assert registered_tool_names() == set(REGISTERED_TOOLS)
 
 
 class TestAnnotationsTable:
@@ -70,9 +69,9 @@ class TestAnnotationsTable:
         earns it because its batch can run remove_component. The op union names
         every op it accepts, so the hint cannot outlive the op unnoticed."""
         tool = next(d for d in get_tools()[0] if d.name == "edit_schematic")
-        ops = tool.input_schema["properties"]["ops"]["items"]
-        defs = tool.input_schema["$defs"]
-        branches = [defs[branch["$ref"].split("/")[-1]] for branch in ops["oneOf"]]
+        schema = tool.input_schema
+        ops = schema["properties"]["ops"]["items"]
+        branches = [resolve_local_ref(schema, branch) for branch in ops["oneOf"]]
         assert "remove_component" in {branch["properties"]["op"]["const"] for branch in branches}
 
 
@@ -85,9 +84,8 @@ class TestErrorHints:
             assert isinstance(hint, str) and hint
 
     def test_no_hint_names_a_removed_tool(self):
-        removed = removed_tool_names()
         for err_type, hint in _ERROR_HINTS.items():
-            named = sorted(tool for tool in removed if re.search(rf"\b{re.escape(tool)}\b", hint))
+            named = removed_tools_named_in(hint)
             assert not named, f"{err_type.__name__} hint names removed tools {named}: {hint!r}"
 
     def test_every_hint_names_a_tool_the_caller_can_actually_call(self):
@@ -96,5 +94,5 @@ class TestErrorHints:
         so a tool the operator can switch off does not count."""
         served = {d.name for d in get_tools(config=ServerConfig(run_code=False))[0]}
         for err_type, hint in _ERROR_HINTS.items():
-            named = {tool for tool in served if re.search(rf"\b{re.escape(tool)}\b", hint)}
+            named = {tool for tool in served if names(hint, tool)}
             assert named, f"{err_type.__name__} hint names no callable tool: {hint!r}"

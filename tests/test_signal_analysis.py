@@ -1514,24 +1514,17 @@ class TestAnalyzeThd:
         assert r["coherent"] is True
         assert r["thd_ratio"] == pytest.approx(0.1, rel=1e-3)
 
-    def test_hann_thd_n_equals_thd_without_noise(self):
+    @pytest.mark.parametrize("offset", [0.0, 2.5])
+    def test_hann_thd_n_equals_thd_without_noise(self, offset: float):
         # Only harmonic distortion, no noise: THD+N must equal THD. The guard
-        # bins around the fundamental keep its own Hann lobe out of the sum.
+        # bins around the fundamental keep its own Hann lobe out of the sum,
+        # and a DC offset is neither: unremoved, it would leak into bin 1 and
+        # count as noise.
         f0, fs = 1000.0, 200_000.0
         t = np.arange(0.0, 0.02, 1.0 / fs)
-        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t) + offset
         r = analyze_thd(t, y, fundamental=f0, window="hann", n_harmonics=3)
         # The residual is the linear-interpolation resample (~3e-4 relative).
-        assert r["thd_n_ratio"] == pytest.approx(0.1, rel=1e-3)
-
-    def test_dc_offset_is_neither_distortion_nor_noise(self):
-        # A 2.5 V offset on the same signal leaves THD and THD+N unchanged; on
-        # the Hann path an unremoved DC term would leak into bin 1 and count
-        # as noise.
-        f0, fs = 1000.0, 200_000.0
-        t = np.arange(0.0, 0.02, 1.0 / fs)
-        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
-        r = analyze_thd(t, y + 2.5, fundamental=f0, window="hann", n_harmonics=3)
         assert r["thd_ratio"] == pytest.approx(0.1, rel=1e-3)
         assert r["thd_n_ratio"] == pytest.approx(0.1, rel=1e-3)
 

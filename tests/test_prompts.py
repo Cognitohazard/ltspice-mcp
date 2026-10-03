@@ -1,14 +1,13 @@
 """Tests for the workflow-starter prompts."""
 
-import re
-
 import pytest
 from mcp import types
 
 from ltspice_mcp import prompts
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import get_tools
-from tests.conftest import removed_tool_names
+from tests._text import names
+from tests.conftest import registered_tool_names, removed_tools_named_in
 
 _STARTERS = {"characterize_filter", "run_and_plot", "step_response"}
 _SAMPLE = {"path": "c.cir", "node": "out", "signal": "out"}
@@ -20,14 +19,10 @@ def _text(result: types.GetPromptResult) -> str:
     return content.text
 
 
-def _names(text: str, word: str) -> bool:
-    return re.search(rf"\b{re.escape(word)}\b", text) is not None
-
-
 def _routes_to_tool(text: str, tool: str) -> bool:
     """The prompt names ``tool``, and ``tool`` is one the registry serves."""
-    assert tool in {t.name for t in get_tools()[0]}, f"{tool} is not a registered tool"
-    return _names(text, tool)
+    assert tool in registered_tool_names(), f"{tool} is not a registered tool"
+    return names(text, tool)
 
 
 class TestListPrompts:
@@ -88,7 +83,7 @@ class TestEveryWorkflowUsesTheLiveTools:
     def test_the_ac_workflow_asks_for_the_bode_recipe(self):
         text = _text(prompts.get_prompt("characterize_filter", _SAMPLE))
         assert "bode_filter" in DISCRIMINANTS
-        assert _names(text, "bode_filter"), "the AC workflow no longer asks for bode_filter"
+        assert names(text, "bode_filter"), "the AC workflow no longer asks for bode_filter"
 
 
 class TestPromptsNameOnlyLiveTools:
@@ -99,16 +94,15 @@ class TestPromptsNameOnlyLiveTools:
     payloads a prompt carries are scanned along with its prose."""
 
     def test_no_prompt_names_a_removed_tool(self):
-        removed = removed_tool_names()
         for p in prompts.list_prompts():
             text = _text(prompts.get_prompt(p.name, _SAMPLE))
-            named = sorted(tool for tool in removed if _names(text, tool))
+            named = removed_tools_named_in(text)
             assert not named, f"prompt {p.name!r} names removed tools {named}"
 
     def test_every_prompt_names_a_callable_tool(self):
         visible = {t.name for t in get_tools()[0]}
         for p in prompts.list_prompts():
             text = _text(prompts.get_prompt(p.name, _SAMPLE))
-            assert any(_names(text, tool) for tool in visible), (
+            assert any(names(text, tool) for tool in visible), (
                 f"prompt {p.name!r} names no callable tool"
             )
