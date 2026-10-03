@@ -42,6 +42,11 @@ from ltspice_mcp.lib.raw_parser import (
     sniff_raw_dialect,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator_build import (
+    executable_path,
+    is_cp1252_ltspice_build,
+    is_cp1252_ltspice_executable,
+)
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -430,6 +435,44 @@ def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     if simulator:
         return dialect_for_simulator_name(simulator)
     return state.raw_dialect
+
+
+def cp1252_ltspice(state: SessionState, simulator_class: type | None = None) -> str | None:
+    """The LTspice build this server knows decodes decks as cp1252, or None.
+
+    LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
+    (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
+    LTspice 24 and later read the UTF-8 they write. Which one a session drives
+    is known from the executable's own name (``XVIIx64.exe``), or from the
+    build the latest run on that executable named in its output, which is what
+    ``inspect(kind="capabilities")`` reports. Neither launches the simulator.
+
+    ``simulator_class`` defaults to the session's LTspice; any other simulator
+    answers None. The answer names the evidence, for a finding to cite.
+    """
+    ltspice = state.available_simulators.get("ltspice")
+    simulator_class = simulator_class or ltspice
+    if simulator_class is None or simulator_class is not ltspice:
+        return None
+    program = executable_path(simulator_class)
+    if program is None:
+        return None
+    if is_cp1252_ltspice_executable(program):
+        return program
+    latest = max(
+        (
+            (case.completed_at or job.started_at, case.simulator_version)
+            for job in state.all_jobs.values()
+            if job.simulator_executable is not None and job.simulator_executable.path == program
+            for case in job.cases
+            if case.simulator_version
+        ),
+        key=lambda run: run[0],
+        default=None,
+    )
+    if latest is not None and is_cp1252_ltspice_build(latest[1]):
+        return f"{latest[1]} ({program})"
+    return None
 
 
 def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:

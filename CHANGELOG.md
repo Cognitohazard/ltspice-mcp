@@ -10,6 +10,21 @@ tool-surface changes.
 
 ### Fixed
 
+- Running a schematic on ngspice replaced every `µ` and `μ` in the exported
+  netlist with `u` and deleted every `§`, including in comments, quoted strings
+  and include paths, so an `.include` naming a folder with either character in
+  it pointed at a file that does not exist. Only what ngspice cannot read is
+  changed now: the `.backanno` card is dropped, and the `§` LTspice writes into
+  an instance name (`R§Load`) leaves that name wherever the deck names it,
+  `.meas` references included. A value's micro sign is left to staging, which
+  spells it `u` for every simulator without touching a path.
+- A deck or include that staging had to rewrite, and a case deck a variation
+  wrote, was always written as UTF-8. A cp1252 deck, which is what LTspice XVII
+  writes, came out with every other non-ASCII character re-encoded, and XVII
+  read a `§` in an instance name as `Â§`, renaming the instance. A rewritten
+  file is now written in the encoding it was read in, with UTF-8 used only for
+  text that encoding cannot spell. A UTF-16 or UTF-32 deck is still rewritten
+  as UTF-8, since the edits made to a deck at run time are ASCII bytes.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -358,6 +373,20 @@ tool-surface changes.
 
 ### Changed
 
+- `verify_circuit` reports micro-sign value suffixes (`value_suffix_micro_sign`)
+  as one observation per file, with their count, lines and tokens, which leaves
+  the outcome `complete`. LTspice 24 and later read the UTF-8 `µ` they write, so
+  an LTspice export was otherwise `partial` with one warning per value. A
+  warning per value remains where the server knows of a reader that would
+  misread the file: the session's LTspice is XVII or earlier (from the
+  executable's name, or the build a run on it reported) or the deck names XVII
+  as its writer, and the file is not cp1252. The warning's evidence names that
+  reader. Both value-suffix rules are now under the per-rule finding cap, with
+  the usual `showing N of M` observation.
+- `run_experiments` reports the `micro_sign_folded` observation only when the
+  job runs on an LTspice that decodes decks as cp1252. Staging still spells
+  every micro-sign suffix `u`; for every other simulator that reads the same as
+  the source, so the observation was on nearly every LTspice run.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and

@@ -540,7 +540,8 @@ RULES: tuple[LintRule, ...] = (
     # scale, so the deck runs at the bare number. 'Âµ' — a UTF-8 micro sign
     # decoded as cp1252 — lands here and is a factor of 1e6 off. A micro sign
     # itself never reaches the linter: staging has spelled it 'u' by then, and
-    # verify_circuit reports it for a deck that will run elsewhere.
+    # verify_circuit reports it for a deck that will run elsewhere, as a
+    # warning only where a reader it knows of decodes the file otherwise.
     LintRule("value-suffix-nonascii", "blocking", _value_suffix_nonascii),
 )
 

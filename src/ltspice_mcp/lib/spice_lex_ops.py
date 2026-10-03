@@ -23,6 +23,9 @@ Public surface:
   comments, ``.control`` blocks, include paths and double-quoted strings.
 - ``fold_micro_suffix_cards(cards)`` — the same scan, with each micro sign
   found at a suffix position rewritten as ``u`` in place.
+- ``strip_instance_section_signs(cards)`` — drop the ``§`` LTspice's
+  netlister writes into an instance name, from that name wherever the deck
+  names it, and nowhere else.
 
 Future cross-card transformations (component rename, subcircuit
 inline/extract, structural diff, atomic change-set commit) will land
@@ -414,3 +417,42 @@ def fold_micro_suffix_cards(cards: list[SpiceCard]) -> tuple[ValueSuffixSite, ..
     for site in folded:
         site.card.replace_span(site.offset, site.offset + 1, "u")
     return folded
+
+
+#: What LTspice's netlister writes between the element letter it prefixes and
+#: an instance name that does not start with that letter: ``R§Load``.
+SECTION_SIGN = "§"
+
+
+def strip_instance_section_signs(cards: list[SpiceCard]) -> dict[str, str]:
+    """Drop ``§`` from every instance name that holds one, wherever it is named.
+
+    ngspice's parser does not accept the character, so a deck LTspice exported
+    names those instances without it for ngspice: on the instance card itself
+    and in every other card that names the instance (``I(R§Load)`` in a
+    ``.meas``). Nothing else changes: a ``§`` in a comment, a double-quoted
+    string or an include path is part of a file name or text, not an instance.
+    Returns each renamed instance's old name with its new one.
+    """
+    renamed = {
+        card.instance_ref: card.instance_ref.replace(SECTION_SIGN, "")
+        for card in cards
+        if card.kind == "instance" and card.instance_ref and SECTION_SIGN in card.instance_ref
+    }
+    if not renamed:
+        return {}
+    by_name = {old.casefold(): new for old, new in renamed.items()}
+    names = "|".join(re.escape(old) for old in sorted(renamed, key=len, reverse=True))
+    pattern = re.compile(rf"(?<![\w{SECTION_SIGN}])(?:{names})(?![\w{SECTION_SIGN}])", re.I)
+    for card in cards:
+        body = card.body
+        if SECTION_SIGN not in body:
+            continue
+        if card.kind == "directive" and body.split(None, 1)[0].casefold() in INCLUDE_HEADS:
+            continue
+        found = [
+            m for start, end in _unquoted_spans(body) for m in pattern.finditer(body, start, end)
+        ]
+        for match in reversed(found):
+            card.replace_span(match.start(), match.end(), by_name[match.group(0).casefold()])
+    return renamed

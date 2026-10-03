@@ -14,7 +14,7 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock
 
 import jsonschema
@@ -1629,17 +1629,37 @@ class TestLintModes:
             if line.startswith(".include")
         )
         assert await asyncio.to_thread(Path(include).read_bytes) == b"C1 out 0 23u\n"
-        folded = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
-        assert {Path(item["evidence"]["file"]).name for item in folded} == {
-            "micro.cir",
-            "core.inc",
-        }
+        # The simulator reads 'u' as the source's µ meant, so nothing is reported.
+        assert not [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
         assert not [
             finding
             for block in data["lint"]
             for finding in block["findings"]
             if finding["rule_id"].startswith("value-suffix")
         ]
+
+    async def test_the_fold_is_reported_when_the_simulator_decodes_decks_as_cp1252(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """On LTspice XVII the source's UTF-8 µ and the staged 'u' read
+        differently, so the receipt says the staged copy is not the source."""
+
+        class FakeXVII(FakeSim):
+            spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
+
+        state = SessionState.create(config, available={"ltspice": FakeXVII})
+        fake_simulator(monkeypatch)
+        deck = work_dir / "micro.cir"
+        deck.write_bytes("* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 23µ\n.op\n.end\n".encode())
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "micro-xvii"), state))
+
+        (folded,) = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
+        assert folded["evidence"]["tokens"] == ["23µ"]
+        assert folded["evidence"]["reader"] == FakeXVII.spice_exe[0]
 
     async def test_mis_decoded_micro_blocks_submission(
         self,

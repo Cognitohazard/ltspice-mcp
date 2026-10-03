@@ -327,7 +327,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 ### Other LTspice Quirks
 
-- **Unicode mu**: LTspice writes the `u` suffix as the micro sign (µ) in saved files and exported netlists. LTspice 24 and later write it as UTF-8 (bytes `C2 B5`); LTspice XVII reads a deck as cp1252, sees `Âµ`, and silently drops the scale, so `23µ` runs as 23. Decks `run_experiments` stages and the case decks it writes spell it `u`; a deck you run elsewhere, or hand-write, should use `u`. `verify_circuit` flags a µ suffix (`value_suffix_micro_sign`) and any other non-ASCII character where a suffix goes (`value_suffix_nonascii`), in a netlist and in an `.asc`'s exported netlist.
+- **Unicode mu**: LTspice writes the `u` suffix as the micro sign (µ) in saved files and exported netlists. LTspice 24 and later write it as UTF-8 (bytes `C2 B5`); LTspice XVII reads a deck as cp1252, sees `Âµ`, and silently drops the scale, so `23µ` runs as 23. Decks `run_experiments` stages and the case decks it writes spell it `u`; a deck you run elsewhere, or hand-write, should use `u`. `verify_circuit` reports µ suffixes (`value_suffix_micro_sign`) as one observation per file, and as a warning per value only when it knows of an LTspice XVII that would misread the file (the session's LTspice is XVII, or the deck names XVII as its writer). Any other non-ASCII character where a suffix goes (`value_suffix_nonascii`) is an error. Both checks run on a netlist and on an `.asc`'s exported netlist.
 - **`startup` keyword**: LTspice-only in `.tran`. Ramps sources from zero. Not portable.
 - **A-devices** (mixed-signal primitives like `SRflop`, `Counter`, `OTA`): LTspice-proprietary.
 - **`*!LTspice: <directive>`**: Treated as a directive, not a comment — despite `*` prefix.
