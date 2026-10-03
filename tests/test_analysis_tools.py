@@ -682,33 +682,6 @@ class TestSummaryAcWithMetrics:
 
 
 @pytest.mark.asyncio
-class TestSummarySuggestions:
-    """When the run's errors name unresolved models, the summary carries
-    model-resolution help from the loaded libraries (``suggestions``)."""
-
-    async def test_missing_model_error_yields_library_suggestions(
-        self, state_no_sim: SessionState, work_dir: Path, fake_raw: Path
-    ):
-        lib = work_dir / "sw.lib"
-        lib.write_text(".MODEL SW VSWITCH(VT=1)\n", encoding="utf-8")
-        state_no_sim.libraries.load_library(lib)
-        # The raw's sibling log, which a bare raw path picks up.
-        fake_raw.with_suffix(".log").write_text(
-            'Error on line 2 : s1 0 0 swx Unable to find definition of model "swx"\n',
-            encoding="utf-8",
-        )
-        data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
-        assert any('model "swx"' in e for e in data["errors"])
-        assert [m["name"] for m in data["suggestions"]["swx"]] == ["SW"]
-
-    async def test_clean_run_carries_no_suggestions(
-        self, state_no_sim: SessionState, fake_raw: Path
-    ):
-        data = await _metric(state_no_sim, fake_raw.name, SummaryRecipe(key="s", metric="summary"))
-        assert "suggestions" not in data
-
-
-@pytest.mark.asyncio
 class TestQueryStepRange:
     async def test_step_out_of_range(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="out of range"):

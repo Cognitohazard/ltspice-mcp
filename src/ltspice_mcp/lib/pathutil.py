@@ -40,11 +40,17 @@ def _anchor(path: Path, base: Path | None) -> Path:
 def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
     """Resolve a user-provided path within security sandbox.
 
-    This function implements strict sandboxing:
-    1. Explicitly rejects path traversal attempts (../)
-    2. Resolves symlinks before validation
-    3. Checks that resolved path is within allowed directories
-    4. Returns specific error messages for security violations
+    The path is judged by where it lands, never by how it is spelled:
+    1. Rejects an embedded NUL byte
+    2. Resolves symlinks and ``..`` segments
+    3. Checks that the resolved path is within an allowed directory
+
+    A ``..`` is therefore accepted when the path it forms stays inside the
+    sandbox (``sub/../deck.cir``, or a deck's ``.include ../models/x.lib``
+    joined onto its folder) and refused when it climbs out. The resolution
+    is what makes that safe: on POSIX a symlink is followed before the ``..``
+    after it, as the open would follow it, and on Windows ``..`` collapses
+    before any link is followed, as the open collapses it.
 
     Args:
         user_path: Path string from user (relative or absolute)
@@ -54,8 +60,8 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
         Resolved absolute path within sandbox
 
     Raises:
-        PathSecurityError: If path contains traversal attempts or resolves
-                          outside allowed directories
+        PathSecurityError: If the path cannot be resolved or resolves outside
+                          the allowed directories
     """
     if not allowed_dirs:
         raise PathSecurityError("No allowed directories configured")
@@ -65,17 +71,7 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
     if "\x00" in user_path:
         raise PathSecurityError(f"Failed to resolve path {user_path!r}: embedded null byte")
 
-    # Convert to Path object
     path = Path(user_path)
-
-    # Check for explicit path traversal attempts
-    # This catches patterns like "../../etc/passwd"
-    if ".." in path.parts:
-        raise PathSecurityError(
-            f"Path traversal attempts (..) are not allowed: {user_path}. "
-            "This is rejected before resolution even when the target would land "
-            "inside the sandbox — pass the equivalent absolute path instead."
-        )
 
     # Resolve relative paths against the host's declared base when there is one,
     # else against the first allowed_dir (working directory). Absolute paths are

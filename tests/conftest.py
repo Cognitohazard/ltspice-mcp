@@ -233,6 +233,22 @@ class FakeSim:
     spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
 
 
+def installed_simulator(*library_dirs: Path, base: type = FakeSim) -> type:
+    """A detected simulator whose own model library is ``library_dirs``.
+
+    What an install reports is the environment; which files the server reads
+    because of it is what a test using this pins. ``base`` keeps whatever else
+    the test's stand-in class carries.
+    """
+
+    class InstalledSimulator(base):
+        @classmethod
+        def get_default_library_paths(cls) -> list[str]:
+            return [str(path) for path in library_dirs]
+
+    return InstalledSimulator
+
+
 async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120) -> dict:
     """Submit an experiment and return its TERMINAL receipt.
 

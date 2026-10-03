@@ -10,6 +10,51 @@ tool-surface changes.
 
 ### Fixed
 
+- A path containing `..` was refused before it was resolved, even when it
+  landed inside the sandbox. A deck in a subfolder with
+  `.include ../models/x.lib` got an error-severity `path_denied` finding from
+  `verify_circuit` and from `edit_schematic`'s compare, saying the include
+  resolved outside the allowed roots, although `run_experiments` staged the
+  same include. `inspect` and `verify_circuit` also refused
+  `path="sub/../x.asc"`. A path is now judged by where it resolves, with
+  symlinks followed; a `..` that climbs out of the sandbox is still refused,
+  as outside the allowed directories.
+- `inspect` model queries refused a `libs` file inside the detected
+  simulator's own model library (LTspice's `lib/cmp/standard.bjt`, say) under
+  the default sandbox, although staging, the include resolver and the
+  hierarchy reader all read that library. These reads now admit it too, and
+  `verify_circuit`'s compare reads an include into any detected simulator's
+  library rather than only the default simulator's, so the two agree on every
+  file a model search names.
+- An `inspect` model search with `libs` omitted always returned nothing: it
+  searched only libraries loaded through a call nothing makes any more. It now
+  searches the detected simulators' own model libraries, which are the
+  directories a `libs` entry may name, so every `source_path` it returns can
+  be read back through `libs` and staged by a run. The first such search
+  parses the whole install, in a worker thread so other requests are not held
+  up. The `missing_model` failure hint points there instead of at loaded
+  libraries.
+- `inspect` model rows differed by route: a search or enumerate naming `libs`
+  returned name, type, source_path, ports and params, while a search of the
+  simulator's libraries also returned `include_directive`, `device_type` and
+  `usage`, and ranked equal scores differently. Every route now returns the
+  same row from the same ranking, so a `.MODEL` found through `libs` carries
+  its connection order too.
+- On WSL a model row's `include_directive` was converted to a Windows path
+  with one `wslpath` process per row, thousands on a search of a full install,
+  and a library on the Linux side came back as a `\\wsl.localhost` path that
+  staging and `verify_circuit` cannot resolve. It now names `source_path` as
+  the server sees it, which is what staging reads; staging already hands
+  LTspice its staged copy in Windows form.
+- `run_experiments`, `verify_circuit` and the `inspect` net, components and
+  hierarchy queries refused `.spice` netlists, the extension xschem and the
+  sky130 testbenches write. Every surface that reads a netlist now takes
+  `.cir`, `.net`, `.sp` and `.spice`; a run hands the simulator a `.cir` copy
+  of a `.spice` deck, so a simulator that needs a known extension still
+  reads it.
+- The `circuits[].path` description of `run_experiments` told agents to export
+  an `.asc` through LTspice first. An `.asc` is accepted and exported
+  automatically, and the description now says so.
 - A notch whose null fell midway between two sweep samples was reported
   without the under-sampling warning. Those two samples read the same level,
   so the check, which wanted both neighbours of the lowest sample well above
@@ -29,7 +74,6 @@ tool-surface changes.
   opened, and a quote left open inside a braced or parenthesized expression is
   reported at the quote, with the same hint, rather than at the enclosing
   bracket with none.
-
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -226,6 +270,28 @@ tool-surface changes.
 
 ### Added
 
+- The guide is now a short core plus topic sections and the task skills, and
+  every interface can read it. `inspect` has a `guide` query kind: with no
+  `section` it returns the core (how to work with the server, when to use
+  Python or the tools, the rules that cause silent errors) ending in an index
+  of the sections and skills; `section` reads one (`"ltspice"`,
+  `"skill:spice-experiments"`). The Python API has the same text as
+  `Api.guide(section=None)`, a static method that needs no engine session, and
+  `python -m ltspice_mcp.api guide [SECTION]` prints it without starting the
+  engine. The resources are `spice://guide` (the core) and
+  `spice://guide/{section}`. A client that could not read resources had no way
+  to reach the guide before.
+- The guide has a section on working in Python: where `api` comes from, the six
+  operations as methods, waiting on jobs, raw traces and measurements, the
+  analysis primitives, errors, detached jobs, and running a second LTspice
+  build. The design document that held this is not in the package, so a model
+  had no way to read it.
+- The wheel carries the task skills (`ltspice_mcp/skills`), so the guide can
+  serve them to a client that installed only the package.
+- The first tool reply of a session that has not read the guide carries a
+  one-time reminder to read its core, on the text channel and in the
+  structured `hint`. Reading the guide through `inspect` or a `spice://guide`
+  resource retires it.
 - `plot_waveform` replies summarize each plotted trace: `min` and `max` with
   the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
   `final`, and the time-weighted `mean` on a transient, read from every sample
@@ -378,6 +444,18 @@ tool-surface changes.
 
 ### Changed
 
+- The server instructions send the model to the guide first, say when to use
+  Python and when the tools (Python for anything past a single call: loops and
+  complete results in one call; tools for one sandboxed step, charts, and jobs
+  the server owns), and keep the rules that cost a wrong answer. The per-tool
+  map they carried moved to the guide's core.
+- `spice://guide` returns the guide's core and index rather than the whole
+  guide; each section is `spice://guide/{section}`. The packaged file
+  `assets/spice_guide.md` became `assets/guide/`, one file per section. Pointers
+  in tool descriptions and hints name the section they mean
+  (`guide section 'signals'`).
+- `plot_waveform`'s output schema declares `hint`, which carries the guide
+  reminder when that is the session's first reply.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and
@@ -497,6 +575,19 @@ tool-surface changes.
   (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
   too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
   `invalid_query`.
+
+### Removed
+
+- The `spice://models/` resource. It listed libraries loaded through
+  `load_library`, which was removed in 0.6.0, so it has answered with an empty
+  list since. `inspect(kind="model", mode="search")` searches the simulator's
+  own libraries, and its `libs` names any other file.
+- The `suggestions` key of the `analyze_results` summary recipe, and the fuzzy
+  matching behind it, which searched the same loaded libraries and so never
+  produced one. A failed run's receipt already names the unresolved models
+  (`missing_model`, with `evidence.missing_refs`) and the model search that
+  finds them. The server does not run that search itself on a failure path:
+  the first search parses the whole install, which takes seconds.
 
 ### Security
 

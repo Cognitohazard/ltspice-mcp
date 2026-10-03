@@ -75,7 +75,7 @@ class TestToolSchemas:
 class TestConsolidatedInputDocumentation:
     """Every top-level argument must say what it is for. The description on
     the model is what a client is shown, what api.reference() prints, and what
-    spice://guide renders — one text, three readers — so an argument with none
+    inspect(kind="reference") returns — one text, three readers — so an argument with none
     is undocumented everywhere at once. Keep each one short; the depth belongs
     in docs/design/mcp_surface.md or the guide, with a pointer left behind."""
 

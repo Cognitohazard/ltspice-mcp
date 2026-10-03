@@ -244,7 +244,7 @@ class TestDormantBranchesKeepTheirDescription:
             pointer = f"inspect(kind='reference', query='{metric}')"
             assert pointer in body["description"], name
             assert body["description"].index(pointer) < body["description"].index("api.reference(")
-            assert "spice://guide" in body["description"]
+            assert "guide section 'tools'" in body["description"]
 
 
 def _state(work_dir, listing: ToolListing) -> SessionState:
@@ -265,7 +265,7 @@ class TestSessionStateHonoursTheListing:
     def test_capabilities_reports_which_listing_the_session_got(
         self, work_dir, listing: ToolListing
     ):
-        """spice://guide tells a caller to reach for the reference lookup when
+        """The guide tells a caller to reach for the reference lookup when
         the listing is compact. Nothing else on the wire says which one it is:
         both modes advertise the same seven tools and the same schemas, so a
         caller could only infer it from prose that is not there."""
