@@ -286,7 +286,6 @@ class TestTheDoorsAgree:
         assert "# Working in Python" in proc.stdout, proc.stdout + proc.stderr
         assert "HEAVY []" in proc.stdout, proc.stdout + proc.stderr
 
-
     def test_a_code_page_pipe_still_gets_the_whole_text(self, tmp_path: Path):
         """A Windows pipe encodes with the ANSI code page, which has no Γ: the
         shell door falls back to UTF-8 rather than failing mid-print."""
