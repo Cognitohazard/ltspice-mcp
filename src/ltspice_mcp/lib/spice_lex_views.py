@@ -13,6 +13,7 @@ after each mutation.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -339,6 +340,32 @@ _EXACT_NODE_COUNT: dict[str, int] = {
 # state for the model and clobber the real model on a set_model edit.
 _SWITCH_STATES = frozenset({"on", "off"})
 
+# Variable-arity devices whose model may be followed by an area factor and an
+# OFF (initial-condition) keyword: ``Q2 c b e QN 8``, ``J1 d g s JN 2 off``,
+# ``M1 d g s b NCH off``.
+_DEVICE_TAIL_PREFIXES = frozenset({"Q", "J", "M"})
+
+# A plain SPICE number with an optional scale suffix. Deliberately strict: a
+# model name that starts with digits (``2N2222``) must not read as a number.
+_PLAIN_NUMBER_RE = re.compile(
+    r"[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:meg|mil|[tgkmunpf])?", re.IGNORECASE
+)
+
+
+def _is_device_tail_value(token: Token) -> bool:
+    """A positional that can only be a device's trailing area factor or state.
+
+    A number, a ``{...}`` or ngspice ``'...'`` expression, or ON/OFF — never a
+    model name.
+    """
+    if token.kind == TokenKind.BRACED:
+        return True
+    if token.kind == TokenKind.QUOTED:
+        return token.text.startswith("'")
+    if token.kind != TokenKind.BARE:
+        return False
+    return token.text.casefold() in _SWITCH_STATES or bool(_PLAIN_NUMBER_RE.fullmatch(token.text))
+
 
 def _exact_node_span(positional: list[Token], exact: int | None) -> tuple[int, int] | None:
     """Body span of the FIRST ``exact`` positional tokens — the editable node
@@ -373,7 +400,8 @@ class InstanceLine:
     Field semantics by element kind:
 
     - ``M`` / ``Q`` / ``J`` / ``X``: ``model`` carries the model or
-      subckt name, ``value`` is None.
+      subckt name; ``value`` carries a trailing area factor or OFF
+      (``Q2 c b e QN 8``), else None.
     - ``R`` / ``C`` / ``L`` / ``V`` / ``I``: ``value`` carries the
       passive value or source magnitude (e.g. ``"1k"``), ``model`` is
       None.
@@ -462,12 +490,14 @@ class InstanceLine:
             # value the last-positional heuristic would mistake for the model:
             #  - a diode area factor (``D1 a k 1N4148 2`` — the model is the
             #    first positional after its fixed 2 nodes, the 2 is the area);
-            #  - a switch ON/OFF state (``S1 ... MYSW ON``).
-            # Both follow the model and are preserved as the value tail.
-            # (Variable-arity classes with a bare trailing NUMBER — e.g. a
-            # MOSFET/BJT area factor — stay on the last-positional heuristic:
-            # the trailing number is indistinguishable from a numerically-named
-            # model like a ``555`` subckt without arity we don't have.)
+            #  - a switch ON/OFF state (``S1 ... MYSW ON``);
+            #  - a BJT/JFET/MOSFET area factor or OFF (``Q2 c b e QN 8``,
+            #    ``M1 d g s b NCH off``), peeled only while the tokens left
+            #    still hold the minimum nodes plus a model, so ``Q1 c b e 555``
+            #    keeps a numerically-named model.
+            # All of them follow the model and are preserved as the value tail.
+            # A subckt call's ``params:`` keyword introduces its overrides; it
+            # is neither the subckt name nor a value, so it is dropped here.
             tail: list[Token] = []
             pos = positional
             # ON/OFF is a state ONLY for switches (S/W). For any other element a
@@ -476,6 +506,12 @@ class InstanceLine:
             if prefix in ("S", "W") and pos[-1].text.strip('"').lower() in _SWITCH_STATES:
                 tail = [pos[-1]]
                 pos = pos[:-1]
+            elif prefix == "X" and pos[-1].text.casefold() == "params:":
+                pos = pos[:-1]
+            elif prefix in _DEVICE_TAIL_PREFIXES:
+                while len(pos) > spec.min_nodes + 1 and _is_device_tail_value(pos[-1]):
+                    tail.insert(0, pos[-1])
+                    pos = pos[:-1]
             if pos:
                 # Fixed-arity (a diode) splits nodes | model | trailing area at the
                 # known node count; everything else takes the last positional as

@@ -583,14 +583,14 @@ async def test_job_status_reports_result_files_that_exist(
     assert hashes["raw_sha256"]
 
 
-async def test_tran_meas_is_refused_before_submission_in_batch_mode(
+async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
     ngspice_state: SessionState, work_dir: Path
 ):
     # Verified against real ngspice-42: batch mode (-b with -r rawfile) does
-    # NOT evaluate .meas at all ("No .measure possible in batch mode"). The deck
-    # lint refuses the case up front rather than running it and reporting an
-    # unmet request afterwards, so nothing fabricates a 'vfinal' entry and the
-    # caller learns why before paying for a simulation.
+    # NOT evaluate .meas at all ("No .measure possible in batch mode"), but it
+    # does run the deck. The lint warns before submission and the run goes
+    # ahead; reading the result relays ngspice's own notice of the skip, no
+    # 'vfinal' entry is fabricated, and the waveform is there to measure.
     net = _write(
         work_dir,
         "meas.cir",
@@ -610,15 +610,34 @@ async def test_tran_meas_is_refused_before_submission_in_batch_mode(
             "execution": {"wait_s": 90, "simulator": "ngspice"},
         },
     )
-    assert receipt["status"] == "completed_with_failures"
-    assert receipt["completeness"]["skipped"] == 1
-    assert receipt["completeness"]["produced"] == 0
+    assert receipt["status"] == "completed"
+    assert receipt["completeness"]["produced"] == 1
+    assert receipt["failures"] == []
 
     (finding,) = receipt["lint"][0]["findings"]
     assert finding["rule_id"] == "meas-ngspice-batch"
+    assert finding["severity"] == "warning"
     assert finding["subject"] == "vfinal"
     assert "batch mode" in finding["evidence"]["reason"]
-    assert [f["code"] for f in receipt["failures"]] == ["lint_blocked"]
+
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [
+            {"key": "sum", "metric": "summary"},
+            {"key": "measured", "metric": "measurements"},
+            {"key": "vout", "metric": "signal_stats", "signal": "V(out)"},
+        ],
+    )
+    assert any(
+        "No .measure possible in batch mode" in warning
+        for warning in data["results"]["sum"]["warnings"]
+    )
+    assert "measured" not in data["results"]
+    assert [f["code"] for f in data["failures"] if "No .MEAS results" in f["message"]] == [
+        "recipe_failed"
+    ]
+    assert data["results"]["vout"]["values"]
 
 
 #: 10^8 steps of an RC under a sine: still solving seconds after launch, so a

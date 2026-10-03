@@ -1666,9 +1666,42 @@ class TestLintModes:
             finding
             for block in data["lint"]
             for finding in block["findings"]
-            if finding["rule_id"] == "value-suffix-nonascii"
+            if finding["rule_id"] == "value-suffix-mojibake"
         ]
         assert finding["evidence"]["likely_intended"] == "23u"
+
+    async def test_valid_ltspice_device_forms_reach_the_simulator(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A bandgap core under its own title: an area-factored BJT pair, a
+        subckt called with ``params:``, comma-continued initial conditions and
+        a behavioural resistor. Every card is one LTspice runs, so the default
+        lint mode submits the deck instead of refusing it."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "bandgap.cir",
+            "Bandgap core\n"
+            ".model QN NPN\n"
+            ".subckt load a b params: R=1k\nR1 a b {R}\n.ends load\n"
+            "V1 vdd 0 1.8\n"
+            "Q1 vdd vdd e1 QN\n"
+            "Q2 vdd vdd e2 QN 8 IC=0.7,1\n"
+            "X1 e1 0 load params: R=10k\n"
+            "X2 e2 0 load params: R=12k\n"
+            "B1 vdd 0 R=V(vdd)*1k\n"
+            ".op\n.end\n",
+        )
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "bandgap"), state_with_sim))
+
+        assert len(submissions) == 1
+        assert [
+            finding["rule_id"] for block in data["lint"] for finding in block["findings"]
+        ] == []
 
     async def test_warn_proceeds_and_preserves_findings(
         self,

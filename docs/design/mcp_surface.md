@@ -1192,16 +1192,28 @@ Rules are a registry with dispositions:
 Only deterministic harvested failures block. Suppression is per call, and
 `linter_version` travels in provenance.
 
-Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (blocking,
-ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
-`model-missing` (blocking at staging), `directive-arity` (blocking),
-`include-relative` (warning), `suffix-mega-milli` (warning), `temp-as-param`
-(blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
-scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
-simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
-before the deck is linted, and `verify_circuit` warns about it for a deck run
-elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
-device list, currents, threshold, step — whose hint mentions `.nodeset`).
+Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (warning,
+ngspice: the deck runs and only the top-level `.meas` is skipped, which the run
+relays when it is read), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
+mode), `model-missing` (blocking at staging; the model is read past a BJT/JFET/MOSFET
+area factor or `off` and before a subckt call's `params:`), the four checks of
+the netlist arity validator, each its own rule so suppressing one never
+silences another — `element-arity` (blocking: fewer nodes than terminals),
+`bsource-value-prefix` (blocking: no `V=`/`I=`, or on LTspice `R=`/`P=`),
+`value-keyword-ltspice` (blocking, LTspice: `C=`/`L=` as the primary value)
+and `value-expression-remnant` (warning: tokens left after the first
+`key=value`, which a value edit would drop) — `include-relative` (warning),
+`suffix-mega-milli` (warning), `step-ngspice` (warning), `temp-as-param`
+(blocking), `value-suffix-mojibake` (blocking: a suffix that shows the file was
+decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ`
+becomes under cp1252 — the simulator reads the bare number, a factor of 1e6),
+`value-suffix-nonascii` (warning: any other symbol after a number, such as
+`10Ω` or `25°C`, read as the bare number, which is usually what it means; a
+`µ`/`μ` itself is spelled `u` by staging before the deck is linted, and
+`verify_circuit` warns about it for a deck run elsewhere), and `op-degenerate`
+(a post-run observation with neutral evidence — device list, currents,
+threshold, step — whose hint mentions `.nodeset`). The rules that read
+elements or values skip line 1 of the deck, the title both simulators skip.
 
 ---
 
