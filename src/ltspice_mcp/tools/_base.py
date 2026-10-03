@@ -16,6 +16,8 @@ from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
 from mcp import types
 from pydantic import Field
 
+from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
+from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
@@ -1049,21 +1051,35 @@ def require_simulator(state: SessionState) -> None:
 
 
 def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
-    """Resolve a per-run ``simulator=`` override to its simulator class, or fall
+    """Resolve a run's ``execution.simulator`` to its simulator class, or fall
     back to the session default when ``requested`` is None.
 
-    Shared by run_simulation, run_sweep, and run_montecarlo so a caller can pick
-    which detected simulator a run/batch executes on. Raises SimulationError if
-    the requested name is not among the detected simulators, or (via
-    ``require_simulator``) if none is available at all.
+    A family name (``"ltspice"``) is that family's detected executable; a
+    selector (``"ltspice:xvii"``) is the named executable bound to it at
+    startup, a class of its own. Raises SimulationError if the request names
+    neither, or (via ``require_simulator``) if no simulator is available at all.
     """
     if requested is not None:
-        sim_cls = state.available_simulators.get(requested.lower())
+        key = requested.lower()
+        if ":" in key:
+            sim_cls = state.named_simulators.get(key)
+            if sim_cls is None:
+                raise SimulationError(
+                    f"Simulator '{requested}' is not a named executable on this server "
+                    f"(named: {sorted(state.named_simulators)}). They are read from "
+                    f"{_SIM_SECTION}.{_SIM_EXECUTABLES_KEY} at startup; "
+                    "inspect(kind='capabilities') lists them, and its diagnostics say "
+                    "why a configured one was skipped.",
+                    show_hint=False,
+                )
+            return sim_cls
+        sim_cls = state.available_simulators.get(key)
         if sim_cls is None:
             raise SimulationError(
                 f"Simulator '{requested}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}). "
-                "inspect(kind='capabilities') lists the detected simulators.",
+                f"(detected: {list(state.available_simulators)}"
+                + (f", named: {sorted(state.named_simulators)}" if state.named_simulators else "")
+                + "). inspect(kind='capabilities') lists the detected simulators.",
                 show_hint=False,
             )
         return sim_cls

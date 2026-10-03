@@ -58,7 +58,9 @@ class SessionState:
 
     Attributes:
         config: Server configuration loaded from TOML/env vars
-        available_simulators: Simulators detected at startup
+        available_simulators: Simulators detected at startup, by family
+        named_simulators: Named executables bound at startup, by selector
+            (``"ltspice:xvii"``), each its own simulator class
         default_simulator: Simulator to use when not specified by user
         editors: Cache of parsed SpiceEditor instances
         results: Cache of parsed RawRead instances
@@ -80,6 +82,11 @@ class SessionState:
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
+    named_simulators: dict[str, type] = field(default_factory=dict)
+    """``[simulator.executables]`` bound at startup, keyed by the selector a run
+    names in ``execution.simulator`` (``"ltspice:xvii"``). Each is a simulator
+    class of its own (``simulator.bind_named_executable``), so it gets its own
+    runner, launch permits and kill names, and never retargets the family's."""
     sandbox_pinned: bool = False
     """The sandbox was given explicitly when the session was opened
     (``Api(allowed_paths=...)``). That outranks the file at startup, so it keeps
@@ -244,6 +251,7 @@ class SessionState:
         available: dict[str, type],
         diagnostics: list[str] | None = None,
         *,
+        named: dict[str, type] | None = None,
         sandbox_pinned: bool = False,
     ) -> "SessionState":
         """Factory method to create session state at server startup.
@@ -251,8 +259,9 @@ class SessionState:
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session and logged at startup. ``sandbox_pinned`` says the
-        caller gave ``allowed_paths`` explicitly (see the field).
+        on the session and logged at startup. ``named`` is the named
+        executables ``detect_named_simulators`` bound. ``sandbox_pinned`` says
+        the caller gave ``allowed_paths`` explicitly (see the field).
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
 
@@ -277,6 +286,7 @@ class SessionState:
             runners=RunnerManager(),
             working_dir=config.working_dir,
             job_registry=registry,
+            named_simulators=dict(named or {}),
             diagnostics=diagnostics,
             sandbox_pinned=sandbox_pinned,
         )

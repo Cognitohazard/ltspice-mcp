@@ -422,6 +422,7 @@ CapabilityField: TypeAlias = Literal[
     "config_path",
     "python",
     "simulators",
+    "named_executables",
     "default_simulator",
     "exporter_available",
     "render",
@@ -440,9 +441,9 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, whether the .asc exporter is available,
-    job persistence, allowed roots, the configured limits, and the linter
-    version."""
+    reported builds and raw dialects, the named executables, whether the .asc
+    exporter is available, job persistence, allowed roots, the configured
+    limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -926,33 +927,43 @@ def _reported_version(
     return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
 
 
+def _build_facts(
+    state: SessionState, cls: type, executable: SimulatorExecutable | None
+) -> dict[str, Any]:
+    """What one simulator class runs: its last reported build, its dialect, and
+    the program it launches."""
+    reported = _reported_version(state, executable)
+    info: dict[str, Any] = {
+        # What a run on this same executable said about itself; nothing
+        # is launched to ask. Null until one has run.
+        "version": reported[0] if reported else None,
+        "version_source": reported[1] if reported else None,
+        "dialect": dialect_for_simulator_name(cls.__name__),
+    }
+    if executable is not None:
+        # The simulator itself, not its launcher: under Wine the command
+        # starts with "wine".
+        info["executable"] = executable.path
+        info["executable_sha256"] = executable.sha256
+    return info
+
+
 def _do_capabilities(
     state: SessionState,
     raster: RasterSupport,
     executables: Mapping[str, SimulatorExecutable | None],
+    named: Mapping[str, SimulatorExecutable | None] | None = None,
 ) -> dict[str, Any]:
-    """The capabilities report. ``raster`` and ``executables`` (each available
-    simulator's ``executable_identity``) are computed off the loop by the
-    caller."""
+    """The capabilities report. ``raster``, ``executables`` (each available
+    simulator's ``executable_identity``) and ``named`` (each named
+    executable's) are computed off the loop by the caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
-        executable = executables.get(name)
-        reported = _reported_version(state, executable)
-        info: dict[str, Any] = {
+        simulators[name] = {
             "available": True,
             "default": cls is state.default_simulator,
-            # What a run on this same executable said about itself; nothing
-            # is launched to ask. Null until one has run.
-            "version": reported[0] if reported else None,
-            "version_source": reported[1] if reported else None,
-            "dialect": dialect_for_simulator_name(cls.__name__),
+            **_build_facts(state, cls, executables.get(name)),
         }
-        if executable is not None:
-            # The simulator itself, not its launcher: under Wine the command
-            # starts with "wine".
-            info["executable"] = executable.path
-            info["executable_sha256"] = executable.sha256
-        simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that
     # would turn it on — the config self-diagnosis surface. Detection runs at
     # startup, so a fix always ends in a server restart; the remediation says
@@ -964,10 +975,22 @@ def _do_capabilities(
                 "remediation": simulator_remediation(name, state.config),
             }
 
+    # The other builds a run can be put on, by the selector that names one in
+    # execution.simulator. A configured executable that could not be bound is
+    # not here; the diagnostics below say why.
+    named_executables = {
+        selector: {
+            "family": selector.partition(":")[0],
+            **_build_facts(state, cls, (named or {}).get(selector)),
+        }
+        for selector, cls in sorted(state.named_simulators.items())
+    }
+
     return {
         "config_path": str(state.config.config_path),
         "python": _python_runtime_facts(),
         "simulators": simulators,
+        "named_executables": named_executables,
         "default_simulator": (
             state.default_simulator.__name__ if state.default_simulator else None
         ),
@@ -1749,16 +1772,24 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         simulators = (
             dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
         )
+        named = (
+            dict(state.named_simulators) if wanted is None or "named_executables" in wanted else {}
+        )
 
-        def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
+        def probe() -> tuple[
+            RasterSupport,
+            dict[str, SimulatorExecutable | None],
+            dict[str, SimulatorExecutable | None],
+        ]:
             # Off the loop: the first successful raster probe loads the native
             # Cairo library, and the first identification of an executable
             # digests it.
             identities = {name: executable_identity(cls) for name, cls in simulators.items()}
-            return raster_support(), identities
+            named_identities = {key: executable_identity(cls) for key, cls in named.items()}
+            return raster_support(), identities, named_identities
 
-        raster, executables = await asyncio.to_thread(probe)
-        report = _do_capabilities(state, raster, executables)
+        raster, executables, named_executables = await asyncio.to_thread(probe)
+        report = _do_capabilities(state, raster, executables, named_executables)
         if wanted is not None:
             report = {key: value for key, value in report.items() if key in wanted}
         return {"data": report}

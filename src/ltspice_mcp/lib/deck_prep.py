@@ -129,14 +129,19 @@ async def _export_schematic(
     ``simulator`` is the class the run will execute on (defaults to the
     session default): when it is ngspice, the LTspice export is sanitized
     for it (see ``_read_export``) — without that, every schematic run on
-    ngspice dies on the exporter's ``.backanno``.
+    ngspice dies on the exporter's ``.backanno``. When it is an LTspice, that
+    build exports the schematic: a named executable (LTspice XVII beside a
+    later default) netlists the sheet against its own symbols and model
+    library, as running the sheet in it would.
 
     The export launches the LTspice binary and blocks until it exits — heavy
     work that would stall the shared event loop, so it is offloaded via
     ``asyncio.to_thread``. It touches no cached editors, so the offload is safe
     under the concurrency contract.
     """
-    ltspice_cls = state.available_simulators.get("ltspice")
+    from ltspice_mcp.lib.simulator import is_ltspice, is_ngspice
+
+    ltspice_cls = simulator if is_ltspice(simulator) else state.available_simulators.get("ltspice")
     if ltspice_cls is None:
         # Don't recommend export_netlist here — it ALSO needs LTspice, so that
         # advice dead-ends when only ngspice/etc. is available.
@@ -150,8 +155,6 @@ async def _export_schematic(
             "embedded .model/.lib/analysis directives can be reused in a .cir.)",
             show_hint=False,
         )
-    from ltspice_mcp.lib.simulator import is_ngspice
-
     for_ngspice = is_ngspice(simulator or state.default_simulator)
     async with asc_export_lock(asc_path):
         try:

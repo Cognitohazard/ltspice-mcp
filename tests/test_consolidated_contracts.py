@@ -612,7 +612,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # an agent reads, and one grepped the installed package to find it.
     # Nested instance assignments and the native PDK family add their field
     # grammar and replay guidance: measured 15,352 characters.
-    "run_experiments": 15400,
+    # Raised by about 110 characters so execution.simulator can name one of
+    # several builds of a family ('ltspice:xvii'): the two-member enum became
+    # a pattern, and the description says where the names are listed.
+    # Measured 15,507.
+    "run_experiments": 15510,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -656,8 +660,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 40 characters so the capabilities description says it
     # reports each simulator's executable and the build its last run reported:
     # that report is where a caller finds which build this server runs.
-    # Measured 8,657.
-    "inspect": 8660,
+    # Raised by about 45 characters for the named_executables report key, the
+    # list of builds execution.simulator can select by name. Measured 8,700.
+    "inspect": 8705,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

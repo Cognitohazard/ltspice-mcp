@@ -581,6 +581,11 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_SIMULATOR": "ltspice",
     "LTSPICE_MCP_ENABLED_SIMULATORS": "LTspice, xyce",
     "LTSPICE_MCP_SIMULATOR_EXE": "/opt/env/ltspice",
+    # A native Windows path, drive colon and all, beside a family-qualified
+    # POSIX one: ';' separates entries on every platform.
+    "LTSPICE_MCP_SIMULATOR_EXECUTABLES": (
+        "XVII=C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe; ngspice:nightly=/opt/env/ngspice;"
+    ),
     "LTSPICE_MCP_NGBEHAVIOR": "  hsa  ",
     "LTSPICE_MCP_WORKING_DIR": "/tmp/env-working-dir",
     "LTSPICE_MCP_ALLOWED_PATHS": f"/tmp/env-a{os.pathsep}/tmp/env-b",
@@ -614,6 +619,13 @@ default = "ngspice"
 path = "/opt/toml/ngspice"
 enabled = ["NGspice", " LTspice "]
 ngbehavior = "  kipsa  "
+
+[simulator.executables]
+xvii = 'C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe'
+"NGspice:Dev" = "/opt/toml/ngspice-dev"
+
+[simulator.executables.ltspice]
+lt24 = "C:/Program Files/ADI/LTspice/LTspice.exe"
 
 [security]
 allowed_paths = ["/tmp/toml-a", "/tmp/toml-b"]
@@ -678,6 +690,11 @@ class TestLoadCoversEveryKey:
             "simulator": "ngspice",
             "enabled_simulators": ["ngspice", "ltspice"],
             "simulator_exe": Path("/opt/toml/ngspice"),
+            "simulator_executables": {
+                "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
+                "ngspice:dev": Path("/opt/toml/ngspice-dev"),
+                "ltspice:lt24": Path("C:/Program Files/ADI/LTspice/LTspice.exe"),
+            },
             "ngbehavior": "kipsa",
             "working_dir": Path.cwd(),
             "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
@@ -714,6 +731,10 @@ class TestLoadCoversEveryKey:
             "simulator": "ltspice",
             "enabled_simulators": ["ltspice", "xyce"],
             "simulator_exe": Path("/opt/env/ltspice"),
+            "simulator_executables": {
+                "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
+                "ngspice:nightly": Path("/opt/env/ngspice"),
+            },
             "ngbehavior": "hsa",
             "working_dir": Path("/tmp/env-working-dir"),
             "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],

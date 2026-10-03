@@ -315,6 +315,52 @@ inside it: the executable is server state, and hashing it in would report a
 swapped build as a different request payload. `jobs(status)` still reads the
 recorded job, and a new `request_id` runs it on the current build.
 
+**Selecting a build.** `execution.simulator` names a family (`"ltspice"`,
+`"ngspice"`), which runs that family's own executable (`[simulator] path`, or
+the detected install), or a family and a name (`"ltspice:xvii"`), which runs one
+of the further executables `[simulator.executables]` names. Configuring them:
+
+```toml
+[simulator.executables]
+xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"   # family from the file name
+"ngspice:dev" = "/opt/ngspice-dev/bin/ngspice"          # or written in the key
+
+[simulator.executables.ltspice]                          # or a table per family
+lt24 = "C:/Program Files/ADI/LTspice/LTspice.exe"
+```
+
+`LTSPICE_MCP_SIMULATOR_EXECUTABLES` takes the same entries as `name=path`,
+separated by `;` on every platform (`:` already joins a family to a name and
+follows a drive letter). A name is lower-case letters, digits, `.`, `_` and
+`-`. The family is read off the file name the way `[simulator] path` is checked
+(`XVIIx64.exe` and `LTspice.exe` are LTspice); a file name that says nothing
+needs `family:name`, and one that names a different simulator than its key is
+refused. Only the families a run can use (`ltspice`, `ngspice`) take named
+executables, and the `[simulator] enabled` allowlist applies to them. Binding
+happens at startup, like detection; an entry that cannot be bound is left out
+with a startup diagnostic, and a run naming it is refused with the names there
+are. `inspect(kind="capabilities")` lists the bound ones under
+`named_executables`.
+
+Each named executable is a spicelib simulator class of its own: a subclass of
+the family's class carrying its own `spice_exe`. spicelib keeps the launched
+program on the class, and `create_from` writes it there, so binding a second
+build to the family's class would retarget every runner holding that class,
+running cases included (`docs/spicelib_bugs.md`, Bug 18). The subclass keeps
+the family's class name, which is what a record's `simulator`, the raw dialect
+and the linter read, so a named build parses and lints as its family does;
+what tells two builds apart in a record is `simulator_executable`. Everything
+keyed by the class follows the build: its own runner and launch permits (so
+each build gets the whole `max_parallel_sims`, as each family does), the kill
+names a cancel matches, the `.asc` exporter when the build is an LTspice, and
+the model library roots staging accepts (LTspice XVII's
+`Documents\LTspiceXVII\lib`, LTspice 24's `%LOCALAPPDATA%\LTspice\lib`).
+
+Replay needs no new rule. The selector is part of the request, so a
+`request_id` replayed under another name is a different payload, and a name
+bound to another build since is the executable check above; both are an
+`idempotency_conflict`.
+
 **Control token.** The receipt carries an unguessable `control_token`. Cancel
 authority is the owning process *or* a presented control token, so a
 reconnected session can still cancel its own work. The token is returned only
@@ -343,7 +389,7 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
                                         random families is ill-defined).
                                         [] = one plain run per circuit
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
-                      simulator?: "ltspice"|"ngspice"}
+                      simulator?: "ltspice"|"ngspice"|"<family>:<name>"}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       include?}
                                         attached analysis stage; `recipes` is
@@ -1026,7 +1072,10 @@ Python API), which are never capped. The gate stays a whole-file answer.
     simulators: each one's executable and its sha256, and as `version` the
     build the latest run on that same executable reported, with
     `version_source` naming the job and case (null until one has run; the
-    executable is never launched to ask); exporter presence, dialects, persistence,
+    executable is never launched to ask); named_executables: the same facts
+    and the family for each [simulator.executables] entry bound at startup,
+    keyed by the selector execution.simulator takes ("ltspice:xvii");
+    exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,
