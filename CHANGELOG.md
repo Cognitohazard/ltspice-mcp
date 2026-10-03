@@ -55,6 +55,25 @@ tool-surface changes.
 - The `circuits[].path` description of `run_experiments` told agents to export
   an `.asc` through LTspice first. An `.asc` is accepted and exported
   automatically, and the description now says so.
+- A notch whose null fell midway between two sweep samples was reported
+  without the under-sampling warning. Those two samples read the same level,
+  so the check, which wanted both neighbours of the lowest sample well above
+  it, never fired, and `stopband_rejection_db` came back as a finite figure
+  (12.96 dB for an ideal notch at 10 points per decade) with nothing saying it
+  was only a lower bound. The warning now fires when either neighbour is more
+  than 3 dB higher, as its description always said.
+- A runner's cap on simulators in flight could be exceeded by one. Each new
+  submission rebuilt the runner's launch permits whenever none were out, and
+  that included the moment a released permit had been handed to a waiting run
+  that had not yet resumed; the woken run and a newcomer then both launched.
+  The permits are now rebuilt only when nothing holds or waits for one, and a
+  lowered cap takes effect as soon as the runner drains rather than at the next
+  submission.
+- An unterminated single quote in a netlist was reported with the hint "add a
+  closing \" after the opening quote". The hint now names the quote that was
+  opened, and a quote left open inside a braced or parenthesized expression is
+  reported at the quote, with the same hint, rather than at the enclosing
+  bracket with none.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -518,6 +537,18 @@ tool-surface changes.
   ships, so PNG rendering was impossible through them; installing native Cairo
   is now the only step. The README documents the extra and the per-platform
   Cairo install.
+- CI: lint and type check run once, in a new `checks / static` job, instead of
+  on every interpreter. They gave the same answer on each: ruff and pyright
+  both target 3.11, and the lockfile resolves one package set for 3.11 through
+  3.13. The Linux test legs run the suite on one xdist worker per core, which
+  takes about 90 s on a four-core machine instead of about 200 s serially. The
+  Windows leg still runs serially, so it now sets how long the checks take. The
+  existing status-check contexts keep their names.
+- The alias publish workflow no longer runs its own copy of the checks. An
+  alias already waits for the canonical `ltspice-mcp` release to appear on
+  PyPI, and that release publishes only after the checks pass, so the second
+  run doubled every release's test matrix without gating anything more. The
+  wait now allows 30 minutes, long enough to cover the checks.
 
 - An `edit_schematic` call on an existing sheet reports only the sheet findings
   in `warnings` (floating pins, dangling labels, duplicate wires, a label

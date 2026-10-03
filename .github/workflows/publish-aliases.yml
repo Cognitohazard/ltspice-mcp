@@ -6,6 +6,11 @@ name: Publish aliases to PyPI
 # packages at one version. skip-existing keeps it idempotent — an alias whose
 # version already exists on PyPI is skipped, not re-published.
 #
+# No checks job of its own: an alias publishes only once the canonical
+# ltspice-mcp of the same version is on PyPI (the wait step below), and
+# publish.yml uploads that only after the shared checks pass. Running them
+# here too ran the whole matrix twice for every release tag.
+#
 # workflow_dispatch is kept for catch-up: publish a single alias whose trusted
 # publisher was registered after a release (run it against that release's tag).
 #
@@ -31,16 +36,11 @@ permissions:
   contents: read
 
 jobs:
-  # Release gate: runs the exact same reusable checks workflow as CI and
-  # publish.yml (lint + pyright + the real-ngspice e2e tier + dependency audit),
-  # so the aliases can't publish when checks fail and the gates cannot drift.
-  checks:
-    uses: ./.github/workflows/checks.yml
-
   publish:
-    needs: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 25  # includes up to ~15 min waiting for the canonical upload
+    # Includes up to 30 min waiting for the canonical upload, which covers
+    # publish.yml's checks, build and upload on the same tag.
+    timeout-minutes: 40
     environment: pypi
     permissions:
       id-token: write
@@ -79,18 +79,20 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # The exact pin makes the alias uninstallable until the canonical package
-      # exists, so wait for it: if the canonical upload failed, the aliases must
-      # not publish at all rather than ship pointing at a version that never
-      # lands (or silently resolving an older one).
+      # exists, so wait for it: if the canonical upload failed (its checks
+      # included), the aliases must not publish at all rather than ship
+      # pointing at a version that never lands (or silently resolving an older
+      # one). This wait is the aliases' release gate.
       - name: Wait for ltspice-mcp ${{ steps.version.outputs.version }} on PyPI
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          for attempt in $(seq 1 30); do
+          ATTEMPTS=60  # 30 s apart: 30 minutes
+          for attempt in $(seq 1 "$ATTEMPTS"); do
             if curl -fsSL "https://pypi.org/pypi/ltspice-mcp/${VERSION}/json" >/dev/null 2>&1; then
               echo "ltspice-mcp ${VERSION} is available on PyPI."
               exit 0
             fi
-            echo "Attempt ${attempt}/30: ltspice-mcp ${VERSION} not on PyPI yet; retrying in 30s."
+            echo "Attempt ${attempt}/${ATTEMPTS}: ltspice-mcp ${VERSION} not on PyPI yet; retrying in 30s."
             sleep 30
           done
           echo "ltspice-mcp ${VERSION} never appeared on PyPI; aborting alias publish." >&2

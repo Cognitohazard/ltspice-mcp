@@ -229,36 +229,40 @@ async def test_existing_edit_requires_and_honors_sha(asc_state, work_dir):
     assert "R3" in (work_dir / "rev.asc").read_text()
 
 
-async def test_stale_sha_returns_revision_conflict(asc_state, work_dir):
-    first = await _build_blank(asc_state, "conflict", _DIVIDER_OPS)
-    sha0 = first["sha256"]
-    # A peer commits, moving the file off sha0.
-    await handle_edit_schematic(
-        _edit_input(
-            target="conflict.asc",
-            expected_sha256=sha0,
-            ops=[{"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}],
-        ),
-        asc_state,
+@pytest.mark.parametrize("stale_caller", ["same_session", "other_session"])
+async def test_stale_sha_returns_revision_conflict(config, work_dir, asc_symbols, stale_caller):
+    """A commit carrying a stale sha is refused, writes nothing, and names the
+    revision now in force, so the retry needs no re-read.
+
+    Without the current sha the caller learns only that its token is stale and
+    has to go fetch the current one. The stale caller may be the session that
+    moved the file or a second session over the same directory, which never
+    cached the sheet: the sha is checked against the file inside the edit guard.
+    The two commits run one after the other; this is not a concurrency test.
+    """
+    session_a = SessionState.create(config, available={})
+    stale = (
+        session_a if stale_caller == "same_session" else SessionState.create(config, available={})
     )
-    sha1 = _sha(work_dir / "conflict.asc")
+    first = await _build_blank(session_a, "conflict", _DIVIDER_OPS)
+    sha0 = first["sha256"]
+
+    def add(ref: str, x: int) -> list[dict]:
+        return [{"op": "add_component", "reference": ref, "symbol": "res", "x": x, "y": 300}]
+
+    winner = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(target="conflict.asc", expected_sha256=sha0, ops=add("R3", 1000)),
+            session_a,
+        )
+    )
+    assert winner["outcome"] == "complete"
+    current = _sha(work_dir / "conflict.asc")
 
     loser = _assert_schema(
         await handle_edit_schematic(
-            _edit_input(
-                target="conflict.asc",
-                expected_sha256=sha0,  # stale
-                ops=[
-                    {
-                        "op": "add_component",
-                        "reference": "R4",
-                        "symbol": "res",
-                        "x": 1300,
-                        "y": 300,
-                    }
-                ],
-            ),
-            asc_state,
+            _edit_input(target="conflict.asc", expected_sha256=sha0, ops=add("R4", 1300)),
+            stale,
         )
     )
     assert loser["outcome"] == "failed"
@@ -268,46 +272,10 @@ async def test_stale_sha_returns_revision_conflict(asc_state, work_dir):
     assert loser["error"]["retryable"] is True
     assert loser["error"]["commit_state"] == "not_started"
     assert loser["commit_state"] == "not_committed"
-    # Nothing written: the file is unchanged and R4 never landed.
-    assert _sha(work_dir / "conflict.asc") == sha1
-    assert "R4" not in (work_dir / "conflict.asc").read_text()
-
-
-async def test_revision_conflict_payload_carries_current_sha(asc_state, work_dir):
-    """A conflict names the revision now in force, so the retry needs no re-read.
-
-    Without it the caller learns only that its token is stale and has to go
-    fetch the current one — the error would report the problem while withholding
-    the handle that fixes it.
-    """
-    first = await _build_blank(asc_state, "conflictsha", _DIVIDER_OPS)
-    add = [{"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}]
-    await handle_edit_schematic(
-        _edit_input(target="conflictsha.asc", expected_sha256=first["sha256"], ops=add),
-        asc_state,
-    )
-    current = _sha(work_dir / "conflictsha.asc")
-
-    loser = _assert_schema(
-        await handle_edit_schematic(
-            _edit_input(
-                target="conflictsha.asc",
-                expected_sha256=first["sha256"],  # stale
-                ops=[
-                    {
-                        "op": "add_component",
-                        "reference": "R4",
-                        "symbol": "res",
-                        "x": 1300,
-                        "y": 300,
-                    }
-                ],
-            ),
-            asc_state,
-        )
-    )
-    assert loser["error"]["code"] == "revision_conflict"
     assert loser["sha256"] == current
+    # Nothing written: the file is unchanged and R4 never landed.
+    assert _sha(work_dir / "conflict.asc") == current
+    assert "R4" not in (work_dir / "conflict.asc").read_text()
 
 
 async def test_first_edit_commits_with_the_digest_inspect_reported(asc_state, work_dir):
@@ -382,65 +350,6 @@ async def test_missing_expected_sha_refusal_hands_back_the_current_digest(asc_st
     assert (work_dir / "needsha.asc").read_bytes() == before
 
 
-async def test_parallel_session_revision_race(config, work_dir, asc_symbols):
-    """Two sessions over one file: one commits, the stale one gets revision_conflict.
-
-    Same-directory sessions coordinate through the shared edit guard + file lock;
-    the sha is rechecked inside the guard, so the second committer loses.
-    """
-    session_a = SessionState.create(config, available={})
-    session_b = SessionState.create(config, available={})
-
-    first = _assert_schema(
-        await handle_edit_schematic(
-            _edit_input(target="race.asc", base="blank", ops=_DIVIDER_OPS), session_a
-        )
-    )
-    sha0 = first["sha256"]
-
-    a = _assert_schema(
-        await handle_edit_schematic(
-            _edit_input(
-                target="race.asc",
-                expected_sha256=sha0,
-                ops=[
-                    {
-                        "op": "add_component",
-                        "reference": "RA",
-                        "symbol": "res",
-                        "x": 1000,
-                        "y": 300,
-                    }
-                ],
-            ),
-            session_a,
-        )
-    )
-    assert a["outcome"] == "complete"
-
-    b = _assert_schema(
-        await handle_edit_schematic(
-            _edit_input(
-                target="race.asc",
-                expected_sha256=sha0,  # stale — A already moved it
-                ops=[
-                    {
-                        "op": "add_component",
-                        "reference": "RB",
-                        "symbol": "res",
-                        "x": 1300,
-                        "y": 300,
-                    }
-                ],
-            ),
-            session_b,
-        )
-    )
-    assert b["outcome"] == "failed"
-    assert b["error"]["code"] == "revision_conflict"
-    assert "RB" not in (work_dir / "race.asc").read_text()
-
-
 # ---------------------------------------------------------------------------
 # Commit-protocol crash injection
 # ---------------------------------------------------------------------------
@@ -491,6 +400,45 @@ async def test_crash_before_rename_leaves_the_target_and_writes_nothing_else(
     # response names the stage that failed.
     assert not list(work_dir.glob("crash.asc.staging-*"))
     assert not list(work_dir.glob("crash.draft-*.asc"))
+    # The cached editor the ops mutated is evicted, so the next read parses the
+    # untouched file instead of returning the uncommitted R3.
+    assert "R3" not in _cached_refs(asc_state, work_dir / "crash.asc")
+
+
+def _cached_refs(state: SessionState, path: Path) -> set[str]:
+    """References on the editor the session cache hands the next caller."""
+    return {c.reference for c in get_asc_editor(path, state).components.values()}
+
+
+async def test_render_failure_leaves_the_target_and_evicts_the_edited_editor(
+    asc_state, work_dir, monkeypatch
+):
+    first = await _build_blank(asc_state, "render", _DIVIDER_OPS)
+    target = work_dir / "render.asc"
+    original = target.read_bytes()
+
+    def partial_then_fail(_editor, sink):
+        # Write a truncated sheet to whatever sink the tool hands over, then
+        # fail, so a sink that is the target itself would corrupt it.
+        partial = "Version 4\nSHEET 1 0 0\n"
+        if hasattr(sink, "write"):
+            sink.write(partial)
+        else:
+            Path(sink).write_text(partial, encoding="utf-8", newline="\n")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(AscEditor, "save_netlist", partial_then_fail)
+    op = {"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}
+    with pytest.raises(OSError, match="disk full"):
+        await handle_edit_schematic(
+            _edit_input(target="render.asc", expected_sha256=first["sha256"], ops=[op]),
+            asc_state,
+        )
+    monkeypatch.undo()
+
+    assert target.read_bytes() == original
+    assert not list(work_dir.glob("render.asc.staging-*"))
+    assert "R3" not in _cached_refs(asc_state, target)
 
 
 async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypatch):
@@ -1257,52 +1205,36 @@ _REF_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
 _REF_DECK_DIFFERENT = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
 
 
-async def test_reference_success(asc_state, work_dir, monkeypatch):
-    (work_dir / "ref.cir").write_text(_REF_DECK)
+@pytest.mark.parametrize("as_text", [False, True], ids=["file", "text"])
+async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
+    asc_state, work_dir, monkeypatch, as_text: bool
+):
+    """A confirmed match commits, completes, and does not echo the exported deck.
+
+    The reference may be a file or, like verify_circuit's, netlist text. Every
+    compare used to return the committed sheet's whole netlist, even when the
+    verdict was ``equivalent: true``. That deck is equivalent to the reference
+    the caller supplied, so it carried no fact the verdict did not, and every
+    later turn re-read it.
+    """
+    (work_dir / "ref.cir").write_text(_REF_DECK, encoding="utf-8", newline="\n")
 
     async def fake_export(_copy, _state):
         return _REF_DECK
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(asc_state, "refok", _DIVIDER_OPS, compare={"reference": "ref.cir"})
+    reference = _REF_DECK if as_text else "ref.cir"
+    data = await _build_blank(asc_state, "refok", _DIVIDER_OPS, compare={"reference": reference})
     assert data["commit_state"] == "committed"
+    assert data["outcome"] == "complete"
     assert data["verification"]["equivalent"] is True
-    # The verdict is the answer; the exported deck only confirms it.
+    named = data["verification"]["reference"]
+    if as_text:
+        assert named == "inline netlist"
+    else:
+        assert Path(named).resolve() == (work_dir / "ref.cir").resolve()  # noqa: ASYNC240
     assert "netlist" not in data
     assert data["stages"][-1] == {"stage": "reference", "ok": True}
-
-
-async def test_an_equivalent_comparison_leaves_the_netlist_out(asc_state, monkeypatch):
-    """A confirmed match does not echo the exported deck.
-
-    Every compare used to return the committed sheet's whole netlist, even
-    when the verdict was ``equivalent: true``. That deck is equivalent to the
-    reference the caller supplied, so it carried no fact the verdict did not,
-    and every later turn re-read it.
-    """
-
-    async def fake_export(_copy, _state):
-        return _REF_DECK
-
-    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(asc_state, "reflean", _DIVIDER_OPS, compare={"reference": _REF_DECK})
-    assert data["verification"]["equivalent"] is True
-    assert data["outcome"] == "complete"
-    assert "netlist" not in data
-
-
-async def test_reference_may_be_netlist_text(asc_state, monkeypatch):
-    """The shared compare spec reads a multi-line reference as netlist text;
-    this tool honours that the same way verify_circuit does."""
-
-    async def fake_export(_copy, _state):
-        return _REF_DECK
-
-    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(asc_state, "reftext", _DIVIDER_OPS, compare={"reference": _REF_DECK})
-    assert data["commit_state"] == "committed"
-    assert data["verification"]["equivalent"] is True
-    assert data["verification"]["reference"] == "inline netlist"
 
 
 async def test_reference_outside_sandbox_names_the_text_alternative(asc_state):
@@ -1340,15 +1272,27 @@ async def test_reference_structural_diff_reports_the_delta(asc_state, monkeypatc
 
 
 async def test_reference_anchors_are_honoured(asc_state, monkeypatch):
+    # The same divider with its nets renamed: wired alike, so it matches by
+    # structure, but the name 'out' now sits on the source node instead of
+    # the R1-R2 junction. Only an anchor on 'out' can tell the two apart.
+    renamed = "Vin out 0 5\nR1 out mid 1k\nR2 mid 0 2k\n.end\n"
+
     async def fake_export(_copy, _state):
-        return _REF_DECK
+        return renamed
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
-    data = await _build_blank(
+    loose = await _build_blank(
+        asc_state, "refloose", _DIVIDER_OPS, compare={"reference": _REF_DECK}
+    )
+    assert loose["verification"]["equivalent"] is True
+
+    anchored = await _build_blank(
         asc_state, "refanchor", _DIVIDER_OPS, compare={"reference": _REF_DECK, "anchors": ["out"]}
     )
-    assert data["verification"]["comparison"]["mode"] == "equivalence"
-    assert data["verification"]["equivalent"] is True
+    comparison = anchored["verification"]["comparison"]
+    assert comparison["mode"] == "equivalence"
+    assert anchored["verification"]["equivalent"] is False
+    assert [v["anchor"] for v in comparison["anchor_violations"]] == ["out"]
 
 
 async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypatch):

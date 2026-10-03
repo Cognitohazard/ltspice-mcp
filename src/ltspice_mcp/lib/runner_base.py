@@ -632,36 +632,58 @@ class RunnerBase:
         # share one cap instead of each getting a private one; a job may divide
         # its own share further, but nothing gets past this.
         self._launch_slots = asyncio.Semaphore(max_parallel)
-        self._slots_out = 0
+        # Permits held plus callers waiting for one, including a caller already
+        # handed a released permit that has not resumed yet.
+        self._slots_claimed = 0
         # Submitted SimRunners, held until their simulation thread is done.
         # See _retire_finished_runners for why letting one go early is a trap.
         self._inflight_runners: dict[str, SimRunner] = {}
 
     @property
     def max_parallel(self) -> int:
-        """Simulator processes this runner will have in flight at once."""
+        """Simulator processes this runner will have in flight at once.
+
+        The requested cap. A change made while runs hold permits is enforced
+        once the runner is idle (see ``_rebuild_slots_if_idle``).
+        """
         return self._max_parallel
 
     @max_parallel.setter
     def max_parallel(self, value: int) -> None:
         self._max_parallel = value
-        # A semaphore's permit count cannot be changed while permits are out
-        # without losing track of them, so a new cap takes effect the next time
-        # the runner is idle; runs already admitted keep the cap they started
-        # under. With no permits out there can be no waiter either (a waiter
-        # only exists once the permits are gone), so nothing is stranded here.
-        if self._slots_out == 0:
-            self._launch_slots = asyncio.Semaphore(value)
+        self._rebuild_slots_if_idle()
+
+    def _rebuild_slots_if_idle(self) -> None:
+        """Give the launch permits the current cap, but only when idle.
+
+        A semaphore's permit count cannot be changed while permits are out
+        without losing track of them, so a new cap takes effect the next time
+        the runner is idle: when the setter finds it idle, or when the last
+        claim on a permit ends. Runs already admitted keep the cap they started
+        under. Idle counts waiters too: releasing a permit hands it to the next
+        waiter before that waiter resumes, and a semaphore replaced in that gap
+        would let the woken run and a newcomer both launch past the cap.
+        """
+        if self._slots_claimed == 0:
+            self._launch_slots = asyncio.Semaphore(self._max_parallel)
 
     async def acquire_launch_slot(self) -> None:
         """Take one launch permit. Call on the event loop, release when done."""
-        await self._launch_slots.acquire()
-        self._slots_out += 1
+        self._slots_claimed += 1
+        try:
+            await self._launch_slots.acquire()
+        except BaseException:
+            self._drop_slot_claim()
+            raise
 
     def release_launch_slot(self) -> None:
         """Return a permit taken by ``acquire_launch_slot``."""
         self._launch_slots.release()
-        self._slots_out -= 1
+        self._drop_slot_claim()
+
+    def _drop_slot_claim(self) -> None:
+        self._slots_claimed -= 1
+        self._rebuild_slots_if_idle()
 
     def _build_sim_runner(
         self,

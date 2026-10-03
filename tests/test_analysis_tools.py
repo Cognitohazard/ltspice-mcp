@@ -65,6 +65,7 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import safe_path
+from tests.conftest import make_raw_mock
 from tests.conftest import stage_recorded_fixture as _stage_recorded
 
 
@@ -94,41 +95,10 @@ def _inject_raw_mock(state: SessionState, path: Path, raw: MagicMock) -> None:
     state.results.set(path, raw)
 
 
-def _make_raw_mock(
-    *,
-    plotname: str = "Transient Analysis",
-    trace_names: list[str] | None = None,
-    waves: dict[str, np.ndarray] | None = None,
-    axis: np.ndarray | None = None,
-    steps: list[int] | None = None,
-    dialect: str = "ltspice",
-) -> MagicMock:
-    raw = MagicMock()
-    raw.dialect = dialect
-    trace_names = trace_names or ["time", "V(out)"]
-    waves = waves or {
-        "time": np.linspace(0, 1, 100),
-        "V(out)": np.sin(2 * np.pi * np.linspace(0, 1, 100)),
-    }
-    axis = axis if axis is not None else waves.get("time", np.linspace(0, 1, 100))
-    raw.get_raw_property.return_value = plotname
-    raw.get_trace_names.return_value = trace_names
-    raw.get_steps.return_value = steps if steps is not None else [0]
-    raw.get_axis.return_value = axis
-    # These name-based cases have no declared trace metadata.
-    raw.get_trace.return_value.whattype = None
-
-    def get_wave(name, step=0):
-        return waves[name]
-
-    raw.get_wave = get_wave
-    return raw
-
-
 @pytest.fixture
 def fake_raw(state_no_sim: SessionState, work_dir: Path) -> Path:
     raw_file = work_dir / "result.raw"
-    raw = _make_raw_mock()
+    raw = make_raw_mock()
     _inject_raw_mock(state_no_sim, raw_file, raw)
     return raw_file
 
@@ -152,7 +122,7 @@ class TestSignalStats:
         ``sweep_start_used`` / ``sweep_end_used`` instead."""
         raw_file = work_dir / "dc.raw"
         temps = np.linspace(-40, 125, 34)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="DC transfer characteristic",
             trace_names=["temperature", "V(vref)"],
             waves={"temperature": temps, "V(vref)": 3.15 + 0.001 * temps},
@@ -182,7 +152,7 @@ class TestSignalStats:
         opts into a flip so signal_stats analyzes it instead of erroring."""
         raw_file = work_dir / "dcdesc.raw"
         v = np.linspace(5.0, 0.0, 21)  # high → low sweep
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="DC transfer characteristic",
             trace_names=["v-sweep", "V(out)"],
             waves={"v-sweep": v, "V(out)": v * 0.5},
@@ -222,7 +192,7 @@ class TestSignalStats:
         raw_file = work_dir / "ac.raw"
         freqs = np.logspace(0, 6, 100)
         wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": wave},
@@ -241,7 +211,7 @@ class TestSignalStats:
         raw_file = work_dir / "ac.raw"
         freqs = np.logspace(0, 6, 100)
         wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": wave},
@@ -266,7 +236,7 @@ class TestSignalStats:
         t = np.linspace(0, 10 / freq, 20001)
         amp = 5.0
         y = amp * np.sin(2 * np.pi * freq * t)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)"],
             waves={"time": t, "V(out)": y},
             axis=t,
@@ -289,7 +259,7 @@ class TestSignalStats:
         t = np.linspace(0, 1e-3, 2001)
         # Step from 0 to 5V at t=0.5ms; window selects steady DC portion.
         y = np.where(t < 0.5e-3, 0.0, 5.0)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)"],
             waves={"time": t, "V(out)": y},
             axis=t,
@@ -336,7 +306,7 @@ class TestQueryValue:
         raw_file = work_dir / "ac.raw"
         freqs = np.logspace(0, 6, 100)
         wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": wave},
@@ -356,7 +326,7 @@ class TestQueryValue:
         # single-value read so the 0.0 isn't trusted.
         raw_file = work_dir / "q.raw"
         (work_dir / "q.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)", "v(@m1[bogus])"],
             waves={
                 "time": np.linspace(0, 1, 10),
@@ -380,7 +350,7 @@ class TestQueryValue:
         # an unrecognized-variable warning about a different (@-param) trace.
         raw_file = work_dir / "q2.raw"
         (work_dir / "q2.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)", "v(@m1[bogus])"],
             waves={
                 "time": np.linspace(0, 1, 10),
@@ -402,7 +372,7 @@ class TestQueryValue:
         # healthy trace must still surface the run-level failure.
         raw_file = work_dir / "q3.raw"
         (work_dir / "q3.log").write_text("gmin stepping failed\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)"],
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
         )
@@ -419,7 +389,7 @@ class TestQueryValue:
         # No false positives: a healthy trace with a clean log carries no warnings.
         raw_file = work_dir / "q4.raw"
         (work_dir / "q4.log").write_text("Total elapsed time: 0.1 seconds.\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)"],
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
         )
@@ -446,7 +416,7 @@ def test_has_active_device_detects_transistor_currents():
 class TestGetOperatingPoint:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "op.raw"
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(out)", "V(in)", "I(R1)"],
             waves={
@@ -470,7 +440,7 @@ class TestGetOperatingPoint:
         # A clean run must still carry the warnings key (as an empty list) so
         # structured-content consumers see "no warnings", not a missing key.
         raw_file = work_dir / "opclean.raw"
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(out)", "I(R1)"],
             waves={"V(out)": np.array([1.5]), "I(R1)": np.array([0.001])},
@@ -502,7 +472,7 @@ class TestGetOperatingPoint:
             "Gm:          4.80e-04\n"
             "Gds:         1.00e-06\n"
         )
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(d)", "Id(M1)"],
             waves={"V(d)": np.array([1.8]), "Id(M1)": np.array([9.6e-5])},
@@ -532,7 +502,7 @@ class TestGetOperatingPoint:
         # at= reads the full bias snapshot at a chosen .dc sweep value (nearest),
         # not the sweep's first point.
         raw_file = work_dir / "dc.raw"
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="DC transfer characteristic",
             trace_names=["v-sweep", "V(out)", "I(R1)"],
             waves={
@@ -563,7 +533,7 @@ class TestGetOperatingPoint:
         # carried so the 0.0 isn't mistaken for a real gds=0/cgd=0.
         raw_file = work_dir / "op.raw"
         (work_dir / "op.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(out)", "v(@m1[bogus])"],
             waves={"V(out)": np.array([1.5]), "v(@m1[bogus])": np.array([0.0])},
@@ -582,7 +552,7 @@ class TestGetOperatingPoint:
         # log's failure line is relayed onto the operating-point read.
         raw_file = work_dir / "opsf.raw"
         (work_dir / "opsf.log").write_text("gmin stepping failed\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(out)"],
             waves={"V(out)": np.array([1.5])},
@@ -604,7 +574,7 @@ class TestGetOperatingPoint:
         from ltspice_mcp.errors import ResultError
 
         raw_file = work_dir / "ac.raw"
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["V(out)", "V(in)"],
             waves={
@@ -625,7 +595,7 @@ class TestGetOperatingPoint:
         from ltspice_mcp.errors import ResultError
 
         raw_file = work_dir / "tran.raw"
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Transient Analysis",
             trace_names=["V(out)"],
             waves={"V(out)": np.array([0.0, 1.0, 2.0])},
@@ -673,7 +643,7 @@ class TestSummaryAcWithMetrics:
         raw_file = work_dir / "ac.raw"
         freqs = np.logspace(0, 6, 100)
         wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": wave},
@@ -698,7 +668,7 @@ class TestSummaryAcWithMetrics:
         raw_file = work_dir / "ac_auto.raw"
         freqs = np.logspace(0, 6, 100)
         wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": wave},
@@ -754,7 +724,7 @@ class TestEdgeMetrics:
     async def test_happy_path(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "edge.raw"
         t, y = _step_waveform()
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
         data = await _metric(
@@ -762,13 +732,15 @@ class TestEdgeMetrics:
         )
         assert data["is_rise_time"] is True
         assert data["signal"] == "V(out)"
-        assert data["transition_time"] > 0
+        # Linear 0→1 V ramp over 0.1 ms: 10-90% takes 80 us, slewing 0.8 V in it.
+        assert data["transition_time"] == pytest.approx(80e-6, rel=1e-3)
+        assert data["slew_rate"] == pytest.approx(1e4, rel=1e-3)
 
     async def test_ac_rejected(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "ac.raw"
         freqs = np.logspace(0, 6, 100)
         wave = 1.0 / (1 + 1j * freqs / 1000)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": wave},
@@ -785,7 +757,7 @@ class TestEdgeMetrics:
     async def test_invalid_signal(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "edge.raw"
         t, y = _step_waveform()
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="not found"):
             await _metric(
@@ -795,24 +767,31 @@ class TestEdgeMetrics:
             )
 
     async def test_window_propagated(self, state_no_sim: SessionState, work_dir: Path):
+        # A pulse rising over 0.5-0.6 ms and falling over 1.5-1.6 ms. The
+        # window covers only the fall, so the edge found is the falling one,
+        # centred at 1.55 ms; unwindowed, the rising edge comes first.
         raw_file = work_dir / "edge.raw"
-        t, y = _step_waveform()
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        t, rise = _step_waveform()
+        y = rise - _step_waveform(step_time=1.5e-3)[1]
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
         result = await _metric(
             state_no_sim,
             raw_file.name,
             EdgesRecipe(
-                key="edges", metric="edges", signal="V(out)", window=Window(start="100u", end="1m")
+                key="edges", metric="edges", signal="V(out)", window=Window(start="1m", end="2m")
             ),
         )
-        assert result["is_rise_time"] is True
+        assert result["edge_direction"] == "falling"
+        assert result["num_edges_in_window"] == 1
+        assert result["t_mid_crossing"] == pytest.approx(1.55e-3, rel=1e-4)
+        assert result["transition_time"] == pytest.approx(80e-6, rel=1e-3)
 
     async def test_invalid_t_start(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "edge.raw"
         t, y = _step_waveform()
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="Invalid t_start"):
             await _metric(
@@ -844,7 +823,7 @@ class TestPulseResponse:
         y_post = 1 - np.exp(-zeta * wn * t_post) / np.sqrt(1 - zeta**2) * np.sin(wd * t_post + phi)
         t = np.concatenate([t_pre, t_post])
         y = np.concatenate([y_pre, y_post])
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
 
         # Pass explicit initial/final — the auto-detect window averages first 10%
@@ -862,7 +841,11 @@ class TestPulseResponse:
         sc = result
         assert sc is not None
         assert sc["direction"] == "rising"
-        assert sc["overshoot_pct"] > 0
+        # Second-order step: overshoot exp(-pi*zeta/sqrt(1 - zeta^2)) ≈ 37.2 %
+        # at the first peak, t = pi/wd.
+        expected_pct = 100 * np.exp(-np.pi * zeta / np.sqrt(1 - zeta**2))
+        assert sc["overshoot_pct"] == pytest.approx(expected_pct, rel=1e-3)
+        assert sc["peak_time"] == pytest.approx(np.pi / wd, rel=1e-3)
         assert sc["initial_value"] == 0.0
         assert sc["steady_state_value"] == 1.0
 
@@ -870,7 +853,7 @@ class TestPulseResponse:
         raw_file = work_dir / "flat.raw"
         t = np.linspace(0, 1e-3, 1000)
         y = np.full_like(t, 3.3)
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="No step detected"):
             await metrics.pulse_response(
@@ -893,7 +876,7 @@ class TestPulseResponse:
         y_post = 1 - np.exp(-zeta * wn * t_post) / np.sqrt(1 - zeta**2) * np.sin(wd * t_post + phi)
         t = np.concatenate([t_pre, t_post])
         y = np.concatenate([np.zeros_like(t_pre), y_post])
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         # No explicit final_value -> trailing window is still ringing -> suppressed.
         data = await metrics.pulse_response(
@@ -916,7 +899,7 @@ class TestPulseResponse:
         t = np.linspace(0, 40e-9, 2001)
         levels = np.array([0.0, 5.0, 2.0, 4.5, 2.5, 4.2, 2.8, 4.109])
         y = levels[np.minimum((t // 5e-9).astype(int), len(levels) - 1)]
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         data = await metrics.pulse_response(
             _source(state_no_sim, raw_file.name), "V(out)", None, None, 0, state_no_sim
@@ -939,7 +922,7 @@ class TestTimingBetween:
         t = np.linspace(0, 1e-3, 10001)
         vin = np.where(t < 0.3e-3, 0.0, 3.3)
         vout = np.where(t < 0.5e-3, 0.0, 1.8)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(in)", "V(out)"],
             waves={"time": t, "V(in)": vin, "V(out)": vout},
             axis=t,
@@ -967,7 +950,7 @@ class TestTimingBetween:
         raw_file = work_dir / "tim.raw"
         t = np.linspace(0, 1e-3, 1000)
         vin = np.where(t < 0.3e-3, 0.0, 3.3)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(in)"],
             waves={"time": t, "V(in)": vin},
             axis=t,
@@ -998,7 +981,7 @@ class TestPeriodicMetrics:
     async def test_square_wave(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "sq.raw"
         t, y = _square_wave(freq=1000.0, duty=0.4, periods=10)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(clk)"],
             waves={"time": t, "V(clk)": y},
             axis=t,
@@ -1017,7 +1000,7 @@ class TestPeriodicMetrics:
         raw_file = work_dir / "flat.raw"
         t = np.linspace(0, 1e-3, 1000)
         y = np.full_like(t, 1.0)
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="constant"):
             await _metric(
@@ -1035,9 +1018,9 @@ class TestPeriodicMetrics:
 @pytest.mark.asyncio
 class TestMeasurementStats:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
-        # Use the same single-measurement log format validated by the log
-        # parser tests — ensures the plumbing works. Multi-step aggregation
-        # logic is covered by test_waveform_analysis.TestComputeMeasurementStats.
+        # One .MEAS result from a single run reaches the stats block intact.
+        # Multi-step aggregation is covered by
+        # tests/test_signal_analysis.py::TestComputeMeasurementStats.
         log = work_dir / "meas.log"
         log.write_text(
             "Circuit: * test\n"
@@ -1050,10 +1033,13 @@ class TestMeasurementStats:
         result = await _metric(
             state_no_sim, log.name, MeasurementsRecipe(key="measurements", metric="measurements")
         )
-        assert result is not None
-        assert "stats" in result
-        # Should have exactly one measurement aggregated
-        assert len(result["stats"]) >= 1
+        assert list(result["stats"]) == ["fc"]
+        entry = result["stats"]["fc"]
+        assert entry["valid_count"] == 1
+        assert entry["mean"] == pytest.approx(0.707)
+        assert entry["aggregated_field"] == "value"
+        # A single-run AT measurement also echoes where it was taken.
+        assert entry["at"] == pytest.approx(1591.5)
 
     async def test_missing_log_file(self, state_no_sim: SessionState, work_dir: Path):
         with pytest.raises(ResultError):
@@ -1093,7 +1079,7 @@ def _ac_raw(
     s = 1j * 2 * np.pi * freqs
     wc = 2 * np.pi * fc
     H = wc / (s + wc)
-    raw = _make_raw_mock(
+    raw = make_raw_mock(
         plotname="AC Analysis",
         trace_names=["frequency", "V(out)"],
         waves={"frequency": freqs, "V(out)": H},
@@ -1167,7 +1153,7 @@ def _ac_ratio_raw(state: SessionState, work_dir: Path, *, fc: float = 1000.0, po
     s = 1j * 2 * np.pi * freqs
     wc = 2 * np.pi * fc
     h = wc / (s + wc)
-    raw = _make_raw_mock(
+    raw = make_raw_mock(
         plotname="AC Analysis",
         trace_names=["frequency", "V(out)", "V(mid)"],
         waves={"frequency": freqs, "V(out)": 2.0 * h, "V(mid)": np.full_like(h, 2.0)},
@@ -1206,7 +1192,7 @@ class TestBodeRatioSignal:
         raw_file = work_dir / "ac_singular.raw"
         freqs = np.logspace(0, 6, 400)
         mid = (freqs - freqs[200]).astype(complex)  # exact zero at index 200
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)", "V(mid)"],
             waves={
@@ -1247,7 +1233,7 @@ class TestStabilityMetricsTool:
         s = 1j * 2 * np.pi * freqs
         A = 1000.0
         H = A / ((1 + s / (2 * np.pi * 1000)) * (1 + s / (2 * np.pi * 100000)))
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(loop)"],
             waves={"frequency": freqs, "V(loop)": H},
@@ -1260,8 +1246,12 @@ class TestStabilityMetricsTool:
             StabilityRecipe(key="stability", metric="stability", signal="V(loop)"),
         )
         sc = result
-        assert sc["stability"] in ("unconditional", "stable")
-        assert sc["phase_margin_worst_deg"] is not None
+        assert sc["stability"] == "unconditional"
+        # |H| = 1 where (1 + 1e4 u)(1 + u) = 1e6 with u = (f / 100 kHz)^2.
+        u = (-10001 + np.sqrt(10001**2 + 4e4 * (1e6 - 1))) / 2e4
+        f_unity = 1e5 * np.sqrt(u)
+        pm = 180 - np.degrees(np.arctan(f_unity / 1e3) + np.arctan(f_unity / 1e5))
+        assert sc["phase_margin_worst_deg"] == pytest.approx(pm, abs=0.01)
         # 60 dB DC gain.
         assert sc["dc_gain_db"] == pytest.approx(60.0, abs=0.1)
 
@@ -1288,7 +1278,7 @@ class TestResonanceTool:
         w0 = 2 * np.pi * 1000
         Q = 10.0
         H = (w0 * w0) / (s * s + (w0 / Q) * s + w0 * w0)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(out)"],
             waves={"frequency": freqs, "V(out)": H},
@@ -1437,7 +1427,9 @@ class TestBodeMetrics:
             "bode.raw",
             BodePointRecipe(key="p", metric="bode_point", signal="V(out)", at_hz="1k"),
         )
-        assert "points" in data
+        # |H(1 kHz)| of the 1-pole LPF at fc = 1591.5 Hz.
+        expected_db = -10 * np.log10(1 + (1000 / 1591.5) ** 2)
+        assert data["points"][0]["magnitude_db"] == pytest.approx(expected_db, abs=0.01)
 
     async def test_crossing_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode2.raw"
@@ -1460,8 +1452,9 @@ class TestBodeMetrics:
                 key="s", metric="bode_slope", signal="V(out)", from_hz="10k", to_hz="100k"
             ),
         )
-        # First-order LPF stopband ≈ -20 dB/decade.
-        assert data["slope_db_per_decade"] < -15
+        # The 1-pole LPF's exact gain change over that one decade.
+        g10k, g100k = (-10 * np.log10(1 + (f / 1591.5) ** 2) for f in (1e4, 1e5))
+        assert data["slope_db_per_decade"] == pytest.approx(g100k - g10k, abs=0.01)
 
     async def test_filter_recipe(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "bode4.raw"
@@ -1471,7 +1464,11 @@ class TestBodeMetrics:
             "bode4.raw",
             BodeFilterRecipe(key="f", metric="bode_filter", signal="V(out)"),
         )
-        assert "filter_type" in data
+        assert data["filter_type"] == "lowpass"
+        # The recipe's cutoff sits 3.0 dB below the plateau, where the 1-pole
+        # LPF is at fc * sqrt(10^0.3 - 1); 40 points/decade bound the rest.
+        assert data["cutoff_high_hz"] == pytest.approx(1591.5 * np.sqrt(10**0.3 - 1), rel=2e-3)
+        assert data["estimated_order"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1740,7 +1737,7 @@ class TestOperatingPointInternalsHint:
         _inject_raw_mock(
             state_no_sim,
             p,
-            _make_raw_mock(
+            make_raw_mock(
                 plotname="Operating Point",
                 trace_names=["V(d)", "Id(M1)"],
                 waves={"V(d)": np.array([0.9]), "Id(M1)": np.array([1e-4])},
@@ -1765,7 +1762,7 @@ class TestOperatingPointInternalsHint:
         _inject_raw_mock(
             state_no_sim,
             p,
-            _make_raw_mock(
+            make_raw_mock(
                 dialect="ngspice",
                 plotname="Operating Point",
                 trace_names=["V(d)"],
@@ -1788,7 +1785,7 @@ class TestOperatingPointInternalsHint:
         _inject_raw_mock(
             state_no_sim,
             p,
-            _make_raw_mock(
+            make_raw_mock(
                 plotname="Operating Point",
                 trace_names=["V(out)", "I(R1)"],
                 waves={"V(out)": np.array([0.5]), "I(R1)": np.array([1e-4])},
@@ -1810,7 +1807,7 @@ class TestOperatingPointInternalsHint:
         _inject_raw_mock(
             state_no_sim,
             p,
-            _make_raw_mock(
+            make_raw_mock(
                 plotname="Operating Point",
                 trace_names=["V(d)", "@m1[gm]"],
                 dialect="ngspice",
@@ -1839,7 +1836,7 @@ class TestSignalStatsAnalysisTypeRobustness:
         raw_file = work_dir / "noise_stats.raw"
         freqs = np.logspace(0, 6, 100)
         density = 1e-9 / np.sqrt(1 + (freqs / 1000) ** 2)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Noise Spectral Density - (V/Hz½)",
             trace_names=["frequency", "V(onoise)"],
             waves={"frequency": freqs, "V(onoise)": density},
@@ -1912,7 +1909,7 @@ class TestOperatingPointDeviceAndUnits:
 
     def _op_raw(self, state: SessionState, work_dir: Path) -> Path:
         raw_file = work_dir / "op_dev.raw"
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(d)", "V(g)", "Id(M1)", "Ig(M1)", "I(R1)", "@m1[gm]", "@m2[gm]"],
             waves={
@@ -2027,7 +2024,7 @@ class TestNoiseIntegralHandler:
 
     def _inoise_raw_mock(self) -> MagicMock:
         freq = np.logspace(1, 5, 20)
-        return _make_raw_mock(
+        return make_raw_mock(
             plotname="Noise Spectral Density",
             trace_names=["frequency", "V(onoise)", "V(inoise)"],
             axis=freq,
@@ -2114,7 +2111,7 @@ class TestThdHandler:
         f0, fs = 1000.0, 200_000.0
         t = np.arange(0.0, 0.02, 1.0 / fs)
         y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Transient Analysis",
             trace_names=["time", "V(out)"],
             waves={"time": t, "V(out)": y},
@@ -2137,7 +2134,7 @@ class TestThdHandler:
         f0, fs = 1000.0, 200_000.0
         t = np.arange(0.0, 0.02, 1.0 / fs)
         y = np.sin(2 * np.pi * f0 * t) + 0.05 * np.sin(2 * np.pi * 2 * f0 * t)
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="Transient Analysis",
             trace_names=["time", "V(out)"],
             waves={"time": t, "V(out)": y},
@@ -2154,7 +2151,7 @@ class TestThdHandler:
 
 def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock:
     """An AC raw mock carrying one complex response under ``signal``."""
-    return _make_raw_mock(
+    return make_raw_mock(
         plotname="AC Analysis",
         trace_names=["frequency", signal],
         waves={"frequency": freqs, signal: h},
@@ -2193,21 +2190,21 @@ class TestSolveFailureRelayCoverage:
         cases = [
             (
                 "ss",
-                _make_raw_mock(),
+                make_raw_mock(),
                 lambda state, n: _metric(
                     state, n, SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)")
                 ),
             ),
             (
                 "edge",
-                _make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
+                make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
                 lambda state, n: _metric(
                     state, n, EdgesRecipe(key="e", metric="edges", signal="V(out)")
                 ),
             ),
             (
                 "pulse",
-                _make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
+                make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
                 lambda state, n: metrics.pulse_response(
                     _source(state, n),
                     "V(out)",
@@ -2221,7 +2218,7 @@ class TestSolveFailureRelayCoverage:
             ),
             (
                 "timing",
-                _make_raw_mock(
+                make_raw_mock(
                     trace_names=["time", "V(in)", "V(out)"],
                     waves={"time": t_step, "V(in)": y_step, "V(out)": y_step},
                     axis=t_step,
@@ -2241,7 +2238,7 @@ class TestSolveFailureRelayCoverage:
             ),
             (
                 "periodic",
-                _make_raw_mock(
+                make_raw_mock(
                     trace_names=["time", "V(clk)"], waves={"time": t_sq, "V(clk)": y_sq}, axis=t_sq
                 ),
                 lambda state, n: _metric(
@@ -2250,7 +2247,7 @@ class TestSolveFailureRelayCoverage:
             ),
             (
                 "thd",
-                _make_raw_mock(waves={"time": t_sin, "V(out)": y_sin}, axis=t_sin),
+                make_raw_mock(waves={"time": t_sin, "V(out)": y_sin}, axis=t_sin),
                 lambda state, n: _metric(
                     state,
                     n,
@@ -2330,7 +2327,7 @@ class TestSolveFailureRelayCoverage:
         # accusation on a good run. Only terminal phrases taint the read.
         raw_file = work_dir / "recov.raw"
         (work_dir / "recov.log").write_text("Warning: singular matrix:  check nodes out and 0\n")
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             trace_names=["time", "V(out)"],
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
         )
@@ -2351,7 +2348,7 @@ class TestSolveFailureRelayCoverage:
         # failure from the log instead of only the generic "no edge" message.
         raw_file = work_dir / "flat.raw"
         t = np.linspace(0, 1e-3, 1000)
-        raw = _make_raw_mock(waves={"time": t, "V(out)": np.ones_like(t)}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": np.ones_like(t)}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         (work_dir / "flat.log").write_text("gmin stepping failed\n")
         with pytest.raises(ResultError, match="gmin stepping"):
@@ -2369,7 +2366,7 @@ class TestDisturbanceResponseTool:
         t = np.linspace(0, 5e-3, 5001)
         tri = np.clip(1 - np.abs(t - 1.5e-3) / 0.5e-3, 0, 1)
         y = 3.3 - 0.1 * tri  # 100 mV droop, recovers by ~2 ms
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         result = await metrics.disturbance_response(
             _source(state_no_sim, raw_file.name),
@@ -2394,7 +2391,7 @@ class TestReturnLossTool:
         raw_file = work_dir / "zin.raw"
         f = np.logspace(6, 9, 200)
         H = np.full_like(f, 100.0, dtype=complex)  # 100 Ω flat → Γ=1/3
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             plotname="AC Analysis",
             trace_names=["frequency", "V(in)"],
             waves={"frequency": f, "V(in)": H},
@@ -2424,7 +2421,7 @@ class TestSignalStatsConstantObservation:
         raw_file = work_dir / "latched.raw"
         t = np.linspace(0, 1e-3, 500)
         y = np.zeros_like(t)  # min == max == 0
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         result = await _metric(
             state_no_sim,
@@ -2442,7 +2439,7 @@ class TestQueryValueExactMatch:
         raw_file = work_dir / "coarse.raw"
         t = np.arange(0.0, 5.0, 1.0)  # 0,1,2,3,4
         y = t * 2.0
-        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
         snapped = await _metric(
             state_no_sim,
