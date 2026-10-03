@@ -247,7 +247,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 _INSTRUCTIONS_TEMPLATE = """\
 SPICE simulation with LTspice and ngspice, and LTspice .asc schematic editing.
 
-Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) returns its core (how to work here, the Python API, the rules that cause silent errors) and an index of topic sections and task skills; add "section" to read one. Read the section or skill for a task before starting it.
+Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) returns its core (how to work here, the Python API, the rules that cause silent errors) and an index of topic sections and task playbooks; add "section" to read one. Read the section for a task before starting it.
 
 {python_door} Tools: one sandboxed step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
 
@@ -288,8 +288,7 @@ CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(python_door=_PYTHON_DO
 #: show them, and a model that skipped them meets this instead.
 GUIDE_REMINDER = (
     'This session has not read the guide. Read its core first: inspect(queries=[{"kind": '
-    '"guide"}]), or api.guide() in Python. Its index names the section or skill for '
-    "this task."
+    '"guide"}]), or api.guide() in Python. Its index names the section for this task.'
 )
 
 

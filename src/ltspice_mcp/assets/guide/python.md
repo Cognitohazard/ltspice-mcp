@@ -9,10 +9,9 @@ description: >
 
 # Working in Python
 
-The six tools are also methods on one Python object, `api`, over the same
-engine, job records and store. A loop, a decision between runs, or numpy on
-the traces is one Python call instead of a tool call per step, and every result
-comes back whole: no pages, no cursors, no response budget.
+`api` holds the six tool operations as methods, over the same engine, job
+records and store as the tools. The core's example shows a sweep read back in
+one loop; this section is the reference behind it.
 
 ## Where `api` comes from
 
@@ -20,11 +19,12 @@ comes back whole: no pages, no cursors, no response budget.
 `api` already open on the server's working directory. Also in scope: `np`,
 `load_raw`, `measurements`, `reference`, `window_and_clean`,
 `compute_signal_stats` and `time_weighted_quantiles`. `print()` output and the
-repr of a trailing expression come back. Each call is a fresh namespace around
-the same engine, so keep state on disk: a file, or a job you find again by its
-`request_id`. A snippet is bounded by `timeout_s` (60 s by default, 600 at
-most), and one runs at a time. It runs with the server process's own file and
-process authority, outside the path sandbox.
+repr of a trailing expression come back, so print the result you need, such as
+the crossing or the worst corner, rather than the whole table. Each call is a
+fresh namespace around the same engine, so keep state on disk: a file, or a
+job you find again by its `request_id`. A snippet is bounded by `timeout_s`
+(60 s by default, 600 at most), and one runs at a time. It runs with the
+server process's own file and process authority, outside the path sandbox.
 
 **Your own Python:**
 
@@ -53,21 +53,12 @@ Read it before guessing an argument. From a shell, without starting the engine:
 
 ## Running and waiting
 
-```python
-receipt = api.run_experiments(
-    request_id="rc-sweep-1",
-    circuits=[{"path": "rc.cir"}],
-    variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k", "4k"]}}],
-)
-receipt["outcome"]  # "complete", "partial" or "failed"
-receipt["completeness"]  # declared, produced, failed, cancelled, skipped
-for row in receipt["runs"]["items"]:
-    row["case_id"], row["assignments"], row["status"]  # status "produced" ran
-```
-
-- `run_experiments` waits until the job is terminal and returns every run row,
-  plus `failures`, `observations` and, when you attached `analyze`, the
-  `analysis` block.
+- `run_experiments` waits until the job is terminal and returns the whole
+  receipt: `outcome` (`"complete"`, `"partial"` or `"failed"`), `completeness`
+  (declared, produced, failed, cancelled, skipped), one row per case under
+  `runs["items"]` (`case_id`, `assignments`, and a `status` of `"produced"`
+  when the case ran), `failures`, `observations`, and the `analysis` block
+  when you attached `analyze`.
 - `wait=False` returns the receipt at once; `api.wait(job_id, timeout=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with
   `timed_out: true`; the job keeps running.
@@ -78,26 +69,23 @@ for row in receipt["runs"]["items"]:
   the jobs it owned. `run_experiments(wait=False, detach=True)` hands the job to
   an owner process of its own, so it outlives yours; `api.wait(job_id)` or
   `jobs(action="wait")` reads it from anywhere.
-- The same `request_id` with the same arguments returns the original receipt
-  instead of running again.
 
 ## Reading results
 
 ```python
-job = receipt["job_id"]
-cid = receipt["runs"]["items"][0]["case_id"]
-r = api.load_raw(job_id=job, case_id=cid)  # or api.load_raw("path/to/run.raw")
+# job_id from the receipt, case_id from one of its run rows
+r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
 r.signals  # trace names
 r.steps  # one entry per .step iteration
 t = r.axis(step=0)  # time or frequency
 v = r.trace("V(out)", step=0)  # numpy array, complex on an .AC run
-meas = api.measurements(job_id=job, case_id=cid)  # parsed .meas values
+meas = api.measurements(job_id=job_id, case_id=case_id)  # parsed .meas values
 ```
 
-Arrays are copies, safe to modify. A step's traces share that step's axis;
-never combine traces across steps. `api.analyze_results(...)` returns every
-row of every recipe; name `include={"per_run": True}` for the per-run rows.
-Variation values are SPICE literals (`"5p"`): `parse_spice_value` reads one.
+Arrays are copies, safe to modify. Trace math across steps and its statistics
+are in guide section 'signals'. `api.analyze_results(...)` returns every row of
+every recipe; name `include={"per_run": True}` for the per-run rows. Variation
+values are SPICE literals (`"5p"`): `parse_spice_value` reads one.
 
 ## Analysis primitives
 
@@ -113,11 +101,6 @@ Importable from `ltspice_mcp.api`; arrays in, dicts out.
   `compute_return_loss`, `integrate_noise`, `classify_filter`,
   `analyze_ac_structure`, `unwrap_phase_safe`, `log_interp`,
   `log_interp_complex`.
-
-Take statistics of a transient trace with `compute_signal_stats` and
-`time_weighted_quantiles`, not `np.mean` or `np.percentile`: the timestep
-varies and samples pack around edges, so a plain sample average over-weights
-them (guide section 'signals').
 
 ## Errors
 

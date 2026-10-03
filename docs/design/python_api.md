@@ -223,7 +223,7 @@ same Pydantic models the call validates against, so it cannot drift.
 
 **`Api.guide(section=None) -> str`** is the guide the MCP server serves
 (`lib/guide.py`): with no argument, the core a session reads first and its index
-of topic sections and task skills; with a name from that index, that part. A
+of topic sections and task playbooks; with a name from that index, that part. A
 staticmethod for the same reason as `reference()`, and the same text as
 `inspect(kind: "guide")` and the `spice://guide` resources. The guide carries
 this interface's usage (its `python` section), because this document is not in
