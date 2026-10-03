@@ -202,10 +202,23 @@ class TestTokenizeBody:
         with pytest.raises(SpiceLexError):
             tokenize_body(".MODEL FOO NMOS (VTO=0.7")
 
-    def test_unterminated_quote_raises(self) -> None:
+    @pytest.mark.parametrize(
+        ("body", "quote"),
+        [
+            ('M1 d g s "unterminated W=10u', '"'),
+            ("R1 n1 n2 r='(a + b", "'"),
+            ("R1 n1 n2 r={a+'b}", "'"),
+        ],
+        ids=["double", "single", "single-in-braces"],
+    )
+    def test_unterminated_quote_is_reported_at_the_quote(self, body: str, quote: str) -> None:
+        # The hint names the quote that was opened, and the position is that
+        # quote's, also when it sits inside a braced expression.
         with pytest.raises(SpiceLexError) as ei:
-            tokenize_body('M1 d g s "unterminated W=10u')
-        assert ei.value.suggestion == 'add a closing " after the opening quote'
+            tokenize_body(body)
+        assert ei.value.category == SpiceLexErrorCategory.UNTERMINATED_QUOTE
+        assert ei.value.position == body.index(quote)
+        assert ei.value.suggestion == f"add a closing {quote} after the opening quote"
 
     def test_single_quoted_expression_is_one_value(self) -> None:
         # ngspice numparam spells expressions in single quotes; the spaces and
@@ -216,15 +229,6 @@ class TestTokenizeBody:
             (TokenKind.KEY_VALUE, "tc=0"),
         ]
         assert toks[3].value == "'(a + b)*2'"
-
-    def test_unterminated_single_quote_raises_at_the_quote(self) -> None:
-        body = "R1 n1 n2 r='(a + b"
-        with pytest.raises(SpiceLexError) as ei:
-            tokenize_body(body)
-        assert ei.value.category == SpiceLexErrorCategory.UNTERMINATED_QUOTE
-        assert ei.value.position == body.index("'")
-        # The hint names the quote that was opened, not a double quote.
-        assert ei.value.suggestion == "add a closing ' after the opening quote"
 
     def test_stray_close_brace_raises(self) -> None:
         with pytest.raises(SpiceLexError):
