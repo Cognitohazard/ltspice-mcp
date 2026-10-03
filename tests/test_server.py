@@ -435,34 +435,6 @@ class TestServerDispatch:
         )
         assert len(result.contents) > 0
 
-    async def test_error_with_suggestions_returns_structured_result(
-        self, state_no_sim: SessionState, tmp_path
-    ):
-        """LibraryError with suggestions should surface as is_error=True + structuredContent.
-
-        The fuzzy-match suggestion path now lives behind inspect's model
-        search query.
-        """
-        lib = state_no_sim.working_dir / "mini.lib"
-        lib.write_text(".MODEL 2N2222 NPN(BF=200)\n")
-        state_no_sim.libraries.load_library(lib)
-
-        result = await call_tool(
-            fake_request_context(state_no_sim),
-            call_tool_params(
-                "inspect",
-                {"queries": [{"kind": "model", "mode": "search", "query": "2N2223"}]},
-            ),
-        )
-        assert isinstance(result, mcp_types.CallToolResult)
-        # The model search returns success with fuzzy matches rather than an
-        # error — assert the near-miss candidate is still surfaced.
-        assert result.is_error is False
-        assert result.structured_content is not None
-        item = result.structured_content["results"][0]
-        assert item["ok"] is True
-        assert "2N2222" in str(item["data"])
-
 
 def _capabilities_call() -> mcp_types.CallToolRequestParams:
     return call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]})

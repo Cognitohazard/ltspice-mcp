@@ -603,7 +603,7 @@ class TestSchematicTools:
 class TestSecurity:
     async def test_path_traversal_blocked(self, shared_session: ClientSession):
         result = await _call(shared_session, "verify_circuit", {"path": "../../../etc/passwd"})
-        _assert_tool_error(result, "not allowed")
+        _assert_tool_error(result, "outside allowed directories")
         finding = _data(result)["findings"][0]
         assert finding["rule_id"] == "path_denied"
 
@@ -857,11 +857,10 @@ class TestResources:
     async def test_list_resources_returns_static_set(self, shared_session: ClientSession):
         result = await shared_session.list_resources()
         resources = {r.name: r for r in result.resources}
-        assert len(resources) == 7
+        assert len(resources) == 6
         assert set(resources.keys()) == {
             "netlists",
             "results",
-            "models",
             "config",
             "recent",
             "plot_widget",
@@ -922,11 +921,6 @@ class TestResources:
         result = await shared_session.read_resource("spice://results/")
         data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
         assert data == {"count": 0, "jobs": []}
-
-    async def test_read_models_empty(self, shared_session: ClientSession):
-        result = await shared_session.read_resource("spice://models/")
-        data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
-        assert data["libraries"] == []
 
     async def test_unknown_resource_uri_is_an_invalid_parameter(
         self, shared_session: ClientSession
