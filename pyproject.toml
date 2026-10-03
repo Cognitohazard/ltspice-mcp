@@ -77,6 +77,12 @@ source = "vcs"
 # assets) — the server reads those at run time, so they are not optional.
 packages = ["src/ltspice_mcp"]
 
+# The task skills live at the repository root, where the Claude Code plugin
+# loads them; the wheel carries a copy so the guide can serve them to a client
+# that installed only the package (lib/guide.py reads either location).
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "ltspice_mcp/skills"
+
 # An explicit list, because the default sdist ships everything git tracks: the
 # repo's development surface (CI workflows, the maintainer's notes, test
 # fixtures, packaging scratch) is not something a source install needs.

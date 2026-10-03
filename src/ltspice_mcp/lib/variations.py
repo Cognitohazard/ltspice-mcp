@@ -156,7 +156,7 @@ class AssignVariation(VariationModel):
             "Target → value list, resolved in order as a 'REF@model' (glob "
             "allowed) model swap, an 'X1:delvto'/'X1:mulu0' per-instance "
             "mismatch delta, a declared .param, then a component reference — "
-            "forms in spice://guide."
+            "forms in guide section 'variations'."
         ),
     )
     instances: list[InstanceAssignment] = Field(default_factory=list)
@@ -232,12 +232,12 @@ class ModelRule(RandomRuleBase):
 
 # The field descriptions here carry the two facts a caller cannot recover from
 # a result: the coefficients' units, and the inversion from a target sigma.
-# Prefix conventions and BSIM parameter names are in ``spice://guide``, which a
+# Prefix conventions and BSIM parameter names are in guide section 'ltspice', which a
 # caller reads once, rather than on the wire in every session.
 class MismatchRule(VariationModel):
     """Pelgrom mismatch rule: σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L),
     sampled independently per instance per run. Worked examples, prefix
-    conventions and BSIM parameter names: spice://guide."""
+    conventions and BSIM parameter names: guide section 'ltspice'."""
 
     rule: Literal["mismatch"]
     instance: list[str] | None = None
