@@ -3,7 +3,9 @@
 import logging
 import os
 import platform
-from pathlib import Path
+import re
+import shutil
+from pathlib import Path, PureWindowsPath
 
 from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -12,6 +14,8 @@ from spicelib.simulators.xyce_simulator import XyceSimulator
 
 from ltspice_mcp.config import (
     SIM_ENABLED_KEY,
+    SIM_EXECUTABLES_ENV,
+    SIM_EXECUTABLES_KEY,
     SIM_PATH_ENV,
     SIM_PATH_KEY,
     SIM_SECTION,
@@ -53,6 +57,19 @@ SIMULATORS: dict[str, type] = {
     "qspice": Qspice,
     "xyce": XyceSimulator,
 }
+
+
+#: The families a run can be put on (``run_experiments``' ``execution.simulator``),
+#: and so the families a named executable may belong to.
+RUN_FAMILIES: tuple[str, ...] = ("ltspice", "ngspice")
+
+#: A named executable's own name: lower case, so a selector is spelled one way.
+EXECUTABLE_NAME_PATTERN = r"[a-z0-9][a-z0-9._-]{0,31}"
+_EXECUTABLE_NAME_RE = re.compile(EXECUTABLE_NAME_PATTERN)
+
+#: What ``execution.simulator`` accepts: a family, or a family and the name of
+#: one of its executables (``ltspice:xvii``).
+SIMULATOR_SELECTOR_PATTERN = rf"^(?:{'|'.join(RUN_FAMILIES)})(?::{EXECUTABLE_NAME_PATTERN})?$"
 
 
 def _exe_simulator_hint(exe_path: object) -> str | None:
@@ -143,6 +160,131 @@ def _apply_simulator_exe(config: ServerConfig, diagnostics: list[str] | None = N
         return False
 
 
+def bind_named_executable(base: type, family: str, name: str, exe_path: Path) -> type:
+    """A simulator class of its own for one named executable of ``family``.
+
+    spicelib keeps the program it launches on the class (``spice_exe``), and
+    ``create_from`` writes it there, so binding a second build to the family's
+    own class would retarget every runner already holding that class, its
+    in-flight cases included. A subclass carries its own ``spice_exe`` and
+    ``process_name`` and inherits everything else, the family's run command
+    and its WSL path handling among them, so the runner cache, the launch
+    permits and the scoped kill all follow it as a simulator in its own right.
+
+    It keeps the family class's ``__name__``: that name is what a job records
+    as its simulator, and what the raw dialect and the linter are chosen by,
+    so a named build parses and lints as its family does. What tells two
+    builds apart in a record is the executable each job identified at
+    submission.
+    """
+    cls = type(
+        base.__name__,
+        (base,),
+        {
+            "__module__": __name__,
+            # Only for reading a traceback: the selector this class is bound to.
+            "__qualname__": f"{base.__qualname__}[{family}:{name}]",
+        },
+    )
+    # The subclass's own attributes, never the family's: see above.
+    cls.create_from(str(exe_path))
+    return cls
+
+
+def _named_entry(
+    key: str,
+    exe_path: Path,
+    enabled: list[str],
+) -> tuple[str, str] | str:
+    """The family and name one configured entry binds, or why it binds none."""
+    family, sep, name = key.rpartition(":")
+    if not sep:
+        family, name = "", key
+    if not _EXECUTABLE_NAME_RE.fullmatch(name):
+        return (
+            f"name {name!r} is not a valid executable name: lower-case letters, digits, "
+            "'.', '_' and '-', starting with a letter or digit, at most 32 characters"
+        )
+    hint = _exe_simulator_hint(exe_path)
+    if not family:
+        if hint is None:
+            return (
+                f"its file name does not say which simulator it is; write the key as "
+                f'"<family>:{name}" with a family from {list(RUN_FAMILIES)}'
+            )
+        family = hint
+    if family not in RUN_FAMILIES:
+        return f"a run can be put on {list(RUN_FAMILIES)} only, not {family!r}"
+    if hint is not None and hint != family:
+        return (
+            f"{exe_path.name} looks like a {hint} executable, not {family}; it was not "
+            "bound, to avoid running the wrong program"
+        )
+    if family not in enabled:
+        return f"{family!r} is excluded by {SIM_SECTION}.{SIM_ENABLED_KEY}"
+    return family, name
+
+
+def _missing_executable(exe_path: Path) -> bool:
+    if exe_path.exists():
+        return False
+    # A bare command resolves through PATH, as the configured path does.
+    return not (len(exe_path.parts) == 1 and shutil.which(str(exe_path)))
+
+
+def detect_named_simulators(
+    config: ServerConfig | None,
+    diagnostics: list[str] | None = None,
+) -> dict[str, type]:
+    """Bind each ``[simulator.executables]`` entry to a simulator class of its own.
+
+    Returns ``{"ltspice:xvii": cls, ...}``, keyed by the selector a run names
+    in ``execution.simulator``. An entry that cannot be bound (no such file, a
+    name the selector grammar refuses, a family no run can use or the
+    allowlist excludes, a file that looks like another simulator) is left out
+    with a diagnostic naming the entry, so the capabilities report says why a
+    configured executable is not offered.
+    """
+    if config is None or not config.simulator_executables or _detection_disabled():
+        return {}
+    enabled = _resolve_enabled_names(config)
+    named: dict[str, type] = {}
+    for key, exe_path in config.simulator_executables.items():
+        where = f"{SIM_SECTION}.{SIM_EXECUTABLES_KEY} ({SIM_EXECUTABLES_ENV}) entry {key!r}"
+        entry = _named_entry(key, exe_path, enabled)
+        if isinstance(entry, str):
+            _note(diagnostics, f"Named executable {where} skipped: {entry}.")
+            continue
+        family, name = entry
+        selector = f"{family}:{name}"
+        if selector in named:
+            _note(diagnostics, f"Named executable {where} skipped: {selector} is named twice.")
+            continue
+        if _missing_executable(exe_path):
+            wsl = (
+                " On WSL, write a Windows path in its /mnt/<drive>/ form."
+                if is_wsl() and PureWindowsPath(str(exe_path)).drive
+                else ""
+            )
+            _note(
+                diagnostics, f"Named executable {where} skipped: {exe_path} does not exist.{wsl}"
+            )
+            continue
+        try:
+            named[selector] = bind_named_executable(SIMULATORS[family], family, name, exe_path)
+        except Exception as exc:
+            _note(diagnostics, f"Named executable {where} skipped: {exc}")
+            continue
+        logger.info("Named executable %s: %s", selector, exe_path)
+    return named
+
+
+def _note(diagnostics: list[str] | None, message: str) -> None:
+    logger.warning(message)
+    if diagnostics is not None:
+        diagnostics.append(message)
+
+
 # spicelib's shipped ngspice compatibility default, captured before we ever
 # override it, so an unset config can restore it. The attribute is process-wide,
 # so a prior override in the same process (re-entrant config load, embedded use)
@@ -177,6 +319,44 @@ def current_ngbehavior() -> str | None:
     return getattr(NGspiceSimulator, "_compatibility_mode", None)
 
 
+def generation_of(simulator_class: type | None) -> str | None:
+    """Which LTspice a class launches, read off its program's file name.
+
+    ``"xvii"`` for LTspice XVII (``XVIIx64.exe``), ``"current"`` for LTspice 24
+    and later (``LTspice.exe``; the macOS app's ``LTspice`` too), None for a
+    class that is not LTspice or a program whose name says neither (LTspice
+    IV's ``scad3.exe``, a renamed copy, a wrapper script). The two keep their
+    model libraries in different places, so a run's library roots are the
+    ones of the build it runs on (``simulator_library_roots``).
+    """
+    if simulator_class is None or not issubclass(simulator_class, LTspice):
+        return None
+    command = getattr(simulator_class, "spice_exe", None) or []
+    if not command:
+        return None
+    # PureWindowsPath splits on both separators, so a posix spice_exe and a
+    # Windows one name the same file.
+    name = PureWindowsPath(str(command[-1])).name.casefold()
+    if "xvii" in name:
+        return "xvii"
+    if name.startswith("ltspice"):
+        return "current"
+    return None
+
+
+def _in_generation(path: Path, generation: str | None) -> bool:
+    """Whether one of spicelib's default library directories is ``generation``'s.
+
+    spicelib lists every LTspice's library directory for every LTspice class
+    and keeps whichever exist, so with XVII and a later build both installed a
+    class would report both. XVII's are the ``LTspiceXVII`` folders.
+    """
+    if generation is None:
+        return True
+    xvii = any(part.casefold() == "ltspicexvii" for part in PureWindowsPath(str(path)).parts)
+    return xvii if generation == "xvii" else not xvii
+
+
 def simulator_library_roots(simulator_class: type | None) -> list[Path]:
     """Directories holding the detected simulator's own shipped model library.
 
@@ -190,20 +370,29 @@ def simulator_library_roots(simulator_class: type | None) -> list[Path]:
     no transistor schematic could otherwise be staged at all.
 
     Resolution mirrors the symbol path's: on WSL the install lives behind
-    ``%LOCALAPPDATA%`` and only the interop probe finds it, because spicelib's
-    own derivation expands ``~`` against the Linux home. Nonexistent
-    directories and any root already contained in an earlier one are dropped,
-    so the result is a minimal list of real directories.
+    ``%LOCALAPPDATA%`` (``%USERPROFILE%\\Documents`` for XVII) and only the
+    interop probe finds it, because spicelib's own derivation expands ``~``
+    against the Linux home. The roots are the library of the build the class
+    launches (``generation_of``), not of every LTspice on the machine: a
+    server running XVII beside a later build, one per named executable, stages
+    each run against its own simulator's library. Nonexistent directories and
+    any root already contained in an earlier one are dropped, so the result is
+    a minimal list of real directories.
     """
     if simulator_class is None:
         return []
     candidates: list[Path] = []
+    generation = generation_of(simulator_class)
     if issubclass(simulator_class, LTspice):
         from ltspice_mcp.lib.wsl import get_ltspice_lib_paths
 
-        candidates += [Path(p) for p in get_ltspice_lib_paths()]
+        candidates += [Path(p) for p in get_ltspice_lib_paths(generation)]
     try:
-        candidates += [Path(p) for p in simulator_class.get_default_library_paths()]
+        candidates += [
+            Path(p)
+            for p in simulator_class.get_default_library_paths()
+            if _in_generation(Path(p), generation)
+        ]
     except Exception as exc:
         # spicelib derives these from spice_exe and the platform; a simulator
         # class without one, or an install shape it does not know, must cost
@@ -226,6 +415,12 @@ def simulator_library_roots(simulator_class: type | None) -> list[Path]:
         for root in found
         if not any(other != root and root.is_relative_to(other) for other in found)
     ]
+
+
+def is_ltspice(simulator_class: type | None) -> bool:
+    """True when the simulator is an LTspice: the family default, its WSL
+    class, or a named executable of the family."""
+    return simulator_class is not None and issubclass(simulator_class, LTspice)
 
 
 def is_ngspice(simulator_class: type | None) -> bool:

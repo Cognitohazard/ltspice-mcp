@@ -341,6 +341,28 @@ tool-surface changes.
   Its `version` is now the build that the latest run on that same executable
   reported, with `version_source` naming the job and case; it was always
   null. The executable is never launched to ask.
+- One server can run more than one build of a simulator family, such as
+  LTspice XVII beside LTspice 24, chosen per call. `[simulator.executables]`
+  names further executables (`xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"`,
+  or a `[simulator.executables.ngspice]` table, or `"family:name"` keys), and
+  `LTSPICE_MCP_SIMULATOR_EXECUTABLES` takes the same as `name=path` entries
+  separated by `;` on every platform; `Api(simulator_executables={...})` too.
+  The family is read off the file name (`XVIIx64.exe` is LTspice), and an
+  executable whose name says nothing needs `family:name`. A run selects one
+  with `execution.simulator = "ltspice:xvii"`; a plain family name runs the
+  family's own executable as before. Each named executable is a simulator
+  class of its own, so it never retargets the family's class or the runs
+  already using it, and it has its own runner and launch permits: each build
+  gets the whole `max_parallel_sims`, as each family already did. Its records,
+  replay check, scoped kill, raw dialect, linter, `.asc` exporter and model
+  library roots follow the build the run selected. Startup binds them; an
+  entry that cannot be bound (missing file, a family no run can use or the
+  allowlist excludes, a file that looks like another simulator) is left out
+  with a startup diagnostic. `inspect(kind="capabilities")` lists them under
+  `named_executables`, keyed by the selector, each with its executable,
+  `executable_sha256` and last reported `version`. A `request_id` replayed
+  under another name, or under a name now bound to another build, is an
+  `idempotency_conflict`.
 
 - `inspect(kind="capabilities")` takes an optional `fields` list naming the
   top-level keys to return, such as `["allowed_paths", "config_path"]` after a
@@ -358,6 +380,18 @@ tool-surface changes.
 
 ### Changed
 
+- A run's simulator library roots, the install directories staging accepts as
+  the simulator's own, are now those of the LTspice build the run launches:
+  LTspice XVII's `Documents\LTspiceXVII\lib`, or LTspice 24's
+  `%LOCALAPPDATA%\LTspice\lib`. Before, every LTspice library spicelib knew
+  of was accepted whichever build ran. On WSL a server running XVII now finds
+  XVII's library under `%USERPROFILE%`; only LTspice 24's location was probed
+  before, so a transistor schematic exported by XVII could not be staged under
+  the default sandbox.
+- On WSL, cancelling a case also matches the Windows process by the file name
+  of the executable its runner launched, so a copy of LTspice under another
+  name is stopped; before, only `LTspice.exe`, `XVIIx64.exe` and `scad3.exe`
+  were matched.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and

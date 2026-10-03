@@ -692,17 +692,17 @@ class RunnerBase:
     def _kill_by_token(self, token: str, context_label: str = "") -> None:
         """Best-effort blocking termination scoped to a command-line token."""
         subject = f"{context_label} {token}".strip()
+        # The program this runner's class launches, which for a named
+        # executable is that build's own, never the family default's.
+        names = simulator_executable_names(self.simulator_class)
         try:
-            killed = kill_windows_ltspice_by_token(token)
+            killed = kill_windows_ltspice_by_token(token, names)
             if killed:
                 logger.info("Killed %d Windows sim process(es) for %s", killed, subject)
         except Exception as exc:
             logger.warning("WSL process kill for %s failed: %s", subject, exc)
         try:
-            killed = kill_simulator_by_token(
-                token,
-                simulator_executable_names(self.simulator_class),
-            )
+            killed = kill_simulator_by_token(token, names)
             if killed:
                 logger.info("Killed %d local sim process(es) for %s", killed, subject)
         except Exception as exc:
