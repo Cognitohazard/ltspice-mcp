@@ -368,6 +368,14 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "avt",
         "threshold mismatch",
     ),
+    # The tool's own arguments: execution.simulator is where a run picks its
+    # engine, and its type is the one place the families are listed.
+    ("run_experiments", "run_experiments"): (
+        "choose the simulator",
+        "run on qspice",
+        "run on xyce",
+        "simulator per run",
+    ),
     ("inspect", "capabilities"): (
         "which simulators",
         "simulator version",

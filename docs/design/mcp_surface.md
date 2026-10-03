@@ -344,7 +344,7 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
                                         random families is ill-defined).
                                         [] = one plain run per circuit
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
-                      simulator?: "ltspice"|"ngspice"}
+                      simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       include?}
                                         attached analysis stage; `recipes` is
@@ -374,6 +374,31 @@ config-settable server default (`[analysis] default_budget`, default 4000)
 engaged at the trim rung only — empty presentation blocks and the identity
 echo, never facts, never caller opt-ins. An explicit caller budget overrides
 the default entirely and may descend the full ladder.
+
+**Simulator choice.** `execution.simulator` names one of the four families
+the server supports, and the schema enumerates all four so the published
+contract matches what the server can drive. A name is accepted when the
+family is detected and this host can run it; `inspect(kind="capabilities")`
+reports that per simulator as `selectable`, with a `refusal` saying why when
+it is not. Both refusals happen before anything is staged
+(`commit_state: "not_started"`): an undetected family gets the "not available"
+error naming what was detected, and a detected family this host cannot run
+gets the reason. QSPICE is the one such family: it runs only when the server
+itself runs on Windows, because spicelib starts it with the host's own file
+paths and only LTspice has a path adapter for a Windows simulator under WSL or
+Wine. The same check applies to the server default when no simulator is named.
+
+The choice also decides the raw dialect the results parse with (QSPICE writes
+`.qraw` with a double-precision frequency axis; Xyce's raw does not name its
+writer, so the job's recorded simulator is what identifies it) and which lint
+rules apply (the LTspice-only `C=`/`L=` arity rule applies to LTspice decks
+only). A `.asc` schematic runs through the netlist LTspice exports in its own
+dialect, which is scrubbed for ngspice and prepared for nothing else, so on
+QSPICE or Xyce a schematic circuit fails with `asc_export_unavailable` and the
+run takes a hand-written `.cir`/`.net`/`.sp`. The `measurements` recipe reads
+`.MEAS` results in the log formats LTspice and ngspice write and has no reader
+for QSPICE's or Xyce's measure output; read those quantities from the waveform
+(`value`, `signal_stats`) instead.
 
 **Run timeout.** A case has no time limit unless one is set:
 `execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
@@ -531,8 +556,9 @@ advancing; that judgment, and whether to cancel, is the caller's.
 simulator_version?}`. The keys are optional because a requested run-field
 projection may remove any of them. `simulator_version` is the build the run
 named in its own output: the LTspice log banner (`LTspice 26.0.2 for Windows`),
-the ngspice console banner (`ngspice-42, Creation Date: ...`), or the raw
-header's `Command:` when neither exists. It is null when the output named none.
+the Xyce log banner (`Xyce Release 7.8.0-opensource`), the ngspice console
+banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when
+none of those exists (LTspice XVII, QSPICE). It is null when the output named none.
 It is recorded per case, so an executable replaced mid-job shows up as two
 builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
 `jobs(runs)` and `run_fields` return it.
@@ -1027,7 +1053,10 @@ Python API), which are never capped. The gate stays a whole-file answer.
     simulators: each one's executable and its sha256, and as `version` the
     build the latest run on that same executable reported, with
     `version_source` naming the job and case (null until one has run; the
-    executable is never launched to ask); exporter presence, dialects, persistence,
+    executable is never launched to ask); `selectable`, whether
+    run_experiments' execution.simulator may name it, with `refusal` when the
+    family is one this host cannot run (detected or not), and for an undetected
+    one the `remediation` that would turn it on; exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,

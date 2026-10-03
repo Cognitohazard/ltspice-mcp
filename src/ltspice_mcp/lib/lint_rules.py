@@ -64,8 +64,17 @@ class _LintContext:
     ngbehavior: str | None = None
 
     @property
+    def family(self) -> str:
+        """The simulator family the deck is linted for: named by the run's raw
+        dialect or simulator class, and LTspice when neither names another."""
+        for name in ("ngspice", "qspice", "xyce"):
+            if self.dialect == name or name in self.simulator_name.casefold():
+                return name
+        return "ltspice"
+
+    @property
     def ngspice(self) -> bool:
-        return self.dialect == "ngspice" or "ngspice" in self.simulator_name.casefold()
+        return self.family == "ngspice"
 
     @functools.cached_property
     def include_cards(self) -> tuple[tuple[Path, str, list[SpiceCard]], ...]:
@@ -327,7 +336,11 @@ def _directive_arity(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    simulator = "ngspice" if context.ngspice else "LTspice"
+    # The arity check's one simulator-specific rule (a C=/L= primary value) is
+    # LTspice's, so only an LTspice deck may be held to it.
+    simulator = {"ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}.get(
+        context.family, "LTspice"
+    )
     return [
         _finding(
             context,

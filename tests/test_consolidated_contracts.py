@@ -645,7 +645,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 35 characters when the guide split into sections: its
     # pointers name the section they mean ("guide section 'tools'") instead of
     # the whole document. Measured 15,433.
-    "run_experiments": 15440,
+    # Raised by 44 characters: execution.simulator enumerates all four
+    # families (QSPICE and Xyce could otherwise run only as the server
+    # default) and says the choice must be one inspect capabilities lists as
+    # selectable, since a detected simulator can still be one this host cannot
+    # run. Measured 15,483.
+    "run_experiments": 15490,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -695,7 +700,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 480 characters for the 'guide' kind, the MCP door to the
     # guide's core and sections: a client that cannot read resources
     # had no way to reach the guide at all. Measured 9,138.
-    "inspect": 9140,
+    # About 30 characters more so the capabilities description says it
+    # reports which simulators a run can select: a detected simulator can be
+    # one this host cannot run, and run_experiments sends a caller here to
+    # find out. Measured 9,149.
+    "inspect": 9150,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

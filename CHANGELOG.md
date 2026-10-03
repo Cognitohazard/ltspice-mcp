@@ -81,6 +81,11 @@ tool-surface changes.
   opened, and a quote left open inside a braced or parenthesized expression is
   reported at the quote, with the same hint, rather than at the enclosing
   bracket with none.
+- `run_experiments` linted a QSPICE or Xyce deck against LTspice's own
+  arity rule: a capacitor or inductor written with a keyed primary value
+  (`C1 out 0 C=1u`) was a blocking `directive-arity` finding on every
+  simulator but ngspice. LTspice is the simulator that rejects that form, so
+  the rule now applies to LTspice decks only.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -297,6 +302,21 @@ tool-surface changes.
   one-time reminder to read its core, on the text channel and in the
   structured `hint`. Reading the guide through `inspect` or a `spice://guide`
   resource retires it.
+- `run_experiments` accepts `execution.simulator: "qspice"` and `"xyce"`.
+  The schema enumerated only LTspice and ngspice, so QSPICE and Xyce could
+  run only as the server default, after a config change and a restart. All
+  four families are now enumerated, and a name is accepted when the family
+  is detected and this host can run it. An undetected family is refused with
+  the existing "not available" error, which lists what was detected. A QSPICE
+  run's `.qraw` and a Xyce run's raw parse with their own dialect, read from
+  the job's recorded simulator (Xyce's raw does not name its writer).
+- `inspect(kind="capabilities")` reports, for every simulator, whether a run
+  can select it (`selectable`), and for a family this host cannot run, the
+  `refusal` saying why. The reference lookup finds `run_experiments`' argument
+  table, where `execution.simulator` lists the families, for "qspice", "xyce"
+  and "choose the simulator".
+- A Xyce run records the release its log banner names
+  (`Xyce Release 7.8.0-opensource`) as the case's `simulator_version`.
 - `plot_waveform` replies summarize each plotted trace: `min` and `max` with
   the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
   `final`, and the time-weighted `mean` on a transient, read from every sample
@@ -479,6 +499,17 @@ tool-surface changes.
   (`guide section 'signals'`).
 - `plot_waveform`'s output schema declares `hint`, which carries the guide
   reminder when that is the session's first reply.
+- A run on QSPICE is refused unless the server runs natively on Windows, with
+  the reason, including when QSPICE is the server default and no simulator is
+  named. spicelib starts QSPICE with the host's own file paths, and only
+  LTspice has a path adapter for a Windows simulator under WSL or Wine, so such
+  a run used to be launched with paths QSPICE cannot open. Off Windows the
+  capabilities remediation for QSPICE now says it cannot run there instead of
+  suggesting an install path.
+- A `.asc` circuit on QSPICE or Xyce fails with `asc_export_unavailable`
+  before LTspice is launched. A schematic runs through LTspice's netlist
+  export, in LTspice's own dialect, which is scrubbed only for ngspice; a run
+  on QSPICE or Xyce takes a hand-written `.cir`/`.net`/`.sp`.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and

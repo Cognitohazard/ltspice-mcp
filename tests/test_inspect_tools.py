@@ -276,7 +276,14 @@ async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: S
         assert remediation["config_key"] == "simulator.path"
         assert remediation["env_var"] == SIM_PATH_ENV
         assert remediation["config_file"] == data["config_path"]
-        assert "restart" in remediation["action"], f"{name}: fix must end in a restart"
+        if "refusal" in info:
+            # A family this host cannot run (QSPICE off Windows) has no fix to
+            # restart into; the action says so instead of sending the caller
+            # to install it.
+            assert info["refusal"] in remediation["action"], name
+            assert "restart" not in remediation["action"], name
+        else:
+            assert "restart" in remediation["action"], f"{name}: fix must end in a restart"
         assert remediation["excluded_by_allowlist"] is False
 
 
