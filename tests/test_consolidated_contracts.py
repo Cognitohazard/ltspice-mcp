@@ -22,7 +22,6 @@ from __future__ import annotations
 import ast
 import re
 from collections.abc import Iterator
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -98,13 +97,12 @@ def _reference_lookup(query: str | None = None) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
-def _names_the_guide(text: str) -> bool:
-    """The text points at the guide resource, and that resource is served."""
-    from ltspice_mcp.resources import get_static_resources
+def _names_guide_section(text: str, section: str) -> bool:
+    """The text points at a guide section by name, and the guide has it."""
+    from ltspice_mcp.lib import guide
 
-    guide = "spice://guide"
-    assert guide in {str(resource.uri) for resource in get_static_resources()}
-    return guide in text
+    assert section in guide.names()
+    return re.search(rf"guide section\s+['\"]{re.escape(section)}['\"]", text) is not None
 
 
 class TestAttachedRecipeGrammar:
@@ -154,7 +152,7 @@ class TestAttachedRecipeGrammar:
         assert "recipes" in _registered()["analyze_results"].input_schema["properties"]
         assert "analyze_results.recipes" in description
         assert _api_reference_call("analyze_results").search(description)
-        assert _names_the_guide(description)
+        assert _names_guide_section(description, "tools")
         # Permissive on purpose, like the dormant recipe stubs: a client
         # pre-validating a full recipe against this shape must still send it.
         assert "additionalProperties" not in items
@@ -644,13 +642,17 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # an agent reads, and one grepped the installed package to find it.
     # Nested instance assignments and the native PDK family add their field
     # grammar and replay guidance: measured 15,352 characters.
-    "run_experiments": 15400,
+    # Raised by about 35 characters when the guide split into sections: its
+    # pointers name the section they mean ("guide section 'tools'") instead of
+    # the whole document. Measured 15,433.
+    "run_experiments": 15440,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
     # Run-field projection exposes full native provenance on explicit request:
-    # measured 5,187 characters.
-    "jobs": 5200,
+    # measured 5,187 characters. The budget pointer names its guide section:
+    # measured 5,203.
+    "jobs": 5210,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
@@ -677,8 +679,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # bounds and count, and one sentence naming the q-keyed fields they add,
     # which a 'field' has to spell to reduce or spec one; plus "percentiles"
     # on the roster, so a host routes that word here. Measured 19,621.
-    "analyze_results": 19630,
-    # Seven query kinds, each with its own argument shape — including the
+    # Raised by about 40 characters so its guide pointers name a section.
+    # Measured 19,659.
+    "analyze_results": 19660,
+    # Nine query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
     # Raised by about 400 characters for the capabilities 'fields' selector: a
@@ -688,8 +692,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 40 characters so the capabilities description says it
     # reports each simulator's executable and the build its last run reported:
     # that report is where a caller finds which build this server runs.
-    # Measured 8,657.
-    "inspect": 8660,
+    # Raised by about 480 characters for the 'guide' kind, the MCP door to the
+    # guide's core, sections and skills: a client that cannot read resources
+    # had no way to reach the guide at all. Measured 9,138.
+    "inspect": 9140,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -753,7 +759,7 @@ class TestDormantRecipeWireStubs:
         # the wire still sends it.
         assert _reference_lookup(metric).search(body["description"])
         assert _api_reference_call("analyze_results").search(body["description"])
-        assert _names_the_guide(body["description"])
+        assert _names_guide_section(body["description"], "tools")
         assert "additionalProperties" not in body
 
     def test_no_branch_the_census_showed_used_is_stubbed(self):
@@ -1098,11 +1104,12 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     def test_it_says_a_signal_is_not_an_expression(self):
         """Names the V(a,b) form and points at the guide's trace-math section,
         never at the gated run_code."""
+        from ltspice_mcp.lib import guide
+
         description = _registered()["analyze_results"].description or ""
         assert re.search(r"V\(\s*a\s*,\s*b\s*\)", description)
-        assert _names_the_guide(description)
-        guide = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
-        assert has_heading(guide, "trace math"), (
-            "the description sends trace math to a guide section that no longer exists"
+        assert _names_guide_section(description, "signals")
+        assert has_heading(guide.read("signals"), "trace math"), (
+            "the description sends trace math to a guide section that no longer covers it"
         )
         assert not names(description, "run_code")

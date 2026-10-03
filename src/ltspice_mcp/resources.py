@@ -10,14 +10,12 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cache
-from importlib.resources import files
 from typing import Any
 from urllib.parse import quote, unquote
 
 from mcp import types
 
-from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, guide, services
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.plot_html import (
@@ -29,7 +27,6 @@ from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-NETLIST_EXTENSIONS = CIRCUIT_EXTENSIONS
 RouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
 
 
@@ -79,7 +76,10 @@ class ResourceRouter:
         for part in parts:
             if not part:
                 continue
-            if part.startswith("{") and part.endswith("}"):
+            if part.startswith("{+") and part.endswith("}"):
+                # RFC 6570 reserved expansion: the value may span segments.
+                pattern += f"(?P<{part[2:-1]}>.+)"
+            elif part.startswith("{") and part.endswith("}"):
                 name = part[1:-1]
                 pattern += f"(?P<{name}>[^/]+)"
             else:
@@ -93,7 +93,7 @@ _router = ResourceRouter()
 def get_static_resources() -> list[types.Resource]:
     """Return the static resources always present on this server.
 
-    (netlists, results, models, config, recent, and the plot_widget UI renderer.)
+    (netlists, results, config, recent, the guide, and the plot_widget UI renderer.)
     """
     return [
         types.Resource(
@@ -106,12 +106,6 @@ def get_static_resources() -> list[types.Resource]:
             name="results",
             uri="spice://results/",
             description="List of all simulation jobs and their status",
-            mime_type="application/json",
-        ),
-        types.Resource(
-            name="models",
-            uri="spice://models/",
-            description="User-loaded SPICE model libraries and their models",
             mime_type="application/json",
         ),
         types.Resource(
@@ -147,19 +141,26 @@ def get_static_resources() -> list[types.Resource]:
             uri="spice://guide",
             mime_type="text/markdown",
             description=(
-                "SPICE authoring & schematic guide (LTspice + ngspice): syntax, value "
-                "notation (M=milli), waveform sources, .meas, behavioral sources, "
-                "convergence, per-engine specifics with an LTspice-vs-ngspice "
-                "differences table, and the schematic-layout playbook (wiring, tiers, "
-                "mirror/diff-pair orientations)."
+                "Read first: the guide's core (how to work with this server, Python or "
+                "tools, the rules that cause silent errors) and an index of its topic "
+                "sections and task skills, each readable as spice://guide/{section}."
             ),
         ),
     ]
 
 
 def get_resource_templates() -> list[types.ResourceTemplate]:
-    """Return the 3 dynamic resource templates."""
+    """Return the 4 dynamic resource templates."""
     return [
+        types.ResourceTemplate(
+            name="guide_section",
+            uri_template="spice://guide/{section}",
+            description=(
+                "One part of the guide, named as the core's index names it: a topic "
+                "section ('ltspice') or a task skill ('skill:spice-experiments')."
+            ),
+            mime_type="text/markdown",
+        ),
         types.ResourceTemplate(
             name="netlist_content",
             uri_template="spice://netlists/{filename}",
@@ -225,19 +226,25 @@ def _read_plot_widget(
     return _make_result(uri_str, build_widget_html(), mime=WIDGET_MIME_TYPE)
 
 
-@cache
-def _guide_text() -> str:
-    """Read the packaged guide once; it is immutable for the process."""
-    return (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
-
-
 @_router.route("spice://guide")
 def _read_guide(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Serve the packaged LTspice authoring + schematic-layout guide."""
-    del params, state
-    return _make_result(uri_str, _guide_text(), mime="text/markdown")
+    """Serve the guide's core and its index of sections and skills."""
+    del params
+    text = guide.read()
+    state.guide_read = True
+    return _make_result(uri_str, text, mime="text/markdown")
+
+
+@_router.route("spice://guide/{+section}")
+def _read_guide_section(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
+    """Serve one section, skill, or skill file of the guide by its index name."""
+    text = guide.read(params["section"])
+    state.guide_read = True
+    return _make_result(uri_str, text, mime="text/markdown")
 
 
 @_router.route("spice://config")
@@ -278,7 +285,7 @@ def _read_netlists_list(
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
         for f in working_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in CIRCUIT_EXTENSIONS
     ]
     netlists.sort(key=lambda x: x["name"])
     data = {"netlists": netlists, "count": len(netlists)}
@@ -304,8 +311,8 @@ def _read_netlist_content(
     """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.allowed_paths())
-    if resolved.suffix.lower() not in NETLIST_EXTENSIONS:
-        allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
+    if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
+        allowed = ", ".join(sorted(CIRCUIT_EXTENSIONS))
         raise ValueError(
             f"Not a netlist file: {filename!r}. This resource serves netlist "
             f"text ({allowed}); simulation artifacts are read via analyze_results "
@@ -418,36 +425,6 @@ def _read_recent(
         "note": (
             'Use jobs (action:"status" or "runs") with a job_id to inspect '
             "a specific job; interrupted jobs were running when the server last stopped."
-        ),
-    }
-    return _make_result(uri_str, json.dumps(data, indent=2))
-
-
-@_router.route("spice://models/")
-def _read_models(
-    uri_str: str, params: dict[str, str], state: SessionState
-) -> types.ReadResourceResult:
-    """List user-loaded libraries and their models (not built-ins)."""
-    del params
-    libraries: list[dict] = []
-
-    for path, index in state.libraries.get_loaded_libraries():
-        models = [
-            {
-                "name": m.name,
-                "type": m.model_type,
-                "ports": m.ports,
-                "params": m.params,
-            }
-            for m in index.models
-        ]
-        libraries.append({"path": str(path), "models": models})
-
-    data = {
-        "libraries": libraries,
-        "note": (
-            'Use inspect with a model query (kind:"model", mode:"search") to '
-            "fuzzy-match a part name against these libraries."
         ),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))

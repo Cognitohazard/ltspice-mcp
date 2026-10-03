@@ -196,8 +196,10 @@ above assumes them:
   on PATH (so it runs in CI); `tests/test_e2e.py` runs un-gated in degraded
   mode; `tests/test_ltspice_integration.py` is opt-in via an environment flag.
 - **Drift guards.** `tests/test_doc_drift.py` checks documented tool counts and
-  names against the registry; `tests/test_guide_delivery.py` keeps the
-  packaged guide in sync with the skill.
+  names against the registry; `tests/test_guide_delivery.py` pins the guide's
+  structure (the section list is the files present, the index lists every
+  section and skill, every "guide section" pointer resolves) and that its
+  doors serve one text.
 
 See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
 `docs/DESIGN.md` for the architecture and the end-to-end verification recipe.

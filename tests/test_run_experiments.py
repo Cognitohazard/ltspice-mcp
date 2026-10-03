@@ -335,6 +335,26 @@ class TestReceiptThenDwell:
         assert set(data["progress"]) == {"expanded", "terminal", "remaining"}
         assert len(submissions) == 1
 
+    async def test_a_spice_suffixed_deck_runs_from_a_cir_copy(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """``.spice`` is what xschem and the sky130 testbenches write. The
+        simulator is handed a ``.cir`` copy, which every simulator reads."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "tb.spice")
+
+        result = await handle_run_experiments(_args(deck, "spice-suffix"), state_with_sim)
+        data = _assert_schema(result)
+
+        assert data["outcome"] == "complete", data
+        assert data["completeness"]["produced"] == 1
+        assert len(submissions) == 1
+        assert Path(submissions[0]).suffix == ".cir"
+
     async def test_zero_dwell_returns_receipt_then_job_finishes(
         self,
         state_with_sim: SessionState,
@@ -2211,6 +2231,10 @@ class TestFailureChannel:
         row = data["failures"][0]
         assert row["code"] == "missing_model"
         assert row["evidence"] == {"missing_refs": ["mystery"]}
+        # The recovery is a model search over the simulator's own libraries,
+        # which the failure names rather than running on the agent's behalf.
+        assert "model query" in row["hint"]
+        assert "simulator's own libraries" in row["hint"]
 
 
 @pytest.mark.asyncio

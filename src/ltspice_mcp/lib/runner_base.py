@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from spicelib.sim.sim_runner import SimRunner
 
+from ltspice_mcp.lib import RUN_DECK_SUFFIXES
 from ltspice_mcp.lib.deck_staging import resolve_reference
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import (
@@ -387,7 +388,7 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
-    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
+    if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path
     try:
         data = netlist_path.read_bytes()
@@ -508,7 +509,7 @@ def inject_ngspice_control_write(
 
     if not (isinstance(simulator, type) and issubclass(simulator, NGspiceSimulator)):
         return netlist_path
-    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
+    if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path
     try:
         data = netlist_path.read_bytes()

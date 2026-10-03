@@ -3,11 +3,11 @@ placed geometry computation, and pin direction inference.
 """
 
 import re
-from importlib.resources import files
 from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib import guide
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     PinInfo,
@@ -55,9 +55,10 @@ class TestApplyRotation:
         assert _apply_rotation(self.PX, self.PY, f"M{degrees}") == (-rotated[0], rotated[1])
 
     def test_guide_states_the_same_transforms(self):
-        """spice://guide restates this table for callers; hold it to the code."""
-        guide = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
-        line = next(ln for ln in guide.splitlines() if ln.startswith("Rotations transform pin"))
+        """The guide's schematics section restates this table for callers; hold
+        it to the code."""
+        text = guide.read("schematics")
+        line = next(ln for ln in text.splitlines() if ln.startswith("Rotations transform pin"))
 
         def term(t: str) -> int:
             value = {"x": self.PX, "y": self.PY}[t.lstrip("-")]

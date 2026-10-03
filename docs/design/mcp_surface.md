@@ -188,9 +188,10 @@ shown. The listing is paid for once per session whether or not a tool is
 called, so each description is written short — one or two sentences carrying
 the unit, the sign or direction convention, the default, and how the field
 interacts with its siblings. Anything longer than that belongs here or in
-`spice://guide`, with a pointer on the field. `api.reference('<tool>')` and
-`spice://guide` render the same model descriptions, so a sentence written for
-the wire is the one those two channels also serve.
+a section of the guide, with a pointer on the field naming it
+(`guide section 'signals'`). `api.reference('<tool>')` and
+`inspect(kind: "reference")` render the same model descriptions, so a sentence
+written for the wire is the one those two channels also serve.
 `tests/test_consolidated_contracts.py` holds both ends: the advertised
 descriptions must equal the source ones, and each tool's serialized definition
 has an upper size bound.
@@ -336,7 +337,7 @@ Input:
 
 ```
 request_id           str, optional      idempotency key; minted when omitted
-circuits             list[{path, id?}]  .cir / .net / .sp / .asc
+circuits             list[{path, id?}]  .cir / .net / .sp / .spice / .asc
 variations           list[Variation]    Appendix A.1. assign entries combine by
                                         cartesian product; AT MOST ONE random
                                         entry per call (the product of two
@@ -1056,16 +1057,36 @@ Python API), which are never capped. The gate stays a whole-file answer.
     each instance's own reference (the last segment), so a one-letter
     prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
-    search requires query; enumerate requires libs
+    search requires query; enumerate requires libs. A search without libs
+    reads the detected simulators' own model libraries; libs may name a file
+    inside the sandbox or inside one of those libraries, so every source_path
+    a search returns can be read back through libs. Every route returns the
+    same row: name, type, source_path, include_directive (source_path as the
+    server sees it, which is what staging reads), ports, params, and for a
+    .MODEL its device_type and usage; a search adds score
 {kind: "reference", query?, limit? (default 5, cap 20)}
     the tools' own vocabulary: each tool's top-level arguments, plus the
     branches — recipes, ops, variation kinds, query kinds, checks and job
     actions. A plain-words `query` returns the closest entries with their full
     field tables; no `query` returns the table of contents, one line per entry
+{kind: "guide", section?}
+    the packaged guide (`lib/guide.py`): no `section` returns the core a
+    session reads first, ending in an index of the topic sections and task
+    skills; a `section` from that index returns that part. An unknown name
+    fails the item as `unknown_section`, listing the names that exist
 ```
 
-`path` is required except on `capabilities`, `symbols`, `symbol` and
-`reference`.
+`path` is required except on `capabilities`, `symbols`, `symbol`,
+`reference` and `guide`.
+
+**Why the guide is a query kind.** The instructions send every session to the
+guide's core first, and the one door every client has is a tool call: some
+clients cannot read resources, and the Python API's own door, `Api.guide()`,
+has no session to ask. So the guide is served three ways from one module — this
+kind, `Api.guide()`, and the `spice://guide` resources — and the tests hold the
+three to one text. A read through this kind or a resource is recorded on the
+session, because the first tool reply of a session that has not read the guide
+carries one reminder to read it, in its text and its structured `hint`.
 
 **Why the vocabulary needs a lookup of its own.** Each tool holds many
 capabilities behind a discriminator, and a host choosing a tool sees only tool
@@ -1217,7 +1238,7 @@ The pre-0.6.0 surface had 49 tools. The mapping:
   `signal_stats`, `edge_metrics`, `timing_between`, `periodic_metrics`, `thd`,
   `noise_integral`, `operating_point`, `measurement_stats`, `query_value`,
   `get_waveform`, `export_waveform`, `batch_results`, `simulation_summary`
-  (as `metric: "summary"`, including Fourier, AC bandwidth and suggestions),
+  (as `metric: "summary"`, including Fourier and AC bandwidth),
   `ac_structure`, `resonance`, `return_loss`, `transient_response`.
 - **`edit_schematic`**: `create_schematic`, `apply_schematic_ops` (op models
   carried over verbatim), `wire_pins`.
@@ -1333,7 +1354,7 @@ recipe takes none, having one number.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
