@@ -232,12 +232,12 @@ class ModelRule(RandomRuleBase):
 
 # The field descriptions here carry the two facts a caller cannot recover from
 # a result: the coefficients' units, and the inversion from a target sigma.
-# Prefix conventions and BSIM parameter names are in guide section 'ltspice', which a
+# Prefix conventions and BSIM parameter names are in guide section 'variations', which a
 # caller reads once, rather than on the wire in every session.
 class MismatchRule(VariationModel):
     """Pelgrom mismatch rule: σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L),
     sampled independently per instance per run. Worked examples, prefix
-    conventions and BSIM parameter names: guide section 'ltspice'."""
+    conventions and BSIM parameter names: guide section 'variations'."""
 
     rule: Literal["mismatch"]
     instance: list[str] | None = None

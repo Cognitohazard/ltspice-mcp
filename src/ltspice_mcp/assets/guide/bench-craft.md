@@ -33,13 +33,12 @@ The standard bench closes the loop at DC only, with elements too large to
 matter in the measured band:
 
 ```spice
-* loop closed at DC through a huge inductor; AC injected differentially
+* loop closed at DC through a huge inductor; AC drive on inp
 LFB  out  inn  1T        ; 1 tera-henry: short at DC, open at any AC freq
 CFB  inn  0    1T        ; 1 tera-farad: blocks DC, grounds inn for AC
-VIP  inp  0    DC {CM} AC 0.5
-* inn receives -0.5 of the AC drive THROUGH the cap if driven; or drive
-* single-ended and read V(out)/V(inp,inn) — both are open-loop above
-* the (vanishingly low) servo corner at 1/(2*pi*sqrt(LC)).
+VIP  inp  0    DC {CM} AC 1
+* above the servo corner, 1/(2*pi*sqrt(LC)), V(out)/V(inp,inn) is the
+* open-loop gain
 ```
 
 At DC the feedback forces the output to the level that zeroes the input
@@ -58,7 +57,6 @@ open-loop transfer function.
   a margin that is not there.
 - Supply current: measure the supply source current at the `.op` point, not a
   sum of device currents.
-- Check `.op` first and AC second: is the output within the linear region?
 - Compare measured DC gain with `gm*ro` expectations. A roughly 25 dB shortfall
   usually means the bench is wrong, not the amplifier.
 - Re-run one point at twice the sweep density. If gain or phase margin
@@ -121,10 +119,9 @@ CFB  inn 0 1T
 
 For balanced drive, give `VIP` `AC 0.5 0`, replace `CFB inn 0 1T` with
 `CFB inn ndrive 1T`, and add `VIM ndrive 0 DC 0 AC 0.5 180`; keep the inductor
-as the only DC feedback path. Always compute gain and phase from
-`V(out)/V(inp,inn)` (the `signal` of `stability` or a `bode_*` recipe, as
-written), unwrap phase, inspect every 0 dB crossing, and repeat at twice the
-point density.
+as the only DC feedback path. Compute gain and phase from `V(out)/V(inp,inn)`
+(the `signal` of `stability` or a `bode_*` recipe, as written) and apply the
+checks under "Reading and checking the result".
 
 ### Closed-loop transient and load-step archetype
 
@@ -149,15 +146,15 @@ ILOAD out 0 PULSE(@ILOAD_LO@ @ILOAD_HI@ @TDELAY@ @TRISE@ @TFALL@ @TON@ @PERIOD@)
 .end
 ```
 
-Before extracting slew or settling, confirm the initial `.op` is linear and
-the requested step does not turn the measurement into an overload test.
+Before extracting slew or settling, make sure the step does not drive the
+amplifier into overload.
 
 ## ngspice batch-output practice
 
-This server invokes ngspice with batch mode and a raw output (`-b -r`), which
-suppresses top-level `.meas`. Move measurements into a `.control` block as the
-dot-less interactive `meas` command; a dotted `.meas` inside `.control` is not
-valid.
+On ngspice, `run_experiments` refuses a top-level `.meas` (guide section
+'ngspice'). Prefer saved traces and `analyze_results` recipes; where a
+measurement has to run inside ngspice, use the dot-less interactive `meas`
+command in a `.control` block:
 
 ```spice
 .control
@@ -167,9 +164,8 @@ meas ac unity when vdb(out)=0 cross=1
 .endc
 ```
 
-Prefer saved traces plus the server's `analyze_results` recipes when they express the
-metric. If using `wrdata`, its columns repeat the scale vector for every dumped
-vector: dumping `V(out)` and `I(VDD)` yields `scale, V(out), scale, I(VDD)`, not
-one shared scale followed by both values. Parse repeated scale/value groups,
-and remember that `wrdata` writes only the text table; add an explicit `write`
-too if later server analysis needs a rawfile.
+If you use `wrdata`, its columns repeat the scale vector for every dumped
+vector: dumping `V(out)` and `I(VDD)` yields `scale, V(out), scale, I(VDD)`,
+not one shared scale followed by both values. Parse repeated scale/value
+groups, and remember that `wrdata` writes only the text table; add an explicit
+`write` too if later server analysis needs a rawfile.

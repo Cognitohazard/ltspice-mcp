@@ -8,51 +8,61 @@ description: >
 
 ## Discovering nested instances
 
-Use `inspect(queries=[{"kind":"hierarchy", "path":"amp.cir",
-"simulator":"ltspice", "instance":["XA","Xleaf"], "prefix":"M"}])`
-to find devices inside a repeated block. `instance` contains exact reference
-segments, matched without case sensitivity; keep that list for identity.
-The source file/line/section identifies the declaration, while the instance
-list identifies one runtime device. `components` remains a flat source read.
-Hierarchy reads netlists only; export a schematic explicitly first.
+This lists the devices inside a repeated block:
 
-Rows carry structural scoped nodes and port mappings, model source, raw/resolved
-values and parameters, MOS W/L in metres, and backend addresses. A numeric fact
-with `status: "unresolved"` has no effective value: read its `reason`.
-Discovery supports static arithmetic, defaults and caller overrides, with
-backend-specific parameter precedence. Ngspice sibling-dependent X-call overrides and
-expressions with multiple powers remain unresolved. LTspice caret expressions
-are unsupported; caret is not interpreted as exponentiation. Explicit LTspice `scale`
-is refused; use SI dimensions. The `mil` suffix is 25.4 micrometres.
-Functions, missing parameters, cycles
-and simulator steps can leave numeric facts unknown. Conditional structure,
-opaque control scripts, local definitions, recursion, missing dependencies,
-ambiguous declarations and resource-limit overruns are refused. Discovery is
-read-only; pass its instance list to an experiment variation to edit that instance.
+```json
+{"queries": [{"kind": "hierarchy", "path": "amp.cir", "simulator": "ltspice",
+              "instance": ["XA", "Xleaf"], "prefix": "M"}]}
+```
 
-Declare the simulator even for offline inspection. For ngspice, `ngbehavior`
-defaults to the configured effective mode; sectioned libraries need a mode
-without `lt`/`ps` reinterpretation, such as `hsa`. An explicit inspection mode
-does not reconfigure subsequent runs. Cursor tokens bind captured dependency
-content, the declared profile and filters; after an edit, start a new query.
-The initial supported ngspice profiles are `hsa`, `kiltpsa`, and the empty
-string (native SPICE mode); other profiles are refused explicitly.
+`instance` is a list of exact reference segments, matched without regard to
+case; keep it as the device's identity. A row's source file, line and section
+identify the declaration, and its instance list identifies one runtime device
+(`components` stays a flat read of the source). Hierarchy reads netlists only,
+so export a schematic first. It is read-only: to change a device, pass its
+instance list to a variation (below).
 
-To measure a selected device, put its `address.save` guidance in the deck,
-run it through `run_experiments`, and pass `address.device` to the existing
-`analyze_results` recipe `{"key":"chosen", "metric":"operating_point",
-"device":"..."}`. For example, a MOS at `["XA","Xleaf","M0"]` uses
-`m.xa.xleaf.m0` and `.save @m.xa.xleaf.m0[gm]` on ngspice. LTspice uses
-`xa:xleaf:m0` and `.options logopinfo`: gm is read from the log, not a guessed
-raw signal. A nested resistor uses `.save @r.xa.xleaf.r1[i]` on ngspice or
-`.save I(xa:xleaf:r1)` on LTspice. Full ancestral names distinguish the repeated
-peer. If an address is unavailable, use the explicit reason; do not shorten or
-guess a selector. Node voltage spellings do not guarantee a run saved the trace.
+Each row carries the scoped nodes and port mappings, the model source, raw and
+resolved values and parameters, MOS W/L in metres, and the backend addresses.
 
+A number discovery cannot evaluate is reported, not guessed: it has
+`status: "unresolved"`, no value, and a `reason`. Discovery evaluates static
+arithmetic, defaults and caller overrides, with each simulator's parameter
+precedence. Functions, missing parameters, cycles, simulator steps, ngspice
+sibling-dependent X-call overrides and expressions with several powers stay
+unresolved. LTspice caret expressions are not supported, since `^` is not
+exponentiation there. What discovery cannot expand is refused with a reason:
+conditional structure, opaque control scripts, local definitions, recursion,
+missing dependencies, ambiguous declarations, resource limits, and an explicit
+LTspice `scale` (use SI dimensions; the `mil` suffix is 25.4 µm).
+
+Declare the simulator even when only inspecting. For ngspice, `ngbehavior`
+defaults to the configured mode, and sectioned libraries need a mode without
+the `lt`/`ps` reinterpretation, such as `hsa`; a mode set here does not change
+later runs. The supported ngspice modes are `hsa`, `kiltpsa` and `""` (native
+SPICE); others are refused. A cursor is bound to the files, mode and filters it
+was issued for, so after an edit, start a new query.
+
+## Measuring a nested device
+
+Put the row's `address.save` line in the deck, run it with `run_experiments`,
+and pass `address.device` to the `operating_point` recipe:
+`{"key": "chosen", "metric": "operating_point", "device": "..."}`. For a MOS at
+`["XA", "Xleaf", "M0"]`:
+
+| | ngspice | LTspice |
+|-|-|-|
+| `device` | `m.xa.xleaf.m0` | `xa:xleaf:m0` |
+| deck line | `.save @m.xa.xleaf.m0[gm]` | `.options logopinfo` (gm comes from the log) |
+| a nested resistor's current | `.save @r.xa.xleaf.r1[i]` | `.save I(xa:xleaf:r1)` |
+
+Keep the full name: it is what tells repeated peers apart. When a row has no
+address, it gives the reason; do not shorten or guess a selector. A node
+voltage's spelling does not mean the run saved that trace.
 
 ## Varying one nested instance
 
-Use the exact reference-segment list from hierarchy discovery:
+Use the exact reference-segment list from discovery:
 
 ```json
 {"kind": "assign", "instances": [
@@ -62,11 +72,11 @@ Use the exact reference-segment list from hierarchy discovery:
 ]}
 ```
 
-This changes only the selected runtime instances in private case files. Peers
-and original authoring files stay unchanged. Values use the deck's units:
-Sky130 widths above are micrometres because its scale is `1e-6`; a typical
-LTspice MOS width would instead use a value such as `"2u"`. Use `combine: "zip"`
-for paired target lists of equal length. Conflicting fields and overlapping
-ancestor/descendant edits are refused. For caller-defined mismatch, a random
-rule may instead name the exact physical MOS with `instance`; do not also give
-that rule a `prefix`.
+This changes only the selected runtime instances, in private case files; peers
+and your own files stay unchanged. Values use the deck's units: on a Sky130
+deck, whose scale is `1e-6`, the widths `1` and `2` above are micrometres,
+where a typical LTspice MOS width would be `"2u"`. Use `combine: "zip"` for
+paired lists of equal length. Conflicting fields, and edits to both an ancestor
+and its descendant, are refused. For your own mismatch coefficients, a
+`random` rule can name the exact physical MOS with `instance` instead of a
+`prefix` (guide section 'variations').

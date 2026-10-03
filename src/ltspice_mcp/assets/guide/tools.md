@@ -1,18 +1,16 @@
 ---
 name: tools
 description: >
-  Calling the tools directly: which tool does what, a sweep in one call,
+  Calling the tools directly: which call does what, a sweep in one call,
   notes per tool, progress on a running job, the reference lookup, the
   recipes the schema lists by name only, and the response budget.
 ---
 
 # Using the tools
 
-Six tools: `run_experiments`, `jobs`, `analyze_results`, `inspect`,
-`edit_schematic`, `verify_circuit`. The loop is: write the deck to a file, run it
-with `run_experiments` (attach `analyze.recipes` and the numbers come back in the
-same response), follow a receipt with `jobs`, measure a finished job with
-`analyze_results`.
+The loop: write the deck to a file, run it with `run_experiments` (attach
+`analyze.recipes` and the numbers come back in the same response), follow a
+receipt with `jobs`, and measure a finished job with `analyze_results`.
 
 | To … | Call |
 |-|-|
@@ -34,19 +32,16 @@ same response), follow a receipt with `jobs`, measure a finished job with
 A case has no time limit unless `execution.run_timeout_s` (or the server's
 `[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or
 `jobs(wait)` receipt carries a `run_progress` observation per running case:
-points written and the last time or frequency reached, to set against the
-deck's own stop value. A simulator writes in buffered blocks, so judge over looks minutes
-apart: if `points` has not moved across them, the case is not advancing, and
-`jobs(action="cancel")` stops it.
+points written and the last time or frequency reached, to compare with the
+deck's own stop value. A simulator writes in buffered blocks, so compare
+readings a few minutes apart: if `points` has not moved, the case is not
+advancing, and `jobs(action="cancel")` stops it.
 
-`inspect(kind="reference")` is the lookup for this surface's own vocabulary.
-Each tool holds many capabilities behind a discriminator — twenty-one
-`analyze_results` recipes, eleven `edit_schematic` ops, the variation kinds,
-the `verify_circuit` checks, the `jobs` actions — and a `query` in plain words
-returns the closest ones with their fields, types, defaults and units. With no
-`query` it returns the table of contents. Reach for it instead of guessing a
-name or re-reading the guide, and always when the server is serving the
-compact tool listing, where the per-argument descriptions are not on the wire.
+`inspect(kind="reference")` finds a recipe, schematic op, variation kind,
+check or job action from plain words (`query="phase margin"`) and returns its
+fields, types, defaults and units; with no `query` it lists them all. Use it
+instead of guessing a name, and always on the compact tool listing, where the
+argument descriptions are not on the wire.
 
 ## A sweep in one call
 
@@ -65,22 +60,21 @@ attach the recipe that reads it back:
              "group_by": ["ILOAD"]}}
 ```
 
-The cases run as one batch, and other sessions can run beside it. The
-simulator computes the scalar and the `measurements` recipe reads it back from
-the log, parsed and with SI units. An `assign` target must exist in the deck.
-If the deck restricts what it saves, `.save` every signal a `.meas` uses; lint
-blocks a mismatch. A case that produced nothing is counted in `completeness`,
-and `outcome` is `"partial"`.
+The simulator computes the scalar and the `measurements` recipe reads it back
+from the log, parsed and with SI units. On ngspice, measure the trace with a
+recipe instead (guide section 'ngspice'). An `assign` target must exist in the
+deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
+lint blocks a mismatch. A case that produced nothing is counted in
+`completeness`, and `outcome` is `"partial"`.
 
 ## Notes per tool
 
-- `run_experiments`: the same `request_id` with the same arguments returns the
-  original receipt instead of running again. Decks are content-addressed, so
-  editing one afterwards does not change what ran, and different arguments
-  under a used id return `idempotency_conflict`. A `skipped` case means lint
-  blocked its deck: fix the deck, or drop that one rule with `suppress` (the
-  `rule_id` from the finding, such as `"save-meas-coverage"`) rather than
-  setting `lint: "warn"`.
+- `run_experiments`: a reused `request_id` returns `idempotency_conflict` when
+  the arguments differ, a deck has changed since the job ran, or the simulator
+  is now a different build; submit under a new id to run again. A `skipped`
+  case means lint blocked its deck: fix the deck, or drop that one rule with
+  `suppress` (the `rule_id` from the finding, such as `"save-meas-coverage"`)
+  rather than setting `lint: "warn"`.
 - `jobs`: `{"action": "status", "request_id": "ldo-load-1"}` finds a job whose
   id you lost. A `wait` that returns `timed_out` ended the wait, not the job.
 - `analyze_results`: the default reply is the answer (`results`, `coverage`,
@@ -88,6 +82,10 @@ and `outcome` is `"partial"`.
   `per_run`, `outliers`, `signals_available`). `group_by` is a top-level
   argument, never inside a recipe. Results of the `operating_point` recipe are
   in `device_op_points`, keyed by the simulator's literal names (`@m1[gm]`).
+  For a staircase signal (DAC steps, line reflections), read each level with a
+  `value` recipe on its plateau, or take the whole table with a `waveform`
+  recipe at `"format": "csv"`; the inline waveform's bucket statistics blur
+  the levels.
 - `inspect` reads decks, schematics and libraries, never results:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
 - `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`
@@ -128,17 +126,11 @@ in order until it fits:
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
 | 2 shrink | page size, with cursors minted against the smaller page so paging still walks every row |
 
-Rows keep their shape at every rung: a row is always an object with the same
-keys, so a tight budget returns fewer rows, never differently shaped ones.
-
-Facts are never cut at any rung: `failures`, `observations`, `warnings`,
-`completeness` and spec verdicts always come back whole, and a budget too small
-for them returns them anyway and says so. The budget is presentation only — it
-is not part of a result's identity, so the same request at two budgets shares
-one result set and one set of cursors.
+Facts are never cut: `failures`, `observations`, `warnings`, `completeness`
+and spec verdicts always come back whole, and a budget too small for them
+returns them anyway and says so.
 
 If you omit `budget`, the server applies its own default
-(`[analysis] default_budget`, 4000 tokens) at **rung 0 only**: a large
-response loses empty blocks and the identity echo, nothing else. Detail you
-asked for is never removed by the default. Set the config value to `0` to
-turn that off.
+(`[analysis] default_budget`, 4000 tokens) at rung 0 only: a large response
+loses empty blocks and the identity echo, nothing else. Set the config value
+to `0` to turn that off.
