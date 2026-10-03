@@ -164,8 +164,8 @@ class TestSectionContent:
     @pytest.mark.parametrize(
         ("section", "anchor"),
         [
-            ("fundamentals", "## Value Notation — CRITICAL"),
-            ("fundamentals", "ngspice skips `.meas` under the server's"),
+            ("fundamentals", "## Value suffixes"),
+            ("fundamentals", "On ngspice, `run_experiments` refuses a top-level `.meas`"),
             ("ltspice", "## Other LTspice Quirks"),
             ("ngspice", "## .control / .endc Blocks"),
             ("ngspice", "## XSPICE"),

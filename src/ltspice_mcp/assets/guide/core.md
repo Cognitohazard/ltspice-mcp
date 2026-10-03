@@ -2,8 +2,8 @@
 
 This is the core: how to work with this server, when to use Python or the
 tools, the rules that cause silent errors, and an index of the topic sections
-and task playbooks. Before you start a task, read the section or playbook whose
-line in the index matches it.
+and task playbooks. Before you start a task, read the section whose line in the
+index matches it.
 
 Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 `api.guide("<name>")` in Python. A pointer elsewhere such as
@@ -22,9 +22,10 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
   is fine too: `analyze_results` with a `raw_path` source, or
   `api.load_raw(path)`, reads its raw.
 - Check a new deck before a sweep: `verify_circuit` with `checks: ["syntax"]`.
-- Put each scalar you need in the deck as a `.meas` and read it back with the
-  `measurements` recipe. Use the other recipes for what `.meas` cannot
-  express.
+- On LTspice, put each scalar you need in the deck as a `.meas` and read it
+  back with the `measurements` recipe. On ngspice, read the trace with a
+  recipe instead (see the rules below). Use the other recipes for what `.meas`
+  cannot express.
 - Pass a `request_id` to `run_experiments`: the same id and arguments return
   the original receipt instead of running again, and `jobs` finds the job by
   it.
@@ -70,23 +71,20 @@ receipt = api.run_experiments(  # waits until the job is terminal
     circuits=[{"path": "ldo.cir"}],
     variations=[{"kind": "assign", "assign": {"ILOAD": ["1m", "10m", "100m"]}}],
 )
-job = receipt["job_id"]
 for row in receipt["runs"]["items"]:  # one row per case
-    meas = api.measurements(job_id=job, case_id=row["case_id"])
-    r = api.load_raw(job_id=job, case_id=row["case_id"])
+    r = api.load_raw(job_id=receipt["job_id"], case_id=row["case_id"])
     t, v = r.axis(step=0), r.trace("V(out)", step=0)
     t_w, v_w, _ = window_and_clean(t, v, 4e-3, None)  # from 4 ms to the end
-    print(row["assignments"], meas, compute_signal_stats(t_w, v_w)["mean"])
+    print(row["assignments"], compute_signal_stats(t_w, v_w)["mean"])
 ```
 
-- The methods are the six tools, taking the tools' arguments as keywords:
-  `run_experiments`, `jobs`, `analyze_results`, `inspect`, `edit_schematic`,
-  `verify_circuit`. Results come back whole.
+- The methods take the tools' arguments as keywords, and their results come
+  back whole.
 - `wait=False` returns the receipt at once and `api.wait(job_id)` blocks;
   adding `detach=True` lets the job outlive this process.
-- `compute_signal_stats` and `time_weighted_quantiles` weight by time.
-  `np.mean` over transient samples over-weights the edges, where the simulator
-  packs its samples.
+- Take statistics of a transient trace with `compute_signal_stats` and
+  `time_weighted_quantiles`, which weight by time; `np.mean` does not (guide
+  section 'signals').
 - `ApiValidationError` means bad arguments and `ApiCallError` a failed call.
   A per-item failure is returned data, not an exception.
 
@@ -101,7 +99,8 @@ The rest is guide section 'python'.
 - A deck that carries `.step` holds several sweeps in one raw;
   `analyze_results` reads the first unless you name `step` or `all_steps`.
 - ngspice has no `.step`: sweep with `run_experiments` variations. Once a deck
-  has a `.save` line, ngspice keeps only what `.save` names. In this server's
-  batch mode it skips a dotted `.meas`; read the trace with a recipe instead.
+  has a `.save` line, ngspice keeps only what `.save` names. As this server
+  runs it, ngspice does not evaluate a top-level `.meas`, so `run_experiments`
+  refuses such a deck; read the trace with a recipe instead.
 - Inline comments are `;` in LTspice and `$` in ngspice.
 - Ground is `0`; `00` is a different node.

@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Fixed
 
+- The guide described what ngspice prints for a top-level `.meas` and for a
+  sectioned `.lib` under the default compatibility mode, but `run_experiments`
+  refuses both decks before they run (lint `meas-ngspice-batch` and
+  `lib-section-ngspice`); it now says so, and its core no longer tells an
+  ngspice session to put scalars in `.meas`. It also counted six tools where
+  there are eight, and described the ngspice build it was checked on as the
+  reader's.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -378,6 +385,11 @@ tool-surface changes.
 
 ### Changed
 
+- The guide states each rule once, in the section it belongs to, and points to
+  it from elsewhere. LTspice-only syntax (`.step`, PWL extras, `startup`) moved
+  from the fundamentals into the LTspice section, and `run_experiments` Monte
+  Carlo and mismatch from the LTspice section into variations. Test-log notes,
+  arguments against positions nobody holds, and repeated examples are gone.
 - The Claude Code plugin ships one skill, `spice-guide`, in place of
   `spice-experiments`, `ltspice`, `ngspice` and `spice-bench-craft`. Those four
   were hand-kept copies of what the guide says, and had drifted from it: the
