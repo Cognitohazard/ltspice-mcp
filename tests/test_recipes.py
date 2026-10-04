@@ -156,6 +156,7 @@ def test_a_multi_field_recipe_names_its_field_once_for_reduce_and_spec():
     bare = validate_recipe(
         {"key": "s", "metric": "signal_stats", "signal": "V(out)", "reduce": ["max"]}
     )
+    assert isinstance(bare, SignalStatsRecipe)
     assert bare.field is None
 
 
