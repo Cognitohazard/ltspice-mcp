@@ -195,12 +195,9 @@ async def test_identical_request_id_submits_one_job(
     surviving job claims, not the survivor of two that were staged.
 
     The duplicate is released once the first submission is staging, so it is
-    provably inside the gate's queue while the first holds it. Which of the two
-    responses carries the replay note is deliberately not asserted: the note is
-    a durable fact on the shared job record, so every receipt rendered after the
-    duplicate arrives carries it — including the original submitter's, whose
-    dwell may still be running. What the record must not do is accumulate a
-    second copy of it, which is asserted below.
+    provably inside the gate's queue while the first holds it. Exactly one of
+    the two responses says it replayed (its own ``replayed``), and the shared job
+    record it was answered from is left as it was.
     """
     submissions: list[str] = []
     fake_simulator(monkeypatch, submissions)
