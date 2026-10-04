@@ -465,6 +465,13 @@ tool-surface changes.
   (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
   too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
   `invalid_query`.
+- `verify_circuit`'s `export` check writes `<name>.net` beside the schematic by
+  default (`export_to: "sidecar"`), the file LTspice itself writes beside a
+  schematic it runs and the one `run_experiments` exports through. The default
+  used to be `managed`, which copied the schematic and every `.asy`, `.lib`,
+  `.sub`, `.inc` and `.mod` under its folder into the store to avoid that file,
+  and is where a relative include was once refused as `path_denied`. `managed`
+  is still available for a call that must write nothing beside the schematic.
 
 ### Security
 
