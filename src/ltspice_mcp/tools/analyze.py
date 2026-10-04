@@ -105,8 +105,8 @@ _VALUES_OMITTED_WARNING = (
     "{omitted} value(s) omitted; request include.per_run for callable pagination."
 )
 
-# Per-call digest memo keyed by (path, mtime_ns, size); one hash per unchanged
-# source across manifest build, precheck and postcheck.
+# Per-call digest memo keyed by (path, mtime_ns, size), for the calls that take
+# content digests at all (include.provenance, a resumed set, a cursor issued).
 _DigestCache = dict[tuple[str, int, int], str]
 
 
@@ -1068,25 +1068,79 @@ async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
     return digest
 
 
-async def _manifest_for(run: _ResolvedRun, deadline: float, cache: _DigestCache) -> dict[str, Any]:
-    raw_sha = await _digest(run.source.raw, deadline, cache)
-    log_present = run.source.log is not None and run.source.log.is_file()
-    log_sha = (
-        await _digest(run.source.log, deadline, cache) if log_present and run.source.log else None
-    )
-    composite = result_store.composite_digest(raw_sha, log_sha, log_present)
+def _file_stamp(path: Path) -> list[int]:
+    """``[size, mtime_ns]``, what a source file is identified by.
+
+    A metadata stat on the loop, like the sibling ``is_file`` checks here. The
+    file's content is read only when a digest is asked for: by
+    ``include.provenance``, or for a set the caller can resume (see
+    ``_record_source_digests``).
+    """
+    info = os.stat(path)
+    return [info.st_size, info.st_mtime_ns]
+
+
+def _source_stamp(raw: Path, log: Path | None) -> dict[str, Any]:
+    """The stamps of a run's raw and log, the log's absence recorded as such."""
+    log_present = log is not None and log.is_file()
     return {
+        "raw_stamp": _file_stamp(raw),
+        "log_present": log_present,
+        "log_stamp": _file_stamp(log) if log_present and log is not None else None,
+    }
+
+
+def _same_stamp(manifest: dict[str, Any], stamp: dict[str, Any]) -> bool:
+    return all(manifest.get(key) == stamp[key] for key in stamp)
+
+
+async def _content_digests(
+    raw: Path, log: Path | None, log_present: bool, deadline: float, cache: _DigestCache
+) -> dict[str, Any]:
+    """The raw's and the log's SHA-256, and their composite."""
+    raw_sha = await _digest(raw, deadline, cache)
+    log_sha = await _digest(log, deadline, cache) if log_present and log is not None else None
+    return {
+        "raw_sha256": raw_sha,
+        "log_sha256": log_sha,
+        "composite_sha256": result_store.composite_digest(raw_sha, log_sha, log_present),
+    }
+
+
+async def _manifest_for(
+    run: _ResolvedRun, *, digest: bool, deadline: float, cache: _DigestCache
+) -> dict[str, Any]:
+    """One run's source record: its paths, their stamps, and digests if asked.
+
+    The stamps identify the source: the drift checks compare them, and
+    ``source_identity`` names the artifacts derived from it. Content digests
+    cost a full read of every raw, so they are taken only when ``digest`` asks
+    (``include.provenance``) or the set is handed to a caller to resume.
+    """
+    stamp = _source_stamp(run.source.raw, run.source.log)
+    log_path = str(run.source.log) if run.source.log else None
+    manifest: dict[str, Any] = {
         "manifest_id": run.manifest_id,
         "label": run.label,
         "raw_path": str(run.source.raw),
-        "raw_sha256": raw_sha,
-        "log_path": str(run.source.log) if run.source.log else None,
-        "log_present": log_present,
-        "log_sha256": log_sha,
-        "composite_sha256": composite,
+        "log_path": log_path,
+        **stamp,
+        "source_identity": result_store.canonical_hash(
+            {"raw_path": str(run.source.raw), "log_path": log_path, **stamp}
+        ),
+        "raw_sha256": None,
+        "log_sha256": None,
+        "composite_sha256": None,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
     }
+    if digest:
+        manifest.update(
+            await _content_digests(
+                run.source.raw, run.source.log, stamp["log_present"], deadline, cache
+            )
+        )
+    return manifest
 
 
 def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
@@ -1134,7 +1188,11 @@ async def _create_result_set(
     manifests: list[dict[str, Any]] = []
     for run in runs:
         try:
-            manifests.append(await _manifest_for(run, deadline, cache))
+            manifests.append(
+                await _manifest_for(
+                    run, digest=args.include.provenance, deadline=deadline, cache=cache
+                )
+            )
         except (LTSpiceMCPError, OSError) as exc:
             manifests.append(
                 {
@@ -1183,7 +1241,17 @@ async def _verify_direct_sources(
     selected_ids: set[str],
     deadline: float,
     cache: _DigestCache,
+    *,
+    contents: bool = False,
 ) -> dict[str, SourceFault]:
+    """The selected direct sources that no longer read as their manifest recorded.
+
+    A changed stamp (size or modification time) is drift. With ``contents``,
+    a source whose manifest records a content digest is also re-read and
+    compared, which is how a set resumed by a later call is checked: a rewrite
+    that kept both the size and the timestamp still reads as drift. A manifest
+    written before stamps were recorded is checked by content alone.
+    """
     failures: dict[str, SourceFault] = {}
     for manifest in manifests:
         manifest_id = str(manifest["manifest_id"])
@@ -1195,15 +1263,18 @@ async def _verify_direct_sources(
             continue
         try:
             raw_path = Path(manifest["raw_path"])
-            raw_sha = await _digest(raw_path, deadline, cache)
             log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
-            log_present = log_path is not None and log_path.is_file()
-            log_sha = (
-                await _digest(log_path, deadline, cache) if log_present and log_path else None
-            )
-            composite = result_store.composite_digest(raw_sha, log_sha, log_present)
-            if composite != manifest["composite_sha256"]:
+            stamp = _source_stamp(raw_path, log_path)
+            stamped = "raw_stamp" in manifest
+            if stamped and not _same_stamp(manifest, stamp):
                 failures[manifest_id] = SourceFault("source_drift")
+                continue
+            if manifest.get("composite_sha256") and (contents or not stamped):
+                digests = await _content_digests(
+                    raw_path, log_path, stamp["log_present"], deadline, cache
+                )
+                if digests["composite_sha256"] != manifest["composite_sha256"]:
+                    failures[manifest_id] = SourceFault("source_drift")
         except (LTSpiceMCPError, OSError) as exc:
             failures[manifest_id] = SourceFault(
                 "analysis_deadline"
@@ -1212,6 +1283,63 @@ async def _verify_direct_sources(
                 str(exc),
             )
     return failures
+
+
+async def _record_source_digests(item: result_store.ResultSet, state: SessionState) -> None:
+    """Record content digests for the direct sources of a set a caller can resume.
+
+    Called when a reply hands out a cursor or continuation: the call that
+    resumes the set compares these digests (``_verify_direct_sources`` with
+    ``contents``), which a size and timestamp alone cannot match for a rewrite
+    that kept both. Job artifacts are trusted server files and are not digested.
+    Bounded by the analysis budget; a source not digested in time, or whose
+    stamp moved meanwhile, is left to its stamp. Nothing here fails a recipe.
+    """
+    pending = [
+        manifest
+        for manifest in item.source_manifests
+        if not manifest.get("trusted_job_artifact")
+        and not manifest.get("digest_error")
+        and not manifest.get("composite_sha256")
+        and "raw_stamp" in manifest
+    ]
+    if not pending:
+        return
+    deadline = asyncio.get_running_loop().time() + state.config.analysis_budget_s
+    cache: _DigestCache = {}
+    recorded: dict[str, dict[str, Any]] = {}
+    for manifest in pending:
+        raw_path = Path(manifest["raw_path"])
+        log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
+        try:
+            digests = await _content_digests(
+                raw_path, log_path, bool(manifest.get("log_present")), deadline, cache
+            )
+            # The digests describe the stamped content only if nothing moved
+            # while they were taken.
+            if _same_stamp(manifest, _source_stamp(raw_path, log_path)):
+                recorded[str(manifest["manifest_id"])] = digests
+        except (LTSpiceMCPError, OSError):
+            continue
+    if recorded:
+        await asyncio.to_thread(result_store.record_digests, item, recorded)
+
+
+def _resumable(data: dict[str, Any]) -> bool:
+    """Whether a reply hands the caller a cursor or continuation into its set."""
+    if data.get("next") is not None or data.get("cursor") is not None:
+        return True
+    coverage = data.get("coverage")
+    missing = coverage.get("missing_cases") if isinstance(coverage, dict) else None
+    if isinstance(missing, dict) and missing.get("next_cursor") is not None:
+        return True
+    results = data.get("results")
+    return isinstance(results, dict) and any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("per_run"), dict)
+        and entry["per_run"].get("next_cursor") is not None
+        for entry in results.values()
+    )
 
 
 def _spice(value: float | str | None) -> str | None:
@@ -1476,7 +1604,7 @@ async def _waveform(
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest["composite_sha256"],
+        source_digest=manifest.get("source_identity") or manifest["composite_sha256"],
         recipe_hash=recipe_hash,
         suffix="csv",
     )
@@ -1537,7 +1665,7 @@ async def _plot(
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest["composite_sha256"],
+        source_digest=manifest.get("source_identity") or manifest["composite_sha256"],
         recipe_hash=recipe_hash,
         suffix="html",
     )
@@ -3065,7 +3193,7 @@ _BUDGET_NOTES = response_budget.Notes(
 
 async def _negotiate_analysis(
     budget: ResponseBudget, a: AnalysisEvaluation
-) -> types.CallToolResult:
+) -> tuple[dict[str, Any], str]:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
     base = _Limits.of(a.include)
     text = ""
@@ -3094,7 +3222,7 @@ async def _negotiate_analysis(
         budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
     )
     response_budget.attach_notes(result, _BUDGET_NOTES)
-    return format_response(text, result.data)
+    return result.data, text
 
 
 async def _evaluate_unit(
@@ -3268,6 +3396,10 @@ class _DriveStart:
     intra_item: int
     missing_offset: int
     include: AnalyzeInclude
+    #: Resumed from a cursor or continuation a caller handed back: the set may
+    #: have been written by an earlier call, so its sources are checked by
+    #: content where it recorded digests.
+    resumed: bool = False
 
 
 async def _resolve_drive_start(
@@ -3353,7 +3485,8 @@ async def _resolve_drive_start(
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
     if inherited_view:
         include = include.model_copy(update={"fields": cursor_fields})
-    return _DriveStart(item, position, intra_item, missing_offset, include)
+    resumed = continuation is None and (args.continuation is not None or page_cursor is not None)
+    return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
 
 
 async def _evaluate_analysis_drive(
@@ -3408,15 +3541,15 @@ async def _evaluate_analysis_drive(
         work_done = True
 
     # Source-drift precheck (once per call): verify every direct source before
-    # any recipe reads it. The shared digest cache makes this free for the
-    # sources a fresh set just hashed; a continuation re-checks them against the
-    # manifest.
+    # any recipe reads it, by its stamp, and by content too when a caller
+    # resumed a set that recorded digests.
     precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
     precheck = await _verify_direct_sources(
         item.source_manifests,
         {run.manifest_id for run in runs},
         precheck_deadline,
         digest_cache,
+        contents=start.resumed,
     )
 
     processed: list[WorkUnit] = []
@@ -3695,5 +3828,10 @@ async def handle_analyze_results(
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
         data, text = _assemble(assembly, None, _Limits.of(assembly.include))
-        return format_response(text, data)
-    return await _negotiate_analysis(budget, assembly)
+    else:
+        data, text = await _negotiate_analysis(budget, assembly)
+    # Sources are identified by their stamps within a call; a set handed to the
+    # caller to resume gets content digests, which the resuming call compares.
+    if _resumable(data):
+        await _record_source_digests(assembly.item, state)
+    return format_response(text, data)
