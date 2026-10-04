@@ -76,32 +76,34 @@ def test_step_and_all_steps_are_exclusive_on_the_attached_block():
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
-    """One cap, both surfaces.
+    """One cap, both surfaces, held rather than refused.
 
-    The attached block is handed straight to analyze_results, so a per_run
-    limit run_experiments advertises but that engine rejects would be a lever
-    that cannot work. Both bounds must come from the same constant, and the
-    over-cap request must be refused at submission, not at the analysis stage.
+    The attached block is handed straight to analyze_results, so its limit is
+    that engine's own model: an over-cap request is held to the cap at
+    submission, and the request the job records names the page it will serve.
     """
-    advertised = AnalysisPerRun.model_json_schema()["properties"]["limit"]["maximum"]
-    engine = analyze_mod.PerRunInclude.model_json_schema()["properties"]["limit"]["maximum"]
+    assert issubclass(AnalysisPerRun, analyze_mod.CappedPerRunLimit)
+    assert issubclass(analyze_mod.PerRunInclude, analyze_mod.CappedPerRunLimit)
+    for model in (AnalysisPerRun, analyze_mod.PerRunInclude):
+        assert "maximum" not in model.model_json_schema()["properties"]["limit"]
 
-    assert advertised == engine == analyze_mod.MAX_PAGE_SIZE
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": "over-cap",
+            "circuits": [{"path": "dut.cir"}],
+            "analyze": {
+                "recipes": [{"key": "vout", "metric": "summary"}],
+                "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
+            },
+        }
+    )
+    analyze_block = args.strip_presentation()["analyze"]
+    assert analyze_block["include"]["per_run"]["limit"] == analyze_mod.MAX_PAGE_SIZE
+    (note,) = experiments_mod._argument_warnings(args, None)
+    assert f"analyze.include.per_run.limit={analyze_mod.MAX_PAGE_SIZE + 1}" in note
 
-    with pytest.raises(ValidationError):
-        RunExperimentsInput.model_validate(
-            {
-                "request_id": "over-cap",
-                "circuits": [{"path": "dut.cir"}],
-                "analyze": {
-                    "recipes": [{"key": "vout", "metric": "summary"}],
-                    "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
-                },
-            }
-        )
 
-
-def test_wait_caps_keep_the_submission_and_control_plane_contracts():
+def test_wait_caps_are_held_not_advertised_as_a_maximum():
     run_schema = build_input_schema(RunExperimentsInput)
     execution_schema = resolve_local_ref(
         run_schema,
@@ -119,14 +121,32 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
         ),
     )
 
-    assert execution_schema["properties"]["wait_s"]["maximum"] == 120
-    assert wait_branch["properties"]["timeout_s"]["maximum"] == 300
+    # A strict client checks a maximum before sending and would refuse on the
+    # server's behalf; the descriptions name the cap instead.
+    assert "maximum" not in execution_schema["properties"]["wait_s"]
+    assert "maximum" not in wait_branch["properties"]["timeout_s"]
+    assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
-    with pytest.raises(ValidationError) as excinfo:
-        experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})
-    message = str(excinfo.value)
-    assert 'jobs(action="wait"' in message
-    assert "timeout_s<=300" in message
+
+@pytest.mark.asyncio
+async def test_a_dwell_past_its_cap_is_held_and_names_the_continuation(
+    state_with_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    submissions: list[str] = []
+    fake_simulator(monkeypatch, submissions)
+    deck = _deck(work_dir / "dwell.cir")
+
+    data = _assert_schema(
+        await handle_run_experiments(_args(deck, "dwell-past-cap", wait_s=900), state_with_sim)
+    )
+
+    assert "error" not in data, data.get("error")
+    assert len(submissions) == 1
+    (note,) = [w for w in data["warnings"] if "execution.wait_s" in w]
+    assert "execution.wait_s=900s" in note and "120s was used" in note
+    assert "jobs(action='wait', timeout_s<=300)" in note
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():
@@ -1050,17 +1070,13 @@ class TestAttachedBlockPreflight:
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "attached_dup.cir")
+        recipe = {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
 
         result = await handle_run_experiments(
             _args(
                 deck,
-                "attached-dup-group",
-                analyze={
-                    "recipes": [
-                        {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
-                    ],
-                    "group_by": ["R1", "R1"],
-                },
+                "attached-dup-key",
+                analyze={"recipes": [recipe, {**recipe, "at": "800u"}]},
             ),
             state_with_sim,
         )
@@ -1068,6 +1084,37 @@ class TestAttachedBlockPreflight:
         assert result.is_error
         assert "attached analyze block" in json.dumps(result.structured_content)
         assert submissions == []
+
+    async def test_a_repeated_group_by_entry_is_read_once_and_said(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # Refused at the door before; a repeat asks for nothing extra.
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_dup_group.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-dup-group",
+                    analyze={
+                        "recipes": [
+                            {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
+                        ],
+                        "group_by": ["R1", "R1"],
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "error" not in data, data.get("error")
+        assert len(submissions) == 1
+        assert "analyze.group_by repeated 'R1'; each is read once." in data["warnings"]
 
 
 class TestOptionalRequestId:
@@ -1848,6 +1895,68 @@ class TestPerCircuitFailuresAndAccounting:
         ]
         assert [item["run_index"] for item in data["runs"]["items"]] == [0, 1]
         assert data["failures"][0]["case_id"] == "missing-case-0000"
+
+    async def test_ids_from_file_stems_are_made_valid_and_unique(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # A stem was refused as invalid_circuit_id ("amp.v2") or as
+        # duplicate_circuit_id (two "amp" files), although the caller never
+        # wrote an id. The server picked the name, so it now makes one that
+        # works and says which.
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        (work_dir / "a").mkdir()
+        (work_dir / "b").mkdir()
+        first = _deck(work_dir / "a" / "amp.cir")
+        second = _deck(work_dir / "b" / "amp.cir")
+        dotted = _deck(work_dir / "amp.v2.cir")
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "stem-ids",
+                "circuits": [{"path": str(p)} for p in (first, second, dotted)],
+                "execution": {"wait_s": 1},
+            }
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert "error" not in data, data.get("error")
+        assert len(submissions) == 3
+        assert [item["circuit"] for item in data["runs"]["items"]] == ["amp", "amp-2", "amp_v2"]
+        derived = {
+            item["evidence"]["circuit_id"]: item["detail"]
+            for item in data["observations"]
+            if item["code"] == "circuit_id_derived"
+        }
+        assert set(derived) == {"amp-2", "amp_v2"}
+        assert "'amp' is another circuit's id" in derived["amp-2"]
+        assert "'amp.v2' is not a valid id" in derived["amp_v2"]
+
+    async def test_an_id_the_caller_wrote_is_still_validated(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "amp.cir")
+        for circuits, code in (
+            ([{"path": str(deck), "id": "amp.v2"}], "invalid_circuit_id"),
+            (
+                [{"path": str(deck), "id": "amp"}, {"path": str(deck), "id": "AMP"}],
+                "duplicate_circuit_id",
+            ),
+        ):
+            args = RunExperimentsInput.model_validate(
+                {"request_id": f"caller-id-{code}", "circuits": circuits}
+            )
+            data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+            assert data["error"]["code"] == code
+        assert submissions == []
 
     async def test_case_deck_keeps_staged_relative_includes_reachable(
         self,
@@ -2965,6 +3074,60 @@ class TestVariationsReachIntoIncludes:
         ]
         assert len(set(values)) == 2
         assert all(float(value) != 1000.0 for value in values)
+
+    async def test_random_entries_on_different_circuits_share_one_job(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # Refused per call before, so two designs could not be Monte-Carlo'd
+        # in one job; one random entry per circuit is the rule that holds.
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        first, second = _deck(work_dir / "a.cir"), _deck(work_dir / "b.cir")
+
+        def entry(circuit: str, runs: int) -> dict[str, Any]:
+            return {
+                "kind": "random",
+                "runs": runs,
+                "seed": 5,
+                "applies_to": [circuit],
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    first,
+                    "random-per-circuit",
+                    lint="off",
+                    circuits=[{"path": str(first), "id": "a"}, {"path": str(second), "id": "b"}],
+                    variations=[entry("a", 2), entry("b", 3)],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "error" not in data, data.get("error")
+        assert data["completeness"]["produced"] == 5
+        assert len(submitted) == 5
+
+        refused = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    first,
+                    "random-same-circuit",
+                    lint="off",
+                    circuits=[{"path": str(first), "id": "a"}, {"path": str(second), "id": "b"}],
+                    variations=[entry("a", 2), {**entry("b", 2), "applies_to": ["a", "b"]}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert refused["error"]["code"] == "multiple_random_variations"
+        assert "'a'" in refused["error"]["message"]
+        assert len(submitted) == 5
 
     async def test_two_level_include_chain_resolves_and_is_rewired(
         self,

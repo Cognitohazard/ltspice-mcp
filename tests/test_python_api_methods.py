@@ -636,6 +636,27 @@ def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
     )
 
 
+def test_analyze_reports_a_repeat_it_read_once_through_both_interfaces(
+    state_no_sim: SessionState,
+    work_dir: Path,
+) -> None:
+    """A repeated group_by entry is read once, and the note saying so was set
+    only by the MCP handler, so the Python API dropped the repeat silently."""
+    api = SyncApi(state_no_sim)
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    arguments = {
+        "sources": [{"raw_path": str(raw), "label": "dut"}],
+        "recipes": [
+            {"key": "v", "metric": "value", "expr": "V(out)", "at": "500u", "reduce": ["max"]}
+        ],
+        "all_steps": True,
+        "group_by": ["circuit", "circuit"],
+    }
+    note = "group_by repeated 'circuit'; each is read once."
+    assert note in api.analyze_results(**arguments)["hint"]
+    assert note in api.analyze_results(raw_page=True, **arguments)["hint"]
+
+
 def test_analyze_collects_projected_per_run_rows_and_missing_cases_together(
     state_no_sim: SessionState,
     work_dir: Path,

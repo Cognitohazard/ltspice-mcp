@@ -5,6 +5,7 @@ Used throughout the analysis tools to accept human-friendly frequency and time v
 """
 
 import re
+from collections.abc import Container
 from typing import Any
 
 
@@ -131,6 +132,22 @@ def parse_spice_value(s: str) -> float:
         f"Cannot parse '{s}' as SPICE value. "
         f"Expected number or number with suffix: {', '.join(suf for suf, _ in _SCALE_FACTORS)}"
     )
+
+
+def unique_name(
+    base: str, taken: Container[str], *, fold: bool = False, max_len: int | None = None
+) -> str:
+    """``base``, or ``base-2``, ``base-3``…, whichever comes first not in ``taken``.
+
+    With ``fold`` the comparison ignores case, and ``taken`` holds casefolded
+    names. ``max_len`` shortens ``base`` so a suffixed name still fits.
+    """
+    candidate, counter = base, 2
+    while (candidate.casefold() if fold else candidate) in taken:
+        suffix = f"-{counter}"
+        stem = base if max_len is None else base[: max_len - len(suffix)]
+        candidate, counter = stem + suffix, counter + 1
+    return candidate
 
 
 def format_spice_value(value: float | str) -> str:

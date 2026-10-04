@@ -10,6 +10,87 @@ tool-surface changes.
 
 ### Fixed
 
+- `inspect(kind="model", mode="enumerate")` refused a `query` because it never
+  filtered. It now lists only the models whose name contains the query,
+  case-insensitively, and echoes the filter it applied; `search` keeps its
+  fuzzy match.
+- `analyze_results` refused several requests that asked for nothing harmful.
+  A source's `label` is now optional (it defaults to the job_id or the raw
+  file's stem, with a `-2` suffix where two sources would share one); a
+  repeated run index, `case_ids` entry, `group_by` dimension or `include.fields`
+  path is read once and named in the `hint` (on an attached analysis, in the
+  receipt's `warnings`); and `continue` accepts the original request's fields
+  resent with it, refusing only a field that differs from the stored request,
+  which it now names. A label the caller writes must still be unique.
+- `jobs` refused a call carrying both `job_id` and `request_id`, even when
+  both named the same job. Both are now accepted; when they name different jobs
+  the call fails with the new code `selector_conflict`, naming the job the
+  `request_id` resolves to.
+- Four caps refused a larger value instead of serving the cap:
+  `run_experiments`' `execution.wait_s` above 120 s, `jobs(wait)`'s
+  `timeout_s` above 300 s, `jobs(list)`'s `limit` above 50, and `per_run.limit`
+  above 100 on `analyze_results` and on an attached analysis. Each now runs at
+  the cap and says so — a warning on `run_experiments` and `jobs`, the `hint`
+  on `analyze_results` — naming the value used and how to get the rest (wait
+  again, or the next cursor). The schemas no longer advertise these as a
+  `maximum`, since a strict client refuses one before sending; the
+  descriptions name the cap.
+- `analyze_results` refused `reduce` without `field` on a multi-field recipe
+  (`{metric: "stability", reduce: ["min"]}`), while a keyed recipe's bare
+  `reduce` covered every key. A bare `reduce` now covers every field the recipe
+  reports, one row per field and statistic, each the number a reduction naming
+  that field gives; `spec` still needs `field`. `edges` reports its transition
+  time as `rise_time` or `fall_time` by the edge each row measured.
+- `run_experiments` refused a circuit whose id came from its file stem when the
+  stem was not a valid id (`amp.v2.cir`, `my amp.cir`: `invalid_circuit_id`) or
+  when two files shared a stem (`a/amp.cir` and `b/amp.cir`:
+  `duplicate_circuit_id`), with no word that the caller had written no id. The
+  server chose that name, so it now makes it valid (`amp_v2`, `my_amp`) and
+  unique against every other id in the call (`amp`, `amp-2`), and each such
+  circuit's cases carry a new `circuit_id_derived` observation naming the id
+  it ran under and why. An id the caller writes is still refused when invalid
+  or duplicated, and an unknown `applies_to` id now lists the ids in the call.
+- `run_experiments` refused two `random` variation entries in one call even
+  when their `applies_to` lists named different circuits, so two designs could
+  not be Monte-Carlo'd in one job. The rule it enforces is per circuit: the
+  product of two random families on one deck is ill-defined, so a circuit still
+  takes at most one (`multiple_random_variations`, now naming the circuit), but
+  entries on different circuits each run with their own seed.
+- `add_net_label` refused any second name on a net that already had one, even
+  a name no other net carries, which joins nothing. It now refuses only a label
+  that would join two named nets: a name another net already has, or a new
+  name placed where two named nets cross (a label at a crossing joins both
+  wires, which the old check missed). A second name for one net is placed with
+  a warning that the node now has two names. `wire_pins`' refusal to join two
+  named nets pointed at `add_net_label` "to merge them deliberately", which
+  refused the same merge; it now names the relabelling that works.
+- `inspect(kind="net")` read a bare `at: "out"` as a node name on a netlist but
+  refused it on a schematic. On a schematic it now names the net label, as
+  `net:out` does.
+- `wire_pins` refused a route that crosses an existing wire where neither
+  ends, although LTspice leaves such a crossing unjoined (the LTspice 26.1.1
+  export in `tests/fixtures/t_junctions/crossing_wires`), so the route joins
+  nothing there. The route is now drawn and the op reports a warning naming the
+  wire and the crossing point.
+- `edit_schematic` refused a dry run, or an op-less read such as paging the
+  `preexisting` view, on an existing sheet unless it carried
+  `expected_sha256`. The token guards against a lost update, which only a
+  write can cause, so it is now required only to commit. A dry run returns the
+  sheet's current `sha256`, and a token it is given that does not match is
+  reported in `observations` rather than refused; a commit quoting that token
+  is still `revision_conflict`.
+- `edit_schematic`'s `set_component_value` refused any value with a space
+  outside braces, quotes, a waveform's parentheses or a `MODEL KEY=VALUE` list,
+  so a source's `AC 1` or `DC 5 AC 1`, a BJT's `2N3904 2` or `NPN 8`, and a
+  behavioural source's `V=V(a) + V(b)` were refused, although `add_component`
+  writes the same values and none of them can reach a node slot. The refusal
+  now applies only where a space would split the value into an extra node: a
+  resistor, capacitor, inductor or subcircuit value, a MOSFET value other than
+  a model name and `off`, and a BJT, JFET or diode value other than a model
+  name, an area factor and `off`. The element class is the symbol's `Prefix`,
+  as LTspice netlists it, not the instance name. A waveform followed by a
+  parameter (`PULSE(...) Rser=1`) keeps its parentheses in Value and puts the
+  parameter in SpiceLine.
 - Running a schematic on ngspice replaced every `µ` and `μ` in the exported
   netlist with `u` and deleted every `§`, including in comments, quoted strings
   and include paths, so an `.include` naming a folder with either character in
