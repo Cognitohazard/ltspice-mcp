@@ -311,12 +311,15 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
     """An executable not named like XVII is still known to be one once a run on
     it reported that build in its own output, as capabilities reports it."""
     from ltspice_mcp.lib.experiment_types import Completeness, ExperimentCase, ExperimentJob
-    from ltspice_mcp.lib.simulator_build import SimulatorExecutable
+    from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_path
     from ltspice_mcp.lib.store import Store
 
     class Renamed(FakeSim):
-        spice_exe: typing.ClassVar[list[str]] = ["/opt/ltspice/ltspice.exe"]
+        spice_exe: typing.ClassVar[list[str]] = [str(work_dir / "tools" / "ltspice.exe")]
 
+    # Recorded as the server records it, in the platform's own spelling.
+    program = executable_path(Renamed)
+    assert program is not None
     state = SessionState.create(config, available={"ltspice": Renamed})
     deck = work_dir / "rc.net"
     deck.write_bytes("* rc\nC1 out 0 23µ\n.end\n".encode())
@@ -343,7 +346,7 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
             simulator="Renamed",
             completeness=Completeness(declared=1, expanded=1),
             simulator_executable=SimulatorExecutable(
-                path="/opt/ltspice/ltspice.exe", sha256=None, bytes=None, modified=None
+                path=program, sha256=None, bytes=None, modified=None
             ),
         ),
         already_persisted=True,
@@ -354,7 +357,7 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
     (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "warning"
     assert finding["evidence"]["reader"] == (
-        "Linear Technology Corporation LTspice XVII (/opt/ltspice/ltspice.exe)"
+        f"Linear Technology Corporation LTspice XVII ({program})"
     )
 
 
