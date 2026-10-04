@@ -31,6 +31,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
+    JOBS_WAIT_CAP_S,
     RunExperimentsInput,
     handle_run_experiments,
 )
@@ -42,6 +43,7 @@ from ltspice_mcp.tools.jobs import (
     handle_jobs,
 )
 from ltspice_mcp.tools.receipts import (
+    JOBS_PAGE_LIMIT,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     progress_from_completeness,
     project_receipt_runs,
@@ -279,7 +281,6 @@ _REJECTED_JOBS_ARGUMENTS: tuple[tuple[str, dict], ...] = (
     ("wait-without-a-selector", {"action": "wait", "timeout_s": 0}),
     ("cancel-without-a-selector", {"action": "cancel", "control_token": "tok"}),
     ("runs-without-a-selector", {"action": "runs"}),
-    ("status-with-both-selectors", {"action": "status", "job_id": "exp-1", "request_id": "r"}),
     ("list-with-a-job-id", {"action": "list", "job_id": "exp-1"}),
     ("list-with-a-request-id", {"action": "list", "request_id": "req-1"}),
     ("list-with-a-null-job-id", {"action": "list", "job_id": None}),
@@ -297,11 +298,9 @@ _REJECTED_JOBS_ARGUMENTS: tuple[tuple[str, dict], ...] = (
     ("unknown-field", {"action": "status", "job_id": "exp-1", "verbose": True}),
     ("empty-job-id", {"action": "status", "job_id": ""}),
     ("empty-request-id", {"action": "status", "request_id": ""}),
-    ("dwell-past-the-cap", {"action": "wait", "job_id": "exp-1", "timeout_s": 301}),
     ("negative-dwell", {"action": "wait", "job_id": "exp-1", "timeout_s": -1}),
     ("unknown-wait-mode", {"action": "wait", "job_id": "exp-1", "wait_for": "cases"}),
     ("limit-below-one", {"action": "list", "limit": 0}),
-    ("limit-past-the-page-cap", {"action": "list", "limit": 51}),
     ("budget-below-the-floor", {"action": "status", "job_id": "exp-1", "budget": 1}),
 )
 
@@ -331,7 +330,7 @@ class TestAcceptedArgumentSpellings:
         """The message a client acts on: the e2e surface asserts this wording."""
         with pytest.raises(ValidationError) as excinfo:
             JobsInput.model_validate({"action": "status"})
-        assert "requires exactly one of job_id or request_id" in str(excinfo.value)
+        assert "requires job_id or request_id" in str(excinfo.value)
 
     def test_an_unknown_action_names_every_action(self):
         with pytest.raises(ValidationError) as excinfo:
@@ -524,6 +523,44 @@ class TestActionShapesAndTokenSecrecy:
         assert data["request_id"] == job.request_id
         assert data["analysis_status"] == "not_requested"
 
+    async def test_both_selectors_naming_one_job_address_it(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        # Refused at validation even when both named the same job, which is
+        # what a caller holding both from a receipt naturally sends.
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, status="running")
+        _persist_experiment(job, work_dir)
+
+        data = _assert_jobs_schema(
+            await handle_jobs(
+                _args("status", job_id=job.job_id, request_id=job.request_id),
+                state_no_sim,
+            )
+        )
+        assert "error" not in data
+        assert data["job_id"] == job.job_id
+
+    async def test_selectors_naming_two_jobs_are_refused(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, status="running")
+        _persist_experiment(job, work_dir)
+
+        data = _assert_jobs_schema(
+            await handle_jobs(
+                _args("status", job_id="exp_some_other_job", request_id=job.request_id),
+                state_no_sim,
+            )
+        )
+        assert data["error"]["code"] == "selector_conflict"
+        assert job.job_id in data["error"]["message"]
+
     async def test_terminal_receipt_with_paged_runs_emits_working_cursor(
         self,
         state_no_sim: SessionState,
@@ -554,11 +591,8 @@ class TestActionShapesAndTokenSecrecy:
             assert runs["total"] == 60
             assert runs["next_cursor"] == "o:50"
             assert runs["next_cursor"] in data["hint"]
-            # The counts the hint must carry, read off the structured payload
-            # it summarises — not the sentence it wraps them in.
-            progress = data["progress"]
-            assert f"{progress['terminal']}/{progress['expanded']}" in data["hint"]
-            assert f"{progress['remaining']} remaining" in data["hint"]
+            # The counts are in 'progress'; the hint does not restate them.
+            assert "remaining" not in data["hint"]
 
         follow = _assert_jobs_schema(
             await handle_jobs(
@@ -1052,10 +1086,10 @@ class TestDurableProgress:
         assert middle["progress"]["terminal"] < middle["progress"]["expanded"]
         assert final["progress"]["terminal"] == final["progress"]["expanded"]
         assert "cases_failed" not in middle["progress"]
-        assert "jobs(action='wait'" in middle["hint"]
-        counts = middle["progress"]
-        assert f"{counts['terminal']}/{counts['expanded']}" in middle["hint"]
-        assert f"{counts['remaining']} remaining" in middle["hint"]
+        assert middle["hint"] == (
+            f"Job {job.job_id} is still running; continue with "
+            f"jobs(action='wait', job_id='{job.job_id}')."
+        )
 
     async def test_status_reports_how_far_each_running_case_has_got(
         self,
@@ -1176,6 +1210,34 @@ class TestWait:
         assert runs_done["timed_out"] is False
         assert runs_done["status"] == "analyzing"
         assert runs_done["analysis_status"] == "running"
+
+    async def test_a_wait_past_its_cap_is_held_to_it_and_says_so(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # A timeout_s above 300 was refused at validation, so asking to wait
+        # longer cost a round trip; the wait runs at the cap and says so.
+        circuit = _circuit(work_dir)
+        running = _experiment(work_dir, circuit, status="running")
+        state_no_sim.all_jobs[running.job_id] = running
+        real_wait = jobs_module._wait_for_jobs_target
+        waited: list[float] = []
+
+        async def spy(job, state, *, timeout_s, wait_for):
+            waited.append(timeout_s)
+            return await real_wait(job, state, timeout_s=0, wait_for=wait_for)
+
+        monkeypatch.setattr(jobs_module, "_wait_for_jobs_target", spy)
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("wait", job_id=running.job_id, timeout_s=900), state_no_sim)
+        )
+
+        assert waited == [JOBS_WAIT_CAP_S]
+        assert data["timed_out"] is True
+        (note,) = [w for w in data["warnings"] if "timeout_s" in w]
+        assert "timeout_s=900s" in note and "300s was used" in note
 
     async def test_foreign_wait_refreshes_a_second_registry_from_sidecar(
         self,
@@ -1477,6 +1539,32 @@ class TestListAndRunsPagination:
         assert page_one["returned"] == page_two["returned"] == 1
         observations = [*page_one["observations"], *page_two["observations"]]
         assert any(item["code"] == "experiment_index_invalid" for item in observations)
+
+    async def test_a_list_limit_past_the_page_cap_is_held_to_it_and_says_so(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # The recent index keeps fewer groups than a page holds, so the page
+        # size served is read off the renderer it is handed to.
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
+        for index in range(3):
+            await asyncio.to_thread(recent.touch, _circuit(work_dir, f"c{index}.cir"))
+        real_render = jobs_module.render_jobs_data
+        limits: list[int | None] = []
+
+        def spy(evaluation, *, limit=None, rung=None):
+            limits.append(limit)
+            return real_render(evaluation, limit=limit, rung=rung)
+
+        monkeypatch.setattr(jobs_module, "render_jobs_data", spy)
+        data = _assert_jobs_schema(await handle_jobs(_args("list", limit=500), state_no_sim))
+
+        assert limits == [JOBS_PAGE_LIMIT]
+        assert data["returned"] == data["total"] == 3
+        (note,) = data["warnings"]
+        assert "limit=500" in note and f"{JOBS_PAGE_LIMIT} was used" in note
 
     async def test_submission_appears_in_unfiltered_recent_view(
         self,

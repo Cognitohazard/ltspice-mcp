@@ -91,7 +91,6 @@ class TestAnalysisDeadlineIsTyped:
             ],
             {"m1"},
             asyncio.get_running_loop().time() + 60.0,
-            {},
         )
         assert failures["m1"].code == "source_drift"
 
@@ -112,9 +111,33 @@ class TestAnalysisDeadlineIsTyped:
                 ],
                 {"m1"},
                 loop.time() + 60.0,
-                {},
             )
         assert failures["m1"].code == "analysis_deadline"
+
+    async def test_a_resumed_content_check_out_of_time_leaves_the_source_to_its_stamp(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The digest a resumed set compares is taken within a budget and may be
+        # skipped; comparing it is bounded the same way, and the stamp, which
+        # still matches, is what identifies the source.
+        raw = _copy_raw(work_dir, "probe.raw")
+        loop = asyncio.get_running_loop()
+        with services.analysis_deadline(loop.time() - 1.0):
+            failures = await analyze_mod._verify_direct_sources(
+                [
+                    {
+                        "manifest_id": "m1",
+                        "raw_path": str(raw),
+                        "log_path": None,
+                        **analyze_mod._source_stamp(raw, None),
+                        "composite_sha256": "0" * 64,
+                    }
+                ],
+                {"m1"},
+                loop.time() + 60.0,
+                contents=True,
+            )
+        assert failures == {}
 
     async def test_manifest_digest_out_of_quota_is_source_unavailable(
         self,
@@ -126,8 +149,17 @@ class TestAnalysisDeadlineIsTyped:
         # storage fault, not a deadline, and the manifest must say so.
         raw = _copy_raw(work_dir, "probe.raw")
         monkeypatch.setattr(result_store, "sha256_file", _out_of_quota)
-        data = await _analyze(state_no_sim, raw, [{"key": "summary", "metric": "summary"}])
-        assert _failure_codes(data) == {"source_unavailable"}
+        # Provenance is the call that digests its sources up front.
+        args = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [{"key": "summary", "metric": "summary"}],
+                "include": {"provenance": True},
+            }
+        )
+        result = await handle_analyze_results(args, state_no_sim)
+        assert result.structured_content is not None
+        assert _failure_codes(result.structured_content) == {"source_unavailable"}
 
     async def test_signal_named_deadline_is_recipe_failed(
         self, state_no_sim: SessionState, work_dir: Path
@@ -399,6 +431,7 @@ FROZEN_ERROR_CODES = (
     "case_cap",
     "case_cap_exceeded",
     "case_not_found",
+    "circuit_id_derived",
     "circuits_empty",
     "clone_include_unsupported",
     "commit_failed",
@@ -423,7 +456,6 @@ FROZEN_ERROR_CODES = (
     "geometry_not_literal",
     "hierarchy_write_conflict",
     "idempotency_conflict",
-    "idempotent_replay",
     "image_unavailable",
     "include_unstaged",
     "inner_device_not_found",
@@ -476,7 +508,6 @@ FROZEN_ERROR_CODES = (
     "not_found",
     "op_failed",
     "open_failed",
-    "open_skipped",
     "order_disagreement",
     "overlapping_assignment",
     "overlapping_mismatch_rules",
@@ -487,7 +518,6 @@ FROZEN_ERROR_CODES = (
     "path_denied",
     "pdk_native_request",
     "phase_unwrapped",
-    "plot_written",
     "post_commit_failed",
     "preexisting_mismatch",
     "preexisting_mismatch_param",
@@ -508,6 +538,7 @@ FROZEN_ERROR_CODES = (
     "run_not_found",
     "run_progress",
     "search_error",
+    "selector_conflict",
     "semantic_profile_required",
     "server_restarted",
     "server_shutdown",
@@ -520,7 +551,6 @@ FROZEN_ERROR_CODES = (
     "source_unavailable_after_staging",
     "sparse_sweep",
     "staging_collision",
-    "step_axis_unioned",
     "step_value_unavailable",
     "subckt_unresolved",
     "submission_committed",
@@ -539,7 +569,6 @@ FROZEN_ERROR_CODES = (
     "unsupported_model",
     "unsupported_variant",
     "unwrap_warning",
-    "widget_delivered",
     "widget_unavailable",
     "window_empty_steps",
     "windows_native_storage_unavailable",

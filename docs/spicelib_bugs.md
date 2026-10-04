@@ -1630,3 +1630,199 @@ refuses pending child edits before saving (Bug 13's workaround); the wrong read
 is. The test suite warms this cache for the fixture library once per session
 (`tests/conftest.py::_asc_symbol_cache`), and tests that load sheet-local
 symbols swap in a copy of it so no later test inherits their folders.
+
+---
+
+## Bug 18 — `Simulator.create_from` rebinds the class it is called on instead of creating one
+
+**Status:** draft for an upstream spicelib pull request. Recorded 2026-10-03.
+**Affected version:** spicelib 1.5.1 (`spicelib/sim/simulator.py`,
+`Simulator.create_from`).
+**Our workaround:** `src/ltspice_mcp/lib/simulator.py` —
+`bind_named_executable` creates a subclass of the family's class for each named
+executable and calls `create_from` on the subclass, so the program is written
+onto that subclass alone. Keep the subclass even once upstream is fixed: the
+per-class runner, launch permits and kill names all key on a class per build.
+Only the comment explaining why `create_from` must never touch the family's
+class can go.
+
+### Summary
+
+`create_from` is documented as "Creates a simulator class from a path to the
+simulator executable" and returns "a class instance representing the Spice
+simulator". It creates nothing: it assigns `cls.spice_exe` and
+`cls.process_name` on the class it was called on and returns that same class.
+Calling it on `LTspice` (or any shipped simulator class) retargets every holder
+of that class, so two builds of one simulator cannot be bound in one process
+through the documented route: the second call silently replaces the first.
+
+### Affected code
+
+```python
+@classmethod
+def create_from(cls, path_to_exe, process_name=None):
+    ...
+    if plib_path_to_exe is not None and (plib_path_to_exe.exists() or shutil.which(plib_path_to_exe)):
+        if process_name is None:
+            cls.process_name = cls.guess_process_name(exe_parts[0])
+        else:
+            cls.process_name = process_name
+        cls.spice_exe = exe_parts
+        return cls
+```
+
+### Reproduction
+
+```python
+from spicelib.simulators.ltspice_simulator import LTspice
+
+xvii = LTspice.create_from("C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe")
+lt24 = LTspice.create_from("C:/Program Files/ADI/LTspice/LTspice.exe")
+
+assert xvii is lt24 is LTspice
+xvii.spice_exe   # ['C:/Program Files/ADI/LTspice/LTspice.exe']: the XVII binding is gone
+```
+
+Any two existing files show it; the paths only need to exist.
+
+### Impact
+
+- A program that keeps two builds of one simulator (LTspice XVII for decks that
+  depend on its cp1252 reading of `µ`, LTspice 24 for current ones) gets one
+  of them, the last one bound, with no error.
+- A `SimRunner` already running on the class launches its next run on the new
+  program, so a rebind while runs are queued moves them to another build.
+- `process_name`, which spicelib's own `kill_all_spice` reads, moves with it.
+
+### Proposed fix
+
+Create the class the docstring promises, and leave the receiver alone:
+
+```python
+@classmethod
+def create_from(cls, path_to_exe, process_name=None):
+    ...
+    return type(cls.__name__, (cls,), {
+        "spice_exe": exe_parts,
+        "process_name": process_name or cls.guess_process_name(exe_parts[0]),
+    })
+```
+
+Callers that relied on the in-place rebind (`LTspice.create_from(path)` and
+then using `LTspice`) would need the returned class; a deprecation period that
+does both is the gentle route.
+
+### Suggested upstream test
+
+```python
+def test_create_from_returns_a_class_of_its_own(tmp_path):
+    a = tmp_path / "a" / "LTspice.exe"
+    b = tmp_path / "b" / "LTspice.exe"
+    for exe in (a, b):
+        exe.parent.mkdir()
+        exe.write_text("")
+    before = list(LTspice.spice_exe)
+    first = LTspice.create_from(str(a))
+    second = LTspice.create_from(str(b))
+    assert first is not second
+    assert first.spice_exe == [a.as_posix()] and second.spice_exe == [b.as_posix()]
+    assert LTspice.spice_exe == before
+```
+
+### Cross-reference
+
+`tests/test_named_executables.py::TestBinding::test_each_named_executable_is_a_class_launching_its_own_program`
+pins that binding two named executables leaves the family's class launching
+what it did, and `TestRoutedRuns` that each run launches the build it named.
+
+---
+
+## Bug 19 — `get_default_library_paths` reports every LTspice's library, whichever program the class runs (limitation)
+
+**Status:** known limitation. Recorded 2026-10-03.
+**Affected version:** spicelib 1.5.1 (`spicelib/simulators/ltspice_simulator.py`,
+`LTspice._default_lib_paths`; `spicelib/sim/simulator.py`,
+`Simulator.get_default_library_paths`).
+**Our workaround:** `src/ltspice_mcp/lib/simulator.py` — `generation_of` reads
+which LTspice a class launches off its program's file name (`XVIIx64.exe` is
+XVII, `LTspice.exe` is 24 and later), and `simulator_library_roots` keeps only
+that generation's directories from spicelib's list (`_in_generation`). On WSL,
+where spicelib's list expands against the Linux home and finds nothing,
+`wsl.get_ltspice_lib_paths(generation)` probes the matching Windows folder.
+Remove the filter once spicelib reports the library of the program it runs.
+
+### Summary
+
+`LTspice._default_lib_paths` lists the library folders of every LTspice
+generation in one list (`~/AppData/Local/LTspice/lib` for LTspice 24 and later,
+`~/Documents/LTspiceXVII/lib/` for XVII, and older locations), and
+`get_default_library_paths` returns each one that exists. It uses the
+executable only to translate paths under Wine. With XVII and a later LTspice
+installed side by side, a class bound to either program reports both
+libraries, so a caller cannot ask which model library the program it runs
+actually reads.
+
+### Affected code
+
+```python
+_default_lib_paths = ["~/AppData/Local/LTspice/lib",
+                      "~/Documents/LTspiceXVII/lib/",
+                      "~/Documents/LTspice/lib/",
+                      "~/My Documents/LTspiceXVII/lib/",
+                      "~/My Documents/LTspice/lib/",
+                      "~/Local Settings/Application Data/LTspice/lib"]
+```
+
+`get_default_library_paths` walks this list and keeps every directory that
+exists, with no reference to which program `spice_exe` names.
+
+### Reproduction
+
+With both libraries present in the user profile (`~/AppData/Local/LTspice/lib`
+and `~/Documents/LTspiceXVII/lib`):
+
+```python
+xvii = LTspice.create_from("C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe")
+xvii.get_default_library_paths()
+# ['%USERPROFILE%/AppData/Local/LTspice/lib', '%USERPROFILE%/Documents/LTspiceXVII/lib/' (expanded)]
+```
+
+### Impact
+
+A program that trusts the running simulator's own library (we accept a deck's
+reference into it without widening the sandbox, because LTspice's netlister
+writes such references itself) extends that trust to another program's
+library too. On WSL the list finds nothing at all, so XVII's library was
+unreachable until we probed it ourselves.
+
+### Proposed fix
+
+Give each generation its own list and pick it from the executable, or let a
+subclass narrow `_default_lib_paths`, for example by keying the defaults on the
+program's file name:
+
+```python
+_lib_paths_by_program = {
+    "xviix64.exe": ["~/Documents/LTspiceXVII/lib/", "~/My Documents/LTspiceXVII/lib/"],
+    "ltspice.exe": ["~/AppData/Local/LTspice/lib", "~/Documents/LTspice/lib/", ...],
+}
+```
+
+### Suggested upstream test
+
+```python
+def test_library_paths_follow_the_program(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / "Documents" / "LTspiceXVII" / "lib").mkdir(parents=True)
+    (tmp_path / "AppData" / "Local" / "LTspice" / "lib").mkdir(parents=True)
+    exe = tmp_path / "XVIIx64.exe"
+    exe.write_text("")
+    xvii = type("XVII", (LTspice,), {}).create_from(str(exe))
+    assert [Path(p).parts[-2] for p in xvii.get_default_library_paths()] == ["LTspiceXVII"]
+```
+
+### Cross-reference
+
+`tests/test_named_executables.py::TestLibraryRoots` pins both routes: each
+build's roots on a native profile, and XVII's under the Windows profile on WSL.

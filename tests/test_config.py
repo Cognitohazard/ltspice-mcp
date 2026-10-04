@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import os
 import tempfile
+import tomllib
 import types
 from pathlib import Path
 
@@ -199,6 +200,30 @@ class TestServerConfig:
         monkeypatch.delenv("LTSPICE_MCP_MAX_PARALLEL", raising=False)
         config = ServerConfig.load(path)
         assert config.max_parallel_sims == 8
+
+    def test_the_generated_config_sets_nothing(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Every key is shown at its default and commented out, so the file pins
+        no default: a host with only ngspice is not told to use LTspice, and a
+        later release's default reaches a server whose file was written before."""
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+
+        assert all(not values for values in tomllib.loads(content).values())
+        assert "# default = " in content
+        assert "# timeout = 300.0" in content
+        assert "# default_budget = 4000" in content
+        assert "# open_plot = true" in content
+        for name in os.environ:
+            if name.startswith("LTSPICE_MCP_"):
+                monkeypatch.delenv(name)
+        loaded = ServerConfig.load(path)
+        assert loaded.simulator is None
+        defaults = ServerConfig(working_dir=work_dir)
+        for name in ("default_timeout", "default_budget", "open_plot", "max_points_returned"):
+            assert getattr(loaded, name) == getattr(defaults, name)
 
 
 class TestToolProfile:
@@ -604,6 +629,11 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_SIMULATOR": "ltspice",
     "LTSPICE_MCP_ENABLED_SIMULATORS": "LTspice, xyce",
     "LTSPICE_MCP_SIMULATOR_EXE": "/opt/env/ltspice",
+    # A native Windows path, drive colon and all, beside a family-qualified
+    # POSIX one: ';' separates entries on every platform.
+    "LTSPICE_MCP_SIMULATOR_EXECUTABLES": (
+        "XVII=C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe; ngspice:nightly=/opt/env/ngspice;"
+    ),
     "LTSPICE_MCP_NGBEHAVIOR": "  hsa  ",
     "LTSPICE_MCP_WORKING_DIR": "/tmp/env-working-dir",
     "LTSPICE_MCP_ALLOWED_PATHS": f"/tmp/env-a{os.pathsep}/tmp/env-b",
@@ -637,6 +667,13 @@ default = "ngspice"
 path = "/opt/toml/ngspice"
 enabled = ["NGspice", " LTspice "]
 ngbehavior = "  kipsa  "
+
+[simulator.executables]
+xvii = 'C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe'
+"NGspice:Dev" = "/opt/toml/ngspice-dev"
+
+[simulator.executables.ltspice]
+lt24 = "C:/Program Files/ADI/LTspice/LTspice.exe"
 
 [security]
 allowed_paths = ["/tmp/toml-a", "/tmp/toml-b"]
@@ -701,6 +738,11 @@ class TestLoadCoversEveryKey:
             "simulator": "ngspice",
             "enabled_simulators": ["ngspice", "ltspice"],
             "simulator_exe": Path("/opt/toml/ngspice"),
+            "simulator_executables": {
+                "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
+                "ngspice:dev": Path("/opt/toml/ngspice-dev"),
+                "ltspice:lt24": Path("C:/Program Files/ADI/LTspice/LTspice.exe"),
+            },
             "ngbehavior": "kipsa",
             "working_dir": Path.cwd(),
             "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
@@ -737,6 +779,10 @@ class TestLoadCoversEveryKey:
             "simulator": "ltspice",
             "enabled_simulators": ["ltspice", "xyce"],
             "simulator_exe": Path("/opt/env/ltspice"),
+            "simulator_executables": {
+                "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
+                "ngspice:nightly": Path("/opt/env/ngspice"),
+            },
             "ngbehavior": "hsa",
             "working_dir": Path("/tmp/env-working-dir"),
             "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],

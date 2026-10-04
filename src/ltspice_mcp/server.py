@@ -203,6 +203,8 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             logger.warning(
                 "No simulators detected. Circuit editing will work but simulation tools will return errors."
             )
+        for selector, cls in state.named_simulators.items():
+            logger.info(f"  - {selector} (named): {executable_path(cls)}")
 
         logger.info(
             f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"

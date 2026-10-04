@@ -11,11 +11,13 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
+from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
+from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
+from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
@@ -450,6 +452,68 @@ ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
 
 #: The three fact channels, which stay separate on every tool that has them.
 ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
+
+
+_Number = TypeVar("_Number", int, float)
+
+
+def held_to_cap(
+    name: str, requested: _Number, cap: _Number, unit: str = ""
+) -> tuple[_Number, str | None]:
+    """The value to use for an argument with a cap, and the warning when it was held.
+
+    A cap bounds what one call costs, so a larger value is served at the cap
+    and said so, not refused: the caller asked for more of the same thing.
+    """
+    if requested <= cap:
+        return requested, None
+    return (
+        cap,
+        f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used.",
+    )
+
+
+def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
+    """``values`` without repeats, in first-seen order, and the repeats dropped."""
+    seen: set[Any] = set()
+    kept: list[Any] = []
+    repeats: list[Any] = []
+    for value in values:
+        (repeats if value in seen else kept).append(value)
+        seen.add(value)
+    return kept, repeats
+
+
+class NotedModel(StrictModel):
+    """A request model that normalizes what it was given and keeps a note saying so.
+
+    The notes ride beside the fields, so a request identity built from the
+    fields names the normalized request while the response can still say what
+    changed. :meth:`argument_notes` gathers a model's notes and those of every
+    nested ``NotedModel`` under its field path.
+    """
+
+    _notes: list[str] = PrivateAttr(default_factory=list)
+
+    def keep_first(self, name: str) -> None:
+        """Drop repeated entries from list field ``name``, first-seen order kept, and note it."""
+        kept, repeats = first_seen(getattr(self, name))
+        if repeats:
+            # Past validate_assignment, which would run the model's validators again.
+            object.__setattr__(self, name, kept)
+            listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
+            self._notes.append(f"{name} repeated {listed}; each is read once.")
+
+    def argument_notes(self) -> list[str]:
+        notes = list(self._notes)
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            items = enumerate(value) if isinstance(value, list) else [(None, value)]
+            for index, item in items:
+                if isinstance(item, NotedModel):
+                    path = name if index is None else f"{name}[{index}]"
+                    notes.extend(f"{path}.{note}" for note in item.argument_notes())
+        return notes
 
 
 def outcome_of(
@@ -1035,24 +1099,30 @@ def require_simulator(state: SessionState) -> None:
 
 
 def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
-    """Resolve a per-run ``simulator=`` override to its simulator class, or fall
+    """Resolve a run's ``execution.simulator`` to its simulator class, or fall
     back to the session default when ``requested`` is None.
 
-    Shared by both routes into a run (a new submission and the replay lookup)
-    so a caller can pick which detected simulator an experiment executes on.
-    Raises SimulationError if the requested name is not among the detected
-    simulators, if none is available at all (``require_simulator``), or if the
-    resolved simulator is one this host cannot run (``family_refusal``) — a
-    refusal here, before anything is staged, rather than a run handed paths
-    the simulator cannot open.
+    A family name (``"ltspice"``) is that family's detected executable; a
+    selector (``"ltspice:xvii"``) is the named executable bound to it at
+    startup, a class of its own. Shared by both routes into a run (a new
+    submission and the replay lookup). Raises SimulationError if the request
+    names neither, if no simulator is available at all (``require_simulator``),
+    or if the resolved simulator's family is one this host cannot run
+    (``family_refusal``) — a refusal here, before anything is staged, rather
+    than a run handed paths the simulator cannot open.
     """
     if requested is not None:
-        sim_cls = state.available_simulators.get(requested.lower())
+        # A selector carries a ':' and a family name never does, so one lookup
+        # through both tables cannot pick the wrong one.
+        key = requested.lower()
+        sim_cls = state.named_simulators.get(key) or state.available_simulators.get(key)
         if sim_cls is None:
             raise SimulationError(
-                f"Simulator '{requested}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}). "
-                "inspect(kind='capabilities') lists the detected simulators.",
+                f"Simulator '{requested}' is not available on this server (detected: "
+                f"{list(state.available_simulators)}, named: {sorted(state.named_simulators)}). "
+                f"Named executables are read from {_SIM_SECTION}.{_SIM_EXECUTABLES_KEY} at "
+                "startup; inspect(kind='capabilities') lists them, and its diagnostics say "
+                "why a configured one was skipped.",
                 show_hint=False,
             )
     else:
@@ -1064,12 +1134,12 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
     if refusal is not None:
         selectable = [
             key
-            for key, cls in state.available_simulators.items()
+            for key, cls in (*state.available_simulators.items(), *state.named_simulators.items())
             if family_refusal(simulator_family(cls)) is None
         ]
         role = "Simulator" if requested is not None else "The server's default simulator"
         raise SimulationError(
-            f"{role} '{family}' cannot run here: {refusal} Selectable here: "
+            f"{role} '{requested or family}' cannot run here: {refusal} Selectable here: "
             f"{selectable}; inspect(kind='capabilities') says which simulators a "
             "run can select.",
             show_hint=False,

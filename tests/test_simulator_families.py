@@ -13,9 +13,10 @@ name because the job records that name and reads its raw dialect back from it.
 from __future__ import annotations
 
 import json
+import re
 import struct
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import pytest
 from spicelib.simulators.qspice_simulator import Qspice
@@ -25,7 +26,12 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import simulator as simulator_mod
 from ltspice_mcp.lib import store
 from ltspice_mcp.lib.lint_rules import lint_deck
-from ltspice_mcp.lib.simulator import SIMULATORS, SimulatorName, simulator_remediation
+from ltspice_mcp.lib.simulator import (
+    SIMULATORS,
+    detect_named_simulators,
+    simulator_family,
+    simulator_remediation,
+)
 from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
@@ -208,17 +214,17 @@ async def _recorded_run(
 
 
 class TestSchema:
-    def test_the_named_families_are_the_supported_ones(self):
-        assert get_args(SimulatorName) == tuple(SIMULATORS)
-
-    def test_the_published_schema_enumerates_every_family(self):
+    def test_the_published_pattern_names_every_family(self):
         defs, _ = get_tools()
         (tool,) = [tool for tool in defs if tool.name == "run_experiments"]
         schema = tool.input_schema
         execution = resolve_local_ref(schema, schema["properties"]["execution"])
-        simulator = execution["properties"]["simulator"]
-        enums = [branch["enum"] for branch in simulator["anyOf"] if "enum" in branch]
-        assert enums == [list(SIMULATORS)]
+        published = json.dumps(execution["properties"]["simulator"])
+        (pattern,) = re.findall(r'"pattern": "((?:[^"\\]|\\.)*)"', published)
+        pattern = json.loads(f'"{pattern}"')
+        for family in SIMULATORS:
+            assert re.fullmatch(pattern, family), family
+            assert re.fullmatch(pattern, f"{family}:build-2"), family
 
     @pytest.mark.parametrize("name", ["qspice", "xyce"])
     def test_qspice_and_xyce_are_accepted_by_the_request_model(self, name: str):
@@ -406,7 +412,7 @@ class TestLint:
 
     def _arity(self, tmp_path: Path, dialect: str | None, simulator: type) -> list[str]:
         findings = lint_deck(self._KEYED_CAPACITOR, tmp_path / "keyed.cir", dialect, simulator)
-        return [f["subject"] for f in findings if f["rule_id"] == "directive-arity"]
+        return [f["subject"] for f in findings if f["rule_id"] == "value-keyword-ltspice"]
 
     def test_ltspice_rejects_a_keyed_capacitor_value(self, tmp_path: Path):
         assert self._arity(tmp_path, None, SIMULATORS["ltspice"]) != []
@@ -491,7 +497,56 @@ class TestReference:
 
         assert (top["tool"], top["family"]) == ("run_experiments", "argument")
         (field,) = [field for field in top["fields"] if field["name"] == "execution.simulator"]
-        assert all(repr(name) in field["type"] for name in SIMULATORS), field
+        # The entry shows the pattern the field is checked against, which
+        # admits every family.
+        matched = re.search(r"matching (\S+)\)$", field["type"])
+        assert matched is not None, field
+        assert all(re.fullmatch(matched[1], name) for name in SIMULATORS), field
+
+
+@pytest.mark.asyncio
+class TestNamedExecutables:
+    """A further build of QSPICE or Xyce binds at startup like one of LTspice or
+    ngspice, and a run naming it meets the same host check as its family."""
+
+    def _bind(self, config: ServerConfig, work_dir: Path) -> dict[str, type]:
+        config.simulator_executables = {
+            "qspice:alt": stand_in_program(work_dir / "builds" / "QSPICE64.exe", b"QSPICE two"),
+            "xyce:alt": stand_in_program(work_dir / "builds" / "Xyce", b"Xyce two"),
+        }
+        diagnostics: list[str] = []
+        named = detect_named_simulators(config, diagnostics)
+        assert diagnostics == []
+        return named
+
+    async def test_a_named_build_of_each_family_binds(self, config: ServerConfig, work_dir: Path):
+        named = self._bind(config, work_dir)
+
+        assert {selector: simulator_family(cls) for selector, cls in named.items()} == {
+            "qspice:alt": "qspice",
+            "xyce:alt": "xyce",
+        }
+
+    async def test_a_named_qspice_build_off_windows_is_refused_by_its_selector(
+        self, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _host(monkeypatch, "wsl")
+        state = SessionState.create(
+            config, {"ltspice": FakeSim}, named=self._bind(config, work_dir)
+        )
+
+        is_error, data = await submit_experiment(
+            state, _payload(_deck(work_dir), "named-qspice", "qspice:alt")
+        )
+
+        assert is_error
+        message = data["error"]["message"]
+        assert "'qspice:alt' cannot run here" in message
+        assert "Selectable here: ['ltspice', 'xyce:alt']" in message
+        named = (await capabilities_report(state))["named_executables"]
+        assert named["xyce:alt"]["selectable"] is True
+        assert named["qspice:alt"]["selectable"] is False
+        assert "only when this server itself runs on Windows" in named["qspice:alt"]["refusal"]
 
 
 class TestRemediation:
