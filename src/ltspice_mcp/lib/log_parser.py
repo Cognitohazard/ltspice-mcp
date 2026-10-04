@@ -560,11 +560,6 @@ def missing_refs_from_text(text: str) -> list[str]:
     return refs
 
 
-def extract_missing_refs(log_path: Path) -> list[str]:
-    """Extract names of models/subcircuits that LTspice couldn't resolve."""
-    return missing_refs_from_text(read_log_text(log_path))
-
-
 # Phrases every simulator we support prints when the solver gave up. Grouped
 # with the OP-solve rung wording because a bias point that no method could find
 # IS a convergence failure — it just fails before the analysis starts.

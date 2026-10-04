@@ -18,6 +18,7 @@ exercises the exact cross-process semantics without spawning a process.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import os
 import subprocess
@@ -521,6 +522,86 @@ class TestScopedKill:
         self._iter(monkeypatch, [ghost])
         assert kill_simulator_by_token(token, {"ngspice"}) == 0
 
+    def test_the_process_name_alone_identifies_the_simulator(self, monkeypatch):
+        # Windows can report argv[0] as a short 8.3 path, so the basename of the
+        # first argument is not the simulator's name; the process name still is.
+        token = "sim_1751000000_0badc0de"
+        short_path = _FakeProc(
+            601,
+            "LTspice.exe",
+            ["C:\\PROGRA~1\\ADI\\LTSPIC~1\\LTSPIC~1.EXE", "-Run", "-b", f"C:\\runs\\{token}.net"],
+        )
+        self._iter(monkeypatch, [short_path])
+
+        assert kill_simulator_by_token(token, {"ltspice.exe"}) == 1
+        assert short_path.killed
+
+    def test_only_the_first_two_arguments_identify_the_simulator(self, monkeypatch):
+        # A search of the job's log for the simulator's name carries the token
+        # and the name, but the name is a later argument, not the executable.
+        token = "sim_1751000000_5ea4c4ed"
+        search = _FakeProc(701, "grep", ["grep", "-l", "ngspice", f"/runs/{token}_case_0.log"])
+        self._iter(monkeypatch, [search])
+
+        assert kill_simulator_by_token(token, {"ngspice"}) == 0
+        assert not search.killed
+
+    def test_a_failed_descendant_lookup_still_kills_by_name(self, monkeypatch):
+        # Without the descendant set nothing can be proved to be this server's
+        # own launch, so only the name gate applies: the simulator dies and a
+        # wrapper carrying the run deck is spared.
+        token = "sim_1751000000_acce55ed"
+        simulator = _FakeProc(801, "ngspice", ["ngspice", "-b", f"/runs/{token}.cir"])
+        wrapper = _FakeProc(802, "python3", ["python3", "wrap.py", f"/runs/{token}.cir"])
+        self._iter(monkeypatch, [simulator, wrapper])
+
+        def _denied(*args, **kwargs):
+            raise psutil.AccessDenied()
+
+        monkeypatch.setattr(proc_kill_mod.psutil, "Process", _denied)
+
+        assert kill_simulator_by_token(token, {"ngspice"}) == 1
+        assert simulator.killed
+        assert not wrapper.killed
+
+    def test_a_grandchild_started_through_a_launcher_is_killed_by_its_deck_path(
+        self, tmp_path: Path
+    ):
+        """A configured launcher that starts the simulator as its own child.
+
+        The simulator is this process's grandchild and is the only process that
+        names the run deck, so the deck-path route has to look past direct
+        children. The launcher exits once its child does, which is what shows
+        the grandchild died.
+        """
+        token = "exp_launched_1790000000_ab12cd34_case_0"
+        executable, env = python_launch()
+        launcher_code = (
+            "import os, subprocess, sys\n"
+            "child = subprocess.Popen([sys.argv[1], '-c', 'import time; time.sleep(60)',"
+            " os.environ['CASE_DECK']])\n"
+            "print(child.pid, flush=True)\n"
+            "child.wait()\n"
+        )
+        launcher = subprocess.Popen(
+            [executable, "-c", launcher_code, executable],
+            env={**(env or os.environ), "CASE_DECK": str(tmp_path / f"{token}.cir")},
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert launcher.stdout is not None
+        grandchild = int(launcher.stdout.readline())
+        try:
+            assert kill_simulator_by_token(token, {"ngspice"}) == 1
+            assert launcher.wait(timeout=10) is not None
+        finally:
+            with contextlib.suppress(psutil.Error):
+                psutil.Process(grandchild).kill()
+            if launcher.poll() is None:
+                launcher.kill()
+            launcher.wait()
+            launcher.stdout.close()
+
     def test_a_launched_child_under_another_name_is_killed_by_its_deck_path(self, tmp_path: Path):
         """A wrapper or launcher the name gate does not know is still our child.
 
@@ -569,9 +650,17 @@ class TestScopedKill:
             spice_exe: ClassVar[list[str]] = ["wine", "/opt/lt/LTspice.exe"]
             process_name = ""
 
+        class FakeLaunchedLTspice:
+            # A launcher script whose running simulator goes by another name.
+            spice_exe: ClassVar[list[str]] = ["C:/Tools/run-ltspice.cmd"]
+            process_name = "XVIIx64.exe"
+
         class Bare:
             pass
 
         assert simulator_executable_names(FakeLTspice) == frozenset({"ltspice.exe"})
         assert simulator_executable_names(FakeWineLTspice) == frozenset({"wine", "ltspice.exe"})
+        assert simulator_executable_names(FakeLaunchedLTspice) == frozenset(
+            {"run-ltspice.cmd", "xviix64.exe"}
+        )
         assert simulator_executable_names(Bare) == frozenset()
