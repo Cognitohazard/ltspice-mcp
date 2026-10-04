@@ -16,7 +16,12 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.simulator import current_ngbehavior
+from ltspice_mcp.lib.simulator import (
+    SIMULATOR_DISPLAY,
+    SIMULATORS,
+    current_ngbehavior,
+    simulator_family,
+)
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
@@ -58,8 +63,8 @@ class _LintContext:
     # of a netlist, so a title that starts with an element letter (``Diode
     # clamp test``) is prose, not a card, for every rule.
     cards: list[SpiceCard]
-    dialect: str | None
-    simulator_name: str
+    # The simulator family the deck is linted for (see ``lint_deck``).
+    family: str
     # The staged include closure, as (staged path, staged text) snapshots. On
     # a deck staged for a Windows simulator the rewritten references cannot be
     # re-read from the Linux side, so the snapshots are the authoritative
@@ -69,13 +74,16 @@ class _LintContext:
 
     @property
     def ngspice(self) -> bool:
-        return self.dialect == "ngspice" or "ngspice" in self.simulator_name.casefold()
+        return self.family == "ngspice"
 
     @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
-        """``validate_netlist_arity`` over the deck, run once for every arity rule."""
-        simulator = "ngspice" if self.ngspice else "LTspice"
-        return validate_netlist_arity(self.cards, simulator=simulator)
+        """``validate_netlist_arity`` over the deck, run once for every arity rule.
+
+        Its one simulator-specific check (a C=/L= primary value) is LTspice's, so
+        only an LTspice deck is held to it.
+        """
+        return validate_netlist_arity(self.cards, simulator=SIMULATOR_DISPLAY[self.family])
 
     @functools.cached_property
     def include_cards(self) -> tuple[tuple[Path, str, list[SpiceCard]], ...]:
@@ -630,19 +638,15 @@ def lint_deck(
     instead of re-reading the deck's rewritten references from disk.
     """
     suppressed = set(suppress)
-    simulator_name = (
-        simulator
-        if isinstance(simulator, str)
-        else simulator.__name__
-        if simulator is not None
-        else ""
-    )
+    # A raw dialect names its family for every simulator but LTspice, so a
+    # non-LTspice dialect decides; otherwise the simulator class (or recorded
+    # class name) does, and a deck nothing names is linted as LTspice's.
+    named_by_dialect = dialect if dialect in SIMULATORS and dialect != "ltspice" else None
     context = _LintContext(
         text=deck_text,
         path=path,
         cards=drop_title_card(lex(deck_text).cards),
-        dialect=dialect,
-        simulator_name=simulator_name,
+        family=named_by_dialect or simulator_family(simulator) or "ltspice",
         includes=tuple(includes),
         ngbehavior=ngbehavior,
     )

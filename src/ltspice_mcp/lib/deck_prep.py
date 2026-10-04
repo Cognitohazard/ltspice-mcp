@@ -210,10 +210,20 @@ async def resolve_runnable_netlist(
     run staged moments later) would otherwise read a parallel session's
     re-export. Staging resolves its relative includes beside the schematic
     (``deck_staging.stage_deck``).
+
+    A schematic is refused, before LTspice is launched, for a simulator that
+    cannot read LTspice's netlist dialect (``simulator.asc_export_refusal``).
     """
     netlist_path = resolve_netlist_path(netlist_str, state)
     if netlist_path.suffix.lower() != ".asc":
         return netlist_path
+    from ltspice_mcp.lib.simulator import asc_export_refusal
+
+    refusal = asc_export_refusal(simulator or state.default_simulator)
+    if refusal is not None:
+        raise SimulationError(
+            f"{netlist_path.name} is an .asc schematic. {refusal}", show_hint=False
+        )
     stem, data = await _export_schematic(netlist_path, state, simulator)
     return await asyncio.to_thread(_stage_deck_snapshot, state.store, stem, data)
 

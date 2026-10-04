@@ -649,7 +649,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # several builds of a family ('ltspice:xvii'): the two-member enum became
     # a pattern, and the description says where the names are listed.
     # Measured 15,544.
-    "run_experiments": 15550,
+    # Raised by about 50 characters so the pattern names all four families
+    # (QSPICE and Xyce could otherwise run only as the server default) and the
+    # description says capabilities lists which simulators a run can select,
+    # since a detected simulator can still be one this host cannot run.
+    # Measured 15,596.
+    "run_experiments": 15600,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -701,7 +706,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # had no way to reach the guide at all. Measured 9,138.
     # The named_executables report key, the builds execution.simulator can
     # select by name, adds about 45 characters within this: measured 9,122.
-    "inspect": 9140,
+    # About 30 characters more so the capabilities description says it
+    # reports which simulators a run can select: a detected simulator can be
+    # one this host cannot run, and run_experiments sends a caller here to
+    # find out. Measured 9,151.
+    "inspect": 9155,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

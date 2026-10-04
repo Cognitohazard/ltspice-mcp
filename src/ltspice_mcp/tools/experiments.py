@@ -218,8 +218,9 @@ class ExperimentExecution(StrictModel):
         pattern=SIMULATOR_SELECTOR_PATTERN,
         description=(
             "Engine for every case; its family decides the dialect the results are "
-            "parsed with. 'family:name' (e.g. 'ltspice:xvii') runs a named executable "
-            "that inspect capabilities lists. Defaults to the server's default simulator."
+            "parsed with. 'family:name' (e.g. 'ltspice:xvii') runs a named executable. "
+            "inspect capabilities lists those and which simulators a run can select. "
+            "Defaults to the server's default simulator."
         ),
     )
 

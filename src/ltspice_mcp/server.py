@@ -24,7 +24,7 @@ from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.observability import configure_stderr_logging
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.simulator import SIMULATOR_DISPLAY, no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -260,10 +260,6 @@ Write .cir/.net/.sp decks with your own file tools; change .asc schematics only 
 # the runtime prefix (active-simulator line) must fit inside it too.
 _INSTRUCTIONS_BUDGET = 2048
 
-# Friendly display names for the detected-simulator line prepended to the
-# instructions at runtime (registry keys are lowercase).
-_SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
-
 
 #: The Python door, in its two editions: run_code in front of the library when
 #: the operator serves it, the library alone when ``[tools] run_code = false``.
@@ -318,7 +314,7 @@ def build_instructions(
     else:
 
         def disp(name: str) -> str:
-            return _SIM_DISPLAY.get(name, name)
+            return SIMULATOR_DISPLAY.get(name, name)
 
         if len(available) == 1:
             active = f"Active simulator: {disp(next(iter(available)))}."
