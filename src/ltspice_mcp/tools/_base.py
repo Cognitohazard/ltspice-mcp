@@ -7,14 +7,14 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
+from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
@@ -37,7 +37,7 @@ from ltspice_mcp.lib.runner_base import (
 )
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
-from ltspice_mcp.lib.simulator import no_simulator_message, simulator_library_roots
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._schema import (
     ToolInput,
@@ -233,24 +233,6 @@ HINT_SCHEMA: dict[str, str] = {"type": "string"}
 # Free-text measurement caveats (see the observations-vs-warnings rule in
 # lib/result_observations.py).
 WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
-
-# Fuzzy library matches for unresolved model/subcircuit references, keyed by
-# the missing ref: ``{ref: [{name, score, source_path}, ...]}`` (produced by
-# services.suggestions_from_errors / attach_suggestions_to_failure).
-SUGGESTIONS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "score": {"type": "number"},
-                "source_path": {"type": "string"},
-            },
-        },
-    },
-}
 
 PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -466,6 +448,68 @@ ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
 
 #: The three fact channels, which stay separate on every tool that has them.
 ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
+
+
+_Number = TypeVar("_Number", int, float)
+
+
+def held_to_cap(
+    name: str, requested: _Number, cap: _Number, unit: str = ""
+) -> tuple[_Number, str | None]:
+    """The value to use for an argument with a cap, and the warning when it was held.
+
+    A cap bounds what one call costs, so a larger value is served at the cap
+    and said so, not refused: the caller asked for more of the same thing.
+    """
+    if requested <= cap:
+        return requested, None
+    return (
+        cap,
+        f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used.",
+    )
+
+
+def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
+    """``values`` without repeats, in first-seen order, and the repeats dropped."""
+    seen: set[Any] = set()
+    kept: list[Any] = []
+    repeats: list[Any] = []
+    for value in values:
+        (repeats if value in seen else kept).append(value)
+        seen.add(value)
+    return kept, repeats
+
+
+class NotedModel(StrictModel):
+    """A request model that normalizes what it was given and keeps a note saying so.
+
+    The notes ride beside the fields, so a request identity built from the
+    fields names the normalized request while the response can still say what
+    changed. :meth:`argument_notes` gathers a model's notes and those of every
+    nested ``NotedModel`` under its field path.
+    """
+
+    _notes: list[str] = PrivateAttr(default_factory=list)
+
+    def keep_first(self, name: str) -> None:
+        """Drop repeated entries from list field ``name``, first-seen order kept, and note it."""
+        kept, repeats = first_seen(getattr(self, name))
+        if repeats:
+            # Past validate_assignment, which would run the model's validators again.
+            object.__setattr__(self, name, kept)
+            listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
+            self._notes.append(f"{name} repeated {listed}; each is read once.")
+
+    def argument_notes(self) -> list[str]:
+        notes = list(self._notes)
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            items = enumerate(value) if isinstance(value, list) else [(None, value)]
+            for index, item in items:
+                if isinstance(item, NotedModel):
+                    path = name if index is None else f"{name}[{index}]"
+                    notes.extend(f"{path}.{note}" for note in item.argument_notes())
+        return notes
 
 
 def outcome_of(
@@ -1170,9 +1214,9 @@ def resolve_reference(reference: str, state: SessionState) -> str | Path:
 # are MUTABLE and entangled with per-session snapshots — concurrent edits
 # would be last-writer-wins data loss; worst case is a cold .asc parse over
 # /mnt/c, ~1 s), job sidecar JSON loads (small per-circuit files), config
-# saves (durable=False), log-file reads (KB scale), and library .lib parses
-# (LibraryManager sessions are loop-owned mutable state; worst case ~1 s for
-# a multi-MB vendor library).
+# saves (durable=False), and log-file reads (KB scale). Library parses are
+# offloaded instead: a search over the simulator's own libraries parses the
+# whole install on first use, into thread-safe caches of immutable indexes.
 # ---------------------------------------------------------------------------
 
 
@@ -1181,38 +1225,53 @@ def resolve_reference(reference: str, state: SessionState) -> str | Path:
 # ---------------------------------------------------------------------------
 
 
+def safe_library_path(
+    user_path: str, state: SessionState, library_roots: Sequence[Path] | None = None
+) -> Path:
+    """``safe_path``, also admitting a file inside a detected simulator's own
+    model library.
+
+    That library is one trust class across the server: LTspice's ``.asc``
+    netlister appends a ``.lib`` into the install's model library on every
+    sheet carrying a MOSFET, so with only ``allowed_paths`` a reader would deny
+    a file the run path stages. This is the answer for the readers no run is
+    bound to (the include resolver behind ``verify_circuit``'s compare, and
+    the model query's ``libs``), so they agree with each other and with the
+    file a model search names; staging and the hierarchy reader narrow it to
+    the one simulator they read for. A deck still may not RUN from one of
+    these directories: staging checks the authored file against
+    ``allowed_paths`` alone.
+
+    ``library_roots`` is ``state.libraries.library_roots()``, for a caller
+    resolving many paths; without it the roots are worked out only when the
+    sandbox refuses. A path outside both is refused with the sandbox's error
+    when there is no simulator library, else with one naming both.
+    """
+    try:
+        return safe_path(user_path, state)
+    except PathSecurityError:
+        roots = state.libraries.library_roots() if library_roots is None else library_roots
+        if not roots:
+            raise
+    return resolve_safe_path(user_path, [*state.allowed_paths(), *roots])
+
+
 def make_include_resolver(state: SessionState) -> IncludeResolver:
-    """An include resolver that routes every include/lib open through safe_path.
+    """An include resolver that routes every include/lib open through
+    ``safe_library_path``.
 
     The graph engine calls this before opening any include, so an in-deck include
-    that escapes the allowed roots is denied and never read.
-
-    The detected simulator's own library directories are a second allowed set,
-    the same trust class ``deck_staging.stage_deck`` accepts as
-    ``simulator_roots``: LTspice's ``.asc`` netlister appends a ``.lib`` into the
-    install's model library on every sheet carrying a MOSFET, so with only
-    ``allowed_paths`` this resolver denies a file the run path just staged —
-    and ``verify_circuit`` reports the schematic's own library as an unusable
-    include. The MCP and the Python API must answer "may I read this referenced file?" the
-    same way, or the answer depends on which one you asked. The roots are
-    resolved once per resolver rather than per include, and a deck still may
-    not RUN from one — staging checks the authored file against
-    ``allowed_paths`` alone.
+    that escapes the allowed roots and the simulator's own library is denied and
+    never read. The library roots are worked out once per resolver rather than
+    per include.
     """
-    simulator_roots = simulator_library_roots(state.default_simulator)
+    roots = state.libraries.library_roots()
 
     def resolver(candidate: Path) -> Path | None:
         try:
-            return safe_path(str(candidate), state)
+            return safe_library_path(str(candidate), state, roots)
         except PathSecurityError:
-            pass
-        try:
-            resolved = candidate.resolve(strict=True)
-        except OSError:
             return None
-        if any(resolved.is_relative_to(root) for root in simulator_roots):
-            return resolved
-        return None
 
     return resolver
 

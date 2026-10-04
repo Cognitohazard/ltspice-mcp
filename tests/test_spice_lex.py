@@ -155,6 +155,38 @@ class TestTokenizeBody:
         kvs2 = [(t.key, t.value) for t in glued if t.kind == TokenKind.KEY_VALUE]
         assert kvs2 == [("V", "V(in)"), ("tc", "0.1")]
 
+    @pytest.mark.parametrize(
+        ("body", "key", "value"),
+        [
+            ("M1 d g s s N1 L=1u W=1u IC=1,2,3", "IC", "1,2,3"),
+            ("Q1 c b e QN IC=0.7, 5", "IC", "0.7,5"),
+            ("R1 a 0 1k tc=0.001,1e-6", "tc", "0.001,1e-6"),
+            ("R1 a 0 1k tc={a} ,{b}", "tc", "{a},{b}"),
+        ],
+    )
+    def test_comma_continued_value_is_one_key_value(self, body, key, value) -> None:
+        # ``IC=1,2,3`` / ``tc=a,b`` is one value written as a list. Split at the
+        # commas it would leave bare remnants after the key=value, which read
+        # back as an unparseable card.
+        toks = tokenize_body(body)
+        assert [(t.key, t.value) for t in toks if t.kind == TokenKind.KEY_VALUE][-1] == (
+            key,
+            value,
+        )
+        assert not body_has_stray_kv_remnant(body)
+        kv = toks[-1]
+        assert body[kv.body_offset : kv.body_end].endswith(value.split(",")[-1])
+
+    def test_comma_before_the_next_key_does_not_join_it(self) -> None:
+        # Model parameter lists separate keys with commas; the next key=value
+        # stays its own token.
+        toks = tokenize_body("Is=1e-14, N=1.05,Rs=0.1")
+        assert [(t.key, t.value) for t in toks] == [
+            ("Is", "1e-14"),
+            ("N", "1.05"),
+            ("Rs", "0.1"),
+        ]
+
     def test_stray_remnant_detector_glued_vs_spaced(self) -> None:
         # The glued operator forms now parse cleanly (no remnant); the spaced
         # form (operators surrounded by whitespace) still cannot be re-joined
@@ -202,9 +234,33 @@ class TestTokenizeBody:
         with pytest.raises(SpiceLexError):
             tokenize_body(".MODEL FOO NMOS (VTO=0.7")
 
-    def test_unterminated_quote_raises(self) -> None:
-        with pytest.raises(SpiceLexError):
-            tokenize_body('M1 d g s "unterminated W=10u')
+    @pytest.mark.parametrize(
+        ("body", "quote"),
+        [
+            ('M1 d g s "unterminated W=10u', '"'),
+            ("R1 n1 n2 r='(a + b", "'"),
+            ("R1 n1 n2 r={a+'b}", "'"),
+        ],
+        ids=["double", "single", "single-in-braces"],
+    )
+    def test_unterminated_quote_is_reported_at_the_quote(self, body: str, quote: str) -> None:
+        # The hint names the quote that was opened, and the position is that
+        # quote's, also when it sits inside a braced expression.
+        with pytest.raises(SpiceLexError) as ei:
+            tokenize_body(body)
+        assert ei.value.category == SpiceLexErrorCategory.UNTERMINATED_QUOTE
+        assert ei.value.position == body.index(quote)
+        assert ei.value.suggestion == f"add a closing {quote} after the opening quote"
+
+    def test_single_quoted_expression_is_one_value(self) -> None:
+        # ngspice numparam spells expressions in single quotes; the spaces and
+        # parentheses inside belong to the value, not to the token stream.
+        toks = tokenize_body("R1 n1 n2 r='(a + b)*2' tc=0")
+        assert [(t.kind, t.text) for t in toks[3:]] == [
+            (TokenKind.KEY_VALUE, "r='(a + b)*2'"),
+            (TokenKind.KEY_VALUE, "tc=0"),
+        ]
+        assert toks[3].value == "'(a + b)*2'"
 
     def test_stray_close_brace_raises(self) -> None:
         with pytest.raises(SpiceLexError):
@@ -465,6 +521,27 @@ class TestSpiceCardTypedAccessors:
         assert cards[0].param_name == "Vdd"
         assert cards[0].model_name is None
 
+    @pytest.mark.parametrize(
+        "line", [".PARAM Vdd = 5", ".PARAM Vdd =5", ".param  Vdd=  {2*x}", ".PARAM\tVdd\t=\t5"]
+    )
+    def test_param_name_with_whitespace_around_equals(self, line: str) -> None:
+        assert lex(line + "\n").cards[0].param_name == "Vdd"
+
+    def test_param_name_without_equals_is_the_bare_name(self) -> None:
+        assert lex(".PARAM Vdd 5\n").cards[0].param_name == "Vdd"
+
+    def test_param_name_missing_before_equals_is_none(self) -> None:
+        assert lex(".PARAM =5\n").cards[0].param_name is None
+
+    @pytest.mark.parametrize("line", [".PARAM a=1 b=2", ".param a = 1 b = 2", ".param a=1, b=2"])
+    def test_multi_param_line_has_no_single_name(self, line: str) -> None:
+        # No one name identifies a card that defines two parameters.
+        assert lex(line + "\n").cards[0].param_name is None
+
+    @pytest.mark.parametrize("line", [".PARAM a={x==1 ? 2 : 3}", ".param a='b=1'"])
+    def test_an_equals_inside_the_value_is_not_a_second_parameter(self, line: str) -> None:
+        assert lex(line + "\n").cards[0].param_name == "a"
+
     def test_single_quoted_semicolon_is_not_comment(self) -> None:
         cards = lex(".PARAM x='a;b'\n").cards
         assert cards[0].body == ".PARAM x='a;b'"
@@ -657,6 +734,15 @@ class TestLexAndEmit:
         assert any(".ENDS with no matching" in w for w in result.warnings)
         # Round-trip still works.
         assert emit(result.cards) == text
+
+    def test_ends_name_matches_its_opener_case_insensitively(self) -> None:
+        # SPICE names are case-insensitive: ``.ends opamp`` closes ``OPAMP``.
+        result = lex(".SUBCKT OPAMP a b\nR1 a b 1k\n.ends opamp\n")
+        assert result.warnings == []
+
+    def test_ends_naming_another_subckt_still_warns(self) -> None:
+        result = lex(".SUBCKT OPAMP a b\nR1 a b 1k\n.ends comparator\n")
+        assert any("does not match opener" in w for w in result.warnings)
 
     def test_eof_in_open_subckt_warns(self) -> None:
         text = ".SUBCKT FOO a b\nR1 a b 1k\n"
@@ -935,29 +1021,32 @@ class TestFormatPreservation:
         assert out == "R1 n1 n2\n+ 2k\n"
 
     def test_param_card_set_value_preserves_position(self) -> None:
-        # A .PARAM card on a single line — set_value should rewrite
-        # only the value substring.
-        text = ".PARAM   Vdd  =  5\n"
-        cards = lex(text).cards
-        view = ParamCard.from_card(cards[0])
-        view.set_value(3.3)
-        out = emit(cards)
-        # The leading whitespace and `=` spacing stays; only `5` → `3.3`.
-        # set_value falls back to canonical when the original token has
-        # whitespace around `=` (since text reconstruction loses it).
-        # Either way the value sticks.
-        assert "3.3" in out
-        assert "5" not in out.split("3.3")[1]
+        # The key=value span is rewritten where it stands: the gap after
+        # .PARAM survives, while the spacing around `=` inside the span is
+        # re-spelled as `key=value`.
+        cards = lex(".PARAM   Vdd  =  5\n").cards
+        ParamCard.from_card(cards[0]).set_value(3.3)
+        assert emit(cards) == ".PARAM   Vdd=3.3\n"
 
     def test_model_set_param_in_place_preserves_continuation(self) -> None:
         text = ".MODEL NMOS1 NMOS\n+ VTO=0.7\n+ KP=100u\n"
         cards = lex(text).cards
         view = ModelCard.from_card(cards[0])
         view.set_param("VTO", 0.8)
-        out = emit(cards)
-        # Continuation layout preserved; only the VTO value changed.
-        assert "VTO=0.8" in out
-        assert out.count("\n+ ") == 2  # both continuation lines intact
+        assert emit(cards) == ".MODEL NMOS1 NMOS\n+ VTO=0.8\n+ KP=100u\n"
+
+    def test_second_edit_on_a_later_continuation_line_lands_in_place(self) -> None:
+        # The first edit changes the length of line 2, so every later line's
+        # body offsets move. The second edit and the line lookup must both
+        # use the shifted layout.
+        text = ".MODEL NMOS1 NMOS\n+ VTO=0.7\n+ KP=100u\n"
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        view.set_param("VTO", "0.725")
+        kp_offset = cards[0].body.index("KP=")
+        assert cards[0].line_at(kp_offset) == 3
+        view.set_param("KP", "20u")
+        assert emit(cards) == ".MODEL NMOS1 NMOS\n+ VTO=0.725\n+ KP=20u\n"
 
     def test_dirty_after_mutation(self) -> None:
         cards = lex(".PARAM Vdd=5\n").cards
@@ -1060,6 +1149,52 @@ class TestInstanceLine:
         assert view.nodes == ["a", "k"]
         assert view.model == "555"
         assert view.value is None
+
+    def test_subckt_call_with_params_keyword(self) -> None:
+        # ``params:`` introduces the overrides; the subckt name is before it.
+        cards = lex("X1 n1 0 mysub params: R=2k\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert view.nodes == ["n1", "0"]
+        assert view.model == "mysub"
+        assert view.params == {"R": "2k"}
+        view.set_model("other")
+        assert emit(cards).strip() == "X1 n1 0 other params: R=2k"
+
+    def test_rerender_keeps_the_params_keyword(self) -> None:
+        # Adding a parameter re-renders the card from the view; the keyword
+        # the call was written with stays in front of its overrides.
+        cards = lex("X1 n1 0 mysub PARAMS: R=2k\n").cards
+        InstanceLine.from_card(cards[0]).set_param("C", "1n")
+        assert emit(cards).strip() == "X1 n1 0 mysub PARAMS: R=2k C=1n"
+
+    @pytest.mark.parametrize(
+        ("card", "nodes", "model", "value"),
+        [
+            # The area factor of a bandgap's ratioed BJT pair.
+            ("Q1 c b e QN 8", ["c", "b", "e"], "QN", "8"),
+            ("Q2 c b e QN {N}", ["c", "b", "e"], "QN", "{N}"),
+            ("Q1 c b e QN off", ["c", "b", "e"], "QN", "off"),
+            ("Q1 c b e QN 8 off IC=0.7,5", ["c", "b", "e"], "QN", "8 off"),
+            ("Q1 c b e sub QN 8", ["c", "b", "e", "sub"], "QN", "8"),
+            ("J1 d g s JN 2", ["d", "g", "s"], "JN", "2"),
+            ("M1 d g s b NCH off", ["d", "g", "s", "b"], "NCH", "off"),
+            # Nothing to peel: a model whose name reads as a number, or a
+            # substrate node before a model that starts with a digit.
+            ("Q1 c b e 555", ["c", "b", "e"], "555", None),
+            ("Q1 c b e sub 2N2222", ["c", "b", "e", "sub"], "2N2222", None),
+        ],
+    )
+    def test_device_trailing_area_and_off_follow_the_model(
+        self, card, nodes, model, value
+    ) -> None:
+        cards = lex(card + "\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert (view.nodes, view.model, view.value) == (nodes, model, value)
+
+    def test_set_model_keeps_the_area_factor(self) -> None:
+        cards = lex("Q1 c b e QN 8\n").cards
+        InstanceLine.from_card(cards[0]).set_model("QP")
+        assert emit(cards).strip() == "Q1 c b e QP 8"
 
     def test_switch_with_on_off_state(self) -> None:
         # A switch carries a trailing ON/OFF state after the model; the state is

@@ -27,7 +27,7 @@ from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 import ltspice_mcp.lib.wsl as wsl_mod
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_library_engine
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib import proc_kill, store
@@ -238,6 +238,16 @@ class TestBinding:
             "ltspice:lt24": builds["lt24"],
         }
         assert set(named) == {"ltspice:xvii", "ltspice:lt24"}
+
+    def test_the_generated_example_loads_once_uncommented(self, work_dir: Path):
+        generated = work_dir / "generated.toml"
+        generate_default_config(generated)
+        toml = work_dir / "ltspice-mcp.toml"
+        toml.write_text(generated.read_text().replace("# executables = ", "executables = "))
+
+        assert ServerConfig.load(toml).simulator_executables == {
+            "xvii": Path("C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe")
+        }
 
     def test_the_environment_form_takes_windows_paths_on_every_platform(
         self, work_dir: Path, builds: dict[str, Path], monkeypatch: pytest.MonkeyPatch

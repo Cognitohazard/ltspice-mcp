@@ -587,6 +587,22 @@ class TestMicroSuffixStaging:
         origin = next(item for item in staged.manifest if item.path == schematic.resolve())
         assert origin.staged_path is not None
         assert origin.staged_path.read_bytes() == schematic.read_bytes()
+        # Spelled 'u', a value means the same to every simulator, so the fold
+        # is reported only for one that decodes decks as cp1252.
+        assert not [item for item in staged.observations if item["code"] == "micro_sign_folded"]
+
+    def test_the_fold_is_reported_for_a_simulator_that_decodes_decks_as_cp1252(
+        self, tmp_path: Path
+    ):
+        root = tmp_path / "source"
+        root.mkdir()
+        (root / "core.inc").write_bytes("C1 out 0 23µ\n".encode())
+        deck = root / "bench.cir"
+        deck.write_bytes('* bench\n.include "core.inc"\n.param tau=4.7µ\n.end\n'.encode())
+        reader = "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, cp1252_reader=reader)
+
         folded = [item for item in staged.observations if item["code"] == "micro_sign_folded"]
         assert {Path(item["evidence"]["file"]).name for item in folded} == {
             "bench.cir",
@@ -596,6 +612,41 @@ class TestMicroSuffixStaging:
             "23µ",
             "4.7µ",
         }
+        assert {item["evidence"]["reader"] for item in folded} == {reader}
+
+    @pytest.mark.parametrize("codec", ["cp1252", "utf-8", "utf-8-sig"])
+    def test_a_rewritten_file_keeps_its_codec(self, tmp_path: Path, codec: str):
+        """A copy staging rewrote keeps every byte it did not change: LTspice
+        XVII reads a cp1252 '§' as the one byte A7, and would read the two
+        bytes of a UTF-8 re-encode as 'Â§', renaming the instance."""
+        root = tmp_path / "source"
+        root.mkdir()
+        (root / "core.inc").write_text("C1 out 0 1n\n")
+        deck = root / "bench.cir"
+        deck.write_bytes(
+            '* bench\n.include "core.inc"\nR§Load out 0 1k\n.op\n.end\n'.encode(codec)
+        )
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        assert '.include "core.inc"' not in staged.text, "the reference is rewritten"
+        assert staged.codec == codec
+        assert staged.staged_deck.read_bytes() == staged.text.encode(codec)
+        assert "R§Load out 0 1k\n" in staged.text
+
+    def test_a_utf16_file_is_rewritten_as_utf8(self, tmp_path: Path):
+        """Every step after staging edits a deck as ASCII bytes, so a rewritten
+        UTF-16 deck is written as UTF-8, which spells every character it held."""
+        root = tmp_path / "source"
+        root.mkdir()
+        (root / "core.inc").write_text("C1 out 0 1n\n")
+        deck = root / "bench.cir"
+        deck.write_bytes('* bench\n.include "core.inc"\nR§1 out 0 1k\n.end\n'.encode("utf-16"))
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        assert staged.codec == "utf-8"
+        assert "R§1 out 0 1k\n" in staged.staged_deck.read_bytes().decode("utf-8")
 
     def test_file_with_micro_only_in_a_comment_keeps_its_bytes(self, tmp_path: Path):
         root = tmp_path / "source"

@@ -93,6 +93,18 @@ class FileCache(Generic[T]):
             Cached value if the file's (mtime, size) stamp is unchanged,
             otherwise a newly created value
         """
+        return self.get_stamped(path, factory)[1]
+
+    def get_stamped(
+        self, path: Path, factory: Callable[[Path], T]
+    ) -> tuple[tuple[int, int] | None, T]:
+        """``get``, also returning the ``file_stamp`` the value is current for.
+
+        For a caller that records the revision of what it read (a cursor bound
+        to many files): the stamp is the one this lookup already took, so
+        recording it costs no second ``stat``. ``None`` when the file could
+        not be stat'd, in which case the value is built uncached.
+        """
         with self._lock:
             key_lock = self._key_locks.setdefault(path, threading.Lock())
 
@@ -100,7 +112,7 @@ class FileCache(Generic[T]):
             try:
                 stamp = file_stamp(path)
             except OSError:
-                return factory(path)
+                return None, factory(path)
 
             # Re-check under the per-path lock: a follower that waited on
             # the leader's parse finds the freshly stored entry here.
@@ -108,14 +120,14 @@ class FileCache(Generic[T]):
                 entry = self._entries.get(path)
                 if entry is not None and entry[0] == stamp:
                     self._entries.move_to_end(path)  # mark most-recently-used
-                    return entry[1]
+                    return stamp, entry[1]
 
             value = factory(path)
             with self._lock:
                 self._entries[path] = (stamp, value)
                 self._entries.move_to_end(path)
                 self._evict_locked()
-            return value
+            return stamp, value
 
     def peek(self, path: Path) -> T | None:
         """Return the cached value if it is still fresh, else ``None``.

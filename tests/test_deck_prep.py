@@ -41,8 +41,38 @@ async def test_the_ngspice_deck_goes_straight_into_the_store(
     assert deck.name.startswith("amp-ngspice.run-")
     text = deck.read_text(encoding="utf-8")
     assert ".backanno" not in text
-    assert "4.7u" in text
+    # A value's micro sign is staging's to spell 'u', for every simulator.
+    assert "R1 in 0 4.7µ\n" in text
     assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("codec", ["utf-8", "cp1252"])
+async def test_the_ngspice_scrub_changes_only_instance_names_and_backanno(
+    state_no_sim: SessionState, project_dir: Path, codec: str
+):
+    """The '§' leaves the instance names LTspice put it in, wherever the deck
+    names them, and nothing else: a comment, a quoted string and an include
+    path keep every character, and the deck keeps its encoding."""
+    export = (
+        "* amp.asc § rev 2\n"
+        '.include "models µ§/core.inc"\n'
+        "V1 in 0 1\n"
+        "R§Load in 0 4.7k ; §pnba A)B\n"
+        ".meas op iload find I(R§Load)\n"
+        '.param note="R§Load"\n'
+        ".op\n"
+        ".backanno\n"
+        ".end\n"
+    )
+    install_fixed_exporter(state_no_sim, export, encoding=codec)
+    sheet = _schematic(project_dir)
+
+    deck = await resolve_runnable_netlist(str(sheet), state_no_sim, simulator=NGspiceSimulator)
+
+    assert deck.read_bytes() == export.replace(".backanno\n", "").replace(
+        "R§Load in 0", "RLoad in 0"
+    ).replace("I(R§Load)", "I(RLoad)").encode(codec)
 
 
 @pytest.mark.asyncio

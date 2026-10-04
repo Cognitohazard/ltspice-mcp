@@ -172,11 +172,24 @@ async def test_asc_rejects_syntax_check(state_no_sim, work_dir, asc_symbols):
     assert data["checks_run"] == []
 
 
-async def test_sp_dispatch(state_no_sim, work_dir):
-    deck = _write(work_dir, "d.sp", _BASE)
+@pytest.mark.parametrize("suffix", [".sp", ".spice"])
+async def test_netlist_suffix_dispatch(state_no_sim, work_dir, suffix):
+    """``.spice`` is the extension xschem and the sky130 testbenches write."""
+    deck = _write(work_dir, f"d{suffix}", _BASE)
     data = await _run(state_no_sim, path=str(deck))
     assert data["kind"] == "netlist"
     assert "syntax" in data["checks_run"]
+    assert data["outcome"] == "complete"
+
+
+async def test_a_path_through_a_parent_segment_inside_the_sandbox_is_checked(
+    state_no_sim, work_dir
+):
+    deck = _write(work_dir, "d.cir", _BASE)
+    (work_dir / "sub").mkdir()
+    data = await _run(state_no_sim, path="sub/../d.cir")
+    assert data["kind"] == "netlist"
+    assert Path(data["path"]) == deck.resolve()
     assert data["outcome"] == "complete"
 
 
@@ -213,17 +226,48 @@ async def test_syntax_finding_shape(state_no_sim, work_dir):
 
 
 @pytest.mark.parametrize("codec", ["utf-8", "cp1252"])
-async def test_syntax_flags_a_micro_sign_suffix_with_the_file_encoding(
+async def test_micro_signs_are_one_observation_per_file_when_no_misreading_reader_is_known(
     state_no_sim, work_dir, codec
 ):
-    """A deck run outside the server gets no fold: whether its µ is micro
-    depends on the LTspice version that reads it (XVII decodes as cp1252 and
-    reads a UTF-8 µ as 'Âµ', losing the scale). The syntax check says so, and
-    says which encoding the file is in, since that decides which reader errs."""
+    """A µ is micro to a reader that decodes the file in the encoding it was
+    written in, which LTspice 24 and later do for the UTF-8 they write. With no
+    LTspice XVII known to the session, a deck full of them is one fact about the
+    file, with the count and lines, and the outcome stays complete."""
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23µ\nC2 out 0 4.7µF\n.end\n".encode(codec))
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "observation"
+    assert finding["at"] == {"file": str(deck), "line": 3}
+    assert finding["subject"] == "rc.net"
+    evidence = finding["evidence"]
+    assert evidence["count"] == 2
+    assert evidence["lines"] == [3, 4]
+    assert evidence["tokens"] == ["23µ", "4.7µF"]
+    assert evidence["encoding"] == codec
+    assert "'u' is micro in every encoding" in evidence["reason"]
+    assert data["outcome"] == "complete"
+
+
+class FakeXVII(FakeSim):
+    """An LTspice XVII install: the executable name is the build's identity."""
+
+    spice_exe: typing.ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
+
+
+@pytest.mark.parametrize("codec", ["utf-8", "utf-8-sig", "utf-16"])
+async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xvii(
+    config, work_dir, codec
+):
+    """LTspice XVII decodes a deck as cp1252, so a µ in any other encoding
+    reaches it as other characters and the value runs without its scale."""
+    state = SessionState.create(config, available={"ltspice": FakeXVII})
     deck = work_dir / "rc.net"
     deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23µ\n.end\n".encode(codec))
 
-    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+    data = await _run(state, path=str(deck), checks=["syntax"])
 
     (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "warning"
@@ -231,10 +275,107 @@ async def test_syntax_flags_a_micro_sign_suffix_with_the_file_encoding(
     assert finding["subject"] == "23µ"
     assert finding["evidence"]["ascii_spelling"] == "23u"
     assert finding["evidence"]["suffix"] == "U+00B5"
-    assert "Âµ" in finding["evidence"]["reason"]
-    assert finding["evidence"]["encoding"] == codec
+    assert finding["evidence"]["reader"] == FakeXVII.spice_exe[0]
     assert finding["evidence"]["card"] == "C1 out 0 23µ"
     assert data["outcome"] == "partial"
+
+
+async def test_a_cp1252_micro_sign_read_by_xvii_stays_an_observation(config, work_dir):
+    """In cp1252 a µ is the one byte XVII reads as micro: nothing is misread."""
+    state = SessionState.create(config, available={"ltspice": FakeXVII})
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\nC1 out 0 23µ\n.end\n".encode("cp1252"))
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "observation"
+    assert data["outcome"] == "complete"
+
+
+async def test_a_deck_that_names_xvii_as_its_writer_warns_when_stored_as_utf8(
+    state_no_sim, work_dir
+):
+    """The deck's own header names the reader it was written for."""
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\n* Generated by LTspice XVII\nC1 out 0 23µ\n.end\n".encode())
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "warning"
+    assert finding["evidence"]["reader"] == "LTspice XVII"
+
+
+async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
+    """An executable not named like XVII is still known to be one once a run on
+    it reported that build in its own output, as capabilities reports it."""
+    from ltspice_mcp.lib.experiment_types import Completeness, ExperimentCase, ExperimentJob
+    from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_path
+    from ltspice_mcp.lib.store import Store
+
+    class Renamed(FakeSim):
+        spice_exe: typing.ClassVar[list[str]] = [str(work_dir / "tools" / "ltspice.exe")]
+
+    # Recorded as the server records it, in the platform's own spelling.
+    program = executable_path(Renamed)
+    assert program is not None
+    state = SessionState.create(config, available={"ltspice": Renamed})
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\nC1 out 0 23µ\n.end\n".encode())
+    state.add_experiment_job(
+        ExperimentJob(
+            job_id="exp_xvii_0001",
+            request_id="xvii",
+            fingerprint="f" * 64,
+            canonicalizer_version=1,
+            control_token="token",
+            store_path=Store(work_dir).job_record("exp_xvii_0001"),
+            cases=[
+                ExperimentCase(
+                    case_id="case_0000",
+                    run_index=0,
+                    circuit="rc",
+                    circuit_path=deck,
+                    staged_deck=deck,
+                    deck_sha256="deck-sha",
+                    simulator_version="Linear Technology Corporation LTspice XVII",
+                )
+            ],
+            sources=[],
+            simulator="Renamed",
+            completeness=Completeness(declared=1, expanded=1),
+            simulator_executable=SimulatorExecutable(
+                path=program, sha256=None, bytes=None, modified=None
+            ),
+        ),
+        already_persisted=True,
+    )
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "warning"
+    assert finding["evidence"]["reader"] == (
+        f"Linear Technology Corporation LTspice XVII ({program})"
+    )
+
+
+async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, work_dir):
+    """60 values spelled with µ are 25 findings and a note counting the rest."""
+    state = SessionState.create(config, available={"ltspice": FakeXVII})
+    cards = "".join(f"C{i} n{i} 0 {i + 1}µ\n" for i in range(60))
+    deck = work_dir / "many.net"
+    deck.write_bytes(f"* many\n{cards}.end\n".encode())
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    shown = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert len(shown) == vc.FINDING_RULE_CAP
+    assert (
+        f"value_suffix_micro_sign: showing {vc.FINDING_RULE_CAP} of 60 findings"
+        in (data["observations"])
+    )
 
 
 async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir):
@@ -244,8 +385,8 @@ async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir)
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
     (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
-    assert finding["evidence"]["suffix"] == "U+03BC"
-    assert finding["evidence"]["ascii_spelling"] == "10us"
+    assert finding["evidence"]["tokens"] == ["10μs"]
+    assert finding["evidence"]["lines"] == [2]
 
 
 async def test_syntax_blocks_a_mis_decoded_micro_suffix(state_no_sim, work_dir):
@@ -256,18 +397,82 @@ async def test_syntax_blocks_a_mis_decoded_micro_suffix(state_no_sim, work_dir):
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_nonascii"]
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_mojibake"]
     assert finding["severity"] == "error"
     assert finding["evidence"]["reads_as"] == "23"
     assert finding["evidence"]["likely_intended"] == "23u"
 
 
-async def test_export_stage_flags_micro_sign_in_the_exported_netlist(
+async def test_syntax_warns_on_a_symbol_after_a_number(state_no_sim, work_dir):
+    """'10Ω' runs as 10, which is what it says; only a mis-decoded character
+    is an error, because that is where a scale can have been lost."""
+    deck = work_dir / "rc.cir"
+    deck.write_bytes("* rc\nV1 in 0 1\nR1 in 0 10Ω\n.temp 25°C\n.end\n".encode())
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    assert [(f["rule_id"], f["severity"]) for f in data["findings"]] == [
+        ("value_suffix_nonascii", "warning"),
+        ("value_suffix_nonascii", "warning"),
+    ]
+
+
+async def test_syntax_reports_each_arity_issue_at_its_own_severity(state_no_sim, work_dir):
+    """A spaced expression runs; the validator calls it a warning, and so does
+    the syntax check, beside a one-node resistor that stays an error."""
+    deck = _write(work_dir, "b.cir", "* b\nV1 a 0 1\nB1 c 0 V = V(a) + 1\nR1 c 1k\n.end\n")
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    assert sorted(
+        (f["subject"].split()[0], f["severity"])
+        for f in data["findings"]
+        if f["rule_id"] == "element_arity"
+    ) == [("B1", "warning"), ("R1", "error")]
+
+
+_SIMULATOR_SPECIFIC = (
+    "* rules that depend on the simulator\n"
+    "V1 in 0 AC 1\n"
+    "C1 in out C=1n\n"
+    "R1 out 0 1k\n"
+    ".tran 0 1m\n"
+    ".meas ac g FIND vdb(out) AT=1k\n"
+    ".end\n"
+)
+
+
+async def test_syntax_checks_against_an_ngspice_default(config, work_dir):
+    """An ngspice session is told about ngspice faults (a zero .tran step) and
+    not about LTspice ones (vdb() in .meas, C= as the value)."""
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
+    deck = _write(work_dir, "sim.cir", _SIMULATOR_SPECIFIC)
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    assert [f["subject"] for f in data["findings"]] == [".tran 0 1m"]
+
+
+async def test_syntax_checks_against_an_ltspice_default(state_no_sim, work_dir):
+    deck = _write(work_dir, "sim.cir", _SIMULATOR_SPECIFIC)
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    assert sorted(f["subject"] for f in data["findings"]) == [
+        ".meas ac g FIND vdb(out) AT=1k",
+        "C1 in out C=1n",
+    ]
+
+
+async def test_export_stage_reports_micro_signs_in_the_exported_netlist(
     config, work_dir, asc_symbols, monkeypatch
 ):
-    """LTspice 24 and later write the exported .net as UTF-8, µ as C2 B5. That
-    netlist is what a user hands to another LTspice, so the export stage scans
-    it; the schematic itself is left exactly as it was."""
+    """LTspice 24 and later write the exported .net as UTF-8, µ as C2 B5, and
+    read it back as micro. That netlist is what a user hands to another LTspice,
+    so the export stage reports its micro signs as a fact about the file; the
+    schematic itself is left exactly as it was."""
 
     def exporter(_cls, asc_path, timeout=0):
         net = Path(asc_path).with_suffix(".net")
@@ -285,14 +490,16 @@ async def test_export_stage_flags_micro_sign_in_the_exported_netlist(
     data = await _run(state, path=str(asc), checks=["export"])
 
     (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "observation"
     assert finding["at"] == {"file": data["export"]["netlist"], "line": 3}
     assert finding["evidence"]["encoding"] == "utf-8"
     assert finding["evidence"]["generated_by"] == "LTspice 24.1.9 for Windows."
+    assert data["outcome"] == "complete"
     assert asc.read_bytes() == before
 
 
 async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_state, project_dir):
-    """The default export mode's contract: nothing is written beside the caller's file.
+    """The managed export mode's contract: nothing is written beside the caller's file.
 
     The staged copy is exported inside the store, but the copy is taken under
     the schematic's cross-process lock, and that lock used to live in a
@@ -300,7 +507,7 @@ async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_s
     """
     sheet = _write(project_dir, "amp.asc", fake_netlister.amp_asc())
 
-    data = await _run(exporting_state, path=str(sheet), checks=["export"])
+    data = await _run(exporting_state, path=str(sheet), checks=["export"], export_to="managed")
 
     assert data["export"]["ok"] is True
     assert data["export"]["destination"] == "managed"
@@ -330,7 +537,11 @@ async def test_an_exports_relative_include_resolves_beside_the_schematic(
     assert not exporting_state.store.root.is_relative_to(work_dir)
 
     data = await _run(
-        exporting_state, path=str(sheet), checks=["export", "compare"], reference=str(reference)
+        exporting_state,
+        path=str(sheet),
+        checks=["export", "compare"],
+        reference=str(reference),
+        export_to="managed",
     )
 
     assert data["failures"] == []
@@ -681,7 +892,7 @@ def exporting_state(config, asc_symbols, monkeypatch) -> SessionState:
     return _with_ltspice(config)
 
 
-async def _diff_exported(state: SessionState, sheet: Path, reference: Path) -> dict:
+async def _diff_exported(state: SessionState, sheet: Path, reference: Path, **kw) -> dict:
     """structural_diff of ``sheet``'s export against ``reference``."""
     return await _run(
         state,
@@ -689,6 +900,7 @@ async def _diff_exported(state: SessionState, sheet: Path, reference: Path) -> d
         checks=["export", "compare"],
         reference=str(reference),
         compare_mode="structural_diff",
+        **kw,
     )
 
 
@@ -704,7 +916,7 @@ async def test_unchanged_sheet_against_its_own_asc_reports_no_changes(exporting_
     """
     sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
-    data = await _diff_exported(exporting_state, sheet, sheet)
+    data = await _diff_exported(exporting_state, sheet, sheet, export_to="managed")
 
     assert data["failures"] == []
     assert _delta(data["comparison"]) == _empty_delta()
@@ -733,7 +945,11 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
     sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
     data = await _run(
-        exporting_state, path=str(sheet), checks=["export", "compare"], reference=str(sheet)
+        exporting_state,
+        path=str(sheet),
+        checks=["export", "compare"],
+        reference=str(sheet),
+        export_to="managed",
     )
 
     assert data["failures"] == []
@@ -883,28 +1099,54 @@ def test_structural_compare_refuses_a_schematic(work_dir):
 # ---------------------------------------------------------------------------
 
 
-async def test_escaping_include_denied_no_read(state_no_sim, work_dir):
-    # Canary lives OUTSIDE the single allowed root (work_dir).
+@pytest.mark.parametrize("spelling", ["absolute", "parent-relative"])
+async def test_escaping_include_denied_no_read(state_no_sim, work_dir, spelling):
+    """An include outside the single allowed root (work_dir) is denied and never
+    read, whether it names the file outright or climbs to it through ``..``:
+    a path is judged by where it lands, not by how it is spelled."""
     outside = work_dir.parent / "outside_roots"
     outside.mkdir(exist_ok=True)
     canary = outside / "canary.lib"
     canary.write_text(".subckt CANARY 1 2\nR9 1 2 1\n.ends\n")
+    include = str(canary) if spelling == "absolute" else f"../{outside.name}/canary.lib"
 
     deck = _write(
         work_dir,
         "cand.cir",
-        f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {canary}\n.end\n",
+        f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {include}\n.end\n",
     )
     ref = _write(work_dir, "ref.cir", "* r\nR1 in out 1k\n.end\n")
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
     denied = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
     assert denied, "the escaping include must surface a path_denied finding"
-    assert str(canary) in denied[0]["subject"]
+    assert include in denied[0]["subject"]
     assert denied[0]["at"]["file"] == str(deck)
     # NO read: the CANARY subckt was never loaded, so it stays unresolved.
     unresolved = {u["name"].upper() for u in data["comparison"]["unresolved_subckts"]}
     assert "CANARY" in unresolved
+
+
+@pytest.mark.parametrize("separator", ["/", "\\"], ids=["slash", "backslash"])
+async def test_parent_relative_include_inside_the_roots_is_read(state_no_sim, work_dir, separator):
+    """``.include ../models/x.lib`` from a deck in a subfolder names a file
+    inside the sandbox; the run path stages it, so the compare must read it
+    rather than report it as resolving outside the allowed roots."""
+    models = work_dir / "models"
+    models.mkdir()
+    (models / "parts.lib").write_text(".subckt SHARED 1 2\nR9 1 2 1\n.ends\n")
+    decks = work_dir / "decks"
+    decks.mkdir()
+    include = separator.join(["..", "models", "parts.lib"])
+    body = f"* c\nX1 in out SHARED\nR1 in out 1k\n.include {include}\n.end\n"
+    deck = _write(decks, "cand.cir", body)
+    ref = _write(decks, "ref.cir", body)
+
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
+
+    assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"], data["findings"]
+    assert data["comparison"]["unresolved_subckts"] == []
+    assert data["comparison"]["equivalent"] is True
 
 
 async def test_simulator_library_include_is_read_though_the_sandbox_denies_it(
@@ -1262,11 +1504,52 @@ def _fake_exporter(_cls, asc_path, timeout=0):
     return net
 
 
+async def test_the_default_export_writes_the_net_ltspice_writes(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """LTspice writes <name>.net beside a schematic it runs, and so does
+    run_experiments, so the default export writes that file rather than copy the
+    schematic and its project files into the store to avoid it."""
+    monkeypatch.setattr(vc, "_create_netlist", _fake_exporter)
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "d.asc", _RES_ASC)
+
+    data = await _run(state, path=str(asc), checks=["export"])
+
+    assert data["export"]["ok"] is True
+    assert data["export"]["destination"] == "sidecar"
+    assert data["export"]["netlist"] == str(work_dir / "d.net")
+    assert (work_dir / "d.net").read_text() == _NEW_NET
+    assert not state.store.verify_artifact("export").exists()
+
+
+async def test_a_failed_default_export_names_the_mode_that_writes_nothing_beside_it(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """A schematic in a folder the user cannot write (LTspice's bundled examples
+    under Program Files) cannot take a sidecar; the managed export can."""
+
+    def refused(_cls, asc_path, timeout=0):
+        raise PermissionError(
+            f"[Errno 13] Permission denied: '{Path(asc_path).with_suffix('.net')}'"
+        )
+
+    monkeypatch.setattr(vc, "_create_netlist", refused)
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "ro.asc", _RES_ASC)
+
+    data = await _run(state, path=str(asc), checks=["export"])
+
+    (failure,) = data["failures"]
+    assert failure["stage"] == "export"
+    assert "export_to='managed'" in failure["remedy"]
+
+
 async def test_managed_export_is_non_destructive(config, work_dir, asc_symbols, monkeypatch):
     monkeypatch.setattr(vc, "_create_netlist", _fake_exporter)
     state = _with_ltspice(config)
     asc = _write(work_dir, "m.asc", _RES_ASC)
-    data = await _run(state, path=str(asc), checks=["export"])
+    data = await _run(state, path=str(asc), checks=["export"], export_to="managed")
     assert data["export"]["ok"] is True
     assert data["export"]["destination"] == "managed"
     assert data["export"]["sha256"]
