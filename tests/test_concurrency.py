@@ -14,7 +14,6 @@ import json
 import multiprocessing as mp
 import os
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -128,18 +127,36 @@ class TestAsyncFileLock:
 
         The thread goes on to take the lock, and by then the coroutine that
         asked for it is gone — so the lock has to be handed back rather than
-        held until the process exits. Stretching one attempt makes that window
-        wide enough to aim at instead of racing.
+        held until the process exits. The attempt is held open, with the flock
+        taken, until the cancel has landed, so the window is entered every time
+        rather than raced for.
         """
         real_file_lock = filelock.file_lock
+        real_try_acquire = filelock._try_acquire
+        mid_attempt = threading.Event()
+        cancelled = threading.Event()
+        attempt_done = threading.Event()
 
         @contextlib.contextmanager
-        def slow_lock(target: Path, **kwargs: object):
+        def held_open_lock(target: Path, **kwargs: object):
             with real_file_lock(target, **kwargs):  # type: ignore[arg-type]
-                time.sleep(0.3)
+                mid_attempt.set()
+                cancelled.wait(10)
                 yield
 
-        monkeypatch.setattr(filelock, "file_lock", slow_lock)
+        # The attempt's arguments, the hand-off among them, stay referenced so
+        # a release cannot be left to the collector.
+        attempts: list[tuple[object, ...]] = []
+
+        def recorded_attempt(*args: object) -> bool:
+            attempts.append(args)
+            try:
+                return real_try_acquire(*args)  # type: ignore[arg-type]
+            finally:
+                attempt_done.set()
+
+        monkeypatch.setattr(filelock, "file_lock", held_open_lock)
+        monkeypatch.setattr(filelock, "_try_acquire", recorded_attempt)
         target = tmp_path / "gate.txt"
         target.touch()
 
@@ -148,14 +165,15 @@ class TestAsyncFileLock:
                 pass
 
         task = asyncio.create_task(waiter())
-        await asyncio.sleep(0.05)  # the attempt is in flight, mid-acquire
+        assert await asyncio.to_thread(mid_attempt.wait, 10), "the attempt never took the lock"
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        await asyncio.sleep(0.5)  # let the worker finish and hand the lock back
+        cancelled.set()
+        assert await asyncio.to_thread(attempt_done.wait, 10), "the attempt never finished"
 
         monkeypatch.undo()
-        with file_lock(target, timeout=1.0):
+        with file_lock(target, timeout=0):
             pass
 
     def test_a_lock_published_after_the_waiter_gave_up_is_released(self, tmp_path: Path) -> None:

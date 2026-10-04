@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import filelock as filelock_mod
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome
@@ -31,6 +32,7 @@ from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     FakeSim,
+    await_until,
     fake_artifact_paths,
     fake_simulator,
     recorded_fixture_simulator,
@@ -193,12 +195,9 @@ async def test_identical_request_id_submits_one_job(
     surviving job claims, not the survivor of two that were staged.
 
     The duplicate is released once the first submission is staging, so it is
-    provably inside the gate's queue while the first holds it. Which of the two
-    responses carries the replay note is deliberately not asserted: the note is
-    a durable fact on the shared job record, so every receipt rendered after the
-    duplicate arrives carries it — including the original submitter's, whose
-    dwell may still be running. What the record must not do is accumulate a
-    second copy of it, which is asserted below.
+    provably inside the gate's queue while the first holds it. Exactly one of
+    the two responses says it replayed (its own ``replayed``), and the shared job
+    record it was answered from is left as it was.
     """
     submissions: list[str] = []
     fake_simulator(monkeypatch, submissions)
@@ -220,25 +219,26 @@ async def test_identical_request_id_submits_one_job(
     assert second.get("error") is None, second.get("error")
     assert first["job_id"] == second["job_id"]
     assert [p.stem for p in _job_records(work_dir)] == [first["job_id"]]
-    # The replay says so rather than looking like a second run — and says it
-    # once, however many callers read the record after it was noted.
-    replayed = [
-        d
-        for d in (first, second)
-        if any(o["code"] == "idempotent_replay" for o in d["observations"])
-    ]
-    assert replayed, "neither response reported the duplicate as a replay"
+    # The replay says so rather than looking like a second run, on its own
+    # receipt; the record it was answered from is left as it was.
+    replayed = [d for d in (first, second) if d["replayed"]]
+    assert len(replayed) == 1, "exactly one response is the replay"
     record = state_with_sim.all_jobs[first["job_id"]]
-    notes = [o for o in record.observations if o.get("code") == "idempotent_replay"]
-    assert len(notes) == 1, f"the replay was noted {len(notes)} times on one record"
+    assert not [o for o in record.observations if o.get("code") == "idempotent_replay"]
     assert len(submissions) == 1, f"the loser also reached the simulator: {submissions}"
     assert len(staged) == 1, f"both submissions staged a deck set: {staged}"
     assert first["job_id"] in staged[0].parts
     assert [p.parent.name for p in _staged_deck_dirs(work_dir)] == [first["job_id"]]
 
 
-def _hold_request_lock(work_dir: str, request_id: str, held: Any, hold_s: float) -> None:
-    """Subprocess helper: take the store's request gate and hold it briefly."""
+def _hold_request_lock(
+    work_dir: str, request_id: str, held: Any, release: Any, released: Any
+) -> None:
+    """Subprocess helper: take the store's request gate and hold it until told.
+
+    ``released`` is set as the last thing done while the gate is still held,
+    so a submission that finds it set inside the gate got in after the holder.
+    """
     from ltspice_mcp.lib.filelock import file_lock
     from ltspice_mcp.lib.store import Store as _Store
 
@@ -246,7 +246,8 @@ def _hold_request_lock(work_dir: str, request_id: str, held: Any, hold_s: float)
     store.ensure_root()
     with file_lock(store.request_lock(request_id)):
         held.set()
-        time.sleep(hold_s)
+        release.wait(60)
+        released.set()
 
 
 async def test_submission_waits_on_another_process_holding_the_request_gate(
@@ -257,32 +258,63 @@ async def test_submission_waits_on_another_process_holding_the_request_gate(
     A second server process sharing the working directory is exactly the case
     an in-process lock cannot cover, so the gate is a real file lock: a
     submission must wait for a foreign holder rather than reading the index
-    around it.
+    around it. The holder lets go only once the submission has been refused the
+    gate twice — a second attempt means it was still waiting after the first —
+    and the lookup inside the gate checks that the holder had let go.
     """
     fake_simulator(monkeypatch)
     deck = _deck(work_dir / "gated.cir")
-    hold_s = 1.0
+    gate = Store(work_dir).request_lock("gated-request")
+
+    refused: list[bool] = []
+    try_acquire = filelock_mod._try_acquire
+
+    def attempt_spy(target: Path, *args: Any) -> bool:
+        acquired = try_acquire(target, *args)
+        if target == gate and not acquired:
+            refused.append(True)
+        return acquired
+
+    monkeypatch.setattr(filelock_mod, "_try_acquire", attempt_spy)
 
     ctx = mp.get_context("spawn")
-    held = ctx.Event()
+    held, release, released = ctx.Event(), ctx.Event(), ctx.Event()
+    lookups_after_release: list[bool] = []
+    read_index = ExperimentRunner._read_request_index
+
+    def index_spy(request: Any) -> Any:
+        lookups_after_release.append(released.is_set())
+        return read_index(request)
+
+    monkeypatch.setattr(ExperimentRunner, "_read_request_index", staticmethod(index_spy))
+
     holder = ctx.Process(
         target=_hold_request_lock,
-        args=(str(work_dir), "gated-request", held, hold_s),
+        args=(str(work_dir), "gated-request", held, release, released),
     )
     holder.start()
     try:
         assert await asyncio.to_thread(held.wait, 30), "the lock holder never took the gate"
-
-        started = time.monotonic()
-        data = await _call(state_with_sim, "run_experiments", _run_payload(deck, "gated-request"))
-        waited = time.monotonic() - started
+        submission = asyncio.ensure_future(
+            _call(state_with_sim, "run_experiments", _run_payload(deck, "gated-request"))
+        )
+        # A submission that skipped the gate reads the index instead of trying
+        # again, so stop waiting then too and let the assertion below say so.
+        await await_until(
+            lambda: len(refused) >= 2 or lookups_after_release,
+            timeout_s=30,
+            what="the submission to wait on the held gate",
+        )
+        release.set()
+        data = await asyncio.wait_for(submission, 60)
     finally:
+        release.set()
         holder.join(timeout=30)
         assert holder.exitcode == 0
 
     assert data.get("error") is None, data.get("error")
-    assert waited >= hold_s * 0.5, (
-        f"the submission did not wait on the foreign request gate ({waited:.2f}s)"
+    assert lookups_after_release == [True], (
+        "the submission read the request index while another process held its gate"
     )
 
 

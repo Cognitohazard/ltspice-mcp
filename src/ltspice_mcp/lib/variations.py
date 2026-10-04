@@ -24,14 +24,15 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import atomic_write_text, component_value
+from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
     rewrite_staged_reference_cards,
     staged_reference_targets,
 )
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.encoding import encode_spice_text
+from ltspice_mcp.lib.format import parse_spice_value, unique_name
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
@@ -156,7 +157,7 @@ class AssignVariation(VariationModel):
             "Target → value list, resolved in order as a 'REF@model' (glob "
             "allowed) model swap, an 'X1:delvto'/'X1:mulu0' per-instance "
             "mismatch delta, a declared .param, then a component reference — "
-            "forms in spice://guide."
+            "forms in guide section 'variations'."
         ),
     )
     instances: list[InstanceAssignment] = Field(default_factory=list)
@@ -232,12 +233,12 @@ class ModelRule(RandomRuleBase):
 
 # The field descriptions here carry the two facts a caller cannot recover from
 # a result: the coefficients' units, and the inversion from a target sigma.
-# Prefix conventions and BSIM parameter names are in ``spice://guide``, which a
+# Prefix conventions and BSIM parameter names are in guide section 'variations', which a
 # caller reads once, rather than on the wire in every session.
 class MismatchRule(VariationModel):
     """Pelgrom mismatch rule: σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L),
     sampled independently per instance per run. Worked examples, prefix
-    conventions and BSIM parameter names: spice://guide."""
+    conventions and BSIM parameter names: guide section 'variations'."""
 
     rule: Literal["mismatch"]
     instance: list[str] | None = None
@@ -371,6 +372,8 @@ class DeckFile:
     text: str
     # Digest of exact staged bytes, which may use an encoding other than UTF-8.
     sha256: str = ""
+    # The codec a case copy of this file is written in (``StagedFile.codec``).
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -384,13 +387,10 @@ class CircuitDeck:
     # against every file in it, so factoring a circuit into a reusable core
     # does not put that core's components out of a sweep's reach.
     includes: tuple[DeckFile, ...] = ()
-    # True when ``circuit_id`` was taken from the file stem because the caller
-    # named none. Carried on the deck so the one validator can say where a
-    # rejected id came from: the rule is about the id, but the fix is about the
-    # argument, and a caller who never wrote an id cannot see the connection.
-    id_from_file_stem: bool = False
     semantic_profile: SemanticProfile | None = None
     record_source_lineage: bool = False
+    # The codec a case deck is written in (``StagedDeck.codec``).
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -482,6 +482,8 @@ class _ClosureFile:
     path: Path
     text: str
     targets: _DeckTargets
+    # The codec a case copy of this file is written in.
+    codec: str = "utf-8"
 
     @property
     def depth(self) -> int:
@@ -525,16 +527,58 @@ class _DeckClosure:
         return all(file.text is self.files[file.index].text for file in files)
 
 
-def _id_suggestion(circuit_id: str) -> str:
-    """A valid id built out of the rejected one, or '' when nothing survives.
+def sanitize_circuit_id(text: str) -> str:
+    """A valid circuit id built out of ``text``, or ``"circuit"`` when nothing survives.
 
-    Offered rather than imposed: silently repairing the id would run the file
-    under a name the caller never chose and cannot predict.
+    Each run of characters an id may not hold becomes one underscore
+    (``amp.v2`` → ``amp_v2``, ``my amp`` → ``my_amp``), a leading underscore or
+    hyphen is dropped, and the result is cut to the 64-character limit.
     """
-    cleaned = "".join(
-        char for char in circuit_id if char.isascii() and (char.isalnum() or char in "_-")
-    )
-    return cleaned.lstrip("_-")[:64]
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", text).lstrip("_-")[:64]
+    return cleaned or "circuit"
+
+
+def derive_circuit_ids(
+    paths: Sequence[str | Path], given: Sequence[str | None]
+) -> list[tuple[str, str | None]]:
+    """Each circuit's id, plus why a derived one is not its file stem.
+
+    An id the caller gave is used as given, and validated later. A circuit with
+    none takes its file stem, made valid with :func:`sanitize_circuit_id` and
+    made unique against every other id in the call, case-insensitively, by a
+    ``-2``, ``-3``... suffix (``a/amp.cir`` and ``b/amp.cir`` run as ``amp`` and
+    ``amp-2``). Ids the caller gave are reserved first, so a derived id never
+    displaces one. The second element is ``None`` when the id is the caller's
+    or the stem unchanged, else a sentence saying which id the circuit runs
+    under and why.
+    """
+    taken = {name.casefold() for name in given if name}
+    derived: list[tuple[str, str | None]] = []
+    for path, name in zip(paths, given, strict=True):
+        if name:
+            derived.append((name, None))
+            continue
+        stem = Path(path).stem
+        base = sanitize_circuit_id(stem)
+        candidate = unique_name(base, taken, fold=True, max_len=64)
+        taken.add(candidate.casefold())
+        if candidate == stem:
+            derived.append((candidate, None))
+            continue
+        reasons = []
+        if base != stem:
+            reasons.append(f"its file stem {stem!r} is not a valid id")
+        if candidate != base:
+            reasons.append(f"{base!r} is another circuit's id in this call")
+        derived.append(
+            (
+                candidate,
+                f"{Path(path).name} carried no id, so it runs as circuit id {candidate!r}: "
+                + " and ".join(reasons)
+                + ". Pass 'id' to choose the name.",
+            )
+        )
+    return derived
 
 
 def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
@@ -551,16 +595,7 @@ def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
                 "invalid_circuit_id",
                 f"Circuit id {circuit_id!r} must be 1-64 characters long, start "
                 "with a letter or digit, and use only letters, digits, "
-                "underscores and hyphens after that"
-                + (
-                    f". This id was derived from the file stem of {circuit.path.name!r} "
-                    "because the circuit carried no 'id'; pass one explicitly "
-                    "(e.g. id='"
-                    + (_id_suggestion(circuit_id) or "amp")
-                    + "') to run this file under a valid id without renaming it"
-                    if circuit.id_from_file_stem
-                    else ""
-                ),
+                f"underscores and hyphens after that (e.g. {sanitize_circuit_id(circuit_id)!r})",
             )
         folded = circuit_id.casefold()
         if folded in seen:
@@ -587,8 +622,31 @@ def validate_variation_circuit_ids(
                 raise VariationError(
                     "missing_circuit_id",
                     f"Variation {variation.id or variation.kind!r} applies_to unknown "
-                    f"circuit id {circuit_id!r}",
+                    f"circuit id {circuit_id!r}; the circuit ids in this call are "
+                    + ", ".join(repr(name) for name in known.values()),
                 )
+
+
+def check_random_families(circuit_ids: Sequence[str], variations: Sequence[Variation]) -> None:
+    """Refuse a circuit that two random entries apply to.
+
+    The product of two random families on one deck is ill-defined, so a circuit
+    takes at most one. Entries whose ``applies_to`` lists are disjoint run
+    side by side in one call, each circuit drawing from its own entry.
+    """
+    random_entries = [item for item in variations if isinstance(item, RandomVariation)]
+    for circuit_id in circuit_ids:
+        applying = [item for item in random_entries if _applies(item, circuit_id)]
+        if len(applying) > 1:
+            names = ", ".join(
+                repr(item.id) if item.id else "an unnamed entry" for item in applying
+            )
+            raise VariationError(
+                "multiple_random_variations",
+                f"Circuit {circuit_id!r} has {len(applying)} random variation entries "
+                f"applying to it ({names}); a circuit takes at most one. Give each "
+                "entry an applies_to list naming different circuits.",
+            )
 
 
 def assignment_family_size(variation: AssignVariation) -> int:
@@ -644,15 +702,10 @@ def expand_variations(
     circuits = normalize_circuit_decks(circuits)
     if validate_applies_to:
         validate_variation_circuit_ids(circuits, variations)
-    random_entries = [item for item in variations if isinstance(item, RandomVariation)]
     native_entries = [item for item in variations if isinstance(item, PdkNativeVariation)]
     if len({item.id.casefold() for item in native_entries}) != len(native_entries):
         raise VariationError("duplicate_native_family", "native family ids must be unique")
-    if len(random_entries) > 1:
-        raise VariationError(
-            "multiple_random_variations",
-            "At most one random variation entry is allowed per run_experiments call",
-        )
+    check_random_families([circuit.circuit_id for circuit in circuits], variations)
     projected = sum(projected_case_count(circuit.circuit_id, variations) for circuit in circuits)
     check_case_cap(projected, max_cases)
 
@@ -760,12 +813,11 @@ def materialize_variants(
 ) -> list[MaterializedCase]:
     """Write stable ``case-NNNN`` deck variants into a staged circuit directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = (
-        circuit.path.suffix if circuit.path.suffix.lower() in {".cir", ".net", ".sp"} else ".cir"
-    )
+    suffix = circuit.path.suffix if circuit.path.suffix.lower() in RUN_DECK_SUFFIXES else ".cir"
     closure = _build_closure(circuit)
     captured_digests = {
-        file.path.resolve(): file.sha256 or hashlib.sha256(file.text.encode("utf-8")).hexdigest()
+        file.path.resolve(): file.sha256
+        or hashlib.sha256(encode_spice_text(file.text, file.codec)).hexdigest()
         for file in circuit.includes
     }
     materialized: list[MaterializedCase] = []
@@ -874,26 +926,17 @@ def materialize_variants(
         else:
             current = _case_closure(case_closure, _closure_files(case_closure, texts))
             referrers = _include_referrers(current)
-        destinations: dict[Path, Path] = {}
-        text = _write_case_includes(
-            case_closure,
-            referrers,
-            texts,
-            case.case_index,
-            destinations=destinations,
-        )
+        text, written = _write_case_includes(case_closure, referrers, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
-        destinations[circuit.path.resolve()] = path.resolve()
-        file_digests: list[tuple[Path, str]] = []
-        for file in case_closure.files:
-            source = file.path.resolve()
-            destination = destinations.get(source)
-            if destination is None:
-                destination = source
-                digest = captured_digests[source]
-            else:
-                digest = hashlib.sha256(texts[file.index].encode("utf-8")).hexdigest()
-            file_digests.append((destination, digest))
+        data = encode_spice_text(text, case_closure.files[0].codec)
+        written[circuit.path.resolve()] = (path.resolve(), hashlib.sha256(data).hexdigest())
+        destinations = {source: destination for source, (destination, _) in written.items()}
+        # Each file the case reads, where it reads it, and the digest of those
+        # bytes: its own copy where it wrote one, else the shared staged file.
+        file_digests = [
+            written[source] if source in written else (source, captured_digests[source])
+            for source in (file.path.resolve() for file in case_closure.files)
+        ]
         lineage = tuple(
             SourceLineage(
                 replace(
@@ -906,7 +949,7 @@ def materialize_variants(
             )
             for item in lineage
         )
-        atomic_write_text(path, text, durable=True)
+        atomic_write_bytes(path, data, durable=True)
         materialized.append(
             MaterializedCase(
                 case_id=case.case_id,
@@ -974,10 +1017,11 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
             path=path,
             text=text,
             targets=_deck_targets(text, path, closure_depth(index)),
+            codec=codec,
         )
-        for index, (path, text) in enumerate(
-            [(circuit.path, circuit.text)]
-            + [(include.path, include.text) for include in circuit.includes]
+        for index, (path, text, codec) in enumerate(
+            [(circuit.path, circuit.text, circuit.codec)]
+            + [(include.path, include.text, include.codec) for include in circuit.includes]
         )
     ]
     return _DeckClosure(
@@ -1821,10 +1865,12 @@ def _write_case_includes(
     referrers: dict[int, set[int]],
     texts: dict[int, str],
     case_index: int,
-    *,
-    destinations: dict[Path, Path] | None = None,
-) -> str:
+) -> tuple[str, dict[Path, tuple[Path, str]]]:
     """Write this case's private copies of the includes it edited.
+
+    Returns the root deck's text, which the caller writes once the copies it
+    names exist, and, for each include copied, its source's resolved path with
+    the copy's path and the digest of the bytes written there.
 
     Isolation is by construction: a case only ever creates new ``case-NNNN__``
     files beside the shared staged originals and never writes to a path any
@@ -1832,8 +1878,9 @@ def _write_case_includes(
     under it. Every file on the include chain above an edited one is copied too
     — otherwise the copy would be written and nothing would point at it.
 
-    Every copy is UTF-8, so each spells a micro-sign suffix ``u``: staging did
-    so for the files it wrote, but an assigned value can bring the sign back.
+    Every copy is written in its staged file's codec and spells a micro-sign
+    suffix ``u``: staging did so for the files it wrote, but an assigned value
+    can bring the sign back.
     """
     edited = {index for index, text in texts.items() if text != closure.files[index].text}
     copies = {0}
@@ -1851,8 +1898,7 @@ def _write_case_includes(
         for index in copies
         if index != 0
     }
-    if destinations is not None:
-        destinations.update({path: path.with_name(name) for path, name in renames.items()})
+    written: dict[Path, tuple[Path, str]] = {}
     for index in sorted(copies):
         file = closure.files[index]
         cards = lex(texts[index]).cards
@@ -1861,10 +1907,13 @@ def _write_case_includes(
             texts[index] = emit(cards)
         if index == 0:
             continue
-        destination = file.path.with_name(renames[file.path.resolve()])
+        source = file.path.resolve()
+        destination = source.with_name(renames[source])
         destination.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(destination, texts[index], durable=True)
-    return texts[0]
+        data = encode_spice_text(texts[index], file.codec)
+        atomic_write_bytes(destination, data, durable=True)
+        written[source] = (destination, hashlib.sha256(data).hexdigest())
+    return texts[0], written
 
 
 def _spec(rule: RandomRuleBase) -> ToleranceSpec:
@@ -2563,7 +2612,12 @@ def _case_closure(closure: _DeckClosure, files: Sequence[ClosureFile]) -> _DeckC
         closure,
         files=tuple(
             _ClosureFile(
-                file.index, file.path, file.text, _deck_targets(file.text, file.path, file.depth)
+                file.index,
+                file.path,
+                file.text,
+                _deck_targets(file.text, file.path, file.depth),
+                # A file a structured edit cloned is new, and written as UTF-8.
+                closure.files[file.index].codec if file.index < len(closure.files) else "utf-8",
             )
             for file in files
         ),

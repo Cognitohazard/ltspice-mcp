@@ -58,21 +58,9 @@ logger = logging.getLogger(__name__)
 # ``observations`` is a plain ``list[dict]`` with no schema, so every scan of it
 # has to decide the same two things: how an entry's code is spelled, and what to
 # do with an entry that is not a mapping at all (a record written by an older
-# build can carry anything JSON allows). These two answer both once, beside
-# ``owner_unknown_observation`` and the other named observation constructors.
-
-
-def note_once(observations: list[Any], observation: dict[str, Any]) -> bool:
-    """Append ``observation`` unless the list already carries its code.
-
-    Returns whether it was appended, so a caller can persist only when the
-    record actually changed.
-    """
-    code = observation.get("code")
-    if any(isinstance(item, Mapping) and item.get("code") == code for item in observations):
-        return False
-    observations.append(observation)
-    return True
+# build can carry anything JSON allows). ``replace_code`` answers both once,
+# beside ``owner_unknown_observation`` and the other named observation
+# constructors.
 
 
 def replace_code(observations: list[Any], code: str, observation: dict[str, Any]) -> None:

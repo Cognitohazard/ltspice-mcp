@@ -4,7 +4,8 @@ carries its runtime resources.
 An explicit sdist include list can silently drop a file the package reads at
 runtime while ``twine check`` stays green, so this builds the sdist, builds a
 wheel FROM that sdist, installs it into a fresh interpreter environment, and
-reads both packaged resources through the installed package.
+reads the packaged resources — every section of the guide, and the widget
+assets — through the installed package.
 """
 
 from __future__ import annotations
@@ -38,8 +39,10 @@ def test_sdist_builds_a_wheel_that_installs_with_its_resources(tmp_path: Path) -
         "from importlib.resources import files\n"
         "import ltspice_mcp, ltspice_mcp.api\n"
         "assets = files('ltspice_mcp') / 'assets'\n"
-        "guide = (assets / 'spice_guide.md').read_text(encoding='utf-8')\n"
-        "assert '### .asc Schematics' in guide\n"
+        "from ltspice_mcp.lib import guide\n"
+        "assert '## Building and editing a sheet' in guide.read('schematics')\n"
+        "assert '## Index' in guide.read()\n"
+        "assert all(guide.read(name) for name in guide.SECTION_ORDER)\n"
         "assert (assets / 'uplot' / 'uPlot.iife.min.js').is_file()\n"
         "assert (assets / 'ext-apps' / 'app-with-deps.js').is_file()\n"
         "print('ok')\n"

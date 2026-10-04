@@ -33,95 +33,103 @@ def _ids(
 _CLEAN = "V1 in 0 1\nR1 in out 1k\n.model DFAST D(Is=1e-12)\nD1 out 0 DFAST\n.op\n.end\n"
 
 
-@pytest.mark.parametrize(
-    ("rule_id", "deck", "dialect", "simulator"),
-    [
-        (
-            "save-meas-coverage",
-            "V1 in 0 1\n.save V(in)\n.meas tran peak MAX V(out)\n.tran 1u 1m\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "meas-ngspice-batch",
-            "V1 in 0 1\n.meas tran peak MAX V(in)\n.tran 1u 1m\n.end\n",
-            "ngspice",
-            "NGspiceSimulator",
-        ),
-        (
-            "lib-section-ngspice",
-            '.lib "models.lib" TT\n.op\n.end\n',
-            "ngspice",
-            "NGspiceSimulator",
-        ),
-        (
-            "step-ngspice",
-            "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
-            "ngspice",
-            "NGspiceSimulator",
-        ),
-        (
-            "model-missing",
-            "V1 in 0 1\nD1 in 0 MISSING\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "element-arity",
-            "V1 in 0 1\nR1 out 1k\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "bsource-value-prefix",
-            "V1 in 0 1\nB1 out 0 {V(in)*2}\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "value-keyword-ltspice",
-            "V1 in 0 1\nC1 in 0 C=1n\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "value-expression-remnant",
-            "V1 in 0 1\nB1 out 0 V = V(in) + 1\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "include-relative",
-            '.include "models.lib"\n.op\n.end\n',
-            None,
-            "LTspice",
-        ),
-        (
-            "suffix-mega-milli",
-            "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "temp-as-param",
-            "V1 in 0 1\n.param TEMP=27\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "value-suffix-mojibake",
-            "V1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-        (
-            "value-suffix-nonascii",
-            "V1 in 0 1\nR1 in 0 10Ω\n.op\n.end\n",
-            None,
-            "LTspice",
-        ),
-    ],
-)
+# Each seed rule, a deck that trips it, and the dialect and simulator it is
+# live under. The clean-deck test lints in the same context, so a rule that
+# only runs for one simulator is held quiet where it could actually fire.
+_SEED_CASES = [
+    (
+        "save-meas-coverage",
+        "V1 in 0 1\n.save V(in)\n.meas tran peak MAX V(out)\n.tran 1u 1m\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "meas-ngspice-batch",
+        "V1 in 0 1\n.meas tran peak MAX V(in)\n.tran 1u 1m\n.end\n",
+        "ngspice",
+        "NGspiceSimulator",
+    ),
+    (
+        "lib-section-ngspice",
+        '.lib "models.lib" TT\n.op\n.end\n',
+        "ngspice",
+        "NGspiceSimulator",
+    ),
+    (
+        "step-ngspice",
+        "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
+        "ngspice",
+        "NGspiceSimulator",
+    ),
+    (
+        "model-missing",
+        "V1 in 0 1\nD1 in 0 MISSING\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "element-arity",
+        "V1 in 0 1\nR1 out 1k\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "bsource-value-prefix",
+        "V1 in 0 1\nB1 out 0 {V(in)*2}\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "value-keyword-ltspice",
+        "V1 in 0 1\nC1 in 0 C=1n\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "value-expression-remnant",
+        "V1 in 0 1\nB1 out 0 V = V(in) + 1\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "include-relative",
+        '.include "models.lib"\n.op\n.end\n',
+        None,
+        "LTspice",
+    ),
+    (
+        "suffix-mega-milli",
+        "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "temp-as-param",
+        "V1 in 0 1\n.param TEMP=27\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "value-suffix-mojibake",
+        "V1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "value-suffix-nonascii",
+        "V1 in 0 1\nR1 in 0 10Ω\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+]
+_CASE_IDS = [case[0] for case in _SEED_CASES]
+
+
+def test_every_seed_rule_has_a_case():
+    assert sorted(_CASE_IDS) == sorted(rule.rule_id for rule in RULES)
+
+
+@pytest.mark.parametrize(("rule_id", "deck", "dialect", "simulator"), _SEED_CASES, ids=_CASE_IDS)
 def test_each_seed_rule_fires(
     rule_id: str,
     deck: str,
@@ -140,15 +148,23 @@ def test_each_seed_rule_fires(
     )
 
 
-@pytest.mark.parametrize("rule_id", [rule.rule_id for rule in RULES])
+# Each rule runs on the clean deck under the dialect and simulator where it
+# can fire, in place of its own trigger deck.
+@pytest.mark.parametrize(
+    ("rule_id", "dialect", "simulator"),
+    [(rule_id, dialect, simulator) for rule_id, _deck, dialect, simulator in _SEED_CASES],
+    ids=_CASE_IDS,
+)
 def test_each_seed_rule_stays_quiet_on_clean_deck(
     rule_id: str,
+    dialect: str | None,
+    simulator: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "hsa")
+    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
 
-    assert rule_id not in _ids(_CLEAN, tmp_path)
+    assert rule_id not in _ids(_CLEAN, tmp_path, dialect=dialect, simulator=simulator)
 
 
 def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):

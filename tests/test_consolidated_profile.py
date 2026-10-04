@@ -1,117 +1,78 @@
-"""Profile wiring for the consolidated tool surface — the only one since 0.6.0.
-
-Locks the exposed set, the design annotations table (mcp_v1_design.md section 3,
-normative), and error hints that never name a tool the surface no longer
-carries.
+"""The registered tool surface: its exact membership, the annotation table, and
+error hints that never name a tool a caller cannot call.
 """
 
 from __future__ import annotations
 
-import re
-
-import pytest
-
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
 from ltspice_mcp.tools import get_tools
-from tests.conftest import REGISTERED_TOOLS
-from tests.conftest import TOOLS_REMOVED_IN_0_6 as _TOOLS_REMOVED_TUPLE
-
-# Single-homed in conftest; frozen view under the name this file always used.
-TOOLS_REMOVED_IN_0_6 = frozenset(_TOOLS_REMOVED_TUPLE)
-
-
-CONSOLIDATED_TOOLS = frozenset(
-    {
-        "run_experiments",
-        "jobs",
-        "analyze_results",
-        "edit_schematic",
-        "verify_circuit",
-        "inspect",
-        "plot_waveform",
-    }
+from tests._text import names
+from tests.conftest import (
+    REGISTERED_TOOLS,
+    registered_tool_names,
+    removed_tools_named_in,
+    resolve_local_ref,
 )
 
-# The 0.5 tool surface, deleted with the "full"/"agentic" profiles in 0.6.0.
-# Kept as data because it is what the text guards scan for: an error hint or a
-# prompt that still names one of these sends the caller at a tool no client can
-# call any more, and the name alone reads as if it were live. Also imported by
-# test_prompts. Two entries ("parameter", "recent") are ordinary English words,
-# so prose that happens to use them trips the scan — the fix is to reword the
-# hint or prompt, not to drop the name from this set.
-
-# mcp_v1_design.md section 3 — the normative annotations table.
-# (readOnlyHint, destructiveHint, idempotentHint, openWorldHint)
+# The one annotation table for the surface, each row
+# (readOnlyHint, destructiveHint, idempotentHint, openWorldHint).
+# docs/design/mcp_surface.md section 4 carries the design table for the six.
 ANNOTATIONS_TABLE: dict[str, tuple[bool, bool, bool, bool]] = {
+    # Without a caller request_id the same arguments start new work, so an
+    # auto-retrying client must not treat it as idempotent. It launches a
+    # simulator, so it leaves the process.
     "run_experiments": (False, False, False, True),
     "jobs": (False, True, True, False),
     "analyze_results": (False, False, True, False),
+    # Each call advances the sheet's revision (and the batch can remove a
+    # component or rewrite the file), so it is destructive and not idempotent.
     "edit_schematic": (False, True, False, False),
     "verify_circuit": (False, True, True, False),
+    # The only tool that never writes.
     "inspect": (True, False, True, False),
-    # The render tool that survived the profile removal: it writes an HTML file
-    # and hands it to the local desktop, so it is neither read-only nor closed.
+    # Writes an HTML file and hands it to the local desktop: a fresh artifact
+    # per call, and it leaves the process.
     "plot_waveform": (False, False, False, True),
+    # Runs whatever the snippet does, in a process of its own; a retry would
+    # run it again.
+    "run_code": (False, True, False, True),
 }
 
 
-def _names(profile: str) -> set[str]:
-    defs, _ = get_tools()
-    return {tool_def.name for tool_def in defs}
-
-
 class TestExposureCounts:
-    """Exact membership — a tool registered by accident trips one of these."""
+    """Exact membership — a tool registered by accident trips this."""
 
-    def test_consolidated_exposes_exactly_the_declared_surface(self):
-        # The registry: the envelope six, the plot widget, and run_code (served
-        # only when the operator turned it on, but registered always).
-        assert _names("consolidated") == set(REGISTERED_TOOLS)
-
-    def test_the_removed_surface_is_really_gone(self):
-        # If a 0.5 tool is ever re-registered, the text guards below (and the
-        # prompt guard) would start rejecting a name that is legitimate again.
-        assert TOOLS_REMOVED_IN_0_6.isdisjoint(_names("consolidated"))
+    def test_the_registry_is_exactly_the_declared_surface(self):
+        # The envelope six, the plot widget, and run_code (served only while
+        # the operator leaves it on, but registered always).
+        assert registered_tool_names() == set(REGISTERED_TOOLS)
 
 
 class TestAnnotationsTable:
-    """Each exposed tool against its design-table row."""
-
-    @pytest.mark.parametrize("name", sorted(CONSOLIDATED_TOOLS))
-    def test_annotations_match_design_table(self, name: str):
+    def test_every_tool_advertises_its_table_row(self):
         defs, _ = get_tools()
-        by_name = {tool_def.name: tool_def for tool_def in defs}
-        annotations = by_name[name].annotations
-        assert annotations is not None
-        actual = (
-            annotations.read_only_hint,
-            annotations.destructive_hint,
-            annotations.idempotent_hint,
-            annotations.open_world_hint,
-        )
-        assert actual == ANNOTATIONS_TABLE[name]
+        actual = {}
+        for tool_def in defs:
+            annotations = tool_def.annotations
+            assert annotations is not None, f"{tool_def.name} advertises no annotations"
+            actual[tool_def.name] = (
+                annotations.read_only_hint,
+                annotations.destructive_hint,
+                annotations.idempotent_hint,
+                annotations.open_world_hint,
+            )
+        assert actual == ANNOTATIONS_TABLE
 
-    def test_inspect_is_the_only_read_only_tool(self):
-        defs, _ = get_tools()
-        read_only = {
-            tool_def.name
-            for tool_def in defs
-            if tool_def.annotations and tool_def.annotations.read_only_hint
-        }
-        assert read_only == {"inspect"}
-
-    def test_only_the_tools_that_leave_the_process_are_open_world(self):
-        """run_experiments launches a simulator; plot_waveform opens a browser;
-        run_code runs whatever the snippet does, in a process of its own.
-        Nothing else reaches outside, and a tool that claims to is telling the
-        client to gate a call that never leaves the box."""
-        defs, _ = get_tools()
-        open_world = {
-            tool_def.name
-            for tool_def in defs
-            if tool_def.annotations and tool_def.annotations.open_world_hint
-        }
-        assert open_world == {"run_experiments", "plot_waveform", "run_code"}
+    def test_edit_schematic_earns_its_destructive_hint(self):
+        """The hint is what a client gates write-risk on, and edit_schematic
+        earns it because its batch can run remove_component. The op union names
+        every op it accepts, so the hint cannot outlive the op unnoticed."""
+        tool = next(d for d in get_tools()[0] if d.name == "edit_schematic")
+        schema = tool.input_schema
+        ops = schema["properties"]["ops"]["items"]
+        branches = [resolve_local_ref(schema, branch) for branch in ops["oneOf"]]
+        assert "remove_component" in {branch["properties"]["op"]["const"] for branch in branches}
 
 
 class TestErrorHints:
@@ -124,15 +85,14 @@ class TestErrorHints:
 
     def test_no_hint_names_a_removed_tool(self):
         for err_type, hint in _ERROR_HINTS.items():
-            for tool in TOOLS_REMOVED_IN_0_6:
-                assert not re.search(rf"\b{re.escape(tool)}\b", hint), (
-                    f"{err_type.__name__} hint names removed tool {tool!r}: {hint!r}"
-                )
+            named = removed_tools_named_in(hint)
+            assert not named, f"{err_type.__name__} hint names removed tools {named}: {hint!r}"
 
     def test_every_hint_names_a_tool_the_caller_can_actually_call(self):
         """A hint that names no tool is a dead end: the caller just failed, and
-        the recovery step has to be something it can invoke."""
-        live = _names("consolidated")
+        the recovery step has to be something it can invoke — on every session,
+        so a tool the operator can switch off does not count."""
+        served = {d.name for d in get_tools(config=ServerConfig(run_code=False))[0]}
         for err_type, hint in _ERROR_HINTS.items():
-            named = {tool for tool in live if re.search(rf"\b{re.escape(tool)}\b", hint)}
+            named = {tool for tool in served if names(hint, tool)}
             assert named, f"{err_type.__name__} hint names no callable tool: {hint!r}"

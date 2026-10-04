@@ -19,6 +19,7 @@ from ltspice_mcp.lib.variations import (
     RandomVariation,
     Variation,
     VariationError,
+    derive_circuit_ids,
     expand_variations,
     materialize_variants,
     normalize_circuit_decks,
@@ -111,6 +112,37 @@ class TestAssignExpansion:
 
         assert "R1 in out 2.2k" in variants[0].text
         assert variants[0].sha256 == hashlib.sha256(variants[0].text.encode("utf-8")).hexdigest()
+
+    def test_case_files_are_written_in_the_staged_codec(self, tmp_path: Path):
+        """A case deck and the include copy a case edits keep the bytes of every
+        character the case did not change: a cp1252 '§' stays the one byte A7
+        LTspice XVII reads, and each recorded digest is of the bytes written."""
+        include = tmp_path / "core.inc"
+        include_text = "R§2 out 0 1k\n.param rload=1k\n"
+        include.write_bytes(include_text.encode("cp1252"))
+        path = tmp_path / "dut.cir"
+        text = '* dut\n.include "core.inc"\nR§1 in out {rload}\n.op\n.end\n'
+        path.write_bytes(text.encode("cp1252"))
+        circuit = CircuitDeck(
+            "dut",
+            path,
+            text,
+            includes=(DeckFile(include, include_text, codec="cp1252"),),
+            codec="cp1252",
+        )
+        variation = AssignVariation(kind="assign", assign={"rload": ["2k"]})
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+
+        assert case.path.read_bytes() == case.text.encode("cp1252")
+        assert b"R\xa71 in out {rload}" in case.path.read_bytes()
+        copies = [written for written, _ in case.file_digests if written != case.path]
+        assert [p.name for p in copies] == ["case-0000__core.inc"]
+        assert b"R\xa72 out 0 1k\n.param rload=2k" in copies[0].read_bytes()
+        for written, digest in case.file_digests:
+            assert hashlib.sha256(written.read_bytes()).hexdigest() == digest
 
     def test_b_source_assignment_preserves_source_kind_and_nodes(self, tmp_path: Path):
         path = tmp_path / "behavioral.cir"
@@ -238,6 +270,35 @@ class TestCrossCircuitValidation:
         with pytest.raises(VariationError, match="duplicated"):
             expand_variations([first, second], [])
 
+    def test_stem_ids_are_sanitised_and_disambiguated(self):
+        ids = derive_circuit_ids(
+            ["a/amp.cir", "b/amp.cir", "my amp.cir", "_x.cir", "AMP-2.cir", "plain.cir"],
+            [None, None, None, None, None, None],
+        )
+        assert [name for name, _ in ids] == ["amp", "amp-2", "my_amp", "x", "AMP-2-2", "plain"]
+        assert ids[0][1] is None and ids[5][1] is None
+        assert all(note is not None for _, note in ids[1:5])
+
+    def test_a_caller_id_is_kept_and_reserved_before_stems(self):
+        ids = derive_circuit_ids(["amp.cir", "other.cir"], [None, "amp"])
+        assert ids == [
+            ("amp-2", ids[0][1]),
+            ("amp", None),
+        ]
+        assert "'amp' is another circuit's id" in str(ids[0][1])
+
+    def test_a_stem_with_nothing_valid_left_gets_a_generic_id(self):
+        ((name, note),) = derive_circuit_ids(["___.cir"], [None])
+        assert name == "circuit"
+        assert note is not None
+
+    def test_unknown_applies_to_names_the_ids_in_the_call(self, tmp_path: Path):
+        circuit = _deck(tmp_path / "a.cir", "amp_v2")
+        variation = AssignVariation(kind="assign", applies_to=["amp.v2"], assign={"R1": [1]})
+
+        with pytest.raises(VariationError, match="'amp_v2'"):
+            expand_variations([circuit], [variation])
+
     def test_missing_applies_to_id_is_rejected(self, tmp_path: Path):
         circuit = _deck(tmp_path / "a.cir", "a")
         variation = AssignVariation(
@@ -332,11 +393,33 @@ class TestPdkNativeExpansion:
 
 
 class TestRandomExpansion:
-    def test_only_one_random_entry_is_allowed(self, tmp_path: Path):
+    def test_only_one_random_entry_per_circuit_is_allowed(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")
 
-        with pytest.raises(VariationError, match="At most one random"):
+        with pytest.raises(VariationError, match="at most one") as exc_info:
             expand_variations([circuit], [_random(), _random(seed=8)])
+        assert exc_info.value.code == "multiple_random_variations"
+
+    def test_random_entries_on_different_circuits_each_run(self, tmp_path: Path):
+        # The rule was one random entry per call, so two designs could not be
+        # Monte-Carlo'd in one job although neither deck saw two families.
+        first = _deck(tmp_path / "a.cir", "a")
+        second = _deck(tmp_path / "b.cir", "b")
+
+        cases = expand_variations(
+            [first, second],
+            [_random(seed=3, runs=2, applies_to=["a"]), _random(seed=8, runs=3, applies_to=["b"])],
+        )
+
+        assert [(case.circuit_id, case.random_index) for case in cases] == [
+            ("a", 0),
+            ("a", 1),
+            ("b", 0),
+            ("b", 1),
+            ("b", 2),
+        ]
+        seeds = {case.circuit_id: case.random.seed for case in cases if case.random is not None}
+        assert seeds == {"a": 3, "b": 8}
 
     def test_seed_is_repeatable_with_distinct_case_streams(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")
@@ -1590,13 +1673,13 @@ class TestCaseBundleIsWrittenWhole:
         written: list[str] = []
         import ltspice_mcp.lib.variations as variations
 
-        real = variations.atomic_write_text
+        real = variations.atomic_write_bytes
 
-        def record(path, text, **kwargs):
+        def record(path, data, **kwargs):
             written.append(Path(path).name)
-            return real(path, text, **kwargs)
+            return real(path, data, **kwargs)
 
-        variations.atomic_write_text = record
+        variations.atomic_write_bytes = record
         try:
             variation = RandomVariation.model_validate(
                 {
@@ -1610,7 +1693,7 @@ class TestCaseBundleIsWrittenWhole:
                 circuit, expand_variations([circuit], [variation]), tmp_path / "out"
             )
         finally:
-            variations.atomic_write_text = real
+            variations.atomic_write_bytes = real
 
         for case in cases:
             include_copy = f"case-{case.case_index:04d}__dut.spice"
@@ -1643,28 +1726,17 @@ class TestCaseBundleIsWrittenWhole:
 
 
 class TestCircuitIdRejection:
-    def test_a_derived_id_says_where_it_came_from_and_how_to_override(self, tmp_path: Path):
-        """A caller who never wrote the id cannot connect the rule to a fix.
+    def test_a_derived_id_is_made_valid_and_says_where_it_came_from(self):
+        """A file named ``_truth_op.asc`` used to be refused because its stem
+        is not a valid id, although the caller never wrote one. The stem is
+        now made valid, and the note names the file and how to override it."""
+        ((name, note),) = derive_circuit_ids(["_truth_op.asc"], [None])
 
-        The refusal reports the id, not the argument, so a file named
-        ``_truth_op.asc`` reads as an unusable file rather than a missing
-        ``id``.
-        """
-        deck = CircuitDeck(
-            "_truth_op",
-            tmp_path / "_truth_op.asc",
-            "",
-            (),
-            True,
-        )
-
-        with pytest.raises(VariationError) as excinfo:
-            normalize_circuit_decks([deck])
-
-        message = str(excinfo.value)
-        assert "_truth_op.asc" in message
-        assert "id=" in message
-        assert "id='truth_op'" in message
+        assert name == "truth_op"
+        assert note is not None
+        assert "_truth_op.asc" in note
+        assert "'truth_op'" in note
+        assert "'id'" in note
 
     def test_an_explicit_id_is_not_blamed_on_the_filename(self, tmp_path: Path):
         deck = CircuitDeck("_chosen", tmp_path / "amp.asc", "")
