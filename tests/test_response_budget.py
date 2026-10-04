@@ -232,7 +232,6 @@ class TestLadderPrimitives:
             data={"observations": []},
             rung=Rung(level=response_budget.RUNG_TRIM, budget=600, measured=900),
             estimate=900,
-            capped=True,
             max_rung=response_budget.RUNG_TRIM,
         )
         response_budget.attach_notes(tidied, response_budget.Notes(cut="cut", route="route"))
@@ -243,7 +242,6 @@ class TestLadderPrimitives:
             data={"observations": []},
             rung=cut,
             estimate=900,
-            capped=True,
             max_rung=response_budget.RUNG_TRIM,
         )
         notes = response_budget.Notes(cut="cut", route="raise budget", default_route="see rows")
@@ -285,9 +283,7 @@ class TestLadderPrimitives:
             rungs.append(rung.level)
             return {"failures": ["x" * 4000]}
 
-        result = await response_budget.negotiate(
-            1, render, response_budget.Notes(cut="cut", route="route")
-        )
+        result = await response_budget.negotiate(1, render)
         assert rungs == list(response_budget.LADDER)
         assert result.met is False
         assert result.rung.level == response_budget.RUNG_SHRINK

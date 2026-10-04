@@ -1083,24 +1083,18 @@ async def _evaluate_edit_schematic(
             present_mcp_views=present_mcp_views,
         )
 
-    def _stage(name: str, ok: bool = True, error: str | None = None) -> None:
-        """End one commit-protocol stage, recording it only when it did not succeed.
+    def _failed(name: str, error: str | None = None) -> None:
+        """Record a commit-protocol stage that did not complete.
 
         A stage that completed adds nothing a caller acts on: the protocol's
         order is fixed and ``commit_state`` says how far it got, so ``stages``
         lists only the stage that failed (or the reference check that found a
-        mismatch). Recording an outcome also ends that stage:
-        ``post_commit_stage`` drops back to "response", so a later failure
-        cannot be reported against a stage that already completed. A stage
-        names itself right before it runs; nothing has to remember to un-name it.
+        mismatch).
         """
-        nonlocal post_commit_stage
-        if not ok:
-            entry: dict[str, Any] = {"stage": name, "ok": ok}
-            if error is not None:
-                entry["error"] = error
-            stages.append(entry)
-        post_commit_stage = "response"
+        entry: dict[str, Any] = {"stage": name, "ok": False}
+        if error is not None:
+            entry["error"] = error
+        stages.append(entry)
 
     async with edit_guard(target):
         # --- revision guard (inside the guard so a peer's committed write is seen)
@@ -1116,7 +1110,7 @@ async def _evaluate_edit_schematic(
                 # write would take, so a retry that quotes it is exactly as
                 # safe as one quoting a prior read: a peer's write between the
                 # two still loses the race and comes back as revision_conflict.
-                _stage("revision_check", False, "expected_sha256 missing")
+                _failed("revision_check", "expected_sha256 missing")
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1151,7 +1145,7 @@ async def _evaluate_edit_schematic(
                     )
                 )
             if current != expected:
-                _stage("revision_check", False, "sha mismatch")
+                _failed("revision_check", "sha mismatch")
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1180,7 +1174,6 @@ async def _evaluate_edit_schematic(
                         ),
                     )
                 )
-        _stage("revision_check")
 
         use_template = args.base == "blank" or not exists
         editor = _build_editor(target, use_template, state)
@@ -1205,7 +1198,7 @@ async def _evaluate_edit_schematic(
             # --- op failure → transactional abort (nothing written)
             if abort_reason is not None:
                 state.editors.invalidate(target)
-                _stage("apply_ops", False, abort_reason)
+                _failed("apply_ops", abort_reason)
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1230,7 +1223,6 @@ async def _evaluate_edit_schematic(
                         ),
                     )
                 )
-            _stage("apply_ops")
 
             profile = wiring_profile(editor)
             legend, label_only = _pin_tables(
@@ -1313,7 +1305,7 @@ async def _evaluate_edit_schematic(
             )
             if not outcome.staged:
                 state.editors.invalidate(target)
-                _stage("stage_asc", False, outcome.error)
+                _failed("stage_asc", outcome.error)
                 return _commit_failure_response(
                     args,
                     target,
@@ -1322,10 +1314,9 @@ async def _evaluate_edit_schematic(
                     outcome.error or "",
                     present_mcp_views=present_mcp_views,
                 )
-            _stage("stage_asc")
             if not outcome.renamed:
                 state.editors.invalidate(target)
-                _stage("rename", False, outcome.error)
+                _failed("rename", outcome.error)
                 return _commit_failure_response(
                     args,
                     target,
@@ -1334,15 +1325,14 @@ async def _evaluate_edit_schematic(
                     outcome.error or "",
                     present_mcp_views=present_mcp_views,
                 )
-            _stage("rename")
             state.editors.invalidate(target)
             # The bytes we just staged and renamed ARE the file — hash them in
             # memory instead of re-reading the target back off disk.
             committed_sha = hashlib.sha256(committed_text.encode(encoding)).hexdigest()
 
             # --- post-commit: everything below keeps commit_state='committed'
-            # Views report no stage entry of their own, so they open and close
-            # their name by hand; a stage that calls _stage() only opens it.
+            # Each post-commit stage names itself while it runs and hands back
+            # to "response" when it is over.
             post_commit_stage = "views"
             neutral_views = _build_edit_views(
                 profile, legend, pins_reported, preexisting_rows, committed_sha
@@ -1366,7 +1356,11 @@ async def _evaluate_edit_schematic(
                 exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
                 mismatch = comparison_mismatch(verification)
-                _stage("reference", not mismatch)
+                # The stage is over: a later failure is the response's, never
+                # a second verdict on the reference.
+                post_commit_stage = "response"
+                if mismatch:
+                    _failed("reference")
                 # A confirmed match is the answer, and the exported deck only
                 # restates the reference the caller supplied. A mismatch, a
                 # compare error or no verdict keeps it: it is the sheet's side
@@ -1405,10 +1399,8 @@ async def _evaluate_edit_schematic(
             state.editors.invalidate(target)
             if committed_sha is None:
                 raise
-            # Read the name before recording it: _stage ends the stage it
-            # records, so post_commit_stage is "response" by the time it returns.
             failed_stage = post_commit_stage
-            _stage(failed_stage, False, str(exc))
+            _failed(failed_stage, str(exc))
             return _post_commit_failure_response(
                 args,
                 target,

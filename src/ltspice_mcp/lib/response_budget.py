@@ -95,9 +95,6 @@ class Rung:
     level: int
     budget: int
     measured: int
-    #: Room held back for the budget's own epilogue. ``None`` means the default
-    #: reserve; :class:`Notes` sets it for the tool that is negotiating.
-    reserve: int | None = None
     #: The blocks this rung's trim emptied of content, as :func:`apply_trim`
     #: reports them. The renderer adds to it; the epilogue reads it.
     cut: list[str] = field(default_factory=list, compare=False)
@@ -121,7 +118,7 @@ class Rung:
     @property
     def body_budget(self) -> int:
         """The budget less the room the budget notes themselves will take."""
-        return self.budget - (NOTE_RESERVE_TOKENS if self.reserve is None else self.reserve)
+        return self.budget - NOTE_RESERVE_TOKENS
 
 
 def estimate_tokens(payload: Any) -> int:
@@ -261,7 +258,7 @@ def truncated_observation(rung: Rung, estimate: int, cut: str, route: str) -> di
     ``rung.cut`` names the blocks the trim emptied; ``route`` may be empty when
     there is nothing to go back for.
     """
-    emptied = f" Emptied: {', '.join(dict.fromkeys(rung.cut))}." if rung.cut else ""
+    emptied = f" Emptied: {', '.join(rung.cut)}." if rung.cut else ""
     return {
         "code": "budget_truncated",
         "kind": OBSERVATION_KIND,
@@ -304,7 +301,7 @@ def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
 NOTE_RESERVE_TOKENS = estimate_tokens(
     [
         truncated_observation(
-            Rung(level=RUNG_SHRINK, budget=999_999, measured=999_999, cut=["x" * 40] * 2),
+            Rung(level=RUNG_SHRINK, budget=999_999, measured=999_999, cut=["x" * 40]),
             999_999,
             cut="x" * 160,
             route="x" * 160,
@@ -315,14 +312,12 @@ NOTE_RESERVE_TOKENS = estimate_tokens(
 
 @dataclass(frozen=True)
 class Notes:
-    """A tool's budget epilogue: what it says, and what saying it costs.
+    """A tool's budget epilogue, which :func:`attach_notes` writes.
 
-    One value drives both ends of the ladder — :func:`negotiate` holds back the
-    room the notes will need, :func:`attach_notes` writes them — so the two
-    cannot disagree about how much room that is. The note lands on
-    ``observations`` only: that channel is structured content, so a client that
-    reads nothing else still reads it, and a second copy in a hint would say
-    the same thing twice.
+    The note lands on ``observations`` only: that channel is structured
+    content, so a client that reads nothing else still reads it, and a second
+    copy in a hint would say the same thing twice. The room it takes is
+    ``NOTE_RESERVE_TOKENS``, held back by every rung's ``body_budget``.
     """
 
     #: What this tool gave up, in its own terms.
@@ -334,24 +329,22 @@ class Notes:
     #: this tool runs never empties anything with content.
     default_route: str = ""
 
-    @property
-    def reserve(self) -> int:
-        """Room to hold back for the epilogue itself."""
-        return NOTE_RESERVE_TOKENS
-
 
 @dataclass(frozen=True)
 class Negotiated:
     data: dict[str, Any]
     rung: Rung
     estimate: int
-    #: Whether the ladder was stopped short of its last rung by policy rather
-    #: than by fitting. A capped run that does not fit is the policy working,
-    #: not a shortfall, so it reports no unmet-budget note.
-    capped: bool = False
     #: The last rung this ladder was allowed: the trim rung under the server's
     #: default budget, the shrink rung under a caller's.
     max_rung: int = RUNG_SHRINK
+
+    @property
+    def capped(self) -> bool:
+        """Whether the ladder was stopped short of its last rung by policy rather
+        than by fitting. A capped run that does not fit is the policy working,
+        not a shortfall, so it reports no unmet-budget note."""
+        return not self.met and self.max_rung < RUNG_SHRINK
 
     @property
     def degraded(self) -> bool:
@@ -372,7 +365,6 @@ class Negotiated:
 async def negotiate(
     budget: int,
     render: Callable[[Rung], Awaitable[dict[str, Any]]],
-    notes: Notes,
     *,
     max_rung: int = RUNG_SHRINK,
 ) -> Negotiated:
@@ -388,29 +380,21 @@ async def negotiate(
     0) but must not revoke opt-ins the caller DID ask for (rung 1 and below) —
     doing that unasked would answer a different question than the one asked.
 
-    Fit is judged against the budget less ``notes.reserve``, the room this
-    tool's own budget notes will take once appended.
+    Fit is judged against each rung's ``body_budget``: the budget less the
+    room the budget notes will take once appended.
     """
     measured = 0
     data: dict[str, Any] = {}
-    rung = Rung(level=RUNG_NONE, budget=budget, measured=0, reserve=notes.reserve)
-    met = False
+    rung = Rung(level=RUNG_NONE, budget=budget, measured=0)
     for level in LADDER:
         if level > max_rung:
             break
-        rung = Rung(level=level, budget=budget, measured=measured, reserve=notes.reserve)
+        rung = Rung(level=level, budget=budget, measured=measured)
         data = await render(rung)
         measured = estimate_tokens(data)
-        met = measured <= rung.body_budget
-        if met:
+        if measured <= rung.body_budget:
             break
-    return Negotiated(
-        data=data,
-        rung=rung,
-        estimate=measured,
-        capped=not met and max_rung < RUNG_SHRINK,
-        max_rung=max_rung,
-    )
+    return Negotiated(data=data, rung=rung, estimate=measured, max_rung=max_rung)
 
 
 def append_hint(data: dict[str, Any], detail: str, *, key: str = "hint") -> None:
