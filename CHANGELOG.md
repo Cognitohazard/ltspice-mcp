@@ -289,6 +289,25 @@ tool-surface changes.
   sheets in different folders each keep their own. A redrawn local symbol is
   read again. A `base="blank"` build looks beside its target, not beside the
   temporary template it starts from.
+- The server's default response budget added "presentation was reduced" to
+  any response over it, even when its trim removed nothing, and receipts and
+  `jobs` then told the caller to "ask again with a larger 'budget'", a field
+  the caller had not set. The note is now written only when the trim emptied
+  something with content, names what it emptied, and under the server default
+  sends the caller to no budget: `analyze_results` says each row still names
+  its source and `include.provenance` keeps `source_hashes`. `inspect` no
+  longer repeats the note in its `hint`.
+- Hint and observation text that restated the structured fields is gone.
+  Every receipt's hint no longer repeats the `progress` counts, and a finished
+  receipt for ten or more cases no longer carries a pitch for the Python API
+  (the server's instructions introduce it). A clean terminal receipt's hint is
+  one status line. `plot_waveform` drops `plot_written`, `step_axis_unioned`,
+  `open_skipped` and `widget_delivered`, whose facts are the reply's own
+  counts, `opened` and `delivery`, and reports `phase_unwrapped` only when a
+  summary's phase lies outside ±180 deg, where it differs from the wrapped
+  angle. `edit_schematic` lists in `stages` only the stages that did not
+  complete (the no-op `stage_assets` is gone), and its commit hint no longer
+  restates the `wiring` counts.
 
 ### Added
 
