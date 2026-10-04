@@ -168,7 +168,7 @@ class ExperimentCircuit(StrictModel):
     id: str | None = Field(
         default=None,
         description=(
-            "Names this circuit in a variation's 'applies_to' and in its rows. "
+            "Names this circuit in 'applies_to' and in its rows. "
             "Default: the file stem, made valid and unique."
         ),
     )
