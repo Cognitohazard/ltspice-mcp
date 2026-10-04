@@ -59,8 +59,9 @@ class SessionState:
     Attributes:
         config: Server configuration loaded from TOML/env vars
         available_simulators: Simulators detected at startup, by family
-        named_simulators: Named executables bound at startup, by selector
-            (``"ltspice:xvii"``), each its own simulator class
+        named_simulators: ``[simulator.executables]`` bound at startup, by
+            selector (``"ltspice:xvii"``); each its own simulator class
+            (``simulator.bind_named_executable``)
         default_simulator: Simulator to use when not specified by user
         editors: Cache of parsed SpiceEditor instances
         results: Cache of parsed RawRead instances
@@ -83,10 +84,6 @@ class SessionState:
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
     named_simulators: dict[str, type] = field(default_factory=dict)
-    """``[simulator.executables]`` bound at startup, keyed by the selector a run
-    names in ``execution.simulator`` (``"ltspice:xvii"``). Each is a simulator
-    class of its own (``simulator.bind_named_executable``), so it gets its own
-    runner, launch permits and kill names, and never retargets the family's."""
     sandbox_pinned: bool = False
     """The sandbox was given explicitly when the session was opened
     (``Api(allowed_paths=...)``). That outranks the file at startup, so it keeps
