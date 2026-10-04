@@ -436,7 +436,7 @@ async def test_export_stage_reports_micro_signs_in_the_exported_netlist(
 
 
 async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_state, project_dir):
-    """The default export mode's contract: nothing is written beside the caller's file.
+    """The managed export mode's contract: nothing is written beside the caller's file.
 
     The staged copy is exported inside the store, but the copy is taken under
     the schematic's cross-process lock, and that lock used to live in a
@@ -444,7 +444,7 @@ async def test_managed_export_leaves_the_schematics_folder_untouched(exporting_s
     """
     sheet = _write(project_dir, "amp.asc", fake_netlister.amp_asc())
 
-    data = await _run(exporting_state, path=str(sheet), checks=["export"])
+    data = await _run(exporting_state, path=str(sheet), checks=["export"], export_to="managed")
 
     assert data["export"]["ok"] is True
     assert data["export"]["destination"] == "managed"
@@ -474,7 +474,11 @@ async def test_an_exports_relative_include_resolves_beside_the_schematic(
     assert not exporting_state.store.root.is_relative_to(work_dir)
 
     data = await _run(
-        exporting_state, path=str(sheet), checks=["export", "compare"], reference=str(reference)
+        exporting_state,
+        path=str(sheet),
+        checks=["export", "compare"],
+        reference=str(reference),
+        export_to="managed",
     )
 
     assert data["failures"] == []
@@ -825,7 +829,7 @@ def exporting_state(config, asc_symbols, monkeypatch) -> SessionState:
     return _with_ltspice(config)
 
 
-async def _diff_exported(state: SessionState, sheet: Path, reference: Path) -> dict:
+async def _diff_exported(state: SessionState, sheet: Path, reference: Path, **kw) -> dict:
     """structural_diff of ``sheet``'s export against ``reference``."""
     return await _run(
         state,
@@ -833,6 +837,7 @@ async def _diff_exported(state: SessionState, sheet: Path, reference: Path) -> d
         checks=["export", "compare"],
         reference=str(reference),
         compare_mode="structural_diff",
+        **kw,
     )
 
 
@@ -848,7 +853,7 @@ async def test_unchanged_sheet_against_its_own_asc_reports_no_changes(exporting_
     """
     sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
-    data = await _diff_exported(exporting_state, sheet, sheet)
+    data = await _diff_exported(exporting_state, sheet, sheet, export_to="managed")
 
     assert data["failures"] == []
     assert _delta(data["comparison"]) == _empty_delta()
@@ -877,7 +882,11 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
     sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
     data = await _run(
-        exporting_state, path=str(sheet), checks=["export", "compare"], reference=str(sheet)
+        exporting_state,
+        path=str(sheet),
+        checks=["export", "compare"],
+        reference=str(sheet),
+        export_to="managed",
     )
 
     assert data["failures"] == []
@@ -1432,11 +1441,52 @@ def _fake_exporter(_cls, asc_path, timeout=0):
     return net
 
 
+async def test_the_default_export_writes_the_net_ltspice_writes(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """LTspice writes <name>.net beside a schematic it runs, and so does
+    run_experiments, so the default export writes that file rather than copy the
+    schematic and its project files into the store to avoid it."""
+    monkeypatch.setattr(vc, "_create_netlist", _fake_exporter)
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "d.asc", _RES_ASC)
+
+    data = await _run(state, path=str(asc), checks=["export"])
+
+    assert data["export"]["ok"] is True
+    assert data["export"]["destination"] == "sidecar"
+    assert data["export"]["netlist"] == str(work_dir / "d.net")
+    assert (work_dir / "d.net").read_text() == _NEW_NET
+    assert not state.store.verify_artifact("export").exists()
+
+
+async def test_a_failed_default_export_names_the_mode_that_writes_nothing_beside_it(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """A schematic in a folder the user cannot write (LTspice's bundled examples
+    under Program Files) cannot take a sidecar; the managed export can."""
+
+    def refused(_cls, asc_path, timeout=0):
+        raise PermissionError(
+            f"[Errno 13] Permission denied: '{Path(asc_path).with_suffix('.net')}'"
+        )
+
+    monkeypatch.setattr(vc, "_create_netlist", refused)
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "ro.asc", _RES_ASC)
+
+    data = await _run(state, path=str(asc), checks=["export"])
+
+    (failure,) = data["failures"]
+    assert failure["stage"] == "export"
+    assert "export_to='managed'" in failure["remedy"]
+
+
 async def test_managed_export_is_non_destructive(config, work_dir, asc_symbols, monkeypatch):
     monkeypatch.setattr(vc, "_create_netlist", _fake_exporter)
     state = _with_ltspice(config)
     asc = _write(work_dir, "m.asc", _RES_ASC)
-    data = await _run(state, path=str(asc), checks=["export"])
+    data = await _run(state, path=str(asc), checks=["export"], export_to="managed")
     assert data["export"]["ok"] is True
     assert data["export"]["destination"] == "managed"
     assert data["export"]["sha256"]
