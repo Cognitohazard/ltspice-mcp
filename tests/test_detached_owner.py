@@ -284,7 +284,6 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
         # The complete receipt is re-rendered from the record, which knows only
         # what happened to it; that this call replayed is carried across.
         assert replayed["replayed"] is True
-        assert any(item["code"] == "idempotent_replay" for item in replayed["observations"])
 
         # And detached again: a second owner is spawned, takes the same replay
         # path, and hands back the same job rather than submitting a new one.

@@ -692,7 +692,7 @@ class TestPostClaimFailures:
 
 
 class TestIdempotency:
-    async def test_matching_replay_returns_token_and_observation(
+    async def test_matching_replay_returns_the_same_token(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -710,44 +710,39 @@ class TestIdempotency:
 
         assert replay["job_id"] == first["job_id"]
         assert replay["control_token"] == first["control_token"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         # A zero dwell returns before the coordinator has necessarily reached the
         # simulator, so wait for the one submission rather than racing it.
         await await_until(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
-    async def test_only_the_call_that_replayed_is_told_it_replayed(
+    async def test_a_replay_leaves_the_record_as_it_was(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """Replaying is a fact about a call; the note on the record is not.
-
-        The record's observation is read by everyone who looks at the job
-        afterwards, the original submitter included — and that caller did
-        submit. So the per-call fact is the receipt's own ``replayed`` field,
-        and the durable note says only what happened to the record.
-        """
+        """Replaying is a fact about a call, and the receipt's ``replayed``
+        carries it. The record is not changed: everyone who reads the job later,
+        the original submitter included, did not replay anything."""
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / "replay-voice.cir")
         args = _args(deck, "replay-voice")
 
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         assert first["replayed"] is False
-        assert _observation_code(first, "idempotent_replay") is None
+        await state_with_sim.job_registry.drain_pending()
+        record = Store(work_dir).job_record(first["job_id"])
+        before = record.read_bytes()
 
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        assert replay["replayed"] is True
+        await state_with_sim.job_registry.drain_pending()
 
-        # The note itself reads the same to the caller that replayed and to
-        # every later reader, because it describes the record either way.
+        assert replay["replayed"] is True
+        assert record.read_bytes() == before
         recorded = await _status_payload(first["job_id"], state_with_sim)
         for payload in (replay, recorded):
-            note = next(
-                item for item in payload["observations"] if item["code"] == "idempotent_replay"
-            )
-            assert "A later call carrying this request_id" in note["detail"], note
+            assert _observation_code(payload, "idempotent_replay") is None
 
     async def test_a_replay_in_another_process_leaves_the_owners_record_alone(
         self,
@@ -805,8 +800,6 @@ class TestIdempotency:
             "the replay loaded its own job"
         )
         assert replay["replayed"] is True
-        # The caller that replayed is still told so, from its own copy.
-        assert _observation_code(replay, "idempotent_replay") is not None
         assert on_disk_status() == "completed"
 
     async def test_different_payload_replay_conflicts(
@@ -1258,7 +1251,7 @@ class TestReplayRejectsChangedSources:
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         assert replay["job_id"] == first["job_id"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         assert len(submitted) == 1
 
     async def test_deleted_source_conflicts_rather_than_replaying(
@@ -1352,7 +1345,7 @@ class TestReplayRejectsChangedSources:
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         assert replay["job_id"] == first["job_id"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         assert len(submissions) == 1
 
     async def test_live_include_conflicts_rather_than_replaying(
@@ -2439,7 +2432,7 @@ class TestAttachedAnalysis:
         )
 
         assert wide["request_id"] == lean["request_id"]
-        assert any(item["code"] == "idempotent_replay" for item in wide["observations"])
+        assert wide["replayed"] is True
 
         lean_value = lean["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
         wide_value = wide["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
@@ -2580,7 +2573,7 @@ class TestAttachedAnalysis:
         )
         full = _assert_schema(await handle_run_experiments(request, state_with_sim))
         replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         await state_with_sim.job_registry.drain_pending()
         job = state_with_sim.all_jobs[full["job_id"]]
         assert job.analysis.result is not None

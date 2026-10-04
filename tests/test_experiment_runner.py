@@ -512,7 +512,8 @@ class TestExperimentSubmission:
         assert replay.replayed
         assert replay.job is first.job
         assert replay.control_token == first.control_token
-        assert any(item["code"] == "idempotent_replay" for item in replay.job.observations)
+        # The replay leaves the record as it was.
+        assert not any(item["code"] == "idempotent_replay" for item in replay.job.observations)
         assert len(submissions) == 1
 
         token = submissions[0]
