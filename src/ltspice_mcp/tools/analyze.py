@@ -3037,7 +3037,7 @@ def _degrade_analysis(
     """
     if rung.trim:
         for entry in data["results"].values():
-            response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
+            rung.cut.extend(response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT))
         # An explicit include.provenance is a caller opt-in, and the trim rung's
         # charter is to revoke none — so below the answer rung (the rung whose
         # documented job IS revoking opt-ins) an enriched identity echo
@@ -3045,7 +3045,9 @@ def _degrade_analysis(
         # echo is the ladder working as specified, not a second revocation.
         keep = preserve_provenance and not rung.answer_channel
         empty = () if keep else _TRIM_EMPTY_ENVELOPE
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        rung.cut.extend(
+            response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        )
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3059,6 +3061,10 @@ _BUDGET_NOTES = response_budget.Notes(
     route=(
         "Ask again with a larger 'budget' for the full presentation, or continue "
         "with continue={result_set_id, cursor}."
+    ),
+    default_route=(
+        "Each row still names its source by manifest_id and label; "
+        "include.provenance keeps source_hashes."
     ),
 )
 
