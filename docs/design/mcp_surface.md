@@ -678,6 +678,14 @@ in the result set, so a continuation replays them.
   more than one call's worth — every waveform of a 300-run Monte Carlo, say —
   and you get what was computed plus a continuation handle rather than an hour
   of compute.
+- A source is identified by the size and modification time of its raw and
+  log, which every drift check within a call compares; nothing is read whole
+  to identify it. Content digests are taken only when a reply hands out a
+  cursor or continuation, or `include.provenance` asks for them, and are
+  recorded with the result set. A call resuming the set compares them, so a
+  rewrite that kept both size and timestamp still reads as `source_drift`.
+  Both hashes are bounded by the analysis budget, and one that does not finish
+  leaves the source to its size and time rather than failing a recipe.
 - A `raw_path` source has no job provenance, so its rows carry
   `deck_sha256: null` plus an observation. Provenance is never fabricated.
 - Bulk fidelity travels as artifact handles
