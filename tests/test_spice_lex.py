@@ -202,9 +202,33 @@ class TestTokenizeBody:
         with pytest.raises(SpiceLexError):
             tokenize_body(".MODEL FOO NMOS (VTO=0.7")
 
-    def test_unterminated_quote_raises(self) -> None:
-        with pytest.raises(SpiceLexError):
-            tokenize_body('M1 d g s "unterminated W=10u')
+    @pytest.mark.parametrize(
+        ("body", "quote"),
+        [
+            ('M1 d g s "unterminated W=10u', '"'),
+            ("R1 n1 n2 r='(a + b", "'"),
+            ("R1 n1 n2 r={a+'b}", "'"),
+        ],
+        ids=["double", "single", "single-in-braces"],
+    )
+    def test_unterminated_quote_is_reported_at_the_quote(self, body: str, quote: str) -> None:
+        # The hint names the quote that was opened, and the position is that
+        # quote's, also when it sits inside a braced expression.
+        with pytest.raises(SpiceLexError) as ei:
+            tokenize_body(body)
+        assert ei.value.category == SpiceLexErrorCategory.UNTERMINATED_QUOTE
+        assert ei.value.position == body.index(quote)
+        assert ei.value.suggestion == f"add a closing {quote} after the opening quote"
+
+    def test_single_quoted_expression_is_one_value(self) -> None:
+        # ngspice numparam spells expressions in single quotes; the spaces and
+        # parentheses inside belong to the value, not to the token stream.
+        toks = tokenize_body("R1 n1 n2 r='(a + b)*2' tc=0")
+        assert [(t.kind, t.text) for t in toks[3:]] == [
+            (TokenKind.KEY_VALUE, "r='(a + b)*2'"),
+            (TokenKind.KEY_VALUE, "tc=0"),
+        ]
+        assert toks[3].value == "'(a + b)*2'"
 
     def test_stray_close_brace_raises(self) -> None:
         with pytest.raises(SpiceLexError):
@@ -464,6 +488,27 @@ class TestSpiceCardTypedAccessors:
         cards = lex(".PARAM Vdd=5\n").cards
         assert cards[0].param_name == "Vdd"
         assert cards[0].model_name is None
+
+    @pytest.mark.parametrize(
+        "line", [".PARAM Vdd = 5", ".PARAM Vdd =5", ".param  Vdd=  {2*x}", ".PARAM\tVdd\t=\t5"]
+    )
+    def test_param_name_with_whitespace_around_equals(self, line: str) -> None:
+        assert lex(line + "\n").cards[0].param_name == "Vdd"
+
+    def test_param_name_without_equals_is_the_bare_name(self) -> None:
+        assert lex(".PARAM Vdd 5\n").cards[0].param_name == "Vdd"
+
+    def test_param_name_missing_before_equals_is_none(self) -> None:
+        assert lex(".PARAM =5\n").cards[0].param_name is None
+
+    @pytest.mark.parametrize("line", [".PARAM a=1 b=2", ".param a = 1 b = 2", ".param a=1, b=2"])
+    def test_multi_param_line_has_no_single_name(self, line: str) -> None:
+        # No one name identifies a card that defines two parameters.
+        assert lex(line + "\n").cards[0].param_name is None
+
+    @pytest.mark.parametrize("line", [".PARAM a={x==1 ? 2 : 3}", ".param a='b=1'"])
+    def test_an_equals_inside_the_value_is_not_a_second_parameter(self, line: str) -> None:
+        assert lex(line + "\n").cards[0].param_name == "a"
 
     def test_single_quoted_semicolon_is_not_comment(self) -> None:
         cards = lex(".PARAM x='a;b'\n").cards
@@ -935,29 +980,32 @@ class TestFormatPreservation:
         assert out == "R1 n1 n2\n+ 2k\n"
 
     def test_param_card_set_value_preserves_position(self) -> None:
-        # A .PARAM card on a single line — set_value should rewrite
-        # only the value substring.
-        text = ".PARAM   Vdd  =  5\n"
-        cards = lex(text).cards
-        view = ParamCard.from_card(cards[0])
-        view.set_value(3.3)
-        out = emit(cards)
-        # The leading whitespace and `=` spacing stays; only `5` → `3.3`.
-        # set_value falls back to canonical when the original token has
-        # whitespace around `=` (since text reconstruction loses it).
-        # Either way the value sticks.
-        assert "3.3" in out
-        assert "5" not in out.split("3.3")[1]
+        # The key=value span is rewritten where it stands: the gap after
+        # .PARAM survives, while the spacing around `=` inside the span is
+        # re-spelled as `key=value`.
+        cards = lex(".PARAM   Vdd  =  5\n").cards
+        ParamCard.from_card(cards[0]).set_value(3.3)
+        assert emit(cards) == ".PARAM   Vdd=3.3\n"
 
     def test_model_set_param_in_place_preserves_continuation(self) -> None:
         text = ".MODEL NMOS1 NMOS\n+ VTO=0.7\n+ KP=100u\n"
         cards = lex(text).cards
         view = ModelCard.from_card(cards[0])
         view.set_param("VTO", 0.8)
-        out = emit(cards)
-        # Continuation layout preserved; only the VTO value changed.
-        assert "VTO=0.8" in out
-        assert out.count("\n+ ") == 2  # both continuation lines intact
+        assert emit(cards) == ".MODEL NMOS1 NMOS\n+ VTO=0.8\n+ KP=100u\n"
+
+    def test_second_edit_on_a_later_continuation_line_lands_in_place(self) -> None:
+        # The first edit changes the length of line 2, so every later line's
+        # body offsets move. The second edit and the line lookup must both
+        # use the shifted layout.
+        text = ".MODEL NMOS1 NMOS\n+ VTO=0.7\n+ KP=100u\n"
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        view.set_param("VTO", "0.725")
+        kp_offset = cards[0].body.index("KP=")
+        assert cards[0].line_at(kp_offset) == 3
+        view.set_param("KP", "20u")
+        assert emit(cards) == ".MODEL NMOS1 NMOS\n+ VTO=0.725\n+ KP=20u\n"
 
     def test_dirty_after_mutation(self) -> None:
         cards = lex(".PARAM Vdd=5\n").cards
