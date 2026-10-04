@@ -657,13 +657,13 @@ def _preexisting_block(findings: int, label_only_pins: int) -> dict[str, Any]:
     }
 
 
-def _dry_run_hint(args: EditSchematicInput, current: str | None) -> str:
+def _dry_run_hint(has_ops: bool, current: str | None) -> str:
     """What a dry run or an op-less read hands the caller for the commit that follows.
 
     ``current`` is the target's sha256 as it stood under the edit guard, or None
     when the target does not exist yet (a create needs no token).
     """
-    lead = "Dry run — resubmit without dry_run to commit." if args.ops else "Read only."
+    lead = "Dry run — resubmit without dry_run to commit." if has_ops else "Read only."
     if current is None:
         return lead
     return (
@@ -1111,23 +1111,11 @@ async def _evaluate_edit_schematic(
         # --- revision guard (inside the guard so a peer's committed write is seen)
         exists = target.exists()
         expected = args.expected_sha256.lower() if args.expected_sha256 else None
+        current = sha256_file(target) if exists else None
         # The token guards against a lost update, which only a write can cause:
         # a dry run or an op-less read checks one it is given and reports a
         # mismatch, but does not need one.
-        current: str | None = None
-        revision_notes: list[str] = []
-        if exists and dry_run:
-            current = sha256_file(target)
-            if expected is not None and current != expected:
-                _stage("revision_check", False, "sha mismatch")
-                revision_notes.append(
-                    f"expected_sha256 {expected} does not match the current file "
-                    f"({current}); a commit quoting it would return revision_conflict."
-                )
-            else:
-                _stage("revision_check")
-        elif exists:
-            current = sha256_file(target)
+        if current is not None and not dry_run:
             if expected is None:
                 # The guard stands — nothing is written without the token — but
                 # the refusal hands the token over rather than sending the
@@ -1200,7 +1188,14 @@ async def _evaluate_edit_schematic(
                         ),
                     )
                 )
-            _stage("revision_check")
+        revision_notes: list[str] = []
+        if current is not None and expected is not None and current != expected:
+            # Only a dry run reaches here with a stale token: a write refused above.
+            _stage("revision_check", False, "sha mismatch")
+            revision_notes.append(
+                f"expected_sha256 {expected} does not match the current file "
+                f"({current}); a commit quoting it would return revision_conflict."
+            )
         else:
             _stage("revision_check")
 
@@ -1315,7 +1310,7 @@ async def _evaluate_edit_schematic(
                                 filter(
                                     None,
                                     (
-                                        _dry_run_hint(args, current),
+                                        _dry_run_hint(bool(args.ops), current),
                                         left_out_hint,
                                     ),
                                 )

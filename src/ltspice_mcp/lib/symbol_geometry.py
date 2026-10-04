@@ -220,6 +220,12 @@ def _find_asy_file(symbol: str) -> Path | None:
     return None
 
 
+def _symattr_value(line: str) -> str:
+    """The value of a ``SYMATTR <name> <value>`` line, or "" when it has none."""
+    parts = line.split(None, 2)
+    return parts[2].strip() if len(parts) > 2 else ""
+
+
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
     """Parse a .asy symbol file to extract pins, bounding box, and description.
 
@@ -266,9 +272,9 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
             elements.append(shape)
 
         if line.startswith("SYMATTR Description"):
-            description = line.split(None, 2)[2] if len(line.split(None, 2)) > 2 else ""
+            description = _symattr_value(line)
         elif line.startswith("SYMATTR Prefix"):
-            prefix = line.split(None, 2)[2].strip() if len(line.split(None, 2)) > 2 else ""
+            prefix = _symattr_value(line)
 
         i += 1
 
