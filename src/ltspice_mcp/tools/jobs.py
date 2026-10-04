@@ -1,6 +1,6 @@
-"""The jobs control plane: status, wait, cancel, list, and run pages.
+"""The jobs control plane: status, wait, cancel, resume, list, and run pages.
 
-One tool over five actions, each with its own input model, so a caller
+One tool over distinct actions, each with its own input model, so a caller
 addresses ``jobs`` and only that action's fields are accepted. The evaluation
 (``evaluate_jobs``) is separated from the presentation (``render_jobs_data``)
 because MCP and the Python API differ only by that presentation argument: the wire
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
 
@@ -33,7 +33,13 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
-from ltspice_mcp.lib.experiment_runner import ExperimentCancellationError, cancel_receipt_row
+from ltspice_mcp.lib.experiment_runner import (
+    ExperimentCancellationError,
+    IdempotencyConflictError,
+    RequestGateBusy,
+    SubmissionCommitted,
+    cancel_receipt_row,
+)
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     Completeness,
@@ -43,6 +49,7 @@ from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
+from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
@@ -52,6 +59,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     failures_schema,
     format_response,
+    held_to_cap,
     outcome_of,
     page_schema,
     path_denied_text,
@@ -59,7 +67,11 @@ from ltspice_mcp.tools._base import (
     resolve_response_budget,
     safe_path,
 )
-from ltspice_mcp.tools.experiments import JOBS_WAIT_CAP_S
+from ltspice_mcp.tools.experiments import (
+    JOBS_WAIT_CAP_S,
+    SUBMISSION_DWELL_CAP_S,
+    attached_analysis_callback,
+)
 from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
     JOBS_PAGE_LIMIT,
@@ -83,7 +95,7 @@ _FOREIGN_WAIT_POLL_S = 2.0
 
 
 class JobsInput(ToolInput):
-    """The shared half of every jobs call, and the entry point for the five actions.
+    """The shared half of every jobs call, and the entry point for its actions.
 
     ``JobsInput.model_validate({"action": ...})`` routes on ``action`` and
     returns that action's own model, so a caller may keep addressing this one
@@ -95,7 +107,8 @@ class JobsInput(ToolInput):
         description=(
             "'status' snapshots a job; 'wait' blocks until it finishes or "
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
-            "circuits; 'runs' pages one job's runs. Each action takes only its "
+            "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
+            "cases of a recoverable job. Each action takes only its "
             "own fields, listed below."
         ),
     )
@@ -105,7 +118,7 @@ class JobsInput(ToolInput):
         description=response_budget.BUDGET_DESCRIPTION,
     )
 
-    #: The five action models, in advertised order. Set below, once they exist.
+    #: The action models, in advertised order. Set below, once they exist.
     VARIANTS: ClassVar[tuple[type[JobsInput], ...]] = ()
 
     def __init__(self, /, **data: Any) -> None:
@@ -115,7 +128,7 @@ class JobsInput(ToolInput):
         # is the difference between a clear error and that empty object.
         if type(self) is JobsInput:
             raise TypeError(
-                "JobsInput is the union of the five jobs actions; validate with "
+                "JobsInput is the union of the jobs actions; validate with "
                 "JobsInput.model_validate({'action': ...}) or construct the action "
                 "model itself"
             )
@@ -135,19 +148,19 @@ class JobsInput(ToolInput):
 
     @classmethod
     def wire_input_schema(cls) -> dict[str, Any]:
-        """Advertise the five actions as one discriminated union."""
+        """Advertise the actions as one discriminated union."""
         if cls is not JobsInput:
             return super().wire_input_schema()
         return jobs_input_schema()
 
 
 class _AddressedJobsInput(JobsInput):
-    """The actions that name one job: exactly one of job_id or request_id."""
+    """The actions that name one job, by job_id, request_id, or both."""
 
     job_id: str | None = Field(
         default=None,
         min_length=1,
-        description="Address the job directly. Give this or request_id, never both.",
+        description="Address the job directly. With request_id too, both must name it.",
     )
     request_id: str | None = Field(
         default=None,
@@ -160,10 +173,10 @@ class _AddressedJobsInput(JobsInput):
 
     @model_validator(mode="after")
     def _one_selector(self) -> Self:
-        if int(self.job_id is not None) + int(self.request_id is not None) != 1:
-            raise ValueError(
-                f"jobs action {self.action!r} requires exactly one of job_id or request_id"
-            )
+        # Both is one job named twice, which the resolver checks; a call that
+        # names none has nothing to act on.
+        if self.job_id is None and self.request_id is None:
+            raise ValueError(f"jobs action {self.action!r} requires job_id or request_id")
         return self
 
 
@@ -180,9 +193,8 @@ class JobsWaitInput(_AddressedJobsInput):
     timeout_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=JOBS_WAIT_CAP_S,
         description=(
-            "How long to block, 0-300s. Timing out is not a failure: the "
+            "How long to block, held to 300s. Timing out is not a failure: the "
             "response says timed_out and the job keeps running, so wait again."
         ),
     )
@@ -225,12 +237,49 @@ class JobsListInput(JobsInput):
     limit: int = Field(
         default=JOBS_PAGE_LIMIT,
         ge=1,
-        le=JOBS_PAGE_LIMIT,
-        description="Circuit groups per page.",
+        description="Circuit groups per page, held to 50.",
     )
     cursor: str | None = Field(
         default=None,
         description="next_cursor from the previous page. Absent means the first page.",
+    )
+
+
+class JobsResumeInput(JobsInput):
+    """Resume a terminal recoverable lineage through one durable request."""
+
+    action: Literal["resume"]  # pyright: ignore[reportIncompatibleVariableOverride]
+    job_id: str = Field(min_length=1, strict=True, description="Terminal lineage head to resume.")
+    resume_request_id: str = Field(
+        min_length=1,
+        strict=True,
+        description="Idempotency key within this lineage; replay returns the same child or no-op.",
+    )
+    control_token: str | None = Field(
+        default=None,
+        min_length=1,
+        strict=True,
+        description="Parent receipt's token; required when this process does not own the parent.",
+    )
+    case_ids: list[Annotated[str, Field(strict=True, min_length=1)]] | None = Field(
+        default=None,
+        description="Case IDs to retry as a set; omitted selects all eligible unfinished cases.",
+    )
+    retry_failed: bool = Field(
+        default=False,
+        strict=True,
+        description="Also retry ordinary simulator failures.",
+    )
+    retry_cancelled: bool = Field(
+        default=False,
+        strict=True,
+        description="Also retry explicitly cancelled cases.",
+    )
+    wait_s: float = Field(
+        default=0.0,
+        strict=True,
+        ge=0.0,
+        description="Dwell on the returned job, held to 120s; presentation only, default 0.",
     )
 
 
@@ -252,11 +301,16 @@ class JobsRunsInput(_AddressedJobsInput):
 
 
 #: One jobs call: the action models, told apart by ``action``. Discriminated
-#: rather than a plain union so an unknown action is one error naming the five
+#: rather than a plain union so an unknown action is one error naming the
 #: legal ones, and a known action with a bad field reports against that action
-#: alone instead of five sets of complaints.
+#: alone instead of multiple sets of complaints.
 JobsAction: TypeAlias = Annotated[
-    JobsStatusInput | JobsWaitInput | JobsCancelInput | JobsListInput | JobsRunsInput,
+    JobsStatusInput
+    | JobsWaitInput
+    | JobsCancelInput
+    | JobsListInput
+    | JobsRunsInput
+    | JobsResumeInput,
     Field(discriminator="action"),
 ]
 
@@ -268,7 +322,7 @@ JOBS_ACTIONS: tuple[str, ...] = tuple(
 
 
 def jobs_input_schema() -> dict[str, Any]:
-    """The five actions as one object schema, each action's shape its own branch.
+    """The actions as one object schema, each action's shape its own branch.
 
     Three requirements shape this, and only one spelling meets all three.
 
@@ -283,12 +337,12 @@ def jobs_input_schema() -> dict[str, Any]:
     rather than pydantic's ``oneOf`` so that a client reading the published
     schema can see which action takes which field: each pair names one action
     and the constraints that come with it, where a ``oneOf`` list says only
-    that one of five shapes has to match and leaves the reader to work out
+    that one of several shapes has to match and leaves the reader to work out
     which fields belong to which. The error a bad call gets does not depend on
     the choice — nothing validates a call against the published schema; the
     message comes from ``JobsInput`` itself, through
     ``errors.compact_validation_error`` over pydantic's report, and pydantic
-    enumerates the five actions from the model either way.
+    enumerates the actions from the model either way.
     ``discriminator.propertyName`` is kept beside the branches, saying that
     they are alternatives chosen by ``action``; the branch table itself is
     not, because each ``if``/``then`` pair already names an action and the
@@ -366,6 +420,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "runs": RUNS_PAGE_SCHEMA,
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
     "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
+    "lineage": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lineage"],
 }
 
 _JOBS_RECEIPT_REQUIRED = [
@@ -452,7 +507,7 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
 }
 
 
-def _jobs_receipt_schema(action: Literal["status", "wait"]) -> dict[str, Any]:
+def _jobs_receipt_schema(action: Literal["status", "wait", "resume"]) -> dict[str, Any]:
     properties = {
         "action": {"const": action},
         **_JOBS_COMMON_PROPERTIES,
@@ -462,6 +517,20 @@ def _jobs_receipt_schema(action: Literal["status", "wait"]) -> dict[str, Any]:
     if action == "wait":
         properties["timed_out"] = {"type": "boolean"}
         required.append("timed_out")
+    if action == "resume":
+        properties.update(
+            {
+                "resumed": {"type": "boolean"},
+                "replayed": {"type": "boolean"},
+                "resume_request_id": {"type": "string"},
+                "addressed_parent_job_id": {"type": "string"},
+                "head_job_id": {"type": ["string", "null"]},
+                "control_token": {"type": "string"},
+            }
+        )
+        required.extend(
+            ["resumed", "replayed", "resume_request_id", "addressed_parent_job_id", "head_job_id"]
+        )
     return {
         "type": "object",
         "properties": properties,
@@ -509,7 +578,7 @@ JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     # Every branch below declares these and requires most of them, so hoisting
     # them constrains nothing new. What it buys is the introspecting client that
-    # reads `properties` and never looks at `oneOf`: it sees the shape all five
+    # reads `properties` and never looks at `oneOf`: it sees the shape all
     # actions share instead of the lone `warnings` key the registry injects into
     # a schema that declares no properties of its own.
     "properties": {"action": {"type": "string"}, **_JOBS_COMMON_PROPERTIES},
@@ -520,6 +589,7 @@ JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
         _jobs_page_schema("cancel", _KILL_RECEIPT_SCHEMA, addressed=True),
         _jobs_page_schema("list", _CIRCUIT_GROUP_SCHEMA, addressed=False),
         _jobs_page_schema("runs", RUN_RECORD_SCHEMA, addressed=True),
+        _jobs_receipt_schema("resume"),
     ],
 }
 
@@ -604,8 +674,7 @@ def _without_control_tokens(value: Any) -> Any:
 
 async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -> ExperimentJob:
     job_id = args.job_id
-    if job_id is None:
-        assert args.request_id is not None
+    if args.request_id is not None:
         index = await asyncio.to_thread(
             experiment_store.load_request_index,
             args.request_id,
@@ -620,7 +689,16 @@ async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -
             raise JobNotFoundError(
                 f"The request index for {args.request_id!r} does not name a valid job"
             )
+        if job_id is not None and job_id != raw_job_id:
+            # Two selectors for two jobs: acting on either would be a guess.
+            raise _JobsActionError(
+                "selector_conflict",
+                f"job_id {job_id!r} and request_id {args.request_id!r} name different "
+                f"jobs (the request_id names {raw_job_id!r}); pass one of them.",
+                stage="resolution",
+            )
         job_id = raw_job_id
+    assert job_id is not None
     return await services.resolve_job_async(job_id, state)
 
 
@@ -894,7 +972,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
     addressed = args if isinstance(args, _AddressedJobsInput) else None
     common: dict[str, Any] = {
         "action": args.action,
-        # The action never ran, so nothing came back beside the error.
+        # The call failed to deliver its result even if a resume already committed.
         "outcome": outcome_of(error, delivered=False),
         "observations": [],
         "warnings": [],
@@ -905,14 +983,14 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
             "message": error.message,
             "stage": error.stage,
             "retryable": error.retryable,
-            "commit_state": "not_started",
+            "commit_state": error.commit_state,
         },
     }
-    if isinstance(args, (JobsStatusInput, JobsWaitInput)):
+    if isinstance(args, (JobsStatusInput, JobsWaitInput, JobsResumeInput)):
         common.update(
             {
                 "job_id": args.job_id,
-                "request_id": args.request_id,
+                "request_id": None if isinstance(args, JobsResumeInput) else args.request_id,
                 "job_type": "unknown",
                 "status": "unknown",
                 "analysis_status": "not_requested",
@@ -926,6 +1004,33 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
         )
         if isinstance(args, JobsWaitInput):
             common["timed_out"] = False
+        if isinstance(args, JobsResumeInput):
+            common.update(
+                job_id=evaluation.job_id or args.job_id,
+                request_id=evaluation.request_id,
+                job_type="experiment" if evaluation.job_id is not None else "unknown",
+                status=evaluation.status or "unknown",
+                resumed=evaluation.resumed,
+                replayed=evaluation.replayed,
+                resume_request_id=args.resume_request_id,
+                addressed_parent_job_id=args.job_id,
+                head_job_id=evaluation.head_job_id,
+            )
+            if evaluation.snapshot is not None:
+                snapshot = evaluation.snapshot
+                common.update(
+                    job_id=snapshot.job_id,
+                    request_id=snapshot.request_id,
+                    job_type="experiment",
+                    status=snapshot.status,
+                    analysis_status=snapshot.analysis_status,
+                    dialect=snapshot.dialect,
+                    completeness=snapshot.completeness,
+                )
+                if snapshot.lineage is not None:
+                    common["lineage"] = dict(snapshot.lineage)
+            if evaluation.resumed and evaluation.control_token is not None:
+                common["control_token"] = evaluation.control_token
         return finalize_receipt(common)
     common.update(unpaged([]))
     if addressed is not None:
@@ -950,6 +1055,10 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
         return exc.code, "resolution", False
     if isinstance(exc, ExperimentCancellationError):
         return exc.code, "cancellation", False
+    if isinstance(exc, RecoveryError):
+        return exc.code, "recovery", False
+    if isinstance(exc, (IdempotencyConflictError, SubmissionCommitted, RequestGateBusy)):
+        return exc.code, "recovery", not isinstance(exc, IdempotencyConflictError)
     if isinstance(exc, PermissionError):
         return "cancel_not_authorized", "authorization", False
     if isinstance(exc, LTSpiceMCPError):
@@ -969,6 +1078,7 @@ class _JobsError:
     retryable: bool
     hint: str
     """The envelope's hint: the message, with the remedy after it where one is known."""
+    commit_state: Literal["not_started", "committed", "unknown"] = "not_started"
 
 
 @dataclass(frozen=True)
@@ -993,6 +1103,12 @@ class JobsEvaluation:
     observations: tuple[dict[str, Any], ...] = ()
     circuit: Path | None = None
     error: _JobsError | None = None
+    # An argument held to its cap, said so in the response's warnings.
+    warnings: tuple[str, ...] = ()
+    resumed: bool = False
+    replayed: bool = False
+    control_token: str | None = None
+    head_job_id: str | None = None
 
     @property
     def is_error(self) -> bool:
@@ -1007,6 +1123,53 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
     it through the same envelope.
     """
     try:
+        if isinstance(args, JobsResumeInput):
+            from ltspice_mcp.lib.experiment_resume import resume_experiment
+
+            wait_s, note = held_to_cap("wait_s", args.wait_s, SUBMISSION_DWELL_CAP_S, "s")
+            receipt = await asyncio.shield(
+                resume_experiment(
+                    state,
+                    job_id=args.job_id,
+                    resume_request_id=args.resume_request_id,
+                    control_token=args.control_token,
+                    case_ids=args.case_ids,
+                    retry_failed=args.retry_failed,
+                    retry_cancelled=args.retry_cancelled,
+                    analysis_callback=attached_analysis_callback(state),
+                )
+            )
+            evaluation = JobsEvaluation(
+                args=args,
+                job_id=receipt.job.job_id,
+                request_id=receipt.job.request_id,
+                status=receipt.job.status,
+                resumed=receipt.resumed,
+                replayed=receipt.replayed,
+                control_token=receipt.control_token if receipt.resumed else None,
+                head_job_id=receipt.job.job_id if receipt.resumed else None,
+                warnings=() if note is None else (note,),
+            )
+            try:
+                job = receipt.job
+                head_job_id = job.job_id if receipt.resumed else await _recovery_head(job, state)
+                evaluation = replace(evaluation, head_job_id=head_job_id)
+                if wait_s > 0:
+                    job, _ = await _wait_for_jobs_target(
+                        job, state, timeout_s=wait_s, wait_for="all"
+                    )
+                snapshot = await snapshot_receipt_live(job, state)
+            except Exception as exc:
+                return failed_jobs_evaluation(
+                    args, SubmissionCommitted(args.resume_request_id, exc), state, prior=evaluation
+                )
+            return replace(
+                evaluation,
+                snapshot=snapshot,
+                job_id=snapshot.job_id,
+                request_id=snapshot.request_id,
+                status=snapshot.status,
+            )
         if isinstance(args, JobsListInput):
             circuit = (
                 await asyncio.to_thread(safe_path, args.circuit, state)
@@ -1044,11 +1207,14 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             )
 
         timed_out: bool | None = None
+        held: tuple[str, ...] = ()
         if isinstance(args, JobsWaitInput):
+            timeout_s, note = held_to_cap("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
+            held = () if note is None else (f"{note} Wait again to keep waiting.",)
             job, timed_out = await _wait_for_jobs_target(
                 job,
                 state,
-                timeout_s=args.timeout_s,
+                timeout_s=timeout_s,
                 wait_for=args.wait_for,
             )
         # A runs page carries no observations, so it skips the progress reads.
@@ -1064,20 +1230,70 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             job_id=snapshot.job_id,
             request_id=snapshot.request_id,
             status=snapshot.status,
+            warnings=held,
         )
     except Exception as exc:
-        return _failed_jobs_evaluation(args, exc, state)
+        return failed_jobs_evaluation(args, exc, state)
 
 
-def _failed_jobs_evaluation(
-    args: JobsInput, exc: Exception, state: SessionState
+async def _recovery_head(job: ExperimentJob, state: SessionState) -> str:
+    """Read the current head for a no-op whose parent may no longer be head."""
+    from ltspice_mcp.lib.recovery_journal import load_journal
+    from ltspice_mcp.lib.store import Store
+
+    assert job.recovery is not None
+    journal = await asyncio.to_thread(
+        load_journal, Store(state.working_dir), job.recovery.root_request_id
+    )
+    if journal is None:
+        raise RecoveryError("recovery_journal_missing", "The recovery lineage journal is missing")
+    return journal.head_job_id
+
+
+def failed_jobs_evaluation(
+    args: JobsInput,
+    exc: Exception,
+    state: SessionState | None,
+    *,
+    prior: JobsEvaluation | None = None,
 ) -> JobsEvaluation:
     """Carry one failure as an evaluation, classified for the error envelope."""
+    if prior is None and isinstance(exc, SubmissionCommitted) and exc.receipt is not None:
+        receipt = exc.receipt
+        prior = JobsEvaluation(
+            args=args,
+            job_id=receipt.job.job_id,
+            request_id=receipt.job.request_id,
+            status=receipt.job.status,
+            resumed=True,
+            replayed=receipt.replayed,
+            control_token=receipt.control_token,
+            head_job_id=receipt.job.job_id,
+        )
     code, stage, retryable = _jobs_error_details(exc)
-    hint = path_denied_text(exc, state) if isinstance(exc, PathSecurityError) else str(exc)
-    return JobsEvaluation(
-        args=args,
-        error=_JobsError(code=code, message=str(exc), stage=stage, retryable=retryable, hint=hint),
+    hint = (
+        path_denied_text(exc, state)
+        if isinstance(exc, PathSecurityError) and state is not None
+        else str(exc)
+    )
+    error = _JobsError(
+        code=code,
+        message=str(exc),
+        stage=stage,
+        retryable=retryable,
+        hint=hint,
+        commit_state=(
+            "committed"
+            if isinstance(exc, SubmissionCommitted)
+            else "unknown"
+            if isinstance(exc, RequestGateBusy)
+            else "not_started"
+        ),
+    )
+    return (
+        replace(prior, error=error)
+        if prior is not None
+        else JobsEvaluation(args=args, error=error)
     )
 
 
@@ -1097,7 +1313,10 @@ def render_jobs_data(
     """
     args = evaluation.args
     if evaluation.error is not None:
-        return _without_control_tokens(_jobs_error_payload(evaluation)), evaluation.error.hint
+        data = _jobs_error_payload(evaluation)
+        if not isinstance(args, JobsResumeInput):
+            data = _without_control_tokens(data)
+        return data, evaluation.error.hint
 
     if isinstance(args, JobsListInput):
         groups = list(evaluation.groups)
@@ -1114,7 +1333,7 @@ def render_jobs_data(
             "outcome": outcome_of(list_failures),
             **page,
             "observations": list(evaluation.observations),
-            "warnings": [],
+            "warnings": list(evaluation.warnings),
             "failures": list_failures,
             "hint": (
                 (
@@ -1175,11 +1394,33 @@ def render_jobs_data(
     data = render_jobs_receipt_snapshot(
         action,
         snapshot,
-        timed_out=evaluation.timed_out,
+        timed_out=None if isinstance(args, JobsResumeInput) else evaluation.timed_out,
         runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
         analysis_answer_channel=rung is not None and rung.answer_channel,
         analysis_rows_cap=limit if rung is not None and rung.shrink else None,
     )
+    if evaluation.warnings:
+        data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
+
+    if isinstance(args, JobsResumeInput):
+        data.update(
+            action="resume",
+            resumed=evaluation.resumed,
+            replayed=evaluation.replayed,
+            resume_request_id=args.resume_request_id,
+            addressed_parent_job_id=args.job_id,
+            head_job_id=evaluation.head_job_id,
+        )
+        if evaluation.resumed:
+            if evaluation.control_token is not None:
+                data["control_token"] = evaluation.control_token
+        else:
+            data["hint"] = (
+                "No eligible cases remain; use analyze_results over this job_id "
+                "to retry or change analysis. " + data["hint"]
+            )
+        return data, f"Resume {args.resume_request_id}: job {snapshot.job_id} ({snapshot.status})"
+
     if action == "status":
         text = f"Job {snapshot.job_id}: {snapshot.status}"
     elif evaluation.timed_out:
@@ -1192,7 +1433,18 @@ def render_jobs_data(
 
 def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
     """The whole result of one evaluation: every run, group and receipt."""
-    return render_jobs_data(evaluation)[0]
+    try:
+        return render_jobs_data(evaluation)[0]
+    except Exception as exc:
+        if not isinstance(evaluation.args, JobsResumeInput) or evaluation.error is not None:
+            raise
+        failed = failed_jobs_evaluation(
+            evaluation.args,
+            SubmissionCommitted(evaluation.args.resume_request_id, exc),
+            None,
+            prior=evaluation,
+        )
+        return render_jobs_data(failed)[0]
 
 
 @registry.tool(
@@ -1206,6 +1458,8 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         "'runs' pages the full per-run records, artifact paths included; 'list' "
         "with no circuit is the recently-touched-circuits view for picking up "
         "work from an earlier session."
+        " 'resume' creates a child of a terminal recoverable head, preserving "
+        "produced cases; use a new resume_request_id for each retry."
     ),
     input_model=JobsInput,
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,
@@ -1216,7 +1470,16 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
     evaluation = await evaluate_jobs(args, state)
     built: _JobsBuilt | None = None
     if evaluation.error is None:
-        page_limit = args.limit if isinstance(args, JobsListInput) else JOBS_PAGE_LIMIT
+        page_limit = JOBS_PAGE_LIMIT
+        if isinstance(args, JobsListInput):
+            # A page size is an MCP control; the Python API returns every group,
+            # so only this page says it was held.
+            page_limit, held = held_to_cap("limit", args.limit, JOBS_PAGE_LIMIT)
+            if held is not None:
+                evaluation = replace(
+                    evaluation,
+                    warnings=(f"{held} Page on with next_cursor.", *evaluation.warnings),
+                )
         try:
             budget = resolve_response_budget(args.budget, state)
             if budget.tokens is None:
@@ -1234,7 +1497,11 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
             # cancel among them. Report it through this tool's own envelope
             # rather than letting it out as a protocol error carrying no
             # structuredContent at all.
-            evaluation = _failed_jobs_evaluation(args, exc, state)
+            if isinstance(args, JobsResumeInput):
+                exc = SubmissionCommitted(args.resume_request_id, exc)
+            evaluation = failed_jobs_evaluation(
+                args, exc, state, prior=evaluation if isinstance(args, JobsResumeInput) else None
+            )
     if built is None:
         # A failed call renders once, off the budget ladder: its envelope is
         # already the irreducible floor, and the ladder's trim rung would take

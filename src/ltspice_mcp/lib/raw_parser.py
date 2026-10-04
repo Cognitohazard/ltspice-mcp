@@ -1,8 +1,9 @@
 """.raw file parsing and waveform analysis.
 
 Provides core functions for parsing .raw files, extracting trace names,
-computing statistics, and querying data points. All functions work with
-spicelib's RawRead objects and return Python primitives (no numpy types).
+computing statistics, and querying data points. Numerical helpers consume the
+RawData protocol; decoded plots supply physical metadata for their selected
+analysis. Explicit dependency readers remain usable by offline tests.
 
 For .log file parsing (measurements, Fourier data), see log_parser.py.
 
@@ -23,18 +24,14 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import numpy as np
-from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_classes import SpiceReadException
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.errors import NoAxisError
+from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, PlotDescriptor, RawData
 from ltspice_mcp.lib.format import cap_list
-from ltspice_mcp.lib.log_parser import (
-    extract_log_diagnostics,
-    is_op_stepping_failure,
-    parse_fourier_data,
-    parse_measurements,
-)
+from ltspice_mcp.lib.log_parser import is_op_stepping_failure
 from ltspice_mcp.lib.result_observations import surface_observations
 
 # What a raw accessor raises when the thing being asked for is not there: a
@@ -167,9 +164,9 @@ class _MultiPlotAsciiGuard:
 def _install_multiplot_ascii_guard() -> None:
     """Wrap ``PlotData._read_ascii_vector`` so a multi-plot ASCII raw can't hang.
 
-    Idempotent. Applied at import because every server raw read constructs a
-    ``RawRead`` (via ``OffsetAwareRawRead``), and a single ngspice ``.noise``
-    run would otherwise wedge the process. Report/patch upstream separately;
+    Idempotent. Retained for explicit dependency readers while their callers
+    migrate to decoded results; a single ngspice ``.noise`` recording would
+    otherwise wedge those reads. Report/patch upstream separately;
     this guard no-ops once spicelib breaks the loop itself.
     """
     from spicelib.raw.plot_data import PlotData
@@ -215,7 +212,7 @@ class OffsetAwareRawRead(RawRead):
     plots with a nonzero offset are affected: other analyses' axes are not
     time, and LTspice writes ``Offset: 0`` for unwindowed runs.
 
-    Server-side raw loads construct this class, not bare RawRead.
+    Retained for existing dependency-reader imports and regression fixtures.
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -284,16 +281,23 @@ def safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
     return 20 * np.log10(magnitude)
 
 
-def detect_sim_type(raw: RawRead) -> str:
+def _selected_descriptor(raw: RawData) -> PlotDescriptor | None:
+    """Physical metadata only for actual decoded readers, never guessed from a stub."""
+    return raw.descriptor if isinstance(raw, (DecodedRaw, DecodedPlot)) else None
+
+
+def detect_sim_type(raw: RawData) -> str:
     """Detect simulation type from raw file metadata.
 
     Args:
-        raw: Loaded RawRead instance
+        raw: Selected decoded plot or structural reader
 
     Returns:
         Simulation type string (e.g., "Transient Analysis", "AC Analysis")
         or "Unknown" if detection fails
     """
+    if descriptor := _selected_descriptor(raw):
+        return descriptor.original_plot_name if descriptor.analysis != "unknown" else "Unknown"
     try:
         plot_name = raw.get_raw_property("Plotname")
         if plot_name:
@@ -342,15 +346,18 @@ def is_dc_analysis(sim_type: str) -> bool:
     return bool(_RE_DC.search(sim_type))
 
 
-def get_step_count(raw: RawRead) -> int:
+def get_step_count(raw: RawData) -> int:
     """Get number of simulation steps (for .step directives).
 
     Args:
-        raw: Loaded RawRead instance
+        raw: Selected decoded plot or structural reader
 
     Returns:
-        Number of steps (defaults to 1 if detection fails)
+        Number of validated step slices. Legacy lookup misses default to one;
+        decoded plots with unresolved boundaries refuse numeric selection.
     """
+    if _selected_descriptor(raw) is not None:
+        return len(raw.get_steps())
     try:
         return len(raw.get_steps())
     except _RAW_ACCESS_ERRORS:
@@ -420,7 +427,7 @@ def whattype_unit(whattype: str | None) -> str | None:
     return _WHATTYPE_UNIT.get(whattype.strip().lower())
 
 
-def declared_type(raw: RawRead, name: str) -> str | None:
+def declared_type(raw: RawData, name: str) -> str | None:
     """The simulator's own word for what a trace holds, lowercased, or None.
 
     This relays metadata, not physical meaning: some ngspice analyses label
@@ -437,14 +444,22 @@ def declared_type(raw: RawRead, name: str) -> str | None:
     return None
 
 
-def trace_unit(raw: RawRead, name: str) -> str | None:
-    """SI unit for a trace: the simulator's declared ``whattype`` if it maps to
-    a known SPICE type, else the ``V(``/``I(`` name prefix, else None.
+def trace_unit(raw: RawData, name: str) -> str | None:
+    """Physical unit from the selected decoded descriptor, including unknown units.
+
+    Structural readers use declared ``whattype`` and then a ``V(``/``I(``
+    prefix. A decoded descriptor's absent unit never falls back to that guess:
+    native transfer, root and sensitivity quantities may be declared voltage.
 
     Deliberately never guesses a unit from a device operating-point parameter name
     (e.g. it won't claim ``@m1[gm]`` is siemens unless the simulator typed the
     trace as ``admittance``) — that would be a vendor catalog, not a relay.
     """
+    if descriptor := _selected_descriptor(raw):
+        for trace in descriptor.traces:
+            if trace.name.lower() == name.lower():
+                return trace.unit
+        return None
     unit = whattype_unit(declared_type(raw, name))
     if unit:
         return unit
@@ -456,15 +471,18 @@ def trace_unit(raw: RawRead, name: str) -> str | None:
     return None
 
 
-def dc_axis_name(raw: RawRead) -> tuple[str | None, str | None]:
+def dc_axis_name(raw: RawData) -> tuple[str | None, str | None]:
     """``(name, SI unit)`` of a .dc sweep's swept-variable axis (trace 0).
 
-    Returns ``(None, None)`` if the axis name is unavailable. The unit comes from
-    the axis's declared ``whattype``. Lets the readers label a .dc sweep by its
+    Decoded plots use their sampled axis descriptor; a table has no axis even
+    when trace zero is declared voltage or frequency. Structural readers use
+    trace zero and its declared ``whattype``. Lets readers label a .dc sweep by its
     swept variable (e.g. ``Vin`` / ``Vin_V``) instead of a generic ``t``/``sweep``
     tag — the one place that introspection lives, shared by the text and CSV paths.
     """
-    # An axis-less raw (a stepped ``.op``) legitimately has no trace 0 to name.
+    if descriptor := _selected_descriptor(raw):
+        return (descriptor.axis.name, descriptor.axis.unit) if descriptor.axis else (None, None)
+    # Legacy readers may not expose a trace zero for an axis-less plot.
     with contextlib.suppress(*_RAW_ACCESS_ERRORS):
         ax = raw.get_trace(0)
         name = getattr(ax, "name", None)
@@ -492,7 +510,7 @@ def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
 
 
 def query_point_value(
-    raw: RawRead,
+    raw: RawData,
     trace_name: str,
     target_x: float,
     step: int = 0,
@@ -505,7 +523,7 @@ def query_point_value(
     the nearest data point to the requested value.
 
     Args:
-        raw: Loaded RawRead instance
+        raw: Selected decoded plot or structural reader
         trace_name: Name of trace to query
         target_x: Time or frequency value to query
         step: Step index (default 0)
@@ -564,7 +582,7 @@ _OP_BUCKET_BY_TYPE = {
 
 
 def extract_operating_point(
-    raw: RawRead, step: int = 0, point_index: int = 0
+    raw: RawData, step: int = 0, point_index: int = 0
 ) -> OperatingPointOutput:
     """Extract DC operating point data (node voltages, branch currents, device operating point).
 
@@ -573,7 +591,7 @@ def extract_operating_point(
     iteration of a stepped .OP run to return (0 by default).
 
     Args:
-        raw: Loaded RawRead instance
+        raw: Selected decoded plot or structural reader
         step: Step index for stepped .OP / .DC runs.
 
     Returns:
@@ -620,7 +638,7 @@ def extract_operating_point(
     return buckets
 
 
-def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:
+def compute_ac_bandwidth_metrics(raw: RawData, trace_name: str, step: int = 0) -> dict:
     """Compute -3 dB bandwidth and unity-gain frequency for AC simulations.
 
     Returns a dict with ``bandwidth_3db`` and ``unity_gain_freq`` (each a
@@ -696,7 +714,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     return metrics
 
 
-def _raw_node_data_is_finite(raw: RawRead, trace_names: list[str], step: int) -> bool:
+def _raw_node_data_is_finite(raw: RawData, trace_names: list[str], step: int) -> bool:
     """Whether the raw holds a real, finite NODE VOLTAGE (a solved bias point).
 
     ngspice can print an OP ``<method> stepping failed`` line, recover via a
@@ -734,8 +752,8 @@ _SIGNALS_STRUCTURED_CAP = 100
 
 
 def build_simulation_summary(
-    raw: RawRead,
-    log_path: Path | None,
+    raw: RawData,
+    logs: DecodedLog | None,
     duration: float | None = None,
     *,
     step: int = 0,
@@ -746,8 +764,8 @@ def build_simulation_summary(
     """Build comprehensive, type-aware simulation summary.
 
     Args:
-        raw: Loaded RawRead instance
-        log_path: Optional path to .log file for measurements/warnings
+        raw: Selected decoded plot or structural reader
+        logs: Optional resident facts from the captured log/console decode.
         duration: Optional simulation duration in seconds
         step: Which .step iteration to summarize (axis/range/point_count).
             Defaults to 0. Callers exposing a step (simulation_summary) thread
@@ -776,6 +794,7 @@ def build_simulation_summary(
     sim_type = detect_sim_type(raw)
     trace_names = raw.get_trace_names()
     step_count = get_step_count(raw)
+    descriptor = _selected_descriptor(raw)
 
     # Collected here rather than in the log block below so a fault anywhere in
     # this function has somewhere to land; attached to the summary once, at the
@@ -790,12 +809,16 @@ def build_simulation_summary(
         axis = raw.get_axis(step=step)
         point_count = len(axis)
         has_axis = True
-    except (RuntimeError, TypeError):
+    except (NoAxisError, RuntimeError, TypeError):
         # TypeError is the same shape by another route: for a file that held no
         # plots at all, spicelib's get_axis returns ``np.ndarray([])`` — an
         # UNSIZED 0-d array — so ``len()`` raises instead of answering 0.
         axis = None  # type: ignore[assignment]
-        point_count = step_count
+        point_count = (
+            len(raw.get_wave(trace_names[0], step=step))
+            if descriptor is not None and trace_names
+            else step_count
+        )
         has_axis = False
     except _RAW_ACCESS_ERRORS as exc:
         # Any OTHER read fault is not the axis-less shape above: the range and
@@ -810,7 +833,16 @@ def build_simulation_summary(
     if has_axis and point_count > 0 and axis is not None:
         if _RE_TRANSIENT.search(sim_type):
             range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
-        elif is_ac_analysis(sim_type) or is_noise_analysis(sim_type):
+        elif (
+            is_ac_analysis(sim_type)
+            or is_noise_analysis(sim_type)
+            or (
+                descriptor is not None
+                and descriptor.axis is not None
+                and descriptor.axis.unit == "Hz"
+                and descriptor.axis.real_coordinates
+            )
+        ):
             # AC and noise both sweep over frequency. Axis values may be
             # complex (frequency + j0); take real part.
             range_info = {
@@ -838,80 +870,56 @@ def build_simulation_summary(
     # spice://results/{job_id}/signals resource.
     cap_list(summary, "signals", trace_names, _SIGNALS_STRUCTURED_CAP)
 
-    if log_path and log_path.exists():
-        from ltspice_mcp.lib.log_parser import (
-            make_log_reader,
-            parse_temperatures,
-            read_log_text,
-            scan_op_step_log,
-        )
+    if logs is not None:
 
-        # Read the log buffer once and hand the text to every text parser in
-        # this block (read_log_text exists for exactly this) instead of one
-        # syscall + full decode per parser.
-        log_text = read_log_text(log_path)
+        def section_value(name: LogSectionName, label: str) -> Any:
+            section = logs.section(name)
+            if section["status"] == "error":
+                error = section["error"]
+                warnings.append(f"{label} unavailable: {error['type']}: {error['message']}")
+            if section["nonfinite_count"]:
+                warnings.append(
+                    f"{label}: {section['nonfinite_count']} non-finite numeric log "
+                    "value(s) retained as null."
+                )
+            return section["value"]
 
-        # Ambient/nominal temperature is a provenance fact the simulator prints
-        # by default — surface it so temp-sensitive tasks (noise, leakage,
-        # tempco) can confirm it instead of assuming 27 °C.
-        temp_c, tnom_c = parse_temperatures(text=log_text)
-        if temp_c is not None:
-            summary["temp_c"] = temp_c
-        if tnom_c is not None:
-            summary["tnom_c"] = tnom_c
+        temperatures = section_value("temperatures", "temperatures")
+        if temperatures is not None:
+            for name in ("temp_c", "tnom_c"):
+                if temperatures[name] is not None:
+                    summary[name] = temperatures[name]
 
-        log_reader: LTSpiceLogReader | None = None
-        try:
-            log_reader = make_log_reader(log_path)
-        except ResultError as exc:
-            # Without a reader neither measurements nor Fourier data can be
-            # produced. Say so once here rather than leaving both keys absent,
-            # which reads as a deck that asked for neither.
-            warnings.append(_parse_failure("measurements and fourier (log reader)", exc))
+        meas_data = section_value("measurements", "measurements")
+        if meas_data is not None:
+            if meas_data["measurements"]:
+                summary["measurements"] = meas_data["measurements"]
+            # A failed measurement is distinct from an absent request or a
+            # section the worker could not decode.
+            if meas_data["failed_measurements"]:
+                summary["failed_measurements"] = meas_data["failed_measurements"]
 
-        if log_reader is not None:
-            try:
-                meas_data = parse_measurements(log_path, reader=log_reader)
-                if meas_data["measurements"]:
-                    summary["measurements"] = meas_data["measurements"]
-                # FAIL'ed measurements aren't in get_measure_names(); surface
-                # them as a separate list so consumers can distinguish "did
-                # not trigger" from "did not parse".
-                failed = meas_data.get("failed_measurements") or []
-                if failed:
-                    summary["failed_measurements"] = list(failed)
-            except Exception as exc:
-                warnings.append(_parse_failure("measurements", exc))
-
-        try:
-            diagnostics = extract_log_diagnostics(log_path)
+        diagnostics = section_value("diagnostics", "log diagnostics (errors, warnings)")
+        if diagnostics is not None:
             warnings.extend(diagnostics["warnings"])
             if diagnostics["errors"]:
                 summary["errors"] = diagnostics["errors"]
             if diagnostics.get("meas_errors"):
                 summary["meas_errors"] = diagnostics["meas_errors"]
-        except Exception as exc:
-            # The diagnostics channel itself: an empty ``errors`` list here
-            # otherwise reads as a clean run.
-            warnings.append(_parse_failure("log diagnostics (errors, warnings)", exc))
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails),
         # and a stepped ``.op`` writes only step 0 to the .raw. It both warns the
         # user (operating-point runs) and gates the OP-error demote below (step
-        # 0's data can't vouch for a later step the raw never carries). Only scan
-        # when a consumer needs it — the demote needs it solely when an OP
-        # stepping-failure error is present — so the common clean .tran/.ac path
-        # skips a full log walk. ``.step name=value`` lines add signal when
-        # LTspice emits them.
-        op_log_steps: list[dict[str, float]] = []
-        op_solve_count = 1
-        _pending_errs = summary.get("errors")
-        if "operating" in sim_type.lower() or (
-            _pending_errs and any(is_op_stepping_failure(e) for e in _pending_errs)
-        ):
-            op_log_steps, op_solves = scan_op_step_log(text=log_text)
-            op_solve_count = max(len(op_log_steps), op_solves, 1)
+        # 0's data can't vouch for a later step the raw never carries).
+        op_log_steps = section_value("steps", "step rows")
+        op_iterations = section_value("op_iterations", "OP iterations")
+        op_coverage_known = op_log_steps is not None and op_iterations is not None
+        op_solve_count = max(
+            len(op_log_steps or []),
+            op_iterations["attempts"] if op_iterations is not None else 0,
+            1,
+        )
 
         # Raw-validity gate for OP "stepping failed" errors. The log-only
         # converged-check keys on LTspice's success wording, so an ngspice run
@@ -931,6 +939,7 @@ def build_simulation_summary(
             if (
                 demoted
                 and step_count <= 1
+                and op_coverage_known
                 and op_solve_count <= 1
                 and _raw_node_data_is_finite(raw, trace_names, step)
             ):
@@ -962,19 +971,15 @@ def build_simulation_summary(
                 "point iterations but the .raw only carries step 0. " + suggestion
             )
 
-        if log_reader is not None:
-            try:
-                fourier_data = parse_fourier_data(log_path, reader=log_reader)
-                if fourier_data:
-                    # Drop entries with neither THD nor harmonics — the empty
-                    # stub from a -nan recovery isn't worth surfacing.
-                    fourier_data = [
-                        f for f in fourier_data if f.get("thd") is not None or f.get("harmonics")
-                    ]
-                    if fourier_data:
-                        summary["fourier"] = fourier_data
-            except Exception as exc:
-                warnings.append(_parse_failure("fourier", exc))
+        fourier_data = section_value("fourier", "fourier")
+        if fourier_data:
+            # Preserve the existing omission of blocks without THD/harmonics;
+            # sanitized nonfinite facts still leave an explicit warning above.
+            fourier_data = [
+                f for f in fourier_data if f.get("thd") is not None or f.get("harmonics")
+            ]
+            if fourier_data:
+                summary["fourier"] = fourier_data
 
     if duration is not None:
         summary["duration"] = float(duration)

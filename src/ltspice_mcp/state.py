@@ -19,6 +19,7 @@ from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
+from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.store import Store
@@ -30,11 +31,6 @@ if TYPE_CHECKING:
     from ltspice_mcp.tools.run_code import CodeWorker
 
 logger = logging.getLogger(__name__)
-
-# Cap on parsed-result (RawRead) cache entries. Each can pin a multi-MB raw, so
-# a long-lived session querying many circuits must not retain them all; LRU
-# eviction past this just re-parses on the next access.
-RESULT_CACHE_MAXSIZE = 32
 
 # Re-export the job-status vocabulary so a caller can read it from either
 # ``ltspice_mcp.state`` or ``ltspice_mcp.lib.job_types``.
@@ -58,10 +54,13 @@ class SessionState:
 
     Attributes:
         config: Server configuration loaded from TOML/env vars
-        available_simulators: Simulators detected at startup
+        available_simulators: Simulators detected at startup, by family
+        named_simulators: ``[simulator.executables]`` bound at startup, by
+            selector (``"ltspice:xvii"``); each its own simulator class
+            (``simulator.bind_named_executable``)
         default_simulator: Simulator to use when not specified by user
         editors: Cache of parsed SpiceEditor instances
-        results: Cache of parsed RawRead instances
+        results: Bounded content cache of resident decoded results
         libraries: Loaded component libraries
         runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
@@ -75,11 +74,12 @@ class SessionState:
     available_simulators: dict[str, type]
     default_simulator: type | None
     editors: FileCache
-    results: FileCache
+    results: ResultCache
     libraries: LibraryManager
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
+    named_simulators: dict[str, type] = field(default_factory=dict)
     sandbox_pinned: bool = False
     """The sandbox was given explicitly when the session was opened
     (``Api(allowed_paths=...)``). That outranks the file at startup, so it keeps
@@ -100,14 +100,15 @@ class SessionState:
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
     """Whether the lazy default-config write has been tried this session (once)."""
+    guide_read: bool = field(default=False, repr=False)
+    """Whether this session has read the guide, through an ``inspect`` guide
+    query or a ``spice://guide`` resource. Until it has, the first tool reply
+    carries one reminder to read the core (``server.call_tool``)."""
+    guide_reminded: bool = field(default=False, repr=False)
+    """Whether that one reminder has been sent."""
     code_worker: "CodeWorker | None" = field(default=None, repr=False)
     """The ``run_code`` worker supervisor, created on the first call and
     closed at shutdown."""
-    raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
-    """Raw dialect per job-resolved raw path, recorded when the path is
-    resolved (``services._resolve_result_file``) and read by ``load_raw`` —
-    a per-run simulator override's raw must not parse with the session
-    default's dialect. Paths never resolved through a job aren't listed."""
 
     @property
     def store(self) -> Store:
@@ -122,12 +123,7 @@ class SessionState:
 
     @property
     def raw_dialect(self) -> str | None:
-        """spicelib ``RawRead`` dialect for the default simulator.
-
-        Returns ``None`` for LTspice (auto-detect works) and an explicit
-        dialect string for simulators whose raw files lack the ``Command:``
-        header that spicelib needs for auto-detection.
-        """
+        """Recorded dialect of the default producing simulator, when known."""
         return simulator_dialect(self.default_simulator)
 
     # ------------------------------------------------------------------
@@ -244,6 +240,7 @@ class SessionState:
         available: dict[str, type],
         diagnostics: list[str] | None = None,
         *,
+        named: dict[str, type] | None = None,
         sandbox_pinned: bool = False,
     ) -> "SessionState":
         """Factory method to create session state at server startup.
@@ -251,8 +248,9 @@ class SessionState:
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session and logged at startup. ``sandbox_pinned`` says the
-        caller gave ``allowed_paths`` explicitly (see the field).
+        on the session and logged at startup. ``named`` is the named
+        executables ``detect_named_simulators`` bound. ``sandbox_pinned`` says
+        the caller gave ``allowed_paths`` explicitly (see the field).
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
 
@@ -268,15 +266,14 @@ class SessionState:
             available_simulators=available,
             default_simulator=default,
             # Editors are unbounded: they may hold unsaved in-memory edits that
-            # eviction would drop. Results are immutable parsed RawReads, safe to
-            # LRU-evict so a long session over many circuits doesn't grow without
-            # bound (each can pin a multi-MB raw).
+            # eviction would drop. Resident results have byte and entry bounds.
             editors=FileCache(),
-            results=FileCache(maxsize=RESULT_CACHE_MAXSIZE),
+            results=ResultCache(),
             libraries=LibraryManager(available),
             runners=RunnerManager(),
             working_dir=config.working_dir,
             job_registry=registry,
+            named_simulators=dict(named or {}),
             diagnostics=diagnostics,
             sandbox_pinned=sandbox_pinned,
         )

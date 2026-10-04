@@ -3,69 +3,17 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
-from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.raw_parser import (
-    detect_sim_type,
-    get_step_count,
-    is_ac_analysis,
-    is_dc_analysis,
-    is_noise_analysis,
-)
 from ltspice_mcp.state import SessionState
-
-
-def _analysis_type(raw: RawRead) -> str:
-    sim_type = detect_sim_type(raw)
-    if is_noise_analysis(sim_type):
-        return "noise"
-    if is_ac_analysis(sim_type):
-        return "ac"
-    if is_dc_analysis(sim_type):
-        return "dc"
-    if "transient" in sim_type.lower():
-        return "transient"
-    return "unknown"
-
-
-def _raw_step_metadata(raw: RawRead) -> list[dict[str, Any]]:
-    try:
-        rows = raw.steps
-    except Exception:
-        return []
-    if not rows:
-        return []
-    return [dict(row) if isinstance(row, dict) else {} for row in rows]
-
-
-def _has_step_parameters(rows: list[dict[str, Any]]) -> bool:
-    return any(any(key.lower() != "run" for key in row) for row in rows)
-
-
-async def _aligned_steps(raw: RawRead, raw_path: Path) -> tuple[int, list[dict[str, Any]]]:
-    raw_rows = _raw_step_metadata(raw)
-    rows = raw_rows
-    if not _has_step_parameters(rows):
-        log_path = raw_path.with_suffix(".log")
-        log_rows = await services.bounded_parse(
-            log_path,
-            lambda: parse_step_iterations(log_path),
-            timeout_s=services.RAW_PARSE_TIMEOUT_S,
-        )
-        if log_rows:
-            rows = [dict(row) for row in log_rows]
-
-    step_count = max(get_step_count(raw), len(rows), 1)
-    aligned = [dict(rows[index]) if index < len(rows) else {} for index in range(step_count)]
-    return step_count, aligned
 
 
 class RawResult:
@@ -73,7 +21,7 @@ class RawResult:
 
     def __init__(
         self,
-        raw: RawRead,
+        raw: DecodedRaw,
         *,
         source: Path,
         dialect: str | None,
@@ -86,8 +34,8 @@ class RawResult:
         # contract is the per-read copy on the ``steps`` property.
         self._steps = tuple(steps)
         self._step_count = step_count
-        self._analysis_type = _analysis_type(raw)
-        self._dialect = getattr(raw, "dialect", None) or dialect
+        self._analysis_type = raw.descriptor.analysis
+        self._dialect = raw.descriptor.dialect
         self._source = source
 
     @property
@@ -107,14 +55,19 @@ class RawResult:
         return np.array(signal.wave(self._raw, step), copy=True)
 
     def axis(self, *, step: int = 0) -> np.ndarray:
-        """Return one step's real-valued time or frequency axis as a detached array."""
+        """Return the selected plot's real sampled coordinates as a detached array."""
         self._validate_step(step)
+        descriptor = self._raw.descriptor.axis
+        if descriptor is not None and not descriptor.real_coordinates:
+            raise ResultError("The selected plot's axis has non-real coordinates.")
         axis = np.array(self._raw.get_axis(step=step), copy=True)
         if np.iscomplexobj(axis):
             return np.real(axis).copy()
         return axis
 
     def _validate_step(self, step: int) -> None:
+        if not self._raw.descriptor.steps:
+            raise ResultError("Step boundaries are unresolved; this plot supports inventory only.")
         if step < 0 or step >= self._step_count:
             raise ResultError(
                 f"Step {step} out of range. Valid range: 0 to {self._step_count - 1}"
@@ -141,6 +94,44 @@ class RawResult:
     def source(self) -> Path:
         return self._source
 
+    @property
+    def plot_index(self) -> int:
+        return self._raw.plot_index
+
+    @property
+    def descriptor(self) -> dict[str, Any]:
+        """Detached metadata for the selected plot."""
+        return asdict(self._raw.descriptor)
+
+    @property
+    def plots(self) -> list[dict[str, Any]]:
+        """Detached plot inventory, in original artifact order."""
+        return [asdict(plot.descriptor) for plot in self._raw.plots]
+
+    def table(self, *, step: int = 0) -> list[dict[str, Any]]:
+        """Plain native quantities from a plot with no sampled axis."""
+        if self._raw.descriptor.axis is not None:
+            raise ResultError("table() requires a plot with no sampled axis")
+        self._validate_step(step)
+        rows: list[dict[str, Any]] = []
+        for trace in self._raw.descriptor.traces:
+            for index, sample in enumerate(self._raw.get_wave(trace.name, step=step)):
+                value: float | dict[str, float] = (
+                    {"real": float(np.real(sample)), "imag": float(np.imag(sample))}
+                    if np.iscomplexobj(sample)
+                    else float(sample)
+                )
+                rows.append(
+                    {
+                        "signal": trace.name,
+                        "step_index": step,
+                        "sample_index": index,
+                        "value": value,
+                        "unit": trace.unit,
+                    }
+                )
+        return rows
+
 
 async def load_raw_result(
     *,
@@ -149,25 +140,30 @@ async def load_raw_result(
     job_id: str | None,
     run_index: int,
     case_id: str | None,
+    plot_index: int = 0,
+    dialect: str | None = None,
 ) -> RawResult:
     """Resolve and bounded-parse one raw result on the API event loop."""
-    dialect: str | None
     if raw_path is not None:
         resolved = resolve_safe_path(str(raw_path), state.allowed_paths())
-        dialect = services.raw_dialect_for(resolved, state)
+        source = services.source_for_raw_path(
+            resolved, state, plot_index=plot_index, dialect=dialect
+        )
     else:
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
         context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
-        resolved = context.raw
-        dialect = context.dialect
+        source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
+        resolved = source.raw
 
-    raw = await services.load_raw(resolved, state)
-    step_count, steps = await _aligned_steps(raw, resolved)
+    raw = await services.load_raw(source, state)
+    assert resolved is not None
+    step_count = len(raw.descriptor.steps)
+    steps = [dict(step.parameters) for step in raw.descriptor.steps]
     return RawResult(
         raw,
         source=resolved,
-        dialect=dialect,
+        dialect=raw.descriptor.dialect,
         step_count=step_count,
         steps=steps,
     )
@@ -176,20 +172,29 @@ async def load_raw_result(
 async def load_measurement_results(
     *,
     state: SessionState,
-    job_id: str,
+    job_id: str | None,
     run_index: int,
     case_id: str | None,
+    log_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Resolve and bounded-parse one experiment case's log."""
-    job = await services.resolve_job_async(job_id, state)
-    context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
-    if context.log is None:
-        raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
-    log_path = context.log
-
-    parsed = await services.bounded_parse(
-        log_path,
-        lambda: parse_measurements(log_path),
-        timeout_s=services.RAW_PARSE_TIMEOUT_S,
-    )
-    return copy.deepcopy(dict(parsed))
+    """Read detached measurement facts through the shared log capture."""
+    if log_path is not None:
+        source = services.resolve_analysis_source(state, log_file=str(log_path))
+        absent_message = "Measurement source has no log file"
+    else:
+        assert job_id is not None
+        job = await services.resolve_job_async(job_id, state)
+        context = services.experiment_run_context(
+            job, state, run_index=run_index, case_id=case_id, require_raw=False
+        )
+        absent_message = f"Experiment case {context.identity['case_id']!r} has no log file"
+        if context.log is None:
+            raise ResultError(absent_message)
+        source = services.source_for_run(context)
+    logs = await services.load_logs(source, state)
+    section = logs.section("measurements")
+    if section["status"] == "error":
+        raise ResultError(section["error"]["message"])
+    if section["value"] is None:
+        raise ResultError(absent_message)
+    return dict(section["value"])

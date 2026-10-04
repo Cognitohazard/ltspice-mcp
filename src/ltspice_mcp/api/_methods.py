@@ -12,7 +12,7 @@ from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from importlib import import_module
 from pathlib import Path
 from types import MethodType
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -606,7 +606,7 @@ async def _collect_jobs(
     """
     evaluation = await jobs.evaluate_jobs(request, state)
     data = jobs.complete_jobs_data(evaluation)
-    if evaluation.is_error:
+    if evaluation.is_error or "error" in data:
         message = _payload_message(data) or "The engine returned a call-level error"
         raise ApiCallError(message, payload=data)
     return data
@@ -702,6 +702,23 @@ class ApiMethodsMixin(ABC):
         opened and without taking this process's single session lease.
         """
         return _reference.reference(op)
+
+    @staticmethod
+    def guide(section: str | None = None) -> str:
+        """Return the guide: its core and index, or one section.
+
+        ``guide()`` is the core a session reads first — how to work here,
+        Python or tools, the rules that cause silent errors — ending in an index
+        of the topic sections and task playbooks. ``guide('ltspice')`` or
+        ``guide('bench-craft')`` returns one of them. The same text
+        ``inspect(kind='guide')`` serves over MCP.
+
+        A static method for the same reason as :meth:`reference`: reading the
+        guide must not require an engine session.
+        """
+        from ltspice_mcp.lib import guide as _guide
+
+        return _guide.read(section)
 
     @abstractmethod
     def _check_process_and_thread(self) -> None:
@@ -901,8 +918,21 @@ class ApiMethodsMixin(ABC):
         )
 
     @catalogued
-    def jobs(self, *, raw_page: bool = False, **arguments: Any) -> dict[str, Any]:
+    def jobs(
+        self, *, raw_page: bool = False, detach: bool = False, **arguments: Any
+    ) -> dict[str, Any]:
         """Control jobs, collecting list and receipt pages in automatic mode."""
+        self._check_process_and_thread()
+        if not isinstance(detach, bool):
+            raise TypeError("detach must be a bool")
+        if detach:
+            if arguments.get("action") != "resume":
+                raise ApiValidationError("Only jobs(action='resume') accepts detach=True.")
+            if raw_page:
+                raise ApiValidationError("detach=True cannot be combined with raw_page=True.")
+            if not self._state.config.persist_jobs:
+                raise ApiValidationError("detach=True needs persisted job records (persist_jobs).")
+            return self._resume_detached(arguments)
         return self._dispatch(
             "jobs",
             jobs.JobsInput,
@@ -913,11 +943,69 @@ class ApiMethodsMixin(ABC):
             # A cancel is the one action an interrupt must not abandon halfway.
             # A collected list keeps paging until it is complete, so an
             # interrupt has to reach it the way it reaches a dwelling wait.
-            cancelable=lambda request: request.action != "cancel",
+            cancelable=lambda request: request.action not in {"cancel", "resume"},
             cancel_on_interrupt=lambda request: (
                 request.action == "wait" or (not raw_page and request.action == "list")
             ),
         )
+
+    def _resume_detached(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Authorize a parent here, then privately delegate its token to an owner."""
+        dropped = _enforce_auto_door(arguments)
+        payload = _detach.request_arguments(arguments)
+        request = _validate("jobs", jobs.JobsResumeInput, payload, self._state)
+
+        async def authorize() -> str:
+            from ltspice_mcp.lib.experiment_resume import resume_control_token
+
+            try:
+                return await resume_control_token(
+                    self._state, request.job_id, request.control_token
+                )
+            except Exception as exc:
+                evaluation = jobs.failed_jobs_evaluation(request, exc, self._state)
+                raise ApiCallError(str(exc), payload=jobs.complete_jobs_data(evaluation)) from exc
+
+        payload["control_token"] = self._marshal(authorize())
+        handoff = _detach.submit(
+            self._state,
+            self._boot,
+            payload,
+            request.resume_request_id,
+            self._detached_children,
+            operation="resume",
+        )
+        if handoff.receipt.get("resumed"):
+            try:
+                owner_pid = self._marshal(_record_owner_pid(handoff.receipt, self._state))
+                _note_detached_owner(
+                    handoff.receipt,
+                    owner_pid=owner_pid if owner_pid is not None else handoff.supervisor_pid,
+                    log_file=handoff.log_file,
+                )
+            except Exception as exc:
+                from ltspice_mcp.lib.experiment_runner import SubmissionCommitted
+
+                receipt = handoff.receipt
+                prior = jobs.JobsEvaluation(
+                    args=request,
+                    job_id=receipt.get("job_id"),
+                    request_id=receipt.get("request_id"),
+                    status=receipt.get("status"),
+                    resumed=True,
+                    replayed=bool(receipt.get("replayed")),
+                    control_token=receipt.get("control_token"),
+                    head_job_id=receipt.get("head_job_id"),
+                )
+                evaluation = jobs.failed_jobs_evaluation(
+                    request,
+                    SubmissionCommitted(request.resume_request_id, exc),
+                    self._state,
+                    prior=prior,
+                )
+                data = jobs.complete_jobs_data(evaluation)
+                raise ApiCallError(data["error"]["message"], payload=data) from exc
+        return _with_warnings(handoff.receipt, dropped)
 
     def wait(self, job_id: str, timeout: float | None = None) -> dict[str, Any]:
         """Wait for a job, returning a complete snapshot on terminality or timeout."""
@@ -1041,6 +1129,8 @@ class ApiMethodsMixin(ABC):
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
+        plot_index: int = 0,
+        dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper."""
         self._check_process_and_thread()
@@ -1048,6 +1138,10 @@ class ApiMethodsMixin(ABC):
             raise TypeError("Pass exactly one of raw_path or job_id")
         if raw_path is not None and (run_index != 0 or case_id is not None):
             raise TypeError("run_index and case_id are only valid with job_id")
+        if type(plot_index) is not int or plot_index < 0:
+            raise ApiValidationError("plot_index must be a nonnegative integer")
+        if dialect is not None and dialect not in ("ltspice", "ngspice", "qspice", "xyce"):
+            raise ApiValidationError("dialect must be ltspice, ngspice, qspice, xyce or None")
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1055,6 +1149,8 @@ class ApiMethodsMixin(ABC):
                 job_id=job_id,
                 run_index=run_index,
                 case_id=case_id,
+                plot_index=plot_index,
+                dialect=dialect,
             ),
             cancelable=True,
             cancel_on_interrupt=True,
@@ -1062,16 +1158,22 @@ class ApiMethodsMixin(ABC):
 
     def measurements(
         self,
+        log_path: str | Path | None = None,
         *,
-        job_id: str,
+        job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
     ) -> dict[str, Any]:
-        """Return parsed ``.meas`` data for one experiment case."""
+        """Return detached ``.meas`` facts from a log or one experiment case."""
         self._check_process_and_thread()
+        if (log_path is None) == (job_id is None):
+            raise TypeError("Pass exactly one of log_path or job_id")
+        if log_path is not None and (run_index != 0 or case_id is not None):
+            raise TypeError("run_index and case_id are only valid with job_id")
         return self._marshal(
             load_measurement_results(
                 state=self._state,
+                log_path=log_path,
                 job_id=job_id,
                 run_index=run_index,
                 case_id=case_id,

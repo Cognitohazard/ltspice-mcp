@@ -1630,3 +1630,535 @@ refuses pending child edits before saving (Bug 13's workaround); the wrong read
 is. The test suite warms this cache for the fixture library once per session
 (`tests/conftest.py::_asc_symbol_cache`), and tests that load sheet-local
 symbols swap in a copy of it so no later test inherits their folders.
+
+---
+
+## Bug 18 — `Simulator.create_from` rebinds the class it is called on instead of creating one
+
+**Status:** draft for an upstream spicelib pull request. Recorded 2026-10-03.
+**Affected version:** spicelib 1.5.1 (`spicelib/sim/simulator.py`,
+`Simulator.create_from`).
+**Our workaround:** `src/ltspice_mcp/lib/simulator.py` —
+`bind_named_executable` creates a subclass of the family's class for each named
+executable and calls `create_from` on the subclass, so the program is written
+onto that subclass alone. Keep the subclass even once upstream is fixed: the
+per-class runner, launch permits and kill names all key on a class per build.
+Only the comment explaining why `create_from` must never touch the family's
+class can go.
+
+### Summary
+
+`create_from` is documented as "Creates a simulator class from a path to the
+simulator executable" and returns "a class instance representing the Spice
+simulator". It creates nothing: it assigns `cls.spice_exe` and
+`cls.process_name` on the class it was called on and returns that same class.
+Calling it on `LTspice` (or any shipped simulator class) retargets every holder
+of that class, so two builds of one simulator cannot be bound in one process
+through the documented route: the second call silently replaces the first.
+
+### Affected code
+
+```python
+@classmethod
+def create_from(cls, path_to_exe, process_name=None):
+    ...
+    if plib_path_to_exe is not None and (plib_path_to_exe.exists() or shutil.which(plib_path_to_exe)):
+        if process_name is None:
+            cls.process_name = cls.guess_process_name(exe_parts[0])
+        else:
+            cls.process_name = process_name
+        cls.spice_exe = exe_parts
+        return cls
+```
+
+### Reproduction
+
+```python
+from spicelib.simulators.ltspice_simulator import LTspice
+
+xvii = LTspice.create_from("C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe")
+lt24 = LTspice.create_from("C:/Program Files/ADI/LTspice/LTspice.exe")
+
+assert xvii is lt24 is LTspice
+xvii.spice_exe   # ['C:/Program Files/ADI/LTspice/LTspice.exe']: the XVII binding is gone
+```
+
+Any two existing files show it; the paths only need to exist.
+
+### Impact
+
+- A program that keeps two builds of one simulator (LTspice XVII for decks that
+  depend on its cp1252 reading of `µ`, LTspice 24 for current ones) gets one
+  of them, the last one bound, with no error.
+- A `SimRunner` already running on the class launches its next run on the new
+  program, so a rebind while runs are queued moves them to another build.
+- `process_name`, which spicelib's own `kill_all_spice` reads, moves with it.
+
+### Proposed fix
+
+Create the class the docstring promises, and leave the receiver alone:
+
+```python
+@classmethod
+def create_from(cls, path_to_exe, process_name=None):
+    ...
+    return type(cls.__name__, (cls,), {
+        "spice_exe": exe_parts,
+        "process_name": process_name or cls.guess_process_name(exe_parts[0]),
+    })
+```
+
+Callers that relied on the in-place rebind (`LTspice.create_from(path)` and
+then using `LTspice`) would need the returned class; a deprecation period that
+does both is the gentle route.
+
+### Suggested upstream test
+
+```python
+def test_create_from_returns_a_class_of_its_own(tmp_path):
+    a = tmp_path / "a" / "LTspice.exe"
+    b = tmp_path / "b" / "LTspice.exe"
+    for exe in (a, b):
+        exe.parent.mkdir()
+        exe.write_text("")
+    before = list(LTspice.spice_exe)
+    first = LTspice.create_from(str(a))
+    second = LTspice.create_from(str(b))
+    assert first is not second
+    assert first.spice_exe == [a.as_posix()] and second.spice_exe == [b.as_posix()]
+    assert LTspice.spice_exe == before
+```
+
+### Cross-reference
+
+`tests/test_named_executables.py::TestBinding::test_each_named_executable_is_a_class_launching_its_own_program`
+pins that binding two named executables leaves the family's class launching
+what it did, and `TestRoutedRuns` that each run launches the build it named.
+
+---
+
+## Bug 19 — `get_default_library_paths` reports every LTspice's library, whichever program the class runs (limitation)
+
+**Status:** known limitation. Recorded 2026-10-03.
+**Affected version:** spicelib 1.5.1 (`spicelib/simulators/ltspice_simulator.py`,
+`LTspice._default_lib_paths`; `spicelib/sim/simulator.py`,
+`Simulator.get_default_library_paths`).
+**Our workaround:** `src/ltspice_mcp/lib/simulator.py` — `generation_of` reads
+which LTspice a class launches off its program's file name (`XVIIx64.exe` is
+XVII, `LTspice.exe` is 24 and later), and `simulator_library_roots` keeps only
+that generation's directories from spicelib's list (`_in_generation`). On WSL,
+where spicelib's list expands against the Linux home and finds nothing,
+`wsl.get_ltspice_lib_paths(generation)` probes the matching Windows folder.
+Remove the filter once spicelib reports the library of the program it runs.
+
+### Summary
+
+`LTspice._default_lib_paths` lists the library folders of every LTspice
+generation in one list (`~/AppData/Local/LTspice/lib` for LTspice 24 and later,
+`~/Documents/LTspiceXVII/lib/` for XVII, and older locations), and
+`get_default_library_paths` returns each one that exists. It uses the
+executable only to translate paths under Wine. With XVII and a later LTspice
+installed side by side, a class bound to either program reports both
+libraries, so a caller cannot ask which model library the program it runs
+actually reads.
+
+### Affected code
+
+```python
+_default_lib_paths = ["~/AppData/Local/LTspice/lib",
+                      "~/Documents/LTspiceXVII/lib/",
+                      "~/Documents/LTspice/lib/",
+                      "~/My Documents/LTspiceXVII/lib/",
+                      "~/My Documents/LTspice/lib/",
+                      "~/Local Settings/Application Data/LTspice/lib"]
+```
+
+`get_default_library_paths` walks this list and keeps every directory that
+exists, with no reference to which program `spice_exe` names.
+
+### Reproduction
+
+With both libraries present in the user profile (`~/AppData/Local/LTspice/lib`
+and `~/Documents/LTspiceXVII/lib`):
+
+```python
+xvii = LTspice.create_from("C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe")
+xvii.get_default_library_paths()
+# ['%USERPROFILE%/AppData/Local/LTspice/lib', '%USERPROFILE%/Documents/LTspiceXVII/lib/' (expanded)]
+```
+
+### Impact
+
+A program that trusts the running simulator's own library (we accept a deck's
+reference into it without widening the sandbox, because LTspice's netlister
+writes such references itself) extends that trust to another program's
+library too. On WSL the list finds nothing at all, so XVII's library was
+unreachable until we probed it ourselves.
+
+### Proposed fix
+
+Give each generation its own list and pick it from the executable, or let a
+subclass narrow `_default_lib_paths`, for example by keying the defaults on the
+program's file name:
+
+```python
+_lib_paths_by_program = {
+    "xviix64.exe": ["~/Documents/LTspiceXVII/lib/", "~/My Documents/LTspiceXVII/lib/"],
+    "ltspice.exe": ["~/AppData/Local/LTspice/lib", "~/Documents/LTspice/lib/", ...],
+}
+```
+
+### Suggested upstream test
+
+```python
+def test_library_paths_follow_the_program(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / "Documents" / "LTspiceXVII" / "lib").mkdir(parents=True)
+    (tmp_path / "AppData" / "Local" / "LTspice" / "lib").mkdir(parents=True)
+    exe = tmp_path / "XVIIx64.exe"
+    exe.write_text("")
+    xvii = type("XVII", (LTspice,), {}).create_from(str(exe))
+    assert [Path(p).parts[-2] for p in xvii.get_default_library_paths()] == ["LTspiceXVII"]
+```
+
+### Cross-reference
+
+`tests/test_named_executables.py::TestLibraryRoots` pins both routes: each
+build's roots on a native profile, and XVII's under the Windows profile on WSL.
+
+---
+
+## Bug 20 — `LTspice.valid_switch('-ini', path)` returns a malformed flag
+
+**Status:** draft for an upstream spicelib pull request. Verified 2026-10-02
+by source inspection and function output only; the malformed argv was not
+launched.
+**Affected version:** spicelib 1.5.1
+(`spicelib/simulators/ltspice_simulator.py`, `LTspice.ltspice_args` and
+`LTspice.valid_switch`).
+**Our workaround:** `lib/controlled_ltspice.py::controlled_ltspice` constructs
+separate `'-ini', path` arguments directly. It uses an immutable established
+profile and a verified writable copy per attempt. Controlled recovery is
+restricted to the audited Windows executable and startup policy; correcting
+this upstream typo alone does not establish support for other builds.
+
+### Summary
+
+`LTspice.valid_switch('-ini', path)` returns `['- ini', path]`, with an
+embedded space in the flag. The installed LTspice command-line documentation
+specifies `-ini <path>`. The validator substitutes the path correctly but
+preserves the typo in its switch table.
+
+### Affected code
+
+`spicelib/simulators/ltspice_simulator.py`:
+
+```python
+ltspice_args = {
+    # ...
+    '-ini': ['- ini', '<path>'],
+}
+
+# In valid_switch:
+switches = cls.ltspice_args[switch]
+switches = [switch.replace('<path>', path) for switch in switches]
+return switches
+```
+
+### Reproduction
+
+On Windows or Linux, this calls only the switch helper; it does not start
+LTspice or read a settings file:
+
+```python
+from spicelib.simulators.ltspice_simulator import LTspice
+
+print(LTspice.valid_switch('-ini', 'owned.ini'))
+# Actual in 1.5.1: ['- ini', 'owned.ini']
+# Expected:       ['-ini', 'owned.ini']
+```
+
+Native macOS LTspice has a separate guard that rejects these switches and is
+outside this reproduction.
+
+### Impact
+
+Callers trusting the validator receive an argv element that differs from the
+vendor's documented flag. `LTspice.run` forwards the supplied switch list
+without correcting it. The malformed flag's behavior in LTspice was not
+measured; this report does not claim a particular fallback, settings change,
+or dialog caused by launching it.
+
+### Proposed fix
+
+Change the table entry to `'-ini': ['-ini', '<path>']`. Preserve the path as
+a separate argument, including when it contains spaces; do not concatenate
+or shell-quote it into the flag.
+
+### Suggested upstream test
+
+```python
+@pytest.mark.parametrize('path', ['owned.ini', r'C:\probe inputs\owned.ini'])
+def test_ini_switch_preserves_flag_and_separate_path(path):
+    assert LTspice.valid_switch('-ini', path) == ['-ini', path]
+```
+
+Run this on Windows/Linux or account for the existing native-macOS guard.
+No simulator process or settings file is needed.
+
+### Cross-reference
+
+`src/ltspice_mcp/lib/controlled_ltspice.py::controlled_ltspice` bypasses the
+malformed expansion. `tests/test_controlled_ltspice.py::test_launch_uses_documented_flags_and_child_environment`
+pins the separate flag/path and launch-local environment. The focused tests
+also cover immutable templates, initial writable-copy verification, effective
+Windows profile values and unsupported execution policies.
+
+The initial 2026-10-02 investigation had no production adapter and did not
+launch the malformed flag. Subsequent native Windows evidence established a
+numeric batch solve and normal process exit using
+`-Run -b <deck> -ini <profile>` and an actual vendor-prepared settings copy.
+It still does not establish the behavior
+of malformed argv or validate every LTspice build and solver configuration.
+
+---
+
+## Bug 21 — simulator launches cannot accept a per-run environment (limitation)
+
+**Status:** known API limitation; draft for an upstream enhancement.
+Verified 2026-10-02 by the installed signatures and subprocess forwarding code.
+**Affected version:** spicelib 1.5.1 (`spicelib/sim/simulator.py`,
+`Simulator.run` and `run_function`; `spicelib/simulators/ngspice_simulator.py`,
+`NGspiceSimulator.run`; `spicelib/sim/run_task.py`, `RunTask.run`).
+**Our workaround:** `src/ltspice_mcp/lib/controlled_ngspice.py::controlled_ngspice`
+binds recorded startup settings to a simulator subclass and passes a private
+environment mapping directly to `subprocess.run`. The existing runner owns
+submission and cancellation.
+
+### Summary
+
+The simulator run interface and shared subprocess helper expose no `env`
+argument. `NGspiceSimulator.run` consequently launches with the parent process's
+environment. A caller cannot bind a particular `SPICE_SCRIPTS` directory to one
+run through that interface. Changing `os.environ` around a launch changes shared
+process state and can affect concurrent runs.
+
+This matters for controlled ngspice startup: measured Linux and Windows runs
+showed that `-n` suppresses user/local initialization but does not suppress
+system spinit. A per-child `SPICE_SCRIPTS` override pointing to captured inert
+spinit is needed in addition to `-n` for our recovery contract.
+
+### Affected code
+
+`NGspiceSimulator.run` and the abstract `Simulator.run` have this interface:
+
+```python
+def run(cls, netlist_file, cmd_line_switches=None, timeout=None,
+        stdout=None, stderr=None, cwd=None, exe_log=False):
+    # ... no env parameter
+```
+
+Both console-redirection branches in `NGspiceSimulator.run` call the helper
+without an environment. `RunTask.run` also supplies no per-run environment.
+The shared helper in `spicelib/sim/simulator.py` is:
+
+```python
+def run_function(command, timeout=None, stdout=None, stderr=None, cwd=None):
+    result = subprocess.run(command, timeout=timeout, stdout=stdout,
+                            stderr=stderr, cwd=cwd)
+    return result.returncode
+```
+
+### Reproduction
+
+Inspect and bind the actual call signature without invoking any executable:
+
+```python
+import inspect
+from spicelib.sim.simulator import run_function
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+for function, first_arg in (
+    (NGspiceSimulator.run, 'bench.cir'),
+    (run_function, ['ngspice', '-b', 'bench.cir']),
+):
+    try:
+        inspect.signature(function).bind(
+            first_arg, env={'SPICE_SCRIPTS': 'controlled-startup'}
+        )
+    except TypeError as error:
+        print(function.__qualname__, error)
+    # Both print: got an unexpected keyword argument 'env'
+```
+
+### Impact
+
+Runs requiring different startup directories cannot express those environments
+through the standard adapter API. Ambient startup can change simulator behavior
+despite unchanged deck bytes. A process-wide environment workaround would also
+make the outcome depend on overlapping launch timing.
+
+### Proposed fix
+
+Add an optional keyword-only `env=None` to the simulator interface and
+`run_function`, forward it to `subprocess.run` in both output-redirection
+branches, and carry a per-run mapping through `SimRunner`/`RunTask`. Preserve
+existing inheritance behavior when `env` is `None`. Document that an explicit
+mapping is the child environment, matching `subprocess.run`, and never mutate
+the parent's environment to implement it.
+
+### Suggested upstream test
+
+Use a Python child rather than a simulator to exercise the real helper. Give
+two concurrent calls different values of a test environment variable, have each
+child assert its own value, and assert that the parent's environment is unchanged.
+Test `env=None` inheritance separately. At the adapter/runner boundary, assert
+that each mapping reaches the helper unchanged for both `exe_log` modes.
+
+### Cross-reference
+
+The downstream adapter copies the inherited environment, removes ambient
+`SPICE_*` variables, applies its recorded `SPICE_SCRIPTS` override, and includes
+`-n` without changing shared environment or compatibility-mode state.
+`tests/test_controlled_ngspice.py::test_concurrent_launches_keep_separate_environments`
+pins separate environment mappings and an unchanged parent environment.
+`::test_verification_refuses_before_spawn` pins the pre-launch verification
+boundary. `::test_real_ngspice_uses_only_the_recorded_startup` exercises a real
+ngspice process with hostile ambient startup files and checks its numeric output
+and absence of the startup marker.
+
+An upstream environment API could remove the duplicated subprocess-forwarding
+mechanism. Frozen-byte verification and the captured startup policy would still
+belong in this project's recovery implementation.
+
+---
+
+## ngspice replaces a system startup seed before electrical deck evaluation
+
+**Status:** reproduced simulator dependency defect; draft for an ngspice report.
+This finding concerns ngspice initialization rather than a spicelib parser or
+adapter defect.
+**Affected version:** ngspice 42, observed with the Linux console package
+`42+ds-3build1`. Matching upstream source defines `WaGauss` and calls
+`frontend/trannoise/wallace.c::initw` during startup.
+**Existing workaround:** `src/ltspice_mcp/lib/ngspice_driver.py::seeded_commands`
+places `setseed` immediately before `source` inside an owned driver. Both
+`pdk_native.driver_bytes` and `controlled_ngspice.prepare_seeded_driver` use
+this sequence. Native statistical sample seeds remain distinct from an ordinary
+recoverable execution's explicit `simulator_seed`; neither contract seeds spinit.
+
+### Summary
+
+A positive `setseed N` in system spinit executes and sets the `rndseed`
+variable, but the initial electrical deck's `AGAUSS` values are not controlled
+by that seed. Later process initialization overwrites the shared generator
+state. The variable still reports the caller's seed, so checking that variable
+or checking a random draw within spinit can falsely suggest reproducibility.
+
+### Affected code and mechanism
+
+The matching [ngspice 42 main routine](https://github.com/imr/ngspice/blob/ngspice-42/src/main.c)
+first installs a default seed, then calls `ft_cpinit`. That initialization
+loads system spinit and executes its commands. Before loading the initial
+electrical deck, `main` calls `initw` under the `WaGauss` build definition.
+
+The [Wallace initializer](https://github.com/imr/ngspice/blob/ngspice-42/src/frontend/trannoise/wallace.c)
+unconditionally performs:
+
+```c
+srand((unsigned int) getpid());
+TausSeed();
+```
+
+It then fills its Gaussian pool using the shared uniform generator. These
+calls replace the state established by `setseed`, without updating `rndseed`.
+The local executable's disassembly confirms the compiled `getpid`, `srand`,
+and `TausSeed` sequence followed by pool allocation and filling.
+
+The [parameter evaluator](https://github.com/imr/ngspice/blob/ngspice-42/src/frontend/numparam/xpressn.c)
+implements `agauss` through `gauss1`. The
+[random-number implementation](https://github.com/imr/ngspice/blob/ngspice-42/src/maths/misc/randnumb.c)
+draws directly from the shared Tausworthe/LCG state; it does not restore that
+state from `rndseed` before the draw.
+
+### Reproduction
+
+Create an owned startup directory containing `spinit` with `setseed 17`, and
+an owned `bench.cir` containing:
+
+```spice
+* Seeded parameter evaluation
+.param draw=agauss(10,1,1)
+V1 n 0 {draw}
+R1 n 0 1000
+.op
+.end
+```
+
+Launch the same electrical bytes twice as separate ngspice processes, with
+the owned directory selected through a per-child `SPICE_SCRIPTS` environment:
+
+```text
+ngspice -n -D ngbehavior=hsa -b -o first.log -r first.raw bench.cir
+ngspice -n -D ngbehavior=hsa -b -o second.log -r second.raw bench.cir
+```
+
+Use a 10-second timeout per process and compare the actual `v(n)` values in
+the two operating-point raws. The observed seed-17 values were
+`9.484939411740886 V` and `12.431703780774 V`. A diagnostic spinit reported
+`rndseed=17` in both processes; control-language `sgauss(0)` within spinit
+also agreed while the later electrical values differed. User/local init was
+suppressed with `-n`; no user profile or installed startup file was changed.
+
+For comparison, the unchanged project driver generator was exercised on the
+same electrical bytes through `setseed -> source -> run -> write`. Two
+seed-17 runs produced `9.940377579172193 V` with identical numeric binary
+payloads; seed 19 produced `9.476947311890937 V`. All three exited zero.
+This sequence resets the generator after Wallace initialization and directly
+before electrical input evaluation.
+
+### Impact
+
+An execution seed recorded only in spinit cannot guarantee repeatable
+electrical parameter randomness on the affected build. Frozen input bytes
+and an unchanged executable are insufficient when the shared generator state
+is subsequently initialized from process identity.
+
+### Proposed fix
+
+Initialize Wallace state before executing startup files, or make its setup
+preserve the caller's seed and define how its pool and the shared generator
+are initialized. Keep the reported seed consistent with actual generator
+state. Avoid claiming that resetting the shared generator alone reseeds an
+already-populated Wallace pool.
+
+### Suggested upstream test
+
+Through the real console startup path, load an owned spinit with a positive
+seed and solve a tiny electrical `.param AGAUSS` operating point in two
+separate processes. Assert identical numeric results for the same seed and
+different results for a selected different seed. Cover the `WaGauss` build,
+`-n`, a per-child `SPICE_SCRIPTS` override, and batch/raw output. Test
+transient noise separately because it can consume the Wallace pool rather
+than the parameter evaluator's generator.
+
+### Cross-reference
+
+`ngspice_driver.seeded_commands` supplies the shared deterministic ordering;
+`pdk_native.driver_bytes` uses it for native samples, while
+`controlled_ngspice.prepare_seeded_driver` captures a separate owned driver for
+ordinary seeded recovery and `verify_seeded_driver` checks its identity and
+bytes before launch. `tests/test_recovery_seed.py::test_shared_sequence_preserves_the_audited_native_driver_bytes`
+pins reuse of the native command sequence;
+`::test_real_seeded_coordinator_reproduces_electrical_results` and
+`::test_seeded_retry_keeps_successes_and_reuses_recorded_seed` cover the ordinary
+seeded coordinator and retry contract.
+
+`native_execution.prepare_native_cases` captures electrical and driver bytes
+before publication, and `pdk_native.verify_launch` verifies them before
+submission. `tests/test_pdk_native.py::test_windows_paths_with_spaces_use_only_generated_relative_names`
+checks the generated driver contract. The isolated three-launch console
+probe verifies numeric repeatability for the tiny `.param AGAUSS` deck; no
+startup-file seed contract is claimed. This evidence
+does not establish reproducibility for every stochastic function or analysis.

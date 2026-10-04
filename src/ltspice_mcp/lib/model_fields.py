@@ -181,15 +181,17 @@ _BOUND_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("lt", "<"),
     ("min_length", "min length"),
     ("max_length", "max length"),
+    ("pattern", "matching"),
 )
 
 
 def constraint_label(field: FieldInfo) -> str:
-    """The field's bounds as one short phrase, or ``""`` when it has none.
+    """The field's bounds and pattern as one short phrase, or ``""`` when it has none.
 
     The units live in the description; the bounds do not, because repeating
     ``ge=1, le=20`` in prose is how the two drift apart. Reading them off the
-    model keeps one statement of the range.
+    model keeps one statement of the range, and of the spellings a pattern
+    admits (``execution.simulator``'s families).
     """
     parts: list[str] = []
     for meta in field.metadata:

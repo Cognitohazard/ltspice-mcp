@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
 import numpy as np
-from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import services
@@ -50,13 +49,11 @@ from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
+from ltspice_mcp.lib.decoded_log import DecodedLog
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import (
-    extract_log_diagnostics,
-    parse_measurements,
-    read_device_op_points,
-    scan_op_step_log,
-)
+from ltspice_mcp.lib.log_parser import scan_op_step_log
+from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -217,7 +214,15 @@ def reject_non_transient(raw) -> None:
     clean ResultError pointing at operating_point.
     """
     sim_type = detect_sim_type(raw)
-    if is_ac_analysis(sim_type) or is_dc_analysis(sim_type) or is_noise_analysis(sim_type):
+    if (
+        (
+            isinstance(raw, (DecodedRaw, DecodedPlot))
+            and raw.descriptor.analysis not in {"transient", "op"}
+        )
+        or is_ac_analysis(sim_type)
+        or is_dc_analysis(sim_type)
+        or is_noise_analysis(sim_type)
+    ):
         # show_hint=False: the redirect above is the complete guidance — the
         # generic verify-with-check_job hint would misdirect (errors.py contract).
         raise ResultError(
@@ -242,6 +247,24 @@ def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     confused caller learns the fix where they hit the wall, not just that the
     axis is missing.
     """
+    if isinstance(raw, (DecodedRaw, DecodedPlot)):
+        if raw.descriptor.axis is None:
+            hint = (
+                "Use operating_point to read this bias point."
+                if raw.descriptor.analysis == "op"
+                else "Read its quantities through inspect(kind='results', view='table') "
+                "or api.load_raw(...).table()."
+            )
+            raise NoAxisError(
+                f"Selected plot {raw.descriptor.plot_index} ({raw.descriptor.analysis}) "
+                f"is a table with no sampled axis. {hint}"
+            )
+        axis = np.asarray(raw.get_axis(step=step))
+        if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
+            raise ResultError(
+                "The selected plot has non-real coordinates; a real sampled axis is required."
+            )
+        return real_axis(axis)
     try:
         axis = np.asarray(raw.get_axis(step=step))
     except Exception as e:
@@ -257,7 +280,7 @@ def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
                         f"to '.dc {param} START STOP STEP' to get an axis over every bias "
                         "point, or use operating_point for a single bias point."
                     )
-        raise ResultError(f"This result has no data axis ({e}). {hint}") from e
+        raise NoAxisError(f"This result has no data axis ({e}). {hint}") from e
     if np.iscomplexobj(axis):
         axis = np.real(axis)
     return axis
@@ -272,6 +295,15 @@ def classify_analysis(raw) -> tuple[str, str, str, bool]:
     paths so the classification lives in one place.
     """
     sim_type = detect_sim_type(raw)
+    if isinstance(raw, (DecodedRaw, DecodedPlot)):
+        descriptor = raw.descriptor
+        axis = descriptor.axis
+        return (
+            sim_type,
+            descriptor.analysis,
+            axis.unit or "" if axis is not None else "",
+            axis is not None and axis.quantity == "frequency",
+        )
     if is_noise_analysis(sim_type):
         return sim_type, "noise", "Hz", True
     if is_ac_analysis(sim_type):
@@ -341,7 +373,12 @@ def run_compute(compute, *args, **kwargs) -> dict:
         raise ResultError(str(e)) from e
 
 
-def read_log_warnings(raw_path: Path, log_path: Path | None = None) -> tuple[list[str], list[str]]:
+async def read_log_warnings(
+    source: services.AnalysisSource,
+    state: SessionState,
+    *,
+    logs: DecodedLog | None = None,
+) -> tuple[list[str], list[str]]:
     """``(unrecognized-variable warnings, run-level solve-failure lines)`` from
     the source's ``.log``.
 
@@ -351,10 +388,9 @@ def read_log_warnings(raw_path: Path, log_path: Path | None = None) -> tuple[lis
     is run-wide: a singular/non-converged solve taints every value, so a read
     relays it whatever trace was asked for.
     """
-    log_path = log_path or raw_path.with_suffix(".log")
-    if not log_path.exists():
-        return [], []
-    diags = extract_log_diagnostics(log_path)
+    if logs is None:
+        logs = await services.load_logs(source, state)
+    diags = logs.value("diagnostics")
     unrecognized = [
         w
         for w in diags["warnings"]
@@ -374,22 +410,28 @@ def unrecognized_matches(warning: str, signal: str) -> bool:
     return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
 
 
-async def solve_failures(source: services.AnalysisSource) -> list[str]:
+async def solve_failures(source: services.AnalysisSource, state: SessionState) -> list[str]:
     """Run-level solve-failure log lines (singular matrix / non-convergence).
 
     A failed-but-completed solve taints EVERY value in the raw, not one trace,
     so any read relays these regardless of the signal asked for. Empty when the
     solve finished clean or there is no ``.log``.
     """
-    return (await asyncio.to_thread(read_log_warnings, source.raw, source.log))[1]
+    return (await read_log_warnings(source, state))[1]
 
 
-async def signal_log_warnings(source: services.AnalysisSource, signal: str) -> list[str]:
+async def signal_log_warnings(
+    source: services.AnalysisSource,
+    signal: str,
+    state: SessionState,
+    *,
+    logs: DecodedLog | None = None,
+) -> list[str]:
     """Warnings for a single-value read: the signal-filtered unrecognized-variable
     message (only when the queried trace IS the bogus one, matched by its
     ``@dev[param]`` token or the resolved name) plus any run-level solve
     failures."""
-    unrecognized, failures = await asyncio.to_thread(read_log_warnings, source.raw, source.log)
+    unrecognized, failures = await read_log_warnings(source, state, logs=logs)
     matched = [w for w in unrecognized if unrecognized_matches(w, signal)]
     warnings: list[str] = []
     if matched:
@@ -401,12 +443,16 @@ async def signal_log_warnings(source: services.AnalysisSource, signal: str) -> l
     return warnings
 
 
-async def reraise_with_solve_failure(e: ResultError, source: services.AnalysisSource) -> NoReturn:
+async def reraise_with_solve_failure(
+    e: ResultError,
+    source: services.AnalysisSource,
+    state: SessionState,
+) -> NoReturn:
     """Re-raise ``e``, enriched with any terminal solve failure from the run's
     ``.log``. A failed-but-completed solve often leaves the data degenerate
     enough that the metric itself raises (e.g. no detectable edge), so the
     generic measurement error alone hides the solve failure that explains it."""
-    failures = await solve_failures(source)
+    failures = await solve_failures(source, state)
     if failures:
         raise ResultError(
             f"{e} — the simulator log reports a solve failure that likely explains "
@@ -418,23 +464,34 @@ async def reraise_with_solve_failure(e: ResultError, source: services.AnalysisSo
     raise e
 
 
-async def run_metric(source: services.AnalysisSource, compute, *args, **kwargs) -> dict:
+async def run_metric(
+    source: services.AnalysisSource, state: SessionState, compute, *args, **kwargs
+) -> dict:
     """``run_compute`` for a raw-backed metric: on failure, name any terminal
     solve failure from the run's ``.log`` in the error so a degenerate-data
     raise points at the bad solve instead of just the missing feature."""
     try:
         return run_compute(compute, *args, **kwargs)
     except ResultError as e:
-        await reraise_with_solve_failure(e, source)
+        await reraise_with_solve_failure(e, source, state)
 
 
-async def relay_solve_failures(source: services.AnalysisSource, data: dict) -> dict:
+async def relay_solve_failures(
+    source: services.AnalysisSource, data: dict, state: SessionState
+) -> dict:
     """Standard tail for a raw-backed metric: relay any run-level solve failure
     into ``data["warnings"]``, the channel these metrics surface. Routing every
     metric through here keeps the relay from being forgotten when one is added.
     """
-    data.setdefault("warnings", []).extend(await solve_failures(source))
+    data.setdefault("warnings", []).extend(await solve_failures(source, state))
     return data
+
+
+async def _logs_for_raw(source: services.AnalysisSource, state: SessionState, raw) -> DecodedLog:
+    """Use companion facts from the same capture when they are already resident."""
+    if isinstance(raw, DecodedRaw) and raw.logs is not None:
+        return raw.logs
+    return await services.load_logs(source, state)
 
 
 async def load_real_signal(
@@ -444,7 +501,7 @@ async def load_real_signal(
     state: SessionState,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load ``(axis, wave)`` for a transient signal, rejecting AC/complex data."""
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
     reject_non_transient(raw)
     resolved = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
@@ -501,7 +558,7 @@ async def load_ac_signal(
         signal = signal[1:].lstrip()
         if not signal:
             raise ResultError("Signal is just a '-'; expected '-V(node)' or '-A/B'.")
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
     sim_type = detect_sim_type(raw)
     if not is_ac_analysis(sim_type):
         # show_hint=False: precise redirect; the generic hint would misdirect.
@@ -511,7 +568,7 @@ async def load_ac_signal(
             show_hint=False,
         )
     services.validate_step(raw, step)
-    axis = np.asarray(raw.get_axis(step=step))
+    axis = guarded_axis(raw, step, source.raw)
 
     ratio = split_ratio(signal)
     if ratio is not None:
@@ -780,7 +837,7 @@ def apply_when_axis_swap(
 
 
 def aggregate_log_measurements(
-    log_path: Path,
+    meas_data: MeasurementsOutput,
     netlist: Path | None = None,
 ) -> tuple[
     dict[str, list[float | None]],
@@ -788,7 +845,7 @@ def aggregate_log_measurements(
     str,
     dict[str, list[float | None]],
 ]:
-    """Aggregate the .MEAS results of ONE log file.
+    """Aggregate the already decoded .MEAS results of one captured log.
 
     The interesting case is a ``.step`` log, where each .MEAS name carries
     one value per step; a plain single-run log yields one value per name
@@ -798,13 +855,6 @@ def aggregate_log_measurements(
     per-step ``at`` list per name (unswapped), so the caller can echo the
     reported point for a single-sample read the swap can't classify.
     """
-    try:
-        meas_data = parse_measurements(log_path)
-    except ResultError:
-        raise
-    except Exception as e:
-        raise ResultError(f"Failed to parse log file: {e}") from e
-
     measurements = meas_data.get("measurements", {})
     if not measurements:
         # Surface BOTH errors and warnings — the reason measurements are
@@ -890,6 +940,10 @@ def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[st
     when there is none. The unit is of the amplitude; the density is per √Hz.
     """
     unit = trace_unit(raw, trace)
+    if isinstance(raw, (DecodedRaw, DecodedPlot)) and unit is not None:
+        # Descriptors label the stored density; this helper supplies the unit
+        # of its integrated amplitude to both density and RMS consumers.
+        unit = unit.removesuffix("/√Hz")
     if not is_input_noise(trace):
         return unit, True
     if input_source_unit is not None:
@@ -903,9 +957,10 @@ def unverified_input_noise_warning(unit: str | None) -> str:
     One text for every reader that reports the unit, so the ``value`` and
     ``noise_integral`` recipes word the same fact the same way.
     """
+    status = "the unit is unknown" if unit is None else f"assuming {unit!r}"
     return (
         "Could not verify the input-referred noise unit against the "
-        f"deck's .NOISE source; assuming {unit or 'V'!r}. Analyze a run "
+        f"deck's .NOISE source; {status}. Analyze a run "
         "whose deck is known so the .NOISE line can be checked "
         "(V-source -> V, I-source -> A)."
     )
@@ -950,7 +1005,8 @@ async def summary(
     signal: str | None = None,
 ) -> MetricValue:
     """Sim type, axis range, trace list, .MEAS results and run diagnostics."""
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
+    assert source.raw is not None  # RAW admission established this path.
     # Honor ``step`` for the summary itself (range/point_count), not just for
     # ac_bandwidth_metrics. Validate up front so an out-of-range step errors
     # clearly instead of being silently ignored.
@@ -968,20 +1024,16 @@ async def summary(
             deck_observation_inputs, source.netlist
         )
 
-    log_path = source.log if source.log is not None and source.log.exists() else None
+    logs = await _logs_for_raw(source, state, raw)
     try:
-        # ``raw`` here is fully loaded (services.load_raw reads all traces), so
-        # the value scan is affordable and surfaces NaN/extreme-value facts —
-        # it walks arrays already in memory rather than deciding what to read.
-        # What bounds this path is ``bounded_parse``: a wall-clock deadline on
-        # the summary build, on the load before it, and a cooldown on a file
-        # that has already blown one, so a raw shaped to wedge a parser fails
-        # its own call instead of the session.
+        # The worker has materialized every array and companion section. This
+        # deadline covers resident summary computation; no artifact parser or
+        # source-file read occurs inside the summary builder.
         facts = await services.bounded_parse(
             source.raw,
             lambda: build_simulation_summary(
                 raw,
-                log_path,
+                logs,
                 None,
                 step=step,
                 value_scan=True,
@@ -995,10 +1047,6 @@ async def summary(
         # Suppress the generic ResultError hint — it points at the summary
         # recipe, which is the thing that just failed (self-referential).
         raise ResultError(f"Failed to build summary: {e}", show_hint=False) from e
-
-    suggestions = services.suggestions_from_errors(facts.get("errors"), state.libraries)
-    if suggestions:
-        facts["suggestions"] = suggestions
 
     # Compute AC bandwidth metrics on AC raws. When ``signal`` is omitted,
     # auto-pick the first V(...) trace and warn — silently dropping
@@ -1042,18 +1090,19 @@ async def summary(
 async def measurements(
     source: services.AnalysisSource,
     recipe: MeasurementsRecipe,
-    step: int,
+    step: int | None,
     state: SessionState,
     *,
     measurement: str | None = None,
 ) -> MetricValue:
     """Aggregated .MEAS results from the run's log, keyed by measurement name."""
-    log_path = source.log
-    if log_path is None or not log_path.is_file():
+    logs = await services.load_logs(source, state)
+    parsed = logs.value("measurements")
+    if parsed is None or source.log is None:
         raise ResultError("source has no log artifact for .MEAS results")
     flat_values, axis_map, _steps_label, at_map = await services.bounded_parse(
-        log_path,
-        lambda: aggregate_log_measurements(log_path, source.netlist),
+        source.log,
+        lambda: aggregate_log_measurements(parsed, source.netlist),
     )
     stats = run_compute(
         compute_measurement_stats,
@@ -1093,11 +1142,13 @@ async def value(
     """
     at = recipe.at
     if at is None:
-        raw = await services.load_raw(source.raw, state)
+        raw = await services.load_raw(source, state)
         services.validate_step(raw, step)
         try:
             axis = guarded_axis(raw, step, source.raw)
-        except ResultError:
+        except NoAxisError:
+            if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis != "op":
+                raise
             return await _value_from_operating_point(source, recipe, raw, step, state)
         if len(axis) != 1:
             raise ResultError(
@@ -1111,7 +1162,7 @@ async def value(
 async def _value_from_operating_point(
     source: services.AnalysisSource,
     recipe: ValueRecipe,
-    raw: RawRead,
+    raw: RawData,
     step: int,
     state: SessionState,
 ) -> MetricValue:
@@ -1200,7 +1251,7 @@ async def point_value(
             f"'at' value must be finite, got {at!r} (parsed as {target_x})", show_hint=False
         )
 
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
     sig = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
 
@@ -1249,7 +1300,14 @@ async def point_value(
         data["unit"] = value_unit
     warnings = data.setdefault("warnings", [])
     warnings.extend(unit_warnings)
-    warnings.extend(await signal_log_warnings(source, sig.name))
+    warnings.extend(
+        await signal_log_warnings(
+            source,
+            sig.name,
+            state,
+            logs=await _logs_for_raw(source, state, raw),
+        )
+    )
     return data
 
 
@@ -1261,10 +1319,24 @@ async def signal_stats(
 ) -> MetricValue:
     """Min/max/mean/RMS and window facts for one trace over one window."""
     t_start, t_end = window_bounds(recipe.window)
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
     resolved = services.resolve_signal(raw, recipe.signal)
     signal = resolved.name
     services.validate_step(raw, step)
+    if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis not in {
+        "transient",
+        "ac",
+        "dc",
+        "noise",
+    }:
+        if raw.descriptor.axis is None:
+            guarded_axis(raw, step)
+        raise ResultError(
+            f"signal_stats does not define statistics for {raw.descriptor.analysis!r}. "
+            "Read this plot's quantities through inspect(kind='results') or "
+            "api.load_raw(...).trace(signal) and choose the appropriate calculation.",
+            show_hint=False,
+        )
     if recipe.quantiles and (run := classify_analysis(raw)[1]) != "transient":
         raise ResultError(
             f"quantiles are weighted by time, so they need a transient run; this one is "
@@ -1272,7 +1344,7 @@ async def signal_stats(
             show_hint=False,
         )
     # A failed-but-completed solve makes every stat below garbage; relay it.
-    failures = await solve_failures(source)
+    failures = await solve_failures(source, state)
 
     try:
         wave = resolved.wave(raw, step)
@@ -1435,6 +1507,7 @@ async def edges(
     levels = recipe.levels
     data = await run_metric(
         source,
+        state,
         analyze_edge,
         t,
         y,
@@ -1446,7 +1519,7 @@ async def edges(
         high_level=levels.high if levels else None,
     )
     data["signal"] = recipe.signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def pulse_response(
@@ -1465,6 +1538,7 @@ async def pulse_response(
     t, y, _ = apply_window(axis, wave, t_start, t_end)
     data = await run_metric(
         source,
+        state,
         analyze_pulse_response,
         t,
         y,
@@ -1473,7 +1547,7 @@ async def pulse_response(
         settling_tolerance_pct=settling_tolerance_pct,
     )
     data["signal"] = signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def disturbance_response(
@@ -1492,6 +1566,7 @@ async def disturbance_response(
     t, y, _ = apply_window(axis, wave, t_start, t_end)
     data = await run_metric(
         source,
+        state,
         analyze_disturbance_response,
         t,
         y,
@@ -1500,7 +1575,7 @@ async def disturbance_response(
         settle_band_pct=settle_band_pct,
     )
     data["signal"] = signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def transient_response(
@@ -1520,7 +1595,7 @@ async def transient_response(
     reference_observation: str | None = None
     if recipe.mode == "disturbance":
         assert recipe.input is not None
-        raw = await services.load_raw(source.raw, state)
+        raw = await services.load_raw(source, state)
         reference = services.resolve_signal(raw, recipe.input)
         if t_start is None:
             axis = guarded_axis(raw, step, source.raw)
@@ -1555,7 +1630,7 @@ async def timing(
 ) -> MetricValue:
     """Signed delay between threshold crossings of two transient traces."""
     t_start, t_end = window_bounds(recipe.window)
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
     reject_non_transient(raw)
     signal_a = services.resolve_signal(raw, recipe.from_.signal)
     signal_b = services.resolve_signal(raw, recipe.to.signal)
@@ -1586,6 +1661,7 @@ async def timing(
 
     data = await run_metric(
         source,
+        state,
         analyze_timing_between,
         t_a_arr,
         ya,
@@ -1599,7 +1675,7 @@ async def timing(
     )
     data["signal_a"] = recipe.from_.signal
     data["signal_b"] = recipe.to.signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def periodic(
@@ -1617,6 +1693,7 @@ async def periodic(
     t, y, _ = apply_window(axis, wave, t_start, t_end)
     data = await run_metric(
         source,
+        state,
         analyze_periodic,
         t,
         y,
@@ -1624,7 +1701,7 @@ async def periodic(
         min_periods=min_periods,
     )
     data["signal"] = recipe.signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def thd(
@@ -1642,6 +1719,7 @@ async def thd(
     f0 = parse_time(spice_text(recipe.fundamental_hz), "fundamental")
     data = await run_metric(
         source,
+        state,
         analyze_thd,
         t,
         y,
@@ -1650,12 +1728,13 @@ async def thd(
         window=window,
     )
     data["signal"] = recipe.signal
-    # Label the per-harmonic magnitudes with the signal's native unit (load_raw
-    # is cached — load_real_signal already read this raw).
-    unit = trace_unit(await services.load_raw(source.raw, state), recipe.signal)
+    # A differential signal takes its unit from its resolved voltage trace.
+    raw = await services.load_raw(source, state)
+    signal = services.resolve_signal(raw, recipe.signal)
+    unit = trace_unit(raw, signal.trace)
     if unit:
         data["unit"] = unit
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def filter_metrics(
@@ -1767,6 +1846,7 @@ async def roll_off(
 
 async def _bode(
     source: services.AnalysisSource,
+    state: SessionState,
     compute: Coroutine[Any, Any, MetricValue],
 ) -> MetricValue:
     """Run one bode-mode read, enriching a failure with any solve failure and
@@ -1774,8 +1854,8 @@ async def _bode(
     try:
         data = await compute
     except ResultError as e:
-        await reraise_with_solve_failure(e, source)
-    return await relay_solve_failures(source, data)
+        await reraise_with_solve_failure(e, source, state)
+    return await relay_solve_failures(source, data, state)
 
 
 async def bode_filter(
@@ -1785,7 +1865,7 @@ async def bode_filter(
     state: SessionState,
 ) -> MetricValue:
     """Passband, cutoffs, rejection and roll-off of an AC magnitude response."""
-    return await _bode(source, filter_metrics(source, recipe.signal, step, state))
+    return await _bode(source, state, filter_metrics(source, recipe.signal, step, state))
 
 
 async def bode_point(
@@ -1797,6 +1877,7 @@ async def bode_point(
     """Gain and phase at one frequency of an AC response."""
     return await _bode(
         source,
+        state,
         gain_at(source, recipe.signal, [format_spice_value(recipe.at_hz)], step, state),
     )
 
@@ -1813,6 +1894,7 @@ async def bode_crossing(
     assert level is not None
     return await _bode(
         source,
+        state,
         find_crossing(source, recipe.signal, quantity, level, step, state),
     )
 
@@ -1826,6 +1908,7 @@ async def bode_slope(
     """Magnitude slope in dB/decade between two frequencies."""
     return await _bode(
         source,
+        state,
         roll_off(
             source,
             recipe.signal,
@@ -1849,13 +1932,14 @@ async def stability(
     freqs, h = await load_ac_signal(source, recipe.signal, step, state)
     data = await run_metric(
         source,
+        state,
         compute_stability_metrics,
         freqs,
         h,
         min_separation_decades=min_separation_decades,
     )
     data["signal"] = recipe.signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def ac_structure(
@@ -1866,10 +1950,10 @@ async def ac_structure(
 ) -> MetricValue:
     """Pole/zero structure read off an AC response: order, corners, excess phase."""
     freqs, h = await load_ac_signal(source, recipe.signal, step, state)
-    data = await run_metric(source, analyze_ac_structure, freqs, h)
+    data = await run_metric(source, state, analyze_ac_structure, freqs, h)
     data["signal"] = recipe.signal
     data.setdefault("observations", []).extend(
-        relay_observations({"errors": await solve_failures(source)})
+        relay_observations({"errors": await solve_failures(source, state)})
     )
     return data
 
@@ -1890,6 +1974,7 @@ async def resonance(
     freqs, h = await load_ac_signal(source, recipe.signal, step, state)
     data = await run_metric(
         source,
+        state,
         compute_resonances,
         freqs,
         h,
@@ -1898,7 +1983,7 @@ async def resonance(
         max_peaks=max_peaks,
     )
     data["signal"] = recipe.signal
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def return_loss(
@@ -1913,6 +1998,7 @@ async def return_loss(
     freqs, h = await load_ac_signal(source, recipe.signal, step, state)
     data = await run_metric(
         source,
+        state,
         compute_return_loss,
         freqs,
         h,
@@ -1921,7 +2007,7 @@ async def return_loss(
     )
     data["signal"] = recipe.signal
     data["z0_ohm"] = recipe.z0
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def noise_integral(
@@ -1931,7 +2017,7 @@ async def noise_integral(
     state: SessionState,
 ) -> MetricValue:
     """Total RMS noise integrated over a band of a .noise spectral density."""
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
     sim_type = detect_sim_type(raw)
     if not is_noise_analysis(sim_type):
         raise ResultError(
@@ -1942,10 +2028,11 @@ async def noise_integral(
     services.validate_step(raw, step)
     density_signal = services.resolve_signal(raw, recipe.signal or "onoise")
     signal = density_signal.name
-    freqs = real_axis(np.asarray(raw.get_axis(step=step)))
+    freqs = guarded_axis(raw, step, source.raw)
     density = density_signal.wave(raw, step)
     data = await run_metric(
         source,
+        state,
         integrate_noise,
         freqs,
         density,
@@ -1963,7 +2050,7 @@ async def noise_integral(
     data["signal"] = signal
     data["unit"] = unit or ""
     data["density_unit"] = f"{unit}/√Hz" if unit else "amplitude/√Hz"
-    return await relay_solve_failures(source, data)
+    return await relay_solve_failures(source, data, state)
 
 
 async def operating_point(
@@ -1983,7 +2070,7 @@ async def operating_point(
     opts out of the plot-type guard below; every caller that presents the
     result as a bias point keeps it.
     """
-    raw = await services.load_raw(source.raw, state)
+    raw = await services.load_raw(source, state)
 
     sim_type = detect_sim_type(raw)
     # ``extract_operating_point`` reads ``wave[step]`` for every trace. That's
@@ -2015,11 +2102,14 @@ async def operating_point(
     # back as a node voltage and point 0 of a 251-point distortion sweep came
     # back as the bias.
     if as_bias_point and not (is_operating_point(sim_type) or is_dc_analysis(sim_type)):
+        hint = (
+            "Read native quantities with inspect(kind='results', view='table')."
+            if raw.descriptor.axis is None
+            else "Read sampled traces with the value recipe."
+        )
         raise ResultError(
             f"Cannot extract a DC operating point from {sim_type!r}: that "
-            "analysis does not solve for one. Its traces are still readable — "
-            "list them with the summary recipe and include.signals_available, "
-            "then read one with the value recipe."
+            f"analysis does not solve for one. {hint}"
         )
 
     services.validate_step(raw, step)
@@ -2040,7 +2130,7 @@ async def operating_point(
             at_value = parse_spice_value(at)
         except Exception as e:
             raise ResultError(f"Invalid 'at' value {at!r}: {e}", show_hint=False) from e
-        axis = real_axis(np.asarray(raw.get_axis(step=step)))
+        axis = guarded_axis(raw, step, source.raw)
         if axis.size > 1:
             point_index = nearest_index(axis, at_value)
             sweep_value = float(axis[point_index])
@@ -2065,12 +2155,9 @@ async def operating_point(
     # Dialect resolved per raw: a per-run simulator override can differ from
     # the session default. Don't clobber a value the raw gave.
     raw_dialect = raw.dialect
+    logs = await _logs_for_raw(source, state, raw)
     if raw_dialect != "ngspice":
-        log_op_points = (
-            await asyncio.to_thread(read_device_op_points, source.log)
-            if source.log is not None
-            else {}
-        )
+        log_op_points = logs.value("device_op")
         if log_op_points:
             di = op_data.setdefault("device_op_points", {})
             for key, item in log_op_points.items():
@@ -2107,7 +2194,7 @@ async def operating_point(
     # it's bogus. A solve failure (singular/non-converged) taints every value
     # here, so it's relayed too. The bias point returns every trace, so the
     # full unrecognized list is relevant.
-    unrecognized, failures = await asyncio.to_thread(read_log_warnings, source.raw, source.log)
+    unrecognized, failures = await read_log_warnings(source, state, logs=logs)
     op_data["warnings"].extend([*unrecognized, *failures])
 
     # device_op_points is empty because the deck didn't request the per-device

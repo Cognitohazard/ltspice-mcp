@@ -79,19 +79,19 @@ class TestAnalysisDeadlineIsTyped:
     ):
         # The file name lands in the OSError text, so a source named after a
         # deadline study used to be reported as a deadline of our own.
-        missing = work_dir / "deadline_probe.raw"
+        raw = _copy_raw(work_dir, "deadline_probe.raw")
+        run = analyze_mod._ResolvedRun(
+            "m1", "dut", services.source_for_raw_path(raw, state_no_sim), None
+        )
+        manifest = analyze_mod._manifest_for(
+            run, await services.load_artifacts(run.source, state_no_sim, require_raw=False)
+        )
+        raw.unlink()
         failures = await analyze_mod._verify_direct_sources(
-            [
-                {
-                    "manifest_id": "m1",
-                    "raw_path": str(missing),
-                    "log_path": None,
-                    "composite_sha256": "0" * 64,
-                }
-            ],
+            [manifest],
             {"m1"},
             asyncio.get_running_loop().time() + 60.0,
-            {},
+            state=state_no_sim,
         )
         assert failures["m1"].code == "source_drift"
 
@@ -100,21 +100,41 @@ class TestAnalysisDeadlineIsTyped:
     ):
         raw = _copy_raw(work_dir, "probe.raw")
         loop = asyncio.get_running_loop()
-        with services.analysis_deadline(loop.time() - 1.0):
-            failures = await analyze_mod._verify_direct_sources(
-                [
-                    {
-                        "manifest_id": "m1",
-                        "raw_path": str(raw),
-                        "log_path": None,
-                        "composite_sha256": "0" * 64,
-                    }
-                ],
-                {"m1"},
-                loop.time() + 60.0,
-                {},
-            )
+        run = analyze_mod._ResolvedRun(
+            "m1", "dut", services.source_for_raw_path(raw, state_no_sim), None
+        )
+        manifest = analyze_mod._manifest_for(
+            run, await services.load_artifacts(run.source, state_no_sim, require_raw=False)
+        )
+        failures = await analyze_mod._verify_direct_sources(
+            [manifest], {"m1"}, loop.time() - 1.0, state=state_no_sim
+        )
         assert failures["m1"].code == "analysis_deadline"
+
+    async def test_same_size_same_mtime_rewrite_is_source_drift(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _copy_raw(work_dir, "probe.raw")
+        run = analyze_mod._ResolvedRun(
+            "m1", "dut", services.source_for_raw_path(raw, state_no_sim), None
+        )
+        manifest = analyze_mod._manifest_for(
+            run, await services.load_artifacts(run.source, state_no_sim, require_raw=False)
+        )
+        stamp = raw.stat()
+        original = raw.read_bytes()
+        # The binary payload changes while size and timestamps stay equal.
+        raw.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        os.utime(raw, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        assert raw.stat().st_size == stamp.st_size
+        assert raw.stat().st_mtime_ns == stamp.st_mtime_ns
+        failures = await analyze_mod._verify_direct_sources(
+            [manifest],
+            {"m1"},
+            asyncio.get_running_loop().time() + 60.0,
+            state=state_no_sim,
+        )
+        assert failures["m1"].code == "source_drift"
 
     async def test_manifest_digest_out_of_quota_is_source_unavailable(
         self,
@@ -125,9 +145,22 @@ class TestAnalysisDeadlineIsTyped:
         # A full filesystem reports "Disk quota exceeded" (EDQUOT). That is a
         # storage fault, not a deadline, and the manifest must say so.
         raw = _copy_raw(work_dir, "probe.raw")
-        monkeypatch.setattr(result_store, "sha256_file", _out_of_quota)
+        parser_root = state_no_sim.store.parser_dir("quota-probe").parent
+        real_mkdir = Path.mkdir
+        attempted: list[Path] = []
+
+        # Fail only scratch allocation; keep capture service and public relay live.
+        def quota_on_capture(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path.parent == parser_root:
+                attempted.append(path)
+                _out_of_quota(path)
+            real_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", quota_on_capture)
         data = await _analyze(state_no_sim, raw, [{"key": "summary", "metric": "summary"}])
+        assert attempted
         assert _failure_codes(data) == {"source_unavailable"}
+        assert any(observation["code"] == "log_unread" for observation in data["observations"])
 
     async def test_signal_named_deadline_is_recipe_failed(
         self, state_no_sim: SessionState, work_dir: Path
@@ -273,6 +306,7 @@ _CODE_FIRST_CONSTRUCTORS = frozenset(
         "VariationError",
         "DeckStagingError",
         "MismatchPlanError",
+        "RecoveryError",
     }
 )
 
@@ -399,6 +433,7 @@ FROZEN_ERROR_CODES = (
     "case_cap",
     "case_cap_exceeded",
     "case_not_found",
+    "circuit_id_derived",
     "circuits_empty",
     "clone_include_unsupported",
     "commit_failed",
@@ -406,6 +441,7 @@ FROZEN_ERROR_CODES = (
     "constant_window",
     "control_write_injected",
     "dangling_request_index_replaced",
+    "deadline",
     "detached_owner",
     "device_op_points_absent",
     "downsampled",
@@ -423,7 +459,6 @@ FROZEN_ERROR_CODES = (
     "geometry_not_literal",
     "hierarchy_write_conflict",
     "idempotency_conflict",
-    "idempotent_replay",
     "image_unavailable",
     "include_unstaged",
     "inner_device_not_found",
@@ -438,6 +473,7 @@ FROZEN_ERROR_CODES = (
     "invalid_instance_target",
     "invalid_prefix",
     "invalid_query",
+    "invalid_resume_request",
     "job_deadline",
     "job_not_found",
     "job_not_terminal",
@@ -451,10 +487,12 @@ FROZEN_ERROR_CODES = (
     "lint_blocked",
     "live_include",
     "log_error",
+    "log_path_without_deck_provenance",
     "log_unread",
     "max_points_not_applied",
     "meas_batch_abort",
     "meas_parse_error",
+    "memory_limit",
     "merged_corners",
     "micro_sign_folded",
     "mismatch_geometry_unresolved",
@@ -465,29 +503,30 @@ FROZEN_ERROR_CODES = (
     "model_missing",
     "multiple_random_variations",
     "multiple_stochastic_families",
+    "native_log_output",
     "nested_fet_unsupported",
     "netlist_invalid",
     "ngspice_lib_section",
     "no_axis",
-    "noise_input_unit_unverified",
+    "no_table",
     "non_bsim_inner_device",
     "non_finite",
     "non_minimum_phase",
     "not_found",
+    "not_recoverable",
     "op_failed",
     "open_failed",
-    "open_skipped",
     "order_disagreement",
     "overlapping_assignment",
     "overlapping_mismatch_rules",
     "owner_liveness_unknown",
     "param_namespace_collision",
     "parse_error",
+    "parser_cleanup_failed",
     "partial_progress",
     "path_denied",
     "pdk_native_request",
     "phase_unwrapped",
-    "plot_written",
     "post_commit_failed",
     "preexisting_mismatch",
     "preexisting_mismatch_param",
@@ -501,13 +540,58 @@ FROZEN_ERROR_CODES = (
     "receipt_failed",
     "recipe_failed",
     "recipe_invalid",
+    "recovery_artifact_invalid",
+    "recovery_artifact_missing",
+    "recovery_attempt_invalid",
+    "recovery_case_selection",
+    "recovery_closure_incomplete",
+    "recovery_control_unsupported",
+    "recovery_directive_unsupported",
+    "recovery_execution_changed",
+    "recovery_execution_invalid",
+    "recovery_execution_unknown",
+    "recovery_expression_unsupported",
+    "recovery_external_module",
+    "recovery_external_reader",
+    "recovery_input_drift",
+    "recovery_input_unavailable",
+    "recovery_journal_invalid",
+    "recovery_journal_missing",
+    "recovery_journal_write_failed",
+    "recovery_launch_cancelled",
+    "recovery_live_dependency",
+    "recovery_native_preparation",
+    "recovery_native_unprepared",
+    "recovery_output_drift",
+    "recovery_owner_active",
+    "recovery_owner_unknown",
+    "recovery_path_escape",
+    "recovery_persistence_failed",
+    "recovery_persistence_required",
+    "recovery_process_active",
+    "recovery_random_unsupported",
+    "recovery_record_invalid",
+    "recovery_record_missing",
+    "recovery_refused",
+    "recovery_retained",
+    "recovery_seed_analysis_unsupported",
+    "recovery_seed_unsupported",
+    "recovery_simulator_unavailable",
+    "recovery_stale_parent",
+    "recovery_startup_drift",
+    "recovery_startup_io",
+    "recovery_startup_stale",
+    "recovery_startup_unsupported",
+    "recovery_syntax_unsupported",
     "request_gate_busy",
     "result_unreadable",
+    "resume_not_authorized",
     "review_against_plot",
     "revision_conflict",
     "run_not_found",
     "run_progress",
     "search_error",
+    "selector_conflict",
     "semantic_profile_required",
     "server_restarted",
     "server_shutdown",
@@ -520,7 +604,7 @@ FROZEN_ERROR_CODES = (
     "source_unavailable_after_staging",
     "sparse_sweep",
     "staging_collision",
-    "step_axis_unioned",
+    "startup_policy",
     "step_value_unavailable",
     "subckt_unresolved",
     "submission_committed",
@@ -528,8 +612,10 @@ FROZEN_ERROR_CODES = (
     "symbol_not_found",
     "symbol_unresolved",
     "trace_summary_truncated",
+    "trace_unit_unknown",
     "transport_delay",
     "unencodable_device_ref",
+    "unknown_section",
     "unmet_request",
     "unpersisted_runs_recovered",
     "unplanned_instance",
@@ -538,10 +624,10 @@ FROZEN_ERROR_CODES = (
     "unsupported_model",
     "unsupported_variant",
     "unwrap_warning",
-    "widget_delivered",
     "widget_unavailable",
     "window_empty_steps",
     "windows_native_storage_unavailable",
+    "worker_crashed",
 )
 
 

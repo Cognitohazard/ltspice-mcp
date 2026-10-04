@@ -151,13 +151,14 @@ class TestIndexCompleteness:
 
 
 class TestEntryShape:
-    @pytest.mark.parametrize("entry", _entries(), ids=lambda e: f"{e.tool}.{e.name}")
-    def test_every_branch_carries_a_summary_and_a_call(self, entry):
-        assert entry.summary.strip(), (
-            f"{entry.tool}.{entry.name} has no one-line summary — give the model a "
+    def test_every_branch_carries_a_summary_and_a_call(self):
+        unsummarized = [f"{e.tool}.{e.name}" for e in _entries() if not e.summary.strip()]
+        assert not unsummarized, (
+            f"branches with no one-line summary: {unsummarized} — give each model a "
             "docstring, or add one to reference_index._SUMMARIES"
         )
-        assert entry.name in entry.call
+        uncallable = [f"{e.tool}.{e.name}" for e in _entries() if e.name not in e.call]
+        assert not uncallable, f"branches whose call does not name them: {uncallable}"
 
     def test_fields_carry_types_defaults_and_units(self):
         stability = _named("analyze_results", "stability")
@@ -283,10 +284,24 @@ class TestSearch:
         hits, _ = search_branches("waveform", limit=5)
         assert hits[0].name == "waveform"
 
-    def test_search_is_deterministic(self):
-        assert [entry.name for entry in search_branches("gain", limit=8)[0]] == [
-            entry.name for entry in search_branches("gain", limit=8)[0]
+    def test_ties_break_on_advertised_order(self):
+        """Hits that score alike come back in index order, so a page boundary
+        falls in the same place however the matches were collected. 'signal'
+        is a field on most recipes: a long run of equal scores whose index
+        order is not alphabetical."""
+        query = "signal"
+        hits, total = search_branches(query, limit=10_000)
+        assert len(hits) == total
+        index = build_index()
+        position = {(entry.tool, entry.name): at for at, entry in enumerate(index)}
+        stacks = dict(zip(index, reference_index._haystacks(), strict=True))
+        phrase, tokens = reference_index._normalize(query), reference_index._tokens(query)
+        keys = [
+            (-reference_index._score(stacks[hit], phrase, tokens), position[(hit.tool, hit.name)])
+            for hit in hits
         ]
+        assert len({score for score, _ in keys}) < len(keys), "the query produced no tie"
+        assert keys == sorted(keys)
 
     def test_limit_bounds_the_hits_but_not_the_count(self):
         hits, total = search_branches("signal", limit=2)
@@ -346,7 +361,7 @@ class TestErrorReference:
 
         with pytest.raises(ValidationError) as excinfo:
             validate_recipe(
-                {"key": "s", "metric": "stability", "signal": "V(out)", "reduce": ["min"]}
+                {"key": "s", "metric": "stability", "signal": "V(out)", "spec": {"min": 45}}
             )
         text = validation_error_detail("analyze_results", excinfo.value)
         assert "set 'field'" in text

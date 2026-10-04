@@ -70,20 +70,21 @@ async def export_asc_to_netlist(asc_copy: Path, _state) -> str:
     return netlist_text(asc_copy)
 
 
-def install_fixed_exporter(state, netlist: str) -> None:
+def install_fixed_exporter(state, netlist: str, *, encoding: str = "utf-8") -> None:
     """Make ``state``'s LTspice export every schematic as ``netlist``.
 
     The netlist lands in ``<name>.net`` beside the schematic, where LTspice's
     ``-netlist`` writes it; everything after that is the server's own code.
     Written as bytes, so the file holds exactly ``netlist`` on every platform:
-    text mode would turn each newline into ``\r\n`` on Windows.
+    text mode would turn each newline into ``\r\n`` on Windows. ``encoding``
+    is the one LTspice wrote it in: UTF-8 from LTspice 24 on, cp1252 before.
     """
 
     class _Exporter:
         @staticmethod
         def create_netlist(path: str, timeout: float | None = None) -> str:
             exported = Path(path).with_suffix(".net")
-            exported.write_bytes(netlist.encode("utf-8"))
+            exported.write_bytes(netlist.encode(encoding))
             return str(exported)
 
     state.available_simulators["ltspice"] = _Exporter

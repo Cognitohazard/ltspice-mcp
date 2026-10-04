@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import os
 import tempfile
+import tomllib
 import types
 from pathlib import Path
 
@@ -20,6 +21,14 @@ from ltspice_mcp.config import (
 
 class TestServerConfig:
     """Tests for ServerConfig loading."""
+
+    def test_ltspice_ini_from_toml_and_environment(self, work_dir, monkeypatch):
+        monkeypatch.delenv("LTSPICE_MCP_LTSPICE_INI", raising=False)
+        path = work_dir / "ltspice-mcp.toml"
+        path.write_text('[simulator]\nltspice_ini = "established.ini"\n')
+        assert ServerConfig.load(path).ltspice_ini == Path("established.ini")
+        monkeypatch.setenv("LTSPICE_MCP_LTSPICE_INI", "prepared.ini")
+        assert ServerConfig.load(path).ltspice_ini == Path("prepared.ini")
 
     def test_defaults(self):
         config = ServerConfig()
@@ -200,6 +209,30 @@ class TestServerConfig:
         config = ServerConfig.load(path)
         assert config.max_parallel_sims == 8
 
+    def test_the_generated_config_sets_nothing(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Every key is shown at its default and commented out, so the file pins
+        no default: a host with only ngspice is not told to use LTspice, and a
+        later release's default reaches a server whose file was written before."""
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+
+        assert all(not values for values in tomllib.loads(content).values())
+        assert "# default = " in content
+        assert "# timeout = 300.0" in content
+        assert "# default_budget = 4000" in content
+        assert "# open_plot = true" in content
+        for name in os.environ:
+            if name.startswith("LTSPICE_MCP_"):
+                monkeypatch.delenv(name)
+        loaded = ServerConfig.load(path)
+        assert loaded.simulator is None
+        defaults = ServerConfig(working_dir=work_dir)
+        for name in ("default_timeout", "default_budget", "open_plot", "max_points_returned"):
+            assert getattr(loaded, name) == getattr(defaults, name)
+
 
 class TestToolProfile:
     """There is one tool surface, and no setting names it."""
@@ -283,21 +316,33 @@ class TestToolListing:
 class TestSimulatorExeConfig:
     """Tests for the simulator_exe config field being wired to detection."""
 
-    def test_simulator_exe_applied_to_detection(self, work_dir: Path):
-        """Config simulator_exe should be used by detect_simulators."""
-        from ltspice_mcp.lib.simulator import detect_simulators
+    def test_simulator_exe_applied_to_detection(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The configured executable is bound to the simulator class, and that
+        class is what detection reports as available."""
+        from unittest.mock import MagicMock, patch
 
-        # Use a non-existent path - should warn but not crash
+        import ltspice_mcp.lib.simulator as sim
+
+        exe = work_dir / "ltspice.exe"
+        exe.write_text("stub")
         config = ServerConfig(
             simulator="ltspice",
-            simulator_exe=Path("/nonexistent/ltspice.exe"),
+            simulator_exe=exe,
             working_dir=work_dir,
             allowed_paths=[work_dir],
         )
-        # Should not raise
-        detect_simulators(config)
-        # Non-existent path should not register
-        # (may or may not have ltspice depending on system)
+        ltspice_cls = MagicMock()
+        ltspice_cls.spice_exe = []
+        monkeypatch.delenv("LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION", raising=False)
+        with (
+            patch("ltspice_mcp.lib.simulator.is_wsl", return_value=False),
+            patch.dict(sim.SIMULATORS, {"ltspice": ltspice_cls}),
+        ):
+            available = sim.detect_simulators(config)
+        ltspice_cls.create_from.assert_called_once_with(str(exe))
+        assert available.get("ltspice") is ltspice_cls
 
     def test_detect_without_config(self):
         """detect_simulators(None) should still work (backwards compat)."""
@@ -439,12 +484,23 @@ class TestWslLtspiceAutodetect:
         fake_cls.create_from.assert_not_called()
 
     def test_noop_off_wsl(self):
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
 
         import ltspice_mcp.lib.simulator as sim
 
-        with patch("ltspice_mcp.lib.simulator.is_wsl", return_value=False):
-            sim._autodetect_wsl_ltspice([])  # returns before touching SIMULATORS
+        fake_cls = MagicMock()
+        fake_cls.spice_exe = []  # unconfigured, so only the platform check stops it
+        diagnostics: list[str] = []
+        with (
+            patch("ltspice_mcp.lib.simulator.is_wsl", return_value=False),
+            patch.dict("ltspice_mcp.lib.simulator.SIMULATORS", {"ltspice": fake_cls}),
+            patch("ltspice_mcp.lib.wsl.find_windows_ltspice_exe") as mock_find,
+        ):
+            sim._autodetect_wsl_ltspice(diagnostics)
+        mock_find.assert_not_called()
+        fake_cls.create_from.assert_not_called()
+        assert fake_cls.spice_exe == []
+        assert diagnostics == []
 
     def test_no_install_no_register(self):
         from unittest.mock import MagicMock, patch
@@ -581,7 +637,13 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_SIMULATOR": "ltspice",
     "LTSPICE_MCP_ENABLED_SIMULATORS": "LTspice, xyce",
     "LTSPICE_MCP_SIMULATOR_EXE": "/opt/env/ltspice",
+    # A native Windows path, drive colon and all, beside a family-qualified
+    # POSIX one: ';' separates entries on every platform.
+    "LTSPICE_MCP_SIMULATOR_EXECUTABLES": (
+        "XVII=C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe; ngspice:nightly=/opt/env/ngspice;"
+    ),
     "LTSPICE_MCP_NGBEHAVIOR": "  hsa  ",
+    "LTSPICE_MCP_LTSPICE_INI": "/opt/env/established.ini",
     "LTSPICE_MCP_WORKING_DIR": "/tmp/env-working-dir",
     "LTSPICE_MCP_ALLOWED_PATHS": f"/tmp/env-a{os.pathsep}/tmp/env-b",
     "LTSPICE_MCP_MAX_PARALLEL": "9",
@@ -612,8 +674,16 @@ FULL_TOML = """
 [simulator]
 default = "ngspice"
 path = "/opt/toml/ngspice"
+ltspice_ini = "/opt/toml/established.ini"
 enabled = ["NGspice", " LTspice "]
 ngbehavior = "  kipsa  "
+
+[simulator.executables]
+xvii = 'C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe'
+"NGspice:Dev" = "/opt/toml/ngspice-dev"
+
+[simulator.executables.ltspice]
+lt24 = "C:/Program Files/ADI/LTspice/LTspice.exe"
 
 [security]
 allowed_paths = ["/tmp/toml-a", "/tmp/toml-b"]
@@ -678,6 +748,12 @@ class TestLoadCoversEveryKey:
             "simulator": "ngspice",
             "enabled_simulators": ["ngspice", "ltspice"],
             "simulator_exe": Path("/opt/toml/ngspice"),
+            "simulator_executables": {
+                "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
+                "ngspice:dev": Path("/opt/toml/ngspice-dev"),
+                "ltspice:lt24": Path("C:/Program Files/ADI/LTspice/LTspice.exe"),
+            },
+            "ltspice_ini": Path("/opt/toml/established.ini"),
             "ngbehavior": "kipsa",
             "working_dir": Path.cwd(),
             "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
@@ -714,6 +790,11 @@ class TestLoadCoversEveryKey:
             "simulator": "ltspice",
             "enabled_simulators": ["ltspice", "xyce"],
             "simulator_exe": Path("/opt/env/ltspice"),
+            "simulator_executables": {
+                "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
+                "ngspice:nightly": Path("/opt/env/ngspice"),
+            },
+            "ltspice_ini": Path("/opt/env/established.ini"),
             "ngbehavior": "hsa",
             "working_dir": Path("/tmp/env-working-dir"),
             "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],

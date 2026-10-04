@@ -9,15 +9,16 @@ import math
 import os
 import statistics
 import time
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
+from weakref import WeakValueDictionary
 
 import numpy as np
 from mcp import types
-from pydantic import BeforeValidator, Field, SkipValidation, model_validator
+from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_validator
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -38,14 +39,13 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
-from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.decoded_log import DecodedLog
+from ltspice_mcp.lib.decoded_raw import PlotDescriptor
+from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.log_parser import (
-    diagnostic_collapse_key,
-    extract_log_diagnostics,
-    parse_step_iterations,
-)
+from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.pagination import retotal_page
+from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
     ABSENT,
     escape_field_segment,
@@ -55,8 +55,8 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
-    MULTI_FIELD_KEYS,
     KeyedRecipe,
+    MeasurementsRecipe,
     MultiRecipe,
     OperatingPointRecipe,
     PlotRecipe,
@@ -70,15 +70,17 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    NotedModel,
+    OptionalRawSelectionFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
     format_response,
+    held_to_cap,
     outcome_of,
     page_schema,
     registry,
     resolve_response_budget,
-    safe_path,
     sanitize_payload,
 )
 from ltspice_mcp.tools.reference_index import validation_error_detail
@@ -105,12 +107,8 @@ _VALUES_OMITTED_WARNING = (
     "{omitted} value(s) omitted; request include.per_run for callable pagination."
 )
 
-# Per-call digest memo keyed by (path, mtime_ns, size); one hash per unchanged
-# source across manifest build, precheck and postcheck.
-_DigestCache = dict[tuple[str, int, int], str]
 
-
-class CaseSelection(StrictModel):
+class CaseSelection(NotedModel):
     case_ids: list[str] = Field(
         min_length=1,
         description=(
@@ -121,17 +119,16 @@ class CaseSelection(StrictModel):
 
     @model_validator(mode="after")
     def _unique_cases(self) -> CaseSelection:
-        if len(set(self.case_ids)) != len(self.case_ids):
-            raise ValueError("case_ids must be unique")
+        self.keep_first("case_ids")
         return self
 
 
-class AnalyzeSourceInput(StrictModel):
+class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
             "Analyze the results of a job this server ran. Exactly one of "
-            "job_id or raw_path. A job still running is reported under "
+            "job_id, raw_path or log_path. A job still running is reported under "
             "coverage.missing_cases instead of failing the call."
         ),
     )
@@ -140,8 +137,12 @@ class AnalyzeSourceInput(StrictModel):
         description=(
             "Analyze a .raw file this server did not run. It has no job "
             "provenance, so its rows carry deck_sha256: null. Exactly one of "
-            "job_id or raw_path."
+            "job_id, raw_path or log_path."
         ),
+    )
+    log_path: str | None = Field(
+        default=None,
+        description="Imported log for whole-log measurements; exactly one of job_id, raw_path or log_path. No RAW sibling is read.",
     )
     runs: Literal["all"] | list[int] | CaseSelection = Field(
         default="all",
@@ -151,25 +152,35 @@ class AnalyzeSourceInput(StrictModel):
         ),
     )
     label: str = Field(
+        default="",
         min_length=1,
         description=(
             "Short unique name for this source; it tags every returned row and is "
             "what a recipe's own 'sources' list refers to. Name the condition "
-            "('nominal', 'hot'), not the file."
+            "('nominal', 'hot'). Default: the job_id, or the raw file's stem."
         ),
     )
 
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
-        if bool(self.job_id) == bool(self.raw_path):
-            raise ValueError("provide exactly one of job_id or raw_path")
+        if sum(bool(value) for value in (self.job_id, self.raw_path, self.log_path)) != 1:
+            raise ValueError("provide exactly one of job_id, raw_path or log_path")
+        if self.log_path is not None and self.plot_index is not None:
+            raise ValueError("log_path does not select a RAW plot")
         if isinstance(self.runs, list):
             if not self.runs:
                 raise ValueError("runs must be 'all' or a non-empty list")
-            if any(index < 0 for index in self.runs) or len(set(self.runs)) != len(self.runs):
-                raise ValueError("run indices must be unique non-negative integers")
-        if isinstance(self.runs, CaseSelection) and self.raw_path is not None:
+            if any(index < 0 for index in self.runs):
+                raise ValueError("run indices must be non-negative integers")
+            self.keep_first("runs")
+        if isinstance(self.runs, CaseSelection) and self.job_id is None:
             raise ValueError("case_ids selection is available only for experiment jobs")
+        if "label" not in self.model_fields_set:
+            # One source, or several that name themselves: the label only has
+            # to tell this source's rows apart, and its job or file does that.
+            # AnalyzeResultsInput makes a repeat unique.
+            derived = self.job_id or Path(str(self.raw_path or self.log_path)).stem
+            object.__setattr__(self, "label", derived)
         return self
 
 
@@ -196,6 +207,9 @@ class RowIdentity:
     assignments: dict[str, Any] = field(default_factory=dict)
     circuit: str | None = None
     deck_sha256: str | None = None
+    plot_index: int | None = None
+    dialect: str | None = None
+    snapshot_id: str | None = None
 
     def wire(self, keys: tuple[str, ...]) -> dict[str, Any]:
         return {key: getattr(self, key) for key in keys}
@@ -315,11 +329,9 @@ class WorkUnit:
     observations: list[Observation]
 
 
-# Reduced/spec attribution rows omit the trailing provenance pair (their output
-# schema forbids the extra keys), so they take the first five — a slice of the
-# one definition, never a parallel list.
+# Reduced/spec rows omit circuit/deck provenance while retaining plot selection.
 _IDENTITY_KEYS: tuple[str, ...] = tuple(f.name for f in fields(RowIdentity))
-_ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
+_ATTRIBUTION_KEYS: tuple[str, ...] = (*_IDENTITY_KEYS[:5], "plot_index", "dialect", "snapshot_id")
 # Every key a per_run/values row carries, in emission order. ``include.fields``
 # paths are rooted here, so this one list is both the projector's alphabet and
 # the answer a caller gets when a path names something that does not exist.
@@ -340,8 +352,32 @@ def coerce_per_run_default(value: Any) -> Any:
     return value
 
 
-class PerRunInclude(StrictModel):
-    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
+class CappedPerRunLimit(StrictModel):
+    """A per-run page size, held to ``MAX_PAGE_SIZE`` rather than refused.
+
+    The cap bounds one MCP page, not what the caller may read, so a larger limit
+    is served at the cap and said so through :meth:`limit_note`, which only the
+    MCP page reports: the Python API returns every row whatever the page size.
+    The held value is what the model carries, so a request identity built from
+    it names the page actually served.
+    """
+
+    limit: int = Field(default=50, ge=1, description="Rows per page, held to 100.")
+    _limit_note: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _hold_limit_to_cap(self) -> CappedPerRunLimit:
+        limit, self._limit_note = held_to_cap("limit", self.limit, MAX_PAGE_SIZE)
+        # Past validate_assignment, which would run this validator again.
+        object.__setattr__(self, "limit", limit)
+        return self
+
+    def limit_note(self) -> str | None:
+        """The warning that the limit was held to the cap, or None."""
+        return self._limit_note
+
+
+class PerRunInclude(CappedPerRunLimit):
     cursor: str | None = Field(
         default=None,
         description=(
@@ -351,7 +387,7 @@ class PerRunInclude(StrictModel):
     )
 
 
-class AnalyzeInclude(StrictModel):
+class AnalyzeInclude(NotedModel):
     """Optional response blocks. The default carries reductions, groups and spec
     verdicts; per-run rows, outliers and signal listings are opt-in."""
 
@@ -411,8 +447,6 @@ class AnalyzeInclude(StrictModel):
         # rather than returning empty rows the caller has to explain.
         if self.fields is None:
             return self
-        if len(set(self.fields)) != len(self.fields):
-            raise ValueError("include.fields paths must be unique")
         resolved: list[str] = []
         for path in self.fields:
             segments = split_field_path(path)
@@ -430,6 +464,8 @@ class AnalyzeInclude(StrictModel):
             resolved.append(path)
         if resolved != self.fields:
             object.__setattr__(self, "fields", resolved)  # not re-validated
+        # A path named twice, or once bare and once under 'value', keeps one copy.
+        self.keep_first("fields")
         return self
 
 
@@ -480,12 +516,12 @@ class ContinueInput(StrictModel):
     )
 
 
-class AnalyzeResultsInput(StepSelectionFields, ToolInput):
+class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
     sources: list[AnalyzeSourceInput] | None = Field(
         default=None,
         max_length=64,
         description=(
-            "What to read — up to 64 jobs and/or .raw files, each under a "
+            "What to read — up to 64 jobs, RAW or log files, each under a "
             "unique label. Every recipe runs against every source unless it "
             "names a subset. Required unless 'continue' is given."
         ),
@@ -534,51 +570,90 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput):
         alias="continue",
         description=(
             "Resume a budget-truncated response using its stored execution request "
-            "and cursor fields view. Other request fields are rejected."
+            "and cursor fields view. Request fields sent with it must match it."
         ),
     )
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
-        if self.continuation is not None:
-            # A continuation replays the execution request stored in the result
-            # set and takes its presentation view from the cursor, never these
-            # args. Reject them rather than accept and drop them: raising
-            # include.per_run.limit on resume is the obvious thing to try, and
-            # silently ignoring it hands back a page the caller did not ask for.
-            supplied = {
-                "sources",
-                "recipes",
-                "include",
-                "group_by",
-                "step",
-                "all_steps",
-            } & self.model_fields_set
-            if supplied:
-                raise ValueError(
-                    "'continue' is mutually exclusive with "
-                    + "/".join(sorted(supplied))
-                    + "; a continuation replays the stored execution request and "
-                    "the cursor's fields view. "
-                    "To change sources, recipes, grouping, step selection or "
-                    "include options, start a new analysis."
-                )
-            return self
-        if not self.sources or not self.recipes:
+        # A continuation replays the execution request stored in the result set
+        # and takes its presentation view from the cursor. Fields sent with it
+        # are normalized like a new request's here and compared with that
+        # stored request once it is loaded (_continuation_echo_mismatch): an
+        # echo of the original call is accepted, and a change is refused rather
+        # than dropped, because raising include.per_run.limit on resume is the
+        # obvious thing to try and ignoring it hands back a page the caller did
+        # not ask for.
+        if self.continuation is None and (not self.sources or not self.recipes):
             raise ValueError("a new analysis requires non-empty sources and recipes")
-        labels = [source.label for source in self.sources]
-        if len(set(labels)) != len(labels):
+        sources = self.sources or []
+        given = [source.label for source in sources if "label" in source.model_fields_set]
+        if len(set(given)) != len(given):
             raise ValueError("source labels must be unique")
+        # A label the caller left out is its source's job or file, which two
+        # sources can share (one job read twice, for different runs); a -2, -3
+        # suffix tells them apart, after every label the caller wrote.
+        taken = set(given)
+        for source in sources:
+            if "label" in source.model_fields_set:
+                continue
+            label = unique_name(source.label, taken)
+            taken.add(label)
+            object.__setattr__(source, "label", label)
         keys = [
             str(item.get("key", "")) if isinstance(item, dict) else str(getattr(item, "key", ""))
-            for item in self.recipes
+            for item in self.recipes or []
         ]
         nonempty = [key for key in keys if key]
         if len(set(nonempty)) != len(nonempty):
             raise ValueError("recipe keys must be unique")
-        if len(set(self.group_by)) != len(self.group_by):
-            raise ValueError("group_by dimensions must be unique")
+        self.keep_first("group_by")
         return self
+
+
+class _CaptureKey(NamedTuple):
+    """One whole-file capture, independent of its source label and RAW plot."""
+
+    raw: Path | None
+    log: Path | None
+    console: Path | None
+    dialect: str | None
+    explicit_dialect: str | None
+    snapshot_id: str | None
+    trusted_job_artifact: bool
+
+
+def _capture_key(source: services.AnalysisSource) -> _CaptureKey:
+    return _CaptureKey(
+        source.raw,
+        source.log,
+        source.console,
+        source.dialect,
+        source.explicit_dialect,
+        (source.identity or {}).get("snapshot_id"),
+        source.trusted_job_artifact,
+    )
+
+
+async def _captured_source(
+    source: services.AnalysisSource,
+    state: SessionState,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
+    *,
+    require_raw: bool,
+) -> services.AnalysisSource:
+    """Share resident facts across recipes, aliases and plots in one drive.
+
+    The first read still captures content in the contained worker and checks
+    the manifest snapshot. Prechecks and postchecks always use fresh sources;
+    this map is never persisted or carried into a continuation.
+    """
+    key = _capture_key(source)
+    artifacts = captures.get(key)
+    if artifacts is None or (require_raw and artifacts.raw is None):
+        artifacts = await services.load_artifacts(source, state, require_raw=require_raw)
+        captures[key] = artifacts
+    return replace(source, captured=artifacts)
 
 
 @dataclass(frozen=True)
@@ -752,7 +827,11 @@ def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _identity(
-    source: services.AnalysisSource, step: int | None, values: dict[str, Any]
+    source: services.AnalysisSource,
+    step: int | None,
+    values: dict[str, Any],
+    *,
+    plot_index: int | None,
 ) -> RowIdentity:
     """The identity of one step of one resolved run."""
     base = dict(source.identity or {})
@@ -764,6 +843,9 @@ def _identity(
         assignments=dict(base.get("assignments") or {}),
         circuit=base.get("circuit"),
         deck_sha256=base.get("deck_sha256"),
+        plot_index=plot_index,
+        dialect=base.get("dialect"),
+        snapshot_id=base.get("snapshot_id"),
     )
 
 
@@ -771,10 +853,13 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
     return {
         "manifest_id": run.manifest_id,
         "label": run.label,
-        "raw": str(run.source.raw),
+        "raw": str(run.source.raw) if run.source.raw is not None else None,
         "log": str(run.source.log) if run.source.log else None,
         "netlist": str(run.source.netlist) if run.source.netlist else None,
+        "console": str(run.source.console) if run.source.console else None,
         "dialect": run.source.dialect,
+        "explicit_dialect": run.source.explicit_dialect,
+        "plot_index": run.source.plot_index,
         "identity": run.source.identity,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
@@ -784,9 +869,8 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
 def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list[_ResolvedRun]:
     runs: list[_ResolvedRun] = []
     for data in item.inputs.get("resolved_runs", []):
-        raw = Path(data["raw"])
+        raw = Path(data["raw"]) if data["raw"] is not None else None
         dialect = data.get("dialect")
-        state.raw_dialect_hints[raw] = dialect
         runs.append(
             _ResolvedRun(
                 manifest_id=str(data["manifest_id"]),
@@ -795,7 +879,10 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
                     raw=raw,
                     log=Path(data["log"]) if data.get("log") else None,
                     netlist=Path(data["netlist"]) if data.get("netlist") else None,
+                    console=Path(data["console"]) if data.get("console") else None,
                     dialect=dialect,
+                    explicit_dialect=data.get("explicit_dialect"),
+                    plot_index=data.get("plot_index", 0),
                     identity=dict(data.get("identity") or {}),
                     trusted_job_artifact=bool(data.get("trusted_job_artifact")),
                 ),
@@ -813,7 +900,8 @@ async def _resolve_sources(
     source_jobs: dict[str, str | None] = {}
     observations: list[Observation] = []
     for source_input in inputs:
-        if source_input.raw_path is not None:
+        imported_path = source_input.raw_path or source_input.log_path
+        if imported_path is not None:
             requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
             for index in sorted(requested_indices - {0}):
                 missing.append(
@@ -822,14 +910,19 @@ async def _resolve_sources(
                         "case_id": None,
                         "run_index": index,
                         "code": "run_not_found",
-                        "detail": "A raw_path source has exactly one outer run (index 0).",
+                        "detail": "An imported source has exactly one outer run (index 0).",
                     }
                 )
             if 0 not in requested_indices:
                 continue
             try:
-                raw = safe_path(source_input.raw_path, state)
-                resolved = services.source_for_raw_path(raw, state)
+                resolved = services.resolve_analysis_source(
+                    state,
+                    raw_file=source_input.raw_path,
+                    log_file=source_input.log_path,
+                    plot_index=source_input.plot_index or 0,
+                    dialect=source_input.dialect,
+                )
             except (LTSpiceMCPError, OSError) as exc:
                 row = {
                     "label": source_input.label,
@@ -844,19 +937,17 @@ async def _resolve_sources(
                     row.update(code=exc.code, hint=state.sandbox_guidance())
                 missing.append(row)
                 continue
-            # Preserve the expected sibling-log path even while it is absent:
-            # an absent→present transition changes the composite manifest.
             source = replace(
                 resolved,
-                log=raw.with_suffix(".log"),
                 identity={
                     "case_id": None,
                     "run_index": 0,
                     "assignments": {},
-                    "circuit": raw.stem,
+                    "circuit": Path(imported_path).stem,
                     "deck_sha256": None,
                     "step_index": None,
                     "step_values": {},
+                    "requested_plot_index": source_input.plot_index,
                 },
             )
             runs.append(
@@ -869,10 +960,14 @@ async def _resolve_sources(
             )
             observations.append(
                 Observation(
-                    code="raw_path_without_deck_provenance",
+                    code=(
+                        "raw_path_without_deck_provenance"
+                        if source_input.raw_path is not None
+                        else "log_path_without_deck_provenance"
+                    ),
                     kind="provenance",
                     detail=(
-                        f"Source {source_input.label!r} is a caller-supplied raw path; "
+                        f"Source {source_input.label!r} is an imported result path; "
                         "deck_sha256 is null because no producing job was supplied."
                     ),
                 )
@@ -940,7 +1035,7 @@ async def _resolve_sources(
         else:
             selected = list(job.cases)
         for case in selected:
-            if case.status != "produced" or case.raw_file is None:
+            if case.status != "produced":
                 missing.append(
                     {
                         "label": source_input.label,
@@ -951,8 +1046,19 @@ async def _resolve_sources(
                     }
                 )
                 continue
-            ctx = services.experiment_run_context(job, state, case_id=case.case_id)
-            resolved = services.source_for_run(ctx)
+            ctx = services.experiment_run_context(
+                job, state, case_id=case.case_id, require_raw=False
+            )
+            resolved = services.source_for_run(
+                ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
+            )
+            resolved = replace(
+                resolved,
+                identity={
+                    **(resolved.identity or {}),
+                    "requested_plot_index": source_input.plot_index,
+                },
+            )
             runs.append(
                 _ResolvedRun(
                     f"{source_input.label}:{case.case_id}",
@@ -963,7 +1069,6 @@ async def _resolve_sources(
             )
             await state.note_recent_circuit(case.circuit_path.resolve())
 
-    observations.extend(await _relay_solve_failures(runs))
     return runs, missing, source_jobs, observations
 
 
@@ -971,15 +1076,16 @@ _SOLVE_FAILURE_RUN_CAP = 10
 """How many run labels a relayed solve failure names before deferring to ``runs``."""
 
 
-async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
-    """Relay each resolved run's simulator-declared solve failures.
+def _relay_solve_failures(
+    runs: list[_ResolvedRun], captured_logs: Mapping[str, DecodedLog]
+) -> list[Observation]:
+    """Relay solve failures from the capture that established each manifest.
 
     The one chokepoint for this rule on this surface: a run that produced a raw
     despite a failed solve is analyzed and reported like any other, so unless
     the simulator's own line is relayed here the caller reads a number with no
-    way to know the solve behind it collapsed. The internal metric adapters
-    enforce the same rule at ``analysis._finish_metric``; both classify through
-    ``services.solve_failure_lines`` so they cannot drift.
+    way to know the solve behind it collapsed. Numeric metrics enforce the
+    same rule through ``services.solve_failure_lines`` so they cannot drift.
 
     One observation per distinct cause rather than per run: a sweep that fails
     to converge fails the same way in every case, and the run labels are what
@@ -987,19 +1093,23 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
     :func:`diagnostic_collapse_key`, because the simulator's line ends in the
     run's own numbers (``time = 4.4e-05, timestep = 1.2e-19``) and no two runs
     of a sweep abort at the same instant; the relayed line is the first run's,
-    verbatim. A log the bounded parse could not read is reported as such — an
-    unread log is a gap in this relay's coverage, not an absence of failures.
+    verbatim. Log facts the contained parser could not read are reported as
+    such — an unread log is a gap in coverage, not an absence of failures.
     """
     grouped: dict[str, tuple[str, list[str]]] = {}
     unread: list[str] = []
     for run in runs:
-        log = run.source.log
-        if log is None or not log.exists():
+        if run.source.log is None and run.source.console is None:
             continue
         try:
-            diagnostics = await services.bounded_parse(
-                log, lambda log=log: extract_log_diagnostics(log)
-            )
+            logs = captured_logs.get(run.manifest_id)
+            if logs is None:
+                unread.append(run.label)
+                continue
+            section = logs.section("diagnostics")
+            if section["status"] == "error":
+                raise ResultError(section["error"]["message"])
+            diagnostics = section["value"]
         except ResultError:
             unread.append(run.label)
             continue
@@ -1028,8 +1138,8 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
                 code="log_unread",
                 kind="coverage",
                 detail=(
-                    f"{len(unread)} run log(s) could not be parsed within the analysis "
-                    "deadline, so a solve failure on them would not be reported here."
+                    f"{len(unread)} run log(s) could not be read or parsed, "
+                    "so solve failures may be missing from this report."
                 ),
                 evidence={
                     "runs": unread[:_SOLVE_FAILURE_RUN_CAP],
@@ -1040,53 +1150,52 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
     return relayed
 
 
-async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
-    """Digest ``path``, memoized by (path, mtime, size) for this call.
-
-    A file whose mtime and size are unchanged since it was first digested is not
-    re-read — manifest creation and the source-drift checks before and after
-    evaluation share one hash per unchanged source. A drifting file gets a fresh
-    (mtime, size) key, so a real change is always re-digested.
-    """
-    key: tuple[str, int, int] | None
-    try:
-        # A cheap metadata stat on the loop (like the sibling .is_file() checks
-        # here); the expensive hash read is what bounded_parse offloads.
-        stat = os.stat(path)
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        key = None
-    if key is not None and key in cache:
-        return cache[key]
-    digest = await services.bounded_parse(
+async def _digest(path: Path, deadline: float) -> str:
+    return await services.bounded_parse(
         path,
         lambda: result_store.sha256_file(path),
         timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - asyncio.get_running_loop().time()),
     )
-    if key is not None:
-        cache[key] = digest
-    return digest
 
 
-async def _manifest_for(run: _ResolvedRun, deadline: float, cache: _DigestCache) -> dict[str, Any]:
-    raw_sha = await _digest(run.source.raw, deadline, cache)
-    log_present = run.source.log is not None and run.source.log.is_file()
-    log_sha = (
-        await _digest(run.source.log, deadline, cache) if log_present and run.source.log else None
+def _manifest_for(run: _ResolvedRun, artifacts: ParsedArtifacts) -> dict[str, Any]:
+    files = {item.role: item for item in artifacts.logs.captured.files}
+    digests = {
+        role: files[role].sha256 if role in files else None for role in ("raw", "log", "console")
+    }
+    composite = result_store.composite_digest(
+        raw_sha256=digests["raw"], log_sha256=digests["log"], console_sha256=digests["console"]
     )
-    composite = result_store.composite_digest(raw_sha, log_sha, log_present)
-    return {
+    # This is request selection, not a claim that RAW has decoded successfully.
+    plot_index = run.source.plot_index if "raw" in files else None
+    dialect = run.source.explicit_dialect or run.source.dialect
+    manifest: dict[str, Any] = {
         "manifest_id": run.manifest_id,
         "label": run.label,
-        "raw_path": str(run.source.raw),
-        "raw_sha256": raw_sha,
-        "log_path": str(run.source.log) if run.source.log else None,
-        "log_present": log_present,
-        "log_sha256": log_sha,
         "composite_sha256": composite,
+        "plot_index": plot_index,
+        "dialect": dialect,
+        "producing_dialect": run.source.dialect,
+        "explicit_dialect": run.source.explicit_dialect,
+        "snapshot_id": artifacts.snapshot_id,
+        "selection_sha256": result_store.canonical_hash(
+            {
+                "composite_sha256": composite,
+                "plot_index": plot_index,
+                "dialect": dialect,
+                "snapshot_id": artifacts.snapshot_id,
+            }
+        ),
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
     }
+    for role in ("raw", "log", "console"):
+        path = getattr(run.source, role)
+        manifest[f"{role}_path"] = str(path) if path is not None else None
+        manifest[f"{role}_sha256"] = digests[role]
+        manifest[f"{role}_present"] = role in files
+        manifest[f"{role}_bytes"] = files[role].size_bytes if role in files else None
+    return manifest
 
 
 def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
@@ -1103,6 +1212,24 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
     return work
 
 
+def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
+    """The request as a result set stores it: what a continuation replays.
+
+    ``work`` is the recipes as work items, and the per_run cursor is cleared,
+    since it is a position in the result rather than part of the request.
+    """
+    include = args.include.model_dump(mode="json")
+    if isinstance(include.get("per_run"), dict):
+        include["per_run"]["cursor"] = None
+    return {
+        "sources": [source.model_dump(mode="json") for source in args.sources or []],
+        "work": _work_items(list(args.recipes or [])),
+        "group_by": list(args.group_by),
+        **StepSelection.of(args).as_inputs(),
+        "include": include,
+    }
+
+
 def _request_hash(args: AnalyzeResultsInput) -> str:
     """The identity a per_run cursor is checked against.
 
@@ -1111,62 +1238,80 @@ def _request_hash(args: AnalyzeResultsInput) -> str:
     not a different request.
     """
     assert args.sources is not None and args.recipes is not None
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
-    include.pop("fields", None)
-    return result_store.canonical_hash(
-        {
-            "sources": [source.model_dump(mode="json") for source in args.sources],
-            "work": _work_items(list(args.recipes)),
-            "group_by": list(args.group_by),
-            **StepSelection.of(args).as_inputs(),
-            "include": include,
-        }
-    )
+    request = _request_inputs(args)
+    request["include"].pop("fields", None)
+    return result_store.canonical_hash(request)
 
 
-async def _create_result_set(
-    args: AnalyzeResultsInput, state: SessionState, deadline: float, cache: _DigestCache
-):
+async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, deadline: float):
     assert args.sources is not None and args.recipes is not None
+    loop = asyncio.get_running_loop()
+    initialization_deadline = max(deadline, loop.time() + _MIN_ITEM_DEADLINE_S)
     runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
     manifests: list[dict[str, Any]] = []
-    for run in runs:
+    captured_logs: dict[str, DecodedLog] = {}
+    captures: dict[_CaptureKey, ParsedArtifacts] = {}
+    for index, run in enumerate(runs):
         try:
-            manifests.append(await _manifest_for(run, deadline, cache))
+            capture_key = _capture_key(run.source)
+            artifacts = captures.get(capture_key)
+            if artifacts is None:
+                with services.analysis_deadline(initialization_deadline):
+                    artifacts = await services.load_artifacts(run.source, state, require_raw=False)
+                captures[capture_key] = artifacts
+            manifest = _manifest_for(run, artifacts)
+            manifests.append(manifest)
+            captured_logs[run.manifest_id] = artifacts.logs
+            runs[index] = replace(
+                run,
+                source=replace(
+                    run.source,
+                    identity={
+                        **(run.source.identity or {}),
+                        "dialect": manifest["dialect"],
+                        "snapshot_id": manifest["snapshot_id"],
+                    },
+                ),
+            )
+        except AnalysisDeadlineExceeded as exc:
+            raise AnalysisDeadlineExceeded(
+                "Analysis initialization exceeded its deadline; no result set was created. "
+                "Retry the original request with fewer sources or a larger "
+                "[analysis] analysis_budget_s."
+            ) from exc
         except (LTSpiceMCPError, OSError) as exc:
             manifests.append(
                 {
                     "manifest_id": run.manifest_id,
                     "label": run.label,
-                    "raw_path": str(run.source.raw),
+                    "raw_path": str(run.source.raw) if run.source.raw is not None else None,
                     "log_path": str(run.source.log) if run.source.log else None,
                     "trusted_job_artifact": run.source.trusted_job_artifact,
                     "job_id": run.job_id,
-                    "digest_code": (
-                        "analysis_deadline"
-                        if isinstance(exc, AnalysisDeadlineExceeded)
-                        else "source_unavailable"
-                    ),
+                    "plot_index": run.source.plot_index if run.source.raw is not None else None,
+                    "dialect": run.source.explicit_dialect or run.source.dialect,
+                    "snapshot_id": None,
+                    "digest_code": "source_unavailable",
                     "digest_error": str(exc),
                 }
             )
-    work = _work_items(list(args.recipes))
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
+    observations.extend(_relay_solve_failures(runs, captured_logs))
+    request = _request_inputs(args)
+    work = request.pop("work")
     inputs = {
         "working_dir": str(state.working_dir),
-        "sources": [source.model_dump(mode="json") for source in args.sources],
-        "group_by": list(args.group_by),
-        **StepSelection.of(args).as_inputs(),
-        "include": include,
+        **request,
         "request_hash": _request_hash(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
         "missing": missing,
         "observations": [observation.wire() for observation in observations],
     }
+    if loop.time() >= initialization_deadline:
+        raise AnalysisDeadlineExceeded(
+            "Analysis initialization exceeded its deadline; no result set was created. "
+            "Retry the original request with fewer sources or a larger "
+            "[analysis] analysis_budget_s."
+        )
     return await asyncio.to_thread(
         result_store.create,
         working_dir=state.working_dir,
@@ -1182,35 +1327,47 @@ async def _verify_direct_sources(
     manifests: list[dict[str, Any]],
     selected_ids: set[str],
     deadline: float,
-    cache: _DigestCache,
+    *,
+    state: SessionState,
 ) -> dict[str, SourceFault]:
+    """The selected direct sources that no longer read as their manifest recorded.
+
+    Recapture validates the worker snapshot, including artifact presence and
+    console bytes. Equal size and modification time alone cannot prove that
+    the bytes are unchanged. No parent-side content read is required.
+    """
     failures: dict[str, SourceFault] = {}
+    checked: dict[_CaptureKey, SourceFault | None] = {}
     for manifest in manifests:
         manifest_id = str(manifest["manifest_id"])
-        if (
-            manifest_id not in selected_ids
-            or manifest.get("trusted_job_artifact")
-            or manifest.get("digest_error")
-        ):
+        if manifest_id not in selected_ids or manifest.get("digest_error"):
             continue
-        try:
-            raw_path = Path(manifest["raw_path"])
-            raw_sha = await _digest(raw_path, deadline, cache)
-            log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
-            log_present = log_path is not None and log_path.is_file()
-            log_sha = (
-                await _digest(log_path, deadline, cache) if log_present and log_path else None
-            )
-            composite = result_store.composite_digest(raw_sha, log_sha, log_present)
-            if composite != manifest["composite_sha256"]:
-                failures[manifest_id] = SourceFault("source_drift")
-        except (LTSpiceMCPError, OSError) as exc:
-            failures[manifest_id] = SourceFault(
-                "analysis_deadline"
-                if isinstance(exc, AnalysisDeadlineExceeded)
-                else "source_drift",
-                str(exc),
-            )
+        source = services.AnalysisSource(
+            raw=Path(manifest["raw_path"]) if manifest["raw_path"] is not None else None,
+            log=Path(manifest["log_path"]) if manifest["log_path"] is not None else None,
+            console=Path(manifest["console_path"])
+            if manifest["console_path"] is not None
+            else None,
+            netlist=None,
+            dialect=manifest["producing_dialect"],
+            explicit_dialect=manifest["explicit_dialect"],
+            plot_index=manifest["plot_index"] or 0,
+            identity={"snapshot_id": manifest["snapshot_id"]},
+            trusted_job_artifact=bool(manifest["trusted_job_artifact"]),
+        )
+        key = _capture_key(source)
+        if key not in checked:
+            try:
+                with services.analysis_deadline(deadline):
+                    await services.load_artifacts(source, state, require_raw=False)
+                checked[key] = None
+            except AnalysisDeadlineExceeded as exc:
+                checked[key] = SourceFault("analysis_deadline", str(exc))
+            except (LTSpiceMCPError, OSError) as exc:
+                checked[key] = SourceFault("source_drift", str(exc))
+        failure = checked[key]
+        if failure is not None:
+            failures[manifest_id] = failure
     return failures
 
 
@@ -1261,12 +1418,18 @@ class StepSelection(NamedTuple):
 StepPlan = list[tuple[int, dict[str, Any]]]
 
 
+@dataclass(frozen=True)
+class _RawStepPlan:
+    steps: StepPlan
+    descriptor: PlotDescriptor
+
+
 async def _step_plan(
     steps: StepSelection,
     source: services.AnalysisSource,
     state: SessionState,
-    plan_cache: dict[tuple[str, str], StepPlan],
-) -> StepPlan:
+    plan_cache: dict[tuple[_CaptureKey, int], _RawStepPlan],
+) -> _RawStepPlan:
     """The steps one source contributes, built once per source per call.
 
     The step choice belongs to the call rather than to a recipe, so every
@@ -1274,7 +1437,7 @@ async def _step_plan(
     cached, not just the log parse behind it, and the read is shared rather
     than repeated per (recipe, run). Treat the result as read-only.
     """
-    key = (str(source.raw), str(source.log))
+    key = (_capture_key(source), source.plot_index)
     cached = plan_cache.get(key)
     if cached is not None:
         return cached
@@ -1286,53 +1449,55 @@ async def _build_step_plan(
     steps: StepSelection,
     source: services.AnalysisSource,
     state: SessionState,
-) -> StepPlan:
-    raw = await services.load_raw(source.raw, state)
+) -> _RawStepPlan:
+    raw = await services.load_raw(source, state)
     count = get_step_count(raw)
-    step_values: list[dict[str, Any]] = []
-    if source.log is not None and count > 1:
-        step_values = await services.bounded_parse(
-            source.log,
-            lambda: parse_step_iterations(source.log),
-        )
+    step_values = [dict(step.parameters) for step in raw.descriptor.steps]
     if steps.all_steps:
-        return [
+        plan = [
             (index, step_values[index] if index < len(step_values) else {})
             for index in range(count)
         ]
-    if steps.step is None:
-        return [(0, step_values[0] if step_values else {})]
-    step_sel = steps.step
-    candidates = [
-        (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
-    ]
-    if not candidates:
-        raise ResultError(f"step axis {step_sel.axis!r} is not present in the source log")
-    try:
-        target = float(format_spice_value(step_sel.value))
-        index, values = min(
-            candidates,
-            key=lambda pair: abs(float(pair[1][step_sel.axis]) - target),
-        )
-    except (TypeError, ValueError):
-        index, values = next(
-            (pair for pair in candidates if str(pair[1][step_sel.axis]) == str(step_sel.value)),
-            candidates[0],
-        )
-    return [(index, values)]
+    elif steps.step is None:
+        plan = [(0, step_values[0] if step_values else {})]
+    else:
+        step_sel = steps.step
+        candidates = [
+            (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
+        ]
+        if not candidates:
+            raise ResultError(
+                f"step axis {step_sel.axis!r} is not present in the captured step metadata"
+            )
+        try:
+            target = float(format_spice_value(step_sel.value))
+            index, values = min(
+                candidates, key=lambda pair: abs(float(pair[1][step_sel.axis]) - target)
+            )
+        except (TypeError, ValueError):
+            index, values = next(
+                (
+                    pair
+                    for pair in candidates
+                    if str(pair[1][step_sel.axis]) == str(step_sel.value)
+                ),
+                candidates[0],
+            )
+        plan = [(index, values)]
+    return _RawStepPlan(plan, raw.descriptor)
 
 
 async def _adapter_value(
     recipe: Recipe,
     source: services.AnalysisSource,
-    step: int,
+    step: int | None,
     state: SessionState,
 ) -> dict[str, Any]:
     """One recipe's value, read by the metric function registered for its class.
 
-    ``lib.metrics.METRICS`` is the whole dispatch: every recipe class that
-    produces a value maps to the function that computes it, and a class with no
-    entry fails at import rather than at the one call that needed it.
+    RAW recipes use ``lib.metrics.METRICS``. Whole-log measurements call its
+    existing measurement function with a nullable step, independently of RAW
+    planning. Every recipe class must still have a registered metric.
 
     Non-finite floats are nulled here rather than inside the metric, because
     that substitution is a property of what can cross the wire — a caller
@@ -1340,6 +1505,9 @@ async def _adapter_value(
     this edge also keeps the substitution note attached to the value it
     describes rather than to the whole response.
     """
+    if isinstance(recipe, MeasurementsRecipe):
+        return sanitize_payload(await metrics.measurements(source, recipe, step, state))
+    assert step is not None
     return sanitize_payload(await metrics.METRICS[type(recipe)](source, recipe, step, state))
 
 
@@ -1383,9 +1551,32 @@ def _artifact_estimate(recipe: Recipe, runs: list[_ResolvedRun]) -> float:
         return 0.0
     size = 0
     for run in runs:
-        with contextlib.suppress(OSError):
-            size += run.source.raw.stat().st_size
+        if run.source.raw is not None:
+            with contextlib.suppress(OSError):
+                size += run.source.raw.stat().st_size
     return 0.05 + size / 25_000_000 * max(1, len(recipe.signals))
+
+
+def _inline_series(
+    axis: np.ndarray, wave: np.ndarray, analysis: str, limit: int
+) -> dict[str, Any]:
+    """Render resident samples, using AC magnitude/phase only for AC plots."""
+    if not np.iscomplexobj(wave):
+        components = {"y": wave}
+    elif analysis == "ac":
+        components = {
+            "magnitude_db": safe_magnitude_db(wave),
+            "phase_deg": np.degrees(np.angle(wave)),
+        }
+    else:
+        components = {"real": np.real(wave), "imag": np.imag(wave)}
+    x = axis
+    values: dict[str, Any] = {}
+    for name, samples in components.items():
+        if len(axis) > limit:
+            x, samples = downsample_minmax(axis, samples, limit)
+        values[name] = samples.tolist()
+    return {"x": x.tolist(), **values}
 
 
 async def _waveform(
@@ -1401,9 +1592,14 @@ async def _waveform(
 ) -> tuple[dict[str, Any], list[_PendingArtifact]]:
     from ltspice_mcp.tools import analysis as an
 
-    raw = await services.load_raw(run.source.raw, state)
+    raw = await services.load_raw(run.source, state)
+    assert run.source.raw is not None
     start, end = _window_fields(recipe.window)
     if recipe.format == "inline":
+        if raw.descriptor.axis is None:
+            raise ResultError(
+                "This plot has no sampled axis; use inspect results table or CSV export."
+            )
         values: list[dict[str, Any]] = []
         total_max = 0
         point_limit = min(recipe.max_points, state.config.max_points_returned)
@@ -1419,34 +1615,7 @@ async def _waveform(
                 )
                 axis, wave = axis[lo:hi], wave[lo:hi]
             total_max = max(total_max, len(axis))
-            if len(axis) > point_limit:
-                if np.iscomplexobj(wave):
-                    x, mag = downsample_minmax(
-                        axis,
-                        safe_magnitude_db(wave),
-                        point_limit,
-                    )
-                    _, phase = downsample_minmax(
-                        axis,
-                        np.degrees(np.angle(wave)),
-                        point_limit,
-                    )
-                    series: Any = {
-                        "x": x.tolist(),
-                        "magnitude_db": mag.tolist(),
-                        "phase_deg": phase.tolist(),
-                    }
-                else:
-                    x, y = downsample_minmax(axis, wave, point_limit)
-                    series = {"x": x.tolist(), "y": y.tolist()}
-            elif np.iscomplexobj(wave):
-                series = {
-                    "x": axis.tolist(),
-                    "magnitude_db": safe_magnitude_db(wave).tolist(),
-                    "phase_deg": np.degrees(np.angle(wave)).tolist(),
-                }
-            else:
-                series = {"x": axis.tolist(), "y": wave.tolist()}
+            series = _inline_series(axis, wave, raw.descriptor.analysis, point_limit)
             values.append({"signal": signal.name, **series})
         return (
             {
@@ -1457,13 +1626,14 @@ async def _waveform(
                     default=0,
                 ),
                 "points_total": total_max,
-                **_identity(run.source, step, step_values).wire(_IDENTITY_KEYS),
+                **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
+                    _IDENTITY_KEYS
+                ),
             },
             [],
         )
 
-    trace_names = raw.get_trace_names()
-    axis_name = trace_names[0]
+    axis_name = raw.descriptor.axis.name if raw.descriptor.axis is not None else None
     cols: list[services.Signal] = []
     for requested in recipe.signals:
         signal = services.resolve_signal(raw, requested)
@@ -1471,12 +1641,12 @@ async def _waveform(
             raise ResultError(f"{requested!r} is the sweep axis, not a signal")
         if signal not in cols:
             cols.append(signal)
-    _, analysis_type, _, _ = metrics.classify_analysis(raw)
+    analysis_type = raw.descriptor.analysis
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest["composite_sha256"],
+        source_digest=manifest["selection_sha256"],
         recipe_hash=recipe_hash,
         suffix="csv",
     )
@@ -1494,7 +1664,7 @@ async def _waveform(
         pending,
         lambda: time.monotonic() >= item_deadline,
         export_steps,
-        run.source.log,
+        [dict(step.parameters) for step in raw.descriptor.steps],
     )
     return (
         {
@@ -1510,6 +1680,7 @@ async def _waveform(
                 run.source,
                 step if export_steps is None or len(export_steps) == 1 else None,
                 step_values if export_steps is None or len(export_steps) == 1 else {},
+                plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
         [_PendingArtifact(pending, final, "text/csv", run.manifest_id)],
@@ -1526,18 +1697,23 @@ async def _plot(
 ) -> tuple[dict[str, Any], list[_PendingArtifact]]:
     from ltspice_mcp.tools import analysis as an
 
-    raw = await services.load_raw(run.source.raw, state)
-    trace_names = raw.get_trace_names()
-    axis_name = trace_names[0]
+    raw = await services.load_raw(run.source, state)
+    assert run.source.raw is not None
+    if raw.descriptor.axis is None:
+        raise ResultError(
+            "This plot has no sampled axis; use inspect results table or CSV export."
+        )
+    axis_name = raw.descriptor.axis.name
     cols = [services.resolve_signal(raw, signal) for signal in recipe.signals]
     if axis_name in (col.name for col in cols):
         raise ResultError("The sweep axis cannot be plotted as a signal")
-    _, analysis_type, _, x_is_log = metrics.classify_analysis(raw)
+    analysis_type = raw.descriptor.analysis
+    x_is_log = raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest["composite_sha256"],
+        source_digest=manifest["selection_sha256"],
         recipe_hash=recipe_hash,
         suffix="html",
     )
@@ -1550,7 +1726,7 @@ async def _plot(
         split_by_unit=True,
         netlist=run.source.netlist,
         steps=[step for step, _ in steps],
-        step_dicts=[values for _, values in steps],
+        step_dicts=[dict(step.parameters) for step in raw.descriptor.steps],
         analysis_type=analysis_type,
         x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
         ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
@@ -1578,6 +1754,7 @@ async def _plot(
                 run.source,
                 steps[0][0] if len(steps) == 1 else None,
                 steps[0][1] if len(steps) == 1 else {},
+                plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
         [_PendingArtifact(pending, final, "text/html", run.manifest_id)],
@@ -1692,6 +1869,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
     # The reducer category is the base the recipe inherits (exactly one); a
     # variable-length recipe matches none and yields no samples.
     out: dict[str, list[tuple[Record, float]]] = {}
+    pairs = recipe.reduction_fields() if isinstance(recipe, MultiRecipe) else []
     for record in records:
         value = record.value
         if isinstance(recipe, ScalarRecipe):
@@ -1708,12 +1886,10 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
             if number is not None:
                 out.setdefault(field, []).append((record, number))
         elif isinstance(recipe, MultiRecipe):
-            field = recipe.field
-            if field:
-                actual = MULTI_FIELD_KEYS.get(recipe.metric, {}).get(field, field)
+            for field, actual in pairs:
                 number = _number(value.get(actual))
                 if number is not None:
-                    out.setdefault(field, []).append((record, number))
+                    out.setdefault(recipe.field_for_row(field, value), []).append((record, number))
         elif isinstance(recipe, KeyedRecipe):
             # 'field' means one thing on every category: the single number both
             # a reduction and a spec read. Absent, a keyed recipe covers every
@@ -1873,8 +2049,9 @@ async def _evaluate_item(
     state: SessionState,
     item: result_store.ResultSet,
     item_deadline: float,
-    step_plans: dict[tuple[str, str], StepPlan],
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan],
     steps: StepSelection,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
 ) -> tuple[list[Record], list[Failure], list[_PendingArtifact]]:
     selected = set(recipe.sources or [run.label for run in runs])
     selected_runs = [run for run in runs if run.label in selected]
@@ -1895,7 +2072,58 @@ async def _evaluate_item(
             continue
         try:
             with services.analysis_deadline(item_deadline):
-                step_plan = await _step_plan(steps, run.source, state, step_plans)
+                if isinstance(recipe, MeasurementsRecipe):
+                    if steps.step is not None or steps.all_steps:
+                        raise ResultError(
+                            "RAW step selectors do not apply to whole-log measurements"
+                        )
+                    if (
+                        run.source.raw is None
+                        and (run.source.identity or {}).get("requested_plot_index") is not None
+                    ):
+                        raise ResultError("Cannot select a RAW plot when RAW is absent")
+                    run = replace(
+                        run,
+                        source=await _captured_source(
+                            run.source, state, captures, require_raw=False
+                        ),
+                    )
+                    value = _promote_headlines(
+                        recipe.metric, await _adapter_value(recipe, run.source, None, state)
+                    )
+                    log_source = replace(
+                        run.source,
+                        identity={
+                            **(run.source.identity or {}),
+                            "dialect": run.source.dialect,
+                        },
+                    )
+                    records.append(
+                        Record(
+                            manifest_id=run.manifest_id,
+                            source=run.label,
+                            identity=_identity(log_source, None, {}, plot_index=None),
+                            value=value,
+                        )
+                    )
+                    continue
+                run = replace(
+                    run,
+                    source=await _captured_source(run.source, state, captures, require_raw=True),
+                )
+                planned = await _step_plan(steps, run.source, state, step_plans)
+                step_plan = planned.steps
+                run = replace(
+                    run,
+                    source=replace(
+                        run.source,
+                        identity={
+                            **(run.source.identity or {}),
+                            "dialect": planned.descriptor.dialect,
+                            "dialect_evidence": list(planned.descriptor.dialect_evidence),
+                        },
+                    ),
+                )
                 if isinstance(recipe, PlotRecipe):
                     value, artifacts = await _plot(
                         recipe,
@@ -1946,7 +2174,9 @@ async def _evaluate_item(
                         Record(
                             manifest_id=run.manifest_id,
                             source=run.label,
-                            identity=_identity(run.source, step, step_values),
+                            identity=_identity(
+                                run.source, step, step_values, plot_index=run.source.plot_index
+                            ),
                             value=value,
                         )
                     )
@@ -2134,15 +2364,25 @@ def _result_entry(
 # against. In one measured response the trail was a sixth of the whole receipt
 # (1,174 of 7,835 characters), naming files the analysis tools already resolve
 # by id.
-_RUN_IDENTITY_KEYS = ("manifest_id", "label")
+_RUN_IDENTITY_KEYS = ("manifest_id", "label", "plot_index", "dialect", "snapshot_id")
 _RUN_PROVENANCE_KEYS = (
+    "explicit_dialect",
+    "producing_dialect",
+    "raw_present",
     "log_present",
+    "console_present",
+    "raw_bytes",
+    "log_bytes",
+    "console_bytes",
+    "console_path",
+    "console_sha256",
     "job_id",
     "raw_path",
     "raw_sha256",
     "log_path",
     "log_sha256",
     "composite_sha256",
+    "selection_sha256",
 )
 
 
@@ -2179,6 +2419,9 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
     ),
     "properties": {
         "source": {"type": "string"},
+        "plot_index": {"type": ["integer", "null"], "minimum": 0},
+        "dialect": {"type": ["string", "null"]},
+        "snapshot_id": {"type": ["string", "null"]},
         "case_id": {"type": ["string", "null"]},
         "run_index": {"type": ["integer", "null"]},
         "step_index": {"type": ["integer", "null"]},
@@ -2197,6 +2440,9 @@ _REDUCED_SCHEMA: dict[str, Any] = {
         "field": {"type": "string"},
         "stat": {"type": "string"},
         "value": {"type": ["number", "integer", "null"]},
+        "plot_index": {"type": ["integer", "null"], "minimum": 0},
+        "dialect": {"type": ["string", "null"]},
+        "snapshot_id": {"type": ["string", "null"]},
         "case_id": {"type": ["string", "null"]},
         "run_index": {"type": ["integer", "null"]},
         "step_index": {"type": ["integer", "null"]},
@@ -2321,12 +2567,25 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "manifest_id": {"type": "string"},
                     "label": {"type": "string"},
-                    "raw_path": {"type": "string"},
+                    "plot_index": {"type": ["integer", "null"], "minimum": 0},
+                    "dialect": {"type": ["string", "null"]},
+                    "snapshot_id": {"type": ["string", "null"]},
+                    "explicit_dialect": {"type": ["string", "null"]},
+                    "producing_dialect": {"type": ["string", "null"]},
+                    "raw_path": {"type": ["string", "null"]},
                     "raw_sha256": {"type": ["string", "null"]},
                     "log_path": {"type": ["string", "null"]},
+                    "raw_present": {"type": ["boolean", "null"]},
                     "log_present": {"type": ["boolean", "null"]},
+                    "console_present": {"type": ["boolean", "null"]},
+                    "raw_bytes": {"type": ["integer", "null"]},
+                    "log_bytes": {"type": ["integer", "null"]},
+                    "console_bytes": {"type": ["integer", "null"]},
+                    "console_path": {"type": ["string", "null"]},
+                    "console_sha256": {"type": ["string", "null"]},
                     "log_sha256": {"type": ["string", "null"]},
                     "composite_sha256": {"type": ["string", "null"]},
+                    "selection_sha256": {"type": ["string", "null"]},
                     "job_id": {"type": ["string", "null"]},
                 },
                 # Only the identity a caller addresses a run by is always
@@ -2460,6 +2719,10 @@ class AnalysisEvaluation:
     #: The session's tools, set only when rendering an MCP page, so a failure
     #: can say where its Python snippet runs; the neutral evaluation has none.
     served: frozenset[str] | None = None
+    # What this call's arguments asked for that was read differently (a
+    # repeat read once; on an MCP page, a page size held to its cap), each
+    # said in the hint.
+    argument_notes: tuple[str, ...] = ()
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
@@ -2651,6 +2914,7 @@ def _assemble(
             "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
             "for the next page of missing cases (no work is replayed)."
         )
+    hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
     text = (
@@ -3045,7 +3309,9 @@ def _degrade_analysis(
         # echo is the ladder working as specified, not a second revocation.
         keep = preserve_provenance and not rung.answer_channel
         empty = () if keep else _TRIM_EMPTY_ENVELOPE
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        rung.cut.extend(
+            response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        )
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3060,12 +3326,16 @@ _BUDGET_NOTES = response_budget.Notes(
         "Ask again with a larger 'budget' for the full presentation, or continue "
         "with continue={result_set_id, cursor}."
     ),
+    default_route=(
+        "Each row still names its source by manifest_id and label; "
+        "include.provenance keeps source_hashes."
+    ),
 )
 
 
 async def _negotiate_analysis(
     budget: ResponseBudget, a: AnalysisEvaluation
-) -> types.CallToolResult:
+) -> tuple[dict[str, Any], str]:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
     base = _Limits.of(a.include)
     text = ""
@@ -3090,11 +3360,9 @@ async def _negotiate_analysis(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
-    return format_response(text, result.data)
+    return result.data, text
 
 
 async def _evaluate_unit(
@@ -3107,8 +3375,9 @@ async def _evaluate_unit(
     state: SessionState,
     item: result_store.ResultSet,
     item_deadline: float,
-    step_plans: dict[tuple[str, str], StepPlan],
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan],
     steps: StepSelection,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
     *,
     per_run_offset: int,
     position: int,
@@ -3163,6 +3432,7 @@ async def _evaluate_unit(
         item_deadline,
         step_plans,
         steps,
+        captures,
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
@@ -3268,6 +3538,49 @@ class _DriveStart:
     intra_item: int
     missing_offset: int
     include: AnalyzeInclude
+    #: Resumed from a cursor or continuation a caller handed back: the set may
+    #: have been written by an earlier call, so its sources are checked by
+    #: content where it recorded digests.
+    resumed: bool = False
+
+
+#: The request fields a ``continue`` call may echo, each with the key the
+#: result set stores it under; it replays them, so a copy is accepted only when
+#: it is the same request.
+_CONTINUATION_ECHO_KEYS = {
+    "sources": "sources",
+    "recipes": "work",
+    "include": "include",
+    "group_by": "group_by",
+    "step": "step",
+    "all_steps": "all_steps",
+}
+
+
+def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.ResultSet) -> None:
+    """Refuse request fields sent with ``continue`` that differ from the stored request.
+
+    Each field is compared in the form the result set stored it, so the
+    original call resent with ``continue`` passes, and one that changes a
+    source, a recipe, the grouping, the step selection or an include option is
+    refused, naming what changed.
+    """
+    supplied = _CONTINUATION_ECHO_KEYS.keys() & args.model_fields_set
+    if not supplied:
+        return
+    sent = _request_inputs(args)
+    stored = {**item.inputs, "work": item.work}
+    changed = sorted(
+        name
+        for name in supplied
+        if sent[_CONTINUATION_ECHO_KEYS[name]] != stored.get(_CONTINUATION_ECHO_KEYS[name])
+    )
+    if changed:
+        raise ResultError(
+            "'continue' replays the stored request, and " + "/".join(changed) + " differ "
+            "from it. Resend them unchanged or leave them out; to change sources, "
+            "recipes, grouping, step selection or include options, start a new analysis."
+        )
 
 
 async def _resolve_drive_start(
@@ -3276,7 +3589,6 @@ async def _resolve_drive_start(
     continuation: AnalysisContinuationPosition | None,
     loaded: result_store.ResultSet | None,
     call_deadline: float,
-    digest_cache: _DigestCache,
 ) -> _DriveStart:
     """Load or create the result set this drive runs over, and find its start.
 
@@ -3293,6 +3605,7 @@ async def _resolve_drive_start(
     )
     cursor_fields: list[str] | None = None
     inherited_view = False
+    resumed = False
     if continuation is not None:
         # The set is immutable, so a caller driving successive continuations can
         # hand back the one it already holds instead of re-reading it per drive.
@@ -3313,7 +3626,7 @@ async def _resolve_drive_start(
             list(continuation.view_fields) if continuation.view_fields is not None else None
         )
     elif args.continuation is None and page_cursor is None:
-        item = await _create_result_set(args, state, call_deadline, digest_cache)
+        item = await _create_result_set(args, state, call_deadline)
         position = 0
         intra_item = 0
         missing_offset = 0
@@ -3323,10 +3636,12 @@ async def _resolve_drive_start(
             args.continuation.result_set_id,
             state.working_dir,
         )
+        _continuation_echo_mismatch(args, item)
         position, intra_item, missing_offset = result_store.decode_cursor(
             args.continuation.cursor, item
         )
         inherited_view = True
+        resumed = True
         cursor_fields = result_store.cursor_view(args.continuation.cursor)
     else:
         assert page_cursor is not None
@@ -3336,6 +3651,7 @@ async def _resolve_drive_start(
             state.working_dir,
         )
         inherited_view = True
+        resumed = True
         cursor_fields = result_store.cursor_view(page_cursor)
         if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
             raise ResultError(
@@ -3353,7 +3669,7 @@ async def _resolve_drive_start(
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
     if inherited_view:
         include = include.model_copy(update={"fields": cursor_fields})
-    return _DriveStart(item, position, intra_item, missing_offset, include)
+    return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
 
 
 async def _evaluate_analysis_drive(
@@ -3367,14 +3683,12 @@ async def _evaluate_analysis_drive(
     """Implementation shared by the neutral seam and MCP's paged presentation."""
     loop = asyncio.get_running_loop()
     call_deadline = loop.time() + state.config.analysis_budget_s
-    # Per-call caches: one file hash per (path, mtime, size), shared across
-    # manifest build and verification; one resolved step plan per source.
-    digest_cache: _DigestCache = {}
-    step_plans: dict[tuple[str, str], StepPlan] = {}
+    # RAW recipes share one resolved step plan per source per call.
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan] = {}
+    # Share only while the bounded result cache or an active reader owns it.
+    captures: WeakValueDictionary[_CaptureKey, ParsedArtifacts] = WeakValueDictionary()
 
-    start = await _resolve_drive_start(
-        args, state, continuation, loaded, call_deadline, digest_cache
-    )
+    start = await _resolve_drive_start(args, state, continuation, loaded, call_deadline)
     item = start.item
     position, intra_item, missing_offset = start.position, start.intra_item, start.missing_offset
     include = start.include
@@ -3408,15 +3722,14 @@ async def _evaluate_analysis_drive(
         work_done = True
 
     # Source-drift precheck (once per call): verify every direct source before
-    # any recipe reads it. The shared digest cache makes this free for the
-    # sources a fresh set just hashed; a continuation re-checks them against the
-    # manifest.
+    # any recipe reads it. Recapture validates the stored parser identity,
+    # including console bytes and explicitly absent companions.
     precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
     precheck = await _verify_direct_sources(
         item.source_manifests,
         {run.manifest_id for run in runs},
         precheck_deadline,
-        digest_cache,
+        state=state,
     )
 
     processed: list[WorkUnit] = []
@@ -3467,8 +3780,8 @@ async def _evaluate_analysis_drive(
                     where=key,
                     message=(
                         "Artifact estimate exceeds the per-call safety bound. The "
-                        "bound is computed from raw file size and signal count "
-                        "before any data is read, so request fewer signals or "
+                        "bound uses raw file size and signal count rather than "
+                        "decoded sample counts, so request fewer signals or "
                         "select fewer/smaller runs; narrowing the window or "
                         "lowering max_points does not move it. A single large "
                         "raw read for a single signal has no request-side lever "
@@ -3496,6 +3809,7 @@ async def _evaluate_analysis_drive(
             item_deadline,
             step_plans,
             steps,
+            captures,
             per_run_offset=intra_item,
             position=position,
         )
@@ -3531,7 +3845,7 @@ async def _evaluate_analysis_drive(
         item.source_manifests,
         evaluated_ids,
         postcheck_deadline,
-        digest_cache,
+        state=state,
     )
     if postcheck:
         failed_ids = set(postcheck)
@@ -3545,13 +3859,25 @@ async def _evaluate_analysis_drive(
 
     signals: dict[str, list[str]] | None = None
     if include.signals_available:
-        signals = {}
+        signals = {run.manifest_id: [] for run in runs}
         for run in runs:
+            if loop.time() >= call_deadline:
+                break
+            if (
+                not manifests[run.manifest_id].get("raw_present")
+                or run.manifest_id in precheck
+                or run.manifest_id in postcheck
+            ):
+                continue
             try:
-                raw = await services.load_raw(run.source.raw, state)
+                with services.analysis_deadline(call_deadline):
+                    source = await _captured_source(run.source, state, captures, require_raw=True)
+                    raw = await services.load_raw(source, state)
                 signals[run.manifest_id] = list(raw.get_trace_names())
+            except AnalysisDeadlineExceeded:
+                break
             except LTSpiceMCPError:
-                signals[run.manifest_id] = []
+                continue
 
     return AnalysisEvaluation(
         item=item,
@@ -3567,6 +3893,7 @@ async def _evaluate_analysis_drive(
         natural_intra=intra_item,
         deferred=deferred,
         signals=signals,
+        argument_notes=tuple(args.argument_notes()),
     )
 
 
@@ -3651,7 +3978,7 @@ async def capture_attached_analysis(
     title="Analyze Results",
     description=(
         "Measure finished simulation results: apply typed recipes to completed "
-        "jobs and/or .raw files and get values, reductions, group splits and spec "
+        "jobs, RAW or log files and get values, reductions, group splits and spec "
         "verdicts attributed to case, run and .step. One call spans many sources "
         "and many metrics, so batch them instead of calling per metric. Work is "
         "bounded by a compute budget; a partial response returns a result_set_id "
@@ -3674,7 +4001,7 @@ async def capture_attached_analysis(
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
         "searches these by plain words and returns a recipe's fields. A signal is "
         "one trace or V(a,b), not an expression; other trace math is numpy "
-        "(spice://guide, 'trace math')."
+        "(guide section 'signals')."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(
@@ -3688,12 +4015,21 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
+    assembly = await _evaluate_analysis_drive(args, state, page_stop=_PageStop())
+    held = args.include.per_run.limit_note() if args.include.per_run else None
     assembly = replace(
-        await _evaluate_analysis_drive(args, state, page_stop=_PageStop()),
+        assembly,
         served=frozenset(state.tool_dispatch),
+        argument_notes=(
+            *assembly.argument_notes,
+            *([f"include.per_run.{held} Page on with per_run.next_cursor."] if held else []),
+        ),
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
         data, text = _assemble(assembly, None, _Limits.of(assembly.include))
-        return format_response(text, data)
-    return await _negotiate_analysis(budget, assembly)
+    else:
+        data, text = await _negotiate_analysis(budget, assembly)
+    # Sources are identified by their stamps within a call; a set handed to the
+    # caller to resume gets content digests, which the resuming call compares.
+    return format_response(text, data)

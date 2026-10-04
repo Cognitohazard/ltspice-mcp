@@ -9,14 +9,16 @@ import sys
 from pathlib import Path
 
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.experiment_types import ExperimentJob, failure_row
+from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob, failure_row
 from ltspice_mcp.lib.pdk_native import (
     NativeCaseError,
     NativePaths,
     SimulatorFacts,
     prepare_launch,
     validate_seed_collisions,
+    verify_launch,
 )
+from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import Store
 
@@ -122,3 +124,67 @@ def prepare_native_cases(job: ExperimentJob, working_dir: Path, simulator: type)
         for case in job.cases
         if case.status in {"failed", "skipped", "cancelled"}
     ]
+
+
+def prepare_native_retry(
+    case: ExperimentCase, *, store: Store, root_job_id: str, simulator: type | None = None
+) -> None:
+    """Prepare a fresh token's setup from the persisted sample and dependencies.
+
+    No statistical derivation or original PDK reads occur on this route. The
+    previous prepared launch stays intact if verification/preparation fails.
+    """
+    from ltspice_mcp.lib.experiment_inputs import verify_case_inputs
+
+    record = case.native_statistics
+    if record is None or record.sample is None or record.prepared is None:
+        raise RecoveryError(
+            "recovery_native_unprepared", "Native retry requires persisted validated preparation"
+        )
+    if case.status != "queued" or case.recovery is None:
+        raise RecoveryError(
+            "recovery_native_unprepared", "Native retry requires a queued frozen case"
+        )
+    try:
+        record.validate()
+        previous = record.prepared
+        root = store.lineage_run_dir(root_job_id, case.recovery.inputs.lineage_root, simulator)
+        if Path(previous.paths.cwd).resolve() != root:
+            raise RecoveryError(
+                "recovery_path_escape", "Native preparation has a different lineage root"
+            )
+        verify_case_inputs(case.recovery.inputs, native=True)
+        electrical = case.recovery.inputs.electrical
+        content = electrical.path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != previous.input_sha256:
+            raise RecoveryError(
+                "recovery_input_drift",
+                "Native retry electrical bytes disagree with persisted preparation",
+            )
+        input_path = store.native_input(root_job_id, case.run_token, simulator)
+        driver = store.native_driver(root_job_id, case.run_token, simulator)
+        paths = NativePaths(
+            root,
+            input_path,
+            driver,
+            root / f"{case.run_token}.cir",
+            root / f"{case.run_token}.raw",
+            root / f"{case.run_token}.log",
+        )
+        prepared = prepare_launch(
+            record.sample,
+            paths=paths,
+            token=case.run_token,
+            electrical_bytes=content,
+            dependencies=previous.dependencies,
+        )
+        verify_launch(prepared)
+    except (NativeCaseError, OSError, ValueError) as exc:
+        raise RecoveryError(
+            "recovery_native_preparation",
+            "Cannot prepare native retry from frozen inputs",
+            evidence={"reason": exc.code if isinstance(exc, NativeCaseError) else "io_or_record"},
+        ) from exc
+    record.prepared = prepared
+    record.pending_dependencies = ()
+    record.unavailable_reason = "not submitted"

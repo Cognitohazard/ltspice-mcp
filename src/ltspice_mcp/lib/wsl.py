@@ -1,10 +1,14 @@
 """WSL detection and path conversion utilities."""
 
+import json
 import logging
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
+
+from ltspice_mcp.lib.proc_kill import ProcessPresence, token_in_argument
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,10 @@ _WSL_INTEROP_TIMEOUT_S = 15
 # A job_id / run_filename token is server-generated and safe, but validate it
 # before splicing into a PowerShell command so a future caller can't inject.
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# An executable's file name as it may be spliced into the same query: a Windows
+# program, and nothing that could close the quoted WQL string it lands in.
+_SAFE_PROCESS_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()+-]+\.exe$", re.IGNORECASE)
 
 # Cache WSL detection result at module level (won't change during process lifetime)
 _is_wsl_cached: bool | None = None
@@ -211,13 +219,18 @@ def is_windows_native_path(path: Path) -> bool:
     return len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1
 
 
-def get_ltspice_lib_paths() -> list[str]:
+def get_ltspice_lib_paths(generation: str | None = None) -> list[str]:
     """Discover LTspice symbol library paths on WSL.
 
     spicelib's AscEditor needs .asy symbol files to parse .asc schematics.
     On WSL, spicelib's default path expansion fails because it only handles
     Wine paths (/drive_c/), not WSL's /mnt/c/ mount. This function probes
     the standard LTspice library locations via the Windows user profile.
+
+    ``generation`` (``simulator.generation_of``) picks the build whose
+    library is wanted: LTspice XVII keeps its own under
+    ``%USERPROFILE%\\Documents\\LTspiceXVII\\lib``, LTspice 24 and later
+    (and None) under ``%LOCALAPPDATA%\\LTspice\\lib``.
 
     Returns:
         List of existing library paths (may be empty if not on WSL or
@@ -226,15 +239,19 @@ def get_ltspice_lib_paths() -> list[str]:
     if not is_wsl():
         return []
 
-    local_appdata = _resolve_win_env("LOCALAPPDATA")
-    if local_appdata is None:
-        return []
+    if generation == "xvii":
+        profile = _resolve_win_env("USERPROFILE")
+        if profile is None:
+            return []
+        lib = profile / "Documents" / "LTspiceXVII" / "lib"
+    else:
+        local_appdata = _resolve_win_env("LOCALAPPDATA")
+        if local_appdata is None:
+            return []
+        lib = local_appdata / "LTspice" / "lib"
 
-    # LTspice stores symbols under <LOCALAPPDATA>/LTspice/lib/sym
-    candidates = [
-        local_appdata / "LTspice" / "lib",
-        local_appdata / "LTspice" / "lib" / "sym",
-    ]
+    # LTspice stores symbols under <lib>/sym
+    candidates = [lib, lib / "sym"]
 
     found = []
     for candidate in candidates:
@@ -293,7 +310,50 @@ def find_windows_ltspice_exe() -> Path | None:
     return None
 
 
-def kill_windows_ltspice_by_token(token: str) -> int:
+def windows_ltspice_presence(token: str) -> ProcessPresence:
+    """Read Windows simulator candidates, preserving missing command lines as unknown."""
+    if not token or _SAFE_TOKEN_RE.fullmatch(token) is None:
+        return ProcessPresence.UNKNOWN
+    if not is_wsl():
+        return ProcessPresence.ABSENT
+    name_filter = " or ".join(f"Name='{name}'" for name in _LTSPICE_PROCESS_NAMES)
+    script = (
+        "$ErrorActionPreference='Stop'; "
+        "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); "
+        f'$p=@(Get-CimInstance Win32_Process -Filter "{name_filter}" '
+        "| Select-Object Name,CommandLine); "
+        "ConvertTo-Json -InputObject $p -Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=_WSL_INTEROP_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            return ProcessPresence.UNKNOWN
+        candidates = json.loads(result.stdout)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return ProcessPresence.UNKNOWN
+    if not isinstance(candidates, list):
+        return ProcessPresence.UNKNOWN
+    unknown = False
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            unknown = True
+            continue
+        command = candidate.get("CommandLine")
+        if not isinstance(command, str) or not command.strip():
+            unknown = True
+        elif token_in_argument(token, command):
+            return ProcessPresence.PRESENT
+    return ProcessPresence.UNKNOWN if unknown else ProcessPresence.ABSENT
+
+
+def kill_windows_ltspice_by_token(token: str, executable_names: Iterable[str] = ()) -> int:
     """Terminate Windows LTspice processes whose command line contains ``token``.
 
     On WSL the simulator runs as a *Windows* process launched via interop; the
@@ -306,6 +366,12 @@ def kill_windows_ltspice_by_token(token: str) -> int:
     job_id, which appears in the ``-Run -b ...\\<job_id>.cir`` command line) via
     PowerShell ``Get-CimInstance`` and terminates it with ``taskkill /F``.
 
+    The process must also carry one of LTspice's own program names, or one of
+    ``executable_names``: the program the runner's simulator class launches,
+    which for a named executable may be a copy under another name. A name that
+    is not a plain ``.exe`` file name is left out of the query rather than
+    spliced into it.
+
     Returns the number of processes killed. No-op (returns 0) off WSL, on an
     unsafe/empty token, or if the Windows queries fail — degrading to the prior
     behaviour rather than raising.
@@ -316,9 +382,10 @@ def kill_windows_ltspice_by_token(token: str) -> int:
         logger.warning("kill_windows_ltspice_by_token: refusing unsafe token %r", token)
         return 0
 
-    name_filter = " or ".join(f"Name='{name}'" for name in _LTSPICE_PROCESS_NAMES)
+    names = [*_LTSPICE_PROCESS_NAMES, *filter(_SAFE_PROCESS_NAME_RE.match, executable_names)]
+    name_filter = " or ".join(f"Name='{name}'" for name in names)
     # Anchor the token at a run-filename boundary, mirroring the Linux twin
-    # proc_kill._token_in_arg: the staged deck is ``{job_id}.{ext}`` (single
+    # proc_kill.token_in_argument: the staged deck is ``{job_id}.{ext}`` (single
     # runs) or ``{job_id}_{n}.{ext}`` (batch sub-runs), so the id is always
     # followed by '.' or '_'. Requiring that boundary keeps a job id from
     # matching a longer id it happens to prefix. The token is validated above,

@@ -115,30 +115,30 @@ def test_structured_grid_clones_selected_ancestry_and_preserves_peer(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("attribute", "parameter", "value"),
+    ("attribute", "parameter", "value", "reason"),
     [
-        ("model", None, "n w=2u"),
-        ("model", None, "n\n.end"),
-        ("parameter", "w", "1u l=9u"),
-        ("parameter", "w", "{1} l=9u"),
-        ("parameter", "w", "1}"),
-        ("parameter", "w", "'1"),
-        ("parameter", "w", "1; ignored"),
-        ("parameter", "w", "1$ignored"),
-        ("parameter", "w", float("inf")),
-        ("parameter", "w", float("nan")),
-        ("value", "w", "1"),
-        ("parameter", None, "1"),
-        ("parameter", "w=x", "1"),
-        ("model", None, "n\r.end"),
-        ("parameter", "w", "1)"),
-        ("parameter", "w", "{1}junk"),
+        ("model", None, "n w=2u", "model must be one legal model reference token"),
+        ("model", None, "n\n.end", "single-line"),
+        ("parameter", "w", "1u l=9u", "parameter payload must be one expression"),
+        ("parameter", "w", "{1} l=9u", "parameter payload must be one expression"),
+        ("parameter", "w", "1}", r"unexpected '\}' \(no matching opener\)"),
+        ("parameter", "w", "'1", "unterminated quoted string"),
+        ("parameter", "w", "1; ignored", "comment-free"),
+        ("parameter", "w", "1$ignored", "comment-free"),
+        ("parameter", "w", float("inf"), "assignment must be finite"),
+        ("parameter", "w", float("nan"), "assignment must be finite"),
+        ("value", "w", "1", "parameter is required iff attribute is parameter"),
+        ("parameter", None, "1", "parameter is required iff attribute is parameter"),
+        ("parameter", "w=x", "1", "parameter must be an identifier"),
+        ("model", None, "n\r.end", "single-line"),
+        ("parameter", "w", "1)", r"unexpected '\)' \(no matching opener\)"),
+        ("parameter", "w", "{1}junk", "parameter payload must be one expression"),
     ],
 )
-def test_structured_payload_refuses_slot_escape(attribute, parameter, value):
+def test_structured_payload_refuses_slot_escape(attribute, parameter, value, reason):
     from ltspice_mcp.lib.variations import InstanceAssignment
 
-    with pytest.raises(ValueError, match=r"."):
+    with pytest.raises(ValueError, match=reason):
         InstanceAssignment(
             instance=["XA", "M0"], attribute=attribute, parameter=parameter, values=[value]
         )
@@ -906,3 +906,105 @@ def test_profiled_flat_mismatch_retains_model_clone_engine(tmp_path, simulator):
     assert left.model_name != right.model_name == "n"
     assert dict(left.geometry)["w"].value == 2e-6
     assert left.model_source in {item.case_source for item in case.source_lineage}
+
+
+# The seed the flat mismatch case runs with, which _drawn_mismatch replays.
+_FLAT_MISMATCH_SEED = 13
+
+
+def _flat_mismatch_case(tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=100u)"):
+    from ltspice_mcp.lib.variations import CircuitDeck
+
+    circuit = CircuitDeck(
+        "bench",
+        tmp_path / "flat.cir",
+        f"* flat\n{models}\nM1 a g 0 0 n w=2u l=1u\nM2 b g 0 0 n w=2u l=1u\n.end\n",
+        semantic_profile=SemanticProfile("ngspice", "hsa"),
+    )
+    (case,) = materialize(
+        circuit,
+        tmp_path,
+        [
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": _FLAT_MISMATCH_SEED,
+                "rules": [{"rule": "mismatch", **rule}],
+            }
+        ],
+    )
+    assert circuit.semantic_profile is not None
+    hierarchy = load_hierarchy(str(case.path), [tmp_path], circuit.semantic_profile)
+    m1, m2 = hierarchy.instances
+    assert m2.model_name == "n"
+    return case, m1
+
+
+def _drawn_mismatch(avt=0.0, ak=0.0):
+    """The delta the flat case draws for M1 (2u x 1u), from its own seeded stream."""
+    from ltspice_mcp.lib.instance_targeting import canonical_target
+    from ltspice_mcp.lib.montecarlo import (
+        InstanceGeometry,
+        MCSampler,
+        MismatchRule,
+        sample_instance_mismatch,
+    )
+
+    return sample_instance_mismatch(
+        MCSampler(_FLAT_MISMATCH_SEED).derive("bench:case0:run1"),
+        InstanceGeometry(canonical_target(("M1",), "mismatch"), "n", 2e-6, 1e-6),
+        MismatchRule(prefix="M1", avt=avt, ak=ak),
+    )
+
+
+def test_flat_mismatch_shifts_vth_additively_and_scales_k(tmp_path):
+    from ltspice_mcp.lib.instance_targeting import canonical_target
+    from ltspice_mcp.lib.montecarlo import parse_model_params
+
+    case, m1 = _flat_mismatch_case(tmp_path, {"prefix": "M1", "AVT": 0.003, "AK": 0.02})
+    delta = _drawn_mismatch(avt=0.003, ak=0.02)
+    assert delta["dvth"] != 0 and delta["dk_over_k"] != 0
+    vto = 0.5 + delta["dvth"]
+    kp = 100e-6 * (1 + delta["dk_over_k"])
+
+    drawn = {key: value for key, value in case.assignments.items() if key.startswith("instance:")}
+    assert drawn == {
+        canonical_target(("M1",), "model_parameter", "VTO"): pytest.approx(vto, rel=1e-12),
+        canonical_target(("M1",), "model_parameter", "KP"): pytest.approx(kp, rel=1e-12),
+    }
+    (clone,) = m1.model_family
+    written = parse_model_params(clone.raw)
+    assert written["VTO"] == pytest.approx(vto, rel=1e-5)
+    assert written["KP"] == pytest.approx(kp, rel=1e-5)
+
+
+def test_flat_mismatch_leaves_a_disabled_coefficient_untouched(tmp_path):
+    # AK is not given: K-mismatch is off unless requested, so KP keeps its
+    # nominal value and no KP draw is reported.
+    from ltspice_mcp.lib.instance_targeting import canonical_target
+    from ltspice_mcp.lib.montecarlo import parse_model_params
+
+    case, m1 = _flat_mismatch_case(tmp_path, {"prefix": "M1", "AVT": 0.003})
+    vto = 0.5 + _drawn_mismatch(avt=0.003)["dvth"]
+
+    drawn = {key: value for key, value in case.assignments.items() if key.startswith("instance:")}
+    assert drawn == {
+        canonical_target(("M1",), "model_parameter", "VTO"): pytest.approx(vto, rel=1e-12)
+    }
+    (clone,) = m1.model_family
+    written = parse_model_params(clone.raw)
+    assert written["VTO"] == pytest.approx(vto, rel=1e-5)
+    assert written["KP"] == pytest.approx(100e-6, rel=1e-12)
+
+
+def test_flat_mismatch_refuses_a_bin_member_without_an_exact_model(tmp_path):
+    # The family has one member, but it is a bin (n.0) of the referenced name
+    # rather than an exact definition to clone.
+    from ltspice_mcp.lib.variations import VariationError
+
+    with pytest.raises(VariationError, match="one exact model definition"):
+        _flat_mismatch_case(
+            tmp_path,
+            {"prefix": "M1", "AVT": 0.003},
+            models=".model n.0 NMOS(level=1 vto=.5 kp=100u)",
+        )

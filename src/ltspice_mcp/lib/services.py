@@ -13,127 +13,48 @@ import contextlib
 import contextvars
 import logging
 import re
+import threading
+import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
 from spicelib import AscEditor, SpiceEditor
-from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
 from ltspice_mcp.lib import recent
+from ltspice_mcp.lib.decoded_log import DecodedLog
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.library_manager import LibraryManager
-from ltspice_mcp.lib.log_parser import (
-    LogDiagnostics,
-    extract_missing_refs,
-    missing_refs_from_text,
-)
+from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
+from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
+from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
+from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
+from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
+from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import (
-    OffsetAwareRawRead,
     detect_sim_type,
     get_step_count,
     is_noise_analysis,
-    sniff_raw_dialect,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator_build import (
+    SimulatorExecutable,
+    is_cp1252_ltspice_build,
+    is_cp1252_ltspice_executable,
+    same_executable,
+)
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
 Editor = AscEditor | SpiceEditor
 T = TypeVar("T")
-
-
-def _suggestions_for_refs(
-    refs: list[str], libraries: LibraryManager
-) -> dict[str, list[dict]] | None:
-    """Fuzzy-match each ref against loaded libraries only (never built-ins)."""
-    if not refs:
-        return None
-    out: dict[str, list[dict]] = {}
-    for ref in refs:
-        matches = libraries.find_similar_models(ref, limit=3, cutoff=0.5)
-        if matches:
-            out[ref] = matches
-    return out or None
-
-
-def suggestions_from_errors(
-    errors: list[str] | None, libraries: LibraryManager
-) -> dict[str, list[dict]] | None:
-    """Zero-cost when ``errors`` is falsy — skips the log re-read entirely."""
-    if not errors:
-        return None
-    return _suggestions_for_refs(missing_refs_from_text("\n".join(errors)), libraries)
-
-
-def extract_model_suggestions(
-    log_path: Path | None, libraries: LibraryManager
-) -> dict[str, list[dict]] | None:
-    """Read ``log_path`` and fuzzy-match every missing ref against loaded libraries."""
-    if log_path is None or not log_path.exists():
-        return None
-    return _suggestions_for_refs(extract_missing_refs(log_path), libraries)
-
-
-def format_suggestion_block(
-    suggestions: dict[str, list[dict]] | None,
-    *,
-    header: str = "Possible fixes (from loaded user libraries):",
-) -> str:
-    """Human-readable block for a suggestions dict; empty string if None/empty."""
-    if not suggestions:
-        return ""
-    lines = ["", header]
-    for ref, matches in suggestions.items():
-        lines.append(f"  Missing '{ref}' — did you mean:")
-        for m in matches:
-            lines.append(f"    {m['name']} (score={m['score']}) - {m['source_path']}")
-    return "\n".join(lines)
-
-
-def attach_suggestions_to_failure(
-    error_msg: str,
-    data: dict,
-    log_path: Path | None,
-    libraries: LibraryManager,
-) -> str:
-    """Append model-resolution help to ``error_msg`` and mutate ``data``.
-
-    Two complementary layers, both keyed off the unresolved model/subcircuit
-    refs in the log: fuzzy matches against loaded user libraries (when any),
-    and a recovery hint pointing at ``inspect``'s model search — which fires
-    even with no library loaded, the common case stock parts fail in.
-    Returns the (possibly-unchanged) error message. Called on
-    simulation failure paths where the log already has the error context
-    inline, so callers don't re-implement read-log / extract / format / attach.
-    """
-    if log_path is None or not log_path.exists():
-        return error_msg
-    refs = extract_missing_refs(log_path)
-    if not refs:
-        return error_msg
-    block = ""
-    suggestions = _suggestions_for_refs(refs, libraries)
-    if suggestions:
-        data["suggestions"] = suggestions
-        block += "\n" + format_suggestion_block(suggestions)
-    ref_list = ", ".join(refs)
-    block += (
-        f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
-        "auto-included in the run. For each, call "
-        'inspect(kind="model", mode="search", query="<ref>") to locate its '
-        'definition in the loaded libraries — or mode="enumerate" with "libs" '
-        "to read a specific stock library file — then add the returned .include "
-        "directive to the netlist and rerun."
-    )
-    return f"{error_msg}{block}"
 
 
 def resolve_job(job_id: str, state: SessionState) -> ExperimentJob:
@@ -211,7 +132,7 @@ def solve_failure_lines(diagnostics: LogDiagnostics) -> list[str]:
 class RunContext:
     """Trusted, case-addressed experiment result and its provenance identity."""
 
-    raw: Path
+    raw: Path | None
     log: Path | None
     netlist: Path
     #: The source schematic/deck the case was staged from — where per-circuit
@@ -219,22 +140,28 @@ class RunContext:
     circuit_path: Path
     dialect: str | None
     identity: dict[str, Any]
+    console: Path | None = None
 
 
 @dataclass(frozen=True)
 class AnalysisSource:
     """Resolved source injected into analysis adapters by the consolidated path."""
 
-    raw: Path
+    raw: Path | None
     log: Path | None
     netlist: Path | None
     dialect: str | None
     identity: dict[str, Any] | None
     trusted_job_artifact: bool
+    explicit_dialect: str | None = None
+    plot_index: int = 0
+    console: Path | None = None
+    # Resident facts belong to one evaluation, between fresh drift checks.
+    captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def for_raw(cls, raw_path: Path) -> AnalysisSource:
-        """The companions of a bare ``.raw`` path: its sibling ``.log``, nothing else.
+        """The candidate log and console companions of a bare ``.raw`` path.
 
         For a read that has only a path to go on. ``log`` is always a concrete
         path (existence not guaranteed); ``netlist``, ``dialect`` and
@@ -250,30 +177,36 @@ class AnalysisSource:
             dialect=None,
             identity=None,
             trusted_job_artifact=False,
+            console=raw_path.with_suffix(".exe.log"),
         )
 
 
-def source_for_raw_path(raw: Path, state: SessionState) -> AnalysisSource:
+def source_for_raw_path(
+    raw: Path, state: SessionState, *, plot_index: int = 0, dialect: str | None = None
+) -> AnalysisSource:
     """The source an already-validated caller-supplied ``.raw`` path resolves to.
 
-    Unlike :meth:`AnalysisSource.for_raw` this consults the session: the log is
-    reported only when it exists, and the dialect is the one recorded for the
-    run that produced this raw. The path must already have passed
-    ``safe_path`` — this is the shared tail of the caller-path branch, not a
-    way around it.
+    The path must already have passed ``safe_path``. Companion candidates are
+    authorized independently on load; only the contained capture worker checks
+    presence and writer evidence. Session simulator defaults are not provenance.
     """
     sibling = raw.with_suffix(".log")
     return AnalysisSource(
         raw=raw,
-        log=sibling if sibling.is_file() else None,
+        log=sibling,
         netlist=None,
-        dialect=raw_dialect_for(raw, state),
+        dialect=None,
         identity=None,
         trusted_job_artifact=False,
+        explicit_dialect=dialect,
+        plot_index=plot_index,
+        console=raw.with_suffix(".exe.log"),
     )
 
 
-def source_for_run(run: RunContext) -> AnalysisSource:
+def source_for_run(
+    run: RunContext, *, plot_index: int = 0, dialect: str | None = None
+) -> AnalysisSource:
     """A resolved experiment case as the source its readers take.
 
     Trusted: the raw, log and staged deck are this server's own artifacts, so
@@ -288,6 +221,9 @@ def source_for_run(run: RunContext) -> AnalysisSource:
         dialect=run.dialect,
         identity=run.identity,
         trusted_job_artifact=True,
+        explicit_dialect=dialect,
+        plot_index=plot_index,
+        console=run.console,
     )
 
 
@@ -321,10 +257,13 @@ def resolve_experiment_run(
     *,
     run_index: int | None = None,
     case_id: str | None = None,
+    require_raw: bool = True,
 ) -> RunContext:
     """Resolve a produced case from any experiment job whose runs are terminal."""
     job = resolve_job(job_id, state)
-    return experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+    return experiment_run_context(
+        job, state, run_index=run_index, case_id=case_id, require_raw=require_raw
+    )
 
 
 def experiment_run_context(
@@ -333,12 +272,13 @@ def experiment_run_context(
     *,
     run_index: int | None = None,
     case_id: str | None = None,
+    require_raw: bool = True,
 ) -> RunContext:
     """``resolve_experiment_run`` for a caller already holding the job.
 
-    Records the case raw's dialect hint here, as the path-addressed resolvers do for
-    their runs: resolution always precedes the load, so every reader parses a
-    per-run simulator override with the right dialect without remembering to.
+    Carries the producing simulator and case provenance into the explicit
+    source passed to each reader, independently of session defaults.
+    Log readers can opt out of requiring RAW; case readiness is unchanged.
     """
     job_id = job.job_id
     # Per-case readiness is still gated case by case below.
@@ -358,7 +298,7 @@ def experiment_run_context(
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
     case = matches[0]
-    if case.status != "produced" or case.raw_file is None:
+    if case.status != "produced" or (require_raw and case.raw_file is None):
         raise ResultError(
             f"Experiment case {case.case_id!r} did not produce a raw result "
             f"(status={case.status!r})"
@@ -375,7 +315,13 @@ def experiment_run_context(
     if case.native_statistics is not None:
         identity["native_statistics"] = case.native_statistics.public()
     dialect = dialect_for_job(job, state)
-    state.raw_dialect_hints[case.raw_file] = dialect
+    recorded = case.log_file or case.raw_file
+    if recorded is not None:
+        console = recorded.with_suffix(".exe.log")
+    elif job.output_folder is not None and case.run_token:
+        console = job.output_folder / f"{case.run_token}.exe.log"
+    else:
+        console = None
     return RunContext(
         raw=case.raw_file,
         log=case.log_file,
@@ -383,6 +329,7 @@ def experiment_run_context(
         circuit_path=case.circuit_path,
         dialect=dialect,
         identity=identity,
+        console=console,
     )
 
 
@@ -391,6 +338,8 @@ def resolve_analysis_source(
     *,
     raw_file: str | None = None,
     log_file: str | None = None,
+    plot_index: int = 0,
+    dialect: str | None = None,
 ) -> AnalysisSource:
     """Resolve the source a direct ``raw_file``/``log_file`` call reads.
 
@@ -401,16 +350,24 @@ def resolve_analysis_source(
     case-addressed, so a caller naming a job resolves the case first.
     """
     if raw_file:
-        return source_for_raw_path(resolve_safe_path(str(raw_file), state.allowed_paths()), state)
+        return source_for_raw_path(
+            resolve_safe_path(str(raw_file), state.allowed_paths()),
+            state,
+            plot_index=plot_index,
+            dialect=dialect,
+        )
     if log_file:
         log = resolve_safe_path(str(log_file), state.allowed_paths())
         return AnalysisSource(
-            raw=log.with_suffix(".raw"),
+            raw=None,
             log=log,
             netlist=None,
             dialect=None,
             identity=None,
             trusted_job_artifact=False,
+            explicit_dialect=dialect,
+            plot_index=plot_index,
+            console=log.with_suffix(".exe.log"),
         )
     raise ResultError("Provide one analysis source: raw_file, log_file, or job_id")
 
@@ -423,48 +380,77 @@ def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     recorded simulator wins. Resolved from the recorded name string, so a
     persisted ngspice job read back with only LTspice installed still parses
     with the ngspice dialect — the producing simulator need not remain
-    configured. Falls back to the session default only when the job records no
-    simulator at all.
+    configured. An unrecorded producer has no dialect evidence; the captured
+    writer or an explicit caller selection must determine it instead.
     """
     simulator = getattr(job, "simulator", None)
     if simulator:
         return dialect_for_simulator_name(simulator)
-    return state.raw_dialect
+    return None
 
 
-def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
-    """Raw dialect for the simulator that produced ``raw_path``.
+def reported_version(
+    state: SessionState,
+    executable: SimulatorExecutable | None,
+) -> tuple[str, dict[str, str]] | None:
+    """The build the latest run on this same executable reported, and which run.
 
-    Job-addressed reads record the producing job's dialect when the path is
-    resolved (see ``_resolve_result_file``), so a run launched with a per-run
-    simulator override parses with that simulator's dialect rather than the
-    session default's.
-
-    A caller-supplied raw takes its dialect from its own bytes. The sniffer's
-    ``None`` leaves detection to spicelib, including the file's ``Command:``
-    header; replacing it with the session default would override that header.
+    Read from the jobs this session holds, its own and the recent ones loaded
+    at startup, so it is a run's own output rather than a probe: asking the
+    executable would launch the simulator. None until a run on this build has
+    finished and named itself.
     """
-    if raw_path in state.raw_dialect_hints:
-        return state.raw_dialect_hints[raw_path]
-    return sniff_raw_dialect(raw_path)
+    if executable is None:
+        return None
+    latest = max(
+        (
+            (case.completed_at or job.started_at, job, case)
+            for job in state.all_jobs.values()
+            if same_executable(job.simulator_executable, executable)
+            for case in job.cases
+            if case.simulator_version
+        ),
+        key=lambda run: run[0],
+        default=None,
+    )
+    if latest is None:
+        return None
+    _, job, case = latest
+    assert case.simulator_version is not None
+    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
 
 
-# Hard wall-clock bound on one raw parse. A raw is an untrusted simulator
-# artifact parsed through a third-party library — a shape spicelib didn't
-# anticipate can loop indefinitely (it has: the ngspice noise-raw multi-plot
-# loop, since guarded in raw_parser). Offloading protects the loop from a
-# SLOW parse; only a deadline protects the session from a RUNAWAY one — this
-# fails the one call instead of wedging its worker thread forever. Generous:
-# multi-GB DrvFs parses land in tens of seconds, not minutes.
+def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
+    """The evidence that ``executable`` is an LTspice that decodes decks as cp1252.
+
+    LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
+    (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
+    LTspice 24 and later read the UTF-8 they write. Which one an executable is
+    shows in its own name (``XVIIx64.exe``), or in the build the latest run on
+    it reported, the one ``inspect(kind="capabilities")`` reports. Neither
+    launches the simulator. Any other simulator answers None. The answer names
+    the evidence, for a finding to cite.
+    """
+    if executable is None:
+        return None
+    if is_cp1252_ltspice_executable(executable.path):
+        return executable.path
+    reported = reported_version(state, executable)
+    if reported is not None and is_cp1252_ltspice_build(reported[0]):
+        return f"{reported[0]} ({executable.path})"
+    return None
+
+
+# Absolute worker deadline; the supervisor confirms owned-tree cleanup before
+# RAW/log loading returns. Path authorization metadata still happens off-loop.
 RAW_PARSE_TIMEOUT_S = 120.0
 
-# Paths whose last parse hit the deadline, by monotonic expiry time. Gates
-# retries: an abandoned worker cannot be killed, so immediate retries could
-# abandon more executor threads and eventually stall unrelated to_thread work.
-# During cooldown the retry fails fast on the loop instead; after it, one fresh
-# attempt is allowed (worst case the leak grows by one thread per cooldown
-# period, not per call). Read/written only on the event loop with no await
-# between check and store, so no lock is needed.
+# Paths identifying residual threaded work that timed out, with monotonic retry
+# deadlines. A timeout stops waiting but cannot terminate the executor thread;
+# cooldown limits repeated unfinished work in the shared thread pool. The path
+# can identify resident computation, so it does not imply a corrupt file or
+# report whether the timed-out thread is still running. Read/written only on the
+# event loop with no await between check and store, so no lock is needed.
 _wedged_raw_paths: dict[Path, float] = {}
 
 
@@ -474,11 +460,13 @@ async def bounded_parse(
     *,
     timeout_s: float = RAW_PARSE_TIMEOUT_S,
 ) -> T:
-    """Run one result parse off the event loop with a deadline and cooldown.
+    """Run residual result work off the loop with a deadline and path cooldown.
 
-    The cooldown is shared by every parser using this helper, so a raw file
-    whose abandoned worker may still be running cannot consume another worker
-    through a different result-reading path until the cooldown expires.
+    Callers compute resident summaries, aggregate decoded measurements (with
+    optional trusted staged-deck reads), or hash completed output artifacts.
+    RAW/log capture and dependency decoding use the contained parser service.
+    This deadline stops waiting; it cannot forcibly stop an executor thread.
+    The cooldown limits retries of timed-out work in the shared thread pool.
     """
     loop = asyncio.get_running_loop()
     now_mono = loop.time()
@@ -487,16 +475,16 @@ async def bounded_parse(
     if call_deadline is not None:
         timeout_s = min(timeout_s, max(0.0, call_deadline - now_mono))
     if timeout_s <= 0:
-        raise AnalysisDeadlineExceeded(f"Parsing {path.name} exceeded the analysis item deadline")
+        raise AnalysisDeadlineExceeded(
+            f"Analysis work for {path.name} exceeded the analysis item deadline"
+        )
     wedged_until = _wedged_raw_paths.get(path)
     if wedged_until is not None:
         if now_mono < wedged_until:
             raise AnalysisDeadlineExceeded(
-                f"Parsing {path.name} recently exceeded its deadline and "
-                "its worker is still abandoned; retries are paused for "
-                f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
-                "drain the worker pool. Check the file (size, mtime, source "
-                "simulator) before retrying."
+                f"Analysis work for {path.name} recently exceeded its deadline; "
+                f"retries are paused for {wedged_until - now_mono:.0f}s more "
+                "to limit unfinished work in the thread pool."
             )
         del _wedged_raw_paths[path]
     try:
@@ -512,73 +500,106 @@ async def bounded_parse(
     except TimeoutError:
         _wedged_raw_paths[path] = loop.time() + cooldown_s
         raise AnalysisDeadlineExceeded(
-            f"Parsing {path.name} exceeded {timeout_s:.3g}s and was "
-            "abandoned — the file may be corrupt in a way that wedges the parser, "
-            "or on a stalled mount. The file was not modified; retries are "
-            f"paused for {cooldown_s:.0f}s, then one fresh attempt is "
-            "allowed."
+            f"Analysis work for {path.name} exceeded {timeout_s:.3g}s. "
+            "Its executor thread cannot be forcibly stopped; retries for "
+            f"this path are paused for {cooldown_s:.0f}s."
         ) from None
 
 
-async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
-    """Load and cache a ``RawRead`` instance without blocking the event loop.
+def _raw_deadline() -> float:
+    deadline = time.monotonic() + RAW_PARSE_TIMEOUT_S
+    shared = _analysis_deadline.get()
+    if shared is not None:
+        deadline = min(deadline, shared)
+    return deadline
 
-    Fast path: a fresh cache entry is returned inline — one ``os.stat`` on
-    the loop per call, accepted as far cheaper than a thread hop for the
-    guaranteed-hit patterns (``bode_metrics all_steps`` re-enters this once
-    per step of the same raw). On miss or stale entry the probe and parse
-    run in a worker thread via ``asyncio.to_thread``, bounded by
-    ``RAW_PARSE_TIMEOUT_S``. The parsed value is immutable and the cache
-    store is lock-guarded, so cancellation leaves the cache consistent: a
-    worker that has started runs to completion (at worst storing a benign
-    extra cache entry), and work cancelled before the executor picks it up
-    never begins. On deadline expiry the worker thread is abandoned (Python
-    can't kill it) and the path enters a retry cooldown (see
-    ``_wedged_raw_paths``) so hammering the same file cannot leak a thread
-    per call.
+
+def _resident_artifacts(
+    source: AnalysisSource, *, require_raw: bool, deadline: float
+) -> ParsedArtifacts | None:
+    """Reuse explicit evaluation facts without extending their read deadline."""
+    captured = source.captured
+    if captured is None or (require_raw and captured.raw is None):
+        return None
+    if (source.identity or {}).get("snapshot_id") != captured.snapshot_id:
+        raise ResultError("Resident artifacts do not match the analysis source snapshot")
+    if time.monotonic() >= deadline:
+        raise AnalysisDeadlineExceeded("Analysis exceeded its deadline")
+    return captured
+
+
+async def load_artifacts(
+    source: AnalysisSource, state: SessionState, *, require_raw: bool
+) -> ParsedArtifacts:
+    """Return validated shared capture identity and resident RAW/log facts.
+
+    Cancellation waits for the shared parser's owned-tree cleanup. Selection
+    is left to the caller; snapshot_id binds all captured artifact roles.
     """
-    cached = state.results.peek(raw_path)
-    if cached is not None:
-        return cached
-    return await bounded_parse(
-        raw_path,
-        lambda: load_raw_sync(raw_path, state),
-        timeout_s=RAW_PARSE_TIMEOUT_S,
-    )
+    deadline = _raw_deadline()
+    captured = _resident_artifacts(source, require_raw=require_raw, deadline=deadline)
+    if captured is not None:
+        return captured
+    cancel = threading.Event()
+    context = contextvars.copy_context()
 
+    def run() -> ParsedArtifacts:
+        return context.run(
+            _parse_artifacts_sync,
+            source,
+            state,
+            deadline=deadline,
+            cancel=cancel,
+            require_raw=require_raw,
+        )
 
-def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
-    """Blocking implementation behind :func:`load_raw`.
-
-    Call directly only from code already off the event loop, or from the
-    synchronous resource router. Coroutine handlers must ``await load_raw``.
-    """
-    dialect = raw_dialect_for(raw_path, state)
+    future = asyncio.get_running_loop().run_in_executor(None, run)
+    cancelled = False
+    while not future.done():
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError:
+            cancelled = True
+            cancel.set()
+        except Exception:
+            break
     try:
-        raw = state.results.get(
-            raw_path,
-            lambda p: OffsetAwareRawRead(str(p), traces_to_read="*", dialect=dialect),
-        )
-    except FileNotFoundError:
-        raise ResultError(f"Result file not found: {raw_path}") from None
-    except ResultError:
+        artifacts = future.result()
+    except Exception as exc:
+        if cancelled and not isinstance(exc, ParserCleanupError):
+            raise asyncio.CancelledError from exc
         raise
-    except Exception as e:
-        raise ResultError(
-            f"Failed to parse result file: {e}. "
-            "File may be corrupted or not a valid SPICE .raw file"
-        ) from e
-    # spicelib parses a header truncated mid-write into a "valid" raw with no
-    # variables at all. A real SPICE raw always carries at least its axis
-    # variable, so zero variables is a corruption signature — fail here with
-    # the real cause instead of letting every consumer misreport it as
-    # "signal not found" against an empty signal list.
-    if not raw.get_trace_names():
-        raise ResultError(
-            f"Result file {raw_path} parsed with zero variables — the file is "
-            "most likely truncated or corrupt (e.g. a simulation killed mid-write)."
-        )
-    return raw
+    if cancelled:
+        raise asyncio.CancelledError
+    return artifacts
+
+
+async def load_raw(source: AnalysisSource, state: SessionState) -> DecodedRaw:
+    """Load a selected resident plot and its same-capture log facts."""
+    return select_raw(await load_artifacts(source, state, require_raw=True), source.plot_index)
+
+
+def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
+    """Blocking source-based counterpart for callers already off the loop."""
+    deadline = _raw_deadline()
+    captured = _resident_artifacts(source, require_raw=True, deadline=deadline)
+    if captured is not None:
+        return select_raw(captured, source.plot_index)
+    return _parse_raw_sync(source, state, deadline=deadline)
+
+
+async def load_logs(source: AnalysisSource, state: SessionState) -> DecodedLog:
+    """Load complete log facts, independent of RAW payload validity."""
+    return (await load_artifacts(source, state, require_raw=False)).logs
+
+
+def load_logs_sync(source: AnalysisSource, state: SessionState) -> DecodedLog:
+    """Blocking counterpart using the same capture, cache and cleanup path."""
+    deadline = _raw_deadline()
+    captured = _resident_artifacts(source, require_raw=False, deadline=deadline)
+    if captured is not None:
+        return captured.logs
+    return _parse_logs_sync(source, state, deadline=deadline)
 
 
 # A ``dev.param`` operating-point shorthand: everything before the LAST dot is
@@ -633,7 +654,7 @@ class Signal:
         """A trace this signal is read from; both sides of a pair share its unit."""
         return self.plus or self.minus or self.name
 
-    def wave(self, raw: RawRead, step: int) -> np.ndarray:
+    def wave(self, raw: RawData, step: int) -> np.ndarray:
         """One step of this signal. Both traces of a pair come from ``raw`` at
         ``step``, so they share that step's axis sample for sample."""
         if self.minus is None:
@@ -653,7 +674,7 @@ class Signal:
         return plus - minus
 
 
-def _find_trace(raw: RawRead, signal: str) -> str | None:
+def _find_trace(raw: RawData, signal: str) -> str | None:
     """The raw's own name for one trace ``signal`` addresses, or None.
 
     Lookup is case-insensitive: SPICE node names are case-insensitive per
@@ -729,7 +750,7 @@ def _looks_like_expression(signal: str) -> bool:
     return False
 
 
-def _available_signals(raw: RawRead) -> str:
+def _available_signals(raw: RawData) -> str:
     """The first traces of ``raw``, for an error that names what is there."""
     trace_names = raw.get_trace_names()
     available = ", ".join(trace_names[:10])
@@ -738,7 +759,7 @@ def _available_signals(raw: RawRead) -> str:
     return available
 
 
-def _not_found(raw: RawRead, signal: str) -> ResultError:
+def _not_found(raw: RawData, signal: str) -> ResultError:
     """The error for a ``signal`` no trace answers to."""
     trace_names = raw.get_trace_names()
     available = _available_signals(raw)
@@ -776,7 +797,7 @@ def _not_found(raw: RawRead, signal: str) -> ResultError:
     return ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 
 
-def _node_pair(raw: RawRead, signal: str, plus_node: str, minus_node: str) -> Signal:
+def _node_pair(raw: RawData, signal: str, plus_node: str, minus_node: str) -> Signal:
     """``V(plus_node, minus_node)`` read from the two node voltages of ``raw``.
 
     A ground alias (``0``, ``gnd``) that the raw carries no voltage for is
@@ -816,7 +837,7 @@ def _node_spelling(trace: str | None, node: str) -> str:
     return match.group(1) if match else node
 
 
-def resolve_signal(raw: RawRead, signal: str) -> Signal:
+def resolve_signal(raw: RawData, signal: str) -> Signal:
     """Resolve ``signal`` against ``raw``: one trace, or a node pair ``V(a,b)``.
 
     A trace the raw actually carries wins, including one literally named
@@ -838,7 +859,7 @@ def is_node_pair(signal: str) -> bool:
     return _NODE_PAIR_RE.fullmatch(signal) is not None
 
 
-def validate_step(raw: RawRead, step: int) -> None:
+def validate_step(raw: RawData, step: int) -> None:
     """Validate that a step index exists in a raw result."""
     step_count = get_step_count(raw)
     if step < 0 or step >= step_count:

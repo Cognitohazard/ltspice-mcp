@@ -20,9 +20,9 @@ import signal
 import subprocess
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError
 from ltspice_mcp.lib import atomic_write_json
@@ -155,7 +155,14 @@ def _log_tail(path: Path) -> str:
         return ""
 
 
-def _failure(request_id: str, code: str, message: str, log_file: Path) -> ApiCallError:
+def _failure(
+    request_id: str,
+    code: str,
+    message: str,
+    log_file: Path,
+    *,
+    resume_arguments: Mapping[str, Any] | None = None,
+) -> ApiCallError:
     """A pre-submission failure, shaped like every other one this tool returns."""
     from ltspice_mcp.tools import experiments
 
@@ -163,6 +170,18 @@ def _failure(request_id: str, code: str, message: str, log_file: Path) -> ApiCal
     tail = _log_tail(log_file)
     if tail:
         detail = f"{detail} Its last output was:\n{tail}"
+    if resume_arguments is not None:
+        from ltspice_mcp.lib.recovery_records import RecoveryError
+        from ltspice_mcp.tools import jobs
+
+        args = jobs.JobsResumeInput.model_validate(resume_arguments)
+        evaluation = jobs.failed_jobs_evaluation(args, RecoveryError(code, detail), None)
+        assert evaluation.error is not None
+        evaluation = replace(
+            evaluation,
+            error=replace(evaluation.error, retryable=True, commit_state="unknown"),
+        )
+        return ApiCallError(detail, payload=jobs.complete_jobs_data(evaluation))
     payload = experiments.submission_error_payload(
         request_id,
         code=code,
@@ -204,9 +223,12 @@ def submit(
     arguments: Mapping[str, Any],
     request_id: str,
     children: list[subprocess.Popen[bytes]],
+    *,
+    operation: Literal["run_experiments", "resume"] = "run_experiments",
 ) -> DetachedHandoff:
     """Spawn one owner for this request and return the receipt it reports."""
     store = state.store
+    resume_arguments = arguments if operation == "resume" else None
     store.ensure_root()
     store.detached_dir.mkdir(parents=True, exist_ok=True)
     # This call's own hand-off, not this request id's. Two scripts in one
@@ -230,6 +252,7 @@ def submit(
             config_path=boot.config_path,
             overrides=_jsonable(dict(boot.overrides)),
             arguments=dict(arguments),
+            operation=operation,
         ),
     )
 
@@ -259,11 +282,20 @@ def submit(
             "detached_owner_not_started",
             f"The detached owner process could not be started: {exc}",
             log_path,
+            resume_arguments=resume_arguments,
         ) from exc
     children.append(process)
 
     try:
-        report = _await_report(process, report_path, request_id, log_path)
+        report = _await_report(
+            process,
+            report_path,
+            request_id,
+            log_path,
+            timeout_s=HANDSHAKE_TIMEOUT_S
+            + (float(arguments.get("wait_s", 0)) if operation == "resume" else 0),
+            resume_arguments=resume_arguments,
+        )
     finally:
         # The caller is the only reader, and it has read. Leaving the file
         # behind would accumulate one per call for the life of the directory.
@@ -272,11 +304,15 @@ def submit(
         error = report.get("error")
         message = error.get("message") if isinstance(error, Mapping) else None
         code = error.get("code") if isinstance(error, Mapping) else None
+        payload = error.get("payload") if isinstance(error, Mapping) else None
+        if isinstance(payload, Mapping):
+            raise ApiCallError(str(message or "The detached operation failed"), payload=payload)
         raise _failure(
             request_id,
             str(code or "detached_submission_failed"),
             str(message or "The detached owner reported a failure with no message."),
             log_path,
+            resume_arguments=resume_arguments,
         )
 
     receipt = report.get("receipt")
@@ -349,8 +385,12 @@ def _await_report(
     report_path: Path,
     request_id: str,
     log_path: Path,
+    *,
+    timeout_s: float | None = None,
+    resume_arguments: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    deadline = time.monotonic() + HANDSHAKE_TIMEOUT_S
+    timeout_s = HANDSHAKE_TIMEOUT_S if timeout_s is None else timeout_s
+    deadline = time.monotonic() + timeout_s
     while True:
         report = _read_report(report_path)
         if report is not None:
@@ -368,6 +408,7 @@ def _await_report(
                 "detached_owner_exited",
                 (f"The detached owner exited with status {exited} before reporting a submission."),
                 log_path,
+                resume_arguments=resume_arguments,
             )
         if time.monotonic() >= deadline:
             try:
@@ -383,10 +424,11 @@ def _await_report(
                 "detached_owner_timeout",
                 (
                     f"The detached owner did not report a submission within "
-                    f"{HANDSHAKE_TIMEOUT_S:.0f}s. {cleanup} If it had already submitted, request_id "
+                    f"{timeout_s:.0f}s. {cleanup} If it had already submitted, request_id "
                     f"{request_id!r} still names that job: ask for it again to "
                     "replay it."
                 ),
                 log_path,
+                resume_arguments=resume_arguments,
             )
         time.sleep(HANDSHAKE_POLL_S)

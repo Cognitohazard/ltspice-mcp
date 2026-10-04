@@ -1,14 +1,15 @@
 """inspect — the consolidated read-only UNDERSTAND surface.
 
 One tool answers a batch of independent read-only ``queries`` about the server
-and the circuits it can reach. Each query is one of eight kinds:
+and the circuits it can reach. Each query names one supported kind:
 
-* ``capabilities`` — detected simulators + dialects, exporter presence, job
-  persistence, allowed roots, the active profile and which of the two tool
-  listings this session was served, the configured limits, the
-  linter version, and ``diagnostics``: the startup notes (bad configured
-  simulator path, a requested engine that fell back, WSL auto-detection) that
-  say whether this server started degraded. Pulled from
+* ``capabilities`` — detected simulators + dialects and whether a run can
+  select each (``selectable``, with the ``refusal`` when this host cannot run
+  that family), exporter presence, job persistence, allowed roots, the active
+  profile and which of the two tool listings this session was served, the
+  configured limits, the linter version, and ``diagnostics``: the startup
+  notes (bad configured simulator path, a requested engine that fell back, WSL
+  auto-detection) that say whether this server started degraded. Pulled from
   ``state``/``config``/``lint_rules``; nothing is probed.
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
   precedence they resolve through. A ``path`` adds that schematic's own
@@ -25,6 +26,9 @@ and the circuits it can reach. Each query is one of eight kinds:
 * ``hierarchy`` — bounded netlist instance expansion, scoped ports, numeric
   facts and backend addresses from captured active dependencies. See
   ``lib/hierarchy.py`` for supported grammar and explicit refusal boundaries.
+* ``results`` — RAW plot inventory, selected signal descriptors and axisless
+  quantities, or detached log measurements/native print rows. Pages bind the
+  captured snapshot; RAW reads accept explicit plot/dialect selection.
 
 On a netlist, ``net`` and ``components`` add ``warnings`` when the lexer had to
 guess about the deck (an unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a
@@ -36,8 +40,12 @@ Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
 is what lets a first edit commit in one call; an edit attempted without it is
 refused with the current digest attached, so that path costs one retry rather
 than a hunt.
-* ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
-  ``enumerate`` lists every model defined in the given ``libs``.
+* ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``
+  in the given ``libs``, or in the detected simulators' own model libraries
+  when ``libs`` is omitted; ``enumerate`` lists every model defined in the
+  given ``libs``, narrowed to the names containing ``query`` when one is
+  given. A ``libs`` file may sit inside the sandbox or inside one of those
+  simulator libraries, so every ``source_path`` a search returns reads back.
 * ``reference`` — the tools' own branch vocabulary (``tools/reference_index.py``):
   a plain-words ``query`` returns the closest analysis recipes, schematic ops,
   variation kinds, checks and job actions with their full field tables, and no
@@ -45,6 +53,10 @@ than a hunt.
   gives me phase margin" and to "what does this branch take" on the ``compact``
   tool listing, where per-argument descriptions are not on the wire at all. It
   reads no file and touches no session state.
+* ``guide`` — the packaged guide (``lib/guide.py``): with no ``section``, the
+  core a session reads first and the index of topic sections and task
+  playbooks; with one, that section. It records on the session that the guide
+  was read, which retires the one read-the-guide reminder.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
@@ -66,12 +78,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import sys
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias, overload
 
 from mcp import types
+from numpy.typing import NDArray
 from pydantic import (
     BaseModel,
     Field,
@@ -87,13 +101,19 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, guide, response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
-from ltspice_mcp.lib.library_manager import parse_library_file_cached, part_aware_score
+from ltspice_mcp.lib.library_manager import (
+    LibraryManager,
+    model_row,
+    parse_library_file_cached,
+    rank_models,
+)
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
@@ -120,13 +140,14 @@ from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
     dialect_for_simulator_name,
+    family_refusal,
+    simulator_family,
     simulator_library_roots,
     simulator_remediation,
 )
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -137,6 +158,7 @@ from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
+    OptionalRawSelectionFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -146,6 +168,7 @@ from ltspice_mcp.tools._base import (
     outcome_schema,
     registry,
     resolve_response_budget,
+    safe_library_path,
     safe_path,
     symbol_resolver_for,
 )
@@ -350,8 +373,6 @@ _PAGE_SIZE = 100
 # Larger than the pin page because a coordinate is two integers.
 _COORD_PAGE_SIZE = 500
 
-NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
-
 
 @dataclass(frozen=True)
 class _View:
@@ -422,6 +443,7 @@ CapabilityField: TypeAlias = Literal[
     "config_path",
     "python",
     "simulators",
+    "named_executables",
     "default_simulator",
     "exporter_available",
     "render",
@@ -440,9 +462,10 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, whether the .asc exporter is available,
-    job persistence, allowed roots, the configured limits, and the linter
-    version."""
+    reported builds and raw dialects, and which a run can select; the named
+    executables, whether the .asc exporter is available, job persistence,
+    allowed roots, the configured
+    limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -491,19 +514,23 @@ class SymbolQuery(StrictModel):
     )
 
 
+#: The circuit file a net or components query reads.
+_CIRCUIT_PATH_DESCRIPTION = f"The .asc schematic, or {NETLIST_SUFFIX_TEXT} netlist, to read."
+
+
 class NetQuery(StrictModel):
     """Everything on one net. On a .asc this is a geometric trace — pins, wire
     vertices, net labels, and whether two labels short the net. On a netlist it
     is card membership, with no geometry."""
 
     kind: Literal["net"]
-    path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
+    path: str = Field(description=_CIRCUIT_PATH_DESCRIPTION)
     at: str | list[int] = Field(
         description=(
             "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
-            "(e.g. 'M1.D', 'X1.2'), 'net:NAME', or [x, y]; on a netlist, which "
-            "has no geometry, it takes 'net:NAME', a node name, or "
-            "'REF.<terminal-number>' and rejects a coordinate."
+            "(e.g. 'M1.D', 'X1.2'), 'net:NAME' or a bare net name, or [x, y]; "
+            "on a netlist, which has no geometry, PIN is a terminal number and "
+            "a coordinate is rejected."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -527,10 +554,10 @@ _PREFIX_DESCRIPTION = (
 
 
 class ComponentsQuery(StrictModel):
-    """The components of a .asc schematic or a .cir/.net/.sp netlist."""
+    """The components of a .asc schematic or a netlist."""
 
     kind: Literal["components"]
-    path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
+    path: str = Field(description=_CIRCUIT_PATH_DESCRIPTION)
     prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     detail: Literal["list", "full"] = Field(
         default="list",
@@ -547,7 +574,7 @@ class HierarchyQuery(StrictModel):
     """Resolve repeated netlist instances, ports, parameters and backend device addresses."""
 
     kind: Literal["hierarchy"]
-    path: str = Field(description="Netlist .cir/.net/.sp; explicitly export a schematic first.")
+    path: str = Field(description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first.")
     simulator: Literal["ltspice", "ngspice"] = Field(
         description="Offline semantic backend; installation is not required."
     )
@@ -584,26 +611,25 @@ class ModelQuery(StrictModel):
     mode: Literal["search", "enumerate"] = Field(
         description=(
             "'search' fuzzy-matches 'query' and requires it; 'enumerate' lists "
-            "every model in 'libs' and rejects a 'query' rather than echoing "
-            "back a filter it never applied."
+            "every model in 'libs', or with 'query' those whose name contains it."
         )
     )
     query: str | None = Field(
         default=None,
-        description="Part name or fragment to match; required by 'search', refused by 'enumerate'.",
+        description="Part name or fragment; required by 'search', a name filter for 'enumerate'.",
     )
     libs: list[str] | None = Field(
         default=None,
         description=(
             "Library files to read: required by 'enumerate', optional for "
-            "'search', which searches the session's loaded libraries when omitted."
+            "'search', which searches the simulator's own libraries when omitted."
         ),
     )
     cursor: str | None = Field(
         default=None,
         description=(
-            _CURSOR_DESCRIPTION_FILE + " The files are those named in 'libs'; "
-            "with 'libs' omitted it binds the query alone."
+            _CURSOR_DESCRIPTION_FILE + " The files are those named in 'libs', "
+            "or the simulator's own when it is omitted."
         ),
     )
 
@@ -611,14 +637,40 @@ class ModelQuery(StrictModel):
     def _mode_requirements(self) -> ModelQuery:
         if self.mode == "search" and not self.query:
             raise ValueError("model search requires 'query'")
-        if self.mode == "enumerate":
-            if not self.libs:
-                raise ValueError("model enumerate requires 'libs'")
-            # Enumerate lists every model in 'libs' unfiltered. Accepting a
-            # 'query' here would echo the caller's filter back on a response
-            # that never applied it — reject instead of silently ignoring.
-            if self.query is not None:
-                raise ValueError("model enumerate does not filter; use mode 'search' with 'query'")
+        if self.mode == "enumerate" and not self.libs:
+            raise ValueError("model enumerate requires 'libs'")
+        return self
+
+
+class ResultsQuery(OptionalRawSelectionFields):
+    """RAW inventory or detached log facts with snapshot-bound pages."""
+
+    kind: Literal["results"]
+    view: Literal["plots", "signals", "table", "measurements", "native_tables"] = "plots"
+    path: str | None = Field(
+        default=None,
+        description="RAW path for plots/signals/table, log path for measurements/native_tables; pass this or job_id.",
+    )
+    job_id: str | None = None
+    run_index: int = Field(default=0, strict=True, ge=0)
+    case_id: str | None = None
+    prefix: str | None = Field(
+        default=None,
+        description="Literal signal, measurement or native quantity prefix; omitted lists all.",
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+    limit: int = Field(default=100, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _source(self) -> ResultsQuery:
+        if bool(self.path) == bool(self.job_id):
+            raise ValueError("provide exactly one of path or job_id")
+        if self.path is not None and (self.case_id is not None or self.run_index != 0):
+            raise ValueError("run_index and case_id require job_id")
+        if self.view == "plots" and self.prefix is not None:
+            raise ValueError("prefix does not apply to plot inventory")
+        if self.view in ("measurements", "native_tables") and self.plot_index is not None:
+            raise ValueError("log views do not select a RAW plot")
         return self
 
 
@@ -644,6 +696,19 @@ class ReferenceQuery(StrictModel):
     )
 
 
+class GuideQuery(StrictModel):
+    """Read the guide: its core and index, or one topic section or task playbook."""
+
+    kind: Literal["guide"]
+    section: str | None = Field(
+        default=None,
+        description=(
+            "A name from the core's index ('ltspice', 'bench-craft'). "
+            "Omit it for the core and the index."
+        ),
+    )
+
+
 Query: TypeAlias = Annotated[
     CapabilitiesQuery
     | SymbolsQuery
@@ -652,7 +717,9 @@ Query: TypeAlias = Annotated[
     | ComponentsQuery
     | HierarchyQuery
     | ModelQuery
-    | ReferenceQuery,
+    | ResultsQuery
+    | ReferenceQuery
+    | GuideQuery,
     Field(discriminator="kind"),
 ]
 
@@ -713,7 +780,12 @@ class InspectInput(ToolInput):
 # ---------------------------------------------------------------------------
 
 
-def _binding(kind: str, identity: dict[str, Any], sources: Sequence[Path]) -> str:
+def _binding(
+    kind: str,
+    identity: dict[str, Any],
+    sources: Sequence[Path],
+    revision: str | None = None,
+) -> str:
     """The cursor's view binding: the paginated ``kind``, this query's identity,
     and the revision of every file the rows were derived from.
 
@@ -728,12 +800,16 @@ def _binding(kind: str, identity: dict[str, Any], sources: Sequence[Path]) -> st
 
     ``sources`` is required rather than opt-in so a new file-backed kind cannot
     forget it; a kind that pages something the server does not read off named
-    files passes ``()`` on purpose. Stat granularity bounds the guarantee: a
-    rewrite of identical size within one filesystem clock tick still reads as
+    files passes ``()`` on purpose. ``revision`` stands in for the stamps of a
+    file set too large to stat on the event loop: a digest of them, taken off
+    the loop where the files were read. Stat granularity bounds the guarantee:
+    a rewrite of identical size within one filesystem clock tick still reads as
     unchanged.
     """
     bound = dict(identity)
-    if sources:
+    if revision is not None:
+        bound["sources"] = revision
+    elif sources:
         bound["sources"] = [[str(path), _file_stamp(path)] for path in sources]
     return f"{kind}:{canonical_hash(bound)}"
 
@@ -752,15 +828,17 @@ def _invalid_cursor(exc: PageCursorError) -> _QueryError:
 
 
 def _paginate(
-    items: list[Any],
+    items: Sequence[Any],
     kind: str,
     identity: dict[str, Any],
     cursor: str | None,
     sources: Sequence[Path],
     view: _View,
+    revision: str | None = None,
 ) -> dict[str, Any]:
     """Page ``items`` through the shared paginator, bound to this query's identity
-    and to the revision of the ``sources`` the rows came from.
+    and to the revision of the ``sources`` the rows came from (or ``revision``,
+    see ``_binding``).
 
     The limit comes from ``view``, so a budget that shrinks the page shrinks it
     HERE — before the cursor is minted — and the token the caller gets back
@@ -768,7 +846,7 @@ def _paginate(
     """
     try:
         return paginate_view(
-            items, _binding(kind, identity, sources), cursor=cursor, limit=view.limit
+            items, _binding(kind, identity, sources, revision), cursor=cursor, limit=view.limit
         )
     except PageCursorError as exc:
         raise _invalid_cursor(exc) from exc
@@ -895,35 +973,35 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _reported_version(
-    state: SessionState,
-    executable: SimulatorExecutable | None,
-) -> tuple[str, dict[str, str]] | None:
-    """The build the latest run on this same executable reported, and which run.
+def _build_facts(
+    state: SessionState, cls: type, executable: SimulatorExecutable | None
+) -> dict[str, Any]:
+    """What one simulator class runs: its last reported build, its dialect, and
+    the program it launches."""
+    reported = services.reported_version(state, executable)
+    info: dict[str, Any] = {
+        # What a run on this same executable said about itself; nothing
+        # is launched to ask. Null until one has run.
+        "version": reported[0] if reported else None,
+        "version_source": reported[1] if reported else None,
+        "dialect": dialect_for_simulator_name(cls.__name__),
+    }
+    if executable is not None:
+        # The simulator itself, not its launcher: under Wine the command
+        # starts with "wine".
+        info["executable"] = executable.path
+        info["executable_sha256"] = executable.sha256
+    return info
 
-    Read from the jobs this session holds, its own and the recent ones loaded
-    at startup, so it is a run's own output rather than a probe: asking the
-    executable would launch the simulator. None until a run on this build has
-    finished and named itself.
-    """
-    if executable is None:
-        return None
-    latest = max(
-        (
-            (case.completed_at or job.started_at, job, case)
-            for job in state.all_jobs.values()
-            if same_executable(job.simulator_executable, executable)
-            for case in job.cases
-            if case.simulator_version
-        ),
-        key=lambda run: run[0],
-        default=None,
-    )
-    if latest is None:
-        return None
-    _, job, case = latest
-    assert case.simulator_version is not None
-    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
+
+def _selection_facts(cls: type) -> dict[str, Any]:
+    """Whether run_experiments' execution.simulator may name this simulator:
+    being detected is not enough when this host cannot run its family at all,
+    and then ``refusal`` says why."""
+    refusal = family_refusal(simulator_family(cls))
+    if refusal is None:
+        return {"selectable": True}
+    return {"selectable": False, "refusal": refusal}
 
 
 def _do_capabilities(
@@ -931,28 +1009,17 @@ def _do_capabilities(
     raster: RasterSupport,
     executables: Mapping[str, SimulatorExecutable | None],
 ) -> dict[str, Any]:
-    """The capabilities report. ``raster`` and ``executables`` (each available
-    simulator's ``executable_identity``) are computed off the loop by the
-    caller."""
+    """The capabilities report. ``raster`` and ``executables`` (the
+    ``executable_identity`` of each available simulator and named executable,
+    by family name or selector) are computed off the loop by the caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
-        executable = executables.get(name)
-        reported = _reported_version(state, executable)
-        info: dict[str, Any] = {
+        simulators[name] = {
             "available": True,
+            **_selection_facts(cls),
             "default": cls is state.default_simulator,
-            # What a run on this same executable said about itself; nothing
-            # is launched to ask. Null until one has run.
-            "version": reported[0] if reported else None,
-            "version_source": reported[1] if reported else None,
-            "dialect": dialect_for_simulator_name(cls.__name__),
+            **_build_facts(state, cls, executables.get(name)),
         }
-        if executable is not None:
-            # The simulator itself, not its launcher: under Wine the command
-            # starts with "wine".
-            info["executable"] = executable.path
-            info["executable_sha256"] = executable.sha256
-        simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that
     # would turn it on — the config self-diagnosis surface. Detection runs at
     # startup, so a fix always ends in a server restart; the remediation says
@@ -961,13 +1028,30 @@ def _do_capabilities(
         if name not in simulators:
             simulators[name] = {
                 "available": False,
+                "selectable": False,
                 "remediation": simulator_remediation(name, state.config),
             }
+            refusal = family_refusal(name)
+            if refusal is not None:
+                simulators[name]["refusal"] = refusal
+
+    # The other builds a run can be put on, by the selector that names one in
+    # execution.simulator. A configured executable that could not be bound is
+    # not here; the diagnostics below say why.
+    named_executables = {
+        selector: {
+            "family": selector.partition(":")[0],
+            **_selection_facts(cls),
+            **_build_facts(state, cls, executables.get(selector)),
+        }
+        for selector, cls in sorted(state.named_simulators.items())
+    }
 
     return {
         "config_path": str(state.config.config_path),
         "python": _python_runtime_facts(),
         "simulators": simulators,
+        "named_executables": named_executables,
         "default_simulator": (
             state.default_simulator.__name__ if state.default_simulator else None
         ),
@@ -1244,7 +1328,7 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     raise _QueryError(
         "unsupported_file",
         f"'{suffix}' is not a circuit file; {query} queries take a .asc "
-        "schematic or a .cir / .net / .sp netlist",
+        f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
     )
 
 
@@ -1371,14 +1455,13 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
 
 
 def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
+    """The trace a schematic ``at`` names. A bare name is a net label, as
+    ``net:NAME`` spells it and as a netlist reads the same bare node name."""
     if isinstance(at, list):
         return TraceNetInput(path=path, x=at[0], y=at[1])
     if at.startswith("net:") or "." in at:
         return TraceNetInput(path=path, pin=at)
-    raise _QueryError(
-        "invalid_at",
-        "'at' on a schematic must be 'REF.PIN', 'net:NAME', or [x, y]",
-    )
+    return TraceNetInput(path=path, pin=f"net:{at}")
 
 
 # ---------------------------------------------------------------------------
@@ -1536,44 +1619,39 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
 # ---------------------------------------------------------------------------
 
 
-def _model_entry(entry: Any) -> dict[str, Any]:
-    return {
-        "name": entry.name,
-        "type": entry.model_type,
-        "source_path": str(entry.source_path),
-        "ports": list(entry.ports),
-        "params": dict(entry.params),
-    }
-
-
 def _enumerate_libs(lib_paths: list[Path]) -> list[dict[str, Any]]:
     """Every model/subcircuit defined across the given library files (immutable parse)."""
-    rows: list[dict[str, Any]] = []
-    for lib in lib_paths:
-        index = parse_library_file_cached(lib)
-        for entry in index.models:
-            rows.append(_model_entry(entry))
+    rows = [
+        model_row(entry) for lib in lib_paths for entry in parse_library_file_cached(lib).models
+    ]
     rows.sort(key=lambda r: (r["name"].lower(), r["source_path"]))
     return rows
 
 
-def _search_libs(lib_paths: list[Path], query: str, cutoff: float = 0.6) -> list[dict[str, Any]]:
-    """Fuzzy-match ``query`` against the models defined in the given library files."""
-    query_lower = query.lower()
-    scored: list[tuple[float, dict[str, Any]]] = []
-    seen: set[str] = set()
-    for lib in lib_paths:
-        index = parse_library_file_cached(lib)
-        for entry in index.models:
-            score = part_aware_score(query_lower, entry.name_lower)
-            if score < cutoff or entry.name_lower in seen:
-                continue
-            seen.add(entry.name_lower)
-            row = _model_entry(entry)
-            row["score"] = round(score, 3)
-            scored.append((score, row))
-    scored.sort(key=lambda pair: (-pair[0], pair[1]["name"].lower()))
-    return [row for _, row in scored]
+def _search_libs(lib_paths: list[Path], query: str) -> list[dict[str, Any]]:
+    """Fuzzy-match ``query`` against the models defined in the given library files.
+
+    The ranking and the row are the ones a search of the simulator's own
+    libraries returns, so the two routes differ only in which files they read.
+    """
+    return rank_models((parse_library_file_cached(lib) for lib in lib_paths), query)
+
+
+def _search_simulator_libraries(libraries: LibraryManager, query: str) -> tuple[list[dict], str]:
+    """Fuzzy-match ``query`` across the detected simulators' own libraries.
+
+    Returns the rows and a digest of the revisions of the files searched,
+    hashed here in the worker because a full install is thousands of files.
+    """
+    rows, revisions = libraries.search(query)
+    return rows, canonical_hash(revisions)
+
+
+async def _admit_libs(libs: list[str], state: SessionState) -> list[Path]:
+    """Resolve the named library files through ``safe_library_path``, off the
+    loop: a path outside the sandbox is checked against the simulators'
+    library directories, which may sit on a slow WSL mount."""
+    return await asyncio.to_thread(lambda: [safe_library_path(lib, state) for lib in libs])
 
 
 async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -1581,35 +1659,45 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
     # revision: an edited library must reject a stale token, not page into the
     # re-parsed list at the old offset.
     sources: list[Path] = []
+    revision: str | None = None
     if q.mode == "enumerate":
-        sources = [safe_path(lib, state) for lib in (q.libs or [])]
+        sources = await _admit_libs(q.libs or [], state)
         try:
             rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
-        identity: dict[str, Any] = {"mode": "enumerate", "libs": [str(p) for p in sources]}
+        if q.query:
+            # A listing narrowed by name, case-insensitively: the filter the
+            # response echoes is the one applied, unlike search's fuzzy score.
+            needle = q.query.casefold()
+            rows = [row for row in rows if needle in row["name"].casefold()]
+        identity: dict[str, Any] = {
+            "mode": "enumerate",
+            "libs": [str(p) for p in sources],
+            "query": q.query,
+        }
     else:
         assert q.query is not None  # guaranteed by the model validator
+        identity = {"mode": "search", "query": q.query, "libs": q.libs}
         if q.libs:
-            sources = [safe_path(lib, state) for lib in q.libs]
+            sources = await _admit_libs(q.libs, state)
             try:
                 rows = await asyncio.to_thread(_search_libs, sources, q.query)
             except OSError as exc:
                 raise _QueryError("read_error", str(exc)) from exc
         else:
-            # No libs given: fall back to the session's loaded libraries (loop-owned
-            # mutable state — read inline, never offloaded). Those rows come from
-            # the session's own load/unload state and the stock library tree, not
-            # from files this query names, so there is nothing to stamp.
+            # No libs given: search the detected simulators' own libraries,
+            # the directories _admit_libs accepts, so every source_path in the
+            # rows reads back through 'libs'. Offloaded because the first search
+            # parses the whole install.
             try:
-                rows = state.libraries.find_similar_models(
-                    q.query, exact=False, limit=10_000, cutoff=0.6
+                rows, revision = await asyncio.to_thread(
+                    _search_simulator_libraries, state.libraries, q.query
                 )
             except Exception as exc:
                 raise _QueryError("search_error", str(exc)) from exc
-        identity = {"mode": "search", "query": q.query, "libs": q.libs}
 
-    page = _paginate(rows, "model", identity, q.cursor, sources, view)
+    page = _paginate(rows, "model", identity, q.cursor, sources, view, revision)
     return {
         "data": {
             "mode": q.mode,
@@ -1671,7 +1759,7 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
     if not matches:
         data["hint"] = (
             f"Nothing matched {q.query!r}. Call inspect(kind='reference') with no "
-            "query for the whole vocabulary, or read spice://guide."
+            "query for the whole vocabulary, or read the guide: inspect(kind='guide')."
         )
     elif total > len(matches):
         # Name the lever that is actually free. Under a response budget the
@@ -1688,6 +1776,26 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
             lever = f"'limit' is already at its cap of {REFERENCE_LIMIT_CAP}; narrow the query."
         data["hint"] = f"{total} branches matched; the {len(matches)} closest are shown. {lever}"
     return {"data": data}
+
+
+# ---------------------------------------------------------------------------
+# guide
+# ---------------------------------------------------------------------------
+
+
+def _do_guide(q: GuideQuery, state: SessionState) -> dict[str, Any]:
+    """Serve the guide's core and index, or one section.
+
+    The text is packaged and read once per process (``lib/guide.py``), so
+    nothing is offloaded. A read here is what the session's read-the-guide
+    reminder waits for, whichever section it names.
+    """
+    try:
+        text = guide.read(q.section)
+    except guide.UnknownGuideSection as exc:
+        raise _QueryError("unknown_section", str(exc), supported=list(exc.known)) from exc
+    state.guide_read = True
+    return {"data": {"section": q.section, "title": guide.title_of(q.section), "text": text}}
 
 
 # ---------------------------------------------------------------------------
@@ -1742,13 +1850,239 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     }
 
 
+class _TableRows(Sequence[dict[str, Any]]):
+    """Index resident native quantities; materialize only the requested page."""
+
+    def __init__(self, raw: DecodedRaw, traces: Sequence[TraceDescriptor]) -> None:
+        self._blocks: list[tuple[int, TraceDescriptor, NDArray]] = []
+        self._ends: list[int] = []
+        total = 0
+        for step in raw.get_steps():
+            for trace in traces:
+                wave = raw.get_wave(trace.name, step=step)
+                if len(wave):
+                    total += len(wave)
+                    self._blocks.append((step, trace, wave))
+                    self._ends.append(total)
+
+    def __len__(self) -> int:
+        return self._ends[-1] if self._ends else 0
+
+    @overload
+    def __getitem__(self, index: int) -> dict[str, Any]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[dict[str, Any]]: ...
+
+    def __getitem__(self, index: int | slice) -> dict[str, Any] | list[dict[str, Any]]:
+        if isinstance(index, slice):
+            return [self[row] for row in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        block = bisect_right(self._ends, index)
+        step, trace, wave = self._blocks[block]
+        sample_index = index - (self._ends[block - 1] if block else 0)
+        sample = wave[sample_index]
+        number = (
+            {"real": float(sample.real), "imag": float(sample.imag)}
+            if wave.dtype.kind == "c"
+            else float(sample)
+        )
+        return {
+            "signal": trace.name,
+            "step_index": step,
+            "sample_index": sample_index,
+            "value": number,
+            "unit": trace.unit,
+        }
+
+
+class _LogRows(Sequence[dict[str, Any]]):
+    """Page detached measurements or physical native print blocks lazily."""
+
+    def __init__(self, facts: Any, view: str, prefix: str | None) -> None:
+        self._view = view
+        self._blocks: list[tuple[dict[str, Any], list[Any]]] = []
+        self._ends: list[int] = []
+        if view == "measurements":
+            for name, entry in (facts or {}).get("measurements", {}).items():
+                if prefix is None or matches_prefix(name, prefix):
+                    self._append({"measurement": name, **entry}, entry["values"])
+        else:
+            for block in facts or []:
+                if block["layout"] == "scalar_print":
+                    entries = [
+                        entry
+                        for entry in block["entries"]
+                        if prefix is None or matches_prefix(entry["label"], prefix)
+                    ]
+                    self._append(
+                        {key: value for key, value in block.items() if key != "entries"}, entries
+                    )
+                elif prefix is None or matches_prefix(block["column"]["label"], prefix):
+                    self._append(
+                        {key: value for key, value in block.items() if key != "rows"},
+                        block["rows"],
+                    )
+
+    def _append(self, metadata: dict[str, Any], rows: list[Any]) -> None:
+        if rows:
+            self._blocks.append((metadata, rows))
+            self._ends.append((self._ends[-1] if self._ends else 0) + len(rows))
+
+    def __len__(self) -> int:
+        return self._ends[-1] if self._ends else 0
+
+    @overload
+    def __getitem__(self, index: int) -> dict[str, Any]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[dict[str, Any]]: ...
+
+    def __getitem__(self, index: int | slice) -> dict[str, Any] | list[dict[str, Any]]:
+        if isinstance(index, slice):
+            return [self[row] for row in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        block = bisect_right(self._ends, index)
+        metadata, rows = self._blocks[block]
+        ordinal = index - (self._ends[block - 1] if block else 0)
+        if self._view == "measurements":
+            row = {
+                "measurement": metadata["measurement"],
+                "value_index": ordinal,
+                "value": rows[ordinal],
+            }
+            for key in ("range_from", "range_to", "at"):
+                value = metadata.get(key)
+                row[key] = value[ordinal] if isinstance(value, list) else value
+            return row
+        key = "entry" if metadata["layout"] == "scalar_print" else "row"
+        return {**metadata, key: rows[ordinal]}
+
+
+async def _log_results_page(
+    query: ResultsQuery, source: services.AnalysisSource, state: SessionState, view: _View
+) -> dict[str, Any]:
+    artifacts = await services.load_artifacts(source, state, require_raw=False)
+    logs = artifacts.logs
+    section_name = "measurements" if query.view == "measurements" else "native_tables"
+    section = logs.section(section_name)
+    facts = logs.value(section_name)
+    rows = _LogRows(facts, query.view, _check_prefix(query.prefix))
+    identity = {
+        **query.model_dump(exclude={"cursor", "limit"}),
+        "snapshot_id": artifacts.snapshot_id,
+    }
+    page = _paginate(
+        rows,
+        "results",
+        identity,
+        query.cursor,
+        (),
+        _View(limit=min(query.limit, view.limit), lean=view.lean, shrunk=view.shrunk),
+    )
+    data = {
+        "snapshot_id": artifacts.snapshot_id,
+        "capture_facts": logs.capture_facts,
+        "scan": logs.scan,
+        "section": {key: value for key, value in section.items() if key != "value"},
+        query.view: page["items"],
+    }
+    if query.view == "measurements" and facts is not None:
+        data.update({key: value for key, value in facts.items() if key != "measurements"})
+    metadata = _page_meta(page, "results")
+    metadata["collections"] = {query.view: dict(metadata)}
+    return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
+
+
+async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -> dict[str, Any]:
+    log_view = query.view in ("measurements", "native_tables")
+    if query.path is not None:
+        source = services.resolve_analysis_source(
+            state,
+            raw_file=None if log_view else query.path,
+            log_file=query.path if log_view else None,
+            plot_index=query.plot_index or 0,
+            dialect=query.dialect,
+        )
+    else:
+        assert query.job_id is not None
+        job = await services.resolve_job_async(query.job_id, state)
+        run = services.experiment_run_context(
+            job, state, run_index=query.run_index, case_id=query.case_id, require_raw=not log_view
+        )
+        source = services.source_for_run(
+            run, plot_index=query.plot_index or 0, dialect=query.dialect
+        )
+    if log_view:
+        return await _log_results_page(query, source, state, view)
+    raw = await services.load_raw(source, state)
+    descriptor = raw.descriptor
+    prefix = _check_prefix(query.prefix)
+    traces = [
+        trace
+        for trace in descriptor.traces
+        if prefix is None or matches_prefix(trace.name, prefix)
+    ]
+    rows: Sequence[dict[str, Any]]
+    if query.view == "plots":
+        rows = [asdict(plot.descriptor) for plot in raw.plots]
+    elif query.view == "signals":
+        rows = [
+            {
+                **asdict(trace),
+                "axis": descriptor.axis is not None and trace.name == descriptor.axis.name,
+            }
+            for trace in traces
+        ]
+    else:
+        if descriptor.axis is not None:
+            raise _QueryError("no_table", "table view requires a plot with no sampled axis")
+
+        rows = await asyncio.to_thread(_TableRows, raw, traces)
+    identity = {
+        **query.model_dump(exclude={"cursor", "limit"}),
+        "snapshot_id": descriptor.snapshot_id,
+        "resolved_dialect": descriptor.dialect,
+    }
+    page = _paginate(
+        rows,
+        "results",
+        identity,
+        query.cursor,
+        (),
+        _View(limit=min(query.limit, view.limit), lean=view.lean, shrunk=view.shrunk),
+    )
+    data = {
+        "snapshot_id": descriptor.snapshot_id,
+        "plot_index": raw.plot_index,
+        "dialect": descriptor.dialect,
+        "analysis": descriptor.analysis,
+        "axis": asdict(descriptor.axis) if descriptor.axis else None,
+        query.view: page["items"],
+    }
+    metadata = _page_meta(page, "results")
+    metadata["collections"] = {query.view: dict(metadata)}
+    return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
+
+
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
+    if isinstance(query, ResultsQuery):
+        return await _results_page(query, state, view)
     if isinstance(query, CapabilitiesQuery):
         wanted = set(query.fields) if query.fields is not None else None
-        # Executables are identified only for a report that shows them.
-        simulators = (
-            dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
-        )
+        # Executables are identified only for a report that shows them. A
+        # selector carries a ':' and a family name never does, so the two
+        # tables share one mapping.
+        simulators = {
+            **(state.available_simulators if wanted is None or "simulators" in wanted else {}),
+            **(state.named_simulators if wanted is None or "named_executables" in wanted else {}),
+        }
 
         def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
             # Off the loop: the first successful raster probe loads the native
@@ -1774,6 +2108,8 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return await asyncio.to_thread(_hierarchy_page, query, state, view)
     if isinstance(query, ReferenceQuery):
         return _do_reference(query, view, frozenset(state.tool_dispatch))
+    if isinstance(query, GuideQuery):
+        return _do_guide(query, state)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -1832,7 +2168,7 @@ _REFERENCE_BRANCH_SCHEMA: dict[str, Any] = {
 
 _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     # Echoed by the 'reference' and 'model' kinds alike, and null on a 'model'
-    # enumerate, which asks for everything rather than for a match.
+    # enumerate that lists everything rather than the names containing it.
     "query": {"type": ["string", "null"]},
     "matches": {
         "type": "array",
@@ -1867,6 +2203,17 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     },
 }
 
+#: The ``guide`` kind's payload: the text itself, and which part of the guide
+#: it is. Result queries also return ``section``, as log-section metadata.
+_GUIDE_DATA_PROPERTIES: dict[str, Any] = {
+    "section": {
+        "type": ["string", "null"],
+        "description": "The section read; null for the core and its index.",
+    },
+    "title": {"type": "string"},
+    "text": {"type": "string", "description": "Markdown."},
+}
+
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -1888,11 +2235,32 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "ok": {"type": "boolean"},
                     "error": _ERROR_SCHEMA,
                     # Kind-specific payload; its shape is documented per kind in
-                    # the module docstring and stays open here by design. The
-                    # reference lookup's two collections are named because
-                    # nothing else on this tool returns them, so declaring them
-                    # constrains that kind without constraining any other.
-                    "data": {"type": "object", "properties": _REFERENCE_DATA_PROPERTIES},
+                    # the module docstring and stays open here by design.
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            **_REFERENCE_DATA_PROPERTIES,
+                            **_GUIDE_DATA_PROPERTIES,
+                            "plot_index": {"type": "integer", "minimum": 0},
+                            "snapshot_id": {"type": "string"},
+                            "dialect": {"type": "string"},
+                            "analysis": {"type": "string"},
+                            "axis": {"type": ["object", "null"]},
+                            "plots": {"type": "array", "items": {"type": "object"}},
+                            "signals": {"type": "array", "items": {"type": "object"}},
+                            "table": {"type": "array", "items": {"type": "object"}},
+                            "measurements": {"type": "array", "items": {"type": "object"}},
+                            "native_tables": {"type": "array", "items": {"type": "object"}},
+                            "capture_facts": {"type": "object"},
+                            "scan": {"type": "object"},
+                            "section": {
+                                "anyOf": [
+                                    _GUIDE_DATA_PROPERTIES["section"],
+                                    {"type": "object"},
+                                ]
+                            },
+                        },
+                    },
                     "next_cursor": {"type": ["string", "null"]},
                     "page": {
                         "type": "object",
@@ -1969,9 +2337,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'hierarchy', 'model', 'reference' — each with its own arguments, described "
-    "on its branch of the query schema. 'reference' searches every tool's "
-    "recipes, ops, checks and their fields in plain words ('phase margin'). A "
+    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide' — each with its own arguments, "
+    "described on its branch of the query schema. 'reference' searches every tool's "
+    "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
+    "returns the guide's core, or one 'section' its index names. A "
     "denied path, a stale cursor, an unknown kind, or a malformed query fails "
     "only that item; every other query still returns, and paginated kinds resume "
     "via 'cursor'. It is the only tool on this surface that never writes."
@@ -2094,17 +2463,15 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
                     item.pop(key, None)
 
 
-#: This tool's budget epilogue. The hint mirror is why it is a value: the note's
-#: detail is written twice under a hint key, and the reserve has to know that.
-#: Structured-aware clients render only structuredContent, and 'hint' is where
-#: this tool puts guidance, so the mirror is not optional.
+#: This tool's budget epilogue, on ``observations``. Its trim rung drops only
+#: an exhausted item's page metadata, which the rows it returned restate, so the
+#: server's default budget never has anything to report here.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no query was dropped and no error was hidden.",
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on "
         "with each item's next_cursor."
     ),
-    hint_key="hint",
 )
 
 
@@ -2156,9 +2523,7 @@ async def _negotiate_inspect(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)

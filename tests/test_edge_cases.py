@@ -645,23 +645,13 @@ class TestValueRecipeRejectsNaNInf:
 
     @pytest.mark.parametrize("spelling", ["nan", "inf"])
     async def test_non_finite_at_rejected(self, state_no_sim, work_dir, spelling):
-        import numpy as np
-
         from ltspice_mcp.errors import ResultError
         from ltspice_mcp.lib.metrics import value
         from ltspice_mcp.lib.recipes import ValueRecipe
+        from tests.conftest import stage_recorded_fixture
         from tests.test_analysis_tools import _source
 
-        raw_file = work_dir / "x.raw"
-        raw_file.write_bytes(b"placeholder")
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [0]
-        axis = np.array([0.0, 1.0, 2.0])
-        raw.get_axis.return_value = axis
-        raw.get_wave = lambda n, step=0: axis
-        state_no_sim.results.set(raw_file, raw)
+        raw_file = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
 
         with pytest.raises(ResultError, match="finite"):
             await value(
@@ -678,15 +668,17 @@ class TestValueRecipeRejectsNaNInf:
 
 
 class TestPageLimitFloor:
-    def test_the_page_cap_is_the_input_model_s_bound(self):
-        # The cap moved from the paginator to the field that takes the number:
-        # a limit out of range is refused at validation, not clamped after it.
+    def test_the_page_floor_is_the_input_model_s_bound(self):
+        # Below one names no page and is refused at validation; above the cap
+        # is a larger page of the same listing, held to the cap by the handler
+        # (test_jobs_tool's list cap test pins that).
         from pydantic import ValidationError
 
         from ltspice_mcp.tools.jobs import JobsInput
 
         with pytest.raises(ValidationError):
-            JobsInput.model_validate({"action": "list", "limit": 999})
+            JobsInput.model_validate({"action": "list", "limit": 0})
+        JobsInput.model_validate({"action": "list", "limit": 999})
 
 
 # ---------------------------------------------------------------------------

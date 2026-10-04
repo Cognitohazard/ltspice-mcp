@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import sys
 import typing
 from dataclasses import asdict
 from pathlib import Path
@@ -24,12 +26,13 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import raster
+from ltspice_mcp.lib import raster, wsl
+from ltspice_mcp.lib.deck_staging import stage_deck
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import needs_raster, symlink_or_skip
+from tests.conftest import installed_simulator, needs_raster, symlink_or_skip
 
 
 class FakeLT:
@@ -273,7 +276,14 @@ async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: S
         assert remediation["config_key"] == "simulator.path"
         assert remediation["env_var"] == SIM_PATH_ENV
         assert remediation["config_file"] == data["config_path"]
-        assert "restart" in remediation["action"], f"{name}: fix must end in a restart"
+        if "refusal" in info:
+            # A family this host cannot run (QSPICE off Windows) has no fix to
+            # restart into; the action says so instead of sending the caller
+            # to install it.
+            assert info["refusal"] in remediation["action"], name
+            assert "restart" not in remediation["action"], name
+        else:
+            assert "restart" in remediation["action"], f"{name}: fix must end in a restart"
         assert remediation["excluded_by_allowlist"] is False
 
 
@@ -333,6 +343,25 @@ async def test_net_asc_geometric(asc_file: Path, asc_state: SessionState):
     assert "filtered" in data["labels"]
     assert "start" in data
     assert isinstance(data["pins"], list)
+
+
+async def test_net_asc_takes_a_bare_label_name_as_a_netlist_does(
+    asc_file: Path, asc_state: SessionState
+):
+    """A bare ``at: "filtered"`` was refused on a schematic while a netlist read
+    the same bare name as a node; it now names the net label, as ``net:`` does."""
+    bare, spelled = await _run(
+        asc_state,
+        [
+            {"kind": "net", "path": str(asc_file), "at": "filtered"},
+            {"kind": "net", "path": str(asc_file), "at": "net:filtered"},
+        ],
+    )
+    assert bare["ok"] is True, bare
+    assert bare["data"] == spelled["data"]
+    (missing,) = await _run(asc_state, [{"kind": "net", "path": str(asc_file), "at": "nosuch"}])
+    assert missing["ok"] is False
+    assert "nosuch" in missing["error"]["message"]
 
 
 async def test_net_netlist_has_no_geometry_keys(netlist: Path, state_no_sim: SessionState):
@@ -460,9 +489,21 @@ async def test_net_netlist_coordinates_rejected(netlist: Path, state_no_sim: Ses
 # ---------------------------------------------------------------------------
 
 
-async def test_components_list_netlist(netlist: Path, state_no_sim: SessionState):
-    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(netlist)}])
-    assert res["ok"] is True
+@pytest.mark.parametrize(
+    "spelling",
+    ["amp.cir", "sub/../amp.cir", "amp.spice"],
+    ids=["path", "parent-segment", "spice-suffix"],
+)
+async def test_components_list_netlist(
+    netlist: Path, state_no_sim: SessionState, work_dir: Path, spelling: str
+):
+    """A path is judged by where it lands (``sub/../amp.cir`` is the deck
+    itself), and ``.spice`` is what xschem and the sky130 testbenches write."""
+    await asyncio.to_thread((work_dir / "sub").mkdir)
+    spice = work_dir / "amp.spice"
+    await asyncio.to_thread(spice.write_bytes, await asyncio.to_thread(netlist.read_bytes))
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": spelling}])
+    assert res["ok"] is True, res
     data = res["data"]
     assert data["detail"] == "list"
     refs = [c["reference"] for c in data["components"]]
@@ -646,6 +687,169 @@ async def test_model_search_with_libs(libfile: Path, state_no_sim: SessionState)
     assert res["data"]["results"][0]["name"] == "MyNPN"
 
 
+@pytest.fixture
+def simulator_library(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A detected simulator's own model library, outside the sandbox root."""
+    lib = tmp_path_factory.mktemp("simulator_install") / "lib"
+    (lib / "cmp").mkdir(parents=True)
+    (lib / "cmp" / "standard.bjt").write_text(
+        ".model 2N3904 NPN(BF=300)\n.model 2N3906 PNP(BF=200)\n"
+    )
+    (lib / "sub").mkdir()
+    (lib / "sub" / "LT1001.sub").write_text(".subckt LT1001 in out\nR1 in out 1k\n.ends\n")
+    # Not a library file, so a search never reads it.
+    (lib / "sub" / "readme.txt").write_text(".model 2N3905 NPN(BF=1)\n")
+    return lib
+
+
+@pytest.fixture
+def library_state(config: ServerConfig, simulator_library: Path) -> SessionState:
+    """A session whose detected LTspice reports ``simulator_library`` as its own
+    library."""
+    installed = installed_simulator(simulator_library, base=FakeLT)
+    return SessionState.create(config, available={"ltspice": installed})
+
+
+async def test_model_enumerate_reads_the_simulators_own_library(
+    simulator_library: Path, library_state: SessionState
+):
+    """Staging, the include resolver and the hierarchy reader all read the
+    detected simulator's library under a default sandbox; a model lookup into
+    it must not be the one read that is refused."""
+    shipped = simulator_library / "cmp" / "standard.bjt"
+    (res,) = await _run(
+        library_state, [{"kind": "model", "mode": "enumerate", "libs": [str(shipped)]}]
+    )
+    assert res["ok"] is True, res
+    assert {r["name"] for r in res["data"]["results"]} == {"2N3904", "2N3906"}
+
+
+async def test_model_libs_outside_the_sandbox_and_the_simulator_library_denied(
+    library_state: SessionState, tmp_path_factory: pytest.TempPathFactory
+):
+    stray = tmp_path_factory.mktemp("elsewhere") / "parts.lib"
+    await asyncio.to_thread(stray.write_text, ".model STRAY NPN(BF=1)\n")
+    (res,) = await _run(
+        library_state, [{"kind": "model", "mode": "enumerate", "libs": [str(stray)]}]
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "path_denied"
+
+
+async def test_model_search_without_libs_searches_the_simulators_own_library(
+    simulator_library: Path, library_state: SessionState
+):
+    """With 'libs' omitted the search reads the detected simulator's library,
+    and every file it names can be read back through 'libs'."""
+    (res,) = await _run(library_state, [{"kind": "model", "mode": "search", "query": "2N3905"}])
+    assert res["ok"] is True, res
+    rows = res["data"]["results"]
+    assert [r["name"] for r in rows[:2]] == ["2N3904", "2N3906"]
+    assert {r["name"] for r in rows}.isdisjoint({"LT1001"})
+    source = rows[0]["source_path"]
+    assert Path(source) == (simulator_library / "cmp" / "standard.bjt").resolve()
+
+    (back,) = await _run(library_state, [{"kind": "model", "mode": "enumerate", "libs": [source]}])
+    assert back["ok"] is True, back
+    assert "2N3904" in {r["name"] for r in back["data"]["results"]}
+
+
+async def test_model_rows_have_one_shape_on_every_route(
+    simulator_library: Path, library_state: SessionState
+):
+    """A search naming 'libs', a search of the simulator's own libraries and
+    an enumerate report the same part the same way, so what a caller can do
+    with a row does not depend on how it asked."""
+    shipped = simulator_library / "cmp" / "standard.bjt"
+    results = await _run(
+        library_state,
+        [
+            {"kind": "model", "mode": "search", "query": "2N3904", "libs": [str(shipped)]},
+            {"kind": "model", "mode": "search", "query": "2N3904"},
+            {"kind": "model", "mode": "enumerate", "libs": [str(shipped)]},
+        ],
+    )
+    named, installed, enumerated = (
+        next(row for row in res["data"]["results"] if row["name"] == "2N3904") for res in results
+    )
+    assert named == installed
+    assert {key: value for key, value in named.items() if key != "score"} == enumerated
+    assert enumerated["include_directive"] == f'.include "{shipped.resolve()}"'
+    assert enumerated["usage"] == "Qxxx C B E 2N3904"
+
+
+@pytest.fixture
+def on_wsl(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The environment of a WSL session: detection says WSL, and a wslpath on
+    PATH spells a Linux-side file the way the real one does."""
+    if sys.platform == "win32":
+        pytest.skip("WSL interop runs on the Linux side; native Windows has no wslpath")
+    bin_dir = tmp_path_factory.mktemp("bin")
+    wslpath = bin_dir / "wslpath"
+    wslpath.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "print('\\\\\\\\wsl.localhost\\\\Distro' + sys.argv[-1].replace('/', '\\\\'))\n"
+    )
+    wslpath.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(wsl, "_is_wsl_cached", True)
+
+
+@pytest.mark.usefixtures("on_wsl")
+async def test_model_include_directive_is_staged_on_wsl(
+    simulator_library: Path, library_state: SessionState, work_dir: Path
+):
+    """On WSL the directive names the file as the server sees it, which is
+    what staging reads. A Windows spelling made per row cost a wslpath process
+    each, and for a file on the Linux side came back as a wsl.localhost path
+    that staging cannot map back, so the directive a search handed out named
+    nothing a run could stage."""
+    (res,) = await _run(library_state, [{"kind": "model", "mode": "search", "query": "2N3904"}])
+    assert res["ok"] is True, res
+    directive = res["data"]["results"][0]["include_directive"]
+    deck = work_dir / "tb.cir"
+    await asyncio.to_thread(deck.write_text, f"* tb\nQ1 c b 0 2N3904\n{directive}\n.end\n")
+    library = await asyncio.to_thread(simulator_library.resolve)
+
+    staged = await asyncio.to_thread(
+        stage_deck, deck, work_dir / "staged", [work_dir], origin=deck, simulator_roots=[library]
+    )
+
+    assert library / "cmp" / "standard.bjt" in {included.source for included in staged.includes}
+
+
+async def test_model_search_without_libs_rejects_a_cursor_after_a_library_edit(
+    simulator_library: Path, library_state: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """The rows come out of the simulator's library files, so the cursor binds
+    their revision as it binds the files named in 'libs'."""
+    monkeypatch.setattr(insp, "_PAGE_SIZE", 1)
+    query = {"kind": "model", "mode": "search", "query": "2N3905"}
+    (first,) = await _run(library_state, [query])
+    assert first["ok"] is True, first
+    cursor = first["next_cursor"]
+    assert cursor is not None
+
+    shipped = simulator_library / "cmp" / "standard.bjt"
+    await asyncio.to_thread(
+        shipped.write_text,
+        ".model 2N3903 NPN(BF=250)\n.model 2N3904 NPN(BF=300)\n.model 2N3906 PNP(BF=200)\n",
+    )
+
+    (res,) = await _run(library_state, [{**query, "cursor": cursor}])
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_cursor"
+
+
+async def test_model_search_without_libs_or_a_simulator_finds_nothing(
+    state_no_sim: SessionState,
+):
+    (res,) = await _run(state_no_sim, [{"kind": "model", "mode": "search", "query": "2N3904"}])
+    assert res["ok"] is True, res
+    assert res["data"]["results"] == []
+    assert res["data"]["total"] == 0
+
+
 async def test_model_search_requires_query(state_no_sim: SessionState):
     (res,) = await _run(state_no_sim, [{"kind": "model", "mode": "search"}])
     assert res["ok"] is False
@@ -660,18 +864,27 @@ async def test_model_enumerate_requires_libs(state_no_sim: SessionState):
     assert "libs" in res["error"]["message"]
 
 
-async def test_model_enumerate_rejects_a_query_it_would_ignore(
+async def test_model_enumerate_with_a_query_lists_the_names_containing_it(
     libfile: Path, state_no_sim: SessionState
 ):
-    """Enumerate never filters, so accepting 'query' would echo back a filter
-    that was not applied."""
-    (res,) = await _run(
+    """Enumerate refused a 'query' because it never filtered, so narrowing a
+    listing took a second, fuzzy tool. It now applies the query as a
+    case-insensitive name filter, and echoes the filter it applied."""
+    (everything, narrowed) = await _run(
         state_no_sim,
-        [{"kind": "model", "mode": "enumerate", "libs": [str(libfile)], "query": "MyNPN"}],
+        [
+            {"kind": "model", "mode": "enumerate", "libs": [str(libfile)]},
+            {"kind": "model", "mode": "enumerate", "libs": [str(libfile)], "query": "npn"},
+        ],
     )
-    assert res["ok"] is False
-    assert res["error"]["code"] == "invalid_query"
-    assert "query" in res["error"]["message"]
+    assert narrowed["ok"] is True
+    names = [r["name"] for r in narrowed["data"]["results"]]
+    assert names == [
+        r["name"] for r in everything["data"]["results"] if "npn" in r["name"].lower()
+    ]
+    assert "MyNPN" in names and "myamp" not in names
+    assert narrowed["data"]["query"] == "npn"
+    assert narrowed["data"]["total"] == len(names)
 
 
 async def test_requirement_matrix_isolates(libfile: Path, state_no_sim: SessionState):
@@ -1024,7 +1237,7 @@ async def test_reference_says_so_when_nothing_matches(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "reference", "query": "zzz quuxbar"}])
     data = res["data"]
     assert data["matches"] == [] and data["total_matches"] == 0
-    assert "spice://guide" in data["hint"]
+    assert "inspect(kind='guide')" in data["hint"]
 
 
 async def test_reference_limit_above_the_cap_is_rejected_for_that_item_only(
