@@ -38,9 +38,10 @@ from ltspice_mcp.lib.raw_parser import (
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
-    executable_path,
+    SimulatorExecutable,
     is_cp1252_ltspice_build,
     is_cp1252_ltspice_executable,
+    same_executable,
 )
 from ltspice_mcp.state import SessionState
 
@@ -346,41 +347,55 @@ def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     return state.raw_dialect
 
 
-def cp1252_ltspice(state: SessionState, simulator_class: type | None = None) -> str | None:
-    """The LTspice build this server knows decodes decks as cp1252, or None.
+def reported_version(
+    state: SessionState,
+    executable: SimulatorExecutable | None,
+) -> tuple[str, dict[str, str]] | None:
+    """The build the latest run on this same executable reported, and which run.
 
-    LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
-    (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
-    LTspice 24 and later read the UTF-8 they write. Which one a session drives
-    is known from the executable's own name (``XVIIx64.exe``), or from the
-    build the latest run on that executable named in its output, which is what
-    ``inspect(kind="capabilities")`` reports. Neither launches the simulator.
-
-    ``simulator_class`` defaults to the session's LTspice; any other simulator
-    answers None. The answer names the evidence, for a finding to cite.
+    Read from the jobs this session holds, its own and the recent ones loaded
+    at startup, so it is a run's own output rather than a probe: asking the
+    executable would launch the simulator. None until a run on this build has
+    finished and named itself.
     """
-    ltspice = state.available_simulators.get("ltspice")
-    simulator_class = simulator_class or ltspice
-    if simulator_class is None or simulator_class is not ltspice:
+    if executable is None:
         return None
-    program = executable_path(simulator_class)
-    if program is None:
-        return None
-    if is_cp1252_ltspice_executable(program):
-        return program
     latest = max(
         (
-            (case.completed_at or job.started_at, case.simulator_version)
+            (case.completed_at or job.started_at, job, case)
             for job in state.all_jobs.values()
-            if job.simulator_executable is not None and job.simulator_executable.path == program
+            if same_executable(job.simulator_executable, executable)
             for case in job.cases
             if case.simulator_version
         ),
         key=lambda run: run[0],
         default=None,
     )
-    if latest is not None and is_cp1252_ltspice_build(latest[1]):
-        return f"{latest[1]} ({program})"
+    if latest is None:
+        return None
+    _, job, case = latest
+    assert case.simulator_version is not None
+    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
+
+
+def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
+    """The evidence that ``executable`` is an LTspice that decodes decks as cp1252.
+
+    LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
+    (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
+    LTspice 24 and later read the UTF-8 they write. Which one an executable is
+    shows in its own name (``XVIIx64.exe``), or in the build the latest run on
+    it reported, the one ``inspect(kind="capabilities")`` reports. Neither
+    launches the simulator. Any other simulator answers None. The answer names
+    the evidence, for a finding to cite.
+    """
+    if executable is None:
+        return None
+    if is_cp1252_ltspice_executable(executable.path):
+        return executable.path
+    reported = reported_version(state, executable)
+    if reported is not None and is_cp1252_ltspice_build(reported[0]):
+        return f"{reported[0]} ({executable.path})"
     return None
 
 

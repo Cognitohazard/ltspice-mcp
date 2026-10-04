@@ -880,28 +880,17 @@ def materialize_variants(
         else:
             current = _case_closure(case_closure, _closure_files(case_closure, texts))
             referrers = _include_referrers(current)
-        destinations: dict[Path, Path] = {}
-        text = _write_case_includes(
-            case_closure,
-            referrers,
-            texts,
-            case.case_index,
-            destinations=destinations,
-        )
+        text, written = _write_case_includes(case_closure, referrers, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
-        destinations[circuit.path.resolve()] = path.resolve()
-        file_digests: list[tuple[Path, str]] = []
-        for file in case_closure.files:
-            source = file.path.resolve()
-            destination = destinations.get(source)
-            if destination is None:
-                destination = source
-                digest = captured_digests[source]
-            else:
-                digest = hashlib.sha256(
-                    encode_spice_text(texts[file.index], file.codec)
-                ).hexdigest()
-            file_digests.append((destination, digest))
+        data = encode_spice_text(text, case_closure.files[0].codec)
+        written[circuit.path.resolve()] = (path.resolve(), hashlib.sha256(data).hexdigest())
+        destinations = {source: destination for source, (destination, _) in written.items()}
+        # Each file the case reads, where it reads it, and the digest of those
+        # bytes: its own copy where it wrote one, else the shared staged file.
+        file_digests = [
+            written[source] if source in written else (source, captured_digests[source])
+            for source in (file.path.resolve() for file in case_closure.files)
+        ]
         lineage = tuple(
             SourceLineage(
                 replace(
@@ -914,9 +903,7 @@ def materialize_variants(
             )
             for item in lineage
         )
-        atomic_write_bytes(
-            path, encode_spice_text(text, case_closure.files[0].codec), durable=True
-        )
+        atomic_write_bytes(path, data, durable=True)
         materialized.append(
             MaterializedCase(
                 case_id=case.case_id,
@@ -1832,10 +1819,12 @@ def _write_case_includes(
     referrers: dict[int, set[int]],
     texts: dict[int, str],
     case_index: int,
-    *,
-    destinations: dict[Path, Path] | None = None,
-) -> str:
+) -> tuple[str, dict[Path, tuple[Path, str]]]:
     """Write this case's private copies of the includes it edited.
+
+    Returns the root deck's text, which the caller writes once the copies it
+    names exist, and, for each include copied, its source's resolved path with
+    the copy's path and the digest of the bytes written there.
 
     Isolation is by construction: a case only ever creates new ``case-NNNN__``
     files beside the shared staged originals and never writes to a path any
@@ -1863,8 +1852,7 @@ def _write_case_includes(
         for index in copies
         if index != 0
     }
-    if destinations is not None:
-        destinations.update({path: path.with_name(name) for path, name in renames.items()})
+    written: dict[Path, tuple[Path, str]] = {}
     for index in sorted(copies):
         file = closure.files[index]
         cards = lex(texts[index]).cards
@@ -1873,10 +1861,13 @@ def _write_case_includes(
             texts[index] = emit(cards)
         if index == 0:
             continue
-        destination = file.path.with_name(renames[file.path.resolve()])
+        source = file.path.resolve()
+        destination = source.with_name(renames[source])
         destination.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_bytes(destination, encode_spice_text(texts[index], file.codec), durable=True)
-    return texts[0]
+        data = encode_spice_text(texts[index], file.codec)
+        atomic_write_bytes(destination, data, durable=True)
+        written[source] = (destination, hashlib.sha256(data).hexdigest())
+    return texts[0], written
 
 
 def _spec(rule: RandomRuleBase) -> ToleranceSpec:

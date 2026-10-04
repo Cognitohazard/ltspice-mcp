@@ -93,16 +93,16 @@ def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]:
 _KEPT_CODECS = frozenset({"utf-8", "utf-8-sig", "cp1252"})
 
 
-def rewrite_codec(raw: bytes) -> str:
-    """The codec a rewritten copy of the deck ``raw`` is written in.
+def rewrite_codec(encoding: str) -> str:
+    """The codec a rewritten copy of a deck read as ``encoding`` is written in.
 
-    The codec it was read with, so the characters a rewrite does not touch keep
-    their bytes: a ``§`` in a cp1252 deck stays the one byte A7 LTspice XVII
-    reads, rather than becoming the two UTF-8 bytes it reads as ``Â§``. A UTF-16
-    or UTF-32 deck is rewritten as UTF-8, which spells every character it held
-    and is what every simulator here reads.
+    ``encoding`` is the name ``decode_spice_bytes_with_encoding`` gave. The
+    copy keeps it, so the characters a rewrite does not touch keep their
+    bytes: a ``§`` in a cp1252 deck stays the one byte A7 LTspice XVII reads,
+    rather than becoming the two UTF-8 bytes it reads as ``Â§``. A UTF-16 or
+    UTF-32 deck is rewritten as UTF-8, which spells every character it held and
+    is what every simulator here reads.
     """
-    _, encoding = decode_spice_bytes_with_encoding(raw)
     return encoding if encoding in _KEPT_CODECS else "utf-8"
 
 

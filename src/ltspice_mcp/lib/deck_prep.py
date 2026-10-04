@@ -37,7 +37,12 @@ from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
 from ltspice_mcp.errors import PathSecurityError, SimulationError
-from ltspice_mcp.lib.encoding import decode_spice_bytes, encode_spice_text, rewrite_codec
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes,
+    decode_spice_bytes_with_encoding,
+    encode_spice_text,
+    rewrite_codec,
+)
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.spice_lex import emit, lex
@@ -118,13 +123,10 @@ def _read_export(net_path: Path, *, for_ngspice: bool) -> tuple[str, bytes]:
     data = net_path.read_bytes()
     if not for_ngspice:
         return net_path.stem, data
-    cards = [
-        card
-        for card in lex(decode_spice_bytes(data)).cards
-        if card.body.strip().casefold() != ".backanno"
-    ]
+    text, encoding = decode_spice_bytes_with_encoding(data)
+    cards = [card for card in lex(text).cards if card.body.strip().casefold() != ".backanno"]
     strip_instance_section_signs(cards)
-    return f"{net_path.stem}.ngspice", encode_spice_text(emit(cards), rewrite_codec(data))
+    return f"{net_path.stem}.ngspice", encode_spice_text(emit(cards), rewrite_codec(encoding))
 
 
 async def _export_schematic(

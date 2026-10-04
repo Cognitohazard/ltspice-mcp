@@ -880,7 +880,10 @@ async def _prepare_circuit(
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
             # A micro sign spelled 'u' changes what a value means only to an
             # LTspice that decodes decks as cp1252, so only then is it reported.
-            cp1252_reader=cp1252_ltspice(state, simulator),
+            # The identity is cached per executable, so this is a stat here.
+            cp1252_reader=cp1252_ltspice(
+                state, await asyncio.to_thread(executable_identity, simulator)
+            ),
         )
         findings = (
             []

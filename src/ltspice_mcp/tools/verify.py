@@ -101,9 +101,13 @@ from ltspice_mcp.lib.schematic_scene import (
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
 from ltspice_mcp.lib.services import cp1252_ltspice
-from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
+from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
-from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import (
+    MICRO_SIGN_READERS,
+    ValueSuffixSite,
+    value_suffix_sites,
+)
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
@@ -983,10 +987,6 @@ def _rule_finding(
 #: spell every value of a sheet with the same character.
 _VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_nonascii")
 
-# The codec LTspice XVII and earlier decode a deck as. A micro sign written in
-# it is the one byte B5, which those builds read as micro.
-_CP1252 = "cp1252"
-
 
 def _micro_sign_observation(
     sites: list[ValueSuffixSite],
@@ -995,15 +995,13 @@ def _micro_sign_observation(
     generated_by: str | None,
 ) -> dict[str, Any]:
     """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
-    if encoding.startswith("utf-8"):
-        readers = (
-            "LTspice 24 and later read it as micro. LTspice XVII decodes a deck as "
-            "cp1252 and would read these two bytes as 'Âµ', dropping the scale"
-        )
-    elif encoding == _CP1252:
-        readers = "LTspice XVII, which decodes a deck as cp1252, reads it as micro"
-    else:
-        readers = f"A reader that decodes this file as {encoding} reads it as micro"
+    readers = (
+        # cp1252 spells it as the one byte B5, which LTspice XVII reads as micro.
+        "In cp1252 it is the one byte LTspice XVII reads as micro, and 'u' is micro "
+        "in every encoding and to every simulator."
+        if encoding == "cp1252"
+        else MICRO_SIGN_READERS
+    )
     evidence: dict[str, Any] = {
         "count": len(sites),
         "lines": [site.line for site in sites],
@@ -1011,8 +1009,7 @@ def _micro_sign_observation(
         "encoding": encoding,
         "reason": (
             f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
-            f"{encoding} file. {readers}. 'u' is micro in every encoding and to "
-            "every simulator."
+            f"{encoding} file. {readers}"
         ),
     }
     if generated_by is not None:
@@ -1031,7 +1028,8 @@ def _value_suffix_findings(
     path: Path,
     text: str,
     encoding: str,
-    cp1252_reader: str | None = None,
+    *,
+    cp1252_reader: str | None,
 ) -> list[dict[str, Any]]:
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
@@ -1055,7 +1053,7 @@ def _value_suffix_findings(
     generated_by = deck_generator(text)
     if cp1252_reader is None and generated_by and is_cp1252_ltspice_build(generated_by):
         cp1252_reader = generated_by
-    misread = cp1252_reader is not None and encoding != _CP1252
+    misread = cp1252_reader is not None and encoding != "cp1252"
     findings: list[dict[str, Any]] = []
     micro: list[ValueSuffixSite] = []
     for site in sites:
@@ -1082,7 +1080,7 @@ def _value_suffix_findings(
 
 
 def _syntax_findings(
-    text: str, path: Path, deck: _LexedDeck, encoding: str, cp1252_reader: str | None = None
+    text: str, path: Path, deck: _LexedDeck, encoding: str, *, cp1252_reader: str | None
 ) -> list[dict[str, Any]]:
     """Directive, lex, element-arity and value-suffix findings in a netlist.
 
@@ -1124,7 +1122,9 @@ def _syntax_findings(
         _rule_finding(issue, path, rule_id="element_arity", severity="error")
         for issue in validate_netlist_arity(deck.cards)
     )
-    findings.extend(_value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader))
+    findings.extend(
+        _value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader=cp1252_reader)
+    )
     return findings
 
 
@@ -1408,7 +1408,7 @@ def _file_digest(path: Path, length: int | None = None) -> str | None:
 
 
 def _exported_value_suffix_findings(
-    net_path: Path, cp1252_reader: str | None = None
+    net_path: Path, *, cp1252_reader: str | None
 ) -> list[dict[str, Any]]:
     """Value-suffix findings over an exported netlist.
 
@@ -1419,7 +1419,9 @@ def _exported_value_suffix_findings(
         text, encoding = read_spice_text_with_encoding(net_path)
     except OSError:
         return []
-    return _value_suffix_findings(_lex_deck(text).cards, net_path, text, encoding, cp1252_reader)
+    return _value_suffix_findings(
+        _lex_deck(text).cards, net_path, text, encoding, cp1252_reader=cp1252_reader
+    )
 
 
 class _MeasuredNetlist(NamedTuple):
@@ -1431,7 +1433,7 @@ class _MeasuredNetlist(NamedTuple):
     findings: list[dict[str, Any]]
 
 
-def _measure_netlist(net_path: Path, cp1252_reader: str | None = None) -> _MeasuredNetlist | None:
+def _measure_netlist(net_path: Path, *, cp1252_reader: str | None) -> _MeasuredNetlist | None:
     """Component count, net count, digest and value-suffix findings of a
     just-exported netlist.
 
@@ -1451,7 +1453,7 @@ def _measure_netlist(net_path: Path, cp1252_reader: str | None = None) -> _Measu
         components,
         nets,
         _file_digest(net_path),
-        _exported_value_suffix_findings(net_path, cp1252_reader),
+        _exported_value_suffix_findings(net_path, cp1252_reader=cp1252_reader),
     )
 
 
@@ -1471,7 +1473,8 @@ async def _run_export(
     state: SessionState,
     export_to: str,
     simulator_cls: Any,
-    cp1252_reader: str | None = None,
+    *,
+    cp1252_reader: str | None,
 ) -> _ExportOutcome:
     """Export a schematic to a netlist, managed (scratch copy) or sidecar (in place).
 
@@ -1513,7 +1516,9 @@ async def _run_export(
                     )
                     warnings.extend(diff_warnings)
                 net_path = new_path
-                measured = await asyncio.to_thread(_measure_netlist, net_path, cp1252_reader)
+                measured = await asyncio.to_thread(
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                )
         else:
             scratch = (
                 _scratch_dir(state, "export") / f"{asc_path.stem}.{_file_digest(asc_path, 8)}"
@@ -1525,7 +1530,9 @@ async def _run_export(
                 net_path = await asyncio.to_thread(
                     _create_netlist, simulator_cls, staged_asc, timeout
                 )
-                measured = await asyncio.to_thread(_measure_netlist, net_path, cp1252_reader)
+                measured = await asyncio.to_thread(
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                )
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         return _ExportOutcome(
             payload,
@@ -2170,13 +2177,21 @@ async def evaluate_verify_circuit(
         observation_events.extend(deck.notes)
 
     # The LTspice this session drives, when it decodes decks as cp1252: the one
-    # reader known to misread a UTF-8 micro sign.
-    cp1252_reader = cp1252_ltspice(state)
+    # reader known to misread a UTF-8 micro sign. Identified off the loop (the
+    # first identification in a process digests the executable), and only for
+    # a check that reads value suffixes.
+    cp1252_reader: str | None = None
+    ltspice = state.available_simulators.get("ltspice")
+    if ltspice is not None and (wanted.get("syntax") or wanted.get("export")):
+        executable = await asyncio.to_thread(executable_identity, ltspice)
+        cp1252_reader = cp1252_ltspice(state, executable)
 
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
         findings.extend(
-            await asyncio.to_thread(_syntax_findings, text, path, deck, encoding, cp1252_reader)
+            await asyncio.to_thread(
+                _syntax_findings, text, path, deck, encoding, cp1252_reader=cp1252_reader
+            )
         )
         checks_run.append("syntax")
 
@@ -2253,7 +2268,7 @@ async def evaluate_verify_circuit(
                 skip("export", "LTspice not detected")
             else:
                 export = await _run_export(
-                    path, state, args.export_to, simulator_cls, cp1252_reader
+                    path, state, args.export_to, simulator_cls, cp1252_reader=cp1252_reader
                 )
                 observation_events.extend(export.observations)
                 warnings.extend(export.warnings)
