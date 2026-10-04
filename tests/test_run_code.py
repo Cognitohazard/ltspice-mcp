@@ -322,7 +322,7 @@ class TestLifetime:
 
     async def test_a_second_call_while_one_runs_is_busy(self, state: SessionState):
         first = asyncio.ensure_future(run(state, "import time\ntime.sleep(2)\n'first'"))
-        await asyncio.sleep(0.5)
+        await await_until(lambda: worker_for(state).running is not None)
         second = await run(state, "2")
         assert second["status"] == "busy"
         assert second["running"]["phase"] == "running"

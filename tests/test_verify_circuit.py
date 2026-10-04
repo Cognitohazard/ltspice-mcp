@@ -172,11 +172,24 @@ async def test_asc_rejects_syntax_check(state_no_sim, work_dir, asc_symbols):
     assert data["checks_run"] == []
 
 
-async def test_sp_dispatch(state_no_sim, work_dir):
-    deck = _write(work_dir, "d.sp", _BASE)
+@pytest.mark.parametrize("suffix", [".sp", ".spice"])
+async def test_netlist_suffix_dispatch(state_no_sim, work_dir, suffix):
+    """``.spice`` is the extension xschem and the sky130 testbenches write."""
+    deck = _write(work_dir, f"d{suffix}", _BASE)
     data = await _run(state_no_sim, path=str(deck))
     assert data["kind"] == "netlist"
     assert "syntax" in data["checks_run"]
+    assert data["outcome"] == "complete"
+
+
+async def test_a_path_through_a_parent_segment_inside_the_sandbox_is_checked(
+    state_no_sim, work_dir
+):
+    deck = _write(work_dir, "d.cir", _BASE)
+    (work_dir / "sub").mkdir()
+    data = await _run(state_no_sim, path="sub/../d.cir")
+    assert data["kind"] == "netlist"
+    assert Path(data["path"]) == deck.resolve()
     assert data["outcome"] == "complete"
 
 
@@ -883,28 +896,54 @@ def test_structural_compare_refuses_a_schematic(work_dir):
 # ---------------------------------------------------------------------------
 
 
-async def test_escaping_include_denied_no_read(state_no_sim, work_dir):
-    # Canary lives OUTSIDE the single allowed root (work_dir).
+@pytest.mark.parametrize("spelling", ["absolute", "parent-relative"])
+async def test_escaping_include_denied_no_read(state_no_sim, work_dir, spelling):
+    """An include outside the single allowed root (work_dir) is denied and never
+    read, whether it names the file outright or climbs to it through ``..``:
+    a path is judged by where it lands, not by how it is spelled."""
     outside = work_dir.parent / "outside_roots"
     outside.mkdir(exist_ok=True)
     canary = outside / "canary.lib"
     canary.write_text(".subckt CANARY 1 2\nR9 1 2 1\n.ends\n")
+    include = str(canary) if spelling == "absolute" else f"../{outside.name}/canary.lib"
 
     deck = _write(
         work_dir,
         "cand.cir",
-        f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {canary}\n.end\n",
+        f"* c\nX1 in out CANARY\nR1 in out 1k\n.include {include}\n.end\n",
     )
     ref = _write(work_dir, "ref.cir", "* r\nR1 in out 1k\n.end\n")
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
     denied = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
     assert denied, "the escaping include must surface a path_denied finding"
-    assert str(canary) in denied[0]["subject"]
+    assert include in denied[0]["subject"]
     assert denied[0]["at"]["file"] == str(deck)
     # NO read: the CANARY subckt was never loaded, so it stays unresolved.
     unresolved = {u["name"].upper() for u in data["comparison"]["unresolved_subckts"]}
     assert "CANARY" in unresolved
+
+
+@pytest.mark.parametrize("separator", ["/", "\\"], ids=["slash", "backslash"])
+async def test_parent_relative_include_inside_the_roots_is_read(state_no_sim, work_dir, separator):
+    """``.include ../models/x.lib`` from a deck in a subfolder names a file
+    inside the sandbox; the run path stages it, so the compare must read it
+    rather than report it as resolving outside the allowed roots."""
+    models = work_dir / "models"
+    models.mkdir()
+    (models / "parts.lib").write_text(".subckt SHARED 1 2\nR9 1 2 1\n.ends\n")
+    decks = work_dir / "decks"
+    decks.mkdir()
+    include = separator.join(["..", "models", "parts.lib"])
+    body = f"* c\nX1 in out SHARED\nR1 in out 1k\n.include {include}\n.end\n"
+    deck = _write(decks, "cand.cir", body)
+    ref = _write(decks, "ref.cir", body)
+
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
+
+    assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"], data["findings"]
+    assert data["comparison"]["unresolved_subckts"] == []
+    assert data["comparison"]["equivalent"] is True
 
 
 async def test_simulator_library_include_is_read_though_the_sandbox_denies_it(

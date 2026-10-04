@@ -75,12 +75,12 @@ LADDER: tuple[int, ...] = tuple(sorted(_RUNG_NAMES))
 
 # One sentence per fact a caller needs to decide whether to set this: the unit,
 # that presentation is all it touches, and that omitting it is not "no budget".
-# The ladder's per-tool mechanics live in spice://guide — they are what a caller
+# The ladder's per-tool mechanics live in guide section 'tools' — they are what a caller
 # reads once, not what every session should pay for on the wire.
 BUDGET_DESCRIPTION = (
     "Approximate response-token cap (compact characters / 4, minimum 500). "
     "Presentation only: facts are never cut. Omitted, the server's default "
-    "applies. Ladder: spice://guide."
+    "applies. Ladder: guide section 'tools'."
 )
 
 

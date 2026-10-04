@@ -527,6 +527,7 @@ FROZEN_ERROR_CODES = (
     "trace_summary_truncated",
     "transport_delay",
     "unencodable_device_ref",
+    "unknown_section",
     "unmet_request",
     "unpersisted_runs_recovered",
     "unplanned_instance",
