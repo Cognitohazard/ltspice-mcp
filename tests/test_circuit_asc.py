@@ -1107,15 +1107,12 @@ class TestSetComponentValueMultiTokenValues:
     (R/C/L, a subcircuit) keeps the refusal; the class is the symbol's prefix."""
 
     def _sheet(self, work_dir: Path, symbol: str, ref: str, value: str) -> Path:
-        asc = work_dir / f"{ref.lower()}_{symbol}.asc"
-        asc.write_text(
-            "Version 4\n"
-            "SHEET 1 880 680\n"
-            f"SYMBOL {symbol} 100 100 R0\n"
-            f"SYMATTR InstName {ref}\n"
-            f"SYMATTR Value {value}\n"
+        return _write_sheet(
+            work_dir / f"{ref.lower()}_{symbol}.asc",
+            f"SYMBOL {symbol} 100 100 R0",
+            f"SYMATTR InstName {ref}",
+            f"SYMATTR Value {value}",
         )
-        return asc
 
     def _set(self, state: SessionState, asc: Path, ref: str, value: str) -> str:
         from spicelib import AscEditor
