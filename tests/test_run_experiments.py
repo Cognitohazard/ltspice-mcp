@@ -3126,7 +3126,9 @@ class TestReceiptWeight:
             )
         )
 
-        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        # The default's trim found nothing with content to take, so nothing
+        # says the receipt was reduced.
+        assert _observation_code(data, "budget_truncated") is None
         assert data["source"][0]["sha256"] == sha256_file(deck)
 
     async def test_the_server_default_budget_keeps_a_staging_disclosure(
@@ -3155,7 +3157,7 @@ class TestReceiptWeight:
             )
         )
 
-        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        assert _observation_code(data, "budget_truncated") is None
         entries = [e for src in data["source"] for e in src.get("manifest", [])]
         assert [e for e in entries if e["live"]], "the live include must still be disclosed"
 

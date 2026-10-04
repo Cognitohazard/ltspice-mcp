@@ -411,7 +411,7 @@ def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
 def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply presentation rungs to either public receipt envelope."""
     if rung.trim:
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT)
+        rung.cut.extend(response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT))
     if rung.answer_channel:
         for page in _receipt_row_pages(data):
             for row in page["items"]:
