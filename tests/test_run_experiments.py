@@ -25,10 +25,10 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
-from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -56,6 +56,7 @@ from tests.conftest import (
     recorded_fixture_simulator,
     resolve_local_ref,
 )
+from tests.test_completion_logs import captured_completion_facts
 
 
 def test_step_and_all_steps_are_exclusive_on_the_attached_block():
@@ -322,6 +323,17 @@ async def _jobs_wait(
     )
     assert result.structured_content is not None
     return result.structured_content
+
+
+async def _completed_analysis_receipt(args: RunExperimentsInput, state: SessionState):
+    """Read a completed receipt through public wait and replay, without a speed assertion."""
+    immediate = args.model_copy(
+        update={"execution": args.execution.model_copy(update={"wait_s": 0.0})}
+    )
+    submitted = _assert_schema(await handle_run_experiments(immediate, state))
+    finished = await _jobs_wait(state, submitted["job_id"], "all", 30.0)
+    assert finished["status"] in {"completed", "completed_with_failures"}, finished
+    return await handle_run_experiments(immediate, state)
 
 
 @pytest.mark.asyncio
@@ -983,7 +995,7 @@ class TestLeanReceipt:
         deck = _deck(work_dir / "lean_echo.cir")
 
         lean = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(deck, "lean-echo", **_VARIED_ANALYSIS),
                 state_with_sim,
             )
@@ -992,7 +1004,7 @@ class TestLeanReceipt:
         assert "request" not in lean["analysis"]
 
         loud = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(deck, "lean-echo", provenance=True, **_VARIED_ANALYSIS),
                 state_with_sim,
             )
@@ -1012,7 +1024,7 @@ class TestLeanReceipt:
         deck = _deck(work_dir / "attached_plot.cir")
 
         data = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-plot",
@@ -1148,8 +1160,8 @@ class TestOptionalRequestId:
         serialized request: had that serialization started filling in recipe
         defaults or reordering keys, every stored request index would point at
         a fingerprint no retry could reproduce, and every replay would come
-        back a conflict. The pin includes the empty nested-instance selector introduced with
-        the variation grammar; the recipe dictionaries remain exactly authored.
+        back a conflict. The pin includes the empty nested-instance selector
+        and attached RAW plot/dialect fields; recipe dictionaries remain exactly authored.
         """
         from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
 
@@ -1180,7 +1192,7 @@ class TestOptionalRequestId:
         ]
         assert (
             canonical_fingerprint(args)
-            == "4ae01640e26aa8fadf3c2c5f272de7c5f9de61d1b42238c7af3f498586b117e5"
+            == "8d5e2d07daeddf5f92339e9f999d441390c3bb830cbc16a88ed39d9478618861"
         )
 
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
@@ -1845,7 +1857,7 @@ class TestLintModes:
             work_dir / "with_include.cir",
             '.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
         )
-        route = experiments_mod.resolve_experiment_paths
+        route = resolve_experiment_paths
 
         def windows_native(working_dir, job_id, circuit_id, simulator):
             return dataclasses.replace(
@@ -2131,7 +2143,12 @@ def _failing_simulator(
         log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_text)
         extra = {"netlist": netlist, "simulator": self.simulator_class} if pass_deck else {}
-        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log), **extra))
+        self.loop.call_soon_threadsafe(
+            callback,
+            collect_run_outcome(
+                ".", str(log), logs=captured_completion_facts(log.parent, log), **extra
+            ),
+        )
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
@@ -2166,7 +2183,9 @@ def _per_case_simulator(
         else:
             fail = log.with_suffix(".fail")
             fail.write_text(text)
-            outcome = collect_run_outcome(".", str(fail))
+            outcome = collect_run_outcome(
+                ".", str(fail), logs=captured_completion_facts(fail.parent, fail)
+            )
         self.loop.call_soon_threadsafe(callback, outcome)
         return object()
 
@@ -2389,7 +2408,7 @@ class TestAttachedAnalysis:
         deck = _deck(work_dir / "attached.cir")
 
         data = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(deck, "attached-analysis", **_VARIED_ANALYSIS),
                 state_with_sim,
             )
@@ -2432,7 +2451,7 @@ class TestAttachedAnalysis:
         }
 
         data = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-include",
@@ -2467,7 +2486,7 @@ class TestAttachedAnalysis:
         recipes = [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
 
         every = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-all-steps",
@@ -2486,7 +2505,7 @@ class TestAttachedAnalysis:
         # Absent, the same job reads the first step only — which is what makes
         # the row list above evidence the argument was forwarded.
         first = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-first-step",
@@ -2511,7 +2530,7 @@ class TestAttachedAnalysis:
         selection = {"axis": "r", "value": 22}
 
         attached = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-step-parity",
@@ -2557,13 +2576,13 @@ class TestAttachedAnalysis:
         }
 
         lean = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(deck, "attached-neutral", analyze=base),
                 state_with_sim,
             )
         )
         wide = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-neutral",
@@ -2581,7 +2600,7 @@ class TestAttachedAnalysis:
         assert not any(isinstance(value, (dict, list)) for value in lean_value.values())
         assert any(isinstance(value, (dict, list)) for value in wide_value.values())
         missing = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-neutral",
@@ -2616,7 +2635,7 @@ class TestAttachedAnalysis:
             "include": {"per_run": {"limit": 1}, "fields": ["value"]},
         }
         first = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-pages",
@@ -2651,7 +2670,7 @@ class TestAttachedAnalysis:
         )
 
         changed = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-pages",
@@ -2676,20 +2695,20 @@ class TestAttachedAnalysis:
         monkeypatch: pytest.MonkeyPatch,
     ):
         recorded_fixture_simulator(monkeypatch)
-        original_trace_names = OffsetAwareRawRead.get_trace_names
+        original_trace_names = DecodedRaw.get_trace_names
 
-        def wide_trace_names(raw: OffsetAwareRawRead) -> list[str]:
+        def wide_trace_names(raw: DecodedRaw) -> list[str]:
             return [
                 *original_trace_names(raw),
                 *(f"budget_trace_{index:03d}" for index in range(500)),
             ]
 
-        monkeypatch.setattr(OffsetAwareRawRead, "get_trace_names", wide_trace_names)
+        monkeypatch.setattr(DecodedRaw, "get_trace_names", wide_trace_names)
         deck = _deck(work_dir / "attached-answer.cir")
         variations = [{"kind": "assign", "assign": {"R1": ["1k", "2k", "3k"]}}]
         recipe = [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}]
         expected_result = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(
                     deck,
                     "attached-answer-expected",
@@ -2713,8 +2732,8 @@ class TestAttachedAnalysis:
                 },
             },
         )
-        full = _assert_schema(await handle_run_experiments(request, state_with_sim))
-        replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        full = _assert_schema(await _completed_analysis_receipt(request, state_with_sim))
+        replay = _assert_schema(await _completed_analysis_receipt(request, state_with_sim))
         assert replay["replayed"] is True
         await state_with_sim.job_registry.drain_pending()
         job = state_with_sim.all_jobs[full["job_id"]]
@@ -2728,20 +2747,20 @@ class TestAttachedAnalysis:
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
         trim_rung = response_budget.Rung(response_budget.RUNG_TRIM, budget=10_000, measured=0)
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
-        manual_snapshot = experiments_mod.snapshot_receipt(
+        manual_snapshot = receipts_mod.snapshot_receipt(
             job,
             None,
             control_token=job.control_token,
         )
-        trim_view = experiments_mod.finalize_receipt(
-            experiments_mod.render_receipt_snapshot(
+        trim_view = receipts_mod.finalize_receipt(
+            receipts_mod.render_receipt_snapshot(
                 manual_snapshot,
                 control_token=job.control_token,
             )
         )
         receipts_mod._degrade_receipt(trim_view, trim_rung)
-        answer_view = experiments_mod.finalize_receipt(
-            experiments_mod.render_receipt_snapshot(
+        answer_view = receipts_mod.finalize_receipt(
+            receipts_mod.render_receipt_snapshot(
                 manual_snapshot,
                 control_token=job.control_token,
                 analysis_answer_channel=True,
@@ -2758,7 +2777,7 @@ class TestAttachedAnalysis:
         budget = answer_size + (trim_size - answer_size) // 3 + response_budget.NOTE_RESERVE_TOKENS
         assert trim_size > budget - response_budget.NOTE_RESERVE_TOKENS
         answer = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 request.model_copy(update={"budget": budget}),
                 state_with_sim,
             )
@@ -2779,7 +2798,7 @@ class TestAttachedAnalysis:
         assert answer_result["cursor"] is None
         assert "signals_available" not in answer_result
         assert "signals_available" in job.analysis.result["top"]
-        restored = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        restored = _assert_schema(await _completed_analysis_receipt(request, state_with_sim))
         assert restored["analysis"]["result"]["signals_available"]
 
     async def test_successful_analysis_does_not_report_partial(
@@ -2792,7 +2811,7 @@ class TestAttachedAnalysis:
         deck = _deck(work_dir / "attached-complete.cir")
 
         data = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(deck, "attached-complete", **_VARIED_ANALYSIS),
                 state_with_sim,
             )
@@ -2822,7 +2841,7 @@ class TestAttachedAnalysis:
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", exploding_engine)
         data = _assert_schema(
-            await handle_run_experiments(
+            await _completed_analysis_receipt(
                 _args(deck, "attached-bad-request", analyze=analyze),
                 state_with_sim,
             )
@@ -3442,9 +3461,9 @@ class TestReceiptWeight:
     def test_day_one_presentation_fields_leave_old_canonical_bytes_unchanged(self):
         # A tripwire, not the subject: whoever bumps the version has to come
         # back here and confirm the presentation exclusions still change no
-        # bytes. Version 5 added nested variation selectors, which choose
-        # execution and participate in the fingerprint; presentation does not.
-        assert experiment_store.CANONICALIZER_VERSION == 5
+        # bytes. Version 6 added attached RAW selection, which chooses result
+        # data and participates in the fingerprint; presentation does not.
+        assert experiment_store.CANONICALIZER_VERSION == 6
         model = RunExperimentsInput.model_validate(
             {
                 "request_id": "stable-bytes",

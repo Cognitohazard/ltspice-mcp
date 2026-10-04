@@ -4,7 +4,7 @@ Forcing functions for the shared conventions in mcp_v1_design.md sections 2/3
 that no single per-tool test guards: the page-object shape, the findings shape,
 channel separation, the error-object envelope where declared, outcome presence,
 callable pagination, isError vs per-item failure isolation, stable error codes,
-and the bounded-parse routing of every untrusted raw/log parse. A seventh tool
+and service routing for raw/log parsers in public adapters. A seventh tool
 or a regression in any of the six trips one of these.
 
 Uniform envelope (asserted, not merely documented): all six tools carry a
@@ -654,14 +654,17 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # description says capabilities lists which simulators a run can select,
     # since a detected simulator can still be one this host cannot run.
     # Measured 15,596.
-    "run_experiments": 15600,
+    # Recovery opt-in, simulator seed and attached RAW selection also
+    # contribute to the merged schema bound.
+    "run_experiments": 16500,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
     # Run-field projection exposes full native provenance on explicit request:
     # measured 5,187 characters. The budget pointer names its guide section:
     # measured 5,203.
-    "jobs": 5210,
+    # Resume adds selection, authority and dwell fields.
+    "jobs": 6800,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
@@ -690,8 +693,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # on the roster, so a host routes that word here. Measured 19,621.
     # Raised by about 40 characters so its guide pointers name a section.
     # Measured 19,659.
-    "analyze_results": 19660,
-    # Nine query kinds, each with its own argument shape — including the
+    # Explicit plot/dialect selection and imported log sources also
+    # contribute to the schema bound.
+    "analyze_results": 20300,
+    # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
     # Raised by about 400 characters for the capabilities 'fields' selector: a
@@ -710,7 +715,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # reports which simulators a run can select: a detected simulator can be
     # one this host cannot run, and run_experiments sends a caller here to
     # find out. Measured 9,151.
-    "inspect": 9155,
+    # Results inventory, signal/table pages and log facts also
+    # contribute to the merged schema bound.
+    "inspect": 10550,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -738,7 +745,8 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # hand-made panel layout, since the automatic split goes by unit and never
     # by scale), attach_plot, and open, whose default now comes from
     # [analysis] open_plot. Measured 3,695 characters.
-    "plot_waveform": 3700,
+    # Explicit plot and dialect selection also contribute to the schema bound.
+    "plot_waveform": 4100,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
@@ -963,23 +971,31 @@ class TestCursorTamperOnEveryPaginatedInput:
 
 
 # ---------------------------------------------------------------------------
-# Static backstop: untrusted raw/log parses route through services.bounded_parse
+# Static backstop: adapters cannot construct dependency readers
 # ---------------------------------------------------------------------------
 
-# Raw readers that must never be constructed directly in a tool module — every
-# raw read goes through the bounded services.load_raw wrapper.
-_FORBIDDEN_DIRECT = {"OffsetAwareRawRead", "RawRead", "load_raw_sync"}
-# Log/step file parsers that read an untrusted artifact and must be invoked only
-# inside a services.bounded_parse thunk (deadline + cooldown).
-_MUST_BE_BOUNDED = {"parse_step_iterations", "extract_log_diagnostics"}
-_BOUNDED_WRAPPERS = {"bounded_parse", "load_raw"}
-
-_SIX_MODULES = (
-    "experiments",
-    "analyze",
-    "schematic_edit",
-    "verify",
-    "inspect_tools",
+# Services own captured input and process containment. A threaded timeout around
+# one of these calls cannot stop a dependency parser that never returns.
+_FORBIDDEN_DIRECT = {
+    "OffsetAwareRawRead",
+    "RawRead",
+    "LTSpiceLogReader",
+    "opLogReader",
+    "load_raw_sync",
+    "load_logs_sync",
+    "make_log_reader",
+    "read_device_op_points",
+    "parse_measurements",
+    "parse_fourier_data",
+    "parse_step_iterations",
+    "extract_log_diagnostics",
+    "extract_error_context",
+}
+_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
+_PARSER_ADAPTERS = sorted(
+    path.relative_to(_SOURCE_ROOT)
+    for package in ("tools", "api")
+    for path in (_SOURCE_ROOT / package).glob("*.py")
 )
 
 
@@ -992,15 +1008,13 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-class TestBoundedParseBackstop:
-    """A static forcing function (backstop; behavior proof lives in the U1/U4
-    injected-slow-parser tests). Every raw/log parse in the six tool modules
-    routes through services.bounded_parse (directly, via a thunk, or via the
-    bounded services.load_raw wrapper)."""
+class TestParserBoundaryBackstop:
+    """Catch known direct parser calls; process/service tests prove containment."""
 
-    @pytest.mark.parametrize("mod", _SIX_MODULES)
-    def test_no_direct_raw_reader_construction(self, mod: str):
-        path, source = _module_source(mod)
+    @pytest.mark.parametrize("relative_path", _PARSER_ADAPTERS, ids=str)
+    def test_adapters_use_parser_services(self, relative_path: Path):
+        path = _SOURCE_ROOT / relative_path
+        source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         offenders: set[str] = set()
         for node in ast.walk(tree):
@@ -1010,41 +1024,8 @@ class TestBoundedParseBackstop:
             if name is not None and name in _FORBIDDEN_DIRECT:
                 offenders.add(name)
         assert not offenders, (
-            f"{mod}: constructs a raw reader directly {sorted(offenders)} — "
-            "route raw reads through services.load_raw (bounded)."
-        )
-
-    @pytest.mark.parametrize("mod", _SIX_MODULES)
-    def test_log_parsers_are_bounded(self, mod: str):
-        path, source = _module_source(mod)
-        tree = ast.parse(source, filename=str(path))
-        parents: dict[int, ast.AST] = {}
-        for node in ast.walk(tree):
-            for child in ast.iter_child_nodes(node):
-                parents[id(child)] = node
-
-        def _is_bounded(call: ast.Call) -> bool:
-            cur: ast.AST | None = call
-            while cur is not None:
-                if (
-                    isinstance(cur, ast.Call)
-                    and cur is not call
-                    and _call_name(cur) in _BOUNDED_WRAPPERS
-                ):
-                    return True
-                cur = parents.get(id(cur))
-            return False
-
-        unbounded: set[str] = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = _call_name(node)
-            if name is not None and name in _MUST_BE_BOUNDED and not _is_bounded(node):
-                unbounded.add(name)
-        assert not unbounded, (
-            f"{mod}: calls a log parser {sorted(unbounded)} outside a "
-            "services.bounded_parse thunk — untrusted parses need a deadline."
+            f"{relative_path}: calls {sorted(offenders)} directly; "
+            "use services.load_raw/load_logs for contained artifact decoding."
         )
 
 

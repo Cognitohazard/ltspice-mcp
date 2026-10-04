@@ -610,22 +610,25 @@ class TestBuildSummaryRealLogPairs:
     """build_simulation_summary against recorded LTspice .raw/.log pairs.
 
     Everything above drives the surfacer with hand-built summary dicts and
-    mocked RawRead instances; these tests run the REAL log-reading branch
-    (measurement parsing, diagnostics extraction, requested-vs-produced
-    reconciliation) on logs LTspice actually wrote, so the summary shapes the
-    observations see are the ones the parser genuinely produces.
+    mocked RawRead instances; these tests capture and decode logs LTspice
+    actually wrote before passing the facts into summary reconciliation.
     """
 
     @staticmethod
-    def _summarize(name: str, requested: dict[str, list[str]]) -> dict:
+    def _summarize(tmp_path: Path, name: str, requested: dict[str, list[str]]) -> dict:
         from spicelib import RawRead
+
+        from tests.test_summary_log_facts import captured_log_facts
 
         raw = RawRead(str(FIXTURES / f"{name}.raw"))
         return build_simulation_summary(
-            raw, FIXTURES / f"{name}.log", requested=requested, value_scan=True
+            raw,
+            captured_log_facts(tmp_path, FIXTURES / f"{name}.log"),
+            requested=requested,
+            value_scan=True,
         )
 
-    def test_tran_meas_parsed_from_real_log_and_reconciled_clean(self):
+    def test_tran_meas_parsed_from_real_log_and_reconciled_clean(self, tmp_path):
         # The recorded deck carried ``.meas tran vfinal FIND V(out) AT=0.9m``;
         # the log holds ``vfinal: V(out) =0.999876166042 at 0.0009``.
         requested = parse_requested_outputs(
@@ -633,7 +636,7 @@ class TestBuildSummaryRealLogPairs:
         )
         assert requested["meas"] == ["vfinal"]
 
-        summary = self._summarize("ltspice_tran_rc", requested)
+        summary = self._summarize(tmp_path, "ltspice_tran_rc", requested)
 
         vfinal = summary["measurements"]["vfinal"]
         assert vfinal["values"] == [pytest.approx(LTSPICE_TRAN_RC_VFINAL, rel=1e-9)]
@@ -645,7 +648,7 @@ class TestBuildSummaryRealLogPairs:
         # nothing tripped a check here).
         assert summary["observations"] == []
 
-    def test_ac_log_without_meas_surfaces_nothing(self):
+    def test_ac_log_without_meas_surfaces_nothing(self, tmp_path):
         # The AC deck requested no .meas/.four, and its real log carries none:
         # the log branch must not invent measurements or observations.
         requested = parse_requested_outputs(
@@ -653,21 +656,21 @@ class TestBuildSummaryRealLogPairs:
         )
         assert requested == {"meas": [], "four": []}
 
-        summary = self._summarize("ltspice_ac_rc", requested)
+        summary = self._summarize(tmp_path, "ltspice_ac_rc", requested)
 
         assert "measurements" not in summary
         assert "failed_measurements" not in summary
         assert "errors" not in summary
         assert summary["observations"] == []
 
-    def test_requested_meas_absent_from_real_log_reconciled_as_missing(self):
+    def test_requested_meas_absent_from_real_log_reconciled_as_missing(self, tmp_path):
         # Deck asks for a .meas, but the recorded DC log carries no
         # measurement at all — the real parse-then-reconcile chain must
         # surface exactly one unmet_request fact naming it.
         requested = parse_requested_outputs(".dc V1 0 5 0.5\n.meas dc vhalf FIND V(out) AT 2.5")
         assert requested["meas"] == ["vhalf"]
 
-        summary = self._summarize("ltspice_dc_div", requested)
+        summary = self._summarize(tmp_path, "ltspice_dc_div", requested)
 
         assert "measurements" not in summary
         unmet = [o for o in summary["observations"] if o["code"] == "unmet_request"]

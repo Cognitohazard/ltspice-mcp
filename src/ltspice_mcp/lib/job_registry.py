@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -319,13 +320,53 @@ class JobRegistry:
         self._pending_persist.add(task)
         task.add_done_callback(self._pending_persist.discard)
 
-    async def _persist_async(self, job: ExperimentJob) -> None:
-        """Serialise writes for a single job id; swallow and log failures."""
+    async def persist_strict(self, job: ExperimentJob) -> None:
+        """Await an ordered durable checkpoint and propagate storage failures."""
+        if not self.persist_enabled:
+            raise RuntimeError("Recovery requires durable job persistence")
+        # Queue this writer in the same event-loop order as persist_job. Taking
+        # its lock inline could overtake an older task that has not run yet.
+        task = asyncio.create_task(self._persist_async(job, strict=True))
+        self._pending_persist.add(task)
+        task.add_done_callback(self._pending_persist.discard)
+        await self._await_persistence(task)
+
+    @staticmethod
+    async def _await_persistence(task: asyncio.Future[None]) -> None:
+        """Finish a write before honoring cancellation, including repeated requests."""
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        # A strict storage failure still propagates if its caller was cancelled.
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _persist_async(self, job: ExperimentJob, *, strict: bool = False) -> None:
+        """Order writes per job; strict checkpoints propagate storage failures."""
         lock = self._persist_locks.get(job.job_id)
         if lock is None:
             lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
         async with lock:
-            await self._offload_persistence(self._persist_sync, job)
+            if strict:
+                from ltspice_mcp.lib import experiment_store
+
+                # A launch checkpoint cannot retry a storage error as though
+                # it were executor teardown, or hide a failed write.
+                # Keep the executor future itself: cancelling coroutine tasks
+                # during shutdown must not detach the write from its lock.
+                context = contextvars.copy_context()
+
+                def persist() -> None:
+                    context.run(experiment_store.save_job, job)
+
+                write = asyncio.get_running_loop().run_in_executor(None, persist)
+                await self._await_persistence(write)
+            else:
+                await self._offload_persistence(self._persist_sync, job)
 
     async def _offload_persistence(
         self, fn: Callable[[ExperimentJob], None], job: ExperimentJob
@@ -350,7 +391,13 @@ class JobRegistry:
         try:
             from ltspice_mcp.lib import experiment_store
 
-            experiment_store.save_job(job)
+            if job.recovery is not None and job.restart_reconciled:
+                from ltspice_mcp.lib.experiment_resume import persist_reconciled
+                from ltspice_mcp.lib.store import Store
+
+                persist_reconciled(job, Store(self.working_dir))
+            else:
+                experiment_store.save_job(job)
         except Exception as e:
             # Persistence failures must never break simulation flow.
             logger.warning("Failed to persist job %s: %s", job.job_id, e)
@@ -381,9 +428,10 @@ class JobRegistry:
     def _delete_persisted_sync(self, job: ExperimentJob) -> None:
         """Blocking deletion half, including dependent immutable result sets."""
         try:
-            if self.persist_enabled:
-                from ltspice_mcp.lib import experiment_store
+            from ltspice_mcp.lib import experiment_store
 
+            experiment_store.guard_recovery_retention(job, self.working_dir)
+            if self.persist_enabled:
                 experiment_store.delete_job(job, self.working_dir)
             from ltspice_mcp.lib import result_store
 

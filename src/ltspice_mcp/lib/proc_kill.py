@@ -26,8 +26,11 @@ import logging
 import os
 import re
 import signal
+import sys
+import time
 from collections.abc import Collection
-from pathlib import PurePath
+from enum import Enum
+from pathlib import Path, PurePath
 
 import psutil
 
@@ -52,7 +55,7 @@ def simulator_executable_names(simulator_class: type) -> frozenset[str]:
     return frozenset(names)
 
 
-def _token_in_arg(token: str, arg: str) -> bool:
+def token_in_argument(token: str, arg: str) -> bool:
     """True when ``token`` appears at a run-filename boundary in ``arg``.
 
     Staged run files are ``{job_id}.{ext}`` (single runs) or
@@ -101,7 +104,7 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
 
     - some command-line argument contains ``token`` (the uuid-unique job id,
       present because the staged netlist filename embeds it) at a filename
-      boundary (see ``_token_in_arg``), and
+      boundary (see ``token_in_argument``), and
     - the process is the simulator: its name — or the basename of one of its
       first two argv entries (the Wine case: argv is ``wine …/LTspice.exe``)
       — is in ``executable_names``; or it descends from this server process
@@ -126,7 +129,7 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
     for proc in psutil.process_iter(("name", "cmdline")):
         try:
             cmdline = proc.info.get("cmdline") or []
-            if not any(_token_in_arg(token, arg) for arg in cmdline):
+            if not any(token_in_argument(token, arg) for arg in cmdline):
                 continue
             candidates = {(proc.info.get("name") or "").lower()}
             candidates.update(PurePath(arg).name.lower() for arg in cmdline[:2])
@@ -144,6 +147,145 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
     return killed
+
+
+class ProcessPresence(Enum):
+    """Whether the recorded process can still execute work."""
+
+    ABSENT = "absent"
+    PRESENT = "present"
+    UNKNOWN = "unknown"
+
+
+def process_start_marker(pid: int) -> str:
+    """Return process-start identity independent of Linux wall-clock corrections.
+
+    Linux's epoch creation time adds the current boot-time estimate to a
+    stable kernel tick count. Persist the tick count and boot ID directly.
+    Windows records a fixed creation FILETIME, exposed by psutil.
+    """
+    if sys.platform == "linux":
+        proc = Path(psutil.PROCFS_PATH)
+        boot = (proc / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        stat = (proc / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        # The parenthesized command may contain spaces and closing parens.
+        # The fields after its final ')' start at field 3; starttime is 22.
+        ticks = int(stat.rpartition(")")[2].split()[19])
+        return f"linux:{boot}:{ticks}"
+    return "birth:" + psutil.Process(pid).create_time().hex()
+
+
+def process_identity_presence(pid: int, start_marker: str | None) -> ProcessPresence:
+    """Compare a process's start identity as well as its reusable PID."""
+    if pid <= 0 or not start_marker:
+        return ProcessPresence.UNKNOWN
+    try:
+        process = psutil.Process(pid)
+        if process_start_marker(pid) != start_marker or process.status() == psutil.STATUS_ZOMBIE:
+            return ProcessPresence.ABSENT
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return ProcessPresence.ABSENT
+    except (psutil.Error, OSError, ValueError, IndexError):
+        return ProcessPresence.UNKNOWN
+    return ProcessPresence.PRESENT
+
+
+def _windows_process_name(pid: int) -> str | None:
+    """Read an unnamed process's OS name without opening its image or memory.
+
+    Some Windows system entries have no executable path for psutil to name.
+    Toolhelp supplies their names. A missing name, failed query, bounded scan
+    exhaustion or changed process identity remains unresolved.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    try:
+        started = process_start_marker(pid)
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+        kernel.Process32FirstW.restype = wintypes.BOOL
+        kernel.Process32NextW.argtypes = kernel.Process32FirstW.argtypes
+        kernel.Process32NextW.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        deadline = time.monotonic() + 2
+        snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)
+        if snapshot in (None, ctypes.c_void_p(-1).value):
+            return None
+        name = None
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            more = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+            for _ in range(65536):
+                if not more or time.monotonic() >= deadline:
+                    break
+                if entry.th32ProcessID == pid:
+                    name = entry.szExeFile or None
+                    break
+                more = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            closed = kernel.CloseHandle(snapshot)
+        if not closed or process_identity_presence(pid, started) is not ProcessPresence.PRESENT:
+            return None
+        return name
+    except (psutil.Error, OSError, ValueError):
+        return None
+
+
+def simulator_presence(token: str, executable_names: Collection[str]) -> ProcessPresence:
+    """Inspect simulator candidates without turning unreadable commands into absence."""
+    wanted = {name.lower() for name in executable_names if name}
+    if not token or not wanted:
+        return ProcessPresence.UNKNOWN
+    unknown = False
+    try:
+        for process in psutil.process_iter(("name", "cmdline", "status"), ad_value=None):
+            try:
+                if process.info.get("status") == psutil.STATUS_ZOMBIE:
+                    continue
+                name = process.info.get("name")
+                command = process.info.get("cmdline")
+                candidates = {name.lower()} if name else set()
+                if command:
+                    candidates.update(PurePath(arg).name.lower() for arg in command[:2])
+                if not candidates and sys.platform == "win32":
+                    fallback = _windows_process_name(process.pid)
+                    if fallback:
+                        candidates.add(fallback.lower())
+                if not candidates:
+                    unknown = True
+                elif candidates & wanted:
+                    if not command:
+                        unknown = True
+                    elif any(token_in_argument(token, arg) for arg in command):
+                        return ProcessPresence.PRESENT
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (psutil.Error, OSError):
+                unknown = True
+    except (psutil.Error, OSError):
+        unknown = True
+    return ProcessPresence.UNKNOWN if unknown else ProcessPresence.ABSENT
 
 
 def kill_process_group(pid: int, sig: int | None = None) -> bool:

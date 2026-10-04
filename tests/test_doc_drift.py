@@ -292,9 +292,11 @@ class TestRetiredToolPrefixInSourceStrings:
     #   ltspice_mcp   — package name, appears in module paths and log
     #                   prefixes
     #   ltspice_event — log-record extra key used by observability
+    #   ltspice_ini   — configured startup file for controlled LTspice runs
     _NON_TOOL_TOKENS: ClassVar[set[str]] = {
         "ltspice_mcp",
         "ltspice_event",
+        "ltspice_ini",
     }
 
     def test_no_tool_is_registered_under_the_prefix(self) -> None:

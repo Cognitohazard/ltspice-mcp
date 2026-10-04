@@ -18,12 +18,14 @@ from ltspice_mcp.lib.metrics import summary
 from ltspice_mcp.lib.recipes import SummaryRecipe
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import PlotWaveformInput, _direct_source
+from tests.conftest import inject_numeric_raw
 from tests.test_analysis_tools import _source
+
+pytestmark = pytest.mark.usefixtures("numeric_raw_inputs")
 
 
 def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
-    path.write_bytes(b"placeholder")
-    state.results.set(path, raw)
+    inject_numeric_raw(state, path, raw)
 
 
 def _stepped_tran_raw() -> MagicMock:

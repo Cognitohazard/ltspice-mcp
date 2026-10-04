@@ -22,6 +22,14 @@ from ltspice_mcp.config import (
 class TestServerConfig:
     """Tests for ServerConfig loading."""
 
+    def test_ltspice_ini_from_toml_and_environment(self, work_dir, monkeypatch):
+        monkeypatch.delenv("LTSPICE_MCP_LTSPICE_INI", raising=False)
+        path = work_dir / "ltspice-mcp.toml"
+        path.write_text('[simulator]\nltspice_ini = "established.ini"\n')
+        assert ServerConfig.load(path).ltspice_ini == Path("established.ini")
+        monkeypatch.setenv("LTSPICE_MCP_LTSPICE_INI", "prepared.ini")
+        assert ServerConfig.load(path).ltspice_ini == Path("prepared.ini")
+
     def test_defaults(self):
         config = ServerConfig()
         assert config.simulator is None
@@ -635,6 +643,7 @@ ENV_OVERRIDES: dict[str, str] = {
         "XVII=C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe; ngspice:nightly=/opt/env/ngspice;"
     ),
     "LTSPICE_MCP_NGBEHAVIOR": "  hsa  ",
+    "LTSPICE_MCP_LTSPICE_INI": "/opt/env/established.ini",
     "LTSPICE_MCP_WORKING_DIR": "/tmp/env-working-dir",
     "LTSPICE_MCP_ALLOWED_PATHS": f"/tmp/env-a{os.pathsep}/tmp/env-b",
     "LTSPICE_MCP_MAX_PARALLEL": "9",
@@ -665,6 +674,7 @@ FULL_TOML = """
 [simulator]
 default = "ngspice"
 path = "/opt/toml/ngspice"
+ltspice_ini = "/opt/toml/established.ini"
 enabled = ["NGspice", " LTspice "]
 ngbehavior = "  kipsa  "
 
@@ -743,6 +753,7 @@ class TestLoadCoversEveryKey:
                 "ngspice:dev": Path("/opt/toml/ngspice-dev"),
                 "ltspice:lt24": Path("C:/Program Files/ADI/LTspice/LTspice.exe"),
             },
+            "ltspice_ini": Path("/opt/toml/established.ini"),
             "ngbehavior": "kipsa",
             "working_dir": Path.cwd(),
             "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
@@ -783,6 +794,7 @@ class TestLoadCoversEveryKey:
                 "xvii": Path("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"),
                 "ngspice:nightly": Path("/opt/env/ngspice"),
             },
+            "ltspice_ini": Path("/opt/env/established.ini"),
             "ngbehavior": "hsa",
             "working_dir": Path("/tmp/env-working-dir"),
             "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],

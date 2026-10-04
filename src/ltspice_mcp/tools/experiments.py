@@ -41,6 +41,7 @@ from ltspice_mcp.lib.deck_staging import (
     stage_deck,
     verify_staged_manifest,
 )
+from ltspice_mcp.lib.experiment_inputs import capture_case_inputs
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
     AnalysisCallback,
@@ -78,6 +79,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     validate_recipe,
 )
+from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
@@ -86,6 +88,7 @@ from ltspice_mcp.lib.simulator import (
     simulator_library_roots,
 )
 from ltspice_mcp.lib.simulator_build import executable_identity
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
@@ -110,6 +113,7 @@ from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
     NEW_WORK_ANNOTATIONS,
     NotedModel,
+    OptionalRawSelectionFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -178,6 +182,34 @@ class ExperimentCircuit(StrictModel):
 
 class ExperimentExecution(StrictModel):
     """How long this call waits, how hard the job runs, and on which simulator."""
+
+    recoverable: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Freeze validated inputs for jobs(action='resume'); unsupported inputs "
+            "refuse before submission. Defaults to false; see spice://guide."
+        ),
+    )
+
+    simulator_seed: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=2147483646,
+        description=(
+            "Reseed ngspice before loading every case, including retries. Requires "
+            "recoverable ngspice with one .op, .ac, .dc or .tran; cannot mix with native statistics."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _seed_requires_recovery(self) -> ExperimentExecution:
+        if self.simulator_seed is not None and (
+            not self.recoverable or self.simulator == "ltspice"
+        ):
+            raise ValueError("execution.simulator_seed requires recoverable ngspice")
+        return self
 
     wait_s: float = Field(
         default=60.0,
@@ -284,7 +316,7 @@ class AnalysisInclude(NotedModel):
 coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
-class AttachedAnalysis(StepSelectionFields, NotedModel):
+class AttachedAnalysis(OptionalRawSelectionFields, StepSelectionFields, NotedModel):
     # The same typed union analyze_results advertises, not a free-form object:
     # this block IS an analyze_results request, and a schema that said
     # "any object" left a caller to discover the recipe grammar by having a
@@ -395,6 +427,12 @@ class RunExperimentsInput(ToolInput):
             exclude_unset=False,
             exclude=self.PRESENTATION_FIELDS,
         )
+        # Preserve canonical bytes for ordinary requests recorded before the
+        # opt-in existed. Only requesting recovery changes execution identity.
+        if not self.execution.recoverable:
+            payload["execution"].pop("recoverable", None)
+        if self.execution.simulator_seed is None:
+            payload["execution"].pop("simulator_seed", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -568,18 +606,31 @@ async def handle_run_experiments(
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
-            return await _dwell_and_respond(
-                replay,
-                wait_s,
-                state,
-                provenance=args.provenance,
-                run_fields=args.run_fields,
-                analysis_fields=analysis_fields,
-                budget=budget,
-                warnings=cap_warnings,
-            )
+            try:
+                return await _dwell_and_respond(
+                    replay,
+                    wait_s,
+                    state,
+                    provenance=args.provenance,
+                    run_fields=args.run_fields,
+                    analysis_fields=analysis_fields,
+                    budget=budget,
+                    warnings=cap_warnings,
+                )
+            except Exception as exc:
+                return await _post_submit_error_response(
+                    replay, exc, None, budget=budget, state=state
+                )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
+        if args.execution.simulator_seed is not None and (
+            simulator_dialect(simulator) != "ngspice"
+            or any(isinstance(item, PdkNativeVariation) for item in args.variations)
+        ):
+            raise RecoveryError(
+                "recovery_seed_unsupported",
+                "Explicit seed requires recoverable ngspice without native statistics",
+            )
         circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
@@ -646,9 +697,14 @@ async def handle_run_experiments(
                         args.circuits,
                         strict=True,
                     )
-                )
+                ),
+                # Admission can refuse a frozen-input capture. Wait for every
+                # staging worker before the coordinator cleans an unclaimed tree.
+                return_exceptions=True,
             )
             for preparation in preparations:
+                if isinstance(preparation, BaseException):
+                    raise preparation
                 lint_by_circuit[preparation.circuit_id] = preparation.lint_findings
                 if preparation.source is not None:
                     sources.append(preparation.source)
@@ -692,9 +748,11 @@ async def handle_run_experiments(
             max_parallel=args.execution.max_parallel,
             run_timeout_s=args.execution.run_timeout_s,
             job_deadline_s=args.execution.job_deadline_s,
+            recoverable=args.execution.recoverable,
+            simulator_seed=args.execution.simulator_seed,
             analysis_request=analysis_request,
             analysis_callback=(
-                _attached_analysis_callback(state) if analysis_request is not None else None
+                attached_analysis_callback(state) if analysis_request is not None else None
             ),
         )
         receipt = await asyncio.shield(runner.submit(request))
@@ -723,14 +781,17 @@ async def handle_run_experiments(
                 state=state,
             )
     except SubmissionCommitted as exc:
+        if exc.receipt is not None:
+            return await _post_submit_error_response(
+                exc.receipt, exc, None, budget=budget, state=state
+            )
         return await _error_response(
             args.request_id,
             code=exc.code,
             message=str(exc),
             stage="submission",
             retryable=True,
-            # The request index and the record are on disk under this
-            # request_id; only the rest of the call fell over.
+            # The submission is durable; only the rest of the call fell over.
             commit_state="committed",
             budget=budget,
         )
@@ -788,6 +849,16 @@ async def handle_run_experiments(
             commit_state="not_started",
             budget=budget,
             hint=path_denied_text(exc, state),
+        )
+    except RecoveryError as exc:
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="recovery",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
         )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
@@ -948,7 +1019,7 @@ async def _prepare_circuit(
                 if dialect in {"ltspice", "ngspice"}
                 else None
             ),
-            record_source_lineage=native is not None,
+            record_source_lineage=native is not None or args.execution.recoverable,
         )
         expanded = await asyncio.to_thread(
             expand_variations,
@@ -985,6 +1056,11 @@ async def _prepare_circuit(
                 staged.staged_deck.parent,
             )
             native_validator = NativeCaseValidator(staged, paths.staging_root)
+            lineage_root = (
+                await asyncio.to_thread(Store(state.working_dir).run_dir, job_id, simulator)
+                if args.execution.recoverable
+                else None
+            )
             for offset, (variant, descriptor) in enumerate(
                 zip(materialized, expanded, strict=True)
             ):
@@ -1015,7 +1091,25 @@ async def _prepare_circuit(
                         case.error = str(exc)
                         case.completed_at = now()
                         case.native_statistics.unavailable_reason = str(exc)
+                if args.execution.recoverable and case.status == "queued":
+                    assert lineage_root is not None
+                    inputs = await asyncio.to_thread(
+                        capture_case_inputs,
+                        case,
+                        source,
+                        lineage_root=lineage_root,
+                        materialized=variant,
+                        seeded=args.execution.simulator_seed is not None,
+                    )
+                    case.recovery = CaseRecovery(
+                        inputs,
+                        CaseAttempt(job_id, 0, f"{job_id}-{offset:04d}"),
+                    )
                 cases.append(case)
+    except RecoveryError:
+        # Opt-in is an admission contract: a capture refusal must reach the
+        # caller before the coordinator can claim any of this inventory.
+        raise
     except NativeRequestError:
         raise
     except (
@@ -1088,6 +1182,8 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
                 "job_id": job_id,
                 "runs": "all",
                 "label": _ATTACHED_ANALYSIS_LABEL,
+                "plot_index": request.get("plot_index"),
+                "dialect": request.get("dialect"),
             }
         ],
         "recipes": request.get("recipes") or [],
@@ -1129,7 +1225,7 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
         ) from exc
 
 
-def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
+def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     """Bind the session onto the coordinator's job-only analysis hook.
 
     The coordinator hands the callback nothing but the job, so the session it
@@ -1184,7 +1280,7 @@ async def _load_matching_replay(
     state: SessionState,
     fingerprint: str,
 ) -> ExperimentReceipt | None:
-    """A recorded submission this call replays, before a runner is involved.
+    """Resolve a recorded submission before entering new staging.
 
     Only for a request_id the caller passed. An id this server minted a moment
     ago cannot name a recorded submission, so looking one up is a thread hop
@@ -1193,6 +1289,19 @@ async def _load_matching_replay(
     """
     if "request_id" not in args.model_fields_set:
         return None
+    from ltspice_mcp.lib.experiment_resume import lookup_root_recovery
+
+    simulator = resolve_run_simulator(args.execution.simulator, state)
+    recovery = await lookup_root_recovery(
+        state,
+        request_id=args.request_id,
+        fingerprint=fingerprint,
+        simulator=simulator,
+        recoverable=args.execution.recoverable,
+        analysis_callback=attached_analysis_callback(state) if args.analyze is not None else None,
+    )
+    if recovery is not None:
+        return recovery
     index = await asyncio.to_thread(
         experiment_store.load_request_index,
         args.request_id,
@@ -1230,7 +1339,6 @@ async def _load_matching_replay(
         )
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
-    simulator = resolve_run_simulator(args.execution.simulator, state)
     await asyncio.to_thread(
         lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
@@ -1502,15 +1610,11 @@ async def _post_submit_error_response(
     budget: ResponseBudget,
     state: SessionState,
 ) -> types.CallToolResult:
-    """Envelope for a failure that escaped AFTER the cases were submitted.
+    """Envelope for a failure after the experiment committed.
 
-    Submission is the irreversible step: once the receipt exists the simulator
-    runs are under way, and the job_id plus its control_token are the only
-    handles that reach them. Reporting ``not_started`` here — or letting the
-    exception out, which returns no structuredContent at all — strands running
-    cases with no way to poll or cancel them. Those orphaned runs are precisely
-    what commit_state exists to prevent, so a post-submit escape is always
-    reported as committed.
+    Commitment is irreversible even when launch is still pending. The job_id
+    and control_token must survive a response failure so the caller can follow
+    or cancel the committed work instead of submitting it again under a new id.
     """
     job = receipt.job
 
@@ -1555,23 +1659,24 @@ async def _post_submit_error_response(
         data.update(handles)
     data["replayed"] = receipt.replayed
     route = (
-        f"The experiment was submitted and is running. Use jobs(status) with job_id "
+        f"The experiment is committed. Use jobs(status) with job_id "
         f"{job.job_id} to follow it, or jobs(cancel) with that job_id and its "
         f"control_token to stop it."
     )
     data["hint"] = route
     data["error"] = {
-        "code": raise_site_code(exc) or "receipt_failed",
+        "code": (
+            exc.code
+            if isinstance(exc, SubmissionCommitted)
+            else raise_site_code(exc) or "receipt_failed"
+        ),
         "message": error_message(exc, build_error),
-        "stage": "receipt",
+        "stage": "submission" if isinstance(exc, SubmissionCommitted) else "receipt",
         "retryable": True,
         "commit_state": "committed",
     }
     finalize_receipt(data)
-    text = (
-        f"Experiment {job.job_id} was submitted, but building its receipt failed: {exc}. "
-        f"The cases ARE running."
-    )
+    text = f"Experiment {job.job_id} was committed, but completing the call failed: {exc}."
     try:
         return await _render_static_run_receipt(
             data,

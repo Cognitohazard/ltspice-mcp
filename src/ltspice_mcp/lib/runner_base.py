@@ -21,11 +21,10 @@ from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
 from ltspice_mcp.lib.deck_staging import resolve_reference
+from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
-    extract_error_context,
-    extract_log_diagnostics,
     is_op_stepping_failure,
     op_ladder_exhausted,
 )
@@ -94,7 +93,12 @@ class RunOutcome(NamedTuple):
     simulator_version: str | None = None
 
 
-_RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS)
+_REQUESTED_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS) | {
+    ".tf",
+    ".pz",
+    ".sens",
+    ".disto",
+}
 _INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
 _MAX_INCLUDE_DEPTH = 3
 
@@ -110,10 +114,23 @@ def _include_target(rest: str) -> str | None:
     return rest.split(None, 1)[0]
 
 
-def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
-    """Snapshot a deck's raw-producing analyses and ``.save`` presence."""
+@dataclass(frozen=True)
+class DeckRequirements:
+    """Requested analysis directives and output controls from one deck scan."""
+
+    analyses: tuple[str, ...] = ()
+    has_save: bool = False
+    has_control: bool = False
+
+    @property
+    def raw_analyses(self) -> tuple[str, ...]:
+        return () if self.has_control else self.analyses
+
+
+def deck_requirements(netlist: Path | None) -> DeckRequirements:
+    """Snapshot requested analyses, ``.save`` and ``.control`` in one walk."""
     if netlist is None:
-        return [], False
+        return DeckRequirements()
     analyses: list[str] = []
     has_save = False
     has_control = False
@@ -144,7 +161,7 @@ def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
                 break
             if head == ".control":
                 has_control = True
-            elif head in _RAW_PRODUCING_ANALYSES:
+            elif head in _REQUESTED_ANALYSES:
                 if head not in analyses:
                     analyses.append(head)
             elif head == ".save":
@@ -155,20 +172,17 @@ def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
                     scan(resolve_reference(path.parent, target), depth + 1)
 
     scan(netlist, 0)
-    if has_control:
-        return [], has_save
-    return analyses, has_save
+    return DeckRequirements(tuple(analyses), has_save, has_control)
 
 
 def _missing_required_raw_outcome(
     log_file: str,
-    log_path: Path,
-    analyses: list[str],
+    excerpt: str | None,
+    analyses: tuple[str, ...],
     has_save: bool,
 ) -> RunOutcome:
     """Build the failure facts for an expected but absent raw artifact."""
     analysis_str = "/".join(analyses)
-    excerpt = extract_error_context(log_path, max_lines=20)
     if has_save:
         workaround = (
             " The deck sets a '.save' list; if it omits nodes the analysis "
@@ -196,7 +210,7 @@ def _missing_required_raw_outcome(
         ),
         "evidence": {
             "expected_artifact": "raw",
-            "analyses": analyses,
+            "analyses": list(analyses),
             "has_save_list": has_save,
         },
     }
@@ -249,35 +263,9 @@ def _is_ngspice_lib_section_failure(
     return mode
 
 
-def collect_run_outcome(
-    raw_file: str,
-    log_file: str,
-    requirements: tuple[list[str], bool] | None = None,
-    exit_code: int | None = None,
-    *,
-    netlist: Path | None = None,
-    simulator: type | None = None,
-    ngbehavior: str | None = None,
-    simulator_exception: str | None = None,
-) -> RunOutcome:
-    """Collect and classify completion artifacts on a worker thread.
-
-    ``exit_code`` is the simulator process's own exit status, relayed as a
-    fact when the run failed — the one signal that separates a process killed
-    from outside from a deck the simulator declined.
-
-    ``simulator_exception`` is what spicelib caught around the simulator call.
-    It reports every such exception as exit code -2 and keeps the text on the
-    run task, so without it a missing executable and spicelib's own subprocess
-    timeout read as the same bare number.
-
-    ``netlist`` and ``simulator`` are what the deck ran as, and are read only
-    to tell one missing include from another: ngspice in a compatibility mode
-    reports a sectioned ``.lib`` as a missing file, and that failure has a
-    configuration fix the generic one does not.
-    """
-    log_path = Path(log_file)
-    sim_failed = raw_file in ("", ".") or log_path.suffix == ".fail"
+def _raw_completion_outcome(raw_file: str, log_file: str) -> RunOutcome | None:
+    """Return a positive RAW or unreadable-location outcome before log capture."""
+    sim_failed = raw_file in ("", ".") or Path(log_file).suffix == ".fail"
     raw_size = 0
     if not sim_failed:
         try:
@@ -313,29 +301,117 @@ def collect_run_outcome(
             )
     if raw_size > 0:
         return RunOutcome(raw_file, log_file, raw_size, None)
+    return None
 
-    try:
-        log_exists = bool(log_file) and log_path.exists()
-    except OSError:
-        log_exists = False
-    errors = extract_log_diagnostics(log_path)["errors"] if log_exists else []
-    # The clean-exit branch below asserts "exited cleanly" from log-error
-    # ABSENCE, so a killed process with a quiet log would be reported as a
-    # clean exit — gate it on the one direct fact about exit status.
-    if exit_code in (None, 0) and not sim_failed and log_exists:
+
+def _native_log_output(logs: DecodedLog, requirements: DeckRequirements) -> dict[str, Any] | None:
+    """Identify produced native prints without asserting full analysis coverage."""
+    section = logs.section("native_tables")
+    if section["status"] != "parsed" or not requirements.analyses:
+        return None
+    families: set[str] = set()
+    for block in section["value"]:
+        label = block["printed_analysis_label"]
+        if label is None and block["listing_current"] is not None:
+            label = block["listing_current"]["analysis_label"]
+        if label is None:
+            continue
+        analysis = {
+            "Transfer Function": ".tf",
+            "Pole-Zero Analysis": ".pz",
+            "Sensitivity Analysis": ".sens",
+        }.get(label)
+        if label.startswith("DISTORTION -"):
+            analysis = ".disto"
+        if analysis is not None:
+            families.add(analysis)
+    if not set(requirements.analyses).issubset(families):
+        return None
+    return {
+        "code": "native_log_output",
+        "kind": "reconciliation",
+        "detail": (
+            "Native printed results were captured without a RAW file. "
+            "Printed blocks do not establish full analysis coverage."
+        ),
+        "evidence": {
+            "analyses": list(requirements.analyses),
+            "printed_blocks": len(section["value"]),
+            "analysis_extent": "unknown",
+        },
+    }
+
+
+def collect_run_outcome(
+    raw_file: str,
+    log_file: str,
+    requirements: DeckRequirements | None = None,
+    exit_code: int | None = None,
+    *,
+    logs: DecodedLog | None,
+    logs_error: str | None = None,
+    netlist: Path | None = None,
+    simulator: type | None = None,
+    ngbehavior: str | None = None,
+    simulator_exception: str | None = None,
+) -> RunOutcome:
+    """Classify a cold completion using already captured log facts.
+
+    The RAW metadata fast path runs before capture, in the submission callback.
+    No log source is reopened here. Exit status and spicelib's caught exception
+    remain separate process facts even when capture or section decoding fails.
+    The deck may still be read to classify ngspice's sectioned-library failure.
+    """
+    sim_failed = raw_file in ("", ".") or Path(log_file).suffix == ".fail"
+    errors: list[str] = []
+    context: str | None = None
+    log_present = False
+    failures = [logs_error] if logs_error else []
+    if logs is None:
+        if not failures:
+            failures.append("Completion log facts are unavailable")
+    else:
+        log_present = any(item.role == "log" for item in logs.captured.files)
+        diagnostics = logs.section("diagnostics")
+        excerpt = logs.section("error_context")
+        for name, section in (("diagnostics", diagnostics), ("error_context", excerpt)):
+            if section["status"] == "error":
+                failure = section["error"]
+                failures.append(f"{name}: {failure['type']}: {failure['message']}")
+            elif log_present and section["status"] != "parsed":
+                failures.append(f"Completion log section {name!r} is unavailable")
+        if diagnostics["status"] == "parsed":
+            errors = diagnostics["value"]["errors"]
+        if excerpt["status"] == "parsed":
+            context = excerpt["value"]
+    # Quiet diagnostics alone prove neither process success nor produced data.
+    if (
+        exit_code == 0
+        and not simulator_exception
+        and not sim_failed
+        and log_present
+        and not failures
+    ):
         non_rung = [error for error in errors if not is_op_stepping_failure(error)]
         if not non_rung and not op_ladder_exhausted(errors):
-            analyses, has_save = requirements if requirements is not None else ([], False)
-            if not analyses:
-                return RunOutcome("", log_file, 0, None)
-            return _missing_required_raw_outcome(log_file, log_path, analyses, has_save)
+            requirements = requirements or DeckRequirements()
+            if (
+                logs is not None
+                and not errors
+                and is_ngspice(simulator)
+                and (observation := _native_log_output(logs, requirements))
+            ):
+                return RunOutcome("", log_file, 0, None, observations=(observation,))
+            analyses, has_save = requirements.raw_analyses, requirements.has_save
+            if analyses:
+                return _missing_required_raw_outcome(log_file, context, analyses, has_save)
 
-    context: str | None = None
-    if log_exists:
-        context = extract_error_context(log_path, max_lines=20)
+    if context is not None:
         error = f"Simulation failed (no output generated)\n\nLog excerpt:\n{context}"
     else:
         error = "Simulation failed (no output generated, log file missing)"
+    if failures:
+        error += "\nCompletion log facts unavailable: " + "; ".join(failures)
     # The diagnostics above already name the cause; classifying here is what
     # turns it into a code a caller can branch on instead of prose it must read.
     code, evidence = classify_failure_code(errors)
@@ -596,7 +672,7 @@ class _NonBlockingSimRunner(SimRunner):
     session's simulator. See ``docs/spicelib_bugs.md`` Bug 10.
     """
 
-    prelaunch_check: Callable[[], None] | None = None
+    prelaunch_check: Callable[[Path], None] | None = None
 
     def _prepare_sim(self, netlist: str | Path | BaseEditor, run_filename: str | None) -> Path:
         copied = super()._prepare_sim(netlist, run_filename)
@@ -604,7 +680,7 @@ class _NonBlockingSimRunner(SimRunner):
         # Check the copied deck while no simulator can have consumed it yet.
         if self.prelaunch_check is not None:
             try:
-                self.prelaunch_check()
+                self.prelaunch_check(copied)
             except Exception as exc:
                 raise NativePrelaunchRefused(str(exc)) from exc
         return copied
@@ -690,7 +766,8 @@ class RunnerBase:
         *,
         timeout_s: float | None = None,
         cwd: Path | None = None,
-        prelaunch_check: Callable[[], None] | None = None,
+        prelaunch_check: Callable[[Path], None] | None = None,
+        simulator_class: type | None = None,
     ) -> SimRunner:
         """Construct a spicelib SimRunner with this runner's settings.
 
@@ -699,7 +776,7 @@ class RunnerBase:
         ``SUBPROCESS_TIMEOUT_CEILING_S``, becomes that ceiling.
         """
         runner = _NonBlockingSimRunner(
-            simulator=self.simulator_class,
+            simulator=simulator_class or self.simulator_class,
             output_folder=str(self.output_folder),
             parallel_sims=self.max_parallel,
             timeout=(
@@ -739,6 +816,9 @@ class RunnerBase:
         *,
         native: NativeLaunchContext | None = None,
         timeout_s: float | None = None,
+        simulator_class: type | None = None,
+        prelaunch_check: Callable[[Path], None] | None = None,
+        completion_logs: Callable[[Path | None, Path | None], DecodedLog] | None = None,
     ) -> SimRunner:
         """Submit one deck and bridge its filesystem-derived outcome to the loop.
 
@@ -765,48 +845,77 @@ class RunnerBase:
         if native is not None and not is_ngspice(self.simulator_class):
             raise ValueError("native statistical setup requires ngspice")
         electrical_deck = native.input_deck if native else netlist
-        requirements = deck_requests_raw(electrical_deck)
+        requirements = deck_requirements(electrical_deck)
+        simulator = simulator_class or self.simulator_class
+        outcome_mode = native.policy.ngbehavior if native else None
+        if native is None and simulator_class is not None:
+            outcome_mode = getattr(simulator, "_compatibility_mode", None)
+
+        def verify_copied(copied: Path) -> None:
+            if native is not None and native.verify_execution is not None:
+                native.verify_execution()
+            if prelaunch_check is not None:
+                prelaunch_check(copied)
 
         def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
             # This runner is fresh per submission, so active_tasks holds
             # exactly this run's task — appended before its thread starts,
             # so it is present whenever the callback can fire.
             version: str | None = None
+            raw_name = str(raw_file) if raw_file else ""
+            log_name = str(log_file) if log_file else ""
+            task = threading.current_thread()
+            exit_code = getattr(task, "retcode", None)
+            simulator_exception = getattr(task, "exception_text", None)
             try:
                 # Read here, before the callback: a stopped case's artifacts
                 # are removed once it lands. Both outcomes below carry it.
                 version = reported_build(log_file, raw_file)
-                outcome = collect_run_outcome(
-                    str(raw_file) if raw_file else "",
-                    str(log_file) if log_file else "",
-                    requirements,
-                    netlist=electrical_deck,
-                    simulator=self.simulator_class,
-                    ngbehavior=native.policy.ngbehavior if native else None,
-                    # spicelib invokes the callback from the RunTask's own
-                    # thread, and the task IS a Thread subclass carrying its
-                    # retcode — so the current thread is the exact task,
-                    # race-free. Any other calling thread reads None.
-                    exit_code=getattr(threading.current_thread(), "retcode", None),
-                    simulator_exception=getattr(
-                        threading.current_thread(), "exception_text", None
-                    ),
-                )._replace(simulator_version=version)
+                outcome = _raw_completion_outcome(raw_name, log_name)
+                if outcome is None:
+                    logs = None
+                    logs_error = None
+                    if completion_logs is None:
+                        logs_error = "No completion log loader was supplied"
+                    else:
+                        try:
+                            logs = completion_logs(
+                                Path(raw_name) if raw_name not in ("", ".") else None,
+                                Path(log_name) if log_name not in ("", ".") else None,
+                            )
+                        except Exception as exc:
+                            logs_error = f"{type(exc).__name__}: {exc}"
+                    outcome = collect_run_outcome(
+                        raw_name,
+                        log_name,
+                        requirements,
+                        netlist=electrical_deck,
+                        simulator=simulator,
+                        ngbehavior=outcome_mode,
+                        exit_code=exit_code,
+                        simulator_exception=simulator_exception,
+                        logs=logs,
+                        logs_error=logs_error,
+                    )
+                outcome = outcome._replace(simulator_version=version)
             except Exception as exc:
-                outcome = RunOutcome(
-                    "",
-                    "",
-                    0,
-                    f"Simulation failed (outcome collection: {exc})",
-                    simulator_version=version,
-                )
+                outcome = collect_run_outcome(
+                    raw_name,
+                    log_name,
+                    requirements,
+                    logs=None,
+                    logs_error=f"Outcome collection: {type(exc).__name__}: {exc}",
+                    exit_code=exit_code,
+                    simulator_exception=simulator_exception,
+                )._replace(simulator_version=version)
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
         self._retire_finished_runners()
         runner = self._build_sim_runner(
             timeout_s=timeout_s,
             cwd=native.cwd if native else None,
-            prelaunch_check=native.verify_execution if native else None,
+            prelaunch_check=verify_copied if native is not None or prelaunch_check else None,
+            simulator_class=simulator,
         )
         runner.run(
             str(netlist),

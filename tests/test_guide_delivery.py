@@ -246,11 +246,10 @@ class TestSectionContent:
     def test_names_no_absent_or_withheld_surface(self):
         """Two rules share this denylist. Absent behavior: "rerun", "case_axis"
         and "columnar" name things this surface does not have, and a guide that
-        names them teaches calls that do not exist. Withheld knobs: the
-        control token stays scoped to the submitting session, and the
-        analysis_budget_s deferral knob is not taught."""
+        names them teaches calls that do not exist. The analysis_budget_s
+        deferral knob is not taught; recovery authority is documented."""
         text = "\n".join([guide.read(), _all_sections()])
-        for term in ("rerun", "columnar", "case_axis", "control_token", "analysis_budget_s"):
+        for term in ("rerun", "columnar", "case_axis", "analysis_budget_s"):
             pattern = re.compile(
                 r"\b" + r"[\s_-]?".join(re.escape(p) for p in term.split("_")) + r"\b",
                 re.IGNORECASE,

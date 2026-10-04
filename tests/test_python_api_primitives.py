@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, cast, get_args, get_origin, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pytest
-from spicelib.raw.raw_read import RawRead
 
 import ltspice_mcp.api as api_module
-import ltspice_mcp.api._primitives as primitives_module
 from ltspice_mcp.api import Api, RawResult
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     LTSPICE_TRAN_RC_VFINAL,
@@ -23,6 +22,7 @@ from tests.conftest import (
     patch_stub_bootstrap,
     stage_recorded_fixture,
 )
+from tests.test_decoded_raw import header
 
 EXPECTED_ALL = [
     "Api",
@@ -161,7 +161,7 @@ def test_raw_result_preserves_ac_complex_trace_and_real_axis(
     assert not np.iscomplexobj(axis)
 
 
-def test_raw_result_uses_bounded_sibling_log_fallback(
+def test_raw_result_uses_captured_steps_without_reopening_sibling_log(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -173,70 +173,60 @@ def test_raw_result_uses_bounded_sibling_log_fallback(
         encoding="utf-8",
     )
 
-    class _RawWithoutStepParams:
-        dialect = "ltspice"
-        steps = None
+    captured = DecodedRaw(
+        [
+            DecodedPlot(
+                header(
+                    "Transient Analysis",
+                    [("time", "time"), ("V(out)", "voltage")],
+                    6,
+                    flags=("real", "stepped"),
+                ),
+                [
+                    np.array([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]),
+                    np.array([0.0, 1.0, 1.0, 2.0, 2.0, 3.0]),
+                ],
+                snapshot_id="captured-steps",
+                steps=[{"gain": 10}, {"gain": 20}, {"gain": 40}],
+                step_offsets=[0, 2, 4],
+            )
+        ]
+    )
 
-        def get_trace_names(self) -> list[str]:
-            return ["time", "V(out)"]
+    async def fake_load(source: services.AnalysisSource, _state: SessionState) -> DecodedRaw:
+        assert source.raw == raw_path
+        return captured
 
-        def get_steps(self) -> range:
-            return range(3)
-
-        def get_raw_property(self, name: str) -> str:
-            assert name == "Plotname"
-            return "Transient Analysis"
-
-        def get_wave(self, name: str, step: int = 0) -> np.ndarray:
-            del name
-            return np.array([step, step + 1.0])
-
-        def get_axis(self, step: int = 0) -> np.ndarray:
-            del step
-            return np.array([0.0, 1.0])
-
-    bounded_paths: list[Path] = []
-    original_bounded = services.bounded_parse
-
-    async def fake_load(_path: Path, _state: SessionState) -> RawRead:
-        return cast(RawRead, _RawWithoutStepParams())
-
-    async def observed_bounded(path: Path, thunk: Any, *, timeout_s: float) -> Any:
-        bounded_paths.append(path)
-        return await original_bounded(path, thunk, timeout_s=timeout_s)
+    async def forbidden_parent_parse(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("A decoded RAW consumer must not reopen the parent log")
 
     monkeypatch.setattr(services, "load_raw", fake_load)
-    monkeypatch.setattr(services, "bounded_parse", observed_bounded)
+    monkeypatch.setattr(services, "bounded_parse", forbidden_parent_parse)
     result = SyncApi(state_no_sim).load_raw(raw_path=raw_path)
 
-    assert result.steps == [{"gain": 1.0}, {"gain": 2.0}, {"gain": 4.0}]
+    assert result.steps == [{"gain": 10}, {"gain": 20}, {"gain": 40}]
     np.testing.assert_array_equal(result.trace("V(out)", step=2), np.array([2.0, 3.0]))
-    assert bounded_paths == [raw_path.with_suffix(".log")]
 
 
-def test_raw_parse_deadline_propagates_through_api(
+def test_raw_parser_refusal_propagates_through_api(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw_path = work_dir / "wedged-api.raw"
     raw_path.write_bytes(b"placeholder")
-    release = threading.Event()
 
-    def slow_parse(_path: Path, _state: SessionState) -> RawRead:
-        release.wait(5)
-        return cast(RawRead, object())
+    async def refused_parse(source: services.AnalysisSource, _state: SessionState) -> DecodedRaw:
+        assert source.raw == raw_path
+        raise ResultError("RAW parser deadline exceeded")
 
     patch_stub_bootstrap(monkeypatch, state_no_sim)
-    monkeypatch.setattr(services, "load_raw_sync", slow_parse)
-    monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(services, "load_raw", refused_parse)
     api = Api()
     try:
         with pytest.raises(ResultError, match="exceeded"):
             api.load_raw(raw_path=raw_path)
     finally:
-        release.set()
-        services._wedged_raw_paths.pop(raw_path, None)
         api.close()
 
 
@@ -249,9 +239,9 @@ def test_load_raw_runs_on_the_concrete_api_private_loop(
     seen_threads: list[int] = []
     original_load = services.load_raw
 
-    async def observed_load(path: Path, state: SessionState) -> RawRead:
+    async def observed_load(source: services.AnalysisSource, state: SessionState) -> DecodedRaw:
         seen_threads.append(threading.get_ident())
-        return await original_load(path, state)
+        return await original_load(source, state)
 
     patch_stub_bootstrap(monkeypatch, state_no_sim)
     monkeypatch.setattr(services, "load_raw", observed_load)
@@ -261,7 +251,7 @@ def test_load_raw_runs_on_the_concrete_api_private_loop(
         assert result.trace("V(out)").size > 0
 
 
-def test_measurements_support_cases_and_enforce_a_bounded_log_parse(
+def test_measurements_support_cases_and_relay_contained_loader_failure(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -277,15 +267,16 @@ def test_measurements_support_cases_and_enforce_a_bounded_log_parse(
     )
     assert parsed["measurements"]["vfinal"]["values"] == [LTSPICE_TRAN_RC_VFINAL]
 
-    release = threading.Event()
-
-    def slow_measurements(_path: Path):
-        release.wait(5)
-        return {}
+    async def refused_logs(source: services.AnalysisSource, state: SessionState):
+        assert source.raw == raw_path
+        assert source.trusted_job_artifact
+        assert source.identity is not None
+        assert source.identity["case_id"] == "case-selected"
+        assert state is state_no_sim
+        raise ResultError("Contained log parsing exceeded its deadline")
 
     patch_stub_bootstrap(monkeypatch, state_no_sim)
-    monkeypatch.setattr(primitives_module, "parse_measurements", slow_measurements)
-    monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(services, "load_logs", refused_logs)
     api = Api()
     try:
         with pytest.raises(ResultError, match="exceeded"):
@@ -294,8 +285,6 @@ def test_measurements_support_cases_and_enforce_a_bounded_log_parse(
                 case_id="case-selected",
             )
     finally:
-        release.set()
-        services._wedged_raw_paths.pop(raw_path.with_suffix(".log"), None)
         api.close()
 
 

@@ -143,7 +143,7 @@ def _toml_simulator(value: Any) -> Any:
     return value or None
 
 
-def _toml_simulator_exe(value: Any) -> Any:
+def _toml_optional_path(value: Any) -> Any:
     return Path(value) if value else _SKIP
 
 
@@ -365,8 +365,16 @@ _SETTINGS: tuple[_Setting, ...] = (
         field="simulator_exe",
         section=SIM_SECTION,
         key=SIM_PATH_KEY,
-        from_toml=_toml_simulator_exe,
+        from_toml=_toml_optional_path,
         env=SIM_PATH_ENV,
+        from_env=_env_path,
+    ),
+    _Setting(
+        field="ltspice_ini",
+        section=SIM_SECTION,
+        key="ltspice_ini",
+        from_toml=_toml_optional_path,
+        env="LTSPICE_MCP_LTSPICE_INI",
         from_env=_env_path,
     ),
     _Setting(
@@ -595,6 +603,10 @@ class ServerConfig:
     executable whose name says nothing needs it written. Lower-cased as read.
     ``[simulator.executables]``, or ``LTSPICE_MCP_SIMULATOR_EXECUTABLES`` as
     ``name=path`` entries separated by ``;``. Probed at startup."""
+
+    ltspice_ini: Path | None = None
+    """Established LTspice settings to capture for native Windows recovery.
+    None uses the current user's APPDATA/LTspice.ini. The source is never written."""
 
     ngbehavior: str | None = None
     """ngspice compatibility mode (``ngbehavior``). ``None`` leaves spicelib's
@@ -896,6 +908,9 @@ def generate_default_config(path: Path) -> None:
     sim.add(comment("Explicit path to simulator executable (overrides auto-detection)"))
     sim.add(comment("Unset: auto-detect"))
     _shown_default(sim, "simulator_exe", example="C:\\Program Files\\ADI\\LTspice\\LTspice.exe")
+    sim.add(comment("Established native Windows settings for recoverable LTspice runs."))
+    sim.add(comment("Unset uses APPDATA/LTspice.ini; the original file is never written."))
+    _shown_default(sim, "ltspice_ini", example="C:/SPICE/LTspice.ini")
     sim.add(nl())
     sim.add(comment("ngspice compatibility mode (ngbehavior). Unset = spicelib's default"))
     sim.add(comment("'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned"))

@@ -83,7 +83,7 @@ def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading
     def peer() -> None:
         with file_lock(Store.circuit_lock(target)):
             held.set()
-            release.wait(10)
+            release.wait()
 
     t = threading.Thread(target=peer, daemon=True)
     t.start()

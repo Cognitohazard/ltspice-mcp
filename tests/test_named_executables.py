@@ -738,6 +738,7 @@ class TestLibraryRoots:
         monkeypatch.setattr(wsl_mod, "is_wsl", lambda: True)
         monkeypatch.setattr(wsl_mod, "_resolve_win_env", windows_env.get)
         monkeypatch.setenv("HOME", str(work_dir / "linux-home"))
+        monkeypatch.setenv("USERPROFILE", str(work_dir / "linux-home"))
         xvii = bind_named_executable(LTspiceWSL, "ltspice:xvii", builds["xvii"])
         lt24 = bind_named_executable(LTspiceWSL, "ltspice:lt24", builds["lt24"])
 

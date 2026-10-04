@@ -191,6 +191,17 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "raw": {"type": ["string", "null"]},
         "log": {"type": ["string", "null"]},
         "simulator_version": {"type": ["string", "null"]},
+        "attempt": {
+            "type": "object",
+            "properties": {
+                "execution_job_id": {"type": "string"},
+                "attempt_index": {"type": "integer", "minimum": 0},
+                "run_token": {"type": "string"},
+                "reused": {"type": "boolean"},
+            },
+            "required": ["execution_job_id", "attempt_index", "run_token", "reused"],
+            "additionalProperties": False,
+        },
     },
     # run_fields may project away any key, so the shared row fragment
     # deliberately requires none of them.
@@ -208,6 +219,7 @@ _COMPLETENESS_SCHEMA: dict[str, Any] = {
         "failed": {"type": "integer"},
         "cancelled": {"type": "integer"},
         "skipped": {"type": "integer"},
+        "reused": {"type": "integer"},
     },
     "required": [
         "declared",
@@ -217,10 +229,11 @@ _COMPLETENESS_SCHEMA: dict[str, Any] = {
         "failed",
         "cancelled",
         "skipped",
+        "reused",
     ],
 }
 
-# The derived view of ``completeness``, and only that: the seven raw counters
+# The derived view of ``completeness``, and only that: the raw counters
 # live in ``completeness`` and are not restated here.
 _PROGRESS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -232,12 +245,25 @@ _PROGRESS_SCHEMA: dict[str, Any] = {
     "required": ["expanded", "terminal", "remaining"],
 }
 
+LINEAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "root_job_id": {"type": "string"},
+        "parent_job_id": {"type": ["string", "null"]},
+        "attempt_index": {"type": "integer", "minimum": 0},
+    },
+    "required": ["root_job_id", "parent_job_id", "attempt_index"],
+    "additionalProperties": False,
+}
+
+
 RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "job_id": {"type": ["string", "null"]},
         "request_id": {"type": "string"},
         "control_token": {"type": "string"},
+        "lineage": LINEAGE_SCHEMA,
         # A fact about THIS call, not about the job: true when the request_id
         # and canonical payload matched an existing durable experiment, so its
         # receipt came back and no cases were submitted. The replay leaves the
@@ -476,7 +502,7 @@ async def render_run_receipt(
 def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
     """Project durable accounting into the shared progress fact.
 
-    The three DERIVED numbers only. ``completeness`` keeps all seven counters,
+    The three DERIVED numbers only. ``completeness`` keeps all raw counters,
     unchanged and always, so each counter is one key away and neither this
     block nor the hint restates them.
     """
@@ -526,6 +552,7 @@ class ReceiptSnapshot:
     analysis_observations: tuple[dict[str, Any], ...]
     analysis_request: dict[str, Any] | None
     simulator_executable: SimulatorExecutable | None = None
+    lineage: dict[str, Any] | None = None
     path_denied_hint: str | None = None
     """The session's sandbox guidance, which a ``path_denied`` failure row
     carries as its hint. Not a job fact: the remedy is the sandbox setting as
@@ -585,12 +612,13 @@ def render_receipt_snapshot(
             else _terminal_hint(snapshot, runs["truncated"])
         ),
     }
-    # Cancel authority, only where a cancel can still do anything. A terminal
-    # job has nothing left to stop, so the token there is bytes on every receipt
-    # buying an action the lifecycle already refuses.
     emitted_control_token = control_token if control_token is not None else snapshot.control_token
-    if emitted_control_token is not None and snapshot.status not in TERMINAL_EXPERIMENT_STATUSES:
+    if emitted_control_token is not None and (
+        snapshot.lineage is not None or snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
+    ):
         data["control_token"] = emitted_control_token
+    if snapshot.lineage is not None:
+        data["lineage"] = dict(snapshot.lineage)
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
         if snapshot.analysis_result is not None:
@@ -718,7 +746,7 @@ _LEAN_PRODUCED_OMITS = ("raw", "log", "simulator_version")
 
 
 def _run_item(case: ExperimentCase) -> dict[str, Any]:
-    return {
+    row: dict[str, Any] = {
         "case_id": case.case_id,
         "run_index": case.run_index,
         "circuit": case.circuit,
@@ -728,6 +756,15 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         "log": str(case.log_file) if case.log_file else None,
         "simulator_version": case.simulator_version,
     }
+    if case.recovery is not None:
+        attempt = case.recovery.attempt
+        row["attempt"] = {
+            "execution_job_id": attempt.execution_job_id,
+            "attempt_index": attempt.attempt_index,
+            "run_token": attempt.run_token,
+            "reused": attempt.reused,
+        }
+    return row
 
 
 def _project_run_rows(
@@ -971,6 +1008,15 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         simulator_executable=job.simulator_executable,
+        lineage=(
+            {
+                "root_job_id": job.recovery.root_job_id,
+                "parent_job_id": job.recovery.parent_job_id,
+                "attempt_index": job.recovery.attempt_index,
+            }
+            if job.recovery is not None
+            else None
+        ),
         path_denied_hint=(
             state.sandbox_guidance()
             if state is not None

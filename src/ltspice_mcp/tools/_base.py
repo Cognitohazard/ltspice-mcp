@@ -51,6 +51,38 @@ from ltspice_mcp.tools._schema import (
 
 logger = logging.getLogger(__name__)
 
+
+class RawDialectFields(StrictModel):
+    """Explicit format selection shared by RAW and log readers."""
+
+    dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = Field(
+        default=None,
+        description="Explicit producing format for ambiguous imports; must agree with recorded and header evidence.",
+    )
+
+
+class RawSelectionFields(RawDialectFields):
+    """Select one RAW plot independently of case and step selection."""
+
+    plot_index: int = Field(
+        default=0,
+        strict=True,
+        ge=0,
+        description="Zero-based plot in the result artifact; distinct from run and step index.",
+    )
+
+
+class OptionalRawSelectionFields(RawDialectFields):
+    """Choose a RAW plot only when the requested operation reads RAW."""
+
+    plot_index: int | None = Field(
+        default=None,
+        strict=True,
+        ge=0,
+        description="Zero-based RAW plot; omitted selects the first plot for RAW reads. Log views require omission.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Response helpers — standardize tool output format
 #

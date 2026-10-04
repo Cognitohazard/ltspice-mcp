@@ -430,7 +430,7 @@ def _assert_no_control_token(value) -> None:
 def test_jobs_output_schema_is_discriminated_by_action():
     assert JOBS_OUTPUT_SCHEMA["discriminator"]["propertyName"] == "action"
     actions = {branch["properties"]["action"]["const"] for branch in JOBS_OUTPUT_SCHEMA["oneOf"]}
-    assert actions == {"status", "wait", "cancel", "list", "runs"}
+    assert actions == {"status", "wait", "cancel", "list", "runs", "resume"}
 
 
 def test_receipt_schemas_require_progress():

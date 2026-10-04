@@ -2,8 +2,8 @@
 name: ngspice
 description: >
   Writing a deck for ngspice: how it differs from LTspice, parameters,
-  behavioral sources, subcircuits, `.save`, `.control`, Monte Carlo,
-  options, XSPICE, and the LTspice-vs-ngspice table.
+  behavioral sources, subcircuits, `.save`, `.control`, Monte Carlo and
+  seeded recovery, options, XSPICE, and the LTspice-vs-ngspice table.
 ---
 
 # ngspice-Specific
@@ -239,8 +239,10 @@ ngspice has **no `.mc` directive**. Two idioms:
 `gauss`/`unif`/`aunif`/`limit` directly in a `.param` or a device/B-source
 value, in `'…'` or `{…}`. `gauss(nom, rvar, sigma)` and `unif(nom, rvar)` take
 a relative variation, `agauss(nom, avar, sigma)` and `aunif(nom, avar)` an
-absolute one, and `limit(nom, avar)` gives `nom+avar` or `nom-avar`. Each
-device card draws a fresh value at parse time:
+absolute one. In native or `hsa` mode, `limit(nom, avar)` gives `nom+avar` or
+`nom-avar`; this server's default `kiltpsa` instead provides a three-argument
+clamping `limit`. Configure the mode for the syntax the deck uses. Each device
+card draws a fresh value at parse time:
 
 ```spice
 R1 a b 'agauss(10k, 500, 3)'      $ 10k, ±500 absolute, /3 sigma
@@ -271,6 +273,28 @@ end
 ```
 
 Set the seed with `.options seed=<value>` or `seed=random`.
+
+## Seeded recovery
+
+For repeatable static electrical randomness through the server, submit with
+`execution={"simulator": "ngspice", "recoverable": true, "simulator_seed": 17}`.
+The seed takes only integers `1..2147483646`; every case and retry starts from
+that same seed. The owned driver reseeds immediately before loading the captured
+electrical inputs, after simulator initialization. A seed in a startup file
+does not provide this ordering. Recovery supports Linux and native Windows and
+does not change the user's startup files or the configured compatibility mode.
+
+Seeded recovery admits static `agauss`, `gauss`, `aunif`, `unif`, and `limit`
+with exactly one `.op`, `.ac`, `.dc`, or `.tran`. Noise, stepped inputs and
+analysis combinations refuse before claim (`recovery_seed_analysis_unsupported`)
+because the driver writes one plot. Caller `.control` scripts, unknown functions,
+external modules and transient random functions remain unsupported. The `limit`
+syntax still follows the compatibility-mode rule above.
+
+This seed is separate from a `random` variation's draws and from native PDK
+statistical sample seeds. It does not activate PDK statistics or define a
+sampling policy; mixing it with native statistical families refuses. For
+resume calls and saved tokens, see guide section 'tools'.
 
 ## .options Flags
 

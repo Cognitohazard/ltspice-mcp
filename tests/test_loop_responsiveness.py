@@ -10,31 +10,25 @@ request is served while the heavy one is still in flight.
 """
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 
 import pytest
 from mcp import types
-from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp import resources
-from ltspice_mcp.lib import recent, services
+from ltspice_mcp.lib import parser_service, recent, services
 from ltspice_mcp.lib.metrics import signal_stats
 from ltspice_mcp.lib.recipes import SignalStatsRecipe
 from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import fake_request_context, stage_recorded_fixture
+from tests.conftest import await_until, fake_request_context, stage_recorded_fixture
 
 # Stands in for a multi-hundred-MB parse over /mnt/c. The only deliberate
 # slow-op in this module; every timing assertion keeps >=4x margin to it.
 SLOW_OP_SECONDS = 1.0
-
-
-def slow_rawread(*args, **kwargs):
-    """RawRead stand-in that blocks for SLOW_OP_SECONDS before parsing."""
-    time.sleep(SLOW_OP_SECONDS)
-    return RawRead(*args, **kwargs)
 
 
 async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) -> None:
@@ -63,15 +57,23 @@ async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) 
 async def test_light_tool_served_while_heavy_parse_in_flight(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A slow RawRead parse must not block a concurrent light request.
+    """A slow parser supervisor must not block a concurrent light request.
 
     Drives ``signal_stats`` (heavy: parses a recorded LTspice AC raw through
-    services.load_raw, with the parse patched to take SLOW_OP_SECONDS) and
+    services.load_raw, with supervision delayed by SLOW_OP_SECONDS) and
     an ``inspect`` capabilities query (light: no file I/O) concurrently on
     one event loop.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    monkeypatch.setattr(services, "RawRead", slow_rawread)
+    run = parser_service.run_parser_sync
+    entered = threading.Event()
+
+    def slow_parser(*args, **kwargs):
+        entered.set()
+        time.sleep(SLOW_OP_SECONDS)
+        return run(*args, **kwargs)
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", slow_parser)
 
     heavy = asyncio.create_task(
         signal_stats(
@@ -81,8 +83,7 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
             state_no_sim,
         )
     )
-    # One loop tick: the heavy handler starts and reaches the parse.
-    await asyncio.sleep(0)
+    await await_until(entered.is_set)
 
     await assert_light_request_served(heavy, state_no_sim)
 
@@ -132,7 +133,7 @@ async def test_recent_index_write_runs_off_loop(
 async def test_resource_read_served_off_loop(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A slow RawRead parse inside an MCP resource read must not block a
+    """A slow netlist decode inside an MCP resource read must not block a
     concurrent light request.
 
     Drives the real router seam — ``server.read_resource`` over the

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from spicelib import RawRead
 
-from ltspice_mcp.lib import raw_parser, services
+from ltspice_mcp.lib import log_parser, raw_parser, services
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -35,6 +35,8 @@ from tests.conftest import (
     ngspice_binary_raw,
     stage_recorded_fixture,
 )
+from tests.test_log_decode import fourier_text
+from tests.test_summary_log_facts import captured_log_facts
 
 
 def _recorded(name: str) -> RawRead:
@@ -348,71 +350,74 @@ class TestSummarySurfacesParserFaults:
 
     @staticmethod
     def _raiser(exc: Exception):
-        def boom(*args, **kwargs):
-            raise exc
+        return MagicMock(side_effect=exc)
 
-        return boom
-
-    def test_the_fixture_reports_these_fields_when_nothing_raises(self):
+    def test_the_fixture_reports_these_fields_when_nothing_raises(self, tmp_path):
         """Baseline: the fields the fault tests remove are really there."""
         raw, log = self._tran_fixture()
-        summary = raw_parser.build_simulation_summary(raw, log)
+        summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
         assert "vfinal" in {k.lower() for k in summary["measurements"]}
         assert summary.get("warnings") is None
 
-    def test_measurement_parse_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
+    def test_measurement_parse_failure_is_named(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
         raw, log = self._tran_fixture()
-        monkeypatch.setattr(
-            raw_parser, "parse_measurements", self._raiser(ValueError("bad measure block"))
-        )
-        summary = raw_parser.build_simulation_summary(raw, log)
+        fault = self._raiser(ValueError("bad measure block"))
+        monkeypatch.setattr(log_parser, "parse_measurements", fault)
+        summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
+        fault.assert_called_once()
         assert "measurements" not in summary
         joined = " ".join(summary["warnings"])
         assert "measurements" in joined
         assert "ValueError" in joined
         assert "bad measure block" in joined
 
-    def test_log_diagnostics_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
+    def test_log_diagnostics_failure_is_named(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
         """The diagnostics channel itself: no errors list must not be able to
         mean "the error scan crashed"."""
         raw, log = self._tran_fixture()
-        monkeypatch.setattr(
-            raw_parser, "extract_log_diagnostics", self._raiser(RuntimeError("walker died"))
-        )
-        summary = raw_parser.build_simulation_summary(raw, log)
+        fault = self._raiser(RuntimeError("walker died"))
+        monkeypatch.setattr(log_parser, "extract_log_diagnostics", fault)
+        summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
+        fault.assert_called_once()
         assert "errors" not in summary
         joined = " ".join(summary["warnings"])
         assert "log diagnostics" in joined
         assert "RuntimeError" in joined
         assert "walker died" in joined
 
-    def test_fourier_parse_failure_is_named(self, monkeypatch: pytest.MonkeyPatch):
-        raw, log = self._tran_fixture()
-        monkeypatch.setattr(raw_parser, "parse_fourier_data", self._raiser(KeyError("harmonics")))
-        summary = raw_parser.build_simulation_summary(raw, log)
+    def test_fourier_parse_failure_is_named(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
+        raw, _ = self._tran_fixture()
+        fault = self._raiser(KeyError("harmonics"))
+        monkeypatch.setattr(log_parser, "parse_fourier_data", fault)
+        summary = raw_parser.build_simulation_summary(
+            raw, captured_log_facts(tmp_path, text=fourier_text())
+        )
+        fault.assert_called_once()
         assert "fourier" not in summary
         joined = " ".join(summary["warnings"])
         assert "fourier" in joined
         assert "KeyError" in joined
 
-    def test_unreadable_log_names_both_fields_it_costs(self, monkeypatch: pytest.MonkeyPatch):
+    def test_unreadable_log_names_both_fields_it_costs(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ):
         """A log no reader can open costs measurements AND Fourier data."""
         from ltspice_mcp.errors import ResultError
         from ltspice_mcp.lib import log_parser
 
         raw, log = self._tran_fixture()
-        monkeypatch.setattr(
-            log_parser, "make_log_reader", self._raiser(ResultError("Could not parse log file"))
-        )
-        summary = raw_parser.build_simulation_summary(raw, log)
+        fault = self._raiser(ResultError("Could not parse log file"))
+        monkeypatch.setattr(log_parser, "make_log_reader", fault)
+        summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
+        fault.assert_called_once()
         assert "measurements" not in summary
         assert "fourier" not in summary
         joined = " ".join(summary["warnings"])
-        assert "measurements and fourier" in joined
+        assert "measurements" in joined and "fourier" in joined
         assert "ResultError" in joined
 
     def test_an_axis_read_fault_is_named_but_an_axis_less_raw_is_not(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ):
         """The two reasons for a missing range are different facts.
 
@@ -426,7 +431,7 @@ class TestSummarySurfacesParserFaults:
         monkeypatch.setattr(
             raw, "get_axis", self._raiser(RuntimeError("This RAW file does not have an axis."))
         )
-        quiet = raw_parser.build_simulation_summary(raw, log)
+        quiet = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
         assert quiet["range"] == {}
         assert not [w for w in (quiet.get("warnings") or []) if "axis" in w]
 
@@ -434,13 +439,15 @@ class TestSummarySurfacesParserFaults:
         monkeypatch.setattr(
             raw2, "get_axis", self._raiser(SpiceReadException("Not enough data in the binary"))
         )
-        loud = raw_parser.build_simulation_summary(raw2, log2)
+        loud = raw_parser.build_simulation_summary(raw2, captured_log_facts(tmp_path, log2))
         assert loud["range"] == {}
         joined = " ".join(loud["warnings"])
         assert "axis" in joined
         assert "SpiceReadException" in joined
 
-    def test_a_trace_the_value_scan_cannot_read_is_reported(self, monkeypatch: pytest.MonkeyPatch):
+    def test_a_trace_the_value_scan_cannot_read_is_reported(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ):
         """A narrowed scan must not look like a complete one."""
         raw, log = self._tran_fixture()
         real_get_wave = raw.get_wave
@@ -451,7 +458,9 @@ class TestSummarySurfacesParserFaults:
             return real_get_wave(trace, step)
 
         monkeypatch.setattr(raw, "get_wave", refuse_one)
-        summary = raw_parser.build_simulation_summary(raw, log, value_scan=True)
+        summary = raw_parser.build_simulation_summary(
+            raw, captured_log_facts(tmp_path, log), value_scan=True
+        )
         joined = " ".join(summary["warnings"])
         assert "value scan" in joined
         assert "V(out)" in joined
@@ -920,7 +929,9 @@ class TestSteppedTransientAxes:
         real stepped-damping RLC transient (underdamped -> overdamped).
         """
         raw_path = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        raw = services.load_raw_sync(raw_path, state_no_sim)
+        raw = services.load_raw_sync(
+            services.source_for_raw_path(raw_path, state_no_sim), state_no_sim
+        )
 
         n_steps = get_step_count(raw)
         assert n_steps > 1, "fixture must be a multi-step run"
@@ -1035,7 +1046,7 @@ class TestOpSteppingFailureRawGate:
         log.write_text(f"ngspice-42\n{phrase}\n")
         axis = np.array([0.0, 1e-3, 2e-3])
         raw = make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
-        return build_simulation_summary(raw, log)
+        return build_simulation_summary(raw, captured_log_facts(tmp_path, log))
 
     @staticmethod
     def _op_raw(trace: str) -> MagicMock:
@@ -1067,7 +1078,7 @@ class TestOpSteppingFailureRawGate:
         # that belongs to a later step the raw never carries — keep it an error.
         log = tmp_path / "op.log"
         log.write_text(".step v1=1\n.step v1=2\nngspice-42\ngmin stepping failed\n")
-        s = build_simulation_summary(self._op_raw("v(out)"), log)
+        s = build_simulation_summary(self._op_raw("v(out)"), captured_log_facts(tmp_path, log))
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
         assert any("Stepped .op detected" in w for w in s.get("warnings", []))
 
@@ -1082,7 +1093,7 @@ class TestOpSteppingFailureRawGate:
             "Direct Newton iteration failed to find operating point.\n"
             "gmin stepping failed\n"
         )
-        s = build_simulation_summary(self._op_raw("v(out)"), log)
+        s = build_simulation_summary(self._op_raw("v(out)"), captured_log_facts(tmp_path, log))
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
 
     def test_current_only_raw_keeps_error(self, tmp_path: Path):
@@ -1091,7 +1102,7 @@ class TestOpSteppingFailureRawGate:
         # a finite node VOLTAGE demotes; a current-only raw keeps the error.
         log = tmp_path / "op.log"
         log.write_text("ngspice-42\ngmin stepping failed\n")
-        s = build_simulation_summary(self._op_raw("i(v1)"), log)
+        s = build_simulation_summary(self._op_raw("i(v1)"), captured_log_facts(tmp_path, log))
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
 
     def test_single_step_op_still_demotes(self, tmp_path: Path):
@@ -1099,7 +1110,7 @@ class TestOpSteppingFailureRawGate:
         # still demotes — the guard must not over-suppress the single-block case.
         log = tmp_path / "op.log"
         log.write_text("ngspice-42\ngmin stepping failed\n")
-        s = build_simulation_summary(self._op_raw("v(out)"), log)
+        s = build_simulation_summary(self._op_raw("v(out)"), captured_log_facts(tmp_path, log))
         assert "errors" not in s
         assert any("gmin stepping failed" in w for w in s.get("warnings", []))
 
@@ -1115,7 +1126,7 @@ class TestBuildSimulationSummary:
             plotname="Transient Analysis",
         )
 
-        summary = build_simulation_summary(raw, log_path=None)
+        summary = build_simulation_summary(raw, logs=None)
 
         assert summary["sim_type"] == "Transient Analysis"
         assert summary["point_count"] == 1000
@@ -1138,7 +1149,7 @@ class TestBuildSimulationSummary:
             plotname="AC Analysis",
         )
 
-        summary = build_simulation_summary(raw, log_path=None)
+        summary = build_simulation_summary(raw, logs=None)
 
         assert summary["sim_type"] == "AC Analysis"
         assert summary["point_count"] == 500
@@ -1154,7 +1165,7 @@ class TestBuildSimulationSummary:
             plotname="DC sweep",
         )
 
-        summary = build_simulation_summary(raw, log_path=None)
+        summary = build_simulation_summary(raw, logs=None)
 
         assert summary["sim_type"] == "DC sweep"
         assert summary["range"] == {"sweep_start": 0.0, "sweep_end": 5.0}
@@ -1167,7 +1178,7 @@ class TestBuildSimulationSummary:
             {"V(out)": np.ones(100), "time": axis},
         )
 
-        summary = build_simulation_summary(raw, log_path=None, duration=1.23)
+        summary = build_simulation_summary(raw, logs=None, duration=1.23)
 
         assert summary["duration"] == pytest.approx(1.23)
 
@@ -1187,7 +1198,7 @@ class TestBuildSimulationSummary:
             "Total elapsed time: 0.5 seconds.\n"
         )
 
-        summary = build_simulation_summary(raw, log)
+        summary = build_simulation_summary(raw, captured_log_facts(work_dir, log))
 
         assert list(summary["measurements"]) == ["vpk"]
         entry = summary["measurements"]["vpk"]
@@ -1209,7 +1220,7 @@ class TestBuildSimulationSummary:
             "Total elapsed time: 0.5 seconds.\n"
         )
 
-        summary = build_simulation_summary(raw, log)
+        summary = build_simulation_summary(raw, captured_log_facts(work_dir, log))
 
         assert "measurements" not in summary
         assert "warnings" not in summary
@@ -1231,7 +1242,7 @@ class TestBuildSimulationSummary:
             "Total elapsed time: 0.1 seconds.\n"
         )
 
-        summary = build_simulation_summary(raw, log)
+        summary = build_simulation_summary(raw, captured_log_facts(work_dir, log))
 
         assert len(summary["warnings"]) == 2
         assert any("N001" in w for w in summary["warnings"])
@@ -1246,7 +1257,7 @@ class TestBuildSimulationSummary:
             steps=[0, 1, 2],
         )
 
-        summary = build_simulation_summary(raw, log_path=None)
+        summary = build_simulation_summary(raw, logs=None)
 
         assert summary["step_count"] == 3
 
@@ -1259,7 +1270,7 @@ class TestBuildSimulationSummary:
             {"V(out)": np.sin(axis * 1000), "time": axis},
         )
 
-        summary = build_simulation_summary(raw, log_path=None)
+        summary = build_simulation_summary(raw, logs=None)
 
         # Check numeric values are Python types
         assert type(summary["point_count"]) is int

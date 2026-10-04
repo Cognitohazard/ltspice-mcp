@@ -510,20 +510,18 @@ def _autodetect_wsl_ltspice(diagnostics: list[str] | None = None) -> None:
         logger.warning(f"WSL LTspice auto-detection failed for {exe}: {e}")
 
 
-# Every family but LTspice names its RawRead dialect after itself; LTspice is
-# auto-detected from the raw's ``Command:`` header (see below).
+# Recorded producer names identify the expected RAW dialect, including LTspice.
 _DIALECT_MAP: dict[str, str] = {
-    cls.__name__: family for family, cls in _FAMILY_BASES.items() if family != "ltspice"
+    **_FAMILY_BY_CLASS_NAME,
+    "LTspiceWSL": "ltspice",
 }
 
 
 def simulator_dialect(simulator_class: type | None) -> str | None:
     """Return the spicelib ``RawRead`` dialect for a simulator class.
 
-    LTspice (and its WSL subclass) return ``None`` — spicelib auto-detects
-    the dialect from the ``Command:`` field. Other simulators need an
-    explicit hint because older versions (e.g. ngspice < 44) omit that
-    header.
+    Known simulators, including LTspice and its WSL subclass, return explicit
+    producing evidence so parser preflight can reject a contradictory writer.
     """
     return dialect_for_simulator_name(simulator_class.__name__) if simulator_class else None
 
@@ -534,8 +532,7 @@ def dialect_for_simulator_name(name: str | None) -> str | None:
     Same mapping as :func:`simulator_dialect` but keyed off the recorded name
     string, so a persisted job's dialect resolves even when that simulator is
     no longer configured (an ngspice sweep read back under an LTspice-only
-    session still parses as ngspice). LTspice / unknown names → ``None``
-    (spicelib auto-detects from the ``Command:`` header).
+    session still parses as ngspice). Unknown names return ``None``.
     """
     if not name:
         return None

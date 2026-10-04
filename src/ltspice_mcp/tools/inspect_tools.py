@@ -1,7 +1,7 @@
 """inspect — the consolidated read-only UNDERSTAND surface.
 
 One tool answers a batch of independent read-only ``queries`` about the server
-and the circuits it can reach. Each query is one of nine kinds:
+and the circuits it can reach. Each query names one supported kind:
 
 * ``capabilities`` — detected simulators + dialects and whether a run can
   select each (``selectable``, with the ``refusal`` when this host cannot run
@@ -26,6 +26,9 @@ and the circuits it can reach. Each query is one of nine kinds:
 * ``hierarchy`` — bounded netlist instance expansion, scoped ports, numeric
   facts and backend addresses from captured active dependencies. See
   ``lib/hierarchy.py`` for supported grammar and explicit refusal boundaries.
+* ``results`` — RAW plot inventory, selected signal descriptors and axisless
+  quantities, or detached log measurements/native print rows. Pages bind the
+  captured snapshot; RAW reads accept explicit plot/dialect selection.
 
 On a netlist, ``net`` and ``components`` add ``warnings`` when the lexer had to
 guess about the deck (an unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a
@@ -75,12 +78,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import sys
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias, overload
 
 from mcp import types
+from numpy.typing import NDArray
 from pydantic import (
     BaseModel,
     Field,
@@ -100,6 +105,7 @@ from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, guide, respon
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import (
@@ -152,6 +158,7 @@ from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
+    OptionalRawSelectionFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -635,6 +642,38 @@ class ModelQuery(StrictModel):
         return self
 
 
+class ResultsQuery(OptionalRawSelectionFields):
+    """RAW inventory or detached log facts with snapshot-bound pages."""
+
+    kind: Literal["results"]
+    view: Literal["plots", "signals", "table", "measurements", "native_tables"] = "plots"
+    path: str | None = Field(
+        default=None,
+        description="RAW path for plots/signals/table, log path for measurements/native_tables; pass this or job_id.",
+    )
+    job_id: str | None = None
+    run_index: int = Field(default=0, strict=True, ge=0)
+    case_id: str | None = None
+    prefix: str | None = Field(
+        default=None,
+        description="Literal signal, measurement or native quantity prefix; omitted lists all.",
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+    limit: int = Field(default=100, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _source(self) -> ResultsQuery:
+        if bool(self.path) == bool(self.job_id):
+            raise ValueError("provide exactly one of path or job_id")
+        if self.path is not None and (self.case_id is not None or self.run_index != 0):
+            raise ValueError("run_index and case_id require job_id")
+        if self.view == "plots" and self.prefix is not None:
+            raise ValueError("prefix does not apply to plot inventory")
+        if self.view in ("measurements", "native_tables") and self.plot_index is not None:
+            raise ValueError("log views do not select a RAW plot")
+        return self
+
+
 class ReferenceQuery(StrictModel):
     """Look up this server's tool vocabulary — each tool's own arguments, plus
     analysis recipes, schematic ops, variation kinds, query kinds, checks and
@@ -678,6 +717,7 @@ Query: TypeAlias = Annotated[
     | ComponentsQuery
     | HierarchyQuery
     | ModelQuery
+    | ResultsQuery
     | ReferenceQuery
     | GuideQuery,
     Field(discriminator="kind"),
@@ -788,7 +828,7 @@ def _invalid_cursor(exc: PageCursorError) -> _QueryError:
 
 
 def _paginate(
-    items: list[Any],
+    items: Sequence[Any],
     kind: str,
     identity: dict[str, Any],
     cursor: str | None,
@@ -1810,7 +1850,230 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     }
 
 
+class _TableRows(Sequence[dict[str, Any]]):
+    """Index resident native quantities; materialize only the requested page."""
+
+    def __init__(self, raw: DecodedRaw, traces: Sequence[TraceDescriptor]) -> None:
+        self._blocks: list[tuple[int, TraceDescriptor, NDArray]] = []
+        self._ends: list[int] = []
+        total = 0
+        for step in raw.get_steps():
+            for trace in traces:
+                wave = raw.get_wave(trace.name, step=step)
+                if len(wave):
+                    total += len(wave)
+                    self._blocks.append((step, trace, wave))
+                    self._ends.append(total)
+
+    def __len__(self) -> int:
+        return self._ends[-1] if self._ends else 0
+
+    @overload
+    def __getitem__(self, index: int) -> dict[str, Any]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[dict[str, Any]]: ...
+
+    def __getitem__(self, index: int | slice) -> dict[str, Any] | list[dict[str, Any]]:
+        if isinstance(index, slice):
+            return [self[row] for row in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        block = bisect_right(self._ends, index)
+        step, trace, wave = self._blocks[block]
+        sample_index = index - (self._ends[block - 1] if block else 0)
+        sample = wave[sample_index]
+        number = (
+            {"real": float(sample.real), "imag": float(sample.imag)}
+            if wave.dtype.kind == "c"
+            else float(sample)
+        )
+        return {
+            "signal": trace.name,
+            "step_index": step,
+            "sample_index": sample_index,
+            "value": number,
+            "unit": trace.unit,
+        }
+
+
+class _LogRows(Sequence[dict[str, Any]]):
+    """Page detached measurements or physical native print blocks lazily."""
+
+    def __init__(self, facts: Any, view: str, prefix: str | None) -> None:
+        self._view = view
+        self._blocks: list[tuple[dict[str, Any], list[Any]]] = []
+        self._ends: list[int] = []
+        if view == "measurements":
+            for name, entry in (facts or {}).get("measurements", {}).items():
+                if prefix is None or matches_prefix(name, prefix):
+                    self._append({"measurement": name, **entry}, entry["values"])
+        else:
+            for block in facts or []:
+                if block["layout"] == "scalar_print":
+                    entries = [
+                        entry
+                        for entry in block["entries"]
+                        if prefix is None or matches_prefix(entry["label"], prefix)
+                    ]
+                    self._append(
+                        {key: value for key, value in block.items() if key != "entries"}, entries
+                    )
+                elif prefix is None or matches_prefix(block["column"]["label"], prefix):
+                    self._append(
+                        {key: value for key, value in block.items() if key != "rows"},
+                        block["rows"],
+                    )
+
+    def _append(self, metadata: dict[str, Any], rows: list[Any]) -> None:
+        if rows:
+            self._blocks.append((metadata, rows))
+            self._ends.append((self._ends[-1] if self._ends else 0) + len(rows))
+
+    def __len__(self) -> int:
+        return self._ends[-1] if self._ends else 0
+
+    @overload
+    def __getitem__(self, index: int) -> dict[str, Any]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[dict[str, Any]]: ...
+
+    def __getitem__(self, index: int | slice) -> dict[str, Any] | list[dict[str, Any]]:
+        if isinstance(index, slice):
+            return [self[row] for row in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        block = bisect_right(self._ends, index)
+        metadata, rows = self._blocks[block]
+        ordinal = index - (self._ends[block - 1] if block else 0)
+        if self._view == "measurements":
+            row = {
+                "measurement": metadata["measurement"],
+                "value_index": ordinal,
+                "value": rows[ordinal],
+            }
+            for key in ("range_from", "range_to", "at"):
+                value = metadata.get(key)
+                row[key] = value[ordinal] if isinstance(value, list) else value
+            return row
+        key = "entry" if metadata["layout"] == "scalar_print" else "row"
+        return {**metadata, key: rows[ordinal]}
+
+
+async def _log_results_page(
+    query: ResultsQuery, source: services.AnalysisSource, state: SessionState, view: _View
+) -> dict[str, Any]:
+    artifacts = await services.load_artifacts(source, state, require_raw=False)
+    logs = artifacts.logs
+    section_name = "measurements" if query.view == "measurements" else "native_tables"
+    section = logs.section(section_name)
+    facts = logs.value(section_name)
+    rows = _LogRows(facts, query.view, _check_prefix(query.prefix))
+    identity = {
+        **query.model_dump(exclude={"cursor", "limit"}),
+        "snapshot_id": artifacts.snapshot_id,
+    }
+    page = _paginate(
+        rows,
+        "results",
+        identity,
+        query.cursor,
+        (),
+        _View(limit=min(query.limit, view.limit), lean=view.lean, shrunk=view.shrunk),
+    )
+    data = {
+        "snapshot_id": artifacts.snapshot_id,
+        "capture_facts": logs.capture_facts,
+        "scan": logs.scan,
+        "section": {key: value for key, value in section.items() if key != "value"},
+        query.view: page["items"],
+    }
+    if query.view == "measurements" and facts is not None:
+        data.update({key: value for key, value in facts.items() if key != "measurements"})
+    metadata = _page_meta(page, "results")
+    metadata["collections"] = {query.view: dict(metadata)}
+    return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
+
+
+async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -> dict[str, Any]:
+    log_view = query.view in ("measurements", "native_tables")
+    if query.path is not None:
+        source = services.resolve_analysis_source(
+            state,
+            raw_file=None if log_view else query.path,
+            log_file=query.path if log_view else None,
+            plot_index=query.plot_index or 0,
+            dialect=query.dialect,
+        )
+    else:
+        assert query.job_id is not None
+        job = await services.resolve_job_async(query.job_id, state)
+        run = services.experiment_run_context(
+            job, state, run_index=query.run_index, case_id=query.case_id, require_raw=not log_view
+        )
+        source = services.source_for_run(
+            run, plot_index=query.plot_index or 0, dialect=query.dialect
+        )
+    if log_view:
+        return await _log_results_page(query, source, state, view)
+    raw = await services.load_raw(source, state)
+    descriptor = raw.descriptor
+    prefix = _check_prefix(query.prefix)
+    traces = [
+        trace
+        for trace in descriptor.traces
+        if prefix is None or matches_prefix(trace.name, prefix)
+    ]
+    rows: Sequence[dict[str, Any]]
+    if query.view == "plots":
+        rows = [asdict(plot.descriptor) for plot in raw.plots]
+    elif query.view == "signals":
+        rows = [
+            {
+                **asdict(trace),
+                "axis": descriptor.axis is not None and trace.name == descriptor.axis.name,
+            }
+            for trace in traces
+        ]
+    else:
+        if descriptor.axis is not None:
+            raise _QueryError("no_table", "table view requires a plot with no sampled axis")
+
+        rows = await asyncio.to_thread(_TableRows, raw, traces)
+    identity = {
+        **query.model_dump(exclude={"cursor", "limit"}),
+        "snapshot_id": descriptor.snapshot_id,
+        "resolved_dialect": descriptor.dialect,
+    }
+    page = _paginate(
+        rows,
+        "results",
+        identity,
+        query.cursor,
+        (),
+        _View(limit=min(query.limit, view.limit), lean=view.lean, shrunk=view.shrunk),
+    )
+    data = {
+        "snapshot_id": descriptor.snapshot_id,
+        "plot_index": raw.plot_index,
+        "dialect": descriptor.dialect,
+        "analysis": descriptor.analysis,
+        "axis": asdict(descriptor.axis) if descriptor.axis else None,
+        query.view: page["items"],
+    }
+    metadata = _page_meta(page, "results")
+    metadata["collections"] = {query.view: dict(metadata)}
+    return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
+
+
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
+    if isinstance(query, ResultsQuery):
+        return await _results_page(query, state, view)
     if isinstance(query, CapabilitiesQuery):
         wanted = set(query.fields) if query.fields is not None else None
         # Executables are identified only for a report that shows them. A
@@ -1941,7 +2204,7 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
 }
 
 #: The ``guide`` kind's payload: the text itself, and which part of the guide
-#: it is. Like the reference names above, no other kind returns these keys.
+#: it is. Result queries also return ``section``, as log-section metadata.
 _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "section": {
         "type": ["string", "null"],
@@ -1972,14 +2235,31 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "ok": {"type": "boolean"},
                     "error": _ERROR_SCHEMA,
                     # Kind-specific payload; its shape is documented per kind in
-                    # the module docstring and stays open here by design. The
-                    # reference lookup's collections and the guide's text are
-                    # named because nothing else on this tool returns them, so
-                    # declaring them constrains those kinds without constraining
-                    # any other.
+                    # the module docstring and stays open here by design.
                     "data": {
                         "type": "object",
-                        "properties": {**_REFERENCE_DATA_PROPERTIES, **_GUIDE_DATA_PROPERTIES},
+                        "properties": {
+                            **_REFERENCE_DATA_PROPERTIES,
+                            **_GUIDE_DATA_PROPERTIES,
+                            "plot_index": {"type": "integer", "minimum": 0},
+                            "snapshot_id": {"type": "string"},
+                            "dialect": {"type": "string"},
+                            "analysis": {"type": "string"},
+                            "axis": {"type": ["object", "null"]},
+                            "plots": {"type": "array", "items": {"type": "object"}},
+                            "signals": {"type": "array", "items": {"type": "object"}},
+                            "table": {"type": "array", "items": {"type": "object"}},
+                            "measurements": {"type": "array", "items": {"type": "object"}},
+                            "native_tables": {"type": "array", "items": {"type": "object"}},
+                            "capture_facts": {"type": "object"},
+                            "scan": {"type": "object"},
+                            "section": {
+                                "anyOf": [
+                                    _GUIDE_DATA_PROPERTIES["section"],
+                                    {"type": "object"},
+                                ]
+                            },
+                        },
                     },
                     "next_cursor": {"type": ["string", "null"]},
                     "page": {
@@ -2057,7 +2337,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'hierarchy', 'model', 'reference', 'guide' — each with its own arguments, "
+    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide' — each with its own arguments, "
     "described on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
     "returns the guide's core, or one 'section' its index names. A "

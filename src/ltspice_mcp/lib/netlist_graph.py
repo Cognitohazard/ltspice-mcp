@@ -108,7 +108,7 @@ _GROUND = "0"
 _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 
 # Directives that pull another file into the deck. Semantics mirror
-# ``sim_runner.deck_requests_raw`` / ``_include_target``: the walk is
+# ``runner_base.deck_requirements`` / ``_include_target``: the walk is
 # depth-bounded and cycle-guarded, and the ``.lib file section`` form takes the
 # file token (the section name is irrelevant to a subcircuit scan). Resolving a
 # target against the INCLUDING file's directory is NOT restated here — that is

@@ -543,9 +543,16 @@ def stage_deck(
 
 def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
     """Return the resolved paths one staged file's include references name."""
+    return staged_card_reference_targets(lex(text).cards, source, depth=depth)
+
+
+def staged_card_reference_targets(
+    cards: list[SpiceCard], source: Path, *, depth: int
+) -> list[Path]:
+    """Resolve staged references from cards already parsed for this file."""
     return [
         resolve_reference(source.parent, reference.raw_path).resolve()
-        for reference in scan_include_references(lex(text).cards, source, depth=depth)
+        for reference in scan_include_references(cards, source, depth=depth)
     ]
 
 

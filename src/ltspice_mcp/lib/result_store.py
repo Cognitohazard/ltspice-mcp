@@ -1,7 +1,7 @@
 """Persistence for continuable ``analyze_results`` calls.
 
-A result set is immutable but for one step: its source manifests gain content
-digests when a reply hands the set to a caller to resume (``record_digests``).
+A result set records worker-captured source digests at creation and remains
+immutable for every continuation.
 """
 
 from __future__ import annotations
@@ -25,7 +25,14 @@ from ltspice_mcp.lib.cursor_codec import canonical_json as canonical_json
 from ltspice_mcp.lib.cursor_codec import decode_cursor as _decode_body_cursor
 from ltspice_mcp.lib.cursor_codec import encode_cursor as _encode_body_cursor
 from ltspice_mcp.lib.deck_staging import sha256_file as sha256_file  # re-export
-from ltspice_mcp.lib.store import KIND_RESULT_SET, Store, accept, atomic_write_json, envelope
+from ltspice_mcp.lib.store import (
+    KIND_RESULT_SET,
+    STORE_VERSION,
+    Store,
+    accept,
+    atomic_write_json,
+    envelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +55,21 @@ def result_path(result_set_id: str, working_dir: Path) -> Path:
         raise ResultError(f"Invalid result_set_id: {result_set_id!r}") from exc
 
 
-def composite_digest(raw_sha256: str, log_sha256: str | None, log_present: bool) -> str:
-    """Canonical digest of the raw plus the log digest-or-recorded-absence."""
+def composite_digest(
+    *,
+    raw_sha256: str | None,
+    log_sha256: str | None,
+    console_sha256: str | None,
+) -> str:
+    """Bind RAW, log and console bytes, distinguishing empty files from absence."""
     return canonical_hash(
         {
-            "raw_sha256": raw_sha256,
-            "log": (
-                {"present": True, "sha256": log_sha256} if log_present else {"present": False}
-            ),
+            role: {"present": digest is not None, "sha256": digest}
+            for role, digest in (
+                ("raw", raw_sha256),
+                ("log", log_sha256),
+                ("console", console_sha256),
+            )
         }
     )
 
@@ -129,29 +143,16 @@ def create(
 
 
 def _persist(item: ResultSet, store: Store) -> ResultSet:
-    """Stamp ``item``'s snapshot hash and write it, replacing any earlier record."""
+    """Stamp a new set's snapshot hash and write its immutable record."""
     item = replace(item, snapshot_hash=canonical_hash(item.snapshot()))
     atomic_write_json(store.result_set(item.result_set_id), item.to_dict())
     return item
 
 
-def record_digests(item: ResultSet, digests: dict[str, dict[str, Any]]) -> None:
-    """Rewrite ``item`` with content digests added to the named source manifests.
-
-    A set's manifests identify each source by its size and modification time,
-    and gain their content digests once, when a reply hands the set to a caller
-    to resume. Nothing else in the record changes: a cursor binds the set's id
-    and work hash, both untouched, and the snapshot hash is recomputed.
-    """
-    manifests = [
-        {**manifest, **digests.get(str(manifest.get("manifest_id")), {})}
-        for manifest in item.source_manifests
-    ]
-    _persist(replace(item, source_manifests=manifests), Store(Path(item.inputs["working_dir"])))
-
-
 def _decode(data: dict[str, Any], path: Path) -> ResultSet:
-    if not accept(data, path, kind=KIND_RESULT_SET, log=logger):
+    if data.get("store_version") != STORE_VERSION or not accept(
+        data, path, kind=KIND_RESULT_SET, log=logger
+    ):
         raise ResultError(f"Result set {path.stem!r} uses an unsupported storage schema")
     try:
         return ResultSet(

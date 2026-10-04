@@ -19,6 +19,7 @@ from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
+from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.store import Store
@@ -30,11 +31,6 @@ if TYPE_CHECKING:
     from ltspice_mcp.tools.run_code import CodeWorker
 
 logger = logging.getLogger(__name__)
-
-# Cap on parsed-result (RawRead) cache entries. Each can pin a multi-MB raw, so
-# a long-lived session querying many circuits must not retain them all; LRU
-# eviction past this just re-parses on the next access.
-RESULT_CACHE_MAXSIZE = 32
 
 # Re-export the job-status vocabulary so a caller can read it from either
 # ``ltspice_mcp.state`` or ``ltspice_mcp.lib.job_types``.
@@ -64,7 +60,7 @@ class SessionState:
             (``simulator.bind_named_executable``)
         default_simulator: Simulator to use when not specified by user
         editors: Cache of parsed SpiceEditor instances
-        results: Cache of parsed RawRead instances
+        results: Bounded content cache of resident decoded results
         libraries: Loaded component libraries
         runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
@@ -78,7 +74,7 @@ class SessionState:
     available_simulators: dict[str, type]
     default_simulator: type | None
     editors: FileCache
-    results: FileCache
+    results: ResultCache
     libraries: LibraryManager
     runners: RunnerManager
     working_dir: Path
@@ -113,11 +109,6 @@ class SessionState:
     code_worker: "CodeWorker | None" = field(default=None, repr=False)
     """The ``run_code`` worker supervisor, created on the first call and
     closed at shutdown."""
-    raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
-    """Raw dialect per job-resolved raw path, recorded when the path is
-    resolved (``services._resolve_result_file``) and read by ``load_raw`` —
-    a per-run simulator override's raw must not parse with the session
-    default's dialect. Paths never resolved through a job aren't listed."""
 
     @property
     def store(self) -> Store:
@@ -132,12 +123,7 @@ class SessionState:
 
     @property
     def raw_dialect(self) -> str | None:
-        """spicelib ``RawRead`` dialect for the default simulator.
-
-        Returns ``None`` for LTspice (auto-detect works) and an explicit
-        dialect string for simulators whose raw files lack the ``Command:``
-        header that spicelib needs for auto-detection.
-        """
+        """Recorded dialect of the default producing simulator, when known."""
         return simulator_dialect(self.default_simulator)
 
     # ------------------------------------------------------------------
@@ -280,11 +266,9 @@ class SessionState:
             available_simulators=available,
             default_simulator=default,
             # Editors are unbounded: they may hold unsaved in-memory edits that
-            # eviction would drop. Results are immutable parsed RawReads, safe to
-            # LRU-evict so a long session over many circuits doesn't grow without
-            # bound (each can pin a multi-MB raw).
+            # eviction would drop. Resident results have byte and entry bounds.
             editors=FileCache(),
-            results=FileCache(maxsize=RESULT_CACHE_MAXSIZE),
+            results=ResultCache(),
             libraries=LibraryManager(available),
             runners=RunnerManager(),
             working_dir=config.working_dir,

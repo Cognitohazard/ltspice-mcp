@@ -25,8 +25,8 @@ import pytest
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import filelock as filelock_mod
+from ltspice_mcp.lib import parser_service
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
-from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -280,13 +280,13 @@ async def test_submission_waits_on_another_process_holding_the_request_gate(
     ctx = mp.get_context("spawn")
     held, release, released = ctx.Event(), ctx.Event(), ctx.Event()
     lookups_after_release: list[bool] = []
-    read_index = ExperimentRunner._read_request_index
+    read_index = ExperimentRunner.read_request_index
 
     def index_spy(request: Any) -> Any:
         lookups_after_release.append(released.is_set())
         return read_index(request)
 
-    monkeypatch.setattr(ExperimentRunner, "_read_request_index", staticmethod(index_spy))
+    monkeypatch.setattr(ExperimentRunner, "read_request_index", staticmethod(index_spy))
 
     holder = ctx.Process(
         target=_hold_request_lock,
@@ -508,8 +508,9 @@ async def test_simultaneous_analyses_of_one_job_agree_and_parse_once(
 ):
     """Both reads return the same numbers, and the shared raw is parsed once.
 
-    ``FileCache`` is single-flight per path, so two cold readers of one raw
-    must not both pay the parse — and neither may see a half-built value.
+    Every read captures the current bytes in a child. Parser admission seeds
+    later captures with retained decoded snapshots, so only the first cold
+    RAW capture may materialize data; subsequent captures must reuse its key.
     """
     recorded_fixture_simulator(monkeypatch)
     deck = _deck(work_dir / "analyzed.cir")
@@ -517,14 +518,20 @@ async def test_simultaneous_analyses_of_one_job_agree_and_parse_once(
     assert receipt.get("error") is None, receipt.get("error")
     assert receipt["status"] == "completed", receipt
 
-    parses: list[str] = []
-    original = OffsetAwareRawRead.__init__
+    raw_captures: list[tuple[tuple[str, ...], str, str]] = []
+    run_parser = parser_service.run_parser_sync
 
-    def counting_init(self, filename, *args, **kwargs):  # type: ignore[no-untyped-def]
-        parses.append(str(filename))
-        return original(self, filename, *args, **kwargs)
+    def record_capture(request: dict[str, Any], **kwargs: Any):
+        reply = run_parser(request, **kwargs)
+        if request["op"] == "load_raw":
+            status = reply.metadata["status"]
+            key = reply.metadata["cache_key"]
+            assert isinstance(status, str)
+            assert isinstance(key, str)
+            raw_captures.append((tuple(request["existing_cache_keys"]), status, key))
+        return reply
 
-    monkeypatch.setattr(OffsetAwareRawRead, "__init__", counting_init)
+    monkeypatch.setattr(parser_service, "run_parser_sync", record_capture)
     state_with_sim.results.clear()
 
     request = {
@@ -538,7 +545,16 @@ async def test_simultaneous_analyses_of_one_job_agree_and_parse_once(
 
     assert left["results"]["vout"] == right["results"]["vout"]
     assert left["results"]["vout"]["values"], left["results"]["vout"]
-    assert len(parses) == 1, f"the shared raw was parsed {len(parses)} times: {parses}"
+    parses = [key for _, status, key in raw_captures if status == "ok"]
+    assert len(parses) == 1, f"the shared raw was parsed {len(parses)} times: {raw_captures}"
+    assert len(raw_captures) >= 2, raw_captures
+    for seeded_keys, status, key in raw_captures:
+        assert key == parses[0]
+        if status == "ok":
+            assert key not in seeded_keys
+        else:
+            assert status == "cached"
+            assert key in seeded_keys
 
 
 # ---------------------------------------------------------------------------

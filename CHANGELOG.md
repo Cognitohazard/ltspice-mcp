@@ -257,16 +257,12 @@ tool-surface changes.
   `request_id` instead of replaying the first, and a lookup, a listing or a
   cancel could report a live job as not found. Reading a job record now retries
   that denial on the same short schedule writing one already did.
-- `analyze_results` read every raw and log whole on every call, to hash them,
-  against the call's own time budget: a large raw spent most of the budget
-  before any recipe ran, and a hash that ran out of it failed the recipe. A
-  source is now identified by the size and modification time of its raw and
-  log. Content digests are taken only when a reply hands out a cursor or
-  continuation, or `include.provenance` asks for them, and the call resuming
-  the set compares them, so a rewrite that kept both size and timestamp is
-  still reported as `source_drift`. Both hashes are bounded and fail nothing:
-  a digest not taken in time, or a comparison cut short on resume, leaves the
-  source to its size and time.
+- `analyze_results` binds its sources to RAW, log and console bytes captured
+  in a bounded worker. Repeated labels and plot selections share a capture;
+  continuation checks the recorded content again, including companions that
+  appeared or disappeared. A rewrite that kept both size and timestamp is
+  still `source_drift`, and an expired capture deadline remains
+  `analysis_deadline`. Result-set records keep their original content identity.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call
@@ -448,6 +444,19 @@ tool-surface changes.
   restates the `wiring` counts.
 
 ### Added
+
+- Opt-in recoverable experiments freeze circuit inputs, simulator startup
+  settings, seeds and attempt history. `jobs(action="resume")` retains
+  verified completed cases and retries eligible unfinished cases under the
+  recorded executable. Initial support covers controlled ngspice runs and
+  the audited native Windows LTspice build; other execution policies are
+  refused before launch.
+- RAW, log and console decoding runs in worker processes with time, memory
+  and output limits on Linux and native Windows. Analysis can select a RAW
+  plot or read log-only results, including native transfer, sensitivity,
+  pole-zero and distortion tables. Unsupported layouts and ambiguous dialects
+  are reported explicitly. The parser refuses macOS until its process
+  containment has native validation.
 
 - The guide is now a short core plus topic sections and task playbooks, and
   every interface can read it. `inspect` has a `guide` query kind: with no
@@ -2583,4 +2592,3 @@ Netlist and schematic editing:
 Release history before the first tagged version lives in `git log`; the
 `feat:` / `fix:` / `refactor:` prefixes and PR descriptions describe
 each change.
-

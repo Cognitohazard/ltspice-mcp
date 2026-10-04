@@ -44,6 +44,32 @@ _FIXTURE_DRAFT = FIXTURES_DIR / "Draft1.asc"
 LTSPICE_TRAN_RC_VFINAL = 0.999876166042
 
 
+def inject_numeric_raw(state: SessionState, path: Path, raw: typing.Any) -> None:
+    """Supply in-memory arrays to numerical unit tests, outside the parser cache."""
+    path.write_bytes(b"numeric test input")
+    state.__dict__.setdefault("_numeric_test_inputs", {})[path] = raw
+
+
+@pytest.fixture
+def numeric_raw_inputs(monkeypatch: pytest.MonkeyPatch):
+    """Opt-in math-test seam; unregistered artifacts still use the real parser.
+
+    These tests exercise recipes with analytic waves, including malformed
+    arrays. Parser, capture and cache guarantees have separate real-file tests.
+    """
+    from ltspice_mcp.lib import services
+
+    original = services.load_raw
+
+    async def load(source, state):
+        inputs = state.__dict__.get("_numeric_test_inputs", {})
+        if source.raw in inputs:
+            return inputs[source.raw]
+        return await original(source, state)
+
+    monkeypatch.setattr(services, "load_raw", load)
+
+
 # ---------------------------------------------------------------------------
 # Reading a published schema
 # ---------------------------------------------------------------------------
