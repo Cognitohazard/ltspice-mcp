@@ -755,7 +755,6 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
     nmp: bool | None = None
     non_finite = 0
     phase_warnings: list[str] = []
-    distinct_axes = False
     summaries: list[TraceSummary] = []
     total = 0
     groups: list[tuple[list[str], list[_Trace]]] = []
@@ -783,8 +782,6 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
                     # np.real: defensive, for a stray complex trace in a non-AC raw.
                     x, ys = axis_w, (np.real(wave) if np.iscomplexobj(wave) else wave,)
                 non_finite += sum(int(np.count_nonzero(~np.isfinite(y))) for y in ys)
-                if traces and not distinct_axes and not np.array_equal(traces[-1].x, x):
-                    distinct_axes = True
                 label = _label(col.name, step)
                 if total < summary_limit:
                     summaries.append(_trace_summary(plan, col, step, label, panel, x, ys))
@@ -801,7 +798,6 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
             min(float(t.x[0]) for t in everything),
             max(float(t.x[-1]) for t in everything),
         ],
-        "unioned": distinct_axes,
         "step_values_available": (bool(plan.step_dicts) if multi else None),
         "traces": summaries,
         "traces_total": total,
@@ -1301,17 +1297,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     traces: list[TraceSummary] = facts["traces"]
     traces_total: int = facts["traces_total"]
 
-    # Surface FACTS, not verdicts (result-trust doctrine).
-    observations: list[dict] = [
-        {
-            "code": "plot_written",
-            "kind": "coverage",
-            "detail": (
-                f"Wrote an interactive {analysis_type} plot: {facts['panels']} panel(s), "
-                f"{facts['series_count']} series ({len(steps_to_plot)} of {n_steps} step(s))."
-            ),
-        }
-    ]
+    # Surface FACTS, not verdicts (result-trust doctrine). What the reply's own
+    # fields already say (the panels, series and steps drawn, `opened`,
+    # `delivery`) is not restated here.
+    observations: list[dict] = []
     if traces_total > len(traces):
         observations.append(
             {
@@ -1349,31 +1338,31 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 ),
             }
         )
-    if analysis_type == "ac":
+    # A reported phase outside (-180, 180] is the unwrapped curve's, and differs
+    # from the wrapped angle the waveform recipe's CSV keeps; inside it the two
+    # agree, so there is nothing to say.
+    unwrapped = [
+        trace["signal"]
+        for trace in traces
+        if any(
+            isinstance(phase, float) and not -180.0 < phase <= 180.0
+            for phase in (trace.get("phase_initial_deg"), trace.get("phase_final_deg"))
+        )
+    ]
+    if unwrapped:
         observations.append(
             {
                 "code": "phase_unwrapped",
                 "kind": "value",
                 "detail": (
-                    "Bode phase is unwrapped for a readable continuous curve — this differs "
-                    "from the waveform recipe's CSV, which keeps the wrapped np.angle as its lossless "
-                    "primitive."
+                    f"The phase of {', '.join(dict.fromkeys(unwrapped))} is unwrapped: a "
+                    "summary value outside ±180 deg differs by a multiple of 360 from the "
+                    "wrapped angle the waveform recipe's CSV keeps."
                 ),
             }
         )
     for warn in facts["phase_warnings"]:
         observations.append({"code": "sparse_sweep", "kind": "value", "detail": warn})
-    if facts["unioned"]:
-        observations.append(
-            {
-                "code": "step_axis_unioned",
-                "kind": "coverage",
-                "detail": (
-                    "Steps have different per-step x vectors; the chart aligns them on a "
-                    "shared x, and each trace is drawn through its own samples only."
-                ),
-            }
-        )
     if facts["empty_steps"]:
         observations.append(
             {
@@ -1411,20 +1400,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         observations.append(
             {"code": "image_unavailable", "kind": "coverage", "detail": image_problem}
         )
-    if widget_spec_json is not None:
-        observations.append(
-            {
-                "code": "widget_delivered",
-                "kind": "coverage",
-                "detail": (
-                    "Client advertises MCP Apps (ui://) support; the chart spec is in "
-                    "this result's _meta for the host to render in-chat (not shown to the "
-                    "model; local open skipped). The full-fidelity HTML was still written "
-                    "to the returned path."
-                ),
-            }
-        )
-    else:
+    if widget_spec_json is None:
         if widget_skipped is not None:
             observations.append(
                 {
@@ -1436,16 +1412,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                     ),
                 }
             )
-        if not open_locally:
-            why = "open=false" if args.open is False else "[analysis] open_plot = false"
-            observations.append(
-                {
-                    "code": "open_skipped",
-                    "kind": "coverage",
-                    "detail": f"Local open skipped ({why}); open the returned path manually.",
-                }
-            )
-        elif not opened:
+        if open_locally and not opened:
             observations.append(
                 {
                     "code": "open_failed",

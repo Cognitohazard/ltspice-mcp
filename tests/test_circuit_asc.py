@@ -1099,6 +1099,95 @@ class TestSetComponentValueBehavioralSource:
 
 
 @pytest.mark.asyncio
+class TestSetComponentValueMultiTokenValues:
+    """A space in a value was refused unless it sat inside braces, quotes,
+    parentheses or a ``head KEY=VALUE`` list, so a source's ``AC 1`` and a
+    BJT's area factor were refused although ``add_component`` writes them and
+    they cannot reach a node slot. Only a class whose value is one token
+    (R/C/L, a subcircuit) keeps the refusal; the class is the symbol's prefix."""
+
+    def _sheet(self, work_dir: Path, symbol: str, ref: str, value: str) -> Path:
+        return _write_sheet(
+            work_dir / f"{ref.lower()}_{symbol}.asc",
+            f"SYMBOL {symbol} 100 100 R0",
+            f"SYMATTR InstName {ref}",
+            f"SYMATTR Value {value}",
+        )
+
+    def _set(self, state: SessionState, asc: Path, ref: str, value: str) -> str:
+        from spicelib import AscEditor
+
+        apply_one(state, asc, {"op": "set_component_value", "reference": ref, "value": value})
+        return str(AscEditor(str(asc)).get_component_value(ref))
+
+    @pytest.mark.parametrize("value", ["AC 1", "DC 5 AC 1", "1 AC 1 90"])
+    async def test_source_spec_accepted(self, asc_state: SessionState, work_dir: Path, value: str):
+        asc = self._sheet(work_dir, "voltage", "V1", "1")
+        assert self._set(asc_state, asc, "V1", value) == value
+
+    async def test_current_source_spec_accepted(self, asc_state: SessionState, work_dir: Path):
+        asc = self._sheet(work_dir, "current", "I1", "1m")
+        assert self._set(asc_state, asc, "I1", "DC 1m AC 1") == "DC 1m AC 1"
+
+    async def test_waveform_with_series_resistance_keeps_its_parentheses(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        from spicelib import AscEditor
+
+        asc = self._sheet(work_dir, "voltage", "V1", "1")
+        value = self._set(asc_state, asc, "V1", "PULSE(0 1 0 1n 1n 5n 10n) Rser=1")
+        assert value == "PULSE(0 1 0 1n 1n 5n 10n)"
+        attrs = AscEditor(str(asc)).get_component("V1").attributes
+        assert "Rser=1" in attrs["SpiceLine"]
+
+    @pytest.mark.parametrize("value", ["NPN 8", "2N3904 2", "2N3904 2 off", "NPN {area}"])
+    async def test_bjt_area_and_off_accepted(
+        self, asc_state: SessionState, work_dir: Path, value: str
+    ):
+        asc = self._sheet(work_dir, "npn", "Q1", "NPN")
+        assert self._set(asc_state, asc, "Q1", value) == value
+
+    async def test_mosfet_off_accepted_but_not_an_area(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = self._sheet(work_dir, "nmos4", "M1", "NMOS")
+        assert self._set(asc_state, asc, "M1", "NMOS off") == "NMOS off"
+        with pytest.raises(NetlistError, match="whitespace"):
+            self._set(asc_state, asc, "M1", "NMOS 2")
+
+    async def test_diode_area_accepted(self, asc_state: SessionState, work_dir: Path):
+        asc = self._sheet(work_dir, "diode", "D1", "1N4148")
+        assert self._set(asc_state, asc, "D1", "1N4148 2") == "1N4148 2"
+
+    async def test_spaced_behavioural_expression_accepted(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = self._sheet(work_dir, "bv", "B1", "V=1")
+        value = "V=V(a) + V(b)"
+        assert self._set(asc_state, asc, "B1", value) == value
+        assert "SpiceLine" not in asc.read_text()
+
+    @pytest.mark.parametrize("value", ["1 k", "10k 2", "AC 1"])
+    async def test_resistor_still_refuses_whitespace(
+        self, asc_state: SessionState, work_dir: Path, value: str
+    ):
+        asc = self._sheet(work_dir, "res", "R1", "1k")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match="whitespace"):
+            self._set(asc_state, asc, "R1", value)
+        assert asc.read_bytes() == before
+
+    async def test_class_comes_from_the_symbol_not_the_name(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # LTspice netlists a res symbol named "Vload" as resistor "RVload", so a
+        # source spec on it would put "AC" in the value slot and "1" past it.
+        asc = self._sheet(work_dir, "res", "Vload", "1k")
+        with pytest.raises(NetlistError, match="R-class"):
+            self._set(asc_state, asc, "Vload", "AC 1")
+
+
+@pytest.mark.asyncio
 class TestSetComponentValueCreatesMissingValue:
     """Regression: set_component_value on a component added without a Value slot
     used to fail 'Component(s) not found' (the component existed). It must create
@@ -1197,6 +1286,71 @@ class TestNetConflictInWirePins:
         add_net_label(asc_state, _sheet("net_conflict_test.asc"), "RIGHT", pin="R2.1")
         with pytest.raises(NetlistError, match="Net-label conflict"):
             wire_pins(asc_state, _sheet("net_conflict_test.asc"), "R1.1", "R2.1")
+
+    async def test_the_named_remedy_is_one_add_net_label_accepts(self, asc_state: SessionState):
+        # The refusal used to send the caller to add_net_label "to merge them
+        # deliberately", which refuses the same merge. The remedy it names now
+        # is one the label op carries out.
+        blank_sheet_file(asc_state, "net_remedy")
+        sheet = _sheet("net_remedy.asc")
+        add_component(asc_state, sheet, "R1", "res", 100, 100)
+        add_component(asc_state, sheet, "R2", "res", 300, 100)
+        left = add_net_label(asc_state, sheet, "LEFT", pin="R1.1")
+        add_net_label(asc_state, sheet, "RIGHT", pin="R2.1")
+        with pytest.raises(NetlistError) as exc_info:
+            wire_pins(asc_state, sheet, "R1.1", "R2.1")
+        assert "add_net_label op to merge" not in str(exc_info.value)
+        assert "remove_net_label" in str(exc_info.value)
+        with pytest.raises(NetlistError, match="shorting them together"):
+            add_net_label(asc_state, sheet, "RIGHT", pin="R1.1")
+        apply_one(asc_state, sheet, {"op": "remove_net_label", "x": left["x"], "y": left["y"]})
+        add_net_label(asc_state, sheet, "RIGHT", pin="R1.1")
+        assert await _net_pins(asc_state, sheet, "R1.1") == {"R1.1", "R2.1"}
+
+
+@pytest.mark.asyncio
+class TestAddNetLabelJoins:
+    """add_net_label refused any second name on a labelled network, even one
+    that names nothing else and so shorts nothing. It now refuses only a label
+    that joins two named nets."""
+
+    async def test_a_second_name_for_a_net_is_accepted_with_a_warning(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "alias.asc", *_RAIL)
+        add_net_label(asc_state, asc, "rail", x=96, y=196)
+        result = add_net_label(asc_state, asc, "vdd_alias", x=288, y=196)
+        (warning,) = [w for w in result["warnings"] if "second name" in w]
+        assert "['rail']" in warning
+        assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
+
+    async def test_a_name_another_net_carries_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "merge.asc", *_RAIL, _res("R3", 400, 100))
+        add_net_label(asc_state, asc, "rail", x=96, y=196)
+        add_net_label(asc_state, asc, "other", pin="R3.1")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match="shorting them together") as exc_info:
+            add_net_label(asc_state, asc, "other", x=288, y=196)
+        assert "['other']" in str(exc_info.value) and "['rail']" in str(exc_info.value)
+        assert asc.read_bytes() == before
+
+    async def test_a_label_at_a_crossing_of_two_named_nets_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A label at a crossing joins both wires (t_junctions/label_at_crossing),
+        # so a new name there shorts the two named nets even though neither
+        # carried it.
+        asc = _write_sheet(
+            work_dir / "cross_label.asc",
+            "WIRE 0 96 192 96",
+            "WIRE 96 0 96 192",
+            "FLAG 0 96 h_net",
+            "FLAG 96 0 v_net",
+        )
+        with pytest.raises(NetlistError, match="shorting them together"):
+            add_net_label(asc_state, asc, "joined", x=96, y=96)
 
 
 @pytest.mark.asyncio
@@ -1611,8 +1765,9 @@ class TestAddNetLabelOpValidation:
     async def test_short_refused_via_batch(self, asc_state: SessionState):
 
         blank_sheet_file(asc_state, "lbl_short")
-        # Two different named labels on the same pin coordinate would merge the
-        # nets at netlist time; the second must be refused, not silently saved.
+        # A label named after another net, placed on a net that already has a
+        # name, merges the two at netlist time; it must be refused, not silently
+        # saved. A name no other net carries only gives R1.1's net a second name.
         res = batch_view(
             asc_state,
             _sheet("lbl_short.asc"),
@@ -1624,15 +1779,27 @@ class TestAddNetLabelOpValidation:
                     "x": 128,
                     "y": 128,
                 },
+                {
+                    "op": "add_component",
+                    "reference": "R2",
+                    "symbol": "res",
+                    "x": 400,
+                    "y": 128,
+                },
                 {"op": "add_net_label", "net": "a", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "b", "pin": "R2.1"},
                 {"op": "add_net_label", "net": "b", "pin": "R1.1"},
+                {"op": "add_net_label", "net": "c", "pin": "R1.1"},
             ],
             stop_on_error=False,
         )
         results = {r["index"]: r for r in res["results"]}
-        assert results[1]["ok"] is True  # net "a" placed
-        assert results[2]["ok"] is False  # net "b" would short — refused
-        assert "short" in results[2]["error"].lower()
+        assert results[2]["ok"] is True  # net "a" placed
+        assert results[3]["ok"] is True  # net "b" placed on R2
+        assert results[4]["ok"] is False  # "b" on R1's net "a" would short — refused
+        assert "short" in results[4]["error"].lower()
+        assert results[5]["ok"] is True  # "c" names nothing else — a second name
+        assert any("second name" in w for w in results[5]["warnings"])
 
     async def test_floating_label_warning_via_batch(self, asc_state: SessionState):
 
@@ -2038,19 +2205,23 @@ class TestWirePinsTJunction:
         assert '{"x": 240, "y": 196}' in message
         assert _wire_segments(asc) == before
 
-    async def test_a_plain_crossing_is_still_refused_without_claiming_a_join(
+    async def test_a_plain_crossing_is_drawn_with_a_warning_and_joins_nothing(
         self, asc_state: SessionState, work_dir: Path
     ):
         # The same route without the waypoint crosses the rail with neither wire
         # ending there. The export leaves such a crossing unjoined
-        # (crossing_wires), so the refusal must not say the nets would merge.
+        # (crossing_wires), so the route is drawn, the nets stay apart, and the
+        # warning names the wire without saying the nets would merge.
         asc = _write_sheet(
             work_dir / "plain_cross.asc", *_RAIL, _res("R3", 240, 100), _res("R6", 240, 388)
         )
-        with pytest.raises(NetlistError, match="crosses existing wire at \\(240,196\\)") as exc:
-            wire_pins(asc_state, asc, "R3.2", "R6.1")
-        assert "unjoined" in str(exc.value)
-        assert "unintended junction" not in str(exc.value)
+        result = wire_pins(asc_state, asc, "R3.2", "R6.1")
+        (warning,) = [w for w in result["warnings"] if "crosses" in w]
+        assert "(96,196)->(288,196) at (240,196)" in warning
+        assert "unjoined" in warning
+        assert "junctions" not in result
+        assert await _net_pins(asc_state, asc, "R3.2") == {"R3.2", "R6.1"}
+        assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
 
     async def test_a_route_through_another_nets_wire_end_is_refused(
         self, asc_state: SessionState, work_dir: Path

@@ -240,9 +240,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "control_token": {"type": "string"},
         # A fact about THIS call, not about the job: true when the request_id
         # and canonical payload matched an existing durable experiment, so its
-        # receipt came back and no cases were submitted. The record's own
-        # 'idempotent_replay' observation is the durable, record-scoped note,
-        # and reads the same to every later reader.
+        # receipt came back and no cases were submitted. The replay leaves the
+        # job's record as it was.
         "replayed": {"type": "boolean"},
         "status": {"type": "string"},
         "outcome": OUTCOME_SCHEMA,
@@ -411,6 +410,8 @@ def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
 def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply presentation rungs to either public receipt envelope."""
     if rung.trim:
+        # Removes an empty block only, so it never empties anything a note
+        # would have to name.
         response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT)
     if rung.answer_channel:
         for page in _receipt_row_pages(data):
@@ -446,9 +447,7 @@ async def negotiate_receipt(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, notes, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, notes)
     return result.data, text
 
@@ -478,10 +477,8 @@ def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
     """Project durable accounting into the shared progress fact.
 
     The three DERIVED numbers only. ``completeness`` keeps all seven counters,
-    unchanged and always — this block used to restate every one of them beside
-    its own projection, so the same accounting arrived twice in one receipt and
-    a third time in the hint. Dropping the copy removes no fact: each counter is
-    one key away, in the ``completeness`` block itself.
+    unchanged and always, so each counter is one key away and neither this
+    block nor the hint restates them.
     """
     return {
         "expanded": completeness.expanded,
@@ -491,17 +488,11 @@ def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
 
 
 def finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize completeness and attach its two public progress projections."""
+    """Normalize completeness and attach its ``progress`` projection."""
     raw = data["completeness"]
     completeness = raw if isinstance(raw, Completeness) else Completeness(**raw)
     data["completeness"] = asdict(completeness)
-    progress = progress_from_completeness(completeness)
-    data["progress"] = progress
-    response_budget.append_hint(
-        data,
-        f"Progress: {progress['terminal']}/{progress['expanded']} terminal; "
-        f"{progress['remaining']} remaining.",
-    )
+    data["progress"] = progress_from_completeness(completeness)
     return data
 
 
@@ -838,13 +829,6 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     )
 
 
-# Case count at which a terminal receipt starts pointing at the in-process
-# interface. Ten is past any spot-check and squarely in sweep/corner territory —
-# the workload class where the per-call cost of going through the tool surface
-# is large enough to be worth avoiding.
-_API_POINTER_MIN_CASES = 10
-
-
 def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     """Every recovery route this receipt has, not the first one that matched.
 
@@ -855,11 +839,10 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     was to re-run an experiment whose results were sitting on disk.
     """
     if truncated:
-        routes = [
+        return (
             f"The inline run page is truncated; use jobs(runs) with job_id "
             f"{snapshot.job_id} for the remaining cases."
-        ]
-        return " ".join(routes + _api_pointer_route(snapshot))
+        )
     routes: list[str] = []
     if snapshot.analysis_status in {"failed", "cancelled"}:
         routes.append(
@@ -870,23 +853,8 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     if snapshot.failures:
         routes.append("Inspect failures and lint findings before retrying omitted cases.")
     if not routes:
-        routes.append("All declared experiment cases reached terminality.")
-    return " ".join(routes + _api_pointer_route(snapshot))
-
-
-def _api_pointer_route(snapshot: ReceiptSnapshot) -> list[str]:
-    """The second discovery surface for the Python API (the first is the
-    initialize instructions): it lands exactly on the caller who is iterating —
-    a many-case receipt is the loop shape where per-call wire overhead
-    compounds and the Python API pays for itself. Appended on EVERY terminal
-    experiment route, the truncated one included: a receipt big enough to
-    truncate is the biggest loop of all."""
-    if snapshot.completeness.expanded < _API_POINTER_MIN_CASES:
-        return []
-    return [
-        "To run follow-up calls in a loop, use the in-process Python API: "
-        "from ltspice_mcp.api import Api (same ops; api.reference() documents them)."
-    ]
+        routes.append(f"Experiment {snapshot.job_id} is {snapshot.status}.")
+    return " ".join(routes)
 
 
 #: Statuses on which a job delivered nothing at all, so the whole call failed.

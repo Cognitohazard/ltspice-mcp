@@ -70,6 +70,27 @@ _XYCE_BANNER = re.compile(r"^\*+[ \t]*This is version[ \t]+(Xyce\b[^\r\n]*)", re
 _NGSPICE_BANNER = re.compile(r"^\*\*[ \t]*(ngspice-[^\s:]+)", re.MULTILINE)
 _NGSPICE_CREATED = re.compile(r"^\*\*[ \t]*Creation Date:[ \t]*(\S[^\r\n]*)", re.MULTILINE)
 _WHITESPACE = re.compile(r"\s+")
+# LTspice XVII and earlier decode a deck as cp1252. Their executables are
+# XVIIx64.exe / XVIIx86.exe (XVII) and scad3.exe (IV), and the raw header names
+# the writer as "Linear Technology Corporation LTspice XVII". LTspice 24 and
+# later are LTspice.exe and name themselves "LTspice 24.0.12 ...".
+_CP1252_LTSPICE_EXECUTABLE = re.compile(r"(?i)(?:^|[\\/])(?:XVIIx(?:64|86)|scad3)\.exe$")
+_CP1252_LTSPICE_BUILD = re.compile(r"(?i)\bLTspice\s+(?:XVII|IV)\b")
+
+
+def is_cp1252_ltspice_executable(program: str) -> bool:
+    """Whether ``program`` is the executable of an LTspice that decodes decks as cp1252.
+
+    Matched on the file name in either path spelling, so a Windows path read on
+    Linux (under Wine or WSL) is recognized too.
+    """
+    return _CP1252_LTSPICE_EXECUTABLE.search(program) is not None
+
+
+def is_cp1252_ltspice_build(reported: str) -> bool:
+    """Whether a build a run reported (``reported_build``) is an LTspice that
+    decodes decks as cp1252: XVII or earlier."""
+    return _CP1252_LTSPICE_BUILD.search(reported) is not None
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,8 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
     executable_path,
+    is_cp1252_ltspice_build,
+    is_cp1252_ltspice_executable,
     reported_build,
     same_executable,
 )
@@ -253,6 +255,37 @@ class TestReportedBuild:
 # ---------------------------------------------------------------------------
 # Which program a simulator class launches
 # ---------------------------------------------------------------------------
+
+
+class TestCp1252LTspice:
+    """Which LTspice decodes a deck as cp1252, read off names alone."""
+
+    @pytest.mark.parametrize(
+        "program",
+        [
+            "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe",
+            "/mnt/c/Program Files (x86)/LTC/LTspiceXVII/XVIIx86.exe",
+            "/home/user/.wine/drive_c/Program Files/LTC/LTspiceIV/scad3.exe",
+        ],
+    )
+    def test_xvii_and_earlier_executables(self, program: str):
+        assert is_cp1252_ltspice_executable(program)
+
+    @pytest.mark.parametrize(
+        "program",
+        [
+            "C:\\Program Files\\ADI\\LTspice\\LTspice.exe",
+            "/usr/bin/ngspice",
+            "/opt/tools/notXVIIx64.exe",
+        ],
+    )
+    def test_other_executables(self, program: str):
+        assert not is_cp1252_ltspice_executable(program)
+
+    def test_reported_builds(self):
+        assert is_cp1252_ltspice_build("Linear Technology Corporation LTspice XVII")
+        assert not is_cp1252_ltspice_build(LTSPICE_26)
+        assert not is_cp1252_ltspice_build(NGSPICE_42)
 
 
 class TestExecutableIdentity:

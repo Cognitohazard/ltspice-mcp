@@ -5,6 +5,7 @@ Used throughout the analysis tools to accept human-friendly frequency and time v
 """
 
 import re
+from collections.abc import Container
 from typing import Any
 
 
@@ -73,10 +74,25 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
 # The micro sign (µ, U+00B5) is how LTspice's exporter spells 'u' in a
 # netlist, and the Greek mu (μ, U+03BC) is what a keyboard produces; both are
 # admitted to the tail and folded to 'u' before the suffix table is read.
-_NUM_TAIL_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Zµμ]+)$")
+_MANTISSA = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
+_NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ]+)$")
+# A number with at most a scale suffix and nothing after it.
+_SCALED_NUMBER_RE = re.compile(
+    rf"{_MANTISSA}(?:{'|'.join(suffix for suffix, _ in _SCALE_FACTORS)})?", re.IGNORECASE
+)
 #: The micro sign (U+00B5) and the Greek mu (U+03BC).
 MICRO_SIGNS = frozenset("µμ")
 _MICRO_SIGNS = str.maketrans(dict.fromkeys(MICRO_SIGNS, "u"))
+
+
+def is_scaled_number(text: str) -> bool:
+    """``text`` is a SPICE number with at most a scale suffix (``8``, ``2.5k``,
+    ``1meg``) and nothing after it.
+
+    Stricter than ``parse_spice_value``, which also reads a unit after the
+    suffix (``1uF``) and so would take a name such as ``2NPN`` for a number.
+    """
+    return _SCALED_NUMBER_RE.fullmatch(text) is not None
 
 
 def fold_micro_sign(text: str) -> str:
@@ -131,6 +147,22 @@ def parse_spice_value(s: str) -> float:
         f"Cannot parse '{s}' as SPICE value. "
         f"Expected number or number with suffix: {', '.join(suf for suf, _ in _SCALE_FACTORS)}"
     )
+
+
+def unique_name(
+    base: str, taken: Container[str], *, fold: bool = False, max_len: int | None = None
+) -> str:
+    """``base``, or ``base-2``, ``base-3``…, whichever comes first not in ``taken``.
+
+    With ``fold`` the comparison ignores case, and ``taken`` holds casefolded
+    names. ``max_len`` shortens ``base`` so a suffixed name still fits.
+    """
+    candidate, counter = base, 2
+    while (candidate.casefold() if fold else candidate) in taken:
+        suffix = f"-{counter}"
+        stem = base if max_len is None else base[: max_len - len(suffix)]
+        candidate, counter = stem + suffix, counter + 1
+    return candidate
 
 
 def format_spice_value(value: float | str) -> str:

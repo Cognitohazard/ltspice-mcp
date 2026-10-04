@@ -188,8 +188,12 @@ C1 out 0 {C}
   exported netlists. LTspice 24 writes it in UTF-8 and reads it back; LTspice
   XVII reads the file as cp1252 and drops the scale, so `23µ` runs as 23.
   `run_experiments` stages decks with `u`; write `u` in any deck you run
-  elsewhere. `verify_circuit` flags a µ suffix (`value_suffix_micro_sign`) and
-  any other non-ASCII suffix (`value_suffix_nonascii`), in a netlist and in an
+  elsewhere. `verify_circuit` reports µ suffixes (`value_suffix_micro_sign`)
+  as one observation per file, and as a warning per value only when it knows
+  of an LTspice XVII that would misread the file. A suffix that shows the file
+  was decoded in the wrong encoding (`value_suffix_mojibake`, such as `Âµ`) is
+  an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`) is a
+  warning, read as the bare number. These checks run on a netlist and on an
   `.asc`'s exported netlist.
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.

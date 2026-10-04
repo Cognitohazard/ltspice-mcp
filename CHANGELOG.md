@@ -10,6 +10,134 @@ tool-surface changes.
 
 ### Fixed
 
+- `run_experiments` refused valid decks under its default `lint: "block"`, and
+  an `.asc` is linted through its exported netlist, so schematics were refused
+  too. `model-missing` read the model of `Q2 c b e QN 8` (the area factor of a
+  bandgap's ratioed pair) as `8`, of `Q1 c b e QN off` as `off`, and of
+  `X1 a b mysub params: R=2k` as `params:`. The netlist reader now takes the
+  model before a BJT, JFET or MOSFET area factor or `off`, and before a subckt
+  call's `params:`; a model whose name reads as a number (`Q1 c b e 555`) is
+  still the model. The same reading keeps the area factor through a
+  `set_component_value` model change, and stops `verify_circuit` reporting the
+  subckt name before `params:` as a dangling node.
+- The arity check refused valid LTspice cards: a comma-continued value
+  (`IC=1,2,3`, `tc=0.001,1e-6`), which the lexer split at the commas; the
+  behavioural resistor and power forms `B1 a 0 R=...` and `B1 a 0 P=...`; a
+  value carried by a keyword (`C1 a 0 Q=...`, `L1 a 0 Flux=...`,
+  `V1 a 0 wavefile="in.wav"`), counted one node short; and an expression with
+  spaces around its operators (`B1 c 0 V = V(a) + V(b)`), which the validator
+  calls a warning but the linter and `verify_circuit`'s `syntax` check both
+  reported as an error. A comma-continued value now lexes as one `key=value`,
+  a keyword value leaves every positional a node, and each issue is reported
+  at the severity the validator gives it. `R=` and `P=` are still refused for
+  ngspice, whose B-source takes only `V=` and `I=`.
+- A deck whose title on line 1 starts with an element letter
+  (`Diode clamp test`, `Bandgap reference`) was refused by `model-missing` or
+  the arity check, which read the title as an element. Both simulators skip
+  line 1; the lint rules that read elements or values skip it too, as
+  `verify_circuit` already did.
+- `verify_circuit`'s `syntax` check applied LTspice's rules to every netlist
+  (`vdb()` in a `.meas`, `C=` as a capacitor's value) and never ngspice's (a
+  zero `.tran` step, `.backanno`). It now checks against the session's default
+  simulator, the one `run_experiments` runs on when no simulator is named.
+- The netlist lexer noted `.ends opamp` as not matching `.SUBCKT OPAMP`. SPICE
+  names are case-insensitive, and so is the match now.
+- `inspect(kind="model", mode="enumerate")` refused a `query` because it never
+  filtered. It now lists only the models whose name contains the query,
+  case-insensitively, and echoes the filter it applied; `search` keeps its
+  fuzzy match.
+- `analyze_results` refused several requests that asked for nothing harmful.
+  A source's `label` is now optional (it defaults to the job_id or the raw
+  file's stem, with a `-2` suffix where two sources would share one); a
+  repeated run index, `case_ids` entry, `group_by` dimension or `include.fields`
+  path is read once and named in the `hint` (on an attached analysis, in the
+  receipt's `warnings`); and `continue` accepts the original request's fields
+  resent with it, refusing only a field that differs from the stored request,
+  which it now names. A label the caller writes must still be unique.
+- `jobs` refused a call carrying both `job_id` and `request_id`, even when
+  both named the same job. Both are now accepted; when they name different jobs
+  the call fails with the new code `selector_conflict`, naming the job the
+  `request_id` resolves to.
+- Four caps refused a larger value instead of serving the cap:
+  `run_experiments`' `execution.wait_s` above 120 s, `jobs(wait)`'s
+  `timeout_s` above 300 s, `jobs(list)`'s `limit` above 50, and `per_run.limit`
+  above 100 on `analyze_results` and on an attached analysis. Each now runs at
+  the cap and says so — a warning on `run_experiments` and `jobs`, the `hint`
+  on `analyze_results` — naming the value used and how to get the rest (wait
+  again, or the next cursor). The schemas no longer advertise these as a
+  `maximum`, since a strict client refuses one before sending; the
+  descriptions name the cap.
+- `analyze_results` refused `reduce` without `field` on a multi-field recipe
+  (`{metric: "stability", reduce: ["min"]}`), while a keyed recipe's bare
+  `reduce` covered every key. A bare `reduce` now covers every field the recipe
+  reports, one row per field and statistic, each the number a reduction naming
+  that field gives; `spec` still needs `field`. `edges` reports its transition
+  time as `rise_time` or `fall_time` by the edge each row measured.
+- `run_experiments` refused a circuit whose id came from its file stem when the
+  stem was not a valid id (`amp.v2.cir`, `my amp.cir`: `invalid_circuit_id`) or
+  when two files shared a stem (`a/amp.cir` and `b/amp.cir`:
+  `duplicate_circuit_id`), with no word that the caller had written no id. The
+  server chose that name, so it now makes it valid (`amp_v2`, `my_amp`) and
+  unique against every other id in the call (`amp`, `amp-2`), and each such
+  circuit's cases carry a new `circuit_id_derived` observation naming the id
+  it ran under and why. An id the caller writes is still refused when invalid
+  or duplicated, and an unknown `applies_to` id now lists the ids in the call.
+- `run_experiments` refused two `random` variation entries in one call even
+  when their `applies_to` lists named different circuits, so two designs could
+  not be Monte-Carlo'd in one job. The rule it enforces is per circuit: the
+  product of two random families on one deck is ill-defined, so a circuit still
+  takes at most one (`multiple_random_variations`, now naming the circuit), but
+  entries on different circuits each run with their own seed.
+- `add_net_label` refused any second name on a net that already had one, even
+  a name no other net carries, which joins nothing. It now refuses only a label
+  that would join two named nets: a name another net already has, or a new
+  name placed where two named nets cross (a label at a crossing joins both
+  wires, which the old check missed). A second name for one net is placed with
+  a warning that the node now has two names. `wire_pins`' refusal to join two
+  named nets pointed at `add_net_label` "to merge them deliberately", which
+  refused the same merge; it now names the relabelling that works.
+- `inspect(kind="net")` read a bare `at: "out"` as a node name on a netlist but
+  refused it on a schematic. On a schematic it now names the net label, as
+  `net:out` does.
+- `wire_pins` refused a route that crosses an existing wire where neither
+  ends, although LTspice leaves such a crossing unjoined (the LTspice 26.1.1
+  export in `tests/fixtures/t_junctions/crossing_wires`), so the route joins
+  nothing there. The route is now drawn and the op reports a warning naming the
+  wire and the crossing point.
+- `edit_schematic` refused a dry run, or an op-less read such as paging the
+  `preexisting` view, on an existing sheet unless it carried
+  `expected_sha256`. The token guards against a lost update, which only a
+  write can cause, so it is now required only to commit. A dry run returns the
+  sheet's current `sha256`, and a token it is given that does not match is
+  reported in `observations` rather than refused; a commit quoting that token
+  is still `revision_conflict`.
+- `edit_schematic`'s `set_component_value` refused any value with a space
+  outside braces, quotes, a waveform's parentheses or a `MODEL KEY=VALUE` list,
+  so a source's `AC 1` or `DC 5 AC 1`, a BJT's `2N3904 2` or `NPN 8`, and a
+  behavioural source's `V=V(a) + V(b)` were refused, although `add_component`
+  writes the same values and none of them can reach a node slot. The refusal
+  now applies only where a space would split the value into an extra node: a
+  resistor, capacitor, inductor or subcircuit value, a MOSFET value other than
+  a model name and `off`, and a BJT, JFET or diode value other than a model
+  name, an area factor and `off`. The element class is the symbol's `Prefix`,
+  as LTspice netlists it, not the instance name. A waveform followed by a
+  parameter (`PULSE(...) Rser=1`) keeps its parentheses in Value and puts the
+  parameter in SpiceLine.
+- Running a schematic on ngspice replaced every `µ` and `μ` in the exported
+  netlist with `u` and deleted every `§`, including in comments, quoted strings
+  and include paths, so an `.include` naming a folder with either character in
+  it pointed at a file that does not exist. Only what ngspice cannot read is
+  changed now: the `.backanno` card is dropped, and the `§` LTspice writes into
+  an instance name (`R§Load`) leaves that name wherever the deck names it,
+  `.meas` references included. A value's micro sign is left to staging, which
+  spells it `u` for every simulator without touching a path.
+- A deck or include that staging had to rewrite, and a case deck a variation
+  wrote, was always written as UTF-8. A cp1252 deck, which is what LTspice XVII
+  writes, came out with every other non-ASCII character re-encoded, and XVII
+  read a `§` in an instance name as `Â§`, renaming the instance. A rewritten
+  file is now written in the encoding it was read in, with UTF-8 used only for
+  text that encoding cannot spell. A UTF-16 or UTF-32 deck is still rewritten
+  as UTF-8, since the edits made to a deck at run time are ASCII bytes.
 - The guide described what ngspice prints for a top-level `.meas` and for a
   sectioned `.lib` under the default compatibility mode, but `run_experiments`
   refuses both decks before they run (lint `meas-ngspice-batch` and
@@ -81,11 +209,12 @@ tool-surface changes.
   opened, and a quote left open inside a braced or parenthesized expression is
   reported at the quote, with the same hint, rather than at the enclosing
   bracket with none.
-- `run_experiments` linted a QSPICE or Xyce deck against LTspice's own
-  arity rule: a capacitor or inductor written with a keyed primary value
-  (`C1 out 0 C=1u`) was a blocking `directive-arity` finding on every
-  simulator but ngspice. LTspice is the simulator that rejects that form, so
-  the rule now applies to LTspice decks only.
+- `run_experiments` linted a QSPICE or Xyce deck with LTspice's reading of
+  the two arity checks that encode it: a capacitor or inductor written with a
+  keyed primary value (`C1 out 0 C=1u`) was a blocking `value-keyword-ltspice`
+  finding, and a B-source written in LTspice's own `R=`/`P=` forms passed.
+  Both readings are LTspice's, so they now apply to LTspice decks only; a
+  QSPICE or Xyce deck is read as an ngspice deck is.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -110,15 +239,34 @@ tool-surface changes.
   record, read while the job was still running, and that write could land
   after the owner's `completed` one. The owner had exited by then, so the next
   reader found a running job with no owner and recovered it as interrupted.
-  Seen with two scripts detaching the same request. Only the owning process
-  writes a job's record now; the caller that replayed still gets the
-  `idempotent_replay` observation in its receipt.
+  Seen with two scripts detaching the same request. A replay now leaves the
+  job's record as it was, in every process: it used to add an
+  `idempotent_replay` observation to the record, which every later reader saw,
+  the original submitter included. The receipt's `replayed: true` is the fact
+  about the call that replayed, and that observation is no longer written.
+- The configuration file written on the first tool call set every key to the
+  default of the release that wrote it, `default = "ltspice"` included. A host
+  with only ngspice then logged a fallback warning on every start, and a later
+  release's default (`default_budget`, `open_plot`, `timeout` and the rest)
+  never reached a server whose file predated it. Every key is now written
+  commented out with its default shown, so the file sets nothing until a line
+  is uncommented. A file written by an earlier release keeps its values.
 - On Windows, a job record read while its running job rewrote it could read as
   missing: opening a file at the instant a rename replaces it fails with access
   denied for a moment. The request gate then minted a second job for a repeated
   `request_id` instead of replaying the first, and a lookup, a listing or a
   cancel could report a live job as not found. Reading a job record now retries
   that denial on the same short schedule writing one already did.
+- `analyze_results` read every raw and log whole on every call, to hash them,
+  against the call's own time budget: a large raw spent most of the budget
+  before any recipe ran, and a hash that ran out of it failed the recipe. A
+  source is now identified by the size and modification time of its raw and
+  log. Content digests are taken only when a reply hands out a cursor or
+  continuation, or `include.provenance` asks for them, and the call resuming
+  the set compares them, so a rewrite that kept both size and timestamp is
+  still reported as `source_drift`. Both hashes are bounded and fail nothing:
+  a digest not taken in time, or a comparison cut short on resume, leaves the
+  source to its size and time.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call
@@ -279,6 +427,25 @@ tool-surface changes.
   sheets in different folders each keep their own. A redrawn local symbol is
   read again. A `base="blank"` build looks beside its target, not beside the
   temporary template it starts from.
+- The server's default response budget added "presentation was reduced" to
+  any response over it, even when its trim removed nothing, and receipts and
+  `jobs` then told the caller to "ask again with a larger 'budget'", a field
+  the caller had not set. The note is now written only when the trim emptied
+  something with content, names what it emptied, and under the server default
+  sends the caller to no budget: `analyze_results` says each row still names
+  its source and `include.provenance` keeps `source_hashes`. `inspect` no
+  longer repeats the note in its `hint`.
+- Hint and observation text that restated the structured fields is gone.
+  Every receipt's hint no longer repeats the `progress` counts, and a finished
+  receipt for ten or more cases no longer carries a pitch for the Python API
+  (the server's instructions introduce it). A clean terminal receipt's hint is
+  one status line. `plot_waveform` drops `plot_written`, `step_axis_unioned`,
+  `open_skipped` and `widget_delivered`, whose facts are the reply's own
+  counts, `opened` and `delivery`, and reports `phase_unwrapped` only when a
+  summary's phase lies outside ±180 deg, where it differs from the wrapped
+  angle. `edit_schematic` lists in `stages` only the stages that did not
+  complete (the no-op `stage_assets` is gone), and its commit hint no longer
+  restates the `wiring` counts.
 
 ### Added
 
@@ -303,10 +470,11 @@ tool-surface changes.
   structured `hint`. Reading the guide through `inspect` or a `spice://guide`
   resource retires it.
 - `run_experiments` accepts `execution.simulator: "qspice"` and `"xyce"`.
-  The schema enumerated only LTspice and ngspice, so QSPICE and Xyce could
-  run only as the server default, after a config change and a restart. All
-  four families are now enumerated, and a name is accepted when the family
-  is detected and this host can run it. An undetected family is refused with
+  The field admitted only LTspice and ngspice (and their named executables),
+  so QSPICE and Xyce could run only as the server default, after a config
+  change and a restart. Its pattern now admits all four families, each with
+  named executables of its own, and a name is accepted when the family is
+  detected and this host can run it. An undetected family is refused with
   the existing "not available" error, which lists what was detected. A QSPICE
   run's `.qraw` and a Xyce run's raw parse with their own dialect, read from
   the job's recorded simulator (Xyce's raw does not name its writer).
@@ -402,15 +570,19 @@ tool-surface changes.
   difference is complex, so `V(out)/V(inp,inn)` works as a `stability` or
   `bode_*` signal. A `.noise` run refuses a pair because spectral densities do
   not subtract.
-- A blocking lint rule, `value-suffix-nonascii` (`linter_version` 3), for a
-  non-ASCII character where a scale suffix goes. The simulator reads that
-  value as the bare number, and for `Âµ` (a UTF-8 micro sign decoded as cp1252)
-  the finding names the likely intended value. `verify_circuit` reports it as
-  `value_suffix_nonascii`, and warns about a `µ`/`μ` suffix itself as
-  `value_suffix_micro_sign`, from its `syntax` check on a netlist and from its
-  `export` check on the netlist exported from an `.asc`, along with the file's
-  encoding and the `Generated by LTspice` header when present, so decks run
-  outside the server are covered too.
+- Two lint rules for a non-ASCII character where a scale suffix goes, which
+  the simulator reads as the bare number. `value-suffix-mojibake` blocks a
+  suffix that shows the file was decoded in an encoding it was not written in:
+  `Âµ`, a UTF-8 micro sign decoded as cp1252 and a factor of 1e6 off, for which
+  the finding names the likely intended value, or any other `Â`, `Î` or `Ã`.
+  `value-suffix-nonascii` warns about any other symbol, such as `10Ω` or
+  `25°C`, where the bare number is usually what was meant. `verify_circuit`
+  reports them as `value_suffix_mojibake` (an error) and
+  `value_suffix_nonascii` (a warning), and reports a `µ`/`μ` suffix itself as
+  `value_suffix_micro_sign`, from its `syntax` check on a netlist and from
+  its `export` check on the netlist exported from an `.asc`, along with the
+  file's encoding and the `Generated by LTspice` header when present, so decks
+  run outside the server are covered too.
 - Exact nested-instance assignments and caller-defined mismatch, preserving
   untouched peers and original files through private case copies.
 - Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
@@ -452,6 +624,28 @@ tool-surface changes.
   Its `version` is now the build that the latest run on that same executable
   reported, with `version_source` naming the job and case; it was always
   null. The executable is never launched to ask.
+- One server can run more than one build of a simulator family, such as
+  LTspice XVII beside LTspice 24, chosen per call. `[simulator.executables]`
+  names further executables (`xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"`,
+  or a `[simulator.executables.ngspice]` table, or `"family:name"` keys), and
+  `LTSPICE_MCP_SIMULATOR_EXECUTABLES` takes the same as `name=path` entries
+  separated by `;` on every platform; `Api(simulator_executables={...})` too.
+  The family is read off the file name (`XVIIx64.exe` is LTspice), and an
+  executable whose name says nothing needs `family:name`. A run selects one
+  with `execution.simulator = "ltspice:xvii"`; a plain family name runs the
+  family's own executable as before. Each named executable is a simulator
+  class of its own, so it never retargets the family's class or the runs
+  already using it, and it has its own runner and launch permits: each build
+  gets the whole `max_parallel_sims`, as each family already did. Its records,
+  replay check, scoped kill, raw dialect, linter, `.asc` exporter and model
+  library roots follow the build the run selected. Startup binds them; an
+  entry that cannot be bound (missing file, a family the allowlist excludes,
+  a file that looks like another simulator) is left out
+  with a startup diagnostic. `inspect(kind="capabilities")` lists them under
+  `named_executables`, keyed by the selector, each with its executable,
+  `executable_sha256` and last reported `version`. A `request_id` replayed
+  under another name, or under a name now bound to another build, is an
+  `idempotency_conflict`.
 
 - `inspect(kind="capabilities")` takes an optional `fields` list naming the
   top-level keys to return, such as `["allowed_paths", "config_path"]` after a
@@ -469,6 +663,42 @@ tool-surface changes.
 
 ### Changed
 
+- A run's simulator library roots, the install directories staging accepts as
+  the simulator's own, are now those of the LTspice build the run launches:
+  LTspice XVII's `Documents\LTspiceXVII\lib`, or LTspice 24's
+  `%LOCALAPPDATA%\LTspice\lib`. Before, every LTspice library spicelib knew
+  of was accepted whichever build ran. On WSL a server running XVII now finds
+  XVII's library under `%USERPROFILE%`; only LTspice 24's location was probed
+  before, so a transistor schematic exported by XVII could not be staged under
+  the default sandbox.
+- On WSL, cancelling a case also matches the Windows process by the file name
+  of the executable its runner launched, so a copy of LTspice under another
+  name is stopped; before, only `LTspice.exe`, `XVIIx64.exe` and `scad3.exe`
+  were matched.
+- The `directive-arity` lint rule is four rules, so suppressing one check no
+  longer silences the others (`linter_version` 4): `element-arity` (fewer
+  nodes than the element has terminals, blocking), `bsource-value-prefix` (a
+  B-source with no value key, blocking), `value-keyword-ltspice` (`C=`/`L=` as
+  the primary value on LTspice, blocking) and `value-expression-remnant`
+  (tokens left after the first `key=value`, a warning). A `suppress` entry
+  naming `directive-arity` no longer matches a rule.
+- `meas-ngspice-batch` is a warning, not blocking. ngspice runs the deck and
+  skips only the top-level `.meas`, and reading the run relays ngspice's own
+  notice of the skip; refusing the deck cost the caller the whole run.
+- `verify_circuit` reports micro-sign value suffixes (`value_suffix_micro_sign`)
+  as one observation per file, with their count, lines and tokens, which leaves
+  the outcome `complete`. LTspice 24 and later read the UTF-8 `µ` they write, so
+  an LTspice export was otherwise `partial` with one warning per value. A
+  warning per value remains where the server knows of a reader that would
+  misread the file: the session's LTspice is XVII or earlier (from the
+  executable's name, or the build a run on it reported) or the deck names XVII
+  as its writer, and the file is not cp1252. The warning's evidence names that
+  reader. Both value-suffix rules are now under the per-rule finding cap, with
+  the usual `showing N of M` observation.
+- `run_experiments` reports the `micro_sign_folded` observation only when the
+  job runs on an LTspice that decodes decks as cp1252. Staging still spells
+  every micro-sign suffix `u`; for every other simulator that reads the same as
+  the source, so the observation was on nearly every LTspice run.
 - The guide states each rule once, in the section it belongs to, and points to
   it from elsewhere. LTspice-only syntax (`.step`, PWL extras, `startup`) moved
   from the fundamentals into the LTspice section, and `run_experiments` Monte
@@ -629,6 +859,13 @@ tool-surface changes.
   (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
   too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
   `invalid_query`.
+- `verify_circuit`'s `export` check writes `<name>.net` beside the schematic by
+  default (`export_to: "sidecar"`), the file LTspice itself writes beside a
+  schematic it runs and the one `run_experiments` exports through. The default
+  used to be `managed`, which copied the schematic and every `.asy`, `.lib`,
+  `.sub`, `.inc` and `.mod` under its folder into the store to avoid that file,
+  and is where a relative include was once refused as `path_denied`. `managed`
+  is still available for a call that must write nothing beside the schematic.
 
 ### Removed
 

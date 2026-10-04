@@ -345,6 +345,25 @@ async def test_net_asc_geometric(asc_file: Path, asc_state: SessionState):
     assert isinstance(data["pins"], list)
 
 
+async def test_net_asc_takes_a_bare_label_name_as_a_netlist_does(
+    asc_file: Path, asc_state: SessionState
+):
+    """A bare ``at: "filtered"`` was refused on a schematic while a netlist read
+    the same bare name as a node; it now names the net label, as ``net:`` does."""
+    bare, spelled = await _run(
+        asc_state,
+        [
+            {"kind": "net", "path": str(asc_file), "at": "filtered"},
+            {"kind": "net", "path": str(asc_file), "at": "net:filtered"},
+        ],
+    )
+    assert bare["ok"] is True, bare
+    assert bare["data"] == spelled["data"]
+    (missing,) = await _run(asc_state, [{"kind": "net", "path": str(asc_file), "at": "nosuch"}])
+    assert missing["ok"] is False
+    assert "nosuch" in missing["error"]["message"]
+
+
 async def test_net_netlist_has_no_geometry_keys(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(netlist), "at": "net:out"}])
     assert res["ok"] is True
@@ -845,18 +864,27 @@ async def test_model_enumerate_requires_libs(state_no_sim: SessionState):
     assert "libs" in res["error"]["message"]
 
 
-async def test_model_enumerate_rejects_a_query_it_would_ignore(
+async def test_model_enumerate_with_a_query_lists_the_names_containing_it(
     libfile: Path, state_no_sim: SessionState
 ):
-    """Enumerate never filters, so accepting 'query' would echo back a filter
-    that was not applied."""
-    (res,) = await _run(
+    """Enumerate refused a 'query' because it never filtered, so narrowing a
+    listing took a second, fuzzy tool. It now applies the query as a
+    case-insensitive name filter, and echoes the filter it applied."""
+    (everything, narrowed) = await _run(
         state_no_sim,
-        [{"kind": "model", "mode": "enumerate", "libs": [str(libfile)], "query": "MyNPN"}],
+        [
+            {"kind": "model", "mode": "enumerate", "libs": [str(libfile)]},
+            {"kind": "model", "mode": "enumerate", "libs": [str(libfile)], "query": "npn"},
+        ],
     )
-    assert res["ok"] is False
-    assert res["error"]["code"] == "invalid_query"
-    assert "query" in res["error"]["message"]
+    assert narrowed["ok"] is True
+    names = [r["name"] for r in narrowed["data"]["results"]]
+    assert names == [
+        r["name"] for r in everything["data"]["results"] if "npn" in r["name"].lower()
+    ]
+    assert "MyNPN" in names and "myamp" not in names
+    assert narrowed["data"]["query"] == "npn"
+    assert narrowed["data"]["total"] == len(names)
 
 
 async def test_requirement_matrix_isolates(libfile: Path, state_no_sim: SessionState):

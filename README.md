@@ -133,6 +133,9 @@ default = "ltspice"      # ltspice, ngspice, qspice, xyce (null = auto-detect)
 path = ""                # explicit executable path (required on WSL)
 ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
 
+[simulator.executables]  # more builds, run per call as execution.simulator = "ltspice:xvii"
+# xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"
+
 [security]
 # allowed_paths = ["."]  # sandbox, re-read on the next call; unset = working dir + the Claude Code scratch dir (<tempdir>/claude-<uid>; %TEMP%\claude on Windows)
 

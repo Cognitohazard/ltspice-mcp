@@ -155,6 +155,38 @@ class TestTokenizeBody:
         kvs2 = [(t.key, t.value) for t in glued if t.kind == TokenKind.KEY_VALUE]
         assert kvs2 == [("V", "V(in)"), ("tc", "0.1")]
 
+    @pytest.mark.parametrize(
+        ("body", "key", "value"),
+        [
+            ("M1 d g s s N1 L=1u W=1u IC=1,2,3", "IC", "1,2,3"),
+            ("Q1 c b e QN IC=0.7, 5", "IC", "0.7,5"),
+            ("R1 a 0 1k tc=0.001,1e-6", "tc", "0.001,1e-6"),
+            ("R1 a 0 1k tc={a} ,{b}", "tc", "{a},{b}"),
+        ],
+    )
+    def test_comma_continued_value_is_one_key_value(self, body, key, value) -> None:
+        # ``IC=1,2,3`` / ``tc=a,b`` is one value written as a list. Split at the
+        # commas it would leave bare remnants after the key=value, which read
+        # back as an unparseable card.
+        toks = tokenize_body(body)
+        assert [(t.key, t.value) for t in toks if t.kind == TokenKind.KEY_VALUE][-1] == (
+            key,
+            value,
+        )
+        assert not body_has_stray_kv_remnant(body)
+        kv = toks[-1]
+        assert body[kv.body_offset : kv.body_end].endswith(value.split(",")[-1])
+
+    def test_comma_before_the_next_key_does_not_join_it(self) -> None:
+        # Model parameter lists separate keys with commas; the next key=value
+        # stays its own token.
+        toks = tokenize_body("Is=1e-14, N=1.05,Rs=0.1")
+        assert [(t.key, t.value) for t in toks] == [
+            ("Is", "1e-14"),
+            ("N", "1.05"),
+            ("Rs", "0.1"),
+        ]
+
     def test_stray_remnant_detector_glued_vs_spaced(self) -> None:
         # The glued operator forms now parse cleanly (no remnant); the spaced
         # form (operators surrounded by whitespace) still cannot be re-joined
@@ -703,6 +735,15 @@ class TestLexAndEmit:
         # Round-trip still works.
         assert emit(result.cards) == text
 
+    def test_ends_name_matches_its_opener_case_insensitively(self) -> None:
+        # SPICE names are case-insensitive: ``.ends opamp`` closes ``OPAMP``.
+        result = lex(".SUBCKT OPAMP a b\nR1 a b 1k\n.ends opamp\n")
+        assert result.warnings == []
+
+    def test_ends_naming_another_subckt_still_warns(self) -> None:
+        result = lex(".SUBCKT OPAMP a b\nR1 a b 1k\n.ends comparator\n")
+        assert any("does not match opener" in w for w in result.warnings)
+
     def test_eof_in_open_subckt_warns(self) -> None:
         text = ".SUBCKT FOO a b\nR1 a b 1k\n"
         result = lex(text)
@@ -1108,6 +1149,52 @@ class TestInstanceLine:
         assert view.nodes == ["a", "k"]
         assert view.model == "555"
         assert view.value is None
+
+    def test_subckt_call_with_params_keyword(self) -> None:
+        # ``params:`` introduces the overrides; the subckt name is before it.
+        cards = lex("X1 n1 0 mysub params: R=2k\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert view.nodes == ["n1", "0"]
+        assert view.model == "mysub"
+        assert view.params == {"R": "2k"}
+        view.set_model("other")
+        assert emit(cards).strip() == "X1 n1 0 other params: R=2k"
+
+    def test_rerender_keeps_the_params_keyword(self) -> None:
+        # Adding a parameter re-renders the card from the view; the keyword
+        # the call was written with stays in front of its overrides.
+        cards = lex("X1 n1 0 mysub PARAMS: R=2k\n").cards
+        InstanceLine.from_card(cards[0]).set_param("C", "1n")
+        assert emit(cards).strip() == "X1 n1 0 mysub PARAMS: R=2k C=1n"
+
+    @pytest.mark.parametrize(
+        ("card", "nodes", "model", "value"),
+        [
+            # The area factor of a bandgap's ratioed BJT pair.
+            ("Q1 c b e QN 8", ["c", "b", "e"], "QN", "8"),
+            ("Q2 c b e QN {N}", ["c", "b", "e"], "QN", "{N}"),
+            ("Q1 c b e QN off", ["c", "b", "e"], "QN", "off"),
+            ("Q1 c b e QN 8 off IC=0.7,5", ["c", "b", "e"], "QN", "8 off"),
+            ("Q1 c b e sub QN 8", ["c", "b", "e", "sub"], "QN", "8"),
+            ("J1 d g s JN 2", ["d", "g", "s"], "JN", "2"),
+            ("M1 d g s b NCH off", ["d", "g", "s", "b"], "NCH", "off"),
+            # Nothing to peel: a model whose name reads as a number, or a
+            # substrate node before a model that starts with a digit.
+            ("Q1 c b e 555", ["c", "b", "e"], "555", None),
+            ("Q1 c b e sub 2N2222", ["c", "b", "e", "sub"], "2N2222", None),
+        ],
+    )
+    def test_device_trailing_area_and_off_follow_the_model(
+        self, card, nodes, model, value
+    ) -> None:
+        cards = lex(card + "\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert (view.nodes, view.model, view.value) == (nodes, model, value)
+
+    def test_set_model_keeps_the_area_factor(self) -> None:
+        cards = lex("Q1 c b e QN 8\n").cards
+        InstanceLine.from_card(cards[0]).set_model("QP")
+        assert emit(cards).strip() == "Q1 c b e QP 8"
 
     def test_switch_with_on_off_state(self) -> None:
         # A switch carries a trailing ON/OFF state after the model; the state is

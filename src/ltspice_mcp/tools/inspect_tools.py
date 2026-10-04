@@ -40,9 +40,9 @@ than a hunt.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``
   in the given ``libs``, or in the detected simulators' own model libraries
   when ``libs`` is omitted; ``enumerate`` lists every model defined in the
-  given ``libs``. A ``libs`` file may sit inside the sandbox or inside one of
-  those simulator libraries, so every ``source_path`` a search returns reads
-  back.
+  given ``libs``, narrowed to the names containing ``query`` when one is
+  given. A ``libs`` file may sit inside the sandbox or inside one of those
+  simulator libraries, so every ``source_path`` a search returns reads back.
 * ``reference`` — the tools' own branch vocabulary (``tools/reference_index.py``):
   a plain-words ``query`` returns the closest analysis recipes, schematic ops,
   variation kinds, checks and job actions with their full field tables, and no
@@ -142,7 +142,6 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -437,6 +436,7 @@ CapabilityField: TypeAlias = Literal[
     "config_path",
     "python",
     "simulators",
+    "named_executables",
     "default_simulator",
     "exporter_available",
     "render",
@@ -455,8 +455,9 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, and which a run can select; whether the
-    .asc exporter is available, job persistence, allowed roots, the configured
+    reported builds and raw dialects, and which a run can select; the named
+    executables, whether the .asc exporter is available, job persistence,
+    allowed roots, the configured
     limits, and the linter version."""
 
     kind: Literal["capabilities"]
@@ -520,9 +521,9 @@ class NetQuery(StrictModel):
     at: str | list[int] = Field(
         description=(
             "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
-            "(e.g. 'M1.D', 'X1.2'), 'net:NAME', or [x, y]; on a netlist, which "
-            "has no geometry, it takes 'net:NAME', a node name, or "
-            "'REF.<terminal-number>' and rejects a coordinate."
+            "(e.g. 'M1.D', 'X1.2'), 'net:NAME' or a bare net name, or [x, y]; "
+            "on a netlist, which has no geometry, PIN is a terminal number and "
+            "a coordinate is rejected."
         )
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
@@ -603,13 +604,12 @@ class ModelQuery(StrictModel):
     mode: Literal["search", "enumerate"] = Field(
         description=(
             "'search' fuzzy-matches 'query' and requires it; 'enumerate' lists "
-            "every model in 'libs' and rejects a 'query' rather than echoing "
-            "back a filter it never applied."
+            "every model in 'libs', or with 'query' those whose name contains it."
         )
     )
     query: str | None = Field(
         default=None,
-        description="Part name or fragment to match; required by 'search', refused by 'enumerate'.",
+        description="Part name or fragment; required by 'search', a name filter for 'enumerate'.",
     )
     libs: list[str] | None = Field(
         default=None,
@@ -630,14 +630,8 @@ class ModelQuery(StrictModel):
     def _mode_requirements(self) -> ModelQuery:
         if self.mode == "search" and not self.query:
             raise ValueError("model search requires 'query'")
-        if self.mode == "enumerate":
-            if not self.libs:
-                raise ValueError("model enumerate requires 'libs'")
-            # Enumerate lists every model in 'libs' unfiltered. Accepting a
-            # 'query' here would echo the caller's filter back on a response
-            # that never applied it — reject instead of silently ignoring.
-            if self.query is not None:
-                raise ValueError("model enumerate does not filter; use mode 'search' with 'query'")
+        if self.mode == "enumerate" and not self.libs:
+            raise ValueError("model enumerate requires 'libs'")
         return self
 
 
@@ -939,35 +933,35 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _reported_version(
-    state: SessionState,
-    executable: SimulatorExecutable | None,
-) -> tuple[str, dict[str, str]] | None:
-    """The build the latest run on this same executable reported, and which run.
+def _build_facts(
+    state: SessionState, cls: type, executable: SimulatorExecutable | None
+) -> dict[str, Any]:
+    """What one simulator class runs: its last reported build, its dialect, and
+    the program it launches."""
+    reported = services.reported_version(state, executable)
+    info: dict[str, Any] = {
+        # What a run on this same executable said about itself; nothing
+        # is launched to ask. Null until one has run.
+        "version": reported[0] if reported else None,
+        "version_source": reported[1] if reported else None,
+        "dialect": dialect_for_simulator_name(cls.__name__),
+    }
+    if executable is not None:
+        # The simulator itself, not its launcher: under Wine the command
+        # starts with "wine".
+        info["executable"] = executable.path
+        info["executable_sha256"] = executable.sha256
+    return info
 
-    Read from the jobs this session holds, its own and the recent ones loaded
-    at startup, so it is a run's own output rather than a probe: asking the
-    executable would launch the simulator. None until a run on this build has
-    finished and named itself.
-    """
-    if executable is None:
-        return None
-    latest = max(
-        (
-            (case.completed_at or job.started_at, job, case)
-            for job in state.all_jobs.values()
-            if same_executable(job.simulator_executable, executable)
-            for case in job.cases
-            if case.simulator_version
-        ),
-        key=lambda run: run[0],
-        default=None,
-    )
-    if latest is None:
-        return None
-    _, job, case = latest
-    assert case.simulator_version is not None
-    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
+
+def _selection_facts(cls: type) -> dict[str, Any]:
+    """Whether run_experiments' execution.simulator may name this simulator:
+    being detected is not enough when this host cannot run its family at all,
+    and then ``refusal`` says why."""
+    refusal = family_refusal(simulator_family(cls))
+    if refusal is None:
+        return {"selectable": True}
+    return {"selectable": False, "refusal": refusal}
 
 
 def _do_capabilities(
@@ -975,34 +969,17 @@ def _do_capabilities(
     raster: RasterSupport,
     executables: Mapping[str, SimulatorExecutable | None],
 ) -> dict[str, Any]:
-    """The capabilities report. ``raster`` and ``executables`` (each available
-    simulator's ``executable_identity``) are computed off the loop by the
-    caller."""
+    """The capabilities report. ``raster`` and ``executables`` (the
+    ``executable_identity`` of each available simulator and named executable,
+    by family name or selector) are computed off the loop by the caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
-        executable = executables.get(name)
-        reported = _reported_version(state, executable)
-        refusal = family_refusal(simulator_family(cls))
-        info: dict[str, Any] = {
+        simulators[name] = {
             "available": True,
-            # Whether run_experiments' execution.simulator may name it: detected
-            # is not enough when this host cannot run the family at all.
-            "selectable": refusal is None,
+            **_selection_facts(cls),
             "default": cls is state.default_simulator,
-            # What a run on this same executable said about itself; nothing
-            # is launched to ask. Null until one has run.
-            "version": reported[0] if reported else None,
-            "version_source": reported[1] if reported else None,
-            "dialect": dialect_for_simulator_name(cls.__name__),
+            **_build_facts(state, cls, executables.get(name)),
         }
-        if refusal is not None:
-            info["refusal"] = refusal
-        if executable is not None:
-            # The simulator itself, not its launcher: under Wine the command
-            # starts with "wine".
-            info["executable"] = executable.path
-            info["executable_sha256"] = executable.sha256
-        simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that
     # would turn it on — the config self-diagnosis surface. Detection runs at
     # startup, so a fix always ends in a server restart; the remediation says
@@ -1018,10 +995,23 @@ def _do_capabilities(
             if refusal is not None:
                 simulators[name]["refusal"] = refusal
 
+    # The other builds a run can be put on, by the selector that names one in
+    # execution.simulator. A configured executable that could not be bound is
+    # not here; the diagnostics below say why.
+    named_executables = {
+        selector: {
+            "family": selector.partition(":")[0],
+            **_selection_facts(cls),
+            **_build_facts(state, cls, executables.get(selector)),
+        }
+        for selector, cls in sorted(state.named_simulators.items())
+    }
+
     return {
         "config_path": str(state.config.config_path),
         "python": _python_runtime_facts(),
         "simulators": simulators,
+        "named_executables": named_executables,
         "default_simulator": (
             state.default_simulator.__name__ if state.default_simulator else None
         ),
@@ -1425,14 +1415,13 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
 
 
 def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
+    """The trace a schematic ``at`` names. A bare name is a net label, as
+    ``net:NAME`` spells it and as a netlist reads the same bare node name."""
     if isinstance(at, list):
         return TraceNetInput(path=path, x=at[0], y=at[1])
     if at.startswith("net:") or "." in at:
         return TraceNetInput(path=path, pin=at)
-    raise _QueryError(
-        "invalid_at",
-        "'at' on a schematic must be 'REF.PIN', 'net:NAME', or [x, y]",
-    )
+    return TraceNetInput(path=path, pin=f"net:{at}")
 
 
 # ---------------------------------------------------------------------------
@@ -1637,7 +1626,16 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
             rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
-        identity: dict[str, Any] = {"mode": "enumerate", "libs": [str(p) for p in sources]}
+        if q.query:
+            # A listing narrowed by name, case-insensitively: the filter the
+            # response echoes is the one applied, unlike search's fuzzy score.
+            needle = q.query.casefold()
+            rows = [row for row in rows if needle in row["name"].casefold()]
+        identity: dict[str, Any] = {
+            "mode": "enumerate",
+            "libs": [str(p) for p in sources],
+            "query": q.query,
+        }
     else:
         assert q.query is not None  # guaranteed by the model validator
         identity = {"mode": "search", "query": q.query, "libs": q.libs}
@@ -1815,10 +1813,13 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
         wanted = set(query.fields) if query.fields is not None else None
-        # Executables are identified only for a report that shows them.
-        simulators = (
-            dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
-        )
+        # Executables are identified only for a report that shows them. A
+        # selector carries a ':' and a family name never does, so the two
+        # tables share one mapping.
+        simulators = {
+            **(state.available_simulators if wanted is None or "simulators" in wanted else {}),
+            **(state.named_simulators if wanted is None or "named_executables" in wanted else {}),
+        }
 
         def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
             # Off the loop: the first successful raster probe loads the native
@@ -1904,7 +1905,7 @@ _REFERENCE_BRANCH_SCHEMA: dict[str, Any] = {
 
 _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     # Echoed by the 'reference' and 'model' kinds alike, and null on a 'model'
-    # enumerate, which asks for everything rather than for a match.
+    # enumerate that lists everything rather than the names containing it.
     "query": {"type": ["string", "null"]},
     "matches": {
         "type": "array",
@@ -2182,17 +2183,15 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
                     item.pop(key, None)
 
 
-#: This tool's budget epilogue. The hint mirror is why it is a value: the note's
-#: detail is written twice under a hint key, and the reserve has to know that.
-#: Structured-aware clients render only structuredContent, and 'hint' is where
-#: this tool puts guidance, so the mirror is not optional.
+#: This tool's budget epilogue, on ``observations``. Its trim rung drops only
+#: an exhausted item's page metadata, which the rows it returned restate, so the
+#: server's default budget never has anything to report here.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no query was dropped and no error was hidden.",
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on "
         "with each item's next_cursor."
     ),
-    hint_key="hint",
 )
 
 
@@ -2244,9 +2243,7 @@ async def _negotiate_inspect(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)

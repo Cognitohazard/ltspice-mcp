@@ -89,7 +89,7 @@ lint blocks a mismatch. A case that produced nothing is counted in
 - `inspect` reads decks, schematics and libraries, never results:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
 - `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`
-  when the sheet exists (`inspect` reports it). `verify_circuit` checks a
+  to commit to a sheet that exists (`inspect` and a dry run report it). `verify_circuit` checks a
   schematic against a netlist with
   `{"path": "amp.asc", "compare": {"reference": "golden.net"}}`.
 - Charts: `plot_waveform` draws an interactive chart (`attach_plot` adds a PNG
@@ -100,7 +100,8 @@ lint blocks a mismatch. A case that produced nothing is counted in
 Three recipes appear in the tool schema by name only; their arguments are
 documented here (every other recipe field — `key`, `sources`, `reduce`,
 `field`, `spec` — applies to them unchanged; as with any multi-field recipe,
-`reduce`/`spec` on `periodic` or `return_loss` needs `field`):
+`spec` on `periodic` or `return_loss` needs `field`, and a `reduce` without
+one covers every field):
 
 - `periodic` — `{"metric": "periodic", "signal": …}` plus an optional
   `window` `{start, end}`; returns `period`, `frequency`, `duty_cycle`

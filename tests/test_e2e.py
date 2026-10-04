@@ -446,7 +446,7 @@ class TestServerLifecycle:
 class TestSchematicTools:
     async def test_blank_build_commits_and_reports_geometry(self, tmp_path):
         """A base:"blank" op batch writes the sheet and returns the geometry
-        the model acts on: stages, sha, wiring metric, touched pins."""
+        the model acts on: sha, wiring metric, touched pins."""
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
@@ -458,8 +458,11 @@ class TestSchematicTools:
             assert data["outcome"] == "complete"
             assert data["commit_state"] == "committed"
             assert (tmp_path / "divider.asc").exists()
-            assert [stage["stage"] for stage in data["stages"]][-1] == "rename"
-            assert all(stage["ok"] for stage in data["stages"])
+            # Only a stage that did not complete is listed.
+            assert data["stages"] == []
+            # The counts are in 'wiring'; the hint does not restate them.
+            assert data["hint"].startswith("Committed.")
+            assert "pins" not in data["hint"]
 
             wiring = data["wiring"]
             assert wiring["pins_total"] == 4
@@ -1006,4 +1009,4 @@ class TestErrorHandling:
 
     async def test_jobs_status_without_an_identifier_errors(self, shared_session: ClientSession):
         result = await _call(shared_session, "jobs", {"action": "status"})
-        _assert_tool_error(result, "requires exactly one of job_id or request_id")
+        _assert_tool_error(result, "requires job_id or request_id")
