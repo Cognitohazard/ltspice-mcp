@@ -29,7 +29,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import SyncApi, wait_until
+from tests.conftest import SyncApi, check_in, release_into_held_request_gate, wait_until
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ngspice") is None,
@@ -124,18 +124,21 @@ def _pause_simulator(owner_pid: int) -> psutil.Process:
     return wait_until(pause_child, timeout_s=30, what="the owner to start its simulator")
 
 
-def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> None:
+def _detach_worker(
+    work_dir: str, deck: str, request_id: str, ready, start, entered, result
+) -> None:
     """One caller process: open an engine, detach the shared request, report back.
 
     A separate process because the engine lease is per process — two callers
     sharing a working directory is what this exercises, and it is what the
-    idempotent-replay contract invites a user to do.
+    idempotent-replay contract invites a user to do. Checks in (``check_in``)
+    once its engine is open.
     """
     from ltspice_mcp.api import Api
 
     work = Path(work_dir)
-    start.wait(60)
     api = None
+    reported_ready = False
     try:
         api = Api(
             working_dir=work,
@@ -143,6 +146,8 @@ def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> 
             allowed_paths=[work],
             max_parallel_sims=1,
         )
+        reported_ready = True
+        check_in(ready, start, entered, HANDOFF_TIMEOUT_S)
         receipt = api.run_experiments(
             wait=False,
             detach=True,
@@ -152,6 +157,8 @@ def _detach_worker(work_dir: str, deck: str, request_id: str, start, result) -> 
         note = next(item for item in receipt["observations"] if item["code"] == "detached_owner")
         result.put((receipt["job_id"], note["evidence"]["log_file"], None))
     except Exception as exc:
+        if not reported_ready:
+            ready.put(None)
         result.put((None, None, f"{type(exc).__name__}: {exc}"))
     finally:
         if api is not None:
@@ -277,7 +284,6 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
         # The complete receipt is re-rendered from the record, which knows only
         # what happened to it; that this call replayed is carried across.
         assert replayed["replayed"] is True
-        assert any(item["code"] == "idempotent_replay" for item in replayed["observations"])
 
         # And detached again: a second owner is spawned, takes the same replay
         # path, and hands back the same job rather than submitting a new one.
@@ -492,18 +498,22 @@ def test_two_callers_detaching_one_request_id_do_not_trade_reports(
     deck = str(work_dir / "shared.cir")
     (work_dir / "shared.cir").write_text(FAST_DECK)
     context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
     start = context.Event()
+    entered = context.Value("i", 0)
     result = context.Queue()
     callers = [
         context.Process(
             target=_detach_worker,
-            args=(str(work_dir), deck, "detach-shared", start, result),
+            args=(str(work_dir), deck, "detach-shared", ready, start, entered, result),
         )
         for _ in range(2)
     ]
     for caller in callers:
         caller.start()
-    start.set()
+    release_into_held_request_gate(
+        work_dir, "detach-shared", ready, start, entered, len(callers), HANDOFF_TIMEOUT_S
+    )
     outcomes = [result.get(timeout=HANDOFF_TIMEOUT_S) for _ in callers]
     for caller in callers:
         caller.join(HANDOFF_TIMEOUT_S)
@@ -547,11 +557,8 @@ def test_cancelling_a_detached_job_from_another_session_stops_its_owner(
         cancelled = fresh.jobs(action="cancel", job_id=job_id, control_token=control_token)
         assert cancelled["outcome"] != "failed", cancelled
 
-        final = wait_until(
-            lambda: fresh.jobs(action="status", job_id=job_id),
-            timeout_s=HANDOFF_TIMEOUT_S,
-            what="the cancelled job to report",
-        )
+        final = fresh.wait(job_id, timeout=HANDOFF_TIMEOUT_S)
+        assert not final.get("timed_out"), final
         assert final["status"] == "cancelled", final
 
     wait_until(

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.metrics import (
     aggregate_log_measurements as _aggregate_log_measurements,
 )
@@ -75,14 +76,18 @@ class TestSteppedLogWhenAxis:
     instead of the per-step crossing times. Fixture: ltspice_step_when.log."""
 
     def test_stepped_log_when_swaps_to_at_axis(self):
-        flat_values, axis_map, steps_label, _ = _aggregate_log_measurements(STEP_WHEN_LOG)
+        flat_values, axis_map, steps_label, _ = _aggregate_log_measurements(
+            parse_measurements(STEP_WHEN_LOG)
+        )
         # Constant level (0.5) across steps + varying crossing -> aggregate ``at``.
         assert axis_map["tcross"] == "at"
         assert flat_values["tcross"] == pytest.approx(STEP_WHEN_TCROSS_AT)
         assert "3 step(s)" in steps_label
 
     def test_stepped_log_find_stays_on_value_axis(self):
-        flat_values, axis_map, _, _ = _aggregate_log_measurements(STEP_WHEN_LOG)
+        flat_values, axis_map, _, _ = _aggregate_log_measurements(
+            parse_measurements(STEP_WHEN_LOG)
+        )
         # FIND value varies per step -> stays on the value axis.
         assert axis_map["vfinal"] == "value"
         assert flat_values["vfinal"] == pytest.approx(STEP_WHEN_VFINAL)

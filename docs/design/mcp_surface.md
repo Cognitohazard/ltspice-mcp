@@ -14,9 +14,9 @@ source wins and this document is the thing to fix.
 | Plane | Tool | One-line contract |
 |-|-|-|
 | EXECUTE | `run_experiments` | circuits x declared variations; durable idempotent receipt (plus inline results within a bounded dwell); preflight lint; snapshot provenance |
-| EXECUTE | `jobs` | status / long-poll wait / cancel / list / runs over receipts; resolves `job_id` or `request_id` |
+| EXECUTE | `jobs` | status / long-poll wait / cancel / resume / list / runs over receipts; resume addresses a lineage head by `job_id` |
 | UNDERSTAND | `analyze_results` | recipe batch over runs, returning typed values with case/step identity, attributed reductions and spec verdicts; bounded and continuable |
-| UNDERSTAND | `inspect` | reads: capabilities, symbols (list and detail), net trace, components, models, and the tools' own branch vocabulary |
+| UNDERSTAND | `inspect` | reads: capabilities, symbols (list and detail), net trace, components, models, result facts, the guide, and the tools' own branch vocabulary |
 | AUTHOR | `edit_schematic` | typed op batch onto a sheet (blank or existing); revision-guarded, transactional; geometry facts back |
 | AUTHOR | `verify_circuit` | gate: lint/syntax, symbols, export, layout, quality, compare (equivalence or structural diff), render |
 
@@ -188,9 +188,10 @@ shown. The listing is paid for once per session whether or not a tool is
 called, so each description is written short — one or two sentences carrying
 the unit, the sign or direction convention, the default, and how the field
 interacts with its siblings. Anything longer than that belongs here or in
-`spice://guide`, with a pointer on the field. `api.reference('<tool>')` and
-`spice://guide` render the same model descriptions, so a sentence written for
-the wire is the one those two channels also serve.
+a section of the guide, with a pointer on the field naming it
+(`guide section 'signals'`). `api.reference('<tool>')` and
+`inspect(kind: "reference")` render the same model descriptions, so a sentence
+written for the wire is the one those two channels also serve.
 `tests/test_consolidated_contracts.py` holds both ends: the advertised
 descriptions must equal the source ones, and each tool's serialized definition
 has an upper size bound.
@@ -243,7 +244,7 @@ they let a session pay for depth only where it needs it. The compact listing
 drops the prose for every argument — every branch's and every tool's own — on
 the bet that a session uses a handful of them; the reference lookup is what
 buys that prose back, one entry at a time, for the handful actually used. It
-covers both halves: the branch vocabulary (twenty-one recipes, eleven ops, five
+covers both halves: the branch vocabulary (twenty-one recipes, eleven ops, six
 actions, and the rest) and each tool's own top-level arguments, indexed as one
 entry per tool under the family `argument`, so `all_steps` or `expected_sha256`
 is found the same way `stability` is. Neither half of the pair stands alone.
@@ -269,8 +270,8 @@ Passed explicitly, `request_id` is the durability key. At submission the
 server persists `{request_id -> job_id, fingerprint}`, where the fingerprint is
 the sha256 of the canonical (sorted-key) input payload. Same id with the same
 fingerprint returns the existing receipt, with `replayed: true` on it — that
-field is the fact about *this* call, while the record's `idempotent_replay`
-observation is the durable note and reads the same to every later reader. Same
+field is the fact about *this* call, and the replay leaves the job's record as
+it was (only the process that owns a job writes its record). Same
 id with a different fingerprint is an `idempotency_conflict`. Scope is the server working directory's job store;
 retention matches job retention. Transport cancellation ends only the dwell,
 never the durable job.
@@ -315,18 +316,66 @@ inside it: the executable is server state, and hashing it in would report a
 swapped build as a different request payload. `jobs(status)` still reads the
 recorded job, and a new `request_id` runs it on the current build.
 
+**Selecting a build.** `execution.simulator` names a family (`"ltspice"`,
+`"ngspice"`, `"qspice"`, `"xyce"`), which runs that family's own executable (`[simulator] path`, or
+the detected install), or a family and a name (`"ltspice:xvii"`), which runs one
+of the further executables `[simulator.executables]` names. Configuring them:
+
+```toml
+[simulator.executables]
+xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"   # family from the file name
+"ngspice:dev" = "/opt/ngspice-dev/bin/ngspice"          # or written in the key
+
+[simulator.executables.ltspice]                          # or a table per family
+lt24 = "C:/Program Files/ADI/LTspice/LTspice.exe"
+```
+
+`LTSPICE_MCP_SIMULATOR_EXECUTABLES` takes the same entries as `name=path`,
+separated by `;` on every platform (`:` already joins a family to a name and
+follows a drive letter). A name is lower-case letters, digits, `.`, `_` and
+`-`. The family is read off the file name the way `[simulator] path` is checked
+(`XVIIx64.exe` and `LTspice.exe` are LTspice); a file name that says nothing
+needs `family:name`, and one that names a different simulator than its key is
+refused. Every family takes named executables, and the `[simulator] enabled`
+allowlist applies to them; a named QSPICE build is refused per run off Windows,
+as the family's own is (see "Simulator choice" below). Binding
+happens at startup, like detection; an entry that cannot be bound is left out
+with a startup diagnostic, and a run naming it is refused with the names there
+are. `inspect(kind="capabilities")` lists the bound ones under
+`named_executables`.
+
+Each named executable is a spicelib simulator class of its own: a subclass of
+the family's class carrying its own `spice_exe`. spicelib keeps the launched
+program on the class, and `create_from` writes it there, so binding a second
+build to the family's class would retarget every runner holding that class,
+running cases included (`docs/spicelib_bugs.md`, Bug 18). The subclass keeps
+the family's class name, which is what a record's `simulator`, the raw dialect
+and the linter read, so a named build parses and lints as its family does;
+what tells two builds apart in a record is `simulator_executable`. Everything
+keyed by the class follows the build: its own runner and launch permits (so
+each build gets the whole `max_parallel_sims`, as each family does), the kill
+names a cancel matches, the `.asc` exporter when the build is an LTspice, and
+the model library roots staging accepts (LTspice XVII's
+`Documents\LTspiceXVII\lib`, LTspice 24's `%LOCALAPPDATA%\LTspice\lib`).
+
+Replay needs no new rule. The selector is part of the request, so a
+`request_id` replayed under another name is a different payload, and a name
+bound to another build since is the executable check above; both are an
+`idempotency_conflict`.
+
 **Control token.** The receipt carries an unguessable `control_token`. Cancel
 authority is the owning process *or* a presented control token, so a
 reconnected session can still cancel its own work. The token is returned only
 by the original submission response and by an idempotent replay whose
 fingerprint matches — knowing the full original payload is the proof of
 ownership. `jobs` status/wait/list/runs output never includes it: read
-visibility must not grant cancel authority. It is carried only while the job is
-non-terminal, since a terminal receipt's token authorizes nothing.
+visibility must not grant control authority. Ordinary terminal submission
+receipts omit it. Recoverable root and child receipts retain it through terminal
+states because it authorizes resume; no-op resume receipts omit child authority.
 
 **Receipt-then-dwell.** The receipt — job registered, persisted, cancel barrier
 raised, snapshots staged — is durable *before* any case is submitted and before
-any waiting. `execution.wait_s` (default 60, cap 120) bounds the dwell. If the
+any waiting. `execution.wait_s` (default 60, held to 120) bounds the dwell. If the
 job reaches full terminality (runs *and* attached analysis) inside it, terminal
 results return inline; otherwise the receipt returns with
 `outcome: "in_progress"`. Why 60: the wait must end well before the client
@@ -336,16 +385,27 @@ Input:
 
 ```
 request_id           str, optional      idempotency key; minted when omitted
-circuits             list[{path, id?}]  .cir / .net / .sp / .asc
+circuits             list[{path, id?}]  .cir / .net / .sp / .spice / .asc. An
+                                        id the caller writes must be valid and
+                                        unique or the call is refused; with
+                                        none, the file stem is made valid and
+                                        unique (amp.v2 -> amp_v2; two amp
+                                        files -> amp, amp-2) and a
+                                        circuit_id_derived observation names
+                                        the id it ran as
 variations           list[Variation]    Appendix A.1. assign entries combine by
                                         cartesian product; AT MOST ONE random
-                                        entry per call (the product of two
-                                        random families is ill-defined).
-                                        [] = one plain run per circuit
+                                        entry per circuit (the product of two
+                                        random families on one deck is
+                                        ill-defined); entries whose applies_to
+                                        name different circuits run side by
+                                        side. [] = one plain run per circuit
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
-                      simulator?: "ltspice"|"ngspice"}
+                      simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"|
+                                  "<family>:<name>", recoverable?: bool,
+                      simulator_seed?: int}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
-                      include?}
+                      plot_index?, dialect?, include?}
                                         attached analysis stage; `recipes` is
                                         the Appendix A.2 union `analyze_results`
                                         takes, and `step`/`all_steps` are that
@@ -374,6 +434,31 @@ engaged at the trim rung only — empty presentation blocks and the identity
 echo, never facts, never caller opt-ins. An explicit caller budget overrides
 the default entirely and may descend the full ladder.
 
+**Simulator choice.** `execution.simulator` names one of the four families
+the server supports, or a named executable of one (above), and the schema's
+pattern admits all four so the published contract matches what the server can
+drive. A name is accepted when it is detected (or bound) and this host can run
+its family; `inspect(kind="capabilities")` reports that per simulator and per
+named executable as `selectable`, with a `refusal` saying why when it is not. Both refusals happen before anything is staged
+(`commit_state: "not_started"`): an undetected family gets the "not available"
+error naming what was detected, and a detected family this host cannot run
+gets the reason. QSPICE is the one such family: it runs only when the server
+itself runs on Windows, because spicelib starts it with the host's own file
+paths and only LTspice has a path adapter for a Windows simulator under WSL or
+Wine. The same check applies to the server default when no simulator is named.
+
+The choice also decides the raw dialect the results parse with (QSPICE writes
+`.qraw` with a double-precision frequency axis; Xyce's raw does not name its
+writer, so the job's recorded simulator is what identifies it) and which lint
+rules apply (the LTspice-only `C=`/`L=` arity rule applies to LTspice decks
+only). A `.asc` schematic runs through the netlist LTspice exports in its own
+dialect, which is scrubbed for ngspice and prepared for nothing else, so on
+QSPICE or Xyce a schematic circuit fails with `asc_export_unavailable` and the
+run takes a hand-written `.cir`/`.net`/`.sp`. The `measurements` recipe reads
+`.MEAS` results in the log formats LTspice and ngspice write and has no reader
+for QSPICE's or Xyce's measure output; read those quantities from the waveform
+(`value`, `signal_stats`) instead.
+
 **Run timeout.** A case has no time limit unless one is set:
 `execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
 the server (`limits.run_timeout_s` in `inspect(kind="capabilities")`, `null`
@@ -382,6 +467,59 @@ no fixed number fits both a millisecond `.op` and an hour-long switching
 transient; the caller knows which it submitted, and a running job reports each
 case's progress (below), which is what shows a stuck one. `[simulation] timeout`
 (`limits.export_timeout_s`) bounds LTspice netlist export only.
+
+**Recoverable execution.** `execution.recoverable=true` captures exact validated
+materialized inputs before claiming a job. Controlled startup currently supports
+ngspice on Linux and native Windows, and the audited LTspice 26.0.2 executable
+on native Windows. Other LTspice builds and platforms refuse recovery. LTspice
+captures established settings from `simulator.ltspice_ini` or
+`%APPDATA%/LTspice.ini`; each attempt gets a separate writable copy. The captured
+update-query time must remain within 15 days, including at resume and launch.
+No timestamp or consent choice is synthesized and no dialog is answered.
+It refuses unsupported inputs,
+including live dependencies, caller control scripts, external simulator modules
+and unbound simulator randomness. ngspice uses a subprocess-local controlled
+system startup and disables user startup; supported native statistics retain
+their recorded sample and seed. The contract binds the executable and effective
+execution settings. Ordinary submissions retain their startup behavior.
+
+`execution.simulator_seed` optionally reseeds ngspice immediately before loading
+each captured deck. It requires recoverable ngspice and a strict integer in
+`1..2147483646`; every case and retry starts from that same seed. It is separate
+from native statistical sample seeds, and mixing the two refuses. Omitting it
+retains the existing behavior; controlled system startup stays inert.
+
+Seeded inputs admit only the static random functions `agauss`, `gauss`, `aunif`,
+`unif`, and `limit`, while caller controls, unknown functions, external modules
+and transient noise remain refused. Compatibility mode still governs syntax:
+`hsa` supports statistical `limit(nominal, variation)`, whereas the default
+`kiltpsa` introduces a three-argument clamping `limit`. The seed does not select
+a compatibility mode or add PDK statistical assumptions. Seeded inputs require
+exactly one `.op`, `.ac`, `.dc`, or `.tran` analysis; noise, stepped inputs and
+analysis combinations refuse before claim with
+`recovery_seed_analysis_unsupported`, because the driver writes one plot.
+
+`jobs(action="resume", job_id=..., resume_request_id=..., control_token=...,
+case_ids=None, retry_failed=false, retry_cancelled=false, wait_s=0)` addresses a
+terminal recoverable lineage head. It creates a child with fresh attempt output
+names and the full case inventory, reusing validated successful artifacts.
+Interrupted cases are eligible by default; ordinary failures and explicit
+cancellations need their respective retry flag. Failed preparation is not a
+validated retry. Case IDs are a set; unknown or produced selections refuse.
+Resume verifies captured bytes, so editing or deleting the authoring source does
+not require another electrical run of successful cases. Ordinary submission
+replay still verifies the authoring source.
+
+Save control tokens from root and child receipts, including terminal receipts;
+read-only status/list/runs do not disclose them. The job's `lineage` names
+`root_job_id`, `parent_job_id`, and `attempt_index`; each run's `attempt` names
+`execution_job_id`, `attempt_index`, `run_token`, and `reused`. `completeness.reused`
+counts preserved successes, while `submitted` counts this attempt's submissions.
+Resume returns `resumed` and `replayed`, the addressed parent, and `head_job_id`.
+An empty selection returns the parent with `resumed=false`, no child token, and
+an analysis-only hint. Reusing a resume request ID with the same normalized
+selection/retry payload returns that same child or no-op; changed payloads
+conflict. Authorization applies on replay too. Dwell is presentation only.
 
 When a limit is set, the coordinator's timer is the one that decides a timeout:
 it kills the case by its run token and records `run_timeout`. spicelib's own
@@ -465,16 +603,16 @@ one deck N times with device models substituted per run has no one-line deck
 equivalent — so they stay a tool-performed variation (Appendix A.1).
 
 **Completeness.** Every case gets a stable `case_id`. The counters are
-`{declared, expanded, submitted, produced, failed, cancelled, skipped}` with
+`{declared, expanded, submitted, produced, failed, cancelled, skipped, reused}` with
 the run-terminal invariant
 `produced + failed + cancelled + skipped == expanded`; every omission names its
 `case_id` and a reason. Lifecycle status is reported separately from
-completeness.
+completeness. `reused` counts preserved successful cases; `submitted` counts
+submissions in this attempt.
 
 `progress` is derived from that durable completeness snapshot and is present on
 receipts through terminal states:
-`{expanded, terminal, remaining, declared, submitted, produced, failed,
-cancelled, skipped}`, where `terminal = produced + failed + cancelled + skipped`
+`{expanded, terminal, remaining}`, where `terminal = produced + failed + cancelled + skipped`
 and `remaining = expanded - terminal`.
 
 **Stopped cases.** A case the coordinator stops is a failure row whose code
@@ -527,11 +665,12 @@ advancing; that judgment, and whether to cancel, is the caller's.
 **RunRecord** is a standalone schema fragment shared by `run_experiments` and
 `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
-simulator_version?}`. The keys are optional because a requested run-field
+simulator_version?, attempt?}`. The keys are optional because a requested run-field
 projection may remove any of them. `simulator_version` is the build the run
 named in its own output: the LTspice log banner (`LTspice 26.0.2 for Windows`),
-the ngspice console banner (`ngspice-42, Creation Date: ...`), or the raw
-header's `Command:` when neither exists. It is null when the output named none.
+the Xyce log banner (`Xyce Release 7.8.0-opensource`), the ngspice console
+banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when
+none of those exists (LTspice XVII, QSPICE). It is null when the output named none.
 It is recorded per case, so an executable replaced mid-job shows up as two
 builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
 `jobs(runs)` and `run_fields` return it.
@@ -564,12 +703,19 @@ RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
 
 ```
 {action: "status", job_id | request_id}
-{action: "wait",   job_id | request_id, timeout_s (default 60, cap 300),
+{action: "wait",   job_id | request_id, timeout_s (default 60, held to 300),
                    wait_for: "all" (default) | "runs"}
 {action: "cancel", job_id | request_id, control_token?}
-{action: "list",   circuit?: path, limit?, cursor?}
+{action: "resume", job_id, resume_request_id, control_token?, case_ids?,
+ retry_failed?, retry_cancelled?, wait_s?}
+{action: "list",   circuit?: path, limit? (held to 50), cursor?}
 {action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
 ```
+
+An addressed action takes `job_id`, `request_id`, or both. Both is one job
+named twice, as a caller holding a receipt naturally sends it; when the two
+name different jobs the call is `selector_conflict`, since acting on either
+would be a guess.
 
 Each action accepts only its own fields and rejects the rest; `budget` is the
 one argument every action takes. That is the *published* shape, not a rule
@@ -583,6 +729,10 @@ dispatch. Output shapes are discriminated on the echoed `action`:
   snapshot includes `progress` through terminal states and admits the same
   budgeted receipt variants.
 - `cancel` returns a page of per-run kill receipts.
+- `resume` returns the addressed parent or new child receipt, with `resumed`,
+  `replayed`, `resume_request_id`, `addressed_parent_job_id`, and `head_job_id`.
+  Child-producing receipts carry the child's token even after completion.
+  The selection and replay contract is described in §3.1.
 - `list` returns a page of circuit groups
   `{path, exists, last_activity, status_counts, interrupted_job_ids,
   recent_jobs, recent_jobs_total}`. With no filter this is the
@@ -597,6 +747,16 @@ dispatch. Output shapes are discriminated on the echoed `action`:
 dozen status polls. Timing out is not a failure: the response comes back with
 `timed_out` set and the job keeps running.
 
+**Caps hold, they do not refuse.** `execution.wait_s` above 120, `timeout_s`
+above 300, a `list` `limit` above 50 and a `per_run.limit` above 100 are served
+at the cap, and the response says so: a warning on `run_experiments` and
+`jobs`, the `hint` on `analyze_results`, which has no top-level `warnings`.
+Each cap bounds what one call costs; a larger value asks for more of the same
+thing, which the next wait or page delivers, so refusing it cost a round trip
+and taught nothing. The schema no longer advertises a `maximum`, because a
+strict client checks one before sending and would refuse on the server's
+behalf.
+
 Cancel authority is the owning process or a valid control token; otherwise
 `cancel_not_authorized`. The acknowledgement guarantees that no further case
 enters submission: queued cases become cancelled, active ones get a
@@ -607,13 +767,15 @@ across processes — under the same output contract.
 ### 3.3 `analyze_results` — batched read
 
 Identity model, normative across the surface: `case_id` / `run_index` is the
-outer fan-out, `step_index` / `step_values` the inner `.step`, and the sample
-axis is within a step.
+outer fan-out, `plot_index` selects one plot in an artifact, `step_index` /
+`step_values` select the inner `.step`, and a sampled axis is within a step.
+Native table plots have no sampled axis.
 
 Input:
 
 ```
-sources    list[{job_id? | raw_path?, runs?: "all"|[int]|{case_ids}, label}]
+sources    list[{job_id? | raw_path? | log_path?, runs?: "all"|[int]|{case_ids}, label?,
+                 plot_index?: int|null, dialect?: str|null}]
 recipes    list[Recipe]   Appendix A.2; unique key; optional per-recipe
                           sources: [label]
 group_by   list[assignment param | "circuit" | step-axis name]
@@ -622,16 +784,47 @@ step       {axis, value} | null   for a deck carrying `.step`: read the one
                                   first
 all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
                                   exclusive with `step`
-include    {per_run?: {limit?, cursor?} | bool, outliers?, signals_available?,
+include    {per_run?: {limit? (held to 100), cursor?} | bool, outliers?, signals_available?,
             provenance?, fields?: [dotted row path]}
 budget     int | null
-continue   {result_set_id, cursor}   resumes a budget-truncated call; mutually
-                                     exclusive with sources/recipes
+continue   {result_set_id, cursor}   resumes a budget-truncated call; request
+                                     fields sent with it must be the stored
+                                     request's own
 ```
 
 `continue` is the wire spelling; the Python attribute is `continuation`.
 
-`step`/`all_steps` are call-level, not per-recipe. A run's step axis belongs to
+`plot_index` is null or a strict nonnegative integer; omission selects the
+first plot only when a RAW recipe reads it. `log_path` forbids plot selection.
+`dialect` is null or one of
+`ltspice`, `ngspice`, `qspice`, `xyce`; an explicit dialect must agree with
+captured header and producing-run evidence. The same selectors are accepted
+by `plot_waveform` and the attached `run_experiments.analyze` block. Analysis
+type, axis and units come from the selected decoded descriptor. Tables remain
+tables; use the API or `inspect` for plain native quantities. CSV can export
+them without an invented axis. Non-AC complex values retain real and imaginary
+components rather than being treated as AC gain and phase.
+
+The stored request, source manifests and artifact identities bind the selection;
+continuations replay that selection. RAW rows carry the selected descriptor's
+`dialect`; capture-only source hashes retain the explicit or recorded producer
+hint, which may be null. Both carry selection and `snapshot_id`. Step labels use
+the captured step rows, including string values, without reopening parent or sibling logs.
+
+The `measurements` recipe reads whole-log facts once per source, including
+an imported `log_path` or an already-produced job case with no RAW. Its row
+plot/step identities are null (the lean view omits empty attribution) and it
+rejects `step`/`all_steps`, rather than inventing an iteration mapping. Native
+printed tables are available through inspect, not a new metric. RAW recipes in
+a mixed request fail individually on malformed/missing RAW while valid log
+measurements remain available. Capture-only manifests bind RAW/log/console
+presence and hashes without requiring a decoded descriptor. RAW rows retain
+the selected descriptor's dialect; log hints alone do not prove a producer.
+`include.provenance` distinguishes `explicit_dialect` from `producing_dialect`;
+whole-log rows report only the recorded producer, which may be null.
+Companion edits and absent-to-present changes invalidate stored continuations.
+
+`step`/`all_steps` are call-level, not per-recipe. A RAW run's step axis belongs to
 the run, so the choice is made once and every recipe in the call reads it; the
 per-recipe spelling asked twenty-one branches to restate one fact and let two
 recipes over the same run disagree about which iteration they measured. The
@@ -641,7 +834,7 @@ in the result set, so a continuation replays them.
 
 - `include.fields` paths root at one of `source`, `case_id`, `run_index`,
   `step_index`, `step_values`, `assignments`, `circuit`, `deck_sha256`,
-  `value`; an unknown root is rejected rather than silently returning empty
+  `plot_index`, `dialect`, `snapshot_id`, `value`; an unknown root is rejected rather than silently returning empty
   rows. A dot inside a key's own name is escaped as `\.`, so a subcircuit node
   or a device parameter is spelled `value.voltages.v(x1\.out)` or
   `value.device_op_points.@m\.x1\.m1[gm]`. It is worth using on a wide sweep:
@@ -658,10 +851,17 @@ in the result set, so a continuation replays them.
   ignored. A cursor with no embedded view falls back to the stored request's
   view. The `continue` input surface itself does not change.
 - A continuation replays the execution request stored in the result set and
-  takes its presentation view from the cursor. Other request fields are
-  rejected rather than accepted and dropped: raising `include.per_run.limit` on
+  takes its presentation view from the cursor. Request fields sent with it are
+  compared with that stored request: an echo of the original call (the natural
+  thing to resend) is accepted, and a field that differs is rejected, naming
+  it, rather than accepted and dropped: raising `include.per_run.limit` on
   resume is the obvious thing to try, and silently ignoring it hands back a
   page the caller did not ask for.
+- A repeated run index, `case_ids` entry, `group_by` dimension or
+  `include.fields` path asks for nothing more, so it is read once and the
+  `hint` says so; it used to be refused. A source without a `label` is named
+  after its job_id or its raw file's stem, with a `-2` suffix where two would
+  share one; a label the caller writes must still be unique.
 - Validation, results and errors are per recipe: one bad recipe fails that item
   only.
 - Reductions are attributed:
@@ -677,6 +877,20 @@ in the result set, so a continuation replays them.
   more than one call's worth — every waveform of a 300-run Monte Carlo, say —
   and you get what was computed plus a continuation handle rather than an hour
   of compute.
+- Initialization records the contained worker's hashes for every captured
+  artifact role: RAW, log and console, including absence. Source checks
+  recapture those roles in the worker and compare snapshot identity; size and
+  modification time alone cannot establish unchanged content, so even a
+  same-size, same-timestamp rewrite reads as `source_drift`. The parent neither
+  hashes whole artifacts nor rewrites captured inputs. Repeated source
+  references share captured work within a call. A deadline cannot downgrade
+  content verification to stat-only success.
+- Initialization must finish capturing source identities and diagnostics before
+  resumable recipe work begins. An initialization timeout raises
+  `analysis_deadline` without creating a result set or cursor; retry the original
+  request with fewer sources or a larger `[analysis] analysis_budget_s`. It is
+  not saved as a permanent source fault. Once initialized, the existing
+  minimum-work and continuation policy applies.
 - A `raw_path` source has no job provenance, so its rows carry
   `deck_sha256: null` plus an observation. Provenance is never fabricated.
 - Bulk fidelity travels as artifact handles
@@ -705,10 +919,13 @@ target              .asc path (created if absent)
 base                "existing" (default) | "blank"
                     blank = treat the sheet as empty before applying ops;
                     existing = deltas preserving untouched content
-expected_sha256     REQUIRED whenever target exists, under either base;
-                    a mismatch is revision_conflict and nothing is written.
-                    Both refusals — missing and mismatched — report the
-                    target's current sha256, so a retry needs no extra read
+expected_sha256     REQUIRED to commit to an existing target, under either
+                    base; a mismatch is revision_conflict and nothing is
+                    written. Both refusals — missing and mismatched — report
+                    the target's current sha256, so a retry needs no extra
+                    read. A dry run (an op-less read is one) writes nothing,
+                    so it needs no token: it returns the current sha256 and
+                    reports a mismatched token in observations
 ops                 list[Op] — Appendix A.4
 compare             {reference, anchors?, rtol, mode?} — post-commit netlist
                     compare ("equivalence" | "structural_diff"), inside
@@ -872,12 +1089,20 @@ the op's `results` entry whose `via` says what it touched (`waypoint`,
 `wire_end`, `label` or `pin`) and whose `wire`, `label` or `pin` names it. Onto
 any other net it is refused, naming the wire and the `{x, y}` endpoint that
 makes the same T on purpose: a join no argument asked for must not pass
-silently. A route crossing a wire where neither ends is still refused, though
-LTspice would not join it, because the sheet reads ambiguously there. The
-planner's own advisories (long run, bounding-box crossing) now reach the
-response's `warnings` too; they used to stop at the op.
+silently. A route crossing a wire where neither ends is drawn with a warning
+naming the wire: LTspice leaves the crossing unjoined, so the nets stay apart,
+and the only cost is a reader taking it for a junction. It was refused until
+the LTspice export showed it joined nothing. The planner's own advisories
+(long run, bounding-box crossing) now reach the response's `warnings` too;
+they used to stop at the op.
 
 `add_net_label` calls a label floating only when it touches no wire and no pin.
+It refuses a label that would join two nets that each carry a name — a name
+another net already has, or a new name placed where two named nets cross —
+because that is a short at netlist time. A new name on a net that is already
+named joins nothing; it is placed with a warning that the node now has two
+names. `wire_pins`' refusal to join two named nets names the remedy that op
+accepts: relabel one side with the other's name.
 `inspect(kind: "net")` at a point on a wire's interior traces that wire's net
 and names the wire under `snapped_to_wire`; a point where two nets' wires
 cross is refused as ambiguous rather than resolved to either.
@@ -908,7 +1133,8 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+Output: `outcome, target, sha256, build_id, stages[] (the stages that did not
+complete; empty on success), netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
@@ -927,7 +1153,7 @@ render        {format: "png"|"svg", scale?, max_pixels?,
                delivery: "artifact"|"inline"|"both"}
               `true` selects the default policy; `false` or omitted renders
               nothing
-export_to     "managed" (default) | "sidecar"
+export_to     "sidecar" (default) | "managed"
 ```
 
 `compare` is shared with `edit_schematic`, `mode` included: `{reference,
@@ -940,12 +1166,17 @@ the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
 said nothing the object did not, and a call carrying both was refused rather
 than resolved.
 
-`managed` export is non-destructive: it exports into a staged scratch directory
-in the store and writes nothing beside the caller's file (the lock it takes
-while copying lives in the per-user home). A compare of that export resolves
-its relative includes from the schematic's folder, not from the scratch copy. `sidecar` overwrites the deck's `.net`
-under lock and returns `{path, sha256, diff_vs_prior?}`; that makes the call
-destructive, which the annotation table reflects.
+`sidecar`, the default, overwrites the schematic's `<name>.net` under lock and
+returns `{path, sha256, diff_vs_prior?}`. That is the file LTspice itself
+writes beside a schematic it runs, and the one `run_experiments` exports
+through, so the default export adds nothing a run would not; it does make the
+call destructive, which the annotation table reflects. `managed` is the
+non-destructive alternative: it copies the schematic and the project-local
+`.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under its folder into a staged scratch
+directory in the store, exports there, and writes nothing beside the caller's
+file (the lock it takes while copying lives in the per-user home). A compare of
+that export resolves its relative includes from the schematic's folder, not
+from the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
@@ -1026,7 +1257,13 @@ Python API), which are never capped. The gate stays a whole-file answer.
     simulators: each one's executable and its sha256, and as `version` the
     build the latest run on that same executable reported, with
     `version_source` naming the job and case (null until one has run; the
-    executable is never launched to ask); exporter presence, dialects, persistence,
+    executable is never launched to ask); `selectable`, whether
+    run_experiments' execution.simulator may name it, with `refusal` when the
+    family is one this host cannot run (detected or not), and for an undetected
+    one the `remediation` that would turn it on; named_executables: the same
+    facts and the family for each [simulator.executables] entry bound at
+    startup, keyed by the selector execution.simulator takes ("ltspice:xvii");
+    exporter presence, dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,
@@ -1040,11 +1277,13 @@ Python API), which are never capped. The gate stays a whole-file answer.
     directories to the reported precedence
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
-{kind: "net", path, at: "REF.PIN" | "net:NAME" | [x, y], cursor?}
+{kind: "net", path, at: "REF.PIN" | "net:NAME" | "NAME" | [x, y], cursor?}
     .asc gives a geometric trace; an [x, y] on a wire's interior traces that
     wire, reported as snapped_to_wire; a netlist gives card membership and
     makes no geometry claims. On a .asc, PIN is a pin name or, failing that,
-    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number
+    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number.
+    A bare NAME is read as net:NAME on both: a net label on a .asc, a node
+    name on a netlist
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
@@ -1056,16 +1295,54 @@ Python API), which are never capped. The gate stays a whole-file answer.
     each instance's own reference (the last segment), so a one-letter
     prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
-    search requires query; enumerate requires libs
+    search requires query and fuzzy-matches it; enumerate requires libs and,
+    given a query, lists the names containing it (case-insensitive) rather
+    than refusing it. A search without libs reads the detected simulators'
+    own model libraries; libs may name a file inside the sandbox or inside
+    one of those libraries, so every source_path a search returns can be read
+    back through libs. Every route returns the same row: name, type,
+    source_path, include_directive (source_path as the server sees it, which
+    is what staging reads), ports, params, and for a .MODEL its device_type
+    and usage; a search adds score
+{kind: "results", path? | job_id?, run_index?, case_id?, plot_index?: int|null,
+ dialect?: str|null, view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
+    one admitted RAW path or one finished experiment case; plots returns the
+    complete plot inventory in artifact order, signals returns selected trace
+    descriptors (marking the axis), and table returns plain native quantities
+    from a plot with no sampled axis. The first table quantity is retained;
+    complex values are {real, imag}. Prefix filters signals/table by name.
+    Each view is paged, and its cursor binds source snapshot, view and selection.
+    For measurements/native_tables, path is a log path, RAW is optional, and
+    plot_index must be omitted. Measurements pages recorded values/range/AT by
+    value_index (not a step). Native tables page entry/row facts with physical
+    section boundaries, printed labels, closure and unknown analysis extent;
+    unknown units remain null. No plot/step identifiers or inferred formulas
+    are added. Prefix filters literal measurement/quantity labels. Capture
+    presence/digests, complete scan and section status accompany the page;
+    section decode failures are query errors, never successful empty prefixes.
 {kind: "reference", query?, limit? (default 5, cap 20)}
     the tools' own vocabulary: each tool's top-level arguments, plus the
     branches — recipes, ops, variation kinds, query kinds, checks and job
     actions. A plain-words `query` returns the closest entries with their full
     field tables; no `query` returns the table of contents, one line per entry
+{kind: "guide", section?}
+    the packaged guide (`lib/guide.py`): no `section` returns the core a
+    session reads first, ending in an index of the topic sections and task
+    playbooks; a `section` from that index returns that part. An unknown name
+    fails the item as `unknown_section`, listing the names that exist
 ```
 
-`path` is required except on `capabilities`, `symbols`, `symbol` and
-`reference`.
+`path` is required except on `capabilities`, `symbols`, `symbol`,
+`reference` and `guide`; `results` accepts either `path` or `job_id`.
+
+**Why the guide is a query kind.** The instructions send every session to the
+guide's core first, and the one door every client has is a tool call: some
+clients cannot read resources, and the Python API's own door, `Api.guide()`,
+has no session to ask. So the guide is served three ways from one module — this
+kind, `Api.guide()`, and the `spice://guide` resources — and the tests hold the
+three to one text. A read through this kind or a resource is recorded on the
+session, because the first tool reply of a session that has not read the guide
+carries one reminder to read it, in its text and its structured `hint`.
 
 **Why the vocabulary needs a lookup of its own.** Each tool holds many
 capabilities behind a discriminator, and a host choosing a tool sees only tool
@@ -1104,11 +1381,11 @@ symbol browser.
 
 | tool | readOnly | destructive | idempotent | openWorld |
 |-|-|-|-|-|
-| `run_experiments` | false | false | true (via request_id) | true |
+| `run_experiments` | false | false | false (without a repeated `request_id` the same arguments start new work; with one, the original job is replayed) | true |
 | `jobs` | false | true (cancel) | true | false |
 | `analyze_results` | false (artifact writes) | false | true | false |
 | `edit_schematic` | false | true | false | false |
-| `verify_circuit` | false (render, sidecar) | true (export_to: sidecar) | true (managed mode) | false |
+| `verify_circuit` | false (render, export) | true (export_to: sidecar, the default) | true | false |
 | `inspect` | true | false | true | false |
 
 **Ownership.** Visibility covers all persisted jobs; cancel authority is the
@@ -1119,7 +1396,10 @@ read.
 truncation.
 
 **Untrusted parses.** Every raw or log parse — completion summaries included —
-runs under a deadline and cooldown, on top of the whole-call budgets.
+runs in a contained parser process under a deadline, on top of the whole-call
+budgets. The shared loader validates captured bytes and snapshot identity before
+returning fully resident facts. Unconfirmed worker cleanup retains parser
+admission and scratch; moving a parse to a thread alone does not contain it.
 
 **Schema residency.** Every authorable field lives in the tool's
 `inputSchema`: `oneOf`, literal discriminants, `additionalProperties: false`,
@@ -1192,16 +1472,31 @@ Rules are a registry with dispositions:
 Only deterministic harvested failures block. Suppression is per call, and
 `linter_version` travels in provenance.
 
-Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (blocking,
-ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
-`model-missing` (blocking at staging), `directive-arity` (blocking),
-`include-relative` (warning), `suffix-mega-milli` (warning), `temp-as-param`
-(blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
-scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
-simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
-before the deck is linted, and `verify_circuit` warns about it for a deck run
-elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
-device list, currents, threshold, step — whose hint mentions `.nodeset`).
+Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (warning,
+ngspice: the deck runs and only the top-level `.meas` is skipped, which the run
+relays when it is read), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
+mode), `model-missing` (blocking at staging; the model is read past a
+BJT/JFET/MOSFET area factor or `off` and before a subckt call's `params:`), the
+four checks of
+the netlist arity validator, each its own rule so suppressing one never
+silences another — `element-arity` (blocking: fewer nodes than terminals),
+`bsource-value-prefix` (blocking: no `V=`/`I=`, or on LTspice `R=`/`P=`),
+`value-keyword-ltspice` (blocking, LTspice: `C=`/`L=` as the primary value)
+and `value-expression-remnant` (warning: tokens left after the first
+`key=value`, which a value edit would drop) — `include-relative` (warning),
+`suffix-mega-milli` (warning), `step-ngspice` (warning), `temp-as-param`
+(blocking), `value-suffix-mojibake` (blocking: a suffix that shows the file was
+decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ`
+becomes under cp1252 — the simulator reads the bare number, a factor of 1e6),
+`value-suffix-nonascii` (warning: any other symbol after a number, such as
+`10Ω` or `25°C`, read as the bare number, which is usually what it means; a
+`µ`/`μ` itself is spelled `u` by staging before the deck is linted, and
+`verify_circuit` reports it for a deck run elsewhere: one observation per
+file, or a warning per value when a reader the server knows of, an LTspice
+XVII, would decode the file otherwise), and `op-degenerate` (a post-run
+observation with neutral evidence — device list, currents, threshold, step —
+whose hint mentions `.nodeset`). The rules that read elements or values skip
+line 1 of the deck, the title both simulators skip.
 
 ---
 
@@ -1217,7 +1512,7 @@ The pre-0.6.0 surface had 49 tools. The mapping:
   `signal_stats`, `edge_metrics`, `timing_between`, `periodic_metrics`, `thd`,
   `noise_integral`, `operating_point`, `measurement_stats`, `query_value`,
   `get_waveform`, `export_waveform`, `batch_results`, `simulation_summary`
-  (as `metric: "summary"`, including Fourier, AC bandwidth and suggestions),
+  (as `metric: "summary"`, including Fourier and AC bandwidth),
   `ac_structure`, `resonance`, `return_loss`, `transient_response`.
 - **`edit_schematic`**: `create_schematic`, `apply_schematic_ops` (op models
   carried over verbatim), `wire_pins`.
@@ -1286,7 +1581,7 @@ what produced the only measured argument failures.
   See the native PDK contract below for the supported profile and authored deck.
 
 {kind: "random", id?, runs: int >= 1, seed?: int, applies_to?: [circuit id],
- rules: [RandomRule]}          at most ONE random entry per call
+ rules: [RandomRule]}          at most ONE random entry per circuit
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:
@@ -1326,14 +1621,18 @@ selection is not among them; it is one call-level choice (§3.3).
 or a `spec` reads. It was two — `reduce_field` beside a `spec.field` — and the
 validator demanded they agree, so the second spelling could only ever restate
 the first or be refused. It also means one thing on every category. A
-multi-field recipe requires it as soon as either `reduce` or `spec` is given; a
-keyed recipe requires it for `spec`, and when it is given it narrows the
-`reduce` to that key too — without it, `reduce` covers every key; a scalar
-recipe takes none, having one number.
+multi-field or keyed recipe requires it for `spec`, which is one verdict on one
+number, and when it is given it narrows the `reduce` to that field too; without
+it, `reduce` covers every field or key, one row per field and statistic. A
+multi-field recipe used to require it for `reduce` as well, while a keyed one
+reduced every key; the two categories now agree. Two names for one number
+(`edges`' `rise_time` and `fall_time`, a disturbance's `deviation` and
+`undershoot`) reduce once: an edge under the direction its row measured, the
+others under the first name. A scalar recipe takes none, having one number.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics, suggestions |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
@@ -1397,8 +1696,8 @@ Recorded so they are not mistaken for oversights:
 - Request-index records are not pruned today, so spot-check volume grows the
   index. That is the same growth class as job sidecars.
 - Two wires that cross can be joined only by ending one on the other. There
-  is no op for a junction at a crossing, and `wire_pins` refuses a route that
-  crosses a wire where neither ends, even though LTspice leaves it unjoined.
+  is no op for a junction at a crossing; `wire_pins` draws a route across a
+  wire where neither ends, unjoined as LTspice leaves it, and warns.
 - `remove_wire`'s point form removes the segments that end at the point; a
   wire whose interior passes through it stays. At a T that removes the stem
   and keeps the wire it joined, but at a pin sitting on a wire's interior it

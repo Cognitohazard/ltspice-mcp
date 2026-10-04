@@ -44,6 +44,32 @@ _FIXTURE_DRAFT = FIXTURES_DIR / "Draft1.asc"
 LTSPICE_TRAN_RC_VFINAL = 0.999876166042
 
 
+def inject_numeric_raw(state: SessionState, path: Path, raw: typing.Any) -> None:
+    """Supply in-memory arrays to numerical unit tests, outside the parser cache."""
+    path.write_bytes(b"numeric test input")
+    state.__dict__.setdefault("_numeric_test_inputs", {})[path] = raw
+
+
+@pytest.fixture
+def numeric_raw_inputs(monkeypatch: pytest.MonkeyPatch):
+    """Opt-in math-test seam; unregistered artifacts still use the real parser.
+
+    These tests exercise recipes with analytic waves, including malformed
+    arrays. Parser, capture and cache guarantees have separate real-file tests.
+    """
+    from ltspice_mcp.lib import services
+
+    original = services.load_raw
+
+    async def load(source, state):
+        inputs = state.__dict__.get("_numeric_test_inputs", {})
+        if source.raw in inputs:
+            return inputs[source.raw]
+        return await original(source, state)
+
+    monkeypatch.setattr(services, "load_raw", load)
+
+
 # ---------------------------------------------------------------------------
 # Reading a published schema
 # ---------------------------------------------------------------------------
@@ -73,8 +99,11 @@ def schema_descriptions(node: typing.Any, path: str = "") -> dict[str, str]:
 # The registered tool surface, shared by every test that names it
 # ---------------------------------------------------------------------------
 
-# The six ops that share the ratified response envelope.
-CONSOLIDATED_TOOLS = (
+# The six ops that share the ratified response envelope. A literal on purpose:
+# membership is pinned by name, never derived from schema shape, so a tool that
+# lost its envelope marker fails a contract test instead of silently dropping
+# out of the matrix.
+ENVELOPE_TOOLS: tuple[str, ...] = (
     "run_experiments",
     "jobs",
     "analyze_results",
@@ -83,19 +112,40 @@ CONSOLIDATED_TOOLS = (
     "inspect",
 )
 
-# The advertised surface: the six plus the plot widget, which is deliberately
-# kept on the surface even though it predates the envelope — it joins
-# surface-wide checks (size pins, completeness) and stays out of the envelope
-# contract matrix. Membership is pinned BY NAME, never derived from schema
-# shape: a tool that lost its envelope marker must fail a contract test, not
-# silently reclassify.
-# run_code is registered (so its contract is gated with the rest) and served
-# only when [tools] run_code = true.
-REGISTERED_TOOLS = (*CONSOLIDATED_TOOLS, "plot_waveform", "run_code")
+# Every registered tool: the six, the plot widget (registered, but it predates
+# the envelope, so it joins surface-wide checks such as the size pins and stays
+# out of the envelope contract matrix), and run_code. Also a literal: this is
+# the pin on what the registry holds.
+REGISTERED_TOOLS: tuple[str, ...] = (*ENVELOPE_TOOLS, "plot_waveform", "run_code")
 
-# Every tool name removed in 0.6.0 when the consolidated profile became the
-# product (frozen history; test_doc_drift composes its dead-name gate from it).
-TOOLS_REMOVED_IN_0_6: tuple[str, ...] = (
+# run_code is registered always, so its contract is gated with the rest, and
+# served only while [tools] run_code is true. This is what a session that turned
+# it off lists and answers to.
+SERVED_WITHOUT_RUN_CODE: tuple[str, ...] = tuple(
+    name for name in REGISTERED_TOOLS if name != "run_code"
+)
+
+# Every tool name ever removed from the registry. Frozen history: grown, never
+# shrunk by hand. Several of these names live on as something else (``thd`` and
+# ``signal_stats`` are recipe metrics, ``wire_pins`` is an edit_schematic op),
+# which is why the guards read removed_tool_names() rather than this tuple.
+DEAD_TOOL_NAMES: tuple[str, ...] = (
+    # Absorbed before 0.6 (bode_metrics modes, query_value step addressing,
+    # simulation_summary, find_model, edit_directive).
+    "measurements",
+    "model_info",
+    "add_text",
+    "step_get",
+    "filter_metrics",
+    "roll_off",
+    "gain_at",
+    "find_crossing",
+    "get_measurements",
+    "get_simulation_summary",
+    "schematic_from_netlist",
+    "pulse_response",
+    "disturbance_response",
+    # Removed in 0.6.0, when the consolidated surface became the product.
     "create_netlist",
     "read_circuit",
     "list_components",
@@ -147,18 +197,82 @@ TOOLS_REMOVED_IN_0_6: tuple[str, ...] = (
 )
 
 
-# Delegated handlers that legitimately declare NO structuredContent contract:
-# name -> (reason, emits_intermediate_structured_content). The second field
-# derives the conformance hook's walk-stop set — an adapter that emits
-# intermediate structuredContent needs the frame walk stopped at it, while a
-# text-only one must NOT stop the walk (that would subtract coverage for
-# anything emitting beneath its frame). test_conformance_hook_armed.py's
-# closure test pins the exemptions fail-closed (a name that gains a contract,
-# or stops being delegated to, fails the suite).
+def live_surface_vocabulary() -> frozenset[str]:
+    """Every enum and const string in the registered tools' input schemas.
+
+    The live capability vocabulary: edit_schematic op kinds, recipe metrics,
+    inspect kinds, jobs actions. Read off the schemas rather than listed, so a
+    name that stops being live re-enters the removed-name guards on its own.
+    """
+    from ltspice_mcp.tools._base import registry
+
+    vocab: set[str] = set()
+
+    def walk(node: typing.Any) -> None:
+        if isinstance(node, dict):
+            enum = node.get("enum")
+            if isinstance(enum, list):
+                vocab.update(value for value in enum if isinstance(value, str))
+            const = node.get("const")
+            if isinstance(const, str):
+                vocab.add(const)
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    for registered in registry._registered:
+        walk(registered.definition.input_schema)
+    return frozenset(vocab)
+
+
+def removed_tool_names() -> frozenset[str]:
+    """Removed tool names that name nothing live.
+
+    The set every removed-name guard checks text against: a hint, prompt or
+    doc that names one of these sends the caller at something no client can
+    call. A dead tool name that is also live vocabulary (the ``thd`` recipe,
+    the ``wire_pins`` op) is left out, because naming it is documenting the
+    product.
+    """
+    return frozenset(DEAD_TOOL_NAMES) - live_surface_vocabulary()
+
+
+def removed_tools_named_in(text: str) -> list[str]:
+    """The removed tool names ``text`` mentions as whole words, sorted."""
+    from tests._text import names
+
+    return sorted(name for name in removed_tool_names() if names(text, name))
+
+
+def registered_tool_names() -> frozenset[str]:
+    """Every registered tool's wire name, whether or not a session serves it."""
+    from ltspice_mcp.tools._base import registry
+
+    return frozenset(registered.definition.name for registered in registry._registered)
+
+
 class FakeSim:
     """Stub simulator class for tests that need a default simulator."""
 
     spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
+
+
+def installed_simulator(*library_dirs: Path, base: type = FakeSim) -> type:
+    """A detected simulator whose own model library is ``library_dirs``.
+
+    What an install reports is the environment; which files the server reads
+    because of it is what a test using this pins. ``base`` keeps whatever else
+    the test's stand-in class carries.
+    """
+
+    class InstalledSimulator(base):
+        @classmethod
+        def get_default_library_paths(cls) -> list[str]:
+            return [str(path) for path in library_dirs]
+
+    return InstalledSimulator
 
 
 async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120) -> dict:
@@ -191,6 +305,58 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
         assert data is not None
     assert not data.get("timed_out"), f"job {data.get('job_id')} never went terminal: {data}"
     return data
+
+
+def stand_in_program(path: Path, content: bytes) -> Path:
+    """A file standing in for a simulator executable: its bytes are its build."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
+async def submit_experiment(
+    state: SessionState, payload: dict[str, typing.Any]
+) -> tuple[bool, dict[str, typing.Any]]:
+    """One run_experiments call: whether it answered as an error, and its reply,
+    checked against the tool's declared output schema."""
+    import jsonschema
+
+    from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+    from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
+
+    result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
+    data = result.structured_content
+    assert data is not None, result.content[0].text
+    jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+    return bool(result.is_error), data
+
+
+async def job_runs(
+    state: SessionState, job_id: str, **extra: typing.Any
+) -> list[dict[str, typing.Any]]:
+    """The full run rows ``jobs(action="runs")`` returns for a job."""
+    from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
+
+    result = await handle_jobs(
+        JobsInput.model_validate({"action": "runs", "job_id": job_id, **extra}), state
+    )
+    data = result.structured_content
+    assert data is not None
+    return data["items"]
+
+
+async def capabilities_report(state: SessionState) -> dict[str, typing.Any]:
+    """The whole ``inspect(kind="capabilities")`` report."""
+    from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+    result = await handle_inspect(
+        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
+    )
+    data = result.structured_content
+    assert data is not None
+    (item,) = data["results"]
+    assert item["ok"], item
+    return item["data"]
 
 
 def symlink_or_skip(link: Path, target: Path, **kwargs: typing.Any) -> None:
@@ -239,7 +405,7 @@ def ngspice_binary_raw(
         f"No. Points: {declared:<8d}\n"
         "Variables:\n"
         + "".join(
-            f"\t{index}\t{name}\t{'time' if name == 'time' else 'voltage'}\n"
+            f"\t{index}\t{name}\t{'time' if name.lower() == 'time' else 'voltage'}\n"
             for index, name in enumerate(names)
         )
         + "Binary:\n"
@@ -456,6 +622,88 @@ def patch_stub_bootstrap(monkeypatch: pytest.MonkeyPatch, state: object) -> None
 #: How often a waiting test looks again. Short enough that a test that is
 #: about to pass does not pay for the poll, long enough not to spin.
 _POLL_INTERVAL_S = 0.01
+
+
+def make_raw_mock(
+    trace_names: list[str] | None = None,
+    axis: typing.Any = None,
+    waves: dict[str, typing.Any] | None = None,
+    plotname: str = "Transient Analysis",
+    *,
+    steps: list[int] | None = None,
+    dialect: str = "ltspice",
+) -> typing.Any:
+    """A RawRead stand-in with controllable traces; no trace declares a type.
+
+    With nothing given it is a 100-point transient sine on ``V(out)``; the axis
+    defaults to the ``time`` wave.
+    """
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    if waves is None:
+        t = np.linspace(0, 1, 100)
+        waves = {"time": t, "V(out)": np.sin(2 * np.pi * t)}
+    raw = MagicMock()
+    raw.dialect = dialect
+    raw.get_raw_property.return_value = plotname
+    raw.get_trace_names.return_value = (
+        trace_names if trace_names is not None else ["time", "V(out)"]
+    )
+    raw.get_steps.return_value = steps if steps is not None else [0]
+    raw.get_axis.return_value = (
+        axis if axis is not None else waves.get("time", np.linspace(0, 1, 100))
+    )
+    raw.get_trace.return_value.whattype = None
+    raw.get_wave = lambda name, step=0: waves[name]
+    return raw
+
+
+def check_in(ready: typing.Any, start: typing.Any, entered: typing.Any, timeout_s: float) -> None:
+    """A child process's half of ``release_into_held_request_gate``.
+
+    Reports on ``ready``, waits for ``start``, then counts itself into
+    ``entered`` just before it submits. Raises ``TimeoutError`` when ``start``
+    is never set.
+    """
+    ready.put(None)
+    if not start.wait(timeout_s):
+        raise TimeoutError("start was never released")
+    with entered.get_lock():
+        entered.value += 1
+
+
+def release_into_held_request_gate(
+    work_dir: Path,
+    request_id: str,
+    ready: typing.Any,
+    start: typing.Any,
+    entered: typing.Any,
+    count: int,
+    timeout_s: float,
+) -> None:
+    """Put ``count`` child processes in flight on one request at once.
+
+    Waits for every child to report ready (``check_in``), then holds the
+    request's gate while it releases them and until all have counted in. No
+    submission can complete while the gate is held, so they meet there rather
+    than running one after the other.
+    """
+    from ltspice_mcp.lib.filelock import file_lock
+    from ltspice_mcp.lib.store import Store
+
+    for _ in range(count):
+        ready.get(timeout=timeout_s)
+    store = Store(work_dir)
+    store.ensure_root()
+    with file_lock(store.request_lock(request_id)):
+        start.set()
+        wait_until(
+            lambda: entered.value == count,
+            timeout_s=timeout_s,
+            what=f"all {count} processes to enter their submission",
+        )
 
 
 def wait_until(
@@ -864,6 +1112,9 @@ def _isolated_state_home(tmp_path_factory: pytest.TempPathFactory) -> Iterator[N
 # Output-schema conformance hook
 # ---------------------------------------------------------------------------
 
+# How many frames above a response helper the hook searches for the handler.
+_FRAME_WINDOW = 25
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
@@ -875,9 +1126,15 @@ def _enforce_output_schema_conformance():
     schema-validating MCP client (including the official python SDK) raised
     on every batch-job poll, and no test caught it because handler tests
     read structuredContent as a plain dict. This hook turns every existing
-    handler test into a conformance test: the emitting tool is identified
-    by walking the call stack for a registered handler's frame, and its
-    declared schema is enforced at the moment of emission.
+    handler test into a conformance test: the emitting handler is identified
+    by walking the call stack for the nearest frame of a handler that declares
+    an output schema (``@registry.tool`` or ``@declare_output_schema``), and
+    that schema is enforced at the moment of emission.
+
+    The walk looks at most ``_FRAME_WINDOW`` frames above the response
+    helper. An emission with no schema-declaring frame inside that window is
+    not validated and not reported: a response built outside any declared
+    handler, or one nested deeper than the window, passes unchecked.
     """
     import sys
 
@@ -918,7 +1175,7 @@ def _enforce_output_schema_conformance():
             return
         # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.
         frame = sys._getframe(2)
-        for _ in range(25):
+        for _ in range(_FRAME_WINDOW):
             if frame is None:
                 return
             contract = contracts.get(frame.f_code)
@@ -954,9 +1211,9 @@ def _enforce_output_schema_conformance():
     # format_response``), so patch the binding in every tool module, not just
     # the defining module. The module set is the same package-derived set the
     # contract scan used — deriving it from REGISTERED handlers would silently
-    # drop modules whose tools became unregistered adapters (circuit.py and
-    # simulation.py carry contracts but no registrations), leaving their
-    # emissions unvalidated.
+    # drop a module whose handlers declare a contract with
+    # @declare_output_schema but register no tool, or that only builds
+    # responses for a handler elsewhere, leaving its emissions unvalidated.
     #
     # Known limitation: only bindings literally named format_response /
     # json_response are patched — an aliased import (``from _base import

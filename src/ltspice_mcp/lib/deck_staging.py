@@ -10,8 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text, wsl
-from ltspice_mcp.lib.encoding import decode_spice_bytes
+from ltspice_mcp.lib import atomic_write_bytes, wsl
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    encode_spice_text,
+    rewrite_codec,
+)
 from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
@@ -22,7 +26,11 @@ from ltspice_mcp.lib.spice_lex import (
     lex,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, fold_micro_suffix_cards
+from ltspice_mcp.lib.spice_lex_ops import (
+    MICRO_SIGN_READERS,
+    ValueSuffixSite,
+    fold_micro_suffix_cards,
+)
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -73,6 +81,9 @@ class StagedFile:
     staged_path: Path
     text: str
     sha256: str = ""
+    # The codec a copy written from ``text`` is encoded in
+    # (``encoding.rewrite_codec``), so it keeps every byte it did not change.
+    codec: str = "utf-8"
 
 
 @dataclass
@@ -99,6 +110,8 @@ class StagedDeck:
     # Profile validation must not re-read possibly edited authoring files or
     # mistake rewritten include paths for changes to the original model.
     source_contents: dict[Path, bytes] = field(default_factory=dict)
+    # The primary deck's codec, as ``StagedFile.codec``.
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -111,22 +124,28 @@ class IncludeReference:
     section: str | None
 
 
-def _micro_fold_observation(path: Path, folded: Sequence[ValueSuffixSite]) -> dict[str, Any]:
-    """The fact that a staged copy spells a source's micro-sign suffixes ``u``."""
+def _micro_fold_observation(
+    path: Path, folded: Sequence[ValueSuffixSite], reader: str
+) -> dict[str, Any]:
+    """The fact that a staged copy spells a source's micro-sign suffixes ``u``.
+
+    Reported only for a simulator that decodes decks as cp1252 (``reader``),
+    the one reader for which the staged copy and its source mean different
+    things.
+    """
     return {
         "code": "micro_sign_folded",
         "kind": "provenance",
         "detail": (
             f"The staged copy of {path.name} spells {len(folded)} micro-sign "
-            "suffix(es) as 'u', which every simulator reads as micro. The source's "
-            "µ reads as micro only when the file is decoded in the encoding it was "
-            "written in: LTspice XVII decodes as cp1252 and reads a UTF-8 µ as "
-            "'Âµ', dropping the scale."
+            f"suffix(es) as 'u'. {MICRO_SIGN_READERS} This job's simulator decodes "
+            "decks as cp1252, so there the source and its staged copy can differ."
         ),
         "evidence": {
             "file": str(path),
             "tokens": [site.token for site in folded],
             "lines": [site.line for site in folded],
+            "reader": reader,
         },
     }
 
@@ -184,6 +203,7 @@ def stage_deck(
     windows_paths: bool = False,
     simulator_roots: Sequence[Path] = (),
     compact_digests: Collection[str] = (),
+    cp1252_reader: str | None = None,
 ) -> StagedDeck:
     """Copy a primary deck and its include/lib closure into ``staging_root``.
 
@@ -222,6 +242,13 @@ def stage_deck(
     other dependency while every existing root keeps its index — but the deck
     itself must still live in an allowed root, so this cannot be used to reach
     a deck the sandbox denies.
+
+    Every staged copy spells a micro-sign scale suffix ``u``, and a copy that
+    had to be rewritten is written in its source's encoding, so the characters
+    it did not rewrite keep their bytes. ``cp1252_reader`` names the target
+    simulator when it decodes decks as cp1252 (``services.cp1252_ltspice``):
+    only then does the fold change what a value means to the simulator, and
+    only then is it reported, as a ``micro_sign_folded`` observation.
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
@@ -263,6 +290,7 @@ def stage_deck(
     source_digests: dict[Path, str] = {}
     staged_texts: dict[Path, str] = {}
     staged_digests: dict[Path, str] = {}
+    staged_codecs: dict[Path, str] = {}
     processed_depths: dict[Path, int] = {}
     processing: set[Path] = set()
     observations: list[dict[str, Any]] = []
@@ -323,7 +351,7 @@ def stage_deck(
             return destination
         processing.add(resolved)
         try:
-            text = decode_spice_bytes(data)
+            text, encoding = decode_spice_bytes_with_encoding(data)
             parsed = lex(text)
             changed = False
             anchor = stands_at if resolved == source else resolved
@@ -437,23 +465,22 @@ def stage_deck(
                         changed = True
 
             destination.parent.mkdir(parents=True, exist_ok=True)
-            # Every staged SPICE file is a simulator input, and a re-emitted one
-            # is UTF-8, so a micro-sign suffix would reach LTspice XVII as the
-            # two cp1252 characters 'Âµ' and silently lose its scale.
+            # Every staged SPICE file is a simulator input. A micro-sign suffix
+            # is spelled 'u', which every simulator in every encoding reads as
+            # micro: a UTF-8 µ reaches LTspice XVII as the two cp1252
+            # characters 'Âµ' and silently loses its scale.
             folded = fold_micro_suffix_cards(parsed.cards)
             if folded:
                 changed = True
-                observations.append(_micro_fold_observation(resolved, folded))
-            if changed:
-                staged_text = emit(parsed.cards)
-                atomic_write_text(destination, staged_text, durable=True)
-            else:
-                staged_text = text
-                atomic_write_bytes(destination, data, durable=True)
+                if cp1252_reader is not None:
+                    observations.append(_micro_fold_observation(resolved, folded, cp1252_reader))
+            codec = rewrite_codec(encoding)
+            staged_text = emit(parsed.cards) if changed else text
+            staged_bytes = encode_spice_text(staged_text, codec) if changed else data
+            atomic_write_bytes(destination, staged_bytes, durable=True)
             staged_texts[resolved] = staged_text
-            staged_digests[resolved] = hashlib.sha256(
-                staged_text.encode("utf-8") if changed else data
-            ).hexdigest()
+            staged_digests[resolved] = hashlib.sha256(staged_bytes).hexdigest()
+            staged_codecs[resolved] = codec
         finally:
             processing.discard(resolved)
         processed_depths[resolved] = depth
@@ -505,18 +532,27 @@ def stage_deck(
                 staged_path=source_destinations[path],
                 text=text,
                 sha256=staged_digests[path],
+                codec=staged_codecs[path],
             )
             for path, text in staged_texts.items()
             if path != source
         ],
+        codec=staged_codecs[source],
     )
 
 
 def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
     """Return the resolved paths one staged file's include references name."""
+    return staged_card_reference_targets(lex(text).cards, source, depth=depth)
+
+
+def staged_card_reference_targets(
+    cards: list[SpiceCard], source: Path, *, depth: int
+) -> list[Path]:
+    """Resolve staged references from cards already parsed for this file."""
     return [
         resolve_reference(source.parent, reference.raw_path).resolve()
-        for reference in scan_include_references(lex(text).cards, source, depth=depth)
+        for reference in scan_include_references(cards, source, depth=depth)
     ]
 
 

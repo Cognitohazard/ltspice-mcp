@@ -121,7 +121,7 @@ An agent with a shell can run quick one-off ngspice simulations directly. Local 
 |-|-|
 | LTspice | Primary. Windows native, WSL2 (Windows LTspice.exe via interop), Linux via Wine. Required for `.asc` schematic editing (needs `.asy` symbol libraries). |
 | ngspice | Supports simulation, parsing, diagnostics, and analysis. Does not require LTspice. |
-| QSPICE, Xyce | Supported but secondary. |
+| QSPICE, Xyce | Supported but secondary. A run selects either with `execution.simulator`; QSPICE only when the server runs natively on Windows. Both take a hand-written netlist, not a `.asc`. |
 
 ## Configuration
 
@@ -132,6 +132,9 @@ No configuration is required. To customize, copy `ltspice-mcp.example.toml` to `
 default = "ltspice"      # ltspice, ngspice, qspice, xyce (null = auto-detect)
 path = ""                # explicit executable path (required on WSL)
 ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
+
+[simulator.executables]  # more builds, run per call as execution.simulator = "ltspice:xvii"
+# xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"
 
 [security]
 # allowed_paths = ["."]  # sandbox, re-read on the next call; unset = working dir + the Claude Code scratch dir (<tempdir>/claude-<uid>; %TEMP%\claude on Windows)
@@ -222,7 +225,7 @@ The server exposes **8 tools**: six arranged over three planes, the waveform wid
 
 Netlists are written and edited with the agent's own file tools; the server does not wrap text edits. The same six operations are importable as `ltspice_mcp.api` (`Api(working_dir=...)`), so a Python script can drive the same engine without an MCP client.
 
-The `skills/` directory carries the domain knowledge that pairs with the surface: `skills/spice-experiments/SKILL.md` (the experiment workflow), `skills/ltspice/SKILL.md` and `skills/ngspice/SKILL.md` (SPICE syntax per engine), `skills/spice-bench-craft/SKILL.md` (bench archetypes). Copy the relevant skill into your client's persistent-instructions location.
+The domain knowledge that pairs with the surface is the server's guide: a short core every session reads, then topic sections (each simulator's syntax, the tools, trace math, nested instances) and task playbooks (amplifier bench craft). Any client reads it with `inspect(kind="guide")` or the `spice://guide` resources, and Python with `Api.guide()`. The Claude Code plugin's one skill, `skills/spice-guide/SKILL.md`, sends a session there; on another client, point its persistent instructions at the same call.
 
 **Migration from 0.5.** The `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6.0; the consolidated surface above replaces them. `[tools] profile` is no longer a key the server reads — a config that still sets it loads with the key ignored. Keep the `[tools]` section rather than deleting it: it now holds `listing`, above. Pin `ltspice-mcp==0.5.*` if you need the old per-operation tools.
 
@@ -251,9 +254,11 @@ run a batch for an assistant to analyze later.
 
 **An assistant can use either.** Over MCP it calls the six tools; where it can
 execute code it can drive the same engine in Python instead, through `run_code`
-or an installed package (see below). Either way it can read the full argument
-tree for itself — `inspect(kind="reference")` over MCP, `api.reference()` in
-Python.
+or an installed package (see below). Either way it starts from the server's
+guide — a short core, then the section or task playbook a job needs —
+`inspect(kind="guide")` over MCP, `api.guide()` in Python, and reads the full
+argument tree for itself — `inspect(kind="reference")` over MCP,
+`api.reference()` in Python.
 
 ## Driving it from code
 
@@ -291,8 +296,9 @@ the minimum and maximum cutoff frequencies with their assignments. `rc.cir` is
 the RC low-pass deck printed under
 [the tool-level loop](#under-the-hood-the-tool-level-loop) above.
 `api.reference()` lists the six operations. `api.reference("run_experiments")`
-prints that operation's full argument tree. From a shell, use
-`python -m ltspice_mcp.api reference [op]`. `api.load_raw()` returns numpy
+prints that operation's full argument tree, and `api.guide("python")` the
+guide's section on this interface. From a shell, use
+`python -m ltspice_mcp.api reference [op]` or `python -m ltspice_mcp.api guide [section]`. `api.load_raw()` returns numpy
 arrays for direct waveform access.
 
 ### Using both at once

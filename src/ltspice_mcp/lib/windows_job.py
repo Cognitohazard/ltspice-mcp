@@ -9,14 +9,18 @@ break away; ordinary subprocesses stay in the job.
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import sys
+import time
 from ctypes import wintypes
 from functools import cache
 
 _EXTENDED_LIMIT_INFORMATION = 9
 _BREAKAWAY_OK = 0x0800
 _KILL_ON_JOB_CLOSE = 0x2000
+_PROCESS_MEMORY = 0x0100
+_JOB_MEMORY = 0x0200
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
@@ -75,6 +79,19 @@ class _ExtendedLimits(ctypes.Structure):
     ]
 
 
+class _BasicAccounting(ctypes.Structure):
+    _fields_ = [
+        ("TotalUserTime", ctypes.c_longlong),
+        ("TotalKernelTime", ctypes.c_longlong),
+        ("ThisPeriodUserTime", ctypes.c_longlong),
+        ("ThisPeriodKernelTime", ctypes.c_longlong),
+        ("TotalPageFaultCount", wintypes.DWORD),
+        ("TotalProcesses", wintypes.DWORD),
+        ("ActiveProcesses", wintypes.DWORD),
+        ("TotalTerminatedProcesses", wintypes.DWORD),
+    ]
+
+
 @cache
 def _kernel():
     if sys.platform != "win32":
@@ -92,6 +109,7 @@ def _kernel():
         ),
         "OpenProcess": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
         "AssignProcessToJobObject": ([wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        "TerminateJobObject": ([wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
         "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
         "GetCurrentProcess": ([], wintypes.HANDLE),
         "IsProcessInJob": (
@@ -117,12 +135,34 @@ def _check(result):
 class WindowsJob:
     """Own a process tree until close, independently of its root's lifetime."""
 
-    def __init__(self, pid: int) -> None:
+    def __init__(
+        self,
+        pid: int,
+        *,
+        allow_breakaway: bool = True,
+        memory_limit_bytes: int | None = None,
+        cleanup_timeout_s: float | None = None,
+    ) -> None:
+        if memory_limit_bytes is not None and (
+            type(memory_limit_bytes) is not int or memory_limit_bytes <= 0
+        ):
+            raise ValueError("Job memory limit must be a positive integer")
+        if cleanup_timeout_s is not None and (
+            not math.isfinite(cleanup_timeout_s) or cleanup_timeout_s <= 0
+        ):
+            raise ValueError("Job cleanup timeout must be finite and positive")
+        self._cleanup_timeout_s = cleanup_timeout_s
         kernel = _kernel()
         self._handle = _check(kernel.CreateJobObjectW(None, None))
         try:
             limits = _ExtendedLimits()
-            limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE | _BREAKAWAY_OK
+            limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE
+            if allow_breakaway:
+                limits.BasicLimitInformation.LimitFlags |= _BREAKAWAY_OK
+            if memory_limit_bytes is not None:
+                limits.BasicLimitInformation.LimitFlags |= _PROCESS_MEMORY | _JOB_MEMORY
+                limits.ProcessMemoryLimit = memory_limit_bytes
+                limits.JobMemoryLimit = memory_limit_bytes
             _check(
                 kernel.SetInformationJobObject(
                     self._handle,
@@ -144,8 +184,30 @@ class WindowsJob:
 
     def close(self) -> None:
         if self._handle is not None:
-            _check(_kernel().CloseHandle(self._handle))
-            self._handle = None
+            kernel = _kernel()
+            try:
+                if self._cleanup_timeout_s is not None:
+                    _check(kernel.TerminateJobObject(self._handle, 1))
+                    deadline = time.monotonic() + self._cleanup_timeout_s
+                    while True:
+                        accounting = _BasicAccounting()
+                        _check(
+                            kernel.QueryInformationJobObject(
+                                self._handle,
+                                1,
+                                ctypes.byref(accounting),
+                                ctypes.sizeof(accounting),
+                                None,
+                            )
+                        )
+                        if accounting.ActiveProcesses == 0:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Windows parser job did not become empty")
+                        time.sleep(0.01)
+            finally:
+                _check(kernel.CloseHandle(self._handle))
+                self._handle = None
 
 
 def detached_creation_flags() -> int:

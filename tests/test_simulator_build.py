@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
-import jsonschema
 import pytest
 from spicelib.sim.simulator import Simulator
 
@@ -22,15 +21,21 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
     executable_path,
+    is_cp1252_ltspice_build,
+    is_cp1252_ltspice_executable,
     reported_build,
     same_executable,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
-from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
-from tests.conftest import submit_through_spicelib, terminal_experiment
+from tests.conftest import (
+    capabilities_report,
+    job_runs,
+    stand_in_program,
+    submit_experiment,
+    submit_through_spicelib,
+    terminal_experiment,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LTSPICE_26 = "LTspice 26.0.2 for Windows"
@@ -63,13 +68,6 @@ _DECK = "V1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n"
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _program(path: Path, content: bytes) -> Path:
-    """A file standing in for a simulator executable: its bytes are its build."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    return path
 
 
 def _rebuild(path: Path, content: bytes) -> None:
@@ -145,7 +143,7 @@ def _state(config: ServerConfig, program: Path, *launcher: str) -> SessionState:
 @pytest.fixture
 def program(work_dir: Path) -> Path:
     """The executable most tests run: one build of LTspice."""
-    return _program(work_dir / "sim" / "LTspice.exe", b"build one")
+    return stand_in_program(work_dir / "sim" / "LTspice.exe", b"build one")
 
 
 def _payload(deck: Path, request_id: str, **extra: Any) -> dict[str, Any]:
@@ -156,34 +154,6 @@ def _payload(deck: Path, request_id: str, **extra: Any) -> dict[str, Any]:
         "lint": "off",
         **extra,
     }
-
-
-async def _submit(state: SessionState, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
-    data = result.structured_content
-    assert data is not None, result.content[0].text
-    jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
-    return bool(result.is_error), data
-
-
-async def _runs(state: SessionState, job_id: str, **extra: Any) -> list[dict[str, Any]]:
-    result = await handle_jobs(
-        JobsInput.model_validate({"action": "runs", "job_id": job_id, **extra}), state
-    )
-    data = result.structured_content
-    assert data is not None
-    return data["items"]
-
-
-async def _capabilities(state: SessionState) -> dict[str, Any]:
-    result = await handle_inspect(
-        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
-    )
-    data = result.structured_content
-    assert data is not None
-    (item,) = data["results"]
-    assert item["ok"], item
-    return item["data"]
 
 
 # ---------------------------------------------------------------------------
@@ -287,9 +257,40 @@ class TestReportedBuild:
 # ---------------------------------------------------------------------------
 
 
+class TestCp1252LTspice:
+    """Which LTspice decodes a deck as cp1252, read off names alone."""
+
+    @pytest.mark.parametrize(
+        "program",
+        [
+            "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe",
+            "/mnt/c/Program Files (x86)/LTC/LTspiceXVII/XVIIx86.exe",
+            "/home/user/.wine/drive_c/Program Files/LTC/LTspiceIV/scad3.exe",
+        ],
+    )
+    def test_xvii_and_earlier_executables(self, program: str):
+        assert is_cp1252_ltspice_executable(program)
+
+    @pytest.mark.parametrize(
+        "program",
+        [
+            "C:\\Program Files\\ADI\\LTspice\\LTspice.exe",
+            "/usr/bin/ngspice",
+            "/opt/tools/notXVIIx64.exe",
+        ],
+    )
+    def test_other_executables(self, program: str):
+        assert not is_cp1252_ltspice_executable(program)
+
+    def test_reported_builds(self):
+        assert is_cp1252_ltspice_build("Linear Technology Corporation LTspice XVII")
+        assert not is_cp1252_ltspice_build(LTSPICE_26)
+        assert not is_cp1252_ltspice_build(NGSPICE_42)
+
+
 class TestExecutableIdentity:
     def test_the_identity_is_the_programs_own_bytes(self, tmp_path: Path):
-        program = _program(tmp_path / "LTspice.exe", b"build one")
+        program = stand_in_program(tmp_path / "LTspice.exe", b"build one")
 
         identity = executable_identity(_simulator(_RecordedLTspice26, program))
 
@@ -300,7 +301,7 @@ class TestExecutableIdentity:
         assert identity.modified is not None
 
     def test_under_wine_the_program_is_the_simulator_not_the_launcher(self, tmp_path: Path):
-        program = _program(tmp_path / "LTspice.exe", b"build one")
+        program = stand_in_program(tmp_path / "LTspice.exe", b"build one")
 
         simulator = _simulator(_RecordedLTspice26, program, "wine")
 
@@ -312,7 +313,7 @@ class TestExecutableIdentity:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         name = "fakesim.exe" if sys.platform == "win32" else "fakesim"
-        program = _program(tmp_path / "bin" / name, b"on path")
+        program = stand_in_program(tmp_path / "bin" / name, b"on path")
         program.chmod(0o755)
         monkeypatch.setenv("PATH", str(program.parent))
         simulator = type("Bare", (_RecordedLTspice26,), {"spice_exe": ["fakesim"]})
@@ -335,7 +336,7 @@ class TestExecutableIdentity:
         assert executable_path(None) is None
 
     def test_a_rebuilt_program_is_a_different_build(self, tmp_path: Path):
-        program = _program(tmp_path / "LTspice.exe", b"build one")
+        program = stand_in_program(tmp_path / "LTspice.exe", b"build one")
         simulator = _simulator(_RecordedLTspice26, program)
         before = executable_identity(simulator)
 
@@ -346,8 +347,8 @@ class TestExecutableIdentity:
         assert not same_executable(before, after)
 
     def test_the_same_build_moved_is_the_same_build(self, tmp_path: Path):
-        first = _program(tmp_path / "a" / "LTspice.exe", b"build one")
-        moved = _program(tmp_path / "b" / "LTspice.exe", b"build one")
+        first = stand_in_program(tmp_path / "a" / "LTspice.exe", b"build one")
+        moved = stand_in_program(tmp_path / "b" / "LTspice.exe", b"build one")
 
         assert same_executable(
             executable_identity(_simulator(_RecordedLTspice26, first)),
@@ -431,7 +432,7 @@ class TestRecordedBuild:
         assert record["simulator_executable"]["sha256"] == _sha256(program)
         assert [case["simulator_version"] for case in record["cases"]] == [LTSPICE_26] * 2
         # jobs(runs) reads full rows, the build among them.
-        runs = await _runs(state, receipt["job_id"])
+        runs = await job_runs(state, receipt["job_id"])
         assert [row["simulator_version"] for row in runs] == [LTSPICE_26] * 2
 
     async def test_the_lean_receipt_keeps_the_build_one_opt_in_away(
@@ -449,7 +450,7 @@ class TestRecordedBuild:
 
         # Asked for: the replay under provenance names the program, and a
         # run_fields projection names the build.
-        _, detailed = await _submit(
+        _, detailed = await submit_experiment(
             state,
             _payload(deck, "lean-build", provenance=True, run_fields=["simulator_version"]),
         )
@@ -497,7 +498,7 @@ class TestReplayAcrossBuilds:
         _rebuild(program, b"build two")
 
         restarted = _state(config, program)
-        is_error, data = await _submit(restarted, _payload(deck, "rebuilt"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "rebuilt"))
 
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
@@ -512,14 +513,14 @@ class TestReplayAcrossBuilds:
         # The request names no simulator, so it runs on whichever the server
         # defaults to; a server now defaulting to another program is a
         # different build for the same request.
-        first_program = _program(work_dir / "sim" / "LTspice.exe", b"ltspice build")
+        first_program = stand_in_program(work_dir / "sim" / "LTspice.exe", b"ltspice build")
         deck, _ = await self._first_run(config, work_dir, first_program, "switched")
-        other = _program(work_dir / "sim" / "ngspice", b"ngspice build")
+        other = stand_in_program(work_dir / "sim" / "ngspice", b"ngspice build")
 
         restarted = SessionState.create(
             config, available={"ngspice": _simulator(_RecordedNgspice42, other)}
         )
-        is_error, data = await _submit(restarted, _payload(deck, "switched"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "switched"))
 
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
@@ -531,7 +532,7 @@ class TestReplayAcrossBuilds:
         deck, first = await self._first_run(config, work_dir, program, "unchanged")
 
         restarted = _state(config, program)
-        is_error, data = await _submit(restarted, _payload(deck, "unchanged"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "unchanged"))
 
         assert not is_error
         assert data["replayed"] is True
@@ -546,7 +547,7 @@ class TestReplayAcrossBuilds:
         deck, first = await self._first_run(config, work_dir, program, "no-simulator")
 
         restarted = SessionState.create(config, available={})
-        is_error, data = await _submit(restarted, _payload(deck, "no-simulator"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "no-simulator"))
         status = await handle_jobs(
             JobsInput.model_validate({"action": "status", "request_id": "no-simulator"}),
             restarted,
@@ -578,7 +579,7 @@ class TestReplayAcrossBuilds:
 
         monkeypatch.setattr(experiments_mod, "_load_matching_replay", no_early_lookup)
         restarted = _state(config, program)
-        is_error, data = await _submit(restarted, _payload(deck, "gated"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "gated"))
 
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
@@ -604,7 +605,7 @@ class TestReplayAcrossBuilds:
         assert [case.simulator_version for case in loaded.cases] == [None]
 
         restarted = _state(config, program)
-        is_error, data = await _submit(restarted, _payload(deck, "older-record"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "older-record"))
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
         assert "unrecorded executable" in data["error"]["message"]
@@ -622,7 +623,7 @@ class TestCapabilitiesBuild:
     ):
         state = _state(config, program)
 
-        before = (await _capabilities(state))["simulators"]["ltspice"]
+        before = (await capabilities_report(state))["simulators"]["ltspice"]
         assert before["executable"] == str(program)
         assert before["executable_sha256"] == _sha256(program)
         assert before["version"] is None
@@ -631,7 +632,7 @@ class TestCapabilitiesBuild:
         deck = work_dir / "rc.cir"
         deck.write_text(_DECK)
         receipt = await terminal_experiment(state, _payload(deck, "caps-build"))
-        after = (await _capabilities(state))["simulators"]["ltspice"]
+        after = (await capabilities_report(state))["simulators"]["ltspice"]
 
         assert after["version"] == LTSPICE_26
         assert after["version_source"] == {
@@ -648,7 +649,7 @@ class TestCapabilitiesBuild:
         await terminal_experiment(state, _payload(deck, "old-build"))
 
         _rebuild(program, b"build two")
-        caps = (await _capabilities(state))["simulators"]["ltspice"]
+        caps = (await capabilities_report(state))["simulators"]["ltspice"]
 
         assert caps["executable_sha256"] == _sha256(program)
         assert caps["version"] is None
@@ -656,9 +657,9 @@ class TestCapabilitiesBuild:
     async def test_under_wine_the_executable_is_the_simulator(
         self, config: ServerConfig, work_dir: Path
     ):
-        program = _program(work_dir / "wine" / "LTspice.exe", b"build one")
+        program = stand_in_program(work_dir / "wine" / "LTspice.exe", b"build one")
         state = _state(config, program, "wine")
 
-        caps = (await _capabilities(state))["simulators"]["ltspice"]
+        caps = (await capabilities_report(state))["simulators"]["ltspice"]
 
         assert caps["executable"] == str(program)

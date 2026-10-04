@@ -31,7 +31,7 @@ from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
 from pydantic import BaseModel, ConfigDict
 
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, REGISTERED_TOOLS, SERVED_WITHOUT_RUN_CODE
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,17 +40,6 @@ from tests.conftest import FIXTURES_DIR
 TOOL_TIMEOUT = 20.0
 
 SYMBOL_FIXTURES = FIXTURES_DIR / "symbols"
-
-# The seven tools the consolidated profile puts on the wire.
-CONSOLIDATED_TOOLS = {
-    "run_experiments",
-    "jobs",
-    "analyze_results",
-    "inspect",
-    "edit_schematic",
-    "verify_circuit",
-    "plot_waveform",
-}
 
 
 class _WireResult(BaseModel):
@@ -368,10 +357,11 @@ class TestServerLifecycle:
     async def test_list_tools_is_exactly_the_consolidated_surface(
         self, shared_session: ClientSession
     ):
-        """The wire answers the seven consolidated tools and nothing else."""
+        """With run_code switched off (as these sessions run), the wire answers
+        every other registered tool and nothing else."""
         result = await shared_session.list_tools()
         names = {t.name for t in result.tools}
-        assert names == CONSOLIDATED_TOOLS
+        assert names == set(SERVED_WITHOUT_RUN_CODE)
         # Each carries a display title, and none of them is the wire name.
         for tool in result.tools:
             assert tool.title and tool.title != tool.name
@@ -456,7 +446,7 @@ class TestServerLifecycle:
 class TestSchematicTools:
     async def test_blank_build_commits_and_reports_geometry(self, tmp_path):
         """A base:"blank" op batch writes the sheet and returns the geometry
-        the model acts on: stages, sha, wiring metric, touched pins."""
+        the model acts on: sha, wiring metric, touched pins."""
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
@@ -468,8 +458,11 @@ class TestSchematicTools:
             assert data["outcome"] == "complete"
             assert data["commit_state"] == "committed"
             assert (tmp_path / "divider.asc").exists()
-            assert [stage["stage"] for stage in data["stages"]][-1] == "rename"
-            assert all(stage["ok"] for stage in data["stages"])
+            # Only a stage that did not complete is listed.
+            assert data["stages"] == []
+            # The counts are in 'wiring'; the hint does not restate them.
+            assert data["hint"].startswith("Committed.")
+            assert "pins" not in data["hint"]
 
             wiring = data["wiring"]
             assert wiring["pins_total"] == 4
@@ -603,7 +596,7 @@ class TestSchematicTools:
 class TestSecurity:
     async def test_path_traversal_blocked(self, shared_session: ClientSession):
         result = await _call(shared_session, "verify_circuit", {"path": "../../../etc/passwd"})
-        _assert_tool_error(result, "not allowed")
+        _assert_tool_error(result, "outside allowed directories")
         finding = _data(result)["findings"][0]
         assert finding["rule_id"] == "path_denied"
 
@@ -768,8 +761,11 @@ class TestInspectCapabilities:
             assert caps["simulators"], "degraded state must still list known simulators"
             for name, info in caps["simulators"].items():
                 assert info["available"] is False, name
+                assert info["selectable"] is False, name
                 assert info["remediation"]["config_key"] == "simulator.path"
-                assert "restart" in info["remediation"]["action"]
+                # A family this host cannot run says so in place of a restart.
+                expected = info.get("refusal") or "restart"
+                assert expected in info["remediation"]["action"], name
             assert caps["config_path"].endswith("ltspice-mcp.toml")
             assert caps["python"]["executable"]
             assert caps["default_simulator"] is None
@@ -788,7 +784,7 @@ class TestInspectCapabilities:
 
 
 class TestRunCode:
-    async def test_off_by_default_the_name_is_unknown(self, shared_session: ClientSession):
+    async def test_switched_off_the_name_is_unknown(self, shared_session: ClientSession):
         # Not a tool result flagged as an error: a name the session does not
         # serve is a lookup failure, answered as an invalid-params error.
         with pytest.raises(MCPError, match="Unknown tool: run_code"):
@@ -797,7 +793,7 @@ class TestRunCode:
     async def test_on_the_tool_is_advertised_last_and_runs_with_the_engine(self, tmp_path):
         async with mcp_session(tmp_path, run_code=True) as session:
             names = [t.name for t in (await session.list_tools()).tools]
-            assert set(names) == CONSOLIDATED_TOOLS | {"run_code"}
+            assert set(names) == set(REGISTERED_TOOLS)
             assert names[-1] == "run_code"
             caps = _data(await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]}))[
                 "results"
@@ -857,11 +853,10 @@ class TestResources:
     async def test_list_resources_returns_static_set(self, shared_session: ClientSession):
         result = await shared_session.list_resources()
         resources = {r.name: r for r in result.resources}
-        assert len(resources) == 7
+        assert len(resources) == 6
         assert set(resources.keys()) == {
             "netlists",
             "results",
-            "models",
             "config",
             "recent",
             "plot_widget",
@@ -871,10 +866,10 @@ class TestResources:
         assert str(resources["recent"].uri) == "spice://recent"
         assert str(resources["guide"].uri) == "spice://guide"
 
-    async def test_list_resource_templates_returns_three(self, shared_session: ClientSession):
+    async def test_list_resource_templates_returns_four(self, shared_session: ClientSession):
         result = await shared_session.list_resource_templates()
         templates = {t.name for t in result.resource_templates}
-        assert templates == {"netlist_content", "job_signals", "job_measurements"}
+        assert templates == {"guide_section", "netlist_content", "job_signals", "job_measurements"}
 
     async def test_read_ui_widget_resource_over_protocol(self, shared_session: ClientSession):
         # The MCP Apps renderer is served under the ui:// scheme — exercise the
@@ -923,11 +918,6 @@ class TestResources:
         data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
         assert data == {"count": 0, "jobs": []}
 
-    async def test_read_models_empty(self, shared_session: ClientSession):
-        result = await shared_session.read_resource("spice://models/")
-        data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
-        assert data["libraries"] == []
-
     async def test_unknown_resource_uri_is_an_invalid_parameter(
         self, shared_session: ClientSession
     ):
@@ -966,8 +956,8 @@ class TestErrorHandling:
         assert excinfo.value.code == mcp_types.INVALID_PARAMS
         message = excinfo.value.message
         assert "totally_fake_tool" in message
-        for name in CONSOLIDATED_TOOLS:
-            assert name in message
+        for tool in (await shared_session.list_tools()).tools:
+            assert tool.name in message
 
     async def test_missing_required_arg_returns_validation_error(
         self, shared_session: ClientSession
@@ -1019,4 +1009,4 @@ class TestErrorHandling:
 
     async def test_jobs_status_without_an_identifier_errors(self, shared_session: ClientSession):
         result = await _call(shared_session, "jobs", {"action": "status"})
-        _assert_tool_error(result, "requires exactly one of job_id or request_id")
+        _assert_tool_error(result, "requires job_id or request_id")

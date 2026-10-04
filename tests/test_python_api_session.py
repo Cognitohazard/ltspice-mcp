@@ -125,6 +125,19 @@ def test_api_routes_constructor_inputs_to_library_bootstrap(
     }
 
 
+def test_api_normalizes_established_ltspice_profile_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine_module, "detect_simulators", lambda config, diagnostics: {})
+    monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: False)
+    profile = tmp_path / "established.ini"
+    with Api(
+        working_dir=tmp_path,
+        ltspice_ini=str(profile),
+        persist_jobs=False,
+        preload_recent_count=0,
+    ) as api:
+        assert api._state.config.ltspice_ini == profile
+
+
 def test_api_explicit_config_path_uses_real_shared_bootstrap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

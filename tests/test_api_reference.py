@@ -17,8 +17,7 @@ from ltspice_mcp.lib.model_fields import field_name
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools.inspect_tools import SUPPORTED_KINDS
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
-
-OPS = ("run_experiments", "jobs", "analyze_results", "inspect", "edit_schematic", "verify_circuit")
+from tests.conftest import ENVELOPE_TOOLS
 
 
 def _spelled_fields(model) -> list[str]:
@@ -60,31 +59,28 @@ class TestOwnerLifecycleDocumentation:
 class TestIndex:
     def test_index_names_all_six_operations(self):
         text = _reference.reference()
-        for name in OPS:
+        for name in ENVELOPE_TOOLS:
             assert name in text
 
     def test_index_says_how_to_drill_in(self):
         assert "api.reference(" in _reference.reference()
 
-    def test_op_names_is_the_six(self):
-        assert set(_reference.op_names()) == set(OPS)
-
 
 class TestPerOperationTree:
-    @pytest.mark.parametrize("name", OPS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_every_operation_renders(self, name: str):
         text = _reference.reference(name)
         assert text.startswith(name)
         assert "arguments" in text
         assert "example" in text
 
-    @pytest.mark.parametrize("name", OPS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_tree_carries_no_json_schema_artifacts(self, name: str):
         text = _reference.reference(name)
         for artifact in ("$ref", "anyOf", "allOf", "$defs", "propertyName"):
             assert artifact not in text, f"{name} reference leaked {artifact}"
 
-    @pytest.mark.parametrize("name", OPS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_top_level_fields_are_all_listed(self, name: str):
         operation = _reference._find(name)
         text = _reference.reference(name)
@@ -151,7 +147,7 @@ class TestPerOperationTree:
     def test_unknown_operation_names_the_six(self):
         with pytest.raises(ValueError, match="unknown operation") as excinfo:
             _reference.reference("run_simulation")
-        for name in OPS:
+        for name in ENVELOPE_TOOLS:
             assert name in str(excinfo.value)
 
     def test_a_non_string_op_is_a_type_error(self):
@@ -171,7 +167,7 @@ class TestMethodDocstrings:
         # import that rendering needs.
         ApiMethodsMixin.reference()
 
-    @pytest.mark.parametrize("name", OPS)
+    @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_method_doc_is_non_empty_and_names_its_fields(self, name: str):
         method = getattr(ApiMethodsMixin, name)
         doc = inspect_mod.getdoc(method)
@@ -281,7 +277,7 @@ class TestCatalogueDelivery:
             tmp_path,
         )
         assert "RC 0" in proc.stdout
-        for name in OPS:
+        for name in ENVELOPE_TOOLS:
             assert name in proc.stdout
 
     def test_module_entry_point_refuses_an_unknown_operation(self, tmp_path):
@@ -293,7 +289,7 @@ class TestCatalogueDelivery:
             tmp_path,
         )
         assert "RC 2" in proc.stdout
-        for name in OPS:
+        for name in ENVELOPE_TOOLS:
             assert name in proc.stderr
 
     def test_no_console_script_survives_the_removed_command_line(self):
@@ -429,7 +425,6 @@ class TestCatalogueMatchesTheRegistry:
 
     def test_operation_names_equal_the_consolidated_profile(self):
         from ltspice_mcp.tools import get_tools
-        from tests.conftest import CONSOLIDATED_TOOLS
 
         tool_defs, _dispatch = get_tools()
         # The API exposes exactly the envelope six. plot_waveform is MCP-only
@@ -438,7 +433,7 @@ class TestCatalogueMatchesTheRegistry:
         # plotting path is load_raw + the caller's own tooling. run_code is
         # MCP-only too: it hands a tool caller the engine as code, which is
         # what a Python caller already holds.
-        assert set(_reference.op_names()) == set(CONSOLIDATED_TOOLS)
+        assert set(_reference.op_names()) == set(ENVELOPE_TOOLS)
         assert {tool.name for tool in tool_defs} - set(_reference.op_names()) == {
             "plot_waveform",
             "run_code",

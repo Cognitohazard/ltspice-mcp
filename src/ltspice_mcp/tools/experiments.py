@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,9 +16,8 @@ from pydantic import (
     Field,
     SkipValidation,
     ValidationError,
-    ValidatorFunctionWrapHandler,
     field_serializer,
-    field_validator,
+    model_validator,
 )
 
 from ltspice_mcp.errors import (
@@ -29,7 +27,13 @@ from ltspice_mcp.errors import (
     SimulationError,
     raise_site_code,
 )
-from ltspice_mcp.lib import experiment_store, now, response_budget
+from ltspice_mcp.lib import (
+    CIRCUIT_EXTENSIONS,
+    NETLIST_SUFFIX_TEXT,
+    experiment_store,
+    now,
+    response_budget,
+)
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -37,9 +41,9 @@ from ltspice_mcp.lib.deck_staging import (
     stage_deck,
     verify_staged_manifest,
 )
+from ltspice_mcp.lib.experiment_inputs import capture_case_inputs
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
-    REPLAY_RECORD_DETAIL,
     AnalysisCallback,
     ExperimentReceipt,
     ExperimentRunRequest,
@@ -75,12 +79,16 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     validate_recipe,
 )
+from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
+from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.simulator import (
+    SIMULATOR_SELECTOR_PATTERN,
     current_ngbehavior,
     simulator_dialect,
     simulator_library_roots,
 )
 from ltspice_mcp.lib.simulator_build import executable_identity
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
@@ -91,6 +99,8 @@ from ltspice_mcp.lib.variations import (
     Variation,
     VariationError,
     check_case_cap,
+    check_random_families,
+    derive_circuit_ids,
     expand_variations,
     format_case_id,
     materialize_variants,
@@ -102,10 +112,13 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
     NEW_WORK_ANNOTATIONS,
+    NotedModel,
+    OptionalRawSelectionFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
     format_response,
+    held_to_cap,
     outcome_of,
     path_denied_text,
     registry,
@@ -115,7 +128,6 @@ from ltspice_mcp.tools._base import (
 )
 from ltspice_mcp.tools._schema import prune_unreferenced_defs
 from ltspice_mcp.tools.analyze import (
-    MAX_PAGE_SIZE,
     coerce_per_run_default,
     include_flag_coercer,
 )
@@ -154,16 +166,16 @@ class _CircuitPreparation:
 class ExperimentCircuit(StrictModel):
     path: str = Field(
         description=(
-            "Deck to run: .cir/.net/.sp (export an .asc through LTspice first). It "
-            "is staged content-addressed at submission, so later edits to the file "
-            "cannot change what this job ran."
+            f"Deck to run: {NETLIST_SUFFIX_TEXT}, or an .asc, which LTspice exports. "
+            "It is staged content-addressed at submission, so later edits to the "
+            "file cannot change what this job ran."
         ),
     )
     id: str | None = Field(
         default=None,
         description=(
-            "Short name for this circuit, used to scope a variation's 'applies_to' "
-            "and to label its rows. Defaults to the file stem."
+            "Names this circuit in 'applies_to' and in its rows. "
+            "Default: the file stem, made valid and unique."
         ),
     )
 
@@ -171,33 +183,42 @@ class ExperimentCircuit(StrictModel):
 class ExperimentExecution(StrictModel):
     """How long this call waits, how hard the job runs, and on which simulator."""
 
-    wait_s: float = Field(
-        default=60.0,
-        ge=0.0,
-        le=SUBMISSION_DWELL_CAP_S,
+    recoverable: bool = Field(
+        default=False,
+        strict=True,
         description=(
-            "Dwell 0-120s before returning; the durable job keeps running. "
-            "Continue with jobs(action='wait'); 0 returns immediately."
+            "Freeze validated inputs for jobs(action='resume'); unsupported inputs "
+            "refuse before submission. Defaults to false; see spice://guide."
         ),
     )
 
-    @field_validator("wait_s", mode="wrap")
-    @classmethod
-    def _wait_s_names_the_continuation_route(
-        cls,
-        value: Any,
-        handler: ValidatorFunctionWrapHandler,
-    ) -> float:
-        try:
-            return handler(value)
-        except ValidationError as exc:
-            if any(error["type"] == "less_than_equal" for error in exc.errors()):
-                raise ValueError(
-                    f"execution.wait_s cannot exceed {SUBMISSION_DWELL_CAP_S:g}s; "
-                    "submit within that dwell, then continue with "
-                    f'jobs(action="wait", ..., timeout_s<={JOBS_WAIT_CAP_S:g})'
-                ) from exc
-            raise
+    simulator_seed: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=2147483646,
+        description=(
+            "Reseed ngspice before loading every case, including retries. Requires "
+            "recoverable ngspice with one .op, .ac, .dc or .tran; cannot mix with native statistics."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _seed_requires_recovery(self) -> ExperimentExecution:
+        if self.simulator_seed is not None and (
+            not self.recoverable or self.simulator == "ltspice"
+        ):
+            raise ValueError("execution.simulator_seed requires recoverable ngspice")
+        return self
+
+    wait_s: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "Dwell before returning, held to 120s; the job keeps running. "
+            "Continue with jobs(action='wait'); 0 returns immediately."
+        ),
+    )
 
     run_timeout_s: float | None = Field(
         default=None,
@@ -224,20 +245,22 @@ class ExperimentExecution(StrictModel):
             "lower it only to leave room for other work."
         ),
     )
-    simulator: Literal["ltspice", "ngspice"] | None = Field(
+    simulator: str | None = Field(
         default=None,
+        pattern=SIMULATOR_SELECTOR_PATTERN,
         description=(
-            "Engine for every case; it also decides the dialect the results are "
-            "parsed with. Defaults to the server's default simulator."
+            "Engine for every case; its family decides the dialect the results are "
+            "parsed with. 'family:name' (e.g. 'ltspice:xvii') runs a named executable. "
+            "inspect capabilities lists those and which simulators a run can select. "
+            "Defaults to the server's default simulator."
         ),
     )
 
 
-class AnalysisPerRun(StrictModel):
-    # Bound taken from analyze_results itself, never a copy of its number: the
-    # attached block is handed straight to that engine, so a limit this schema
-    # advertised but the engine rejected would be a lever that cannot work.
-    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
+class AnalysisPerRun(analyze.CappedPerRunLimit):
+    # The limit and its cap are analyze_results' own, never a copy of its
+    # number: the attached block is handed straight to that engine, so a bound
+    # this schema held to and the engine's could not drift apart.
     cursor: str | None = Field(
         default=None,
         description=(
@@ -247,7 +270,7 @@ class AnalysisPerRun(StrictModel):
     )
 
 
-class AnalysisInclude(StrictModel):
+class AnalysisInclude(NotedModel):
     per_run: Annotated[
         AnalysisPerRun | None,
         BeforeValidator(
@@ -283,11 +306,17 @@ class AnalysisInclude(StrictModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _fields_read_once(self) -> AnalysisInclude:
+        if self.fields is not None:
+            self.keep_first("fields")
+        return self
+
 
 coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
-class AttachedAnalysis(StepSelectionFields):
+class AttachedAnalysis(OptionalRawSelectionFields, StepSelectionFields, NotedModel):
     # The same typed union analyze_results advertises, not a free-form object:
     # this block IS an analyze_results request, and a schema that said
     # "any object" left a caller to discover the recipe grammar by having a
@@ -322,6 +351,14 @@ class AttachedAnalysis(StepSelectionFields):
         ),
     )
 
+    @model_validator(mode="after")
+    def _group_by_read_once(self) -> AttachedAnalysis:
+        # Normalized here, not only when the analysis runs: group_by is part
+        # of the request fingerprint, so a repeat must not make a resend of
+        # the same request look like a different one.
+        self.keep_first("group_by")
+        return self
+
     @field_serializer("recipes")
     def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
         """Serialize each recipe exactly as it arrived.
@@ -355,7 +392,7 @@ _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "description": (
         "One entry of analyze_results.recipes: same grammar, same metrics, "
         "validated at submission. Fields per metric: "
-        "api.reference('analyze_results') or spice://guide."
+        "api.reference('analyze_results') or guide section 'tools'."
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},
@@ -390,6 +427,12 @@ class RunExperimentsInput(ToolInput):
             exclude_unset=False,
             exclude=self.PRESENTATION_FIELDS,
         )
+        # Preserve canonical bytes for ordinary requests recorded before the
+        # opt-in existed. Only requesting recovery changes execution identity.
+        if not self.execution.recoverable:
+            payload["execution"].pop("recoverable", None)
+        if self.execution.simulator_seed is None:
+            payload["execution"].pop("simulator_seed", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -556,21 +599,39 @@ async def handle_run_experiments(
     )
     fingerprint = canonical_fingerprint(args)
     budget = resolve_response_budget(args.budget, state)
+    wait_s, wait_note = held_to_cap(
+        "execution.wait_s", args.execution.wait_s, SUBMISSION_DWELL_CAP_S, "s"
+    )
+    cap_warnings = _argument_warnings(args, wait_note)
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
-            return await _dwell_and_respond(
-                replay,
-                args.execution.wait_s,
-                state,
-                provenance=args.provenance,
-                run_fields=args.run_fields,
-                analysis_fields=analysis_fields,
-                budget=budget,
-            )
+            try:
+                return await _dwell_and_respond(
+                    replay,
+                    wait_s,
+                    state,
+                    provenance=args.provenance,
+                    run_fields=args.run_fields,
+                    analysis_fields=analysis_fields,
+                    budget=budget,
+                    warnings=cap_warnings,
+                )
+            except Exception as exc:
+                return await _post_submit_error_response(
+                    replay, exc, None, budget=budget, state=state
+                )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
-        circuit_inputs = _circuit_decks_for_validation(args.circuits)
+        if args.execution.simulator_seed is not None and (
+            simulator_dialect(simulator) != "ngspice"
+            or any(isinstance(item, PdkNativeVariation) for item in args.variations)
+        ):
+            raise RecoveryError(
+                "recovery_seed_unsupported",
+                "Explicit seed requires recoverable ngspice without native statistics",
+            )
+        circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
         native_ids = [
@@ -585,11 +646,7 @@ async def handle_run_experiments(
                     _native_request(native, circuit.circuit_id, native.sample_start),
                     backend=simulator_dialect(simulator) or "",
                 )
-        if sum(isinstance(item, RandomVariation) for item in args.variations) > 1:
-            raise VariationError(
-                "multiple_random_variations",
-                "At most one random variation entry is allowed per run_experiments call",
-            )
+        check_random_families([circuit.circuit_id for circuit in circuit_inputs], args.variations)
         projected = sum(
             projected_case_count(circuit.circuit_id, args.variations) for circuit in circuit_inputs
         )
@@ -640,14 +697,22 @@ async def handle_run_experiments(
                         args.circuits,
                         strict=True,
                     )
-                )
+                ),
+                # Admission can refuse a frozen-input capture. Wait for every
+                # staging worker before the coordinator cleans an unclaimed tree.
+                return_exceptions=True,
             )
             for preparation in preparations:
+                if isinstance(preparation, BaseException):
+                    raise preparation
                 lint_by_circuit[preparation.circuit_id] = preparation.lint_findings
                 if preparation.source is not None:
                     sources.append(preparation.source)
+                id_note = id_notes.get(preparation.circuit_id)
                 for case in preparation.cases:
                     case.run_index = len(cases)
+                    if id_note is not None:
+                        case.observations.append(copy.deepcopy(id_note))
                     cases.append(case)
 
             if len(cases) != projected:
@@ -683,9 +748,11 @@ async def handle_run_experiments(
             max_parallel=args.execution.max_parallel,
             run_timeout_s=args.execution.run_timeout_s,
             job_deadline_s=args.execution.job_deadline_s,
+            recoverable=args.execution.recoverable,
+            simulator_seed=args.execution.simulator_seed,
             analysis_request=analysis_request,
             analysis_callback=(
-                _attached_analysis_callback(state) if analysis_request is not None else None
+                attached_analysis_callback(state) if analysis_request is not None else None
             ),
         )
         receipt = await asyncio.shield(runner.submit(request))
@@ -696,13 +763,14 @@ async def handle_run_experiments(
         try:
             return await _dwell_and_respond(
                 receipt,
-                args.execution.wait_s,
+                wait_s,
                 state,
                 lint_by_circuit=lint_by_circuit or None,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
                 budget=budget,
+                warnings=cap_warnings,
             )
         except Exception as exc:
             return await _post_submit_error_response(
@@ -713,14 +781,17 @@ async def handle_run_experiments(
                 state=state,
             )
     except SubmissionCommitted as exc:
+        if exc.receipt is not None:
+            return await _post_submit_error_response(
+                exc.receipt, exc, None, budget=budget, state=state
+            )
         return await _error_response(
             args.request_id,
             code=exc.code,
             message=str(exc),
             stage="submission",
             retryable=True,
-            # The request index and the record are on disk under this
-            # request_id; only the rest of the call fell over.
+            # The submission is durable; only the rest of the call fell over.
             commit_state="committed",
             budget=budget,
         )
@@ -779,6 +850,16 @@ async def handle_run_experiments(
             budget=budget,
             hint=path_denied_text(exc, state),
         )
+    except RecoveryError as exc:
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="recovery",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+        )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
             args.request_id,
@@ -825,12 +906,12 @@ async def _prepare_circuit(
     cases: list[ExperimentCase] = []
     try:
         source_path = safe_path(circuit_arg.path, state)
-        if source_path.suffix.casefold() not in {".cir", ".net", ".sp", ".asc"}:
+        if source_path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
             raise VariationError(
                 "unsupported_variant",
                 f"Circuit {circuit_id!r} uses unsupported extension "
                 f"{source_path.suffix or '<none>'!r}; supported extensions are "
-                ".cir, .net, .sp, and .asc",
+                f"{NETLIST_SUFFIX_TEXT} and .asc",
             )
         if not await asyncio.to_thread(source_path.is_file):
             raise FileNotFoundError(f"Circuit file not found: {source_path}")
@@ -871,6 +952,12 @@ async def _prepare_circuit(
             # so without this no transistor sheet stages under a default
             # sandbox. Resolved per run from the simulator this job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
+            # A micro sign spelled 'u' changes what a value means only to an
+            # LTspice that decodes decks as cp1252, so only then is it reported.
+            # The identity is cached per executable, so this is a stat here.
+            cp1252_reader=cp1252_ltspice(
+                state, await asyncio.to_thread(executable_identity, simulator)
+            ),
         )
         findings = (
             []
@@ -912,8 +999,14 @@ async def _prepare_circuit(
             circuit_id=circuit_id,
             path=staged.staged_deck,
             text=staged.text,
+            codec=staged.codec,
             includes=tuple(
-                DeckFile(path=included.staged_path, text=included.text, sha256=included.sha256)
+                DeckFile(
+                    path=included.staged_path,
+                    text=included.text,
+                    sha256=included.sha256,
+                    codec=included.codec,
+                )
                 for included in staged.includes
             ),
             semantic_profile=(
@@ -926,7 +1019,7 @@ async def _prepare_circuit(
                 if dialect in {"ltspice", "ngspice"}
                 else None
             ),
-            record_source_lineage=native is not None,
+            record_source_lineage=native is not None or args.execution.recoverable,
         )
         expanded = await asyncio.to_thread(
             expand_variations,
@@ -963,6 +1056,11 @@ async def _prepare_circuit(
                 staged.staged_deck.parent,
             )
             native_validator = NativeCaseValidator(staged, paths.staging_root)
+            lineage_root = (
+                await asyncio.to_thread(Store(state.working_dir).run_dir, job_id, simulator)
+                if args.execution.recoverable
+                else None
+            )
             for offset, (variant, descriptor) in enumerate(
                 zip(materialized, expanded, strict=True)
             ):
@@ -993,7 +1091,25 @@ async def _prepare_circuit(
                         case.error = str(exc)
                         case.completed_at = now()
                         case.native_statistics.unavailable_reason = str(exc)
+                if args.execution.recoverable and case.status == "queued":
+                    assert lineage_root is not None
+                    inputs = await asyncio.to_thread(
+                        capture_case_inputs,
+                        case,
+                        source,
+                        lineage_root=lineage_root,
+                        materialized=variant,
+                        seeded=args.execution.simulator_seed is not None,
+                    )
+                    case.recovery = CaseRecovery(
+                        inputs,
+                        CaseAttempt(job_id, 0, f"{job_id}-{offset:04d}"),
+                    )
                 cases.append(case)
+    except RecoveryError:
+        # Opt-in is an admission contract: a capture refusal must reach the
+        # caller before the coordinator can claim any of this inventory.
+        raise
     except NativeRequestError:
         raise
     except (
@@ -1066,6 +1182,8 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
                 "job_id": job_id,
                 "runs": "all",
                 "label": _ATTACHED_ANALYSIS_LABEL,
+                "plot_index": request.get("plot_index"),
+                "dialect": request.get("dialect"),
             }
         ],
         "recipes": request.get("recipes") or [],
@@ -1107,7 +1225,7 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
         ) from exc
 
 
-def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
+def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     """Bind the session onto the coordinator's job-only analysis hook.
 
     The coordinator hands the callback nothing but the job, so the session it
@@ -1131,16 +1249,30 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     return run_attached_analysis
 
 
-def _circuit_decks_for_validation(circuits: list[ExperimentCircuit]) -> list[CircuitDeck]:
-    return [
-        CircuitDeck(
-            circuit_id=circuit.id or Path(circuit.path).stem,
-            path=Path(circuit.path),
-            text="",
-            id_from_file_stem=not circuit.id,
-        )
-        for circuit in circuits
-    ]
+def _circuit_decks_for_validation(
+    circuits: list[ExperimentCircuit],
+) -> tuple[list[CircuitDeck], dict[str, dict[str, Any]]]:
+    """The circuits as decks to validate, and an observation per derived id.
+
+    A circuit with no ``id`` takes its file stem, made valid and unique rather
+    than refused (see ``derive_circuit_ids``); the observation, keyed by the id
+    it ran under, says so on every case of that circuit.
+    """
+    derived = derive_circuit_ids(
+        [circuit.path for circuit in circuits], [circuit.id for circuit in circuits]
+    )
+    decks: list[CircuitDeck] = []
+    notes: dict[str, dict[str, Any]] = {}
+    for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
+        decks.append(CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text=""))
+        if note is not None:
+            notes[circuit_id] = {
+                "code": "circuit_id_derived",
+                "kind": "provenance",
+                "detail": note,
+                "evidence": {"path": circuit.path, "circuit_id": circuit_id},
+            }
+    return decks, notes
 
 
 async def _load_matching_replay(
@@ -1148,7 +1280,7 @@ async def _load_matching_replay(
     state: SessionState,
     fingerprint: str,
 ) -> ExperimentReceipt | None:
-    """A recorded submission this call replays, before a runner is involved.
+    """Resolve a recorded submission before entering new staging.
 
     Only for a request_id the caller passed. An id this server minted a moment
     ago cannot name a recorded submission, so looking one up is a thread hop
@@ -1157,6 +1289,19 @@ async def _load_matching_replay(
     """
     if "request_id" not in args.model_fields_set:
         return None
+    from ltspice_mcp.lib.experiment_resume import lookup_root_recovery
+
+    simulator = resolve_run_simulator(args.execution.simulator, state)
+    recovery = await lookup_root_recovery(
+        state,
+        request_id=args.request_id,
+        fingerprint=fingerprint,
+        simulator=simulator,
+        recoverable=args.execution.recoverable,
+        analysis_callback=attached_analysis_callback(state) if args.analyze is not None else None,
+    )
+    if recovery is not None:
+        return recovery
     index = await asyncio.to_thread(
         experiment_store.load_request_index,
         args.request_id,
@@ -1194,26 +1339,30 @@ async def _load_matching_replay(
         )
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
-    simulator = resolve_run_simulator(args.execution.simulator, state)
     await asyncio.to_thread(
         lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
-    noted = experiment_store.note_once(
-        job.observations,
-        {
-            "code": "idempotent_replay",
-            "kind": "submission",
-            "detail": REPLAY_RECORD_DETAIL,
-        },
-    )
-    # Only the owner writes a job's record. Another process's copy was read
-    # while the job may still have been running, and writing it back can land
-    # after the owner's terminal write; the owner then looks gone from a
-    # record that says running, and the next reader recovers it as
-    # interrupted. The note still reaches this caller through its receipt.
-    if noted and job.owner_pid == os.getpid():
-        state.persist_job(job)
+    # The record is left as it is: the receipt's ``replayed`` is the fact about
+    # this call, and only the owner writes a job's record.
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
+
+
+def _argument_warnings(args: RunExperimentsInput, wait_note: str | None) -> list[str]:
+    """What this call asked for that is served differently: a value held to its
+    cap, and a repeat in the attached analysis read once."""
+    notes: list[str] = []
+    if wait_note is not None:
+        notes.append(
+            f"{wait_note} The job keeps running; continue with "
+            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g})."
+        )
+    if args.analyze is not None:
+        notes.extend(f"analyze.{note}" for note in args.analyze.argument_notes())
+        per_run = args.analyze.include.per_run if args.analyze.include else None
+        held = per_run.limit_note() if per_run is not None else None
+        if held is not None:
+            notes.append(f"analyze.include.per_run.{held}")
+    return notes
 
 
 async def _dwell_and_respond(
@@ -1226,6 +1375,7 @@ async def _dwell_and_respond(
     run_fields: list[str] | None = None,
     analysis_fields: list[str] | None = None,
     budget: ResponseBudget,
+    warnings: list[str] | None = None,
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
@@ -1258,6 +1408,8 @@ async def _dwell_and_respond(
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         )
         data["replayed"] = receipt.replayed
+        if warnings:
+            data["warnings"] = [*warnings, *data.get("warnings", [])]
         return finalize_receipt(data), text
 
     return await render_run_receipt(budget, build)
@@ -1458,15 +1610,11 @@ async def _post_submit_error_response(
     budget: ResponseBudget,
     state: SessionState,
 ) -> types.CallToolResult:
-    """Envelope for a failure that escaped AFTER the cases were submitted.
+    """Envelope for a failure after the experiment committed.
 
-    Submission is the irreversible step: once the receipt exists the simulator
-    runs are under way, and the job_id plus its control_token are the only
-    handles that reach them. Reporting ``not_started`` here — or letting the
-    exception out, which returns no structuredContent at all — strands running
-    cases with no way to poll or cancel them. Those orphaned runs are precisely
-    what commit_state exists to prevent, so a post-submit escape is always
-    reported as committed.
+    Commitment is irreversible even when launch is still pending. The job_id
+    and control_token must survive a response failure so the caller can follow
+    or cancel the committed work instead of submitting it again under a new id.
     """
     job = receipt.job
 
@@ -1511,23 +1659,24 @@ async def _post_submit_error_response(
         data.update(handles)
     data["replayed"] = receipt.replayed
     route = (
-        f"The experiment was submitted and is running. Use jobs(status) with job_id "
+        f"The experiment is committed. Use jobs(status) with job_id "
         f"{job.job_id} to follow it, or jobs(cancel) with that job_id and its "
         f"control_token to stop it."
     )
     data["hint"] = route
     data["error"] = {
-        "code": raise_site_code(exc) or "receipt_failed",
+        "code": (
+            exc.code
+            if isinstance(exc, SubmissionCommitted)
+            else raise_site_code(exc) or "receipt_failed"
+        ),
         "message": error_message(exc, build_error),
-        "stage": "receipt",
+        "stage": "submission" if isinstance(exc, SubmissionCommitted) else "receipt",
         "retryable": True,
         "commit_state": "committed",
     }
     finalize_receipt(data)
-    text = (
-        f"Experiment {job.job_id} was submitted, but building its receipt failed: {exc}. "
-        f"The cases ARE running."
-    )
+    text = f"Experiment {job.job_id} was committed, but completing the call failed: {exc}."
     try:
         return await _render_static_run_receipt(
             data,

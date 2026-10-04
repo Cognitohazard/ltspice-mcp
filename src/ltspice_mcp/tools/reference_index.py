@@ -210,7 +210,7 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("run_experiments", "random"): (
         "One Monte Carlo family: N runs perturbed by the rules below, reproducible "
-        "from 'seed'. At most one random entry per call."
+        "from 'seed'. At most one random entry per circuit."
     ),
     # run_experiments random rules
     ("run_experiments", "component"): (
@@ -367,6 +367,14 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "offset voltage",
         "avt",
         "threshold mismatch",
+    ),
+    # The tool's own arguments: execution.simulator is where a run picks its
+    # engine, and its type is the one place the families are listed.
+    ("run_experiments", "run_experiments"): (
+        "choose the simulator",
+        "run on qspice",
+        "run on xyce",
+        "simulator per run",
     ),
     ("inspect", "capabilities"): (
         "which simulators",

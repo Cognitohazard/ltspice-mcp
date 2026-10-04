@@ -1,35 +1,39 @@
 """Unit tests for the lib/services application service layer."""
 
+import asyncio
+import json
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import services
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
+from ltspice_mcp.lib import parser_service, services
+from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, stage_recorded_fixture
+from tests.test_parser_process import _FIXTURE, _assert_gone
 
 
 class TestLoadRaw:
     async def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
-        with pytest.raises(ResultError, match="not found"):
-            await services.load_raw(tmp_path / "nope.raw", state_no_sim)
+        with pytest.raises(ResultError, match="RAW file is unavailable"):
+            await services.load_raw(
+                services.source_for_raw_path(tmp_path / "nope.raw", state_no_sim), state_no_sim
+            )
 
     async def test_caches_results(self, state_no_sim: SessionState, tmp_path: Path):
-        # Just cover the caching path - call twice on missing file
-        with pytest.raises(ResultError):
-            await services.load_raw(tmp_path / "x.raw", state_no_sim)
+        path = stage_recorded_fixture(tmp_path, "ltspice_tran_rc")
+        source = services.source_for_raw_path(path, state_no_sim)
+        first = await services.load_raw(source, state_no_sim)
+        assert await services.load_raw(source, state_no_sim) is first
+        assert state_no_sim.results.entry_count == 1
 
     async def test_truncated_binary_raw_raises_not_silently_short(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
-        # A killed/interrupted sim can leave a .raw with a valid header but a
-        # data section cut short. spicelib reads trace data EXACTLY and raises
-        # on a short read; load_raw must surface that as ResultError, never
-        # serve silently-short arrays that masquerade as a complete result.
-        # Locks this safety property against a future spicelib regression to
-        # a count-limited (silently-truncating) read.
+        # Preflight must reject a cut payload before publishing resident arrays.
         import numpy as np
         from spicelib.raw.raw_write import RawWrite, Trace
 
@@ -42,7 +46,9 @@ class TestLoadRaw:
 
         # Sanity: the intact fixture parses (valid header). This proves the
         # truncated case below fails on the truncation, not a malformed header.
-        raw = await services.load_raw(good, state_no_sim)
+        raw = await services.load_raw(
+            services.source_for_raw_path(good, state_no_sim), state_no_sim
+        )
         names = [t.lower() for t in raw.get_trace_names()]
         assert "time" in names and "v(out)" in names
 
@@ -53,89 +59,25 @@ class TestLoadRaw:
         truncated.write_bytes(data[: int(len(data) * 0.6)])
 
         with pytest.raises(ResultError):
-            await services.load_raw(truncated, state_no_sim)
+            await services.load_raw(
+                services.source_for_raw_path(truncated, state_no_sim), state_no_sim
+            )
 
     async def test_zero_variable_raw_is_diagnosed_as_corrupt(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
-        # A file cut mid-header (here: 100 bytes into a real LTspice raw, in
-        # the middle of the UTF-16 Title line) does NOT make spicelib raise —
-        # RawRead parses it into a "valid" raw with zero variables. A real
-        # SPICE raw always carries at least its axis variable, so zero
-        # variables is a corruption signature; without this diagnosis,
-        # consumers would report "Signal not found" against an empty
-        # signal list.
+        # Dependency readers previously accepted this cut UTF-16 header as an
+        # empty reader. The contained preflight must diagnose it as malformed.
         truncated = tmp_path / "trunc.raw"
         truncated.write_bytes((FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes()[:100])
 
         with pytest.raises(ResultError) as exc_info:
-            await services.load_raw(truncated, state_no_sim)
+            await services.load_raw(
+                services.source_for_raw_path(truncated, state_no_sim), state_no_sim
+            )
         msg = str(exc_info.value)
-        assert "zero variables" in msg
-        assert "truncated or corrupt" in msg
+        assert "header" in msg.lower()
         assert str(truncated) in msg
-
-
-class TestExtractModelSuggestions:
-    def test_none_when_log_missing(self, state_no_sim: SessionState, tmp_path: Path):
-        assert (
-            services.extract_model_suggestions(tmp_path / "no.log", state_no_sim.libraries) is None
-        )
-
-    def test_none_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):
-        log = tmp_path / "clean.log"
-        log.write_text("Total elapsed time: 0.01 seconds.\n")
-        assert services.extract_model_suggestions(log, state_no_sim.libraries) is None
-
-    def test_none_when_no_libraries_loaded(self, state_no_sim: SessionState, tmp_path: Path):
-        log = tmp_path / "err.log"
-        log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
-        assert services.extract_model_suggestions(log, state_no_sim.libraries) is None
-
-    def test_returns_ranked_suggestions(self, state_no_sim: SessionState, work_dir: Path):
-        lib = work_dir / "sw.lib"
-        lib.write_text(".MODEL SW VSWITCH(VT=1)\n.MODEL SW2 VSWITCH(VT=2)\n")
-        state_no_sim.libraries.load_library(lib)
-        log = work_dir / "err.log"
-        log.write_text('Error on line 2 : s1 0 0 swx Unable to find definition of model "swx"\n')
-        out = services.extract_model_suggestions(log, state_no_sim.libraries)
-        assert out is not None
-        assert "swx" in out
-        names = {m["name"] for m in out["swx"]}
-        assert "SW" in names
-
-    def test_format_suggestion_block_empty(self):
-        assert services.format_suggestion_block(None) == ""
-        assert services.format_suggestion_block({}) == ""
-
-
-class TestAttachSuggestionsToFailure:
-    def test_recovery_hint_fires_without_library(self, state_no_sim: SessionState, tmp_path: Path):
-        # With no library loaded (the common case stock parts fail in), a
-        # missing-model failure still gets a library-independent find_model
-        # recovery hint naming the unresolved ref.
-        log = tmp_path / "err.log"
-        log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
-        msg = services.attach_suggestions_to_failure("failed", {}, log, state_no_sim.libraries)
-        assert 'inspect(kind="model"' in msg
-        assert 'mode="search"' in msg
-        assert "sw" in msg
-
-    def test_no_hint_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):
-        log = tmp_path / "clean.log"
-        log.write_text("Total elapsed time: 0.01 seconds.\n")
-        assert (
-            services.attach_suggestions_to_failure("failed", {}, log, state_no_sim.libraries)
-            == "failed"
-        )
-
-    def test_format_suggestion_block_renders(self):
-        out = services.format_suggestion_block(
-            {"swx": [{"name": "SW", "score": 0.9, "source_path": "/tmp/sw.lib"}]}
-        )
-        assert "Missing 'swx'" in out
-        assert "SW" in out
-        assert "/tmp/sw.lib" in out
 
 
 class TestValidateSignal:
@@ -241,87 +183,264 @@ _NGSPICE_GMIN_FAIL_LINES = "Warning: gmin stepping failed\nsource stepping faile
 _NGSPICE_SINGULAR_LINE = "Warning: singular matrix:  check nodes out and 0\n"
 
 
+@pytest.fixture
+def contained_runaway(monkeypatch):
+    """Reuse the supervisor's real GIL-holding worker and detached child."""
+    run = parser_service.run_parser_sync
+    calls = {"runaway": True, "directories": [], "owners": []}
+
+    def invoke(request, **kwargs):
+        if not calls["runaway"]:
+            return run(request, **kwargs)
+        directory = kwargs["work_dir"]
+        calls["directories"].append(directory)
+        parser_file_in(directory, "parser_fixture.py").write_text(_FIXTURE, encoding="utf-8")
+        try:
+            return run({"mode": "runaway"}, **kwargs, _worker_module="parser_fixture")
+        finally:
+            marker = parser_file_in(directory, "started.json")
+            if marker.exists():
+                calls["owners"].extend(json.loads(marker.read_text(encoding="utf-8")).values())
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", invoke)
+    return calls
+
+
 class TestLoadRawParseDeadline:
-    @pytest.mark.asyncio
-    async def test_wedged_parse_fails_the_call_not_the_session(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    async def test_timeout_reaps_owned_tree_and_allows_fresh_parse(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch, contained_runaway
     ):
-        # The parse thread is untrusted third-party code; a wedged parse must
-        # fail THIS call with a clear error instead of hanging the caller.
-        # The Event lets teardown release the abandoned worker immediately —
-        # a bare sleep would serially delay executor shutdown by its length.
-        import threading
+        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        source = services.source_for_raw_path(path, state_no_sim)
+        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 1.0)
+        with pytest.raises(AnalysisDeadlineExceeded, match="exceeded"):
+            await services.load_raw(source, state_no_sim)
+        assert len(contained_runaway["owners"]) == 2
+        _assert_gone(contained_runaway["owners"])
+        assert all(not directory.exists() for directory in contained_runaway["directories"])
+        assert state_no_sim.results.entry_count == 0
+        contained_runaway["runaway"] = False
+        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 10.0)
+        loaded = await services.load_raw(source, state_no_sim)
+        assert loaded.get_trace_names() == ["time", "V(in)", "V(out)", "I(C1)", "I(R1)", "I(V1)"]
 
-        raw = work_dir / "wedged.raw"
-        raw.write_bytes(b"x")
-        release = threading.Event()
-
-        def _slow(path, state):
-            # Quiet return: the deadline already abandoned this worker's
-            # future; raising here would only log an unretrieved exception.
-            release.wait(5.0)
-            return MagicMock()
-
-        monkeypatch.setattr(services, "load_raw_sync", _slow)
-        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
-        try:
-            with pytest.raises(ResultError, match="exceeded"):
-                await services.load_raw(raw, state_no_sim)
-        finally:
-            release.set()
-            services._wedged_raw_paths.pop(raw, None)
-
-    @pytest.mark.asyncio
-    async def test_retry_during_cooldown_fails_fast_without_new_worker(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    async def test_cancellation_waits_for_owned_tree_and_scratch_cleanup(
+        self, state_no_sim: SessionState, work_dir: Path, contained_runaway
     ):
-        # A wedged path enters a retry cooldown: hammering it must not park
-        # one more executor thread per call on the still-held parse lock.
-        import threading
+        path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        source = services.source_for_raw_path(path, state_no_sim)
+        task = asyncio.create_task(services.load_raw(source, state_no_sim))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            directories = contained_runaway["directories"]
+            if directories and parser_file_in(directories[0], "started.json").exists():
+                break
+            await asyncio.sleep(0.01)
+        else:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            pytest.fail("Contained worker did not reach its GIL-holding seam")
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(contained_runaway["owners"]) == 2
+        _assert_gone(contained_runaway["owners"])
+        assert all(not directory.exists() for directory in contained_runaway["directories"])
+        assert state_no_sim.results.entry_count == 0
+        contained_runaway["runaway"] = False
+        assert (await services.load_raw(source, state_no_sim)).descriptor.analysis == "transient"
 
-        raw = work_dir / "wedged2.raw"
-        raw.write_bytes(b"x")
-        release = threading.Event()
-        calls = {"n": 0}
-
-        def _slow(path, state):
-            calls["n"] += 1
-            release.wait(5.0)
-            return MagicMock()
-
-        monkeypatch.setattr(services, "load_raw_sync", _slow)
-        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
-        try:
-            with pytest.raises(ResultError, match="exceeded"):
-                await services.load_raw(raw, state_no_sim)
-            assert calls["n"] == 1
-            with pytest.raises(ResultError, match="paused"):
-                await services.load_raw(raw, state_no_sim)
-            assert calls["n"] == 1  # no second worker spawned
-        finally:
-            release.set()
-            services._wedged_raw_paths.pop(raw, None)
-
-    @pytest.mark.asyncio
     async def test_normal_parse_unaffected_by_deadline(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        raw = FIXTURES_DIR / "ltspice_tran_rc.raw"
-        import shutil
-
-        local = work_dir / "ok.raw"
-        shutil.copy2(raw, local)
-        loaded = await services.load_raw(local, state_no_sim)
+        local = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        loaded = await services.load_raw(
+            services.source_for_raw_path(local, state_no_sim), state_no_sim
+        )
         assert loaded.get_trace_names()
 
 
+async def test_log_parser_and_raw_parser_share_cancellable_admission(
+    state_no_sim, work_dir, contained_runaway
+):
+    path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    source = services.source_for_raw_path(path, state_no_sim)
+    logs_task = asyncio.create_task(services.load_logs(source, state_no_sim))
+    raw_task = None
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            directories = contained_runaway["directories"]
+            if directories and parser_file_in(directories[0], "started.json").exists():
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("Log worker did not reach its contained runaway seam")
+        raw_task = asyncio.create_task(services.load_raw(source, state_no_sim))
+        await asyncio.sleep(0.05)
+        raw_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await raw_task
+        assert not logs_task.done()
+        assert len(contained_runaway["directories"]) == 1
+    finally:
+        if raw_task is not None and not raw_task.done():
+            raw_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await raw_task
+        logs_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await logs_task
+    assert len(contained_runaway["owners"]) == 2
+    _assert_gone(contained_runaway["owners"])
+    assert all(not directory.exists() for directory in contained_runaway["directories"])
+    contained_runaway["runaway"] = False
+    assert (await services.load_logs(source, state_no_sim)).section("measurements")[
+        "status"
+    ] == "parsed"
+
+
 @pytest.mark.asyncio
-async def test_raw_writer_header_wins_over_session_default(state_no_sim: SessionState):
+async def test_raw_writer_header_wins_over_session_default(
+    state_no_sim: SessionState, work_dir: Path
+):
     from spicelib.simulators.qspice_simulator import Qspice
 
     state_no_sim.default_simulator = Qspice
-    path = FIXTURES_DIR / "ngspice_noise_2plot.raw"
+    path = stage_recorded_fixture(work_dir, "ngspice_noise_2plot")
 
-    raw = await services.load_raw(path, state_no_sim)
+    raw = await services.load_raw(services.source_for_raw_path(path, state_no_sim), state_no_sim)
 
     assert raw.dialect == "ngspice"
+
+
+def test_unrecorded_job_producer_has_no_session_dialect(state_no_sim, work_dir):
+    from spicelib.simulators.qspice_simulator import Qspice
+
+    from tests.test_state import _experiment
+
+    state_no_sim.default_simulator = Qspice
+    job = _experiment(work_dir, work_dir / "deck.cir", job_id="no-producer")
+    job.simulator = ""
+    assert services.dialect_for_job(job, state_no_sim) is None
+
+
+class TestOptionalRawSources:
+    @pytest.mark.parametrize("sibling_raw", [False, True])
+    def test_explicit_log_source_has_no_raw_candidate(self, state_no_sim, work_dir, sibling_raw):
+        log = work_dir / "results.log"
+        log.write_text("recorded log\n", encoding="ascii")
+        if sibling_raw:
+            log.with_suffix(".raw").write_bytes(b"unrelated sibling")
+        source = services.resolve_analysis_source(state_no_sim, log_file=str(log))
+        assert source.raw is None
+        assert source.log == log.resolve()
+        assert source.console == log.with_suffix(".exe.log").resolve()
+
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_missing_raw_refuses_before_admission_or_spawn(
+        self, state_no_sim, work_dir, monkeypatch, mode
+    ):
+        source = services.AnalysisSource(None, work_dir / "only.log", None, None, None, False)
+        admissions = []
+        parse_slot = state_no_sim.results.parse_slot
+
+        def observe_admission(**kwargs):
+            admissions.append(kwargs)
+            return parse_slot(**kwargs)
+
+        monkeypatch.setattr(state_no_sim.results, "parse_slot", observe_admission)
+        if mode == "sync":
+            with pytest.raises(ResultError, match="source has no RAW artifact"):
+                services.load_raw_sync(source, state_no_sim)
+        else:
+            with pytest.raises(ResultError, match="source has no RAW artifact"):
+                await services.load_raw(source, state_no_sim)
+        assert admissions == []
+        assert not list((state_no_sim.store.root / "parsing").glob("*"))
+
+    def test_run_source_preserves_console_without_raw(self, state_no_sim, work_dir):
+        run = services.RunContext(
+            raw=None,
+            log=None,
+            netlist=work_dir / "staged.cir",
+            circuit_path=work_dir / "original.cir",
+            dialect="ngspice",
+            identity={"case_id": "case_0000"},
+            console=work_dir / "recorded.exe.log",
+        )
+        source = services.source_for_run(run)
+        assert source.raw is None
+        assert source.console == run.console
+        assert source.trusted_job_artifact
+
+    @pytest.mark.parametrize("provenance", ["log", "raw", "token", "no_folder", "no_token"])
+    def test_case_console_candidate_uses_recorded_output_inventory(
+        self, state_no_sim, work_dir, provenance
+    ):
+        from tests.test_state import _experiment
+
+        job = _experiment(work_dir, work_dir / "deck.cir", job_id="child_run")
+        case = job.cases[0]
+        job.output_folder = work_dir / "original_lineage_root"
+        case.run_token = "fresh_child_attempt"
+        assert job.output_folder is not None
+        expected = job.output_folder / "fresh_child_attempt.exe.log"
+        if provenance == "log":
+            case.log_file = work_dir / "recorded_log_location" / "result.log"
+            case.raw_file = work_dir / "different_raw_location" / "result.raw"
+            assert case.log_file is not None
+            expected = case.log_file.with_suffix(".exe.log")
+        elif provenance == "raw":
+            case.raw_file = work_dir / "recorded_raw_location" / "result.raw"
+            assert case.raw_file is not None
+            expected = case.raw_file.with_suffix(".exe.log")
+        elif provenance == "no_folder":
+            job.output_folder = None
+            expected = None
+        elif provenance == "no_token":
+            case.run_token = ""
+            expected = None
+        run = services.experiment_run_context(job, state_no_sim, require_raw=False)
+        assert run.console == expected
+        assert services.source_for_run(run).console == expected
+        assert case.status == "produced"
+        assert job.status == "completed"
+
+    def test_job_resolution_raw_default_and_log_opt_in(self, state_no_sim, work_dir):
+        from tests.test_state import _experiment
+
+        job = _experiment(work_dir, work_dir / "deck.cir", job_id="recorded_logs")
+        job.cases[0].log_file = work_dir / "recorded.log"
+        state_no_sim.job_registry.add_experiment_job(job, already_persisted=True)
+        with pytest.raises(ResultError, match="did not produce a raw result"):
+            services.resolve_experiment_run(job.job_id, state_no_sim)
+        run = services.resolve_experiment_run(job.job_id, state_no_sim, require_raw=False)
+        assert run.raw is None
+        assert run.log == job.cases[0].log_file
+        assert run.identity["case_id"] == job.cases[0].case_id
+
+    @pytest.mark.parametrize(
+        ("job_status", "case_status"),
+        [
+            ("running", "produced"),
+            ("completed", "failed"),
+            ("completed", "cancelled"),
+        ],
+    )
+    def test_log_opt_in_retains_existing_status_gates(
+        self, state_no_sim, work_dir, job_status, case_status
+    ):
+        from tests.test_state import _experiment
+
+        job = _experiment(work_dir, work_dir / "deck.cir", job_id="status_gate")
+        job.status = job_status
+        job.cases[0].status = case_status
+        job.cases[0].raw_file = work_dir / "existing.raw"
+        with pytest.raises(ResultError):
+            services.experiment_run_context(job, state_no_sim, require_raw=False)
+        assert job.status == job_status
+        assert job.cases[0].status == case_status

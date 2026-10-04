@@ -702,14 +702,16 @@ def validate_paths(paths: NativePaths, token: str) -> None:
 
 
 def driver_bytes(seed: int, paths: NativePaths, token: str) -> bytes:
+    from ltspice_mcp.lib.ngspice_driver import seeded_commands
+
     validate_paths(paths, token)
     if type(seed) is not int or not 1 <= seed <= SEED_MAX:
         raise NativeCaseError("seed", "effective ngspice seed is outside the verified domain")
     return (
         f"Native PDK initialization\n.control\nset ngbehavior={LAUNCH_POLICY.ngbehavior}\n"
         + ("set ng_nomodcheck\n" if LAUNCH_POLICY.ng_nomodcheck else "")
-        + f"setseed {seed}\nsource {paths.electrical_input.name}\nrun\nwrite {paths.raw.name}\n"
-        "quit\n.endc\n.end\n"
+        + seeded_commands(seed, paths.electrical_input.name, paths.raw.name)
+        + ".endc\n.end\n"
     ).encode("ascii")
 
 

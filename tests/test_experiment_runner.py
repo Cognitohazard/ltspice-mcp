@@ -28,6 +28,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
 from tests.conftest import await_until, ngspice_binary_raw, staged_decks
+from tests.test_completion_logs import captured_completion_facts
 
 
 class MockSimulator:
@@ -439,7 +440,7 @@ class TestArtifactCleanup:
             case.run_token = "exp_case_0"
             # The job names its own artifact directory; cleanup reconstructs
             # the paths inside it, not beside the runner's output folder.
-            job = SimpleNamespace(job_id="exp_cleanup", output_folder=work_dir)
+            job = SimpleNamespace(job_id="exp_cleanup", output_folder=work_dir, recovery=None)
             case.log_file = work_dir / f"{case.run_token}.fail"
             run_netlist = work_dir / f"{case.run_token}.cir"
             raw = work_dir / f"{case.run_token}.raw"
@@ -512,7 +513,8 @@ class TestExperimentSubmission:
         assert replay.replayed
         assert replay.job is first.job
         assert replay.control_token == first.control_token
-        assert any(item["code"] == "idempotent_replay" for item in replay.job.observations)
+        # The replay leaves the record as it was.
+        assert not any(item["code"] == "idempotent_replay" for item in replay.job.observations)
         assert len(submissions) == 1
 
         token = submissions[0]
@@ -622,11 +624,27 @@ class TestCaseConcurrencyAndTimeouts:
             max_parallel=40,
         )
         callbacks, submissions = _controlled_submit(monkeypatch, runner)
-        persisted_statuses: list[str] = []
+        # Tag each persist with whether a case-progress checkpoint made it; the
+        # real checkpoint still runs.
+        persisted: list[tuple[str, bool]] = []
+        case_events = 0
+        in_checkpoint = False
+        real_checkpoint = runner._checkpoint_case_transition
+
+        def counting_checkpoint(execution) -> None:
+            nonlocal case_events, in_checkpoint
+            case_events += 1
+            in_checkpoint = True
+            try:
+                real_checkpoint(execution)
+            finally:
+                in_checkpoint = False
+
+        monkeypatch.setattr(runner, "_checkpoint_case_transition", counting_checkpoint)
         monkeypatch.setattr(
             state_no_sim,
             "persist_job",
-            lambda job: persisted_statuses.append(job.status),
+            lambda job: persisted.append((job.status, in_checkpoint)),
         )
 
         receipt = await asyncio.shield(
@@ -645,8 +663,12 @@ class TestCaseConcurrencyAndTimeouts:
             callbacks[token](_success(work_dir, token))
 
         assert await runner.wait(receipt.job, 1)
-        assert len(persisted_statuses) == 63
-        assert persisted_statuses[-1] == "completed"
+        # Every case starts and finishes, and progress is written once per
+        # total // 20 case events (every second event for 40 cases).
+        assert case_events >= 2 * 40
+        checkpoint_writes = sum(1 for _, from_checkpoint in persisted if from_checkpoint)
+        assert checkpoint_writes == case_events // max(1, 40 // 20)
+        assert persisted[-1][0] == "completed"
 
     async def test_one_runner_caps_cases_across_concurrent_jobs(
         self,
@@ -996,7 +1018,11 @@ def _deliver_killed_run(
     fail_log.write_text(log_text)
     if raw is not None:
         (run_dir / f"{token}.raw").write_bytes(raw)
-    callback(collect_run_outcome("", str(fail_log), exit_code=-9))
+    callback(
+        collect_run_outcome(
+            "", str(fail_log), exit_code=-9, logs=captured_completion_facts(run_dir, fail_log)
+        )
+    )
 
 
 @pytest.mark.asyncio

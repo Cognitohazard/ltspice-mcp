@@ -7,6 +7,7 @@ and a page shrunk to fit a budget still pages to every row.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import copy
 import json
@@ -39,10 +40,10 @@ from ltspice_mcp.tools.jobs import (
 )
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
-# Every rung-0 allowlist the three budget-aware tools declare, paired with the
-# schema node whose keys it names. Listed rather than derived: the coverage test
-# below fails on any `_TRIM_*` constant that is not here, so a new allowlist
-# cannot slip in unpinned.
+# Every rung-0 allowlist the package declares, paired with the schema node whose
+# keys it names. Listed rather than derived, because the pairing is the point:
+# the coverage test below fails on any `_TRIM_*` constant declared anywhere in
+# the package that is not here, so a new allowlist cannot slip in unpinned.
 _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
     (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
@@ -51,6 +52,30 @@ _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (receipts_mod, "_TRIM_REMOVE_RECEIPT", jobs_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
 ]
+
+
+def _declared_trim_allowlists() -> set[tuple[str, str]]:
+    """Every module-level ``_TRIM_*`` name assigned anywhere in the package,
+    as ``(module, name)``. Read off the source with ``ast`` so nothing has to
+    be imported for its constants to be seen."""
+    package = Path(response_budget.__file__).resolve().parents[1]
+    declared: set[tuple[str, str]] = set()
+    for path in sorted(package.rglob("*.py")):
+        relative = path.relative_to(package.parent).with_suffix("")
+        module = ".".join(relative.parts)
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            declared.update(
+                (module, target.id)
+                for target in targets
+                if isinstance(target, ast.Name) and target.id.startswith("_TRIM_")
+            )
+    return declared
 
 
 class TestRungZeroAllowlists:
@@ -82,12 +107,16 @@ class TestRungZeroAllowlists:
                 assert key in required, f"{name} empties optional key {key!r}; remove it instead"
 
     def test_every_declared_allowlist_is_pinned(self):
-        """The fail-closed half: a rung-0 list added to a tool and not listed
-        above is an exemption nothing checks."""
-        for module in (analyze_mod, exp_mod, insp):
-            declared = {name for name in vars(module) if name.startswith("_TRIM_")}
-            pinned = {name for mod, name, _ in _TRIM_ALLOWLISTS if mod is module}
-            assert declared == pinned, f"{module.__name__}: unpinned rung-0 allowlists"
+        """The fail-closed half: a rung-0 list declared anywhere in the package
+        and not listed above is an exemption nothing checks.
+
+        Discovered from the source rather than from a list of modules: the
+        receipt's allowlist lives in ``receipts``, which no tool registers in,
+        so a hand-kept module list is exactly what would miss the next one.
+        """
+        assert _declared_trim_allowlists() == {
+            (module.__name__, name) for module, name, _ in _TRIM_ALLOWLISTS
+        }
 
 
 # A .step AC sweep: 45 attributed rows off one raw, which is the shape a budget
@@ -216,6 +245,42 @@ class TestLadderPrimitives:
         assert container["kept"] == [1]
         assert container["required"] == []
 
+    def test_rung_zero_reports_only_what_it_emptied_of_content(self):
+        """A removed empty block carried nothing, so it is not reported as cut."""
+        container = {"optional": [], "required": [1, 2], "already": []}
+        emptied = response_budget.apply_trim(
+            container, remove=("optional",), empty=("required", "already")
+        )
+        assert emptied == ["required"]
+        assert response_budget.apply_trim(container, empty=("required",)) == []
+
+    def test_a_trim_that_emptied_nothing_is_not_a_degraded_response(self):
+        """The note says presentation was reduced; with nothing removed it
+        would be false, and its route would send the caller after nothing."""
+        tidied = response_budget.Negotiated(
+            data={"observations": []},
+            rung=Rung(level=response_budget.RUNG_TRIM, budget=600, measured=900),
+            estimate=900,
+            max_rung=response_budget.RUNG_TRIM,
+        )
+        response_budget.attach_notes(tidied, response_budget.Notes(cut="cut", route="route"))
+        assert tidied.data["observations"] == []
+
+        cut = Rung(level=response_budget.RUNG_TRIM, budget=600, measured=900, cut=["echo"])
+        emptied = response_budget.Negotiated(
+            data={"observations": []},
+            rung=cut,
+            estimate=900,
+            max_rung=response_budget.RUNG_TRIM,
+        )
+        notes = response_budget.Notes(cut="cut", route="raise budget", default_route="see rows")
+        response_budget.attach_notes(emptied, notes)
+        (note,) = emptied.data["observations"]
+        assert "Emptied: echo." in note["detail"]
+        # The caller set no budget, so the note sends them to none.
+        assert note["detail"].endswith("see rows")
+        assert "raise budget" not in note["detail"]
+
     def test_notes_extend_observations_rather_than_replacing_them(self):
         """A budget cuts presentation, so it may never overwrite a fact channel
         a tool already filled — the epilogue appends, on every tool."""
@@ -225,11 +290,12 @@ class TestLadderPrimitives:
             rung=rung,
             estimate=99_999,
         )
-        notes = response_budget.Notes(cut="cut", route="route", hint_key="hint")
+        notes = response_budget.Notes(cut="cut", route="route")
         response_budget.attach_notes(result, notes)
         codes = [o["code"] for o in result.data["observations"]]
         assert codes == ["prior", "budget_truncated", "budget_not_met"]
-        assert result.data["hint"].startswith("keep me ")
+        # The note is structured content already; a hint copy would repeat it.
+        assert result.data["hint"] == "keep me"
 
     def test_append_hint_preserves_the_route_and_deduplicates_detail(self):
         data = {"hint": "keep me"}
@@ -246,9 +312,7 @@ class TestLadderPrimitives:
             rungs.append(rung.level)
             return {"failures": ["x" * 4000]}
 
-        result = await response_budget.negotiate(
-            1, render, response_budget.Notes(cut="cut", route="route")
-        )
+        result = await response_budget.negotiate(1, render)
         assert rungs == list(response_budget.LADDER)
         assert result.met is False
         assert result.rung.level == response_budget.RUNG_SHRINK
@@ -670,12 +734,14 @@ class TestServerDefaultBudget:
         assert defaulted["results"]["loop"]["per_run"]["returned"] == 20
         assert explicit["results"]["loop"]["per_run"]["returned"] < 20
         assert _observation(explicit, "budget_truncated") is not None
-        # The default degraded too — at rung 0 — and says so. What it must not
-        # say is "re-ask without 'budget'" to a caller who never passed one.
+        # The default degraded too — at rung 0, emptying the identity echo —
+        # and says so. A caller who set no budget is not sent to raise one.
         defaulted_note = _observation(defaulted, "budget_truncated")
         assert defaulted_note is not None
         assert "rung 0" in defaulted_note["detail"]
-        assert "larger 'budget'" in defaulted_note["detail"]
+        assert "Emptied: source_hashes." in defaulted_note["detail"]
+        assert "include.provenance" in defaulted_note["detail"]
+        assert "budget'" not in defaulted_note["detail"]
 
     async def test_zero_disables_the_default_entirely(
         self, state_no_sim: SessionState, work_dir: Path
@@ -850,17 +916,20 @@ def test_the_api_automatic_door_gets_no_server_default(state_no_sim: SessionStat
 
     # Same session, same query, MCP: there the default does engage, so
     # it is the interface and not the configuration that decides.
+    wire_disabled = asyncio.run(_inspect(state_no_sim, [copy.deepcopy(query)]))
     state_no_sim.config.default_budget = 500
     wire = asyncio.run(_inspect(state_no_sim, [copy.deepcopy(query)]))
-    assert _observation(wire, "budget_truncated") is not None
+    assert _stable(wire) != _stable(wire_disabled), "the default did not engage on the wire"
 
 
-def test_the_api_automatic_door_carries_no_budget_route(
+def test_the_server_default_sends_no_caller_to_a_budget(
     state_no_sim: SessionState, work_dir: Path
 ):
-    """The note's route is "ask again with a larger 'budget'" — a field this
-    API refuses. Checked on jobs(list), the collected surface that keeps the
-    observations its pages carried."""
+    """A caller who set no budget has none to raise, and the API refuses the
+    field outright. Checked on jobs(list), the collected surface that keeps the
+    observations its pages carried: its trim only drops an empty 'analysis'
+    block, which takes nothing a caller reads, so neither interface is told
+    anything was reduced."""
     for index in range(6):
         job = _batch_with_runs(state_no_sim, 20)
         job.job_id = f"b_budget_{index}"
@@ -870,8 +939,9 @@ def test_the_api_automatic_door_carries_no_budget_route(
     complete = SyncApi(state_no_sim).jobs(action="list")
     wire = asyncio.run(_jobs(state_no_sim, action="list"))
 
-    assert _observation(wire, "budget_truncated") is not None
-    assert _observation(complete, "budget_truncated") is None
+    for data in (wire, complete):
+        assert _observation(data, "budget_truncated") is None
+        assert not [o for o in data["observations"] if "budget'" in o.get("detail", "")]
 
 
 @pytest.mark.asyncio
@@ -932,7 +1002,11 @@ class TestInspectBudget:
         assert failed["error"]["code"]
         assert failed["error"]["message"]
         assert _observation(data, "budget_truncated") is not None
-        assert "budget" in data["hint"]
+        # The note is on observations; the hint stays the batch's own.
+        assert data["hint"] == (
+            "1 of 2 queries failed; see each result's 'error.code'. Other queries "
+            "returned normally."
+        )
 
     async def test_no_budget_in_a_sweep_lands_over_cap_without_saying_so(
         self, state_no_sim: SessionState, work_dir: Path

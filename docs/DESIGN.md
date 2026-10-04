@@ -174,8 +174,8 @@ A client loads every tool definition before it can call anything, and pays
 for it in every turn of the conversation afterwards. That cost is managed by
 writing each argument description short — the unit, the sign or direction
 convention, the default, how the field interacts with its siblings — and
-putting the depth in `docs/design/mcp_surface.md` or the packaged
-`spice://guide`, with a pointer on the field. It is not managed by filtering
+putting the depth in `docs/design/mcp_surface.md` or a section of the packaged
+guide, with a pointer on the field naming the section. It is not managed by filtering
 the descriptions on the way out: what a model declares is what a client is
 shown, so a reader of the source knows what ships, and the one text also
 serves `api.reference()` and the guide.
@@ -449,7 +449,7 @@ Key `lib/` modules:
 
 ### The tool surface
 
-There is one tool surface and nothing selects it: the guide is one document,
+There is one tool surface and nothing selects it: the guide has one edition,
 the prompts have one edition, and no config key names a profile.
 `inspect(kind="capabilities")` reports `tool_profile: "consolidated"` so a
 client can read which surface it is talking to. What `[tools]` does select is
@@ -498,8 +498,8 @@ All four simulators share the same base `Simulator` ABC:
 |-|-|-|
 |LTspice|`LTspice`|Windows native; Linux/macOS via Wine; WSL via Windows interop|
 |NGspice|`NGspiceSimulator`|Linux/macOS/Windows native|
-|QSPICE|`Qspice`|Windows; Wine limited|
-|Xyce|`XyceSimulator`|Linux/Windows native|
+|QSPICE|`Qspice`|Windows native only (runs refused under WSL or Wine)|
+|Xyce|`XyceSimulator`|Linux/macOS/Windows native|
 
 Core spicelib components used:
 
@@ -527,9 +527,20 @@ Per-simulator notes:
   `.lib <file> <section>` corner select must survive, since `kiltpsa`'s
   `lt`/`ps` tokens make ngspice read it as two plain includes and drop the
   section. Default switches: `-b -o -r -a`. Native on Linux.
-- **QSPICE** uses `.qraw` (double precision). Windows-only, limited Wine.
+- **QSPICE** uses `.qraw` (double precision, a double frequency axis on AC).
+  A run can select it only when the server runs natively on Windows:
+  spicelib starts it with the host's own file paths, and only LTspice has a
+  path adapter for a Windows simulator under WSL (`LTspiceWSL`) or Wine, so
+  elsewhere `execution.simulator="qspice"` is refused with that reason
+  (`simulator.family_refusal`) and capabilities reports it `selectable: false`.
 - **Xyce** supports `-syntax` and `-norun` for validation without
-  simulation.
+  simulation. Its raw carries no `Command:` field, so the dialect a job's
+  results parse with comes from the simulator the job recorded.
+- **Schematics on QSPICE and Xyce.** A `.asc` runs through LTspice's export,
+  which is in LTspice's own netlist dialect and is scrubbed only for ngspice,
+  so a schematic circuit on either fails with `asc_export_unavailable` before
+  LTspice is launched (`simulator.asc_export_refusal`); a run takes a
+  hand-written netlist there.
 
 ### Which build ran
 
@@ -547,10 +558,12 @@ the build is a recorded fact rather than an assumption
   put it on the log's first line (`LTspice 26.0.2 for Windows`). ngspice's `-o`
   log carries no version, but its console banner does, which the runner
   captures in the run's `.exe.log`
-  (`ngspice-42, Creation Date: Sun Mar 31 20:15:14 UTC 2024`). The raw
-  header's `Command:` is the fallback: LTspice XVII writes no log banner and
-  names itself only there. Every read is a fixed number of bytes from the head
-  of an artifact. Simulator output is untrusted input.
+  (`ngspice-42, Creation Date: Sun Mar 31 20:15:14 UTC 2024`). Xyce opens the
+  log it is told to write with a banner naming its release
+  (`Xyce Release 7.8.0-opensource`). The raw header's `Command:` is the
+  fallback: LTspice XVII writes no log banner and names itself only there, and
+  QSPICE names itself there too. Every read is a fixed number of bytes from
+  the head of an artifact. Simulator output is untrusted input.
 - **Replay compares them.** A reused `request_id` whose job ran on a different
   build than the one the request would launch now is an `idempotency_conflict`,
   as an edited deck is. The executable is checked beside the fingerprint rather
