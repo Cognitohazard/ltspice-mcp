@@ -645,7 +645,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 35 characters when the guide split into sections: its
     # pointers name the section they mean ("guide section 'tools'") instead of
     # the whole document. Measured 15,433.
-    "run_experiments": 15440,
+    # Raised by about 110 characters so execution.simulator can name one of
+    # several builds of a family ('ltspice:xvii'): the two-member enum became
+    # a pattern, and the description says where the names are listed.
+    # Measured 15,544.
+    "run_experiments": 15550,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -695,6 +699,8 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 480 characters for the 'guide' kind, the MCP door to the
     # guide's core and sections: a client that cannot read resources
     # had no way to reach the guide at all. Measured 9,138.
+    # The named_executables report key, the builds execution.simulator can
+    # select by name, adds about 45 characters within this: measured 9,122.
     "inspect": 9140,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose

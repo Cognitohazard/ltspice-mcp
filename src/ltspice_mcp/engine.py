@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import result_store
-from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.lib.simulator import detect_named_simulators, detect_simulators
 from ltspice_mcp.state import SessionState
 
 ConfigLoadedHook = Callable[[ServerConfig], None]
@@ -23,6 +23,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "simulator",
         "enabled_simulators",
         "simulator_exe",
+        "simulator_executables",
         "ngbehavior",
         "allowed_paths",
         "max_parallel_sims",
@@ -79,6 +80,14 @@ def _library_config(
         normalized[name] = None if value is None else _expanded_path(value, name)
     for name in _PATH_LIST_OVERRIDE_NAMES & normalized.keys():
         normalized[name] = _path_list(normalized[name], name)
+    if "simulator_executables" in normalized:
+        value = normalized["simulator_executables"]
+        if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
+            raise TypeError("simulator_executables must be a mapping of name to path")
+        normalized["simulator_executables"] = {
+            key.strip().lower(): _expanded_path(path, "simulator_executables")
+            for key, path in value.items()
+        }
     if "enabled_simulators" in normalized:
         value = normalized["enabled_simulators"]
         if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
@@ -177,7 +186,10 @@ async def _bootstrap(
     """The initialization every host shares, once its config is resolved."""
     diagnostics: list[str] = []
     available = detect_simulators(config, diagnostics)
-    state = SessionState.create(config, available, diagnostics, sandbox_pinned=sandbox_pinned)
+    named = detect_named_simulators(config, diagnostics)
+    state = SessionState.create(
+        config, available, diagnostics, named=named, sandbox_pinned=sandbox_pinned
+    )
     configure_asc_editor(config, available, target_logger=target_logger)
     await asyncio.to_thread(result_store.cleanup, state.working_dir)
 

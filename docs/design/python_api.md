@@ -607,16 +607,19 @@ to a supervisor process spawned for that one job, which outlives the script
 (§11). Either way the record is the same record, and the other interface reads
 it by `job_id`.
 
-A process runs one executable per simulator family, so a second simulator
-build runs in a second process on the same working directory, e.g.
-`Api(working_dir=..., simulator_exe=".../XVIIx64.exe")` beside a server on the
-default install. Each job records the executable its cases launched
-(`simulator_executable`) and each run the build it reported
-(`simulator_version`), so the two builds' results stay distinguishable in the
-shared records. A `request_id` reused from the other process replays only when
-both processes launch the same build; otherwise it is an
-`idempotency_conflict` (`docs/design/mcp_surface.md`, "Replay is scoped to the
-simulator build").
+One process can run several builds of a simulator family. Each build past the
+family's own is a named executable, from `[simulator.executables]` or
+`Api(working_dir=..., simulator_executables={"xvii": ".../XVIIx64.exe"})`, and
+a call selects it with `execution={"simulator": "ltspice:xvii"}`
+(`docs/design/mcp_surface.md`, "Selecting a build"). A second process on the
+same working directory with its own `simulator_exe` still works, and is the
+route when the two builds must not share a process. Either way each job
+records the executable its cases launched (`simulator_executable`) and each run
+the build it reported (`simulator_version`), so the builds' results stay
+distinguishable in the shared records. A `request_id` reused from the other
+process, or under another name, replays only when it would launch the same
+build; otherwise it is an `idempotency_conflict` (`docs/design/mcp_surface.md`,
+"Replay is scoped to the simulator build").
 
 The records are shared through the working directory's store, which is
 `<working_dir>/.ltspice-mcp/` unless `LTSPICE_MCP_STORE_DIR` moves it. With the

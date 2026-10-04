@@ -80,6 +80,7 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.simulator import (
+    SIMULATOR_SELECTOR_PATTERN,
     current_ngbehavior,
     simulator_dialect,
     simulator_library_roots,
@@ -212,11 +213,13 @@ class ExperimentExecution(StrictModel):
             "lower it only to leave room for other work."
         ),
     )
-    simulator: Literal["ltspice", "ngspice"] | None = Field(
+    simulator: str | None = Field(
         default=None,
+        pattern=SIMULATOR_SELECTOR_PATTERN,
         description=(
-            "Engine for every case; it also decides the dialect the results are "
-            "parsed with. Defaults to the server's default simulator."
+            "Engine for every case; its family decides the dialect the results are "
+            "parsed with. 'family:name' (e.g. 'ltspice:xvii') runs a named executable "
+            "that inspect capabilities lists. Defaults to the server's default simulator."
         ),
     )
 
