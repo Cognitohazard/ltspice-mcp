@@ -281,7 +281,6 @@ _REJECTED_JOBS_ARGUMENTS: tuple[tuple[str, dict], ...] = (
     ("wait-without-a-selector", {"action": "wait", "timeout_s": 0}),
     ("cancel-without-a-selector", {"action": "cancel", "control_token": "tok"}),
     ("runs-without-a-selector", {"action": "runs"}),
-    ("status-with-both-selectors", {"action": "status", "job_id": "exp-1", "request_id": "r"}),
     ("list-with-a-job-id", {"action": "list", "job_id": "exp-1"}),
     ("list-with-a-request-id", {"action": "list", "request_id": "req-1"}),
     ("list-with-a-null-job-id", {"action": "list", "job_id": None}),
@@ -331,7 +330,7 @@ class TestAcceptedArgumentSpellings:
         """The message a client acts on: the e2e surface asserts this wording."""
         with pytest.raises(ValidationError) as excinfo:
             JobsInput.model_validate({"action": "status"})
-        assert "requires exactly one of job_id or request_id" in str(excinfo.value)
+        assert "requires job_id or request_id" in str(excinfo.value)
 
     def test_an_unknown_action_names_every_action(self):
         with pytest.raises(ValidationError) as excinfo:
@@ -523,6 +522,44 @@ class TestActionShapesAndTokenSecrecy:
         assert data["job_id"] == job.job_id
         assert data["request_id"] == job.request_id
         assert data["analysis_status"] == "not_requested"
+
+    async def test_both_selectors_naming_one_job_address_it(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        # Refused at validation even when both named the same job, which is
+        # what a caller holding both from a receipt naturally sends.
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, status="running")
+        _persist_experiment(job, work_dir)
+
+        data = _assert_jobs_schema(
+            await handle_jobs(
+                _args("status", job_id=job.job_id, request_id=job.request_id),
+                state_no_sim,
+            )
+        )
+        assert "error" not in data
+        assert data["job_id"] == job.job_id
+
+    async def test_selectors_naming_two_jobs_are_refused(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, status="running")
+        _persist_experiment(job, work_dir)
+
+        data = _assert_jobs_schema(
+            await handle_jobs(
+                _args("status", job_id="exp_some_other_job", request_id=job.request_id),
+                state_no_sim,
+            )
+        )
+        assert data["error"]["code"] == "selector_conflict"
+        assert job.job_id in data["error"]["message"]
 
     async def test_terminal_receipt_with_paged_runs_emits_working_cursor(
         self,

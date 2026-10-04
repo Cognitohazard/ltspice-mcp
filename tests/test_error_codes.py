@@ -509,6 +509,7 @@ FROZEN_ERROR_CODES = (
     "run_not_found",
     "run_progress",
     "search_error",
+    "selector_conflict",
     "semantic_profile_required",
     "server_restarted",
     "server_shutdown",

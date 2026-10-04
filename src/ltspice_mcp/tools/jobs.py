@@ -143,12 +143,12 @@ class JobsInput(ToolInput):
 
 
 class _AddressedJobsInput(JobsInput):
-    """The actions that name one job: exactly one of job_id or request_id."""
+    """The actions that name one job, by job_id, request_id, or both."""
 
     job_id: str | None = Field(
         default=None,
         min_length=1,
-        description="Address the job directly. Give this or request_id, never both.",
+        description="Address the job directly. With request_id too, both must name it.",
     )
     request_id: str | None = Field(
         default=None,
@@ -161,10 +161,10 @@ class _AddressedJobsInput(JobsInput):
 
     @model_validator(mode="after")
     def _one_selector(self) -> Self:
-        if int(self.job_id is not None) + int(self.request_id is not None) != 1:
-            raise ValueError(
-                f"jobs action {self.action!r} requires exactly one of job_id or request_id"
-            )
+        # Both is one job named twice, which the resolver checks; a call that
+        # names none has nothing to act on.
+        if self.job_id is None and self.request_id is None:
+            raise ValueError(f"jobs action {self.action!r} requires job_id or request_id")
         return self
 
 
@@ -603,8 +603,7 @@ def _without_control_tokens(value: Any) -> Any:
 
 async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -> ExperimentJob:
     job_id = args.job_id
-    if job_id is None:
-        assert args.request_id is not None
+    if args.request_id is not None:
         index = await asyncio.to_thread(
             experiment_store.load_request_index,
             args.request_id,
@@ -619,7 +618,16 @@ async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -
             raise JobNotFoundError(
                 f"The request index for {args.request_id!r} does not name a valid job"
             )
+        if job_id is not None and job_id != raw_job_id:
+            # Two selectors for two jobs: acting on either would be a guess.
+            raise _JobsActionError(
+                "selector_conflict",
+                f"job_id {job_id!r} and request_id {args.request_id!r} name different "
+                f"jobs (the request_id names {raw_job_id!r}); pass one of them.",
+                stage="resolution",
+            )
         job_id = raw_job_id
+    assert job_id is not None
     return await services.resolve_job_async(job_id, state)
 
 

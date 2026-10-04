@@ -10,6 +10,10 @@ tool-surface changes.
 
 ### Fixed
 
+- `jobs` refused a call carrying both `job_id` and `request_id`, even when
+  both named the same job. Both are now accepted; when they name different jobs
+  the call fails with the new code `selector_conflict`, naming the job the
+  `request_id` resolves to.
 - Four caps refused a larger value instead of serving the cap:
   `run_experiments`' `execution.wait_s` above 120 s, `jobs(wait)`'s
   `timeout_s` above 300 s, `jobs(list)`'s `limit` above 50, and `per_run.limit`
