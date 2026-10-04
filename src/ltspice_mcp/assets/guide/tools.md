@@ -100,7 +100,8 @@ lint blocks a mismatch. A case that produced nothing is counted in
 Three recipes appear in the tool schema by name only; their arguments are
 documented here (every other recipe field — `key`, `sources`, `reduce`,
 `field`, `spec` — applies to them unchanged; as with any multi-field recipe,
-`reduce`/`spec` on `periodic` or `return_loss` needs `field`):
+`spec` on `periodic` or `return_loss` needs `field`, and a `reduce` without
+one covers every field):
 
 - `periodic` — `{"metric": "periodic", "signal": …}` plus an optional
   `window` `{start, end}`; returns `period`, `frequency`, `duty_cycle`

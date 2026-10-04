@@ -7,6 +7,7 @@ or ``field`` is rejected by schema validation instead of being ignored.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
@@ -294,37 +295,56 @@ class ScalarRecipe(RecipeBase):
 class MultiRecipe(RecipeBase):
     # The rule the validator below enforces, stated in the schema itself so a
     # listing that strips descriptions still carries it.
-    model_config = ConfigDict(
-        json_schema_extra={"dependentRequired": {"reduce": ["field"], "spec": ["field"]}}
-    )
+    model_config = ConfigDict(json_schema_extra={"dependentRequired": {"spec": ["field"]}})
     reduce: list[ReduceStat] = Field(default_factory=list)
     field: str | None = Field(
         default=None,
         description=(
             "Which of this recipe's numbers a 'reduce' or a 'spec' reads (e.g. "
-            "'phase_margin_deg'); required as soon as either is given."
+            "'phase_margin_deg'). Required when 'spec' is given; without it, "
+            "'reduce' covers every field."
         ),
     )
     spec: SpecLimits | None = None
 
-    def _reducible_fields(self) -> tuple[str, ...]:
+    def reducible_fields(self) -> tuple[str, ...]:
         """The numbers 'field' may name. A recipe whose row keys depend on its
         own arguments extends this with them."""
         # ``metric`` is the Literal discriminant every concrete subclass sets;
         # this abstract base doesn't declare it, so read it dynamically.
         return REDUCIBLE_FIELDS.get(getattr(self, "metric"), ())  # noqa: B009
 
+    def reduction_fields(self) -> list[tuple[str, str]]:
+        """The (field, row key) pairs a reduction reads in each row.
+
+        With 'field' set, that one. Without it, every reducible field, each row
+        key read once: two names for one key (a disturbance's 'deviation' and
+        'undershoot') are one number, reported under the first in table order.
+        """
+        keys = MULTI_FIELD_KEYS.get(getattr(self, "metric"), {})  # noqa: B009
+        if self.field:
+            return [(self.field, keys.get(self.field, self.field))]
+        pairs: dict[str, str] = {}
+        for name in self.reducible_fields():
+            pairs.setdefault(keys.get(name, name), name)
+        return [(name, key) for key, name in pairs.items()]
+
+    def field_for_row(self, field: str, row: Mapping[str, Any]) -> str:
+        """The name ``field`` is reported under for ``row``; a recipe whose
+        field names depend on what each row measured overrides this."""
+        return field
+
     @model_validator(mode="after")
     def _field_for_cross_run_work(self) -> MultiRecipe:
-        wants_reduction = bool(self.reduce) or self.spec is not None
-        if wants_reduction and self.field is None:
+        # A spec is one verdict on one number. A reduction is per field, so
+        # without 'field' it covers every one, as a keyed recipe's does.
+        if self.spec is not None and self.field is None:
             raise ValueError(
-                "this recipe returns multiple fields; set 'field' to the one "
-                "the reduction or spec should read"
+                "this recipe returns multiple fields; set 'field' to the one the spec should read"
             )
         if self.field is not None:
             metric: str = getattr(self, "metric")  # noqa: B009
-            fields = self._reducible_fields()
+            fields = self.reducible_fields()
             if self.field not in fields:
                 keys = MULTI_FIELD_KEYS.get(metric, {})
                 by_key = [name for name in fields if keys.get(name) == self.field]
@@ -430,8 +450,8 @@ class SignalStatsRecipe(MultiRecipe):
             raise ValueError("quantile levels must be distinct")
         return levels
 
-    def _reducible_fields(self) -> tuple[str, ...]:
-        return (*super()._reducible_fields(), *quantile_fields(self.quantiles))
+    def reducible_fields(self) -> tuple[str, ...]:
+        return (*super().reducible_fields(), *quantile_fields(self.quantiles))
 
 
 class Levels(StrictModel):
@@ -445,6 +465,13 @@ class EdgesRecipe(MultiRecipe):
     levels: Levels | None = None
     edge: Literal["rising", "falling", "auto"] = "auto"
     window: Window | None = None
+
+    def field_for_row(self, field: str, row: Mapping[str, Any]) -> str:
+        # 'rise_time' and 'fall_time' both read the row's transition time; a
+        # bare reduction reports it as the one the row measured.
+        if self.field is None and field in ("rise_time", "fall_time"):
+            return "rise_time" if row.get("is_rise_time", True) else "fall_time"
+        return field
 
 
 class TimingEndpoint(StrictModel):

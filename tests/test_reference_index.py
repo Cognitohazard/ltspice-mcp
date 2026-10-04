@@ -361,7 +361,7 @@ class TestErrorReference:
 
         with pytest.raises(ValidationError) as excinfo:
             validate_recipe(
-                {"key": "s", "metric": "stability", "signal": "V(out)", "reduce": ["min"]}
+                {"key": "s", "metric": "stability", "signal": "V(out)", "spec": {"min": 45}}
             )
         text = validation_error_detail("analyze_results", excinfo.value)
         assert "set 'field'" in text
