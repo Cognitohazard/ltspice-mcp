@@ -1220,8 +1220,9 @@ ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
 (blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
 scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
 simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
-before the deck is linted, and `verify_circuit` warns about it for a deck run
-elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
+before the deck is linted, and `verify_circuit` reports it for a deck run
+elsewhere: one observation per file, or a warning per value when a reader the
+server knows of, an LTspice XVII, would decode the file otherwise), and `op-degenerate` (a post-run observation with neutral evidence —
 device list, currents, threshold, step — whose hint mentions `.nodeset`).
 
 ---
