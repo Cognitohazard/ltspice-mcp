@@ -17,9 +17,8 @@ from pydantic import (
     Field,
     SkipValidation,
     ValidationError,
-    ValidatorFunctionWrapHandler,
     field_serializer,
-    field_validator,
+    model_validator,
 )
 
 from ltspice_mcp.errors import (
@@ -97,6 +96,8 @@ from ltspice_mcp.lib.variations import (
     Variation,
     VariationError,
     check_case_cap,
+    check_random_families,
+    derive_circuit_ids,
     expand_variations,
     format_case_id,
     materialize_variants,
@@ -108,10 +109,12 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
     NEW_WORK_ANNOTATIONS,
+    NotedModel,
     ResponseBudget,
     StrictModel,
     ToolInput,
     format_response,
+    held_to_cap,
     outcome_of,
     path_denied_text,
     registry,
@@ -121,7 +124,6 @@ from ltspice_mcp.tools._base import (
 )
 from ltspice_mcp.tools._schema import prune_unreferenced_defs
 from ltspice_mcp.tools.analyze import (
-    MAX_PAGE_SIZE,
     coerce_per_run_default,
     include_flag_coercer,
 )
@@ -168,8 +170,8 @@ class ExperimentCircuit(StrictModel):
     id: str | None = Field(
         default=None,
         description=(
-            "Short name for this circuit, used to scope a variation's 'applies_to' "
-            "and to label its rows. Defaults to the file stem."
+            "Names this circuit in 'applies_to' and in its rows. "
+            "Default: the file stem, made valid and unique."
         ),
     )
 
@@ -180,30 +182,11 @@ class ExperimentExecution(StrictModel):
     wait_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=SUBMISSION_DWELL_CAP_S,
         description=(
-            "Dwell 0-120s before returning; the durable job keeps running. "
+            "Dwell before returning, held to 120s; the job keeps running. "
             "Continue with jobs(action='wait'); 0 returns immediately."
         ),
     )
-
-    @field_validator("wait_s", mode="wrap")
-    @classmethod
-    def _wait_s_names_the_continuation_route(
-        cls,
-        value: Any,
-        handler: ValidatorFunctionWrapHandler,
-    ) -> float:
-        try:
-            return handler(value)
-        except ValidationError as exc:
-            if any(error["type"] == "less_than_equal" for error in exc.errors()):
-                raise ValueError(
-                    f"execution.wait_s cannot exceed {SUBMISSION_DWELL_CAP_S:g}s; "
-                    "submit within that dwell, then continue with "
-                    f'jobs(action="wait", ..., timeout_s<={JOBS_WAIT_CAP_S:g})'
-                ) from exc
-            raise
 
     run_timeout_s: float | None = Field(
         default=None,
@@ -239,11 +222,10 @@ class ExperimentExecution(StrictModel):
     )
 
 
-class AnalysisPerRun(StrictModel):
-    # Bound taken from analyze_results itself, never a copy of its number: the
-    # attached block is handed straight to that engine, so a limit this schema
-    # advertised but the engine rejected would be a lever that cannot work.
-    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
+class AnalysisPerRun(analyze.CappedPerRunLimit):
+    # The limit and its cap are analyze_results' own, never a copy of its
+    # number: the attached block is handed straight to that engine, so a bound
+    # this schema held to and the engine's could not drift apart.
     cursor: str | None = Field(
         default=None,
         description=(
@@ -253,7 +235,7 @@ class AnalysisPerRun(StrictModel):
     )
 
 
-class AnalysisInclude(StrictModel):
+class AnalysisInclude(NotedModel):
     per_run: Annotated[
         AnalysisPerRun | None,
         BeforeValidator(
@@ -289,11 +271,17 @@ class AnalysisInclude(StrictModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _fields_read_once(self) -> AnalysisInclude:
+        if self.fields is not None:
+            self.keep_first("fields")
+        return self
+
 
 coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
-class AttachedAnalysis(StepSelectionFields):
+class AttachedAnalysis(StepSelectionFields, NotedModel):
     # The same typed union analyze_results advertises, not a free-form object:
     # this block IS an analyze_results request, and a schema that said
     # "any object" left a caller to discover the recipe grammar by having a
@@ -327,6 +315,14 @@ class AttachedAnalysis(StepSelectionFields):
             "a bare list of flag names switches them on."
         ),
     )
+
+    @model_validator(mode="after")
+    def _group_by_read_once(self) -> AttachedAnalysis:
+        # Normalized here, not only when the analysis runs: group_by is part
+        # of the request fingerprint, so a repeat must not make a resend of
+        # the same request look like a different one.
+        self.keep_first("group_by")
+        return self
 
     @field_serializer("recipes")
     def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
@@ -562,21 +558,26 @@ async def handle_run_experiments(
     )
     fingerprint = canonical_fingerprint(args)
     budget = resolve_response_budget(args.budget, state)
+    wait_s, wait_note = held_to_cap(
+        "execution.wait_s", args.execution.wait_s, SUBMISSION_DWELL_CAP_S, "s"
+    )
+    cap_warnings = _argument_warnings(args, wait_note)
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
             return await _dwell_and_respond(
                 replay,
-                args.execution.wait_s,
+                wait_s,
                 state,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
                 budget=budget,
+                warnings=cap_warnings,
             )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
-        circuit_inputs = _circuit_decks_for_validation(args.circuits)
+        circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
         native_ids = [
@@ -591,11 +592,7 @@ async def handle_run_experiments(
                     _native_request(native, circuit.circuit_id, native.sample_start),
                     backend=simulator_dialect(simulator) or "",
                 )
-        if sum(isinstance(item, RandomVariation) for item in args.variations) > 1:
-            raise VariationError(
-                "multiple_random_variations",
-                "At most one random variation entry is allowed per run_experiments call",
-            )
+        check_random_families([circuit.circuit_id for circuit in circuit_inputs], args.variations)
         projected = sum(
             projected_case_count(circuit.circuit_id, args.variations) for circuit in circuit_inputs
         )
@@ -652,8 +649,11 @@ async def handle_run_experiments(
                 lint_by_circuit[preparation.circuit_id] = preparation.lint_findings
                 if preparation.source is not None:
                     sources.append(preparation.source)
+                id_note = id_notes.get(preparation.circuit_id)
                 for case in preparation.cases:
                     case.run_index = len(cases)
+                    if id_note is not None:
+                        case.observations.append(copy.deepcopy(id_note))
                     cases.append(case)
 
             if len(cases) != projected:
@@ -702,13 +702,14 @@ async def handle_run_experiments(
         try:
             return await _dwell_and_respond(
                 receipt,
-                args.execution.wait_s,
+                wait_s,
                 state,
                 lint_by_circuit=lint_by_circuit or None,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
                 budget=budget,
+                warnings=cap_warnings,
             )
         except Exception as exc:
             return await _post_submit_error_response(
@@ -1137,16 +1138,30 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     return run_attached_analysis
 
 
-def _circuit_decks_for_validation(circuits: list[ExperimentCircuit]) -> list[CircuitDeck]:
-    return [
-        CircuitDeck(
-            circuit_id=circuit.id or Path(circuit.path).stem,
-            path=Path(circuit.path),
-            text="",
-            id_from_file_stem=not circuit.id,
-        )
-        for circuit in circuits
-    ]
+def _circuit_decks_for_validation(
+    circuits: list[ExperimentCircuit],
+) -> tuple[list[CircuitDeck], dict[str, dict[str, Any]]]:
+    """The circuits as decks to validate, and an observation per derived id.
+
+    A circuit with no ``id`` takes its file stem, made valid and unique rather
+    than refused (see ``derive_circuit_ids``); the observation, keyed by the id
+    it ran under, says so on every case of that circuit.
+    """
+    derived = derive_circuit_ids(
+        [circuit.path for circuit in circuits], [circuit.id for circuit in circuits]
+    )
+    decks: list[CircuitDeck] = []
+    notes: dict[str, dict[str, Any]] = {}
+    for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
+        decks.append(CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text=""))
+        if note is not None:
+            notes[circuit_id] = {
+                "code": "circuit_id_derived",
+                "kind": "provenance",
+                "detail": note,
+                "evidence": {"path": circuit.path, "circuit_id": circuit_id},
+            }
+    return decks, notes
 
 
 async def _load_matching_replay(
@@ -1222,6 +1237,24 @@ async def _load_matching_replay(
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
+def _argument_warnings(args: RunExperimentsInput, wait_note: str | None) -> list[str]:
+    """What this call asked for that is served differently: a value held to its
+    cap, and a repeat in the attached analysis read once."""
+    notes: list[str] = []
+    if wait_note is not None:
+        notes.append(
+            f"{wait_note} The job keeps running; continue with "
+            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g})."
+        )
+    if args.analyze is not None:
+        notes.extend(f"analyze.{note}" for note in args.analyze.argument_notes())
+        per_run = args.analyze.include.per_run if args.analyze.include else None
+        held = per_run.limit_note() if per_run is not None else None
+        if held is not None:
+            notes.append(f"analyze.include.per_run.{held}")
+    return notes
+
+
 async def _dwell_and_respond(
     receipt: ExperimentReceipt,
     wait_s: float,
@@ -1232,6 +1265,7 @@ async def _dwell_and_respond(
     run_fields: list[str] | None = None,
     analysis_fields: list[str] | None = None,
     budget: ResponseBudget,
+    warnings: list[str] | None = None,
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
@@ -1264,6 +1298,8 @@ async def _dwell_and_respond(
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         )
         data["replayed"] = receipt.replayed
+        if warnings:
+            data["warnings"] = [*warnings, *data.get("warnings", [])]
         return finalize_receipt(data), text
 
     return await render_run_receipt(budget, build)

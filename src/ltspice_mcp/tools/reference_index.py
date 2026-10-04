@@ -210,7 +210,7 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("run_experiments", "random"): (
         "One Monte Carlo family: N runs perturbed by the rules below, reproducible "
-        "from 'seed'. At most one random entry per call."
+        "from 'seed'. At most one random entry per circuit."
     ),
     # run_experiments random rules
     ("run_experiments", "component"): (
