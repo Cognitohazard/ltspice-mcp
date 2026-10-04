@@ -25,12 +25,11 @@ def _text(contents) -> str:
 class TestStaticResources:
     def test_returns_static_resources(self):
         resources = get_static_resources()
-        assert len(resources) == 7
+        assert len(resources) == 6
         names = {r.name for r in resources}
         assert names == {
             "netlists",
             "results",
-            "models",
             "config",
             "recent",
             "plot_widget",
@@ -77,9 +76,12 @@ class TestReadResource:
         result = handle_read_resource("spice://results/", state_no_sim)
         assert '"count": 0' in _text(result.contents[0])
 
-    def test_read_models_empty(self, state_no_sim: SessionState):
-        result = handle_read_resource("spice://models/", state_no_sim)
-        assert "libraries" in _text(result.contents[0])
+    def test_models_resource_is_not_served(self, state_no_sim: SessionState):
+        """It listed libraries loaded through tools removed in 0.6, so it could
+        only ever answer empty; the simulator's own models are searched with
+        inspect's model query instead."""
+        with pytest.raises(ValueError, match="Unknown resource URI"):
+            handle_read_resource("spice://models/", state_no_sim)
 
     def test_read_guide(self, state_no_sim: SessionState):
         result = handle_read_resource("spice://guide", state_no_sim)
@@ -88,10 +90,21 @@ class TestReadResource:
         assert isinstance(contents, TextResourceContents)
         assert contents.mime_type == "text/markdown"
         text = contents.text
-        # Both strings come from the real SKILL.md body, proving the packaged
-        # guide is served (not a placeholder).
-        assert "Schematic layout best practices" in text
-        assert "means milli" in text
+        # The core: a rule from its own text, and the index generated from the
+        # sections' front matter, proving the packaged guide is served.
+        assert "`M` is milli, not mega" in text
+        assert "## Index" in text and "- `schematics`:" in text
+        assert state_no_sim.guide_read
+
+    def test_read_guide_section(self, state_no_sim: SessionState):
+        contents = handle_read_resource("spice://guide/schematics", state_no_sim).contents[0]
+        assert isinstance(contents, TextResourceContents)
+        assert contents.mime_type == "text/markdown"
+        assert "Schematic layout best practices" in contents.text
+
+    def test_unknown_guide_section_names_the_known_ones(self, state_no_sim: SessionState):
+        with pytest.raises(ValueError, match="name one of: python, tools"):
+            handle_read_resource("spice://guide/nope", state_no_sim)
 
     def test_unknown_uri_raises(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):

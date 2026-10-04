@@ -3,11 +3,11 @@ placed geometry computation, and pin direction inference.
 """
 
 import re
-from importlib.resources import files
 from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib import guide
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     PinInfo,
@@ -55,9 +55,10 @@ class TestApplyRotation:
         assert _apply_rotation(self.PX, self.PY, f"M{degrees}") == (-rotated[0], rotated[1])
 
     def test_guide_states_the_same_transforms(self):
-        """spice://guide restates this table for callers; hold it to the code."""
-        guide = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
-        line = next(ln for ln in guide.splitlines() if ln.startswith("Rotations transform pin"))
+        """The guide's schematics section restates this table for callers; hold
+        it to the code."""
+        text = guide.read("schematics")
+        line = next(ln for ln in text.splitlines() if ln.startswith("Rotations transform pin"))
 
         def term(t: str) -> int:
             value = {"x": self.PX, "y": self.PY}[t.lstrip("-")]
@@ -340,13 +341,25 @@ class TestComputePlacedGeometry:
             assert "dir" in pin
             assert pin["dir"] in ("up", "down", "left", "right", "unknown")
 
-    def test_m0_mirror(self, simple_symbol: SymbolInfo):
-        """M0 mirrors x: (x,y) -> (-x, y). Vertical pins stay vertical."""
-        result = compute_placed_geometry(simple_symbol, origin_x=0, origin_y=0, rotation="M0")
-        pins = {p["name"]: p for p in result["pins"]}
-        # M0: (0,-50) -> (0,-50); (0,50) -> (0,50)  (x=0 unaffected)
-        assert pins["A"]["y"] == -50
-        assert pins["B"]["y"] == 50
+    def test_m0_mirror(self):
+        """M0 mirrors x: (x,y) -> (-x, y). An off-axis pin and an off-center
+        body show the flip; the on-axis pins stay where they were."""
+        gated = SymbolInfo(
+            name="gated",
+            description="Two pins on the axis, one off it to the left",
+            pins=(
+                PinInfo(name="A", order=1, x=0, y=-50),
+                PinInfo(name="B", order=2, x=0, y=50),
+                PinInfo(name="G", order=3, x=-30, y=10),
+            ),
+            bbox=BBox(-30, -50, 10, 50),
+        )
+        result = compute_placed_geometry(gated, origin_x=100, origin_y=200, rotation="M0")
+        pins = {p["name"]: (p["x"], p["y"]) for p in result["pins"]}
+        # G: (-30,10) -> (30,10) -> (130,210); A and B sit on x=0.
+        assert pins == {"A": (100, 150), "B": (100, 250), "G": (130, 210)}
+        # Local x span -30..10 mirrors to -10..30.
+        assert result["bounding_box"] == {"x": 90, "y": 150, "width": 40, "height": 100}
 
 
 # ---------------------------------------------------------------------------

@@ -26,12 +26,7 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, Resul
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.library_manager import LibraryManager
-from ltspice_mcp.lib.log_parser import (
-    LogDiagnostics,
-    extract_missing_refs,
-    missing_refs_from_text,
-)
+from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import (
@@ -53,92 +48,6 @@ logger = logging.getLogger(__name__)
 
 Editor = AscEditor | SpiceEditor
 T = TypeVar("T")
-
-
-def _suggestions_for_refs(
-    refs: list[str], libraries: LibraryManager
-) -> dict[str, list[dict]] | None:
-    """Fuzzy-match each ref against loaded libraries only (never built-ins)."""
-    if not refs:
-        return None
-    out: dict[str, list[dict]] = {}
-    for ref in refs:
-        matches = libraries.find_similar_models(ref, limit=3, cutoff=0.5)
-        if matches:
-            out[ref] = matches
-    return out or None
-
-
-def suggestions_from_errors(
-    errors: list[str] | None, libraries: LibraryManager
-) -> dict[str, list[dict]] | None:
-    """Zero-cost when ``errors`` is falsy — skips the log re-read entirely."""
-    if not errors:
-        return None
-    return _suggestions_for_refs(missing_refs_from_text("\n".join(errors)), libraries)
-
-
-def extract_model_suggestions(
-    log_path: Path | None, libraries: LibraryManager
-) -> dict[str, list[dict]] | None:
-    """Read ``log_path`` and fuzzy-match every missing ref against loaded libraries."""
-    if log_path is None or not log_path.exists():
-        return None
-    return _suggestions_for_refs(extract_missing_refs(log_path), libraries)
-
-
-def format_suggestion_block(
-    suggestions: dict[str, list[dict]] | None,
-    *,
-    header: str = "Possible fixes (from loaded user libraries):",
-) -> str:
-    """Human-readable block for a suggestions dict; empty string if None/empty."""
-    if not suggestions:
-        return ""
-    lines = ["", header]
-    for ref, matches in suggestions.items():
-        lines.append(f"  Missing '{ref}' — did you mean:")
-        for m in matches:
-            lines.append(f"    {m['name']} (score={m['score']}) - {m['source_path']}")
-    return "\n".join(lines)
-
-
-def attach_suggestions_to_failure(
-    error_msg: str,
-    data: dict,
-    log_path: Path | None,
-    libraries: LibraryManager,
-) -> str:
-    """Append model-resolution help to ``error_msg`` and mutate ``data``.
-
-    Two complementary layers, both keyed off the unresolved model/subcircuit
-    refs in the log: fuzzy matches against loaded user libraries (when any),
-    and a recovery hint pointing at ``inspect``'s model search — which fires
-    even with no library loaded, the common case stock parts fail in.
-    Returns the (possibly-unchanged) error message. Called on
-    simulation failure paths where the log already has the error context
-    inline, so callers don't re-implement read-log / extract / format / attach.
-    """
-    if log_path is None or not log_path.exists():
-        return error_msg
-    refs = extract_missing_refs(log_path)
-    if not refs:
-        return error_msg
-    block = ""
-    suggestions = _suggestions_for_refs(refs, libraries)
-    if suggestions:
-        data["suggestions"] = suggestions
-        block += "\n" + format_suggestion_block(suggestions)
-    ref_list = ", ".join(refs)
-    block += (
-        f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
-        "auto-included in the run. For each, call "
-        'inspect(kind="model", mode="search", query="<ref>") to locate its '
-        'definition in the loaded libraries — or mode="enumerate" with "libs" '
-        "to read a specific stock library file — then add the returned .include "
-        "directive to the netlist and rerun."
-    )
-    return f"{error_msg}{block}"
 
 
 def resolve_job(job_id: str, state: SessionState) -> ExperimentJob:

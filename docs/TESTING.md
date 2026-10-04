@@ -196,8 +196,11 @@ above assumes them:
   on PATH (so it runs in CI); `tests/test_e2e.py` runs un-gated in degraded
   mode; `tests/test_ltspice_integration.py` is opt-in via an environment flag.
 - **Drift guards.** `tests/test_doc_drift.py` checks documented tool counts and
-  names against the registry; `tests/test_guide_delivery.py` keeps the
-  packaged guide in sync with the skill.
+  names against the registry; `tests/test_guide_delivery.py` pins the guide's
+  structure (the section list is the files present, the index lists every
+  section under its kind, every pointer to a section resolves) and that its
+  doors serve one text; `tests/test_skill_docs.py` keeps the plugin to the one
+  skill that points at the guide.
 
 See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
 `docs/DESIGN.md` for the architecture and the end-to-end verification recipe.
@@ -292,7 +295,7 @@ the push, and `scripts/release_gate.sh` runs it:
 
 | shape | why it exists |
 |-|-|
-| Linux, serially | what CI runs; the parallel run is a convenience and flakes under load |
+| Linux, serially | CI runs the suite on one xdist worker per core; the serial run keeps the one-process order covered, where state a test leaves behind reaches every later test |
 | Linux with WSL detection forced off (`scripts/nonwsl_plugin.py`) | Linux CI is not WSL; this box is, so the non-WSL branch is otherwise never executed here |
 | Ubuntu container, non-root, `--init` | a fresh machine with ngspice and libcairo2; `--init` because a container whose PID 1 is `bash` never reaps a killed child, and a zombie still answers `os.kill(pid, 0)` |
 | Windows native, Python 3.12 and 3.13, checkout with conversion on | the primary platform, both supported interpreters (3.13 changed `Path.resolve` on a NUL byte), and the bytes a runner with `core.autocrlf=true` sees |
