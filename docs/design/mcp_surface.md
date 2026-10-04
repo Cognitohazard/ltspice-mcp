@@ -579,6 +579,11 @@ RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
 {action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
 ```
 
+An addressed action takes `job_id`, `request_id`, or both. Both is one job
+named twice, as a caller holding a receipt naturally sends it; when the two
+name different jobs the call is `selector_conflict`, since acting on either
+would be a guess.
+
 Each action accepts only its own fields and rejects the rest; `budget` is the
 one argument every action takes. That is the *published* shape, not a rule
 applied after the fact: the input schema declares each action as its own

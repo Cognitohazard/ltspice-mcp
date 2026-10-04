@@ -1019,4 +1019,4 @@ class TestErrorHandling:
 
     async def test_jobs_status_without_an_identifier_errors(self, shared_session: ClientSession):
         result = await _call(shared_session, "jobs", {"action": "status"})
-        _assert_tool_error(result, "requires exactly one of job_id or request_id")
+        _assert_tool_error(result, "requires job_id or request_id")
