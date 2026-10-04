@@ -25,6 +25,19 @@ _EST = timezone(timedelta(hours=-5), name="EST")
 # circuits tracker, sidecar loaders, and the netlist resource listing.
 CIRCUIT_EXTENSIONS: frozenset[str] = frozenset({".asc", ".net", ".sp", ".cir", ".spice"})
 
+# The netlists among them: every circuit file read as SPICE text rather than
+# as a schematic. One set for every surface that takes a deck, so a suffix one
+# of them reads (``.spice`` is what xschem and the sky130 testbenches write)
+# is never refused by another. The text is how descriptions and refusals name
+# the set: ".cir/.net/.sp/.spice".
+NETLIST_SUFFIXES: frozenset[str] = CIRCUIT_EXTENSIONS - {".asc"}
+NETLIST_SUFFIX_TEXT = "/".join(sorted(NETLIST_SUFFIXES))
+
+# The extensions a deck is handed to a simulator with, a narrower set: LTspice
+# will not run a netlist without one of them, so a staged case of any other
+# netlist suffix is written as ``.cir`` and only these reach the runner.
+RUN_DECK_SUFFIXES: frozenset[str] = frozenset({".cir", ".net", ".sp"})
+
 # macOS-only: fcntl.F_FULLFSYNC forces a platter-level flush. Plain fsync on
 # APFS/HFS+ stops at the drive's write cache, so durability-critical writes
 # need this. SQLite, Postgres, and git all use it on Darwin.
@@ -308,7 +321,10 @@ def atomic_write_json(
 
 __all__ = [
     "CIRCUIT_EXTENSIONS",
+    "NETLIST_SUFFIXES",
+    "NETLIST_SUFFIX_TEXT",
     "O_BINARY",
+    "RUN_DECK_SUFFIXES",
     "atomic_write",
     "atomic_write_bytes",
     "atomic_write_json",

@@ -622,11 +622,27 @@ class TestCaseConcurrencyAndTimeouts:
             max_parallel=40,
         )
         callbacks, submissions = _controlled_submit(monkeypatch, runner)
-        persisted_statuses: list[str] = []
+        # Tag each persist with whether a case-progress checkpoint made it; the
+        # real checkpoint still runs.
+        persisted: list[tuple[str, bool]] = []
+        case_events = 0
+        in_checkpoint = False
+        real_checkpoint = runner._checkpoint_case_transition
+
+        def counting_checkpoint(execution) -> None:
+            nonlocal case_events, in_checkpoint
+            case_events += 1
+            in_checkpoint = True
+            try:
+                real_checkpoint(execution)
+            finally:
+                in_checkpoint = False
+
+        monkeypatch.setattr(runner, "_checkpoint_case_transition", counting_checkpoint)
         monkeypatch.setattr(
             state_no_sim,
             "persist_job",
-            lambda job: persisted_statuses.append(job.status),
+            lambda job: persisted.append((job.status, in_checkpoint)),
         )
 
         receipt = await asyncio.shield(
@@ -645,8 +661,12 @@ class TestCaseConcurrencyAndTimeouts:
             callbacks[token](_success(work_dir, token))
 
         assert await runner.wait(receipt.job, 1)
-        assert len(persisted_statuses) == 63
-        assert persisted_statuses[-1] == "completed"
+        # Every case starts and finishes, and progress is written once per
+        # total // 20 case events (every second event for 40 cases).
+        assert case_events >= 2 * 40
+        checkpoint_writes = sum(1 for _, from_checkpoint in persisted if from_checkpoint)
+        assert checkpoint_writes == case_events // max(1, 40 // 20)
+        assert persisted[-1][0] == "completed"
 
     async def test_one_runner_caps_cases_across_concurrent_jobs(
         self,

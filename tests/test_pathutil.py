@@ -1,5 +1,6 @@
 """Unit tests for path security sandbox."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,13 +26,62 @@ class TestResolveSafePath:
         result = resolve_safe_path(abs_path, [work_dir])
         assert result == work_dir / "file.cir"
 
-    def test_traversal_rejected(self, work_dir: Path):
-        with pytest.raises(PathSecurityError, match="traversal"):
+    def test_traversal_out_of_the_sandbox_rejected(self, work_dir: Path):
+        with pytest.raises(PathSecurityError, match="outside allowed"):
             resolve_safe_path("../../etc/passwd", [work_dir])
 
-    def test_dotdot_in_middle_rejected(self, work_dir: Path):
-        with pytest.raises(PathSecurityError, match="traversal"):
+    def test_dotdot_in_middle_escaping_the_sandbox_rejected(self, work_dir: Path):
+        with pytest.raises(PathSecurityError, match="outside allowed"):
             resolve_safe_path("subdir/../../../etc/passwd", [work_dir])
+
+    def test_dotdot_landing_inside_the_sandbox_accepted(self, work_dir: Path):
+        """``..`` is judged by where the path lands, not by how it is spelled.
+
+        A deck's ``.include ../models/x.lib`` joins to exactly this shape, so
+        refusing it lexically reported a file inside the sandbox as outside it.
+        """
+        assert resolve_safe_path("subdir/../file.cir", [work_dir]) == work_dir / "file.cir"
+        absolute = str(work_dir / "subdir" / ".." / "file.cir")
+        assert resolve_safe_path(absolute, [work_dir]) == work_dir / "file.cir"
+
+    def test_dotdot_from_a_nested_sandbox_root_into_its_sibling_rejected(self, tmp_path: Path):
+        """A sibling that merely shares the root's name as a prefix is outside it."""
+        sandbox = tmp_path / "proj"
+        sandbox.mkdir()
+        with pytest.raises(PathSecurityError, match="outside allowed"):
+            resolve_safe_path("../proj-secrets/key.txt", [sandbox])
+
+    def test_dotdot_after_a_symlink_is_taken_from_the_link_target(self, tmp_path: Path):
+        """``link/..`` is the link target's parent on POSIX, so the containment
+        check has to run on the resolved path rather than on the spelling: a
+        lexical collapse would read ``link/../secret.txt`` as the sandbox's own
+        ``secret.txt`` while the open reaches the one beside the target."""
+        if sys.platform == "win32":
+            pytest.skip(
+                "Windows collapses '..' before following a link, so 'link/..' "
+                "stays in the directory holding the link and cannot escape"
+            )
+        sandbox = tmp_path / "sandbox"
+        sandbox.mkdir()
+        outside = tmp_path / "outside"
+        (outside / "inner").mkdir(parents=True)
+        (outside / "secret.txt").write_text("secret")
+        symlink_or_skip(sandbox / "link", outside / "inner", target_is_directory=True)
+
+        with pytest.raises(PathSecurityError, match="outside allowed"):
+            resolve_safe_path("link/../secret.txt", [sandbox])
+
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="backslash separators and case-folded drive paths are Windows path syntax",
+    )
+    def test_windows_dotdot_with_backslashes_and_other_case(self, work_dir: Path):
+        """The containment check runs on Windows paths, which compare without case."""
+        assert resolve_safe_path("subdir\\..\\file.cir", [work_dir]) == work_dir / "file.cir"
+        spelled = str(work_dir).upper() + "\\subdir\\..\\file.cir"
+        assert resolve_safe_path(spelled, [work_dir]) == work_dir / "file.cir"
+        with pytest.raises(PathSecurityError, match="outside allowed"):
+            resolve_safe_path(str(work_dir) + "\\..\\..\\secret.txt", [work_dir])
 
     def test_absolute_path_outside_sandbox(self, work_dir: Path):
         with pytest.raises(PathSecurityError, match="outside allowed"):
