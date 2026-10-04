@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import time
 from datetime import timedelta
@@ -186,12 +187,14 @@ async def test_every_discriminant_executes_against_recorded_raw(
         raw,
         [{"key": metric, "metric": metric, **fields}],
     )
-    # Some physical metrics legitimately find no feature in a tiny RC fixture
-    # (periodicity, resonance, or a loop crossover). They still must execute
-    # through their adapter and fail only their own item.
-    assert metric in data["results"] or any(
-        failure.get("stage") == "analyze" for failure in data["failures"]
-    )
+    # Every discriminant answers on its fixture, including the ones that find
+    # no feature there (no resonance peak, no loop crossover): that is a
+    # value, not a failure, so a metric that starts raising shows up here.
+    assert data["failures"] == []
+    assert data["outcome"] == "complete"
+    (row,) = data["results"][metric]["values"]
+    assert row["run_index"] == 0
+    assert row["value"]
 
 
 @pytest.mark.asyncio
@@ -218,15 +221,120 @@ async def test_values_and_extrema_carry_outer_and_inner_identity(
     # success outcome (formerly "success").
     assert data["outcome"] == "complete"
     record = data["results"]["vout"]["per_run"]["items"][0]
-    # Lean default: attribution keys that carry information survive; a
-    # null/empty one (no case, no steps on a standalone raw) is dropped —
-    # absent and empty mean the same thing on a row with no required keys.
+    # Lean default: the source (outer) and run/step (inner) identity survive;
+    # a null/empty attribution key (no case, no step values or assignments on
+    # a standalone raw) is dropped, since absent and empty mean the same thing
+    # on a row with no required keys.
+    assert record["source"] == "dut"
     assert record["run_index"] == 0
-    for field in ("case_id", "step_index", "step_values", "assignments"):
-        assert record.get(field) in (None, {}, []) or field in record
-    reduced = data["results"]["vout"]["reduced"]
-    assert {entry["stat"] for entry in reduced} == {"min", "mean"}
-    assert next(entry for entry in reduced if entry["stat"] == "min")["run_index"] == 0
+    assert record["step_index"] == 0
+    for field in ("case_id", "step_values", "assignments"):
+        assert field not in record
+    reduced = {entry["stat"]: entry for entry in data["results"]["vout"]["reduced"]}
+    assert set(reduced) == {"min", "mean"}
+    # An extremum names the run and step it came from; a mean belongs to none.
+    assert reduced["min"]["value"] == record["value"]["value"]
+    assert (reduced["min"]["run_index"], reduced["min"]["step_index"]) == (0, 0)
+    assert (reduced["mean"]["run_index"], reduced["mean"]["step_index"]) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_a_per_run_limit_past_the_page_cap_is_held_and_said(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A limit above 100 was refused at validation; the page is served at the
+    cap and the hint says so, since this tool has no top-level warnings."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
+        all_steps=True,
+        include={"per_run": {"limit": 500}},
+    )
+    assert data["outcome"] == "complete"
+    assert data["results"]["v"]["per_run"]["items"]
+    assert "include.per_run.limit=500 is above its cap of 100; 100 was used" in data["hint"]
+
+
+@pytest.mark.asyncio
+async def test_a_source_without_a_label_is_named_after_its_file(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """'label' was required even for a single source, where it tells nothing
+    apart. Left out, it is the job_id or the raw file's stem; two sources that
+    would share one get a -2 suffix, and a label the caller wrote is kept."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    recipe = {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}
+
+    single = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {"sources": [{"raw_path": str(raw)}], "recipes": [recipe]}
+        ),
+        state_no_sim,
+    )
+    assert single.structured_content is not None
+    (row,) = single.structured_content["results"]["v"]["values"]
+    assert row["source"] == raw.stem
+
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [
+                {"raw_path": str(raw)},
+                {"raw_path": str(raw)},
+                {"raw_path": str(raw), "label": raw.stem},
+            ],
+            "recipes": [recipe],
+        }
+    )
+    assert [source.label for source in args.sources or []] == [
+        f"{raw.stem}-2",
+        f"{raw.stem}-3",
+        raw.stem,
+    ]
+    with pytest.raises(ValidationError, match="labels must be unique"):
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [
+                    {"raw_path": str(raw), "label": "same"},
+                    {"raw_path": str(raw), "label": "same"},
+                ],
+                "recipes": [recipe],
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_repeated_entries_are_read_once_and_said(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A repeated run index, group_by dimension or include.fields path was
+    refused; it asks for nothing more, so it is read once and the hint says so."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u", "reduce": ["max"]}],
+        all_steps=True,
+        group_by=["circuit", "circuit"],
+        include={"per_run": True, "fields": ["value", "value"]},
+    )
+    assert data["outcome"] == "complete"
+    assert "group_by repeated 'circuit'; each is read once." in data["hint"]
+    assert "include.fields repeated 'value'; each is read once." in data["hint"]
+    assert len(data["results"]["v"]["groups"]) == 1
+
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"raw_path": str(raw), "label": "dut", "runs": [0, 0]}],
+            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
+        }
+    )
+    assert args.sources is not None and args.sources[0].runs == [0]
+    assert args.argument_notes() == ["sources[0].runs repeated 0; each is read once."]
 
 
 @pytest.mark.asyncio
@@ -828,16 +936,21 @@ async def test_mutation_during_adapter_read_is_caught_by_postcheck(
 
 
 @pytest.mark.asyncio
-async def test_digest_deadline_records_failure_and_progresses(
+async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Sources are identified by size and modification time. Hashing every raw
+    and log on every call spent the call's budget on reading files whole, and a
+    hash that ran out of it failed the recipe that had nothing to do with it."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 0.01
+    hashed: list[Path] = []
     original = result_store.sha256_file
 
     def slow_digest(path):
+        hashed.append(Path(path))
         time.sleep(0.2)
         return original(path)
 
@@ -847,8 +960,52 @@ async def test_digest_deadline_records_failure_and_progresses(
         raw,
         [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
     )
-    assert any(failure["code"] == "analysis_deadline" for failure in data["failures"])
+    assert hashed == []
+    assert data["failures"] == []
+    assert data["results"]["v"]["values"]
     assert data["next"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_handed_out_records_the_sources_digests(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The call that resumes a set compares content, so the set records it."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
+    assert first["next"] is not None
+
+    stored = result_store.load(first["result_set_id"], work_dir)
+    (manifest,) = stored.source_manifests
+    assert manifest["raw_sha256"] == result_store.sha256_file(raw)
+    assert manifest["composite_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_set_catches_a_rewrite_that_kept_size_and_timestamp(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Size and modification time identify a source within a call. Across
+    calls the recorded digest does: a rewrite that kept both still drifts."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
+    before = os.stat(raw)
+    data = bytearray(raw.read_bytes())
+    data[-1] ^= 0xFF
+    raw.write_bytes(bytes(data))
+    os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert os.stat(raw).st_size == before.st_size
+
+    continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
+    result = await handle_analyze_results(continuation, state_no_sim)
+    assert result.structured_content is not None
+    assert any(
+        failure["code"] == "source_drift" for failure in result.structured_content["failures"]
+    )
 
 
 def test_multi_source_job_invalidation_and_raw_only_ttl(work_dir: Path):
@@ -1400,22 +1557,51 @@ async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     assert "analysis_budget_s" in message
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "extra",
+    ("extra", "changed"),
     [
-        {"include": {"per_run": {"limit": 100}}},
-        {"include": {"outliers": True}},
-        {"group_by": ["temp"]},
+        ({"include": {"per_run": {"limit": 7}}}, "include"),
+        ({"include": {"outliers": True}}, "include"),
+        ({"group_by": ["temp"]}, "group_by"),
+        ({"recipes": [{"key": "v", "metric": "value", "expr": "V(in)", "at": "900u"}]}, "recipes"),
     ],
 )
-def test_continuation_rejects_request_shaping_arguments(extra: dict[str, Any]):
-    """A continuation replays stored execution state plus its cursor view, so
-    include/group_by passed alongside it must not be silently dropped."""
-    from pydantic import ValidationError
+async def test_continuation_accepts_an_echo_and_refuses_a_change(
+    extra: dict[str, Any],
+    changed: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A continuation replays the stored request plus its cursor view. Sending
+    the original fields again with it was refused although they changed
+    nothing; a field that does change the request is still refused rather than
+    silently dropped."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    original = {
+        "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+        "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+    }
+    first = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(original), state_no_sim
+    )
+    assert first.structured_content is not None
+    resume = {
+        "continue": {
+            "result_set_id": first.structured_content["result_set_id"],
+            "cursor": first.structured_content["coverage"]["missing_cases"]["next_cursor"],
+        }
+    }
 
-    with pytest.raises(ValidationError, match="mutually exclusive"):
-        AnalyzeResultsInput.model_validate(
-            {"continue": {"result_set_id": "set-1", "cursor": "abc"}, **extra}
+    echoed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate({**original, **resume}), state_no_sim
+    )
+    assert echoed.structured_content is not None
+    assert echoed.structured_content["coverage"]["missing_cases"]["returned"] == 20
+
+    with pytest.raises(ResultError, match=f"{changed} differ"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate({**original, **extra, **resume}), state_no_sim
         )
 
 
@@ -2597,6 +2783,51 @@ async def test_field_narrows_a_keyed_recipes_reduction_to_that_key(
         [{"key": "m", "metric": "measurements", "reduce": ["max"]}],
     )
     assert {row["field"] for row in every["results"]["m"]["reduced"]} == {"vfinal", "tcross"}
+
+
+@pytest.mark.asyncio
+async def test_a_bare_reduce_on_a_multi_field_recipe_covers_every_field(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A multi-field recipe refused 'reduce' without 'field' while a keyed one
+    reduced every key. It now reduces every field it reports, each the same
+    number a reduction naming that field gives."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    stats = {"metric": "signal_stats", "signal": "V(out)"}
+
+    every = await _analyze(
+        state_no_sim, raw, [{"key": "s", **stats, "reduce": ["max"]}], all_steps=True
+    )
+    rows = {row["field"]: row["value"] for row in every["results"]["s"]["reduced"]}
+    assert set(rows) == {"min", "max", "mean", "rms", "peak_to_peak", "stddev"}
+    for field in ("mean", "stddev"):
+        named = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "s", **stats, "field": field, "reduce": ["max"]}],
+            all_steps=True,
+        )
+        (row,) = named["results"]["s"]["reduced"]
+        assert rows[field] == row["value"]
+
+
+@pytest.mark.asyncio
+async def test_a_bare_reduce_reports_an_edge_by_the_direction_it_measured(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    # rise_time and fall_time both read the row's transition time; the row
+    # says which one it measured, so a rising edge is not also a fall time.
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "e", "metric": "edges", "signal": "V(out)", "edge": "rising", "reduce": ["max"]}],
+    )
+    fields = {row["field"] for row in data["results"]["e"]["reduced"]}
+    assert "rise_time" in fields
+    assert "fall_time" not in fields
 
 
 # ---------------------------------------------------------------------------

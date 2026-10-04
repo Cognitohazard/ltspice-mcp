@@ -49,10 +49,12 @@ have to make assumptions?"), free-text with one thing to fix. It also keeps the
 channel consistent with ``diff_circuit``, which has surfaced these same messages,
 from this same helper, in ``warnings`` all along.
 
-``export_to`` is ``managed`` by default — a non-destructive export into a staged
-scratch directory that leaves the caller's files untouched. ``sidecar`` overwrites
-the deck's conventional ``<name>.net`` next to the schematic under the export lock,
-which is what makes that mode destructive.
+``export_to`` is ``sidecar`` by default: the export overwrites the schematic's
+conventional ``<name>.net`` under the export lock, the file LTspice itself writes
+beside a schematic it runs (and ``run_experiments`` exports through), and reports
+the structural delta from the prior one. ``managed`` is the non-destructive
+alternative: it stages the schematic with its project-local files in the store's
+scratch and exports there, writing nothing beside the caller's file.
 """
 
 from __future__ import annotations
@@ -64,6 +66,7 @@ import hashlib
 import re
 import shutil
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +76,7 @@ from mcp import types
 from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
@@ -98,9 +102,15 @@ from ltspice_mcp.lib.schematic_scene import (
     layout_issues,
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
+from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.simulator import is_ngspice
+from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
-from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import (
+    MICRO_SIGN_READERS,
+    ValueSuffixSite,
+    value_suffix_sites,
+)
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
@@ -209,8 +219,6 @@ def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]
         *errors,
     ]
 
-
-NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
 
 CHECK_ORDER = ("syntax", "symbols", "export", "layout", "quality", "compare")
 
@@ -726,7 +734,7 @@ RenderArgument: TypeAlias = Annotated[
 
 
 class VerifyCircuitInput(ToolInput):
-    path: str = Field(description="Circuit to check: .asc, .cir, .net or .sp.")
+    path: str = Field(description=f"Circuit to check: .asc or {NETLIST_SUFFIX_TEXT}.")
     checks: list[Literal["syntax", "symbols", "export", "layout", "quality", "compare"]] | None = (
         Field(
             default=None,
@@ -753,23 +761,22 @@ class VerifyCircuitInput(ToolInput):
         ),
     )
 
-    export_to: Literal["managed", "sidecar"] = Field(
-        default="managed",
+    export_to: Literal["sidecar", "managed"] = Field(
+        default="sidecar",
         description=(
-            "Where the exported netlist goes: 'managed' writes into the "
-            "server's scratch directory and leaves your files alone; 'sidecar' "
-            "writes <name>.net next to the schematic, overwriting any existing "
-            "one."
+            "'sidecar' overwrites <name>.net next to the schematic, as LTspice "
+            "does when it runs one; 'managed' exports a copy in the server's "
+            "scratch and writes nothing there."
         ),
     )
 
 
 VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
-    "it checks; with export_to='sidecar' the export check rewrites the .net next "
-    "to an .asc. For a "
-    ".cir/.net/.sp: SPICE syntax, directive and element arity, non-ASCII value "
-    "suffixes such as µ, plus connectivity "
+    "it checks; the export check writes the .net next to an .asc unless "
+    "export_to='managed'. For a "
+    "netlist: SPICE syntax, directive and element arity, non-ASCII "
+    "value suffixes such as µ, and connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
     "declares, nets with no DC path to ground. For an .asc: symbol "
     "and pin resolution, the authoritative LTspice netlist export (which silently "
@@ -978,30 +985,91 @@ def _rule_finding(
     )
 
 
+#: The value-suffix rules, all under ``FINDING_RULE_CAP``: one deck can spell
+#: every value of a sheet with the same character.
+_VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_mojibake", "value_suffix_nonascii")
+
+
+def _micro_sign_observation(
+    sites: list[ValueSuffixSite],
+    path: Path,
+    encoding: str,
+    generated_by: str | None,
+) -> dict[str, Any]:
+    """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
+    readers = (
+        # cp1252 spells it as the one byte B5, which LTspice XVII reads as micro.
+        "In cp1252 it is the one byte LTspice XVII reads as micro, and 'u' is micro "
+        "in every encoding and to every simulator."
+        if encoding == "cp1252"
+        else MICRO_SIGN_READERS
+    )
+    evidence: dict[str, Any] = {
+        "count": len(sites),
+        "lines": [site.line for site in sites],
+        "tokens": [site.token for site in sites],
+        "encoding": encoding,
+        "reason": (
+            f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
+            f"{encoding} file. {readers}"
+        ),
+    }
+    if generated_by is not None:
+        evidence["generated_by"] = generated_by
+    return _finding(
+        rule_id="value_suffix_micro_sign",
+        severity="observation",
+        at={"file": str(path), "line": sites[0].line},
+        subject=path.name,
+        evidence=evidence,
+    )
+
+
 def _value_suffix_findings(
-    cards: list[SpiceCard], path: Path, text: str, encoding: str
+    cards: list[SpiceCard],
+    path: Path,
+    text: str,
+    encoding: str,
+    *,
+    cp1252_reader: str | None,
 ) -> list[dict[str, Any]]:
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
     One scan and one evidence builder with the ``run_experiments`` linter's
-    ``value-suffix-*`` rules, so both surfaces say the same thing. A micro sign
-    is a warning: it is micro to a reader that decodes the file in the encoding
-    it was written in, which LTspice XVII does not do for a UTF-8 file. A
-    suffix that shows the file was decoded in an encoding it was not written
-    in (``Âµ``) is an error: the deck runs at the bare number, and a micro sign
-    lost that way is a factor of 1e6. Any other symbol (``10Ω``) is a warning:
-    it is read as the bare number, which is usually what it means.
-    ``encoding`` is the codec the file decoded as, which decides which reader
-    misreads it. ``cards`` has its title card dropped already.
+    ``value-suffix-*`` rules, so both surfaces say the same thing. A suffix
+    that shows the file was decoded in an encoding it was not written in
+    (``Âµ``) is an error per value: the deck runs at the bare number, and a
+    micro sign lost that way is a factor of 1e6. Any other symbol (``10Ω``) is
+    a warning per value: it is read as the bare number, which is usually what
+    it means.
+
+    A micro sign is micro to a reader that decodes the file in the encoding it
+    was written in. It is a warning per value only when a reader this server
+    knows of decodes it otherwise: an LTspice XVII the session drives
+    (``cp1252_reader``, from ``services.cp1252_ltspice``) or one the deck's own
+    header names as its writer, reading a file that is not cp1252. Otherwise
+    the file's micro signs are one observation, with their count and lines,
+    which leaves the outcome alone. ``encoding`` is the codec the file decoded
+    as. ``cards`` has its title card dropped already.
     """
     sites = value_suffix_sites(cards)
-    generated_by = deck_generator(text) if sites else None
+    if not sites:
+        return []
+    generated_by = deck_generator(text)
+    if cp1252_reader is None and generated_by and is_cp1252_ltspice_build(generated_by):
+        cp1252_reader = generated_by
+    misread = cp1252_reader is not None and encoding != "cp1252"
     findings: list[dict[str, Any]] = []
+    micro: list[ValueSuffixSite] = []
     for site in sites:
+        if site.micro and not misread:
+            micro.append(site)
+            continue
         evidence = value_suffix_evidence(site, generated_by=generated_by)
         evidence["card"] = site.card.body
         evidence["encoding"] = encoding
         if site.micro:
+            evidence["reader"] = cp1252_reader
             rule_id, severity = "value_suffix_micro_sign", "warning"
         elif site.mojibake:
             rule_id, severity = "value_suffix_mojibake", rule_severity("value-suffix-mojibake")
@@ -1016,22 +1084,30 @@ def _value_suffix_findings(
                 evidence=evidence,
             )
         )
+    if micro:
+        findings.append(_micro_sign_observation(micro, path, encoding, generated_by))
     return findings
 
 
 def _syntax_findings(
-    text: str, path: Path, deck: _LexedDeck, encoding: str, simulator: str
+    text: str,
+    path: Path,
+    deck: _LexedDeck,
+    encoding: str,
+    *,
+    cp1252_reader: str | None,
+    simulator: str,
 ) -> list[dict[str, Any]]:
     """Directive, lex, element-arity and value-suffix findings in a netlist.
 
     Everything here changes what the simulator reads. A finding is an error
     unless its rule says the deck still runs as meant: an element-arity issue
     carries the severity its validator check declares, and a suffix finding
-    is a warning except for a mis-decoded file (see
-    ``_value_suffix_findings``). ``simulator`` is the one the session runs
-    decks on, ``"LTspice"`` or ``"ngspice"``: some directive and element forms
-    are a fault for one and valid for the other. The facts that are
-    legal-but-notable live in the quality check.
+    is an error only for a mis-decoded file (see ``_value_suffix_findings``).
+    ``simulator`` is the one the session runs decks on, ``"LTspice"`` or
+    ``"ngspice"``: some directive and element forms are a fault for one and
+    valid for the other. The facts that are legal-but-notable live in the
+    quality check.
     """
     findings: list[dict[str, Any]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -1066,7 +1142,9 @@ def _syntax_findings(
         _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
         for issue in validate_netlist_arity(deck.cards, simulator=simulator)
     )
-    findings.extend(_value_suffix_findings(deck.cards, path, text, encoding))
+    findings.extend(
+        _value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader=cp1252_reader)
+    )
     return findings
 
 
@@ -1349,7 +1427,9 @@ def _file_digest(path: Path, length: int | None = None) -> str | None:
     return digest[:length] if length is not None else digest
 
 
-def _exported_value_suffix_findings(net_path: Path) -> list[dict[str, Any]]:
+def _exported_value_suffix_findings(
+    net_path: Path, *, cp1252_reader: str | None
+) -> list[dict[str, Any]]:
     """Value-suffix findings over an exported netlist.
 
     LTspice 24 and later write the export as UTF-8, a micro sign as C2 B5, and
@@ -1359,7 +1439,9 @@ def _exported_value_suffix_findings(net_path: Path) -> list[dict[str, Any]]:
         text, encoding = read_spice_text_with_encoding(net_path)
     except OSError:
         return []
-    return _value_suffix_findings(_lex_deck(text).cards, net_path, text, encoding)
+    return _value_suffix_findings(
+        _lex_deck(text).cards, net_path, text, encoding, cp1252_reader=cp1252_reader
+    )
 
 
 class _MeasuredNetlist(NamedTuple):
@@ -1371,7 +1453,7 @@ class _MeasuredNetlist(NamedTuple):
     findings: list[dict[str, Any]]
 
 
-def _measure_netlist(net_path: Path) -> _MeasuredNetlist | None:
+def _measure_netlist(net_path: Path, *, cp1252_reader: str | None) -> _MeasuredNetlist | None:
     """Component count, net count, digest and value-suffix findings of a
     just-exported netlist.
 
@@ -1388,7 +1470,10 @@ def _measure_netlist(net_path: Path) -> _MeasuredNetlist | None:
         return None
     components, nets = _netlist_counts(net_path)
     return _MeasuredNetlist(
-        components, nets, _file_digest(net_path), _exported_value_suffix_findings(net_path)
+        components,
+        nets,
+        _file_digest(net_path),
+        _exported_value_suffix_findings(net_path, cp1252_reader=cp1252_reader),
     )
 
 
@@ -1403,8 +1488,17 @@ class _ExportOutcome(NamedTuple):
     findings: Sequence[dict[str, Any]] = ()
 
 
+# What every failed export can fall back to: the checks that need no LTspice.
+_OFFLINE_REMEDY = "drop 'export' from checks to run the offline checks only"
+
+
 async def _run_export(
-    asc_path: Path, state: SessionState, export_to: str, simulator_cls: Any
+    asc_path: Path,
+    state: SessionState,
+    export_to: str,
+    simulator_cls: Any,
+    *,
+    cp1252_reader: str | None,
 ) -> _ExportOutcome:
     """Export a schematic to a netlist, managed (scratch copy) or sidecar (in place).
 
@@ -1446,7 +1540,9 @@ async def _run_export(
                     )
                     warnings.extend(diff_warnings)
                 net_path = new_path
-                measured = await asyncio.to_thread(_measure_netlist, net_path)
+                measured = await asyncio.to_thread(
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                )
         else:
             scratch = (
                 _scratch_dir(state, "export") / f"{asc_path.stem}.{_file_digest(asc_path, 8)}"
@@ -1458,7 +1554,9 @@ async def _run_export(
                 net_path = await asyncio.to_thread(
                     _create_netlist, simulator_cls, staged_asc, timeout
                 )
-                measured = await asyncio.to_thread(_measure_netlist, net_path)
+                measured = await asyncio.to_thread(
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                )
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         return _ExportOutcome(
             payload,
@@ -1466,7 +1564,12 @@ async def _run_export(
                 "export",
                 f"LTspice netlist export failed: {exc}",
                 where=str(asc_path),
-                remedy="drop 'export' from checks to run the offline checks only",
+                remedy=(
+                    f"pass export_to='managed' if the schematic's folder cannot be "
+                    f"written, or {_OFFLINE_REMEDY}"
+                    if export_to == "sidecar"
+                    else _OFFLINE_REMEDY
+                ),
             ),
             observations,
             warnings,
@@ -1934,7 +2037,7 @@ def _hint(data: dict[str, Any]) -> str:
     observations = [f for f in data["findings"] if f["severity"] == "observation"]
     if observations and not parts:
         parts.append(
-            f"{len(observations)} layout/quality observation(s): "
+            f"{len(observations)} observation(s): "
             + ", ".join(sorted({f["rule_id"] for f in observations}))
             + " (facts, not a verdict)"
         )
@@ -2042,7 +2145,7 @@ async def evaluate_verify_circuit(
         return _error_evaluation(
             data,
             f"'{suffix}' is not a circuit file this tool can check; pass a .asc "
-            "schematic or a .cir / .net / .sp netlist",
+            f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
         )
 
     kind = "asc" if suffix == ".asc" else "netlist"
@@ -2102,12 +2205,30 @@ async def evaluate_verify_circuit(
         deck = await asyncio.to_thread(_lex_deck, text)
         observation_events.extend(deck.notes)
 
+    # The LTspice this session drives, when it decodes decks as cp1252: the one
+    # reader known to misread a UTF-8 micro sign. Identified off the loop (the
+    # first identification in a process digests the executable), and only for
+    # a check that reads value suffixes.
+    cp1252_reader: str | None = None
+    ltspice = state.available_simulators.get("ltspice")
+    if ltspice is not None and (wanted.get("syntax") or wanted.get("export")):
+        executable = await asyncio.to_thread(executable_identity, ltspice)
+        cp1252_reader = cp1252_ltspice(state, executable)
+
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
         # The simulator a run_experiments call with no override would use.
         simulator = "ngspice" if is_ngspice(state.default_simulator) else "LTspice"
         findings.extend(
-            await asyncio.to_thread(_syntax_findings, text, path, deck, encoding, simulator)
+            await asyncio.to_thread(
+                _syntax_findings,
+                text,
+                path,
+                deck,
+                encoding,
+                cp1252_reader=cp1252_reader,
+                simulator=simulator,
+            )
         )
         checks_run.append("syntax")
 
@@ -2183,7 +2304,9 @@ async def evaluate_verify_circuit(
             if simulator_cls is None:
                 skip("export", "LTspice not detected")
             else:
-                export = await _run_export(path, state, args.export_to, simulator_cls)
+                export = await _run_export(
+                    path, state, args.export_to, simulator_cls, cp1252_reader=cp1252_reader
+                )
                 observation_events.extend(export.observations)
                 warnings.extend(export.warnings)
                 findings.extend(export.findings)
@@ -2248,6 +2371,15 @@ async def evaluate_verify_circuit(
         if render_task is not None:
             render_task.cancel()
         raise
+
+    # A sheet can spell every value with the same character, so the
+    # value-suffix rules are capped like the layout rules.
+    suffix_totals = Counter(
+        str(f["rule_id"]) for f in findings if f["rule_id"] in _VALUE_SUFFIX_RULES
+    )
+    if suffix_totals:
+        capped_rules.update(suffix_totals)
+        observation_events.append(_FindingCapSummary(dict(suffix_totals)))
 
     # --- render -------------------------------------------------------------
     inline_image: RenderedImage | None = None
@@ -2326,9 +2458,9 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     title="Check Circuit",
     description=VERIFY_DESCRIPTION,
     input_model=VerifyCircuitInput,
-    # Not read-only: export writes a file on every path (managed scratch by
-    # default), and export_to:sidecar overwrites the deck's .net. The annotation
-    # states the worst case; the description carries the conditional nuance.
+    # Not read-only: export writes a file on every path, by default the deck's
+    # .net beside the schematic (export_to:managed writes scratch instead). The
+    # annotation states the worst case; the description carries the nuance.
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=_OUTPUT_SCHEMA,
 )

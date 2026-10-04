@@ -2,7 +2,7 @@
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from ltspice_mcp.lib.encoding import read_spice_text as _read_library_text
@@ -59,57 +59,15 @@ class ModelEntry:
 
 @dataclass
 class LibraryIndex:
-    """Parsed library file with searchable model index.
+    """Parsed library file: the models and subcircuits it defines.
 
     Attributes:
         path: Library file path
         models: List of all model/subcircuit entries found
-        _by_name: Lookup dict mapping lowercase name to list of entries
     """
 
     path: Path
     models: list[ModelEntry]
-    _by_name: dict[str, list[ModelEntry]] = field(default_factory=dict, init=False)
-
-    def __post_init__(self) -> None:
-        """Build lookup index after initialization."""
-        for model in self.models:
-            if model.name_lower not in self._by_name:
-                self._by_name[model.name_lower] = []
-            self._by_name[model.name_lower].append(model)
-
-    def search(self, query: str, offset: int = 0, limit: int = 50) -> tuple[list[ModelEntry], int]:
-        """Search for models by case-insensitive substring match.
-
-        Args:
-            query: Search string (case-insensitive)
-            offset: Skip this many results (for pagination)
-            limit: Maximum results to return
-
-        Returns:
-            (results_page, total_matches) tuple
-        """
-        query_lower = query.lower()
-
-        matches = [model for model in self.models if query_lower in model.name_lower]
-        matches.sort(key=lambda m: m.name_lower)
-
-        total = len(matches)
-        page = matches[offset : offset + limit]
-
-        return page, total
-
-    def get_model(self, name: str) -> ModelEntry | None:
-        """Get model by exact case-insensitive name.
-
-        Args:
-            name: Model name to find
-
-        Returns:
-            First matching ModelEntry or None if not found
-        """
-        entries = self._by_name.get(name.lower())
-        return entries[0] if entries else None
 
 
 def _merge_continuation_lines(lines: list[str]) -> list[str]:

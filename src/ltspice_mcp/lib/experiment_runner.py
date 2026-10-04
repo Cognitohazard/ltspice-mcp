@@ -93,15 +93,6 @@ StageDecks = Callable[[], Awaitable["StagedDecks"]]
 # matrix takes longer to stage than an index write.
 REQUEST_GATE_TIMEOUT_S = 300.0
 
-#: The durable replay note, written on the job record once and read by
-#: everyone who looks at the job afterwards — the original submitter included,
-#: which is why it states what happened to the record rather than making a
-#: claim about the reader's own call.
-REPLAY_RECORD_DETAIL = (
-    "A later call carrying this request_id was answered from this record; "
-    "no cases were resubmitted for it."
-)
-
 # How each staging-time drift observation reads when it blocks a replay
 # instead of annotating a fresh stage.
 _DRIFT_REASONS = {
@@ -610,15 +601,8 @@ class ExperimentRunner(RunnerBase):
         if not barrier.replayed and job.task is None:
             execution = self._new_execution(request, job)
             self._executions[job.job_id] = execution
-        if barrier.replayed:
-            experiment_store.note_once(
-                job.observations,
-                {
-                    "code": "idempotent_replay",
-                    "kind": "submission",
-                    "detail": REPLAY_RECORD_DETAIL,
-                },
-            )
+        # A replay leaves the record as it is: the receipt's ``replayed`` says
+        # this call was answered from it, and only the owner writes a record.
         receipt = ExperimentReceipt(
             job=job,
             replayed=barrier.replayed,

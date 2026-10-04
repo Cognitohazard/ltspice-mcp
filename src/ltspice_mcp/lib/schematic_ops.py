@@ -27,6 +27,7 @@ validate the extension and raise NetlistError for a non-.asc file.
 import asyncio
 import importlib
 import itertools
+import math
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
@@ -64,7 +65,9 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
+from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
@@ -245,15 +248,71 @@ _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 _LEVEL_LABEL_RE = re.compile(r"^\s*level\.\d+\s*$", re.IGNORECASE)
 
 
-def _validate_component_value(reference: str, value: str) -> None:
+# Element classes with exactly two terminals before a value that runs to the
+# end of the line: an independent source's spec (``DC 5 AC 1``). LTspice writes
+# the nodes from the symbol's pins, so nothing in the value can be read as a
+# node. A behavioural source's expression is the same case, taken first.
+_SPEC_VALUE_CLASSES = frozenset("VI")
+
+# Element classes whose model name may be followed by an area factor and
+# ``off``: ``Q1 c b e 2N3904 2 off``, ``J1 d g s NJF 2``, ``D1 a k 1N4148 2``.
+# A MOSFET takes ``off`` but no positional area.
+_AREA_CLASSES = frozenset("QJD")
+_OFF_CLASSES = frozenset("QJDM")
+
+
+def _is_spice_number(text: str) -> bool:
+    """Whether ``text`` is one finite SPICE number (``2``, ``0.5``, ``10u``)."""
+    try:
+        return math.isfinite(parse_spice_value(text))
+    except ValueError:
+        return False
+
+
+def _device_tail_ok(element: str, tokens: list) -> bool:
+    """Whether ``tokens`` read as ``MODEL [area] [off] [KEY=VALUE ...]`` for ``element``,
+    one of the classes in ``_OFF_CLASSES``.
+
+    The model name comes first; after it come at most one area factor (a number
+    or a braced expression, for the classes that take one), at most one
+    ``off``, and any ``KEY=VALUE`` instance parameters.
+    """
+    if not tokens or tokens[0].kind not in (TokenKind.BARE, TokenKind.QUOTED):
+        return False
+    area = off = 0
+    for tok in tokens[1:]:
+        if tok.kind == TokenKind.KEY_VALUE:
+            continue
+        if tok.kind == TokenKind.BARE and tok.text.lower() == "off":
+            off += 1
+        elif element in _AREA_CLASSES and (
+            tok.kind == TokenKind.BRACED
+            or (tok.kind == TokenKind.BARE and _is_spice_number(tok.text))
+        ):
+            area += 1
+        else:
+            return False
+    return area <= 1 and off <= 1
+
+
+def _validate_component_value(reference: str, value: str, element: str) -> None:
     """Reject values that would corrupt the netlist line on write.
 
-    spicelib writes the value verbatim into the component line; spaces in
-    a non-parameterised, non-quoted value bleed into a phantom node and
-    irrecoverably break the netlist. The check is permissive of:
-    - SPICE expressions in braces (``{1/(2*pi*RC)}``) — braces protect spaces
-    - quoted strings (``"a b"``)
-    - ``KEY=VALUE`` parameter lists (handled by ``_apply_component_value``)
+    LTspice writes the Value verbatim after the symbol's pins. A space in a
+    single-token value (a resistor's ``1 k``, a subcircuit's ``opamp 2``)
+    splits it into two tokens, and the netlist reader then takes the first as
+    another node. ``element`` is the element class letter the part netlists
+    as (``element_class``); the shapes that cannot do that are accepted:
+
+    - SPICE expressions in braces (``{1/(2*pi*RC)}``) and quoted strings;
+    - ``[MODEL] KEY=VALUE ...`` parameter lists (split by ``_apply_component_value``);
+    - waveform functions (``PULSE(...)``, ``SIN(...) AC 1``), whose parentheses
+      protect their spaces;
+    - for an independent or behavioural source, any well-formed run of tokens
+      (``AC 1``, ``DC 5 AC 1``, ``V=V(a) + V(b)``): the value follows exactly
+      two nodes and runs to the end of the line;
+    - for a BJT, JFET or diode, a model name followed by an area factor and/or
+      ``off`` (``2N3904 2``, ``NPN 8 off``); for a MOSFET, a model name and ``off``.
     """
     if not isinstance(value, str):  # type: ignore[reportUnnecessaryIsInstance]
         # Pydantic should have rejected non-strings already, but guard
@@ -269,10 +328,27 @@ def _validate_component_value(reference: str, value: str) -> None:
             f"Component '{reference}' value must be a single line; "
             f"got embedded newline in {value!r}"
         )
+    if not any(c.isspace() for c in stripped):
+        return
     # Brace-balanced expression or quoted literal — spaces are safe.
     if (stripped.startswith("{") and stripped.endswith("}")) or (
         stripped.startswith('"') and stripped.endswith('"')
     ):
+        return
+    # A behavioural source's expression may carry anything its own grammar
+    # allows (comparison operators, a ternary); it cannot reach a node slot.
+    if element == "B":
+        return
+    try:
+        toks = [t for t in tokenize_body(stripped) if t.kind != TokenKind.COMMENT_TRAIL]
+    except SpiceLexError:
+        toks = []
+    well_formed = bool(toks) and all(
+        t.kind in (*POSITIONAL_KINDS, TokenKind.KEY_VALUE) for t in toks
+    )
+    if well_formed and element in _SPEC_VALUE_CLASSES:
+        return
+    if well_formed and element in _OFF_CLASSES and _device_tail_ok(element, toks):
         return
     # Independent-source waveform spec: ``PULSE(...)``, ``SIN(...)``,
     # ``EXP(...)``, ``PWL(...)``, ``SFFM(...)``, ``TABLE(...)``, ``AM(...)``,
@@ -280,17 +356,15 @@ def _validate_component_value(reference: str, value: str) -> None:
     # group whose parens protect the embedded whitespace. Optionally
     # preceded by a DC magnitude (``"1 PULSE(...)"``) and followed by an
     # ``AC <mag>`` annotation (``"PULSE(...) AC 1"``).
-    try:
-        toks = tokenize_body(stripped)
-    except SpiceLexError:
-        toks = []
-    if toks and any(t.kind == TokenKind.PARENED for t in toks):
-        # If the body is a sequence of BARE/PARENED tokens (no stray
-        # equals signs, no unbalanced quotes), the parens protect their
-        # internal whitespace from corrupting the netlist line.
-        ok_kinds = (TokenKind.BARE, TokenKind.PARENED, TokenKind.QUOTED, TokenKind.BRACED)
-        if all(t.kind in ok_kinds for t in toks):
-            return
+    # If the body is a sequence of positional tokens (no stray equals signs,
+    # no unbalanced quotes), the parens protect their internal whitespace from
+    # corrupting the netlist line.
+    if (
+        toks
+        and any(t.kind == TokenKind.PARENED for t in toks)
+        and all(t.kind in POSITIONAL_KINDS for t in toks)
+    ):
+        return
     # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one bare
     # head token (the model name) followed by a non-empty list of KEY=VALUE
     # tokens. The pure-params and head+params forms collapse into one rule.
@@ -308,13 +382,18 @@ def _validate_component_value(reference: str, value: str) -> None:
             and all(bool(_PARAM_TOKEN_RE.fullmatch(tok)) for tok in rest)
         ):
             return
-    if any(c.isspace() for c in stripped):
-        raise NetlistError(
-            f"Component '{reference}' value {value!r} contains whitespace. "
-            "Wrap SPICE expressions in braces ({...}) or use the parameter "
-            "form (e.g. 'NMOS1 W=10u L=1u'). A bare space-separated value "
-            "would corrupt the netlist line."
-        )
+    if element in _AREA_CLASSES:
+        shape = "a model name, then an optional area factor and 'off' (e.g. '2N3904 2 off')"
+    elif element == "M":
+        shape = "a model name, then optional 'off' and KEY=VALUE parameters"
+    else:
+        shape = "a single token"
+    raise NetlistError(
+        f"Component '{reference}' value {value!r} contains whitespace where a "
+        f"{element}-class value is {shape}; LTspice would read the extra token "
+        "as another node. Wrap SPICE expressions in braces ({...}) or use the "
+        "parameter form (e.g. 'NMOS1 W=10u L=1u')."
+    )
 
 
 def _asc_component_value(editor, reference: str) -> str | None:
@@ -388,7 +467,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str) -> None:
+def _apply_component_value(editor, reference: str, value: str, element: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -399,21 +478,21 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     tokens and route them through ``set_component_parameters``, keeping
     the model/value field for ``set_component_value``.
 
-    Token-based split via ``spice_lex.tokenize_body``: head is every
-    ``BARE`` / ``QUOTED`` / ``BRACED`` token before any ``KEY_VALUE``
-    token; params are the ``KEY_VALUE`` tokens. The classified-token
+    Token-based split via ``spice_lex.tokenize_body``: params are the
+    ``KEY_VALUE`` tokens and the head is the rest of the value as written
+    (``2N3904 2 off``, ``PULSE(0 1 0 1n 1n 5n 10n)``). The classified-token
     layer knows model-name vs param-name by construction, so adversarial
     cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
-    _validate_component_value(reference, value)
+    _validate_component_value(reference, value, element)
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
     # split below would route it to set_component_parameters, which the .asc
     # editor writes into SpiceLine while the stale expression stays in Value:
     # the netlisted B-line then carries two expressions ("No such node")
     # behind a success message.
-    if reference[:1].upper() == "B" or "=" not in value:
+    if element == "B" or "=" not in value:
         _set_or_create_value(editor, reference, value)
         return
     try:
@@ -422,17 +501,22 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
         raise NetlistError(f"Component '{reference}' value {value!r} failed to parse: {e}") from e
     params: dict[str, str] = {}
     head_parts: list[str] = []
+    # The head is the value with its KEY=VALUE spans cut out, each remaining
+    # run kept as written: a source spec's ``PULSE(0 1 0 1n 1n 5n 10n)`` is a
+    # BARE name and a PARENED group that must stay joined.
+    cursor, end = 0, len(value)
     for tok in tokens:
+        if tok.kind == TokenKind.COMMENT_TRAIL:
+            end = tok.body_offset
+            break
         if tok.kind == TokenKind.KEY_VALUE:
             assert tok.key is not None
             assert tok.value is not None
             params[tok.key] = tok.value
-        elif tok.kind in (TokenKind.BARE, TokenKind.QUOTED, TokenKind.BRACED):
-            head_parts.append(tok.text)
-        # COMMENT_TRAIL / EQUALS / PARENED outside KEY_VALUE: ignore
-        # for value-setting purposes — _validate_component_value
-        # already rejected the shapes that would corrupt the netlist.
-    head = " ".join(head_parts)
+            head_parts.append(value[cursor : tok.body_offset].strip())
+            cursor = tok.body_end
+    head_parts.append(value[cursor:end].strip())
+    head = " ".join(part for part in head_parts if part)
     if head:
         _set_or_create_value(editor, reference, head)
     if params:
@@ -472,6 +556,21 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
         return None
     pos, erot = editor.get_component_position(reference)
     return compute_placed_geometry(info, int(pos.X), int(pos.Y), erot.name if erot else "R0")
+
+
+def element_class(editor: AscEditor, reference: str) -> str:
+    """The element letter a placed part netlists as.
+
+    LTspice takes it from the symbol's ``Prefix`` (``QN`` → ``Q``) and prepends
+    that letter to an instance name that does not already start with it, so a
+    part named ``Vin`` on a resistor symbol is a resistor. Falls back to the
+    reference's own first letter when the symbol does not resolve.
+    """
+    comp = editor.components.get(reference)
+    symbol = getattr(comp, "symbol", None)
+    info = symbol_info_for(editor, symbol) if symbol else None
+    prefix = info.prefix if info is not None and info.prefix else reference
+    return prefix[:1].upper()
 
 
 def collect_component_geometry(editor: AscEditor) -> list[dict]:
@@ -1388,13 +1487,21 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:
     """Validate placing net label ``net`` at ``(x, y)``.
 
-    Raises ``NetlistError`` if a non-ground label would merge two different named
-    nets (a short at netlist time) — a structural error, refused outright.
-    Returns advisory warnings (duplicate name, floating placement) as plain
-    facts for the caller to surface; placing labels before wiring them is a
-    legitimate workflow, so those are warnings, not refusals.
+    Raises ``NetlistError`` if a non-ground label would join two nets that each
+    carry a name (a short at netlist time) — a structural error, refused
+    outright. That happens when the network here is named and ``net`` already
+    names a different one, or when the label lands where two named networks
+    cross and joins both. Returns advisory warnings (duplicate name, a second
+    name for an already-named net, floating placement) as plain facts for the
+    caller to surface; placing labels before wiring them is a legitimate
+    workflow, so those are warnings, not refusals.
     """
     warnings: list[str] = []
+    part = net_partition(editor)
+    # A FLAG anywhere along a wire, its interior included, joins that wire's
+    # net, and one at a crossing joins both (see net_partition for the export
+    # record).
+    through = wires_through((x, y), wire_segments_of(editor))
     if net != "0":
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
         # same-name labels into one net, which is a valid (often simpler) way to
@@ -1410,29 +1517,53 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                     "connect to a component pin (Ref.Pin) instead."
                 )
                 break
-        # Net-label conflict: a non-ground label on a network that already
-        # carries a different named net shorts the two at netlist time. Refuse.
-        nets = trace_nets(editor)
-        other_labels = {n for n in _net_label_at(nets, (x, y)) if n != net and n != "0"}
-        if other_labels:
+        joined = _label_join(part, through, net, (x, y))
+        if len(joined) > 1:
+            listed = "; ".join(f"{sorted(names)}" for names in joined)
             raise NetlistError(
-                f"Refused to add net '{net}' at ({x},{y}): the wire network at this "
-                f"coordinate already carries the label(s) {sorted(other_labels)}. Adding "
-                f"'{net}' would short those nets together. Remove the existing label(s) "
-                f"first or pick a different coordinate."
+                f"Refused to add net '{net}' at ({x},{y}): the label would join nets "
+                f"that each carry a name ({listed}), shorting them together. To join "
+                "them on purpose, give both the same name: remove one side's labels "
+                "with remove_net_label and label it with the other's name."
+            )
+        if joined and net not in joined[0]:
+            warnings.append(
+                f"({x},{y}) is on the net already labelled {sorted(joined[0])}; '{net}' "
+                "becomes a second name for it. LTspice netlists the node under one name, "
+                "so a directive or probe that uses another may not find it."
             )
     # Floating label: a FLAG touching no wire and no component pin names
-    # nothing at netlist time. A FLAG anywhere along a wire, its interior
-    # included, names that wire's net (see net_partition for the export record).
-    all_pin_coords: set[tuple[int, int]] = set()
-    for ref in editor.get_components():
-        all_pin_coords.update(_component_pin_coords(editor, ref))
-    if not wires_through((x, y), wire_segments_of(editor)) and (x, y) not in all_pin_coords:
+    # nothing at netlist time.
+    if not through and (x, y) not in part.pin_owners:
         warnings.append(
             f"({x},{y}) touches no wire and no component pin — LTspice will ignore "
             "this floating label until you wire it up."
         )
     return warnings
+
+
+def _label_join(
+    part: NetPartition,
+    through: Sequence[tuple[int, int, int, int]],
+    net: str,
+    at: tuple[int, int],
+) -> list[frozenset[str]]:
+    """The named nets a label ``net`` placed at ``at`` would make one node.
+
+    Read off the sheet's partition without the label: the label joins every
+    wire it touches (``through``, both wires at a crossing), whatever already
+    sits at ``at`` (a pin, a label, a wire end), and, by name, every net
+    already called ``net``. Each joined net comes back as its set of names,
+    ground excluded; two or more is a short.
+    """
+    node_of = label_folded_nets(part)
+    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
+    for coord, texts in part.label_texts.items():
+        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
+    # A point the sheet does not have reads as its own unnamed node.
+    nodes = {node_of(at), *(node_of(seg[:2]) for seg in through)}
+    nodes.update(node_of(coord) for coord, texts in part.label_texts.items() if net in texts)
+    return [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
 
 
 class _ConnectPlan(NamedTuple):
@@ -1619,17 +1750,18 @@ def _endpoint_name(endpoint: "str | GridPoint") -> str:
     return endpoint if isinstance(endpoint, str) else f"({endpoint.x},{endpoint.y})"
 
 
-def _crossing_error(x: int, y: int) -> str:
-    """Why a route may not cross a wire where neither one ends.
+def _crossing_warning(x: int, y: int, wire: tuple[int, int, int, int]) -> str:
+    """The advisory for a route that crosses a wire where neither one ends.
 
     LTspice leaves such a crossing unjoined (``tests/fixtures/t_junctions/``
-    ``crossing_wires``), so it creates no connection; it is refused because the
-    sheet reads ambiguously there, not because the nets would merge.
+    ``crossing_wires``), so the route creates no connection there and the nets
+    stay apart. It is reported, not refused: the only cost is a reader taking
+    the crossing for a junction.
     """
     return (
-        f"Wire crosses existing wire at ({x},{y}): LTspice leaves a plain crossing "
-        "unjoined, and the sheet reads ambiguously there; route around it, or end "
-        "the route on that wire to join it"
+        f"The route crosses the wire {segment_text(wire)} at ({x},{y}) where neither "
+        "ends; LTspice leaves a plain crossing unjoined, so the two stay separate "
+        "nets. To join them, end the route on that wire instead."
     )
 
 
@@ -1774,9 +1906,9 @@ def _plan_connect_route(
                 f"Net-label conflict — {from_name} is on net "
                 f"{sorted(from_labels_before)} and {to_name} is on net "
                 f"{sorted(to_labels_before)}. Connecting them would short "
-                f"the two named nets. Pick one labelling and rewire, or "
-                f"use the edit_schematic add_net_label op to merge them "
-                f"deliberately."
+                f"the two named nets. To join them on purpose, give both the "
+                f"same name: remove one side's labels with remove_net_label "
+                f"and label it with the other's name; no wire is needed."
             )
         nets_after = trace_nets(editor, extra_segments=segments)
         from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))
@@ -1866,7 +1998,8 @@ def _plan_connect_route(
 
     # Wire-junction check: forbid overlaps with existing wires unless the
     # existing wire already terminates at one of our endpoints (intended
-    # T-junction).
+    # T-junction). A plain crossing, where neither wire ends, is only
+    # reported: LTspice leaves it unjoined.
     flagged: set[int] = set()
     for sx1, sy1, sx2, sy2 in segments:
         for ext_index, (ex1, ey1, ex2, ey2) in enumerate(existing_wires):
@@ -1906,8 +2039,7 @@ def _plan_connect_route(
                     and ext_min < cross_x < ext_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    flagged.add(ext_index)
-                    errors.append(_crossing_error(cross_x, cross_y))
+                    warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
             elif sy1 == sy2 and ex1 == ex2:
                 cross_x, cross_y = ex1, sy1
                 new_min, new_max = min(sx1, sx2), max(sx1, sx2)
@@ -1917,8 +2049,7 @@ def _plan_connect_route(
                     and new_min < cross_x < new_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    flagged.add(ext_index)
-                    errors.append(_crossing_error(cross_x, cross_y))
+                    warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
 
     # An endpoint on a wire's interior is a T-junction onto that wire. Its leg
     # must leave the wire: one running along it overlaps the wire it joins,
@@ -2358,7 +2489,7 @@ def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
-        _apply_component_value(editor, op.reference, op.value)
+        _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result = {"op": "set_component_value", "reference": op.reference, "value": op.value}
         if lint:
             result["warnings"] = [lint]
