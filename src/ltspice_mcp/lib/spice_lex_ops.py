@@ -305,6 +305,11 @@ def rename_model(
 # Non-ASCII value suffixes
 # ---------------------------------------------------------------------------
 
+# What cp1252 shows for the first byte of a UTF-8 micro sign: 'Â' (C2, the lead
+# of U+00B5 MICRO SIGN), 'Î' (CE, the lead of U+03BC GREEK SMALL LETTER MU), and
+# 'Ã' (C3, the lead of 'Â' itself, where a micro sign was encoded twice).
+MICRO_MOJIBAKE_LEADS = frozenset("ÂÎÃ")
+
 # A number at a token boundary followed directly by a non-ASCII character: the
 # character sits where a scale suffix goes. The lookbehind keeps a digit run
 # inside a name (``N001µ``, ``x1µ``) out, and one after a backslash, which is a
@@ -349,6 +354,16 @@ class ValueSuffixSite:
             return (self.suffix + self.tail[:1]).encode("cp1252").decode("utf-8") in MICRO_SIGNS
         except UnicodeError:
             return False
+
+    @property
+    def mojibake(self) -> bool:
+        """The suffix shows a file decoded in an encoding it was not written in.
+
+        It is a cp1252 reading of a UTF-8 lead byte a micro sign starts with
+        (``MICRO_MOJIBAKE_LEADS``): every ``misdecoded_micro`` site, a
+        twice-encoded micro sign, and the same damage to another character.
+        """
+        return self.suffix in MICRO_MOJIBAKE_LEADS
 
 
 def _unquoted_spans(body: str) -> Iterator[tuple[int, int]]:

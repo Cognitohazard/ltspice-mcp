@@ -171,7 +171,7 @@ def tokenize_body(body: str) -> list[Token]:
     bodies return an empty list.
     """
     atoms = list(_iter_atoms(body))
-    return list(_merge_key_values(atoms))
+    return list(_merge_key_values(atoms, body))
 
 
 # Internal atom alias for the equals sentinel. Passed through to callers
@@ -307,13 +307,14 @@ def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     )
 
 
-def _merge_key_values(atoms: Sequence[_Atom]) -> Iterator[Token]:
+def _merge_key_values(atoms: Sequence[_Atom], body: str) -> Iterator[Token]:
     """Merge ``BARE/QUOTED  EQUALS  ATOM`` triples into ``KEY_VALUE`` tokens.
 
     Atoms outside such a triple pass through as their original kind —
     including standalone ``EQUALS``, which appears when ``=`` is used
     as a comparison operator (``.MEAS WHEN mag(V(out))=0.7``) rather
-    than a key-value assignment.
+    than a key-value assignment. ``body`` is the text the atoms were read
+    from, consulted for the separator between two atoms.
     """
     n = len(atoms)
     i = 0
@@ -349,12 +350,22 @@ def _merge_key_values(atoms: Sequence[_Atom]) -> Iterator[Token]:
             # (``V = if(...)``). A glued BARE that is itself the next ``key=``
             # (followed by EQUALS) is left alone, so a missing space before the
             # next parameter does not swallow it.
+            #
+            # A comma-continued list is one value too: ``IC=1,2,3`` (device
+            # initial conditions) and ``tc=0.001,1e-6`` (temperature
+            # coefficients). The comma is a separator, so it is skipped as an
+            # atom; an atom whose only separator from the value is one comma,
+            # with or without whitespace around it, continues the value. The
+            # same next-``key=`` guard keeps ``Is=1e-14, N=1`` two parameters.
             j = i + 3
-            while j < n and atoms[j].offset == value_end and atoms[j].kind != _EQUALS:
+            while j < n and atoms[j].kind not in (_EQUALS, TokenKind.COMMENT_TRAIL.value):
                 nxt = atoms[j]
+                gap = body[value_end : nxt.offset]
+                if gap and gap.strip() != ",":
+                    break
                 if nxt.kind == TokenKind.BARE.value and j + 1 < n and atoms[j + 1].kind == _EQUALS:
                     break
-                value_text += nxt.text
+                value_text += ("," if gap else "") + nxt.text
                 value_end = nxt.offset + len(nxt.text)
                 consumed += 1
                 j += 1
@@ -1089,7 +1100,9 @@ def lex(netlist_text: str) -> LexResult:
                 )
                 card_scope: tuple[str, ...] = ()
             else:
-                if name and name != scope[-1]:
+                # SPICE names are case-insensitive: ``.ends opamp`` closes
+                # ``.SUBCKT OPAMP``.
+                if name and name.casefold() != scope[-1].casefold():
                     warnings.append(
                         f"line {line_start}: .ENDS {name!r} does not match "
                         f"opener {scope[-1]!r}; closing the open scope anyway"
