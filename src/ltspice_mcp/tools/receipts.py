@@ -411,7 +411,9 @@ def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
 def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply presentation rungs to either public receipt envelope."""
     if rung.trim:
-        rung.cut.extend(response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT))
+        # Removes an empty block only, so it never empties anything a note
+        # would have to name.
+        response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT)
     if rung.answer_channel:
         for page in _receipt_row_pages(data):
             for row in page["items"]:
@@ -446,9 +448,7 @@ async def negotiate_receipt(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, notes, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, notes)
     return result.data, text
 
@@ -478,10 +478,8 @@ def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
     """Project durable accounting into the shared progress fact.
 
     The three DERIVED numbers only. ``completeness`` keeps all seven counters,
-    unchanged and always — this block used to restate every one of them beside
-    its own projection, so the same accounting arrived twice in one receipt and
-    a third time in the hint. Dropping the copy removes no fact: each counter is
-    one key away, in the ``completeness`` block itself.
+    unchanged and always, so each counter is one key away and neither this
+    block nor the hint restates them.
     """
     return {
         "expanded": completeness.expanded,
@@ -491,7 +489,7 @@ def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
 
 
 def finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize completeness and attach its two public progress projections."""
+    """Normalize completeness and attach its ``progress`` projection."""
     raw = data["completeness"]
     completeness = raw if isinstance(raw, Completeness) else Completeness(**raw)
     data["completeness"] = asdict(completeness)

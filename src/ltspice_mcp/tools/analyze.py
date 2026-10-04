@@ -3037,7 +3037,7 @@ def _degrade_analysis(
     """
     if rung.trim:
         for entry in data["results"].values():
-            rung.cut.extend(response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT))
+            response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
         # An explicit include.provenance is a caller opt-in, and the trim rung's
         # charter is to revoke none — so below the answer rung (the rung whose
         # documented job IS revoking opt-ins) an enriched identity echo
@@ -3096,9 +3096,7 @@ async def _negotiate_analysis(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     return format_response(text, result.data)
 

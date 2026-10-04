@@ -2515,12 +2515,7 @@ class TestAttachedAnalysis:
         snapshot_identity = job.analysis.result
         pristine_snapshot = copy.deepcopy(job.analysis.result)
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
-        trim_rung = response_budget.Rung(
-            response_budget.RUNG_TRIM,
-            budget=10_000,
-            measured=0,
-            reserve=receipts_mod._RUN_BUDGET_NOTES.reserve,
-        )
+        trim_rung = response_budget.Rung(response_budget.RUNG_TRIM, budget=10_000, measured=0)
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
         manual_snapshot = experiments_mod.snapshot_receipt(
             job,
@@ -2549,10 +2544,8 @@ class TestAttachedAnalysis:
         # does not (replay observation, progress-augmented hint), so aim the
         # budget a third of the rung gap above the measured answer size —
         # still below trim — instead of exactly at it.
-        budget = (
-            answer_size + (trim_size - answer_size) // 3 + receipts_mod._RUN_BUDGET_NOTES.reserve
-        )
-        assert trim_size > budget - receipts_mod._RUN_BUDGET_NOTES.reserve
+        budget = answer_size + (trim_size - answer_size) // 3 + response_budget.NOTE_RESERVE_TOKENS
+        assert trim_size > budget - response_budget.NOTE_RESERVE_TOKENS
         answer = _assert_schema(
             await handle_run_experiments(
                 request.model_copy(update={"budget": budget}),
