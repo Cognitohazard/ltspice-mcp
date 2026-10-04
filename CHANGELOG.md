@@ -10,6 +10,15 @@ tool-surface changes.
 
 ### Fixed
 
+- Four caps refused a larger value instead of serving the cap:
+  `run_experiments`' `execution.wait_s` above 120 s, `jobs(wait)`'s
+  `timeout_s` above 300 s, `jobs(list)`'s `limit` above 50, and `per_run.limit`
+  above 100 on `analyze_results` and on an attached analysis. Each now runs at
+  the cap and says so — a warning on `run_experiments` and `jobs`, the `hint`
+  on `analyze_results` — naming the value used and how to get the rest (wait
+  again, or the next cursor). The schemas no longer advertise these as a
+  `maximum`, since a strict client refuses one before sending; the
+  descriptions name the cap.
 - `analyze_results` refused `reduce` without `field` on a multi-field recipe
   (`{metric: "stability", reduce: ["min"]}`), while a keyed recipe's bare
   `reduce` covered every key. A bare `reduce` now covers every field the recipe

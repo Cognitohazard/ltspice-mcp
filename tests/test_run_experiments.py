@@ -76,32 +76,34 @@ def test_step_and_all_steps_are_exclusive_on_the_attached_block():
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
-    """One cap, both surfaces.
+    """One cap, both surfaces, held rather than refused.
 
-    The attached block is handed straight to analyze_results, so a per_run
-    limit run_experiments advertises but that engine rejects would be a lever
-    that cannot work. Both bounds must come from the same constant, and the
-    over-cap request must be refused at submission, not at the analysis stage.
+    The attached block is handed straight to analyze_results, so its limit is
+    that engine's own model: an over-cap request is held to the cap at
+    submission, and the request the job records names the page it will serve.
     """
-    advertised = AnalysisPerRun.model_json_schema()["properties"]["limit"]["maximum"]
-    engine = analyze_mod.PerRunInclude.model_json_schema()["properties"]["limit"]["maximum"]
+    assert issubclass(AnalysisPerRun, analyze_mod.CappedPerRunLimit)
+    assert issubclass(analyze_mod.PerRunInclude, analyze_mod.CappedPerRunLimit)
+    for model in (AnalysisPerRun, analyze_mod.PerRunInclude):
+        assert "maximum" not in model.model_json_schema()["properties"]["limit"]
 
-    assert advertised == engine == analyze_mod.MAX_PAGE_SIZE
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": "over-cap",
+            "circuits": [{"path": "dut.cir"}],
+            "analyze": {
+                "recipes": [{"key": "vout", "metric": "summary"}],
+                "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
+            },
+        }
+    )
+    analyze_block = args.strip_presentation()["analyze"]
+    assert analyze_block["include"]["per_run"]["limit"] == analyze_mod.MAX_PAGE_SIZE
+    (note,) = experiments_mod._cap_warnings(args)
+    assert f"analyze.include.per_run.limit={analyze_mod.MAX_PAGE_SIZE + 1}" in note
 
-    with pytest.raises(ValidationError):
-        RunExperimentsInput.model_validate(
-            {
-                "request_id": "over-cap",
-                "circuits": [{"path": "dut.cir"}],
-                "analyze": {
-                    "recipes": [{"key": "vout", "metric": "summary"}],
-                    "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
-                },
-            }
-        )
 
-
-def test_wait_caps_keep_the_submission_and_control_plane_contracts():
+def test_wait_caps_are_held_not_advertised_as_a_maximum():
     run_schema = build_input_schema(RunExperimentsInput)
     execution_schema = resolve_local_ref(
         run_schema,
@@ -119,14 +121,32 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
         ),
     )
 
-    assert execution_schema["properties"]["wait_s"]["maximum"] == 120
-    assert wait_branch["properties"]["timeout_s"]["maximum"] == 300
+    # A strict client checks a maximum before sending and would refuse on the
+    # server's behalf; the descriptions name the cap instead.
+    assert "maximum" not in execution_schema["properties"]["wait_s"]
+    assert "maximum" not in wait_branch["properties"]["timeout_s"]
+    assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
-    with pytest.raises(ValidationError) as excinfo:
-        experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})
-    message = str(excinfo.value)
-    assert 'jobs(action="wait"' in message
-    assert "timeout_s<=300" in message
+
+@pytest.mark.asyncio
+async def test_a_dwell_past_its_cap_is_held_and_names_the_continuation(
+    state_with_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    submissions: list[str] = []
+    fake_simulator(monkeypatch, submissions)
+    deck = _deck(work_dir / "dwell.cir")
+
+    data = _assert_schema(
+        await handle_run_experiments(_args(deck, "dwell-past-cap", wait_s=900), state_with_sim)
+    )
+
+    assert "error" not in data, data.get("error")
+    assert len(submissions) == 1
+    (note,) = [w for w in data["warnings"] if "execution.wait_s" in w]
+    assert "execution.wait_s=900s" in note and "120s was used" in note
+    assert "jobs(action='wait', timeout_s<=300)" in note
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():

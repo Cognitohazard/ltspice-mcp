@@ -17,9 +17,7 @@ from pydantic import (
     Field,
     SkipValidation,
     ValidationError,
-    ValidatorFunctionWrapHandler,
     field_serializer,
-    field_validator,
 )
 
 from ltspice_mcp.errors import (
@@ -107,6 +105,7 @@ from ltspice_mcp.tools._base import (
     ResponseBudget,
     StrictModel,
     ToolInput,
+    cap_note,
     format_response,
     outcome_of,
     path_denied_text,
@@ -117,7 +116,6 @@ from ltspice_mcp.tools._base import (
 )
 from ltspice_mcp.tools._schema import prune_unreferenced_defs
 from ltspice_mcp.tools.analyze import (
-    MAX_PAGE_SIZE,
     coerce_per_run_default,
     include_flag_coercer,
 )
@@ -176,30 +174,11 @@ class ExperimentExecution(StrictModel):
     wait_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=SUBMISSION_DWELL_CAP_S,
         description=(
-            "Dwell 0-120s before returning; the durable job keeps running. "
+            "Dwell before returning, held to 120s; the job keeps running. "
             "Continue with jobs(action='wait'); 0 returns immediately."
         ),
     )
-
-    @field_validator("wait_s", mode="wrap")
-    @classmethod
-    def _wait_s_names_the_continuation_route(
-        cls,
-        value: Any,
-        handler: ValidatorFunctionWrapHandler,
-    ) -> float:
-        try:
-            return handler(value)
-        except ValidationError as exc:
-            if any(error["type"] == "less_than_equal" for error in exc.errors()):
-                raise ValueError(
-                    f"execution.wait_s cannot exceed {SUBMISSION_DWELL_CAP_S:g}s; "
-                    "submit within that dwell, then continue with "
-                    f'jobs(action="wait", ..., timeout_s<={JOBS_WAIT_CAP_S:g})'
-                ) from exc
-            raise
 
     run_timeout_s: float | None = Field(
         default=None,
@@ -235,11 +214,10 @@ class ExperimentExecution(StrictModel):
     )
 
 
-class AnalysisPerRun(StrictModel):
-    # Bound taken from analyze_results itself, never a copy of its number: the
-    # attached block is handed straight to that engine, so a limit this schema
-    # advertised but the engine rejected would be a lever that cannot work.
-    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
+class AnalysisPerRun(analyze.CappedPerRunLimit):
+    # The limit and its cap are analyze_results' own, never a copy of its
+    # number: the attached block is handed straight to that engine, so a bound
+    # this schema held to and the engine's could not drift apart.
     cursor: str | None = Field(
         default=None,
         description=(
@@ -558,17 +536,20 @@ async def handle_run_experiments(
     )
     fingerprint = canonical_fingerprint(args)
     budget = resolve_response_budget(args.budget, state)
+    wait_s = min(args.execution.wait_s, SUBMISSION_DWELL_CAP_S)
+    cap_warnings = _cap_warnings(args)
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
             return await _dwell_and_respond(
                 replay,
-                args.execution.wait_s,
+                wait_s,
                 state,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
                 budget=budget,
+                warnings=cap_warnings,
             )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
@@ -697,13 +678,14 @@ async def handle_run_experiments(
         try:
             return await _dwell_and_respond(
                 receipt,
-                args.execution.wait_s,
+                wait_s,
                 state,
                 lint_by_circuit=lint_by_circuit or None,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
                 budget=budget,
+                warnings=cap_warnings,
             )
         except Exception as exc:
             return await _post_submit_error_response(
@@ -1234,6 +1216,22 @@ async def _load_matching_replay(
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
+def _cap_warnings(args: RunExperimentsInput) -> list[str]:
+    """What this call asked for past a cap, and the value used instead."""
+    notes: list[str | None] = [
+        cap_note("execution.wait_s", args.execution.wait_s, SUBMISSION_DWELL_CAP_S, "s"),
+    ]
+    if notes[0] is not None:
+        notes[0] += (
+            " The job keeps running; continue with "
+            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g})."
+        )
+    per_run = args.analyze.include.per_run if args.analyze and args.analyze.include else None
+    if per_run is not None:
+        notes.append(per_run.cap_note("analyze.include.per_run.limit"))
+    return [note for note in notes if note is not None]
+
+
 async def _dwell_and_respond(
     receipt: ExperimentReceipt,
     wait_s: float,
@@ -1244,6 +1242,7 @@ async def _dwell_and_respond(
     run_fields: list[str] | None = None,
     analysis_fields: list[str] | None = None,
     budget: ResponseBudget,
+    warnings: list[str] | None = None,
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
@@ -1276,6 +1275,8 @@ async def _dwell_and_respond(
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         )
         data["replayed"] = receipt.replayed
+        if warnings:
+            data["warnings"] = [*warnings, *data.get("warnings", [])]
         return finalize_receipt(data), text
 
     return await render_run_receipt(budget, build)

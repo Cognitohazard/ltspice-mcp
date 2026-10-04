@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 
 import numpy as np
 from mcp import types
-from pydantic import BeforeValidator, Field, SkipValidation, model_validator
+from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_validator
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -73,6 +73,7 @@ from ltspice_mcp.tools._base import (
     ResponseBudget,
     StrictModel,
     ToolInput,
+    cap_note,
     format_response,
     outcome_of,
     page_schema,
@@ -340,8 +341,34 @@ def coerce_per_run_default(value: Any) -> Any:
     return value
 
 
-class PerRunInclude(StrictModel):
-    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
+class CappedPerRunLimit(StrictModel):
+    """A per-run page size, held to ``MAX_PAGE_SIZE`` rather than refused.
+
+    The cap bounds one page, not what the caller may read, so a larger limit is
+    served at the cap and reported through :meth:`cap_note`. The held value is
+    what the model carries, so a request identity built from it names the page
+    actually served.
+    """
+
+    limit: int = Field(default=50, ge=1, description="Rows per page, held to 100.")
+    _requested_limit: int | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _hold_limit_to_cap(self) -> CappedPerRunLimit:
+        if self.limit > MAX_PAGE_SIZE:
+            self._requested_limit = self.limit
+            # Past validate_assignment, which would run this validator again.
+            object.__setattr__(self, "limit", MAX_PAGE_SIZE)
+        return self
+
+    def cap_note(self, name: str) -> str | None:
+        """The warning that the limit was held to the cap, or None."""
+        if self._requested_limit is None:
+            return None
+        return cap_note(name, self._requested_limit, MAX_PAGE_SIZE)
+
+
+class PerRunInclude(CappedPerRunLimit):
     cursor: str | None = Field(
         default=None,
         description=(
@@ -2486,6 +2513,10 @@ class AnalysisEvaluation:
     #: The session's tools, set only when rendering an MCP page, so a failure
     #: can say where its Python snippet runs; the neutral evaluation has none.
     served: frozenset[str] | None = None
+    # Arguments this call asked for past a cap, each said in the hint. Set by
+    # the MCP handler: the include an evaluation carries is the stored one,
+    # already held, so it no longer knows what was asked.
+    cap_notes: tuple[str, ...] = ()
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
@@ -2677,6 +2708,7 @@ def _assemble(
             "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
             "for the next page of missing cases (no work is replayed)."
         )
+    hints.extend(a.cap_notes)
     if hints:
         data["hint"] = " ".join(hints)
     text = (
@@ -3714,9 +3746,11 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
+    held = args.include.per_run.cap_note("include.per_run.limit") if args.include.per_run else None
     assembly = replace(
         await _evaluate_analysis_drive(args, state, page_stop=_PageStop()),
         served=frozenset(state.tool_dispatch),
+        cap_notes=() if held is None else (f"{held} Page on with per_run.next_cursor.",),
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:

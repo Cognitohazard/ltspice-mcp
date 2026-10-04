@@ -230,6 +230,26 @@ async def test_values_and_extrema_carry_outer_and_inner_identity(
 
 
 @pytest.mark.asyncio
+async def test_a_per_run_limit_past_the_page_cap_is_held_and_said(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A limit above 100 was refused at validation; the page is served at the
+    cap and the hint says so, since this tool has no top-level warnings."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
+        all_steps=True,
+        include={"per_run": {"limit": 500}},
+    )
+    assert data["outcome"] == "complete"
+    assert data["results"]["v"]["per_run"]["items"]
+    assert "include.per_run.limit=500 is above its cap of 100; 100 was used" in data["hint"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("allow_incomplete", "expected"),
     [(False, "indeterminate"), (True, "pass")],

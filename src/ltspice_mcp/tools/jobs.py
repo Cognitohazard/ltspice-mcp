@@ -50,6 +50,7 @@ from ltspice_mcp.tools._base import (
     REPEATABLE_CHANGE_ANNOTATIONS,
     ResponseBudget,
     ToolInput,
+    cap_note,
     failures_schema,
     format_response,
     outcome_of,
@@ -180,9 +181,8 @@ class JobsWaitInput(_AddressedJobsInput):
     timeout_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=JOBS_WAIT_CAP_S,
         description=(
-            "How long to block, 0-300s. Timing out is not a failure: the "
+            "How long to block, held to 300s. Timing out is not a failure: the "
             "response says timed_out and the job keeps running, so wait again."
         ),
     )
@@ -225,8 +225,7 @@ class JobsListInput(JobsInput):
     limit: int = Field(
         default=JOBS_PAGE_LIMIT,
         ge=1,
-        le=JOBS_PAGE_LIMIT,
-        description="Circuit groups per page.",
+        description="Circuit groups per page, held to 50.",
     )
     cursor: str | None = Field(
         default=None,
@@ -993,6 +992,8 @@ class JobsEvaluation:
     observations: tuple[dict[str, Any], ...] = ()
     circuit: Path | None = None
     error: _JobsError | None = None
+    # An argument held to its cap, said so in the response's warnings.
+    warnings: tuple[str, ...] = ()
 
     @property
     def is_error(self) -> bool:
@@ -1044,11 +1045,14 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             )
 
         timed_out: bool | None = None
+        held: tuple[str, ...] = ()
         if isinstance(args, JobsWaitInput):
+            note = cap_note("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
+            held = () if note is None else (f"{note} Wait again to keep waiting.",)
             job, timed_out = await _wait_for_jobs_target(
                 job,
                 state,
-                timeout_s=args.timeout_s,
+                timeout_s=min(args.timeout_s, JOBS_WAIT_CAP_S),
                 wait_for=args.wait_for,
             )
         # A runs page carries no observations, so it skips the progress reads.
@@ -1064,6 +1068,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             job_id=snapshot.job_id,
             request_id=snapshot.request_id,
             status=snapshot.status,
+            warnings=held,
         )
     except Exception as exc:
         return _failed_jobs_evaluation(args, exc, state)
@@ -1180,6 +1185,8 @@ def render_jobs_data(
         analysis_answer_channel=rung is not None and rung.answer_channel,
         analysis_rows_cap=limit if rung is not None and rung.shrink else None,
     )
+    if evaluation.warnings:
+        data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
     if action == "status":
         text = f"Job {snapshot.job_id}: {snapshot.status}"
     elif evaluation.timed_out:
@@ -1215,8 +1222,13 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
     """Execute one jobs control-plane action with an action-discriminated response."""
     evaluation = await evaluate_jobs(args, state)
     built: _JobsBuilt | None = None
+    held: str | None = None
     if evaluation.error is None:
-        page_limit = args.limit if isinstance(args, JobsListInput) else JOBS_PAGE_LIMIT
+        page_limit = JOBS_PAGE_LIMIT
+        if isinstance(args, JobsListInput):
+            # A page size is an MCP control; the Python API returns every group.
+            held = cap_note("limit", args.limit, JOBS_PAGE_LIMIT)
+            page_limit = min(args.limit, JOBS_PAGE_LIMIT)
         try:
             budget = resolve_response_budget(args.budget, state)
             if budget.tokens is None:
@@ -1242,6 +1254,8 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
         built = render_jobs_data(evaluation)
 
     data, text = built
+    if held is not None and not evaluation.is_error:
+        data["warnings"] = [f"{held} Page on with next_cursor.", *data.get("warnings", [])]
     result = format_response(text, data)
     result.is_error = evaluation.is_error
     return result
