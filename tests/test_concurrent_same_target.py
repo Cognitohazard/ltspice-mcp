@@ -195,12 +195,9 @@ async def test_identical_request_id_submits_one_job(
     surviving job claims, not the survivor of two that were staged.
 
     The duplicate is released once the first submission is staging, so it is
-    provably inside the gate's queue while the first holds it. Which of the two
-    responses carries the replay note is deliberately not asserted: the note is
-    a durable fact on the shared job record, so every receipt rendered after the
-    duplicate arrives carries it — including the original submitter's, whose
-    dwell may still be running. What the record must not do is accumulate a
-    second copy of it, which is asserted below.
+    provably inside the gate's queue while the first holds it. Exactly one of
+    the two responses says it replayed (its own ``replayed``), and the shared job
+    record it was answered from is left as it was.
     """
     submissions: list[str] = []
     fake_simulator(monkeypatch, submissions)
@@ -222,17 +219,12 @@ async def test_identical_request_id_submits_one_job(
     assert second.get("error") is None, second.get("error")
     assert first["job_id"] == second["job_id"]
     assert [p.stem for p in _job_records(work_dir)] == [first["job_id"]]
-    # The replay says so rather than looking like a second run — and says it
-    # once, however many callers read the record after it was noted.
-    replayed = [
-        d
-        for d in (first, second)
-        if any(o["code"] == "idempotent_replay" for o in d["observations"])
-    ]
-    assert replayed, "neither response reported the duplicate as a replay"
+    # The replay says so rather than looking like a second run, on its own
+    # receipt; the record it was answered from is left as it was.
+    replayed = [d for d in (first, second) if d["replayed"]]
+    assert len(replayed) == 1, "exactly one response is the replay"
     record = state_with_sim.all_jobs[first["job_id"]]
-    notes = [o for o in record.observations if o.get("code") == "idempotent_replay"]
-    assert len(notes) == 1, f"the replay was noted {len(notes)} times on one record"
+    assert not [o for o in record.observations if o.get("code") == "idempotent_replay"]
     assert len(submissions) == 1, f"the loser also reached the simulator: {submissions}"
     assert len(staged) == 1, f"both submissions staged a deck set: {staged}"
     assert first["job_id"] in staged[0].parts
