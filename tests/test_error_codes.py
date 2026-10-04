@@ -423,7 +423,6 @@ FROZEN_ERROR_CODES = (
     "geometry_not_literal",
     "hierarchy_write_conflict",
     "idempotency_conflict",
-    "idempotent_replay",
     "image_unavailable",
     "include_unstaged",
     "inner_device_not_found",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +44,6 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
-    REPLAY_RECORD_DETAIL,
     AnalysisCallback,
     ExperimentReceipt,
     ExperimentRunRequest,
@@ -1204,21 +1202,8 @@ async def _load_matching_replay(
     await asyncio.to_thread(
         lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
-    noted = experiment_store.note_once(
-        job.observations,
-        {
-            "code": "idempotent_replay",
-            "kind": "submission",
-            "detail": REPLAY_RECORD_DETAIL,
-        },
-    )
-    # Only the owner writes a job's record. Another process's copy was read
-    # while the job may still have been running, and writing it back can land
-    # after the owner's terminal write; the owner then looks gone from a
-    # record that says running, and the next reader recovers it as
-    # interrupted. The note still reaches this caller through its receipt.
-    if noted and job.owner_pid == os.getpid():
-        state.persist_job(job)
+    # The record is left as it is: the receipt's ``replayed`` is the fact about
+    # this call, and only the owner writes a job's record.
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 

@@ -105,9 +105,18 @@ tool-surface changes.
   record, read while the job was still running, and that write could land
   after the owner's `completed` one. The owner had exited by then, so the next
   reader found a running job with no owner and recovered it as interrupted.
-  Seen with two scripts detaching the same request. Only the owning process
-  writes a job's record now; the caller that replayed still gets the
-  `idempotent_replay` observation in its receipt.
+  Seen with two scripts detaching the same request. A replay now leaves the
+  job's record as it was, in every process: it used to add an
+  `idempotent_replay` observation to the record, which every later reader saw,
+  the original submitter included. The receipt's `replayed: true` is the fact
+  about the call that replayed, and that observation is no longer written.
+- The configuration file written on the first tool call set every key to the
+  default of the release that wrote it, `default = "ltspice"` included. A host
+  with only ngspice then logged a fallback warning on every start, and a later
+  release's default (`default_budget`, `open_plot`, `timeout` and the rest)
+  never reached a server whose file predated it. Every key is now written
+  commented out with its default shown, so the file sets nothing until a line
+  is uncommented. A file written by an earlier release keeps its values.
 - On Windows, a job record read while its running job rewrote it could read as
   missing: opening a file at the instant a rename replaces it fails with access
   denied for a moment. The request gate then minted a second job for a repeated
