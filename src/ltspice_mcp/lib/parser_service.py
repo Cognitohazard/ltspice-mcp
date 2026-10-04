@@ -172,16 +172,14 @@ def _load(
     label = source.raw or source.log or source.console or "analysis source"
     paths = {"raw": source.raw, "log": source.log, "console": source.console}
     allowed = state.allowed_paths() if not source.trusted_job_artifact else None
-    admitted: dict[str, JsonValue] = {
-        role: (
-            None
-            if path is None
-            else str(
-                resolve_safe_path(str(path), allowed) if allowed is not None else path.absolute()
-            )
-        )
-        for role, path in paths.items()
-    }
+    admitted: dict[str, JsonValue] = {}
+    for role, path in paths.items():
+        if path is None:
+            admitted[role] = None
+        elif allowed is None:
+            admitted[role] = str(path.absolute())
+        else:
+            admitted[role] = str(resolve_safe_path(str(path), allowed))
     _check_active(deadline, cancel)
     snapshot = state.results.snapshot(require_raw=require_raw)
     directory = state.store.parser_dir(uuid4().hex)

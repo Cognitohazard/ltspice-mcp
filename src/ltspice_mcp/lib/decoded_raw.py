@@ -135,30 +135,27 @@ _UNITS = {
     "current-density": "A/√Hz",
 }
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
+_ANALYSIS_NAMES: dict[str, Analysis] = {
+    "operating point": "op",
+    "transfer function": "tf",
+    "pole-zero analysis": "pz",
+    "transient analysis": "transient",
+    "ac analysis": "ac",
+    "dc transfer characteristic": "dc",
+    "integrated noise": "noise",
+}
 
 
 def _analysis(header: RawPlotHeader) -> Analysis:
     label = header.plot_name.strip().lower()
-    if label == "operating point":
-        return "op"
-    if label == "transfer function":
-        return "tf"
-    if label == "pole-zero analysis":
-        return "pz"
     if label == "sensitivity analysis":
         first = header.variables[0]
         return "sens_ac" if first.declared_type.lower() in ("frequency", "hertz") else "sens_dc"
     if label.startswith("distortion -"):
         return "disto"
-    if label == "transient analysis":
-        return "transient"
-    if label == "ac analysis":
-        return "ac"
-    if label == "dc transfer characteristic":
-        return "dc"
-    if label.startswith("noise spectral density") or label == "integrated noise":
+    if label.startswith("noise spectral density"):
         return "noise"
-    return "unknown"
+    return _ANALYSIS_NAMES.get(label, "unknown")
 
 
 def _trace_descriptor(

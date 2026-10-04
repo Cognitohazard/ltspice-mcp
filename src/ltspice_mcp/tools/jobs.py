@@ -1390,14 +1390,19 @@ def render_jobs_data(
         text = f"Returned {data['returned']} of {data['total']} run record(s)"
         return _without_control_tokens(data), text
 
+    action: Literal["status", "wait"] = "wait" if isinstance(args, JobsWaitInput) else "status"
+    data = render_jobs_receipt_snapshot(
+        action,
+        snapshot,
+        timed_out=None if isinstance(args, JobsResumeInput) else evaluation.timed_out,
+        runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
+        analysis_answer_channel=rung is not None and rung.answer_channel,
+        analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+    )
+    if evaluation.warnings:
+        data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
+
     if isinstance(args, JobsResumeInput):
-        data = render_jobs_receipt_snapshot(
-            "status",
-            snapshot,
-            runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
-            analysis_answer_channel=rung is not None and rung.answer_channel,
-            analysis_rows_cap=limit if rung is not None and rung.shrink else None,
-        )
         data.update(
             action="resume",
             resumed=evaluation.resumed,
@@ -1406,8 +1411,6 @@ def render_jobs_data(
             addressed_parent_job_id=args.job_id,
             head_job_id=evaluation.head_job_id,
         )
-        if evaluation.warnings:
-            data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
         if evaluation.resumed:
             if evaluation.control_token is not None:
                 data["control_token"] = evaluation.control_token
@@ -1418,17 +1421,6 @@ def render_jobs_data(
             )
         return data, f"Resume {args.resume_request_id}: job {snapshot.job_id} ({snapshot.status})"
 
-    action: Literal["status", "wait"] = "wait" if isinstance(args, JobsWaitInput) else "status"
-    data = render_jobs_receipt_snapshot(
-        action,
-        snapshot,
-        timed_out=evaluation.timed_out,
-        runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
-        analysis_answer_channel=rung is not None and rung.answer_channel,
-        analysis_rows_cap=limit if rung is not None and rung.shrink else None,
-    )
-    if evaluation.warnings:
-        data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
     if action == "status":
         text = f"Job {snapshot.job_id}: {snapshot.status}"
     elif evaluation.timed_out:
