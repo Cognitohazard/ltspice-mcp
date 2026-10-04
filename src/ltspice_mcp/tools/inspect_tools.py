@@ -2137,17 +2137,15 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
                     item.pop(key, None)
 
 
-#: This tool's budget epilogue. The hint mirror is why it is a value: the note's
-#: detail is written twice under a hint key, and the reserve has to know that.
-#: Structured-aware clients render only structuredContent, and 'hint' is where
-#: this tool puts guidance, so the mirror is not optional.
+#: This tool's budget epilogue, on ``observations``. Its trim rung drops only
+#: an exhausted item's page metadata, which the rows it returned restate, so the
+#: server's default budget never has anything to report here.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no query was dropped and no error was hidden.",
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on "
         "with each item's next_cursor."
     ),
-    hint_key="hint",
 )
 
 
@@ -2199,9 +2197,7 @@ async def _negotiate_inspect(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)

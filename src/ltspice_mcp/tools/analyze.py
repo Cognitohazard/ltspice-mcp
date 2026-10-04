@@ -3045,7 +3045,9 @@ def _degrade_analysis(
         # echo is the ladder working as specified, not a second revocation.
         keep = preserve_provenance and not rung.answer_channel
         empty = () if keep else _TRIM_EMPTY_ENVELOPE
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        rung.cut.extend(
+            response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        )
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3059,6 +3061,10 @@ _BUDGET_NOTES = response_budget.Notes(
     route=(
         "Ask again with a larger 'budget' for the full presentation, or continue "
         "with continue={result_set_id, cursor}."
+    ),
+    default_route=(
+        "Each row still names its source by manifest_id and label; "
+        "include.provenance keeps source_hashes."
     ),
 )
 
@@ -3090,9 +3096,7 @@ async def _negotiate_analysis(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     return format_response(text, result.data)
 
