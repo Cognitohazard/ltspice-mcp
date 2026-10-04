@@ -574,7 +574,7 @@ async def handle_run_experiments(
         )
         check_case_cap(projected, state.config.max_experiment_cases)
         if args.analyze is not None:
-            _validate_attached_analysis(args.analyze)
+            cap_warnings.extend(_validate_attached_analysis(args.analyze))
 
         # The first circuit's id (the deck's file stem unless the caller named
         # it) rides in the job id so the handle says what it ran.
@@ -1063,18 +1063,19 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
     return payload
 
 
-def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
+def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> list[str]:
     """Refuse a malformed attached analyze block BEFORE anything is staged.
 
     Validated only at the analysis stage, a typo'd recipe burns the whole
     simulation cycle — and the corrected block then changes the canonical
     fingerprint, so the retry re-runs every case. The placeholder job id used
     for this shape check never resolves, because validation does not touch the
-    registry.
+    registry. Returns what the block asked for that will be read differently
+    (a repeated group_by or include.fields entry read once), for the receipt.
     """
     request = analyze_block.model_dump(mode="json", exclude_unset=False)
     try:
-        analyze.AnalyzeResultsInput.model_validate(
+        validated = analyze.AnalyzeResultsInput.model_validate(
             _attached_analysis_payload("preflight", request)
         )
         # The input model deliberately skips per-recipe validation
@@ -1088,6 +1089,10 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
             "The attached analyze block is not a valid analyze_results request: "
             f"{validation_error_detail('analyze_results', exc)}"
         ) from exc
+    # The preflight source is this tool's own, so only the block's notes count.
+    return [
+        f"analyze.{note}" for note in validated.argument_notes() if not note.startswith("sources[")
+    ]
 
 
 def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:

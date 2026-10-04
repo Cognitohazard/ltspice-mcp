@@ -111,7 +111,38 @@ _VALUES_OMITTED_WARNING = (
 _DigestCache = dict[tuple[str, int, int], str]
 
 
-class CaseSelection(StrictModel):
+def _first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
+    """``values`` without repeats, in first-seen order, and the repeats dropped."""
+    seen: set[Any] = set()
+    kept: list[Any] = []
+    repeats: list[Any] = []
+    for value in values:
+        (repeats if value in seen else kept).append(value)
+        seen.add(value)
+    return kept, repeats
+
+
+def _repeat_note(name: str, repeats: list[Any]) -> str:
+    """The note for repeated entries read once."""
+    listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
+    return f"{name} repeated {listed}; each is read once."
+
+
+class _NotedModel(StrictModel):
+    """A request model that adjusts what it was given and keeps a note saying so.
+
+    The notes are what a response reports in its hint or warnings; they ride
+    beside the fields, so the request identity built from the fields names the
+    adjusted request.
+    """
+
+    _notes: list[str] = PrivateAttr(default_factory=list)
+
+    def argument_notes(self) -> list[str]:
+        return list(self._notes)
+
+
+class CaseSelection(_NotedModel):
     case_ids: list[str] = Field(
         min_length=1,
         description=(
@@ -122,12 +153,15 @@ class CaseSelection(StrictModel):
 
     @model_validator(mode="after")
     def _unique_cases(self) -> CaseSelection:
-        if len(set(self.case_ids)) != len(self.case_ids):
-            raise ValueError("case_ids must be unique")
+        kept, repeats = _first_seen(self.case_ids)
+        if repeats:
+            # Past validate_assignment, which would run this validator again.
+            object.__setattr__(self, "case_ids", kept)
+            self._notes.append(_repeat_note("case_ids", repeats))
         return self
 
 
-class AnalyzeSourceInput(StrictModel):
+class AnalyzeSourceInput(_NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
@@ -152,11 +186,12 @@ class AnalyzeSourceInput(StrictModel):
         ),
     )
     label: str = Field(
+        default="",
         min_length=1,
         description=(
             "Short unique name for this source; it tags every returned row and is "
             "what a recipe's own 'sources' list refers to. Name the condition "
-            "('nominal', 'hot'), not the file."
+            "('nominal', 'hot'). Default: the job_id, or the raw file's stem."
         ),
     )
 
@@ -167,10 +202,22 @@ class AnalyzeSourceInput(StrictModel):
         if isinstance(self.runs, list):
             if not self.runs:
                 raise ValueError("runs must be 'all' or a non-empty list")
-            if any(index < 0 for index in self.runs) or len(set(self.runs)) != len(self.runs):
-                raise ValueError("run indices must be unique non-negative integers")
-        if isinstance(self.runs, CaseSelection) and self.raw_path is not None:
-            raise ValueError("case_ids selection is available only for experiment jobs")
+            if any(index < 0 for index in self.runs):
+                raise ValueError("run indices must be non-negative integers")
+            kept, repeats = _first_seen(self.runs)
+            if repeats:
+                object.__setattr__(self, "runs", kept)
+                self._notes.append(_repeat_note("runs", repeats))
+        if isinstance(self.runs, CaseSelection):
+            if self.raw_path is not None:
+                raise ValueError("case_ids selection is available only for experiment jobs")
+            self._notes.extend(self.runs.argument_notes())
+        if "label" not in self.model_fields_set:
+            # One source, or several that name themselves: the label only has
+            # to tell this source's rows apart, and its job or file does that.
+            # AnalyzeResultsInput makes a repeat unique.
+            derived = self.job_id or Path(str(self.raw_path)).stem
+            object.__setattr__(self, "label", derived)
         return self
 
 
@@ -378,7 +425,7 @@ class PerRunInclude(CappedPerRunLimit):
     )
 
 
-class AnalyzeInclude(StrictModel):
+class AnalyzeInclude(_NotedModel):
     """Optional response blocks. The default carries reductions, groups and spec
     verdicts; per-run rows, outliers and signal listings are opt-in."""
 
@@ -438,8 +485,6 @@ class AnalyzeInclude(StrictModel):
         # rather than returning empty rows the caller has to explain.
         if self.fields is None:
             return self
-        if len(set(self.fields)) != len(self.fields):
-            raise ValueError("include.fields paths must be unique")
         resolved: list[str] = []
         for path in self.fields:
             segments = split_field_path(path)
@@ -455,6 +500,10 @@ class AnalyzeInclude(StrictModel):
                 # A bare name is the number's own name, which lives under 'value'.
                 path = f"value.{path}"
             resolved.append(path)
+        # A path named twice, or once bare and once under 'value', keeps one copy.
+        resolved, repeats = _first_seen(resolved)
+        if repeats:
+            self._notes.append(_repeat_note("include.fields", repeats))
         if resolved != self.fields:
             object.__setattr__(self, "fields", resolved)  # not re-validated
         return self
@@ -508,6 +557,8 @@ class ContinueInput(StrictModel):
 
 
 class AnalyzeResultsInput(StepSelectionFields, ToolInput):
+    _notes: list[str] = PrivateAttr(default_factory=list)
+
     sources: list[AnalyzeSourceInput] | None = Field(
         default=None,
         max_length=64,
@@ -561,51 +612,60 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput):
         alias="continue",
         description=(
             "Resume a budget-truncated response using its stored execution request "
-            "and cursor fields view. Other request fields are rejected."
+            "and cursor fields view. Request fields sent with it must match it."
         ),
     )
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
-        if self.continuation is not None:
-            # A continuation replays the execution request stored in the result
-            # set and takes its presentation view from the cursor, never these
-            # args. Reject them rather than accept and drop them: raising
-            # include.per_run.limit on resume is the obvious thing to try, and
-            # silently ignoring it hands back a page the caller did not ask for.
-            supplied = {
-                "sources",
-                "recipes",
-                "include",
-                "group_by",
-                "step",
-                "all_steps",
-            } & self.model_fields_set
-            if supplied:
-                raise ValueError(
-                    "'continue' is mutually exclusive with "
-                    + "/".join(sorted(supplied))
-                    + "; a continuation replays the stored execution request and "
-                    "the cursor's fields view. "
-                    "To change sources, recipes, grouping, step selection or "
-                    "include options, start a new analysis."
-                )
-            return self
-        if not self.sources or not self.recipes:
+        # A continuation replays the execution request stored in the result set
+        # and takes its presentation view from the cursor. Fields sent with it
+        # are normalized like a new request's here and compared with that
+        # stored request once it is loaded (_continuation_echo_mismatch): an
+        # echo of the original call is accepted, and a change is refused rather
+        # than dropped, because raising include.per_run.limit on resume is the
+        # obvious thing to try and ignoring it hands back a page the caller did
+        # not ask for.
+        if self.continuation is None and (not self.sources or not self.recipes):
             raise ValueError("a new analysis requires non-empty sources and recipes")
-        labels = [source.label for source in self.sources]
-        if len(set(labels)) != len(labels):
+        sources = self.sources or []
+        given = [source.label for source in sources if "label" in source.model_fields_set]
+        if len(set(given)) != len(given):
             raise ValueError("source labels must be unique")
+        # A label the caller left out is its source's job or file, which two
+        # sources can share (one job read twice, for different runs); a -2, -3
+        # suffix tells them apart, after every label the caller wrote.
+        taken = set(given)
+        for source in sources:
+            if "label" in source.model_fields_set:
+                continue
+            label, counter = source.label, 2
+            while label in taken:
+                label, counter = f"{source.label}-{counter}", counter + 1
+            taken.add(label)
+            if label != source.label:
+                object.__setattr__(source, "label", label)
         keys = [
             str(item.get("key", "")) if isinstance(item, dict) else str(getattr(item, "key", ""))
-            for item in self.recipes
+            for item in self.recipes or []
         ]
         nonempty = [key for key in keys if key]
         if len(set(nonempty)) != len(nonempty):
             raise ValueError("recipe keys must be unique")
-        if len(set(self.group_by)) != len(self.group_by):
-            raise ValueError("group_by dimensions must be unique")
+        kept, repeats = _first_seen(self.group_by)
+        if repeats:
+            object.__setattr__(self, "group_by", kept)
+            self._notes.append(_repeat_note("group_by", repeats))
         return self
+
+    def argument_notes(self) -> list[str]:
+        """What this request asked for that was read differently, one note each:
+        repeated entries read once, from here and from the nested models."""
+        notes = list(self._notes)
+        for index, source in enumerate(self.sources or []):
+            notes.extend(f"sources[{index}].{note}" for note in source.argument_notes())
+        notes.extend(self.include.argument_notes())
+        return notes
 
 
 @dataclass(frozen=True)
@@ -2513,10 +2573,11 @@ class AnalysisEvaluation:
     #: The session's tools, set only when rendering an MCP page, so a failure
     #: can say where its Python snippet runs; the neutral evaluation has none.
     served: frozenset[str] | None = None
-    # Arguments this call asked for past a cap, each said in the hint. Set by
-    # the MCP handler: the include an evaluation carries is the stored one,
-    # already held, so it no longer knows what was asked.
-    cap_notes: tuple[str, ...] = ()
+    # Arguments this call read differently from how it was asked (held to a
+    # cap, a repeat read once), each said in the hint. Set by the MCP handler:
+    # the request an evaluation carries is the stored one, already adjusted,
+    # so it no longer knows what was asked.
+    argument_notes: tuple[str, ...] = ()
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
@@ -2708,7 +2769,7 @@ def _assemble(
             "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
             "for the next page of missing cases (no work is replayed)."
         )
-    hints.extend(a.cap_notes)
+    hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
     text = (
@@ -3328,6 +3389,54 @@ class _DriveStart:
     include: AnalyzeInclude
 
 
+#: The request fields a ``continue`` call may echo; it replays them from the
+#: stored result set, so a copy is accepted only when it is the same request.
+_CONTINUATION_ECHO_FIELDS = frozenset(
+    {"sources", "recipes", "include", "group_by", "step", "all_steps"}
+)
+
+
+def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.ResultSet) -> None:
+    """Refuse request fields sent with ``continue`` that differ from the stored request.
+
+    Each field is compared in the form the result set stored it, so the
+    original call resent with ``continue`` passes, and one that changes a
+    source, a recipe, the grouping, the step selection or an include option is
+    refused, naming what changed.
+    """
+    supplied = _CONTINUATION_ECHO_FIELDS & args.model_fields_set
+    if not supplied:
+        return
+    inputs = item.inputs
+    include = args.include.model_dump(mode="json")
+    if isinstance(include.get("per_run"), dict):
+        include["per_run"]["cursor"] = None
+    steps = StepSelection.of(args).as_inputs()
+    stored = {
+        "sources": inputs.get("sources"),
+        "recipes": item.work,
+        "include": inputs.get("include"),
+        "group_by": inputs.get("group_by"),
+        "step": inputs.get("step"),
+        "all_steps": inputs.get("all_steps"),
+    }
+    sent = {
+        "sources": [source.model_dump(mode="json") for source in args.sources or []],
+        "recipes": _work_items(list(args.recipes or [])),
+        "include": include,
+        "group_by": list(args.group_by),
+        "step": steps["step"],
+        "all_steps": steps["all_steps"],
+    }
+    changed = sorted(name for name in supplied if sent[name] != stored[name])
+    if changed:
+        raise ResultError(
+            "'continue' replays the stored request, and " + "/".join(changed) + " differ "
+            "from it. Resend them unchanged or leave them out; to change sources, "
+            "recipes, grouping, step selection or include options, start a new analysis."
+        )
+
+
 async def _resolve_drive_start(
     args: AnalyzeResultsInput,
     state: SessionState,
@@ -3381,6 +3490,7 @@ async def _resolve_drive_start(
             args.continuation.result_set_id,
             state.working_dir,
         )
+        _continuation_echo_mismatch(args, item)
         position, intra_item, missing_offset = result_store.decode_cursor(
             args.continuation.cursor, item
         )
@@ -3746,11 +3856,14 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
+    notes = args.argument_notes()
     held = args.include.per_run.cap_note("include.per_run.limit") if args.include.per_run else None
+    if held is not None:
+        notes.append(f"{held} Page on with per_run.next_cursor.")
     assembly = replace(
         await _evaluate_analysis_drive(args, state, page_stop=_PageStop()),
         served=frozenset(state.tool_dispatch),
-        cap_notes=() if held is None else (f"{held} Page on with per_run.next_cursor.",),
+        argument_notes=tuple(notes),
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:

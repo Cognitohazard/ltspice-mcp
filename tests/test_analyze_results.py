@@ -250,6 +250,85 @@ async def test_a_per_run_limit_past_the_page_cap_is_held_and_said(
 
 
 @pytest.mark.asyncio
+async def test_a_source_without_a_label_is_named_after_its_file(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """'label' was required even for a single source, where it tells nothing
+    apart. Left out, it is the job_id or the raw file's stem; two sources that
+    would share one get a -2 suffix, and a label the caller wrote is kept."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    recipe = {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}
+
+    single = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {"sources": [{"raw_path": str(raw)}], "recipes": [recipe]}
+        ),
+        state_no_sim,
+    )
+    assert single.structured_content is not None
+    (row,) = single.structured_content["results"]["v"]["values"]
+    assert row["source"] == raw.stem
+
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [
+                {"raw_path": str(raw)},
+                {"raw_path": str(raw)},
+                {"raw_path": str(raw), "label": raw.stem},
+            ],
+            "recipes": [recipe],
+        }
+    )
+    assert [source.label for source in args.sources or []] == [
+        f"{raw.stem}-2",
+        f"{raw.stem}-3",
+        raw.stem,
+    ]
+    with pytest.raises(ValidationError, match="labels must be unique"):
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [
+                    {"raw_path": str(raw), "label": "same"},
+                    {"raw_path": str(raw), "label": "same"},
+                ],
+                "recipes": [recipe],
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_repeated_entries_are_read_once_and_said(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A repeated run index, group_by dimension or include.fields path was
+    refused; it asks for nothing more, so it is read once and the hint says so."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u", "reduce": ["max"]}],
+        all_steps=True,
+        group_by=["circuit", "circuit"],
+        include={"per_run": True, "fields": ["value", "value"]},
+    )
+    assert data["outcome"] == "complete"
+    assert "group_by repeated 'circuit'; each is read once." in data["hint"]
+    assert "include.fields repeated 'value'; each is read once." in data["hint"]
+    assert len(data["results"]["v"]["groups"]) == 1
+
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"raw_path": str(raw), "label": "dut", "runs": [0, 0]}],
+            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
+        }
+    )
+    assert args.sources is not None and args.sources[0].runs == [0]
+    assert args.argument_notes() == ["sources[0].runs repeated 0; each is read once."]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("allow_incomplete", "expected"),
     [(False, "indeterminate"), (True, "pass")],
@@ -1420,22 +1499,51 @@ async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     assert "analysis_budget_s" in message
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "extra",
+    ("extra", "changed"),
     [
-        {"include": {"per_run": {"limit": 100}}},
-        {"include": {"outliers": True}},
-        {"group_by": ["temp"]},
+        ({"include": {"per_run": {"limit": 7}}}, "include"),
+        ({"include": {"outliers": True}}, "include"),
+        ({"group_by": ["temp"]}, "group_by"),
+        ({"recipes": [{"key": "v", "metric": "value", "expr": "V(in)", "at": "900u"}]}, "recipes"),
     ],
 )
-def test_continuation_rejects_request_shaping_arguments(extra: dict[str, Any]):
-    """A continuation replays stored execution state plus its cursor view, so
-    include/group_by passed alongside it must not be silently dropped."""
-    from pydantic import ValidationError
+async def test_continuation_accepts_an_echo_and_refuses_a_change(
+    extra: dict[str, Any],
+    changed: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A continuation replays the stored request plus its cursor view. Sending
+    the original fields again with it was refused although they changed
+    nothing; a field that does change the request is still refused rather than
+    silently dropped."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    original = {
+        "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+        "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+    }
+    first = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(original), state_no_sim
+    )
+    assert first.structured_content is not None
+    resume = {
+        "continue": {
+            "result_set_id": first.structured_content["result_set_id"],
+            "cursor": first.structured_content["coverage"]["missing_cases"]["next_cursor"],
+        }
+    }
 
-    with pytest.raises(ValidationError, match="mutually exclusive"):
-        AnalyzeResultsInput.model_validate(
-            {"continue": {"result_set_id": "set-1", "cursor": "abc"}, **extra}
+    echoed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate({**original, **resume}), state_no_sim
+    )
+    assert echoed.structured_content is not None
+    assert echoed.structured_content["coverage"]["missing_cases"]["returned"] == 20
+
+    with pytest.raises(ResultError, match=f"{changed} differ"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate({**original, **extra, **resume}), state_no_sim
         )
 
 

@@ -636,7 +636,7 @@ axis is within a step.
 Input:
 
 ```
-sources    list[{job_id? | raw_path?, runs?: "all"|[int]|{case_ids}, label}]
+sources    list[{job_id? | raw_path?, runs?: "all"|[int]|{case_ids}, label?}]
 recipes    list[Recipe]   Appendix A.2; unique key; optional per-recipe
                           sources: [label]
 group_by   list[assignment param | "circuit" | step-axis name]
@@ -648,8 +648,9 @@ all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
 include    {per_run?: {limit? (held to 100), cursor?} | bool, outliers?, signals_available?,
             provenance?, fields?: [dotted row path]}
 budget     int | null
-continue   {result_set_id, cursor}   resumes a budget-truncated call; mutually
-                                     exclusive with sources/recipes
+continue   {result_set_id, cursor}   resumes a budget-truncated call; request
+                                     fields sent with it must be the stored
+                                     request's own
 ```
 
 `continue` is the wire spelling; the Python attribute is `continuation`.
@@ -681,10 +682,17 @@ in the result set, so a continuation replays them.
   ignored. A cursor with no embedded view falls back to the stored request's
   view. The `continue` input surface itself does not change.
 - A continuation replays the execution request stored in the result set and
-  takes its presentation view from the cursor. Other request fields are
-  rejected rather than accepted and dropped: raising `include.per_run.limit` on
+  takes its presentation view from the cursor. Request fields sent with it are
+  compared with that stored request: an echo of the original call (the natural
+  thing to resend) is accepted, and a field that differs is rejected, naming
+  it, rather than accepted and dropped: raising `include.per_run.limit` on
   resume is the obvious thing to try, and silently ignoring it hands back a
   page the caller did not ask for.
+- A repeated run index, `case_ids` entry, `group_by` dimension or
+  `include.fields` path asks for nothing more, so it is read once and the
+  `hint` says so; it used to be refused. A source without a `label` is named
+  after its job_id or its raw file's stem, with a `-2` suffix where two would
+  share one; a label the caller writes must still be unique.
 - Validation, results and errors are per recipe: one bad recipe fails that item
   only.
 - Reductions are attributed:
