@@ -370,14 +370,12 @@ def _merge_key_values(atoms: Sequence[_Atom], body: str) -> Iterator[Token]:
             # with or without whitespace around it, continues the value. The
             # same next-``key=`` guard keeps ``Is=1e-14, N=1`` two parameters.
             j = i + 3
-            while j < n and atoms[j].kind != _EQUALS:
+            while j < n and atoms[j].kind not in (_EQUALS, TokenKind.COMMENT_TRAIL.value):
                 nxt = atoms[j]
                 gap = body[value_end : nxt.offset]
                 if gap and gap.strip() != ",":
                     break
                 if nxt.kind == TokenKind.BARE.value and j + 1 < n and atoms[j + 1].kind == _EQUALS:
-                    break
-                if nxt.kind == TokenKind.COMMENT_TRAIL.value:
                     break
                 value_text += ("," if gap else "") + nxt.text
                 value_end = nxt.offset + len(nxt.text)

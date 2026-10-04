@@ -347,18 +347,9 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
 
 
 # The checks ``validate_netlist_arity`` runs, each with the severity of every
-# issue it reports. Each check is its own lint rule id, with the disposition
-# its severity names, so suppressing one never silences another:
-#
-# ``element-arity`` — fewer positional nodes than the element has terminals
-# (``R1 out 1k``); the simulator refuses the card.
-# ``bsource-value-prefix`` — a B-source whose expression has no V=/I= key
-# (LTspice also takes R= and P=); the simulator refuses the card.
-# ``value-keyword-ltspice`` — C=/L= as a capacitor's or inductor's primary
-# value, which LTspice 26 rejects as an unknown parameter (ngspice accepts it).
-# ``value-expression-remnant`` — tokens left over after the first key=value.
-# The deck may well run (``V = V(a) + V(b)``); what is certain is that a value
-# edit would rewrite only the first span, so it is a warning.
+# issue it reports (the reasons sit at each check). Each check is its own lint
+# rule id, with the disposition its severity names, so suppressing one never
+# silences another.
 ARITY_CHECKS: dict[str, Literal["error", "warning"]] = {
     "element-arity": "error",
     "bsource-value-prefix": "error",
@@ -367,23 +358,17 @@ ARITY_CHECKS: dict[str, Literal["error", "warning"]] = {
 }
 
 # Keywords that carry a two-terminal element's value, so every positional
-# token on the card is a node: the primary-value keys (``R1 a b R=1k``), and
-# LTspice's charge-defined capacitor (``C1 a b Q=...``), flux-defined inductor
-# (``L1 a b Flux=...``) and a source playing a .wav file
-# (``V1 a b wavefile="in.wav"``).
+# token on the card is a node: LTspice's charge-defined capacitor
+# (``C1 a b Q=...``), flux-defined inductor (``L1 a b Flux=...``) and a source
+# playing a .wav file (``V1 a b wavefile="in.wav"``). The primary-value keys
+# (``R1 a b R=1k``) are not here: ``InstanceLine`` already reads every
+# positional of that form as a node.
 _VALUE_KEYWORDS: dict[str, frozenset[str]] = {
-    "R": frozenset({"r"}),
-    "C": frozenset({"c", "q"}),
-    "L": frozenset({"l", "flux"}),
+    "C": frozenset({"q"}),
+    "L": frozenset({"flux"}),
     "V": frozenset({"wavefile"}),
     "I": frozenset({"wavefile"}),
 }
-
-# The keys a B-source's expression may sit under. LTspice adds a behavioural
-# resistor (R=) and a power sink (P=) to the voltage and current forms
-# ngspice also has.
-_BSOURCE_KEYS: dict[str, tuple[str, ...]] = {"LTspice": ("V", "I", "R", "P")}
-_BSOURCE_KEYS_DEFAULT = ("V", "I")
 
 
 def _card_directive(card: SpiceCard) -> str:
@@ -416,7 +401,10 @@ def validate_netlist_arity(
     LTspice's, and B-source R=/P= are LTspice forms.
     """
     issues: list[dict[str, object]] = []
-    bsource_keys = _BSOURCE_KEYS.get(simulator, _BSOURCE_KEYS_DEFAULT)
+    # The keys a B-source's expression may sit under. LTspice adds a
+    # behavioural resistor (R=) and a power sink (P=) to the voltage and
+    # current forms ngspice also has.
+    bsource_keys = ("V", "I", "R", "P") if simulator == "LTspice" else ("V", "I")
     for card in cards:
         if card.kind != "instance":
             continue
@@ -441,10 +429,10 @@ def validate_netlist_arity(
         has_kv = bool(inst.params)
         required = 2 if spec.kind_for(has_kv=has_kv) == "params_only" else spec.min_nodes
 
-        # A value carried by a keyword (``R1 a b R=1k``, ``C1 a b Q=...``)
-        # leaves every positional token after the ref a node. Re-count from
-        # the raw token stream so the last node is not read as a positional
-        # value.
+        # A value carried by a keyword the view does not read as the value
+        # (``C1 a b Q=...``) leaves every positional token after the ref a
+        # node. Re-count from the raw token stream so the last node is not read
+        # as a positional value.
         node_count = len(inst.nodes)
         value_keys = _VALUE_KEYWORDS.get(prefix, frozenset())
         if any(key.casefold() in value_keys for key in inst.params):
@@ -453,14 +441,14 @@ def validate_netlist_arity(
                 for tok in tokenize_body(card.body)[1:]
                 if tok.kind not in (TokenKind.KEY_VALUE, TokenKind.COMMENT_TRAIL)
             )
-        primary_value_key = next(
-            (key for key in inst.params if key.upper() == prefix),
-            None,
-        )
         # Real LTspice 26 accepts R=<value>, but rejects C=<value> and
         # L=<value> as unknown parameters. ngspice accepts all three, so this
         # rejection only applies to the LTspice target.
-        if prefix in ("C", "L") and primary_value_key is not None and simulator == "LTspice":
+        if (
+            prefix in ("C", "L")
+            and simulator == "LTspice"
+            and any(key.upper() == prefix for key in inst.params)
+        ):
             rewrite = " ".join([inst.ref, *inst.nodes, inst.value or ""])
             issues.append(
                 _arity_issue(
@@ -483,7 +471,7 @@ def validate_netlist_arity(
                 )
             )
 
-        if prefix == "B" and not {k.upper() for k in inst.params} & set(bsource_keys):
+        if prefix == "B" and not any(key.upper() in bsource_keys for key in inst.params):
             accepted = " or ".join(f"{key}=" for key in bsource_keys)
             issues.append(
                 _arity_issue(

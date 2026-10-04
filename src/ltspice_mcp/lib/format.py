@@ -73,10 +73,25 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
 # The micro sign (µ, U+00B5) is how LTspice's exporter spells 'u' in a
 # netlist, and the Greek mu (μ, U+03BC) is what a keyboard produces; both are
 # admitted to the tail and folded to 'u' before the suffix table is read.
-_NUM_TAIL_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Zµμ]+)$")
+_MANTISSA = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
+_NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ]+)$")
+# A number with at most a scale suffix and nothing after it.
+_SCALED_NUMBER_RE = re.compile(
+    rf"{_MANTISSA}(?:{'|'.join(suffix for suffix, _ in _SCALE_FACTORS)})?", re.IGNORECASE
+)
 #: The micro sign (U+00B5) and the Greek mu (U+03BC).
 MICRO_SIGNS = frozenset("µμ")
 _MICRO_SIGNS = str.maketrans(dict.fromkeys(MICRO_SIGNS, "u"))
+
+
+def is_scaled_number(text: str) -> bool:
+    """``text`` is a SPICE number with at most a scale suffix (``8``, ``2.5k``,
+    ``1meg``) and nothing after it.
+
+    Stricter than ``parse_spice_value``, which also reads a unit after the
+    suffix (``1uF``) and so would take a name such as ``2NPN`` for a number.
+    """
+    return _SCALED_NUMBER_RE.fullmatch(text) is not None
 
 
 def fold_micro_sign(text: str) -> str:

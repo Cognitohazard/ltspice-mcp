@@ -320,7 +320,7 @@ class TestElementArity:
         ],
     )
     def test_valid_ltspice_cards_raise_no_issue(self, card):
-        assert validate_netlist_arity(lex(f"{card}\n.end\n").cards) == []
+        assert self._arity(f"{card}\n.end") == []
 
     def test_b_source_resistor_and_power_forms_are_ltspice_only(self):
         # ngspice's B-source takes V= or I= only.
@@ -331,8 +331,7 @@ class TestElementArity:
     def test_every_issue_names_its_check_and_severity(self):
         # One card per check, so each check's issues are told apart by the
         # check that raised them, and each carries the severity it declares.
-        cards = lex("R1 a 1k\nB1 b 0 {V(a)}\nC1 c d C=1n\nB2 e 0 V = V(a) + V(b)\n.end\n").cards
-        issues = validate_netlist_arity(cards)
+        issues = self._arity("R1 a 1k\nB1 b 0 {V(a)}\nC1 c d C=1n\nB2 e 0 V = V(a) + V(b)\n.end")
         assert sorted(str(i["check"]) for i in issues) == sorted(ARITY_CHECKS)
         for issue in issues:
             assert issue["severity"] == ARITY_CHECKS[str(issue["check"])]

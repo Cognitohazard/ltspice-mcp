@@ -472,12 +472,10 @@ def _shape(card: SpiceCard) -> tuple[InstanceLine, bool]:
     pos = tokens[:first]
     kind = view.ref[0].upper()
     if kind == "X":
-        if pos and pos[-1].text.casefold() == "params:":
-            pos = pos[:-1]
-        if not pos or any(t.kind != TokenKind.BARE for t in pos):
+        # The view has already read the nodes and the subckt name before any
+        # ``params:``; only plain names are supported here.
+        if view.model is None or any(t.kind != TokenKind.BARE for t in pos):
             raise NetlistError(f"unsupported subcircuit call at line {card.line_start}")
-        view.nodes = [t.text for t in pos[:-1]]
-        view.model = pos[-1].text
         return view, True
     if kind == "M":
         return view, len(pos) == 5 and all(t.kind == TokenKind.BARE for t in pos)

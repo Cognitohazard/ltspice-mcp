@@ -76,7 +76,7 @@ from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
-from ltspice_mcp.lib.lint_rules import deck_generator, value_suffix_evidence
+from ltspice_mcp.lib.lint_rules import deck_generator, rule_severity, value_suffix_evidence
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -98,6 +98,7 @@ from ltspice_mcp.lib.schematic_scene import (
     layout_issues,
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
+from ltspice_mcp.lib.simulator import is_ngspice
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_validator import (
@@ -1003,9 +1004,9 @@ def _value_suffix_findings(
         if site.micro:
             rule_id, severity = "value_suffix_micro_sign", "warning"
         elif site.mojibake:
-            rule_id, severity = "value_suffix_mojibake", "error"
+            rule_id, severity = "value_suffix_mojibake", rule_severity("value-suffix-mojibake")
         else:
-            rule_id, severity = "value_suffix_nonascii", "warning"
+            rule_id, severity = "value_suffix_nonascii", rule_severity("value-suffix-nonascii")
         findings.append(
             _finding(
                 rule_id=rule_id,
@@ -2104,7 +2105,7 @@ async def evaluate_verify_circuit(
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
         # The simulator a run_experiments call with no override would use.
-        simulator = "ngspice" if state.raw_dialect == "ngspice" else "LTspice"
+        simulator = "ngspice" if is_ngspice(state.default_simulator) else "LTspice"
         findings.extend(
             await asyncio.to_thread(_syntax_findings, text, path, deck, encoding, simulator)
         )

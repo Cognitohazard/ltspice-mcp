@@ -54,6 +54,9 @@ class LintRule:
 class _LintContext:
     text: str
     path: Path
+    # The deck's cards without its line-1 title. Both simulators skip line 1
+    # of a netlist, so a title that starts with an element letter (``Diode
+    # clamp test``) is prose, not a card, for every rule.
     cards: list[SpiceCard]
     dialect: str | None
     simulator_name: str
@@ -69,25 +72,28 @@ class _LintContext:
         return self.dialect == "ngspice" or "ngspice" in self.simulator_name.casefold()
 
     @functools.cached_property
-    def body_cards(self) -> list[SpiceCard]:
-        """The deck's cards without its line-1 title.
-
-        Both simulators skip line 1 of a netlist as its title, so a title that
-        starts with an element letter (``Diode clamp test``) is prose, not a
-        card, for every rule that reads elements or values.
-        """
-        return drop_title_card(self.cards)
-
-    @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
-        """``validate_netlist_arity`` over the deck, run once for its four rules."""
+        """``validate_netlist_arity`` over the deck, run once for every arity rule."""
         simulator = "ngspice" if self.ngspice else "LTspice"
-        return validate_netlist_arity(self.body_cards, simulator=simulator)
+        return validate_netlist_arity(self.cards, simulator=simulator)
 
     @functools.cached_property
     def include_cards(self) -> tuple[tuple[Path, str, list[SpiceCard]], ...]:
         """Each staged include snapshot with its cards, lexed once for every rule."""
         return tuple((path, text, lex(text).cards) for path, text in self.includes)
+
+
+# The severity a finding reports for its rule's disposition.
+DISPOSITION_SEVERITY: dict[Disposition, str] = {
+    "blocking": "error",
+    "warning": "warning",
+    "observation": "observation",
+}
+
+
+def rule_severity(rule_id: str) -> str:
+    """The severity a finding of ``rule_id`` reports."""
+    return DISPOSITION_SEVERITY[RULES_BY_ID[rule_id].disposition]
 
 
 def _finding(
@@ -99,14 +105,9 @@ def _finding(
     evidence: Any,
     file: Path | None = None,
 ) -> LintFinding:
-    severity = {
-        "blocking": "error",
-        "warning": "warning",
-        "observation": "observation",
-    }[rule.disposition]
     return {
         "rule_id": rule.rule_id,
-        "severity": severity,
+        "severity": DISPOSITION_SEVERITY[rule.disposition],
         "ok": False,
         "evidence": evidence,
         "at": {"file": str(file or context.path), "line": line},
@@ -258,7 +259,7 @@ def _model_missing(
     declared = _declared_models(context.cards)
     declared.update(_models_from_staged_dependencies(context))
     findings = []
-    for card in context.body_cards:
+    for card in context.cards:
         if card.kind != "instance" or not card.name:
             continue
         try:
@@ -395,7 +396,7 @@ def _suffix_mega_milli(
     rule: LintRule,
 ) -> list[LintFinding]:
     findings = []
-    for card in context.body_cards:
+    for card in context.cards:
         if card.kind in {"comment", "blank"}:
             continue
         matches = [match.group(0) for match in _MILLI_SUFFIX_RE.finditer(card.body)]
@@ -532,7 +533,7 @@ def _value_suffix_findings(
     'u' by the time the deck is linted.
     """
     findings: list[LintFinding] = []
-    files = [(context.path, context.text, context.body_cards), *context.include_cards]
+    files = [(context.path, context.text, context.cards), *context.include_cards]
     for path, text, cards in files:
         sites = [
             site
@@ -559,19 +560,13 @@ def _value_suffix_findings(
     return findings
 
 
-def _value_suffix_mojibake(context: _LintContext, rule: LintRule) -> list[LintFinding]:
-    return _value_suffix_findings(context, rule, mojibake=True)
-
-
-def _value_suffix_nonascii(context: _LintContext, rule: LintRule) -> list[LintFinding]:
-    return _value_suffix_findings(context, rule, mojibake=False)
-
-
 def _normalize_signal(value: str) -> str:
     return re.sub(r"\s+", "", value).casefold()
 
 
-_ARITY_DISPOSITION: dict[str, Disposition] = {"error": "blocking", "warning": "warning"}
+_ARITY_DISPOSITION: dict[str, Disposition] = {
+    severity: disposition for disposition, severity in DISPOSITION_SEVERITY.items()
+}
 
 RULES: tuple[LintRule, ...] = (
     LintRule("save-meas-coverage", "blocking", _save_meas_coverage),
@@ -603,10 +598,18 @@ RULES: tuple[LintRule, ...] = (
     # scale, so the deck runs at the bare number, a factor of 1e6 off. A micro
     # sign itself never reaches the linter: staging has spelled it 'u' by then,
     # and verify_circuit reports it for a deck that will run elsewhere.
-    LintRule("value-suffix-mojibake", "blocking", _value_suffix_mojibake),
+    LintRule(
+        "value-suffix-mojibake",
+        "blocking",
+        functools.partial(_value_suffix_findings, mojibake=True),
+    ),
     # A warning: any other symbol after a number ('10Ω', '25°C') is read as the
     # bare number, which is usually what it means.
-    LintRule("value-suffix-nonascii", "warning", _value_suffix_nonascii),
+    LintRule(
+        "value-suffix-nonascii",
+        "warning",
+        functools.partial(_value_suffix_findings, mojibake=False),
+    ),
 )
 
 RULES_BY_ID: dict[str, LintRule] = {rule.rule_id: rule for rule in RULES}
@@ -639,7 +642,7 @@ def lint_deck(
     context = _LintContext(
         text=deck_text,
         path=path,
-        cards=lex(deck_text).cards,
+        cards=drop_title_card(lex(deck_text).cards),
         dialect=dialect,
         simulator_name=simulator_name,
         includes=tuple(includes),
