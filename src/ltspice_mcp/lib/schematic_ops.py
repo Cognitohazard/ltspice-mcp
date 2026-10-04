@@ -27,6 +27,7 @@ validate the extension and raise NetlistError for a non-.asc file.
 import asyncio
 import importlib
 import itertools
+import math
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
@@ -64,7 +65,9 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
+from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
@@ -245,16 +248,11 @@ _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 _LEVEL_LABEL_RE = re.compile(r"^\s*level\.\d+\s*$", re.IGNORECASE)
 
 
-# A SPICE number with an optional scale suffix (``2``, ``0.5``, ``1e-3``,
-# ``10u``): the positional area factor a BJT, JFET or diode takes after its
-# model name.
-_SPICE_NUMBER_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[a-zA-Zµμ]*")
-
 # Element classes with exactly two terminals before a value that runs to the
-# end of the line: an independent source's spec (``DC 5 AC 1``) and a
-# behavioural source's expression (``V=V(a) + V(b)``). LTspice writes the
-# nodes from the symbol's pins, so nothing in the value can be read as a node.
-_SPEC_VALUE_CLASSES = frozenset("VIB")
+# end of the line: an independent source's spec (``DC 5 AC 1``). LTspice writes
+# the nodes from the symbol's pins, so nothing in the value can be read as a
+# node. A behavioural source's expression is the same case, taken first.
+_SPEC_VALUE_CLASSES = frozenset("VI")
 
 # Element classes whose model name may be followed by an area factor and
 # ``off``: ``Q1 c b e 2N3904 2 off``, ``J1 d g s NJF 2``, ``D1 a k 1N4148 2``.
@@ -262,17 +260,18 @@ _SPEC_VALUE_CLASSES = frozenset("VIB")
 _AREA_CLASSES = frozenset("QJD")
 _OFF_CLASSES = frozenset("QJDM")
 
-_TOKEN_KINDS_OK = (
-    TokenKind.BARE,
-    TokenKind.PARENED,
-    TokenKind.QUOTED,
-    TokenKind.BRACED,
-    TokenKind.KEY_VALUE,
-)
+
+def _is_spice_number(text: str) -> bool:
+    """Whether ``text`` is one finite SPICE number (``2``, ``0.5``, ``10u``)."""
+    try:
+        return math.isfinite(parse_spice_value(text))
+    except ValueError:
+        return False
 
 
 def _device_tail_ok(element: str, tokens: list) -> bool:
-    """Whether ``tokens`` read as ``MODEL [area] [off] [KEY=VALUE ...]`` for ``element``.
+    """Whether ``tokens`` read as ``MODEL [area] [off] [KEY=VALUE ...]`` for ``element``,
+    one of the classes in ``_OFF_CLASSES``.
 
     The model name comes first; after it come at most one area factor (a number
     or a braced expression, for the classes that take one), at most one
@@ -284,12 +283,11 @@ def _device_tail_ok(element: str, tokens: list) -> bool:
     for tok in tokens[1:]:
         if tok.kind == TokenKind.KEY_VALUE:
             continue
-        text = tok.text
-        if element in _OFF_CLASSES and tok.kind == TokenKind.BARE and text.lower() == "off":
+        if tok.kind == TokenKind.BARE and tok.text.lower() == "off":
             off += 1
         elif element in _AREA_CLASSES and (
             tok.kind == TokenKind.BRACED
-            or (tok.kind == TokenKind.BARE and _SPICE_NUMBER_RE.fullmatch(text))
+            or (tok.kind == TokenKind.BARE and _is_spice_number(tok.text))
         ):
             area += 1
         else:
@@ -297,15 +295,14 @@ def _device_tail_ok(element: str, tokens: list) -> bool:
     return area <= 1 and off <= 1
 
 
-def _validate_component_value(reference: str, value: str, element: str | None = None) -> None:
+def _validate_component_value(reference: str, value: str, element: str) -> None:
     """Reject values that would corrupt the netlist line on write.
 
     LTspice writes the Value verbatim after the symbol's pins. A space in a
     single-token value (a resistor's ``1 k``, a subcircuit's ``opamp 2``)
     splits it into two tokens, and the netlist reader then takes the first as
     another node. ``element`` is the element class letter the part netlists
-    as (the symbol's prefix, else the reference's first letter); the shapes
-    that cannot do that are accepted:
+    as (``element_class``); the shapes that cannot do that are accepted:
 
     - SPICE expressions in braces (``{1/(2*pi*RC)}``) and quoted strings;
     - ``[MODEL] KEY=VALUE ...`` parameter lists (split by ``_apply_component_value``);
@@ -338,7 +335,6 @@ def _validate_component_value(reference: str, value: str, element: str | None = 
         stripped.startswith('"') and stripped.endswith('"')
     ):
         return
-    element = (element or reference[:1]).upper()
     # A behavioural source's expression may carry anything its own grammar
     # allows (comparison operators, a ternary); it cannot reach a node slot.
     if element == "B":
@@ -347,7 +343,9 @@ def _validate_component_value(reference: str, value: str, element: str | None = 
         toks = [t for t in tokenize_body(stripped) if t.kind != TokenKind.COMMENT_TRAIL]
     except SpiceLexError:
         toks = []
-    well_formed = bool(toks) and all(t.kind in _TOKEN_KINDS_OK for t in toks)
+    well_formed = bool(toks) and all(
+        t.kind in (*POSITIONAL_KINDS, TokenKind.KEY_VALUE) for t in toks
+    )
     if well_formed and element in _SPEC_VALUE_CLASSES:
         return
     if well_formed and element in _OFF_CLASSES and _device_tail_ok(element, toks):
@@ -358,13 +356,15 @@ def _validate_component_value(reference: str, value: str, element: str | None = 
     # group whose parens protect the embedded whitespace. Optionally
     # preceded by a DC magnitude (``"1 PULSE(...)"``) and followed by an
     # ``AC <mag>`` annotation (``"PULSE(...) AC 1"``).
-    if toks and any(t.kind == TokenKind.PARENED for t in toks):
-        # If the body is a sequence of BARE/PARENED tokens (no stray
-        # equals signs, no unbalanced quotes), the parens protect their
-        # internal whitespace from corrupting the netlist line.
-        ok_kinds = (TokenKind.BARE, TokenKind.PARENED, TokenKind.QUOTED, TokenKind.BRACED)
-        if all(t.kind in ok_kinds for t in toks):
-            return
+    # If the body is a sequence of positional tokens (no stray equals signs,
+    # no unbalanced quotes), the parens protect their internal whitespace from
+    # corrupting the netlist line.
+    if (
+        toks
+        and any(t.kind == TokenKind.PARENED for t in toks)
+        and all(t.kind in POSITIONAL_KINDS for t in toks)
+    ):
+        return
     # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one bare
     # head token (the model name) followed by a non-empty list of KEY=VALUE
     # tokens. The pure-params and head+params forms collapse into one rule.
@@ -467,7 +467,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str, element: str | None = None) -> None:
+def _apply_component_value(editor, reference: str, value: str, element: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -485,7 +485,6 @@ def _apply_component_value(editor, reference: str, value: str, element: str | No
     cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
-    element = (element or reference[:1]).upper()
     _validate_component_value(reference, value, element)
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
@@ -1498,6 +1497,11 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     workflow, so those are warnings, not refusals.
     """
     warnings: list[str] = []
+    part = net_partition(editor)
+    # A FLAG anywhere along a wire, its interior included, joins that wire's
+    # net, and one at a crossing joins both (see net_partition for the export
+    # record).
+    through = wires_through((x, y), wire_segments_of(editor))
     if net != "0":
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
         # same-name labels into one net, which is a valid (often simpler) way to
@@ -1513,7 +1517,7 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                     "connect to a component pin (Ref.Pin) instead."
                 )
                 break
-        joined = _label_join(editor, net, x, y)
+        joined = _label_join(part, through, net, (x, y))
         if len(joined) > 1:
             listed = "; ".join(f"{sorted(names)}" for names in joined)
             raise NetlistError(
@@ -1529,12 +1533,8 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                 "so a directive or probe that uses another may not find it."
             )
     # Floating label: a FLAG touching no wire and no component pin names
-    # nothing at netlist time. A FLAG anywhere along a wire, its interior
-    # included, names that wire's net (see net_partition for the export record).
-    all_pin_coords: set[tuple[int, int]] = set()
-    for ref in editor.get_components():
-        all_pin_coords.update(_component_pin_coords(editor, ref))
-    if not wires_through((x, y), wire_segments_of(editor)) and (x, y) not in all_pin_coords:
+    # nothing at netlist time.
+    if not through and (x, y) not in part.pin_owners:
         warnings.append(
             f"({x},{y}) touches no wire and no component pin — LTspice will ignore "
             "this floating label until you wire it up."
@@ -1542,39 +1542,27 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     return warnings
 
 
-def _label_join(editor: AscEditor, net: str, x: int, y: int) -> list[frozenset[str]]:
-    """The named nets placing label ``net`` at ``(x, y)`` would make one node.
+def _label_join(
+    part: NetPartition,
+    through: Sequence[tuple[int, int, int, int]],
+    net: str,
+    at: tuple[int, int],
+) -> list[frozenset[str]]:
+    """The named nets a label ``net`` placed at ``at`` would make one node.
 
-    Each comes back as its set of names, ground excluded, read off the sheet
-    before the label against the sheet with it: the label joins the wiring it
-    touches (both wires at a crossing) and, by name, every net already called
-    ``net``. Two or more is a short. The label goes on a copy of the label
-    list, so the editor is unchanged on return.
+    Read off the sheet's partition without the label: the label joins every
+    wire it touches (``through``, both wires at a crossing), whatever already
+    sits at ``at`` (a pin, a label, a wire end), and, by name, every net
+    already called ``net``. Each joined net comes back as its set of names,
+    ground excluded; two or more is a short.
     """
-    before = net_partition(editor)
-    node_before = label_folded_nets(before)
-    original = editor.labels
-    editor.labels = [
-        *original,
-        Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL),
-    ]
-    try:
-        after = net_partition(editor)
-    finally:
-        editor.labels = original
-    node_after = label_folded_nets(after)
-    here = node_after((x, y))
+    node_of = label_folded_nets(part)
     names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in before.label_texts.items():
-        names_by_node[node_before(coord)].update(named_labels(frozenset(texts)))
-    # The before-nodes the after-node is made of. A point the sheet did not have
-    # before (the label itself, off any vertex) reads as its own unnamed node.
-    nodes = {
-        node_before(c)
-        for root, coords in after.members.items()
-        if node_after(root) == here
-        for c in coords
-    }
+    for coord, texts in part.label_texts.items():
+        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
+    # A point the sheet does not have reads as its own unnamed node.
+    nodes = {node_of(at), *(node_of(seg[:2]) for seg in through)}
+    nodes.update(node_of(coord) for coord, texts in part.label_texts.items() if net in texts)
     return [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
 
 
