@@ -1074,17 +1074,13 @@ class TestAttachedBlockPreflight:
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "attached_dup.cir")
+        recipe = {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
 
         result = await handle_run_experiments(
             _args(
                 deck,
-                "attached-dup-group",
-                analyze={
-                    "recipes": [
-                        {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
-                    ],
-                    "group_by": ["R1", "R1"],
-                },
+                "attached-dup-key",
+                analyze={"recipes": [recipe, {**recipe, "at": "800u"}]},
             ),
             state_with_sim,
         )
@@ -1092,6 +1088,37 @@ class TestAttachedBlockPreflight:
         assert result.is_error
         assert "attached analyze block" in json.dumps(result.structured_content)
         assert submissions == []
+
+    async def test_a_repeated_group_by_entry_is_read_once_and_said(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # Refused at the door before; a repeat asks for nothing extra.
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_dup_group.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-dup-group",
+                    analyze={
+                        "recipes": [
+                            {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
+                        ],
+                        "group_by": ["R1", "R1"],
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "error" not in data, data.get("error")
+        assert len(submissions) == 1
+        assert "analyze.group_by repeated 'R1'; each is read once." in data["warnings"]
 
 
 class TestOptionalRequestId:

@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- `analyze_results` refused several requests that asked for nothing harmful.
+  A source's `label` is now optional (it defaults to the job_id or the raw
+  file's stem, with a `-2` suffix where two sources would share one); a
+  repeated run index, `case_ids` entry, `group_by` dimension or `include.fields`
+  path is read once and named in the `hint` (on an attached analysis, in the
+  receipt's `warnings`); and `continue` accepts the original request's fields
+  resent with it, refusing only a field that differs from the stored request,
+  which it now names. A label the caller writes must still be unique.
 - `jobs` refused a call carrying both `job_id` and `request_id`, even when
   both named the same job. Both are now accepted; when they name different jobs
   the call fails with the new code `selector_conflict`, naming the job the
