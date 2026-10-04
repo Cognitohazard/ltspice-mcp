@@ -3678,7 +3678,7 @@ async def capture_attached_analysis(
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
         "searches these by plain words and returns a recipe's fields. A signal is "
         "one trace or V(a,b), not an expression; other trace math is numpy "
-        "(spice://guide, 'trace math')."
+        "(guide section 'signals')."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(

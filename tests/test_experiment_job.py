@@ -47,7 +47,13 @@ from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR, staged_decks, symlink_or_skip
+from tests.conftest import (
+    FIXTURES_DIR,
+    check_in,
+    release_into_held_request_gate,
+    staged_decks,
+    symlink_or_skip,
+)
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -134,10 +140,15 @@ def _barrier_process(
     request_id: str,
     fingerprint: str,
     job_id: str,
+    ready: Any,
     start: Any,
+    entered: Any,
     result: Any,
 ) -> None:
-    """Process worker exercising the real request lock and durable barrier."""
+    """Process worker exercising the real request lock and durable barrier.
+
+    Checks in (``check_in``) once its request is built.
+    """
     working = Path(working_dir)
     circuit = Path(circuit_path)
     state = SimpleNamespace(working_dir=working)
@@ -149,8 +160,8 @@ def _barrier_process(
         simulator="FakeSim",
         job_id=job_id,
     )
-    start.wait(10)
     try:
+        check_in(ready, start, entered, 60)
         barrier = asyncio.run(_run_barrier(request))
         result.put((barrier.job.job_id, barrier.replayed, None))
     except Exception as exc:
@@ -887,10 +898,19 @@ class TestExperimentDiscovery:
 
 class TestRequestBarrier:
     def test_two_processes_same_request_create_one_coordinator(self, work_dir: Path):
+        """Both submissions are in flight together while the gate is closed.
+
+        Each process reports ready once it has started up, and this test holds
+        the request's gate while it releases them and until both have entered
+        their submission. Neither can finish before the gate opens, so the two
+        meet there rather than running one after the other.
+        """
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         context = multiprocessing.get_context("spawn")
+        ready = context.Queue()
         start = context.Event()
+        entered = context.Value("i", 0)
         result = context.Queue()
         processes = [
             context.Process(
@@ -901,7 +921,9 @@ class TestRequestBarrier:
                     "shared-request",
                     "a" * 64,
                     f"exp_process_{index}",
+                    ready,
                     start,
+                    entered,
                     result,
                 ),
             )
@@ -909,8 +931,10 @@ class TestRequestBarrier:
         ]
         for process in processes:
             process.start()
-        start.set()
-        outcomes = [result.get(timeout=20) for _ in processes]
+        release_into_held_request_gate(
+            work_dir, "shared-request", ready, start, entered, len(processes), 60
+        )
+        outcomes = [result.get(timeout=60) for _ in processes]
         for process in processes:
             process.join(20)
             assert process.exitcode == 0

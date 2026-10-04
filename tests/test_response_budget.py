@@ -7,6 +7,7 @@ and a page shrunk to fit a budget still pages to every row.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import copy
 import json
@@ -39,10 +40,10 @@ from ltspice_mcp.tools.jobs import (
 )
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
-# Every rung-0 allowlist the three budget-aware tools declare, paired with the
-# schema node whose keys it names. Listed rather than derived: the coverage test
-# below fails on any `_TRIM_*` constant that is not here, so a new allowlist
-# cannot slip in unpinned.
+# Every rung-0 allowlist the package declares, paired with the schema node whose
+# keys it names. Listed rather than derived, because the pairing is the point:
+# the coverage test below fails on any `_TRIM_*` constant declared anywhere in
+# the package that is not here, so a new allowlist cannot slip in unpinned.
 _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
     (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
@@ -51,6 +52,30 @@ _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (receipts_mod, "_TRIM_REMOVE_RECEIPT", jobs_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
 ]
+
+
+def _declared_trim_allowlists() -> set[tuple[str, str]]:
+    """Every module-level ``_TRIM_*`` name assigned anywhere in the package,
+    as ``(module, name)``. Read off the source with ``ast`` so nothing has to
+    be imported for its constants to be seen."""
+    package = Path(response_budget.__file__).resolve().parents[1]
+    declared: set[tuple[str, str]] = set()
+    for path in sorted(package.rglob("*.py")):
+        relative = path.relative_to(package.parent).with_suffix("")
+        module = ".".join(relative.parts)
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            declared.update(
+                (module, target.id)
+                for target in targets
+                if isinstance(target, ast.Name) and target.id.startswith("_TRIM_")
+            )
+    return declared
 
 
 class TestRungZeroAllowlists:
@@ -82,12 +107,16 @@ class TestRungZeroAllowlists:
                 assert key in required, f"{name} empties optional key {key!r}; remove it instead"
 
     def test_every_declared_allowlist_is_pinned(self):
-        """The fail-closed half: a rung-0 list added to a tool and not listed
-        above is an exemption nothing checks."""
-        for module in (analyze_mod, exp_mod, insp):
-            declared = {name for name in vars(module) if name.startswith("_TRIM_")}
-            pinned = {name for mod, name, _ in _TRIM_ALLOWLISTS if mod is module}
-            assert declared == pinned, f"{module.__name__}: unpinned rung-0 allowlists"
+        """The fail-closed half: a rung-0 list declared anywhere in the package
+        and not listed above is an exemption nothing checks.
+
+        Discovered from the source rather than from a list of modules: the
+        receipt's allowlist lives in ``receipts``, which no tool registers in,
+        so a hand-kept module list is exactly what would miss the next one.
+        """
+        assert _declared_trim_allowlists() == {
+            (module.__name__, name) for module, name, _ in _TRIM_ALLOWLISTS
+        }
 
 
 # A .step AC sweep: 45 attributed rows off one raw, which is the shape a budget

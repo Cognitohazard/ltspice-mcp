@@ -1,6 +1,7 @@
 """Tests for RunnerManager caching and invalidation logic."""
 
 import asyncio
+import contextlib
 import types as _types
 from pathlib import Path
 from typing import cast
@@ -30,8 +31,13 @@ class _StubRunner:
 
 
 @pytest.fixture(autouse=True)
-def _patch_runner_imports(monkeypatch):
-    """Patch importlib.import_module so RunnerManager creates _StubRunner instances."""
+def _patch_runner_imports(monkeypatch, request):
+    """Patch importlib.import_module so RunnerManager creates _StubRunner instances.
+
+    A test class that sets ``real_runners`` gets the real runner classes.
+    """
+    if getattr(request.cls, "real_runners", False):
+        return
     stub_module = MagicMock()
     stub_module.ExperimentRunner = _StubRunner
 
@@ -109,20 +115,119 @@ class TestRunnerManager:
         assert len(mgr._runners) == 0
         assert mgr._loop is None
 
-    def test_max_parallel_change_updates_cached_runner(self, loop):
-        # A later submission with a different max_parallel must re-cap the
-        # cached runner IN PLACE (same instance, so an in-flight batch's
-        # cancel-event and live-process tracking survive). Regression: the cap
-        # was honored only at creation, so a second run silently used the
-        # first's cap (observed: 4 processes under a requested 2).
-        mgr = RunnerManager()
-        sim_cls = type("FakeSim", (), {})
-        out = Path("/tmp/out")
 
-        r1 = mgr.get_experiment_runner(loop, sim_cls, out, max_parallel=4)
-        r2 = mgr.get_experiment_runner(loop, sim_cls, out, max_parallel=2)
-        assert r1 is r2
-        assert r2.max_parallel == 2
+def _submitter():
+    """A fresh manager's lookup for one simulator and folder, by cap."""
+    mgr = RunnerManager()
+    loop = asyncio.get_running_loop()
+    sim_cls = type("FakeSim", (), {})
+    return lambda max_parallel: mgr.get_experiment_runner(
+        loop, sim_cls, Path("runs"), max_parallel=max_parallel
+    )
+
+
+async def _admitted_without_waiting(runner) -> bool:
+    """Whether one more launch permit is granted at once. A granted permit is
+    left held; a wait is cancelled."""
+    attempt = asyncio.ensure_future(runner.acquire_launch_slot())
+    await asyncio.sleep(0)
+    if attempt.done():
+        return True
+    attempt.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await attempt
+    return False
+
+
+class TestCapChangeOnTheRealRunner:
+    """A later submission's cap, applied in place by the real runner's setter.
+
+    The cached instance is kept so an in-flight job's cancel state survives;
+    the cap was once honored only at creation, so a second run silently used
+    the first's (observed: 4 processes under a requested 2).
+    """
+
+    real_runners = True
+
+    async def test_a_lowered_cap_waits_for_held_permits_then_holds(self):
+        submit = _submitter()
+        runner = submit(2)
+        await runner.acquire_launch_slot()
+        await runner.acquire_launch_slot()
+
+        assert submit(1) is runner
+        assert runner.max_parallel == 1
+        # The two admitted runs keep their permits, and nothing joins them.
+        assert not await _admitted_without_waiting(runner)
+        runner.release_launch_slot()
+        runner.release_launch_slot()
+
+        # The next submission finds the runner idle, and the cap now holds.
+        assert submit(1) is runner
+        assert await _admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner)
+        runner.release_launch_slot()
+        assert await _admitted_without_waiting(runner)
+        runner.release_launch_slot()
+
+    async def test_a_lowered_cap_applies_once_the_runner_drains(self):
+        submit = _submitter()
+        runner = submit(2)
+        await runner.acquire_launch_slot()
+        await runner.acquire_launch_slot()
+        submit(1)
+        runner.release_launch_slot()
+        runner.release_launch_slot()
+
+        # No further submission: draining alone puts the lowered cap in force.
+        assert await _admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner), (
+            "a second run started under a cap of one"
+        )
+        runner.release_launch_slot()
+
+    async def test_a_lowered_cap_applies_when_the_last_waiter_gives_up(self):
+        """The last claim on a permit can end in a cancelled wait instead of a
+        release: a waiter handed the final permit, cancelled before it resumes.
+        The runner is idle then too, so the lowered cap applies."""
+        submit = _submitter()
+        runner = submit(2)
+        await runner.acquire_launch_slot()
+        await runner.acquire_launch_slot()
+        waiter = asyncio.ensure_future(runner.acquire_launch_slot())
+        await asyncio.sleep(0)
+        submit(1)
+        runner.release_launch_slot()  # hands this permit to the waiter
+        runner.release_launch_slot()
+        waiter.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiter
+
+        assert await _admitted_without_waiting(runner)
+        assert not await _admitted_without_waiting(runner), (
+            "a second run started under a cap of one"
+        )
+        runner.release_launch_slot()
+
+    async def test_a_lookup_while_a_permit_is_handed_over_keeps_the_cap(self):
+        """Releasing the only permit wakes the next run in line, which has not
+        counted itself yet. A submission that looks the runner up in that gap
+        must not reset the permits, or the woken run and a new one would both
+        launch under a cap of one."""
+        submit = _submitter()
+        runner = submit(1)
+        await runner.acquire_launch_slot()
+        woken = asyncio.ensure_future(runner.acquire_launch_slot())
+        await asyncio.sleep(0)
+        assert not woken.done()
+
+        runner.release_launch_slot()  # hands the permit to the waiting run
+        assert submit(1) is runner
+        await woken
+        assert not await _admitted_without_waiting(runner), (
+            "a second run started under a cap of one"
+        )
+        runner.release_launch_slot()
 
 
 class TestCapEviction:
