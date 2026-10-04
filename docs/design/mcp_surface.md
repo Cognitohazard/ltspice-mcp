@@ -928,7 +928,7 @@ render        {format: "png"|"svg", scale?, max_pixels?,
                delivery: "artifact"|"inline"|"both"}
               `true` selects the default policy; `false` or omitted renders
               nothing
-export_to     "managed" (default) | "sidecar"
+export_to     "sidecar" (default) | "managed"
 ```
 
 `compare` is shared with `edit_schematic`, `mode` included: `{reference,
@@ -941,12 +941,17 @@ the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
 said nothing the object did not, and a call carrying both was refused rather
 than resolved.
 
-`managed` export is non-destructive: it exports into a staged scratch directory
-in the store and writes nothing beside the caller's file (the lock it takes
-while copying lives in the per-user home). A compare of that export resolves
-its relative includes from the schematic's folder, not from the scratch copy. `sidecar` overwrites the deck's `.net`
-under lock and returns `{path, sha256, diff_vs_prior?}`; that makes the call
-destructive, which the annotation table reflects.
+`sidecar`, the default, overwrites the schematic's `<name>.net` under lock and
+returns `{path, sha256, diff_vs_prior?}`. That is the file LTspice itself
+writes beside a schematic it runs, and the one `run_experiments` exports
+through, so the default export adds nothing a run would not; it does make the
+call destructive, which the annotation table reflects. `managed` is the
+non-destructive alternative: it copies the schematic and the project-local
+`.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under its folder into a staged scratch
+directory in the store, exports there, and writes nothing beside the caller's
+file (the lock it takes while copying lives in the per-user home). A compare of
+that export resolves its relative includes from the schematic's folder, not
+from the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
@@ -1129,7 +1134,7 @@ symbol browser.
 | `jobs` | false | true (cancel) | true | false |
 | `analyze_results` | false (artifact writes) | false | true | false |
 | `edit_schematic` | false | true | false | false |
-| `verify_circuit` | false (render, sidecar) | true (export_to: sidecar) | true (managed mode) | false |
+| `verify_circuit` | false (render, export) | true (export_to: sidecar, the default) | true | false |
 | `inspect` | true | false | true | false |
 
 **Ownership.** Visibility covers all persisted jobs; cancel authority is the
