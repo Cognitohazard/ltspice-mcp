@@ -24,13 +24,14 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_text, component_value
+from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
     rewrite_staged_reference_cards,
     staged_reference_targets,
 )
+from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.instance_targeting import (
@@ -371,6 +372,8 @@ class DeckFile:
     text: str
     # Digest of exact staged bytes, which may use an encoding other than UTF-8.
     sha256: str = ""
+    # The codec a case copy of this file is written in (``StagedFile.codec``).
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -391,6 +394,8 @@ class CircuitDeck:
     id_from_file_stem: bool = False
     semantic_profile: SemanticProfile | None = None
     record_source_lineage: bool = False
+    # The codec a case deck is written in (``StagedDeck.codec``).
+    codec: str = "utf-8"
 
 
 @dataclass(frozen=True)
@@ -482,6 +487,8 @@ class _ClosureFile:
     path: Path
     text: str
     targets: _DeckTargets
+    # The codec a case copy of this file is written in.
+    codec: str = "utf-8"
 
     @property
     def depth(self) -> int:
@@ -763,7 +770,8 @@ def materialize_variants(
     suffix = circuit.path.suffix if circuit.path.suffix.lower() in RUN_DECK_SUFFIXES else ".cir"
     closure = _build_closure(circuit)
     captured_digests = {
-        file.path.resolve(): file.sha256 or hashlib.sha256(file.text.encode("utf-8")).hexdigest()
+        file.path.resolve(): file.sha256
+        or hashlib.sha256(encode_spice_text(file.text, file.codec)).hexdigest()
         for file in circuit.includes
     }
     materialized: list[MaterializedCase] = []
@@ -872,26 +880,17 @@ def materialize_variants(
         else:
             current = _case_closure(case_closure, _closure_files(case_closure, texts))
             referrers = _include_referrers(current)
-        destinations: dict[Path, Path] = {}
-        text = _write_case_includes(
-            case_closure,
-            referrers,
-            texts,
-            case.case_index,
-            destinations=destinations,
-        )
+        text, written = _write_case_includes(case_closure, referrers, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
-        destinations[circuit.path.resolve()] = path.resolve()
-        file_digests: list[tuple[Path, str]] = []
-        for file in case_closure.files:
-            source = file.path.resolve()
-            destination = destinations.get(source)
-            if destination is None:
-                destination = source
-                digest = captured_digests[source]
-            else:
-                digest = hashlib.sha256(texts[file.index].encode("utf-8")).hexdigest()
-            file_digests.append((destination, digest))
+        data = encode_spice_text(text, case_closure.files[0].codec)
+        written[circuit.path.resolve()] = (path.resolve(), hashlib.sha256(data).hexdigest())
+        destinations = {source: destination for source, (destination, _) in written.items()}
+        # Each file the case reads, where it reads it, and the digest of those
+        # bytes: its own copy where it wrote one, else the shared staged file.
+        file_digests = [
+            written[source] if source in written else (source, captured_digests[source])
+            for source in (file.path.resolve() for file in case_closure.files)
+        ]
         lineage = tuple(
             SourceLineage(
                 replace(
@@ -904,7 +903,7 @@ def materialize_variants(
             )
             for item in lineage
         )
-        atomic_write_text(path, text, durable=True)
+        atomic_write_bytes(path, data, durable=True)
         materialized.append(
             MaterializedCase(
                 case_id=case.case_id,
@@ -972,10 +971,11 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
             path=path,
             text=text,
             targets=_deck_targets(text, path, closure_depth(index)),
+            codec=codec,
         )
-        for index, (path, text) in enumerate(
-            [(circuit.path, circuit.text)]
-            + [(include.path, include.text) for include in circuit.includes]
+        for index, (path, text, codec) in enumerate(
+            [(circuit.path, circuit.text, circuit.codec)]
+            + [(include.path, include.text, include.codec) for include in circuit.includes]
         )
     ]
     return _DeckClosure(
@@ -1819,10 +1819,12 @@ def _write_case_includes(
     referrers: dict[int, set[int]],
     texts: dict[int, str],
     case_index: int,
-    *,
-    destinations: dict[Path, Path] | None = None,
-) -> str:
+) -> tuple[str, dict[Path, tuple[Path, str]]]:
     """Write this case's private copies of the includes it edited.
+
+    Returns the root deck's text, which the caller writes once the copies it
+    names exist, and, for each include copied, its source's resolved path with
+    the copy's path and the digest of the bytes written there.
 
     Isolation is by construction: a case only ever creates new ``case-NNNN__``
     files beside the shared staged originals and never writes to a path any
@@ -1830,8 +1832,9 @@ def _write_case_includes(
     under it. Every file on the include chain above an edited one is copied too
     — otherwise the copy would be written and nothing would point at it.
 
-    Every copy is UTF-8, so each spells a micro-sign suffix ``u``: staging did
-    so for the files it wrote, but an assigned value can bring the sign back.
+    Every copy is written in its staged file's codec and spells a micro-sign
+    suffix ``u``: staging did so for the files it wrote, but an assigned value
+    can bring the sign back.
     """
     edited = {index for index, text in texts.items() if text != closure.files[index].text}
     copies = {0}
@@ -1849,8 +1852,7 @@ def _write_case_includes(
         for index in copies
         if index != 0
     }
-    if destinations is not None:
-        destinations.update({path: path.with_name(name) for path, name in renames.items()})
+    written: dict[Path, tuple[Path, str]] = {}
     for index in sorted(copies):
         file = closure.files[index]
         cards = lex(texts[index]).cards
@@ -1859,10 +1861,13 @@ def _write_case_includes(
             texts[index] = emit(cards)
         if index == 0:
             continue
-        destination = file.path.with_name(renames[file.path.resolve()])
+        source = file.path.resolve()
+        destination = source.with_name(renames[source])
         destination.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(destination, texts[index], durable=True)
-    return texts[0]
+        data = encode_spice_text(texts[index], file.codec)
+        atomic_write_bytes(destination, data, durable=True)
+        written[source] = (destination, hashlib.sha256(data).hexdigest())
+    return texts[0], written
 
 
 def _spec(rule: RandomRuleBase) -> ToleranceSpec:
@@ -2561,7 +2566,12 @@ def _case_closure(closure: _DeckClosure, files: Sequence[ClosureFile]) -> _DeckC
         closure,
         files=tuple(
             _ClosureFile(
-                file.index, file.path, file.text, _deck_targets(file.text, file.path, file.depth)
+                file.index,
+                file.path,
+                file.text,
+                _deck_targets(file.text, file.path, file.depth),
+                # A file a structured edit cloned is new, and written as UTF-8.
+                closure.files[file.index].codec if file.index < len(closure.files) else "utf-8",
             )
             for file in files
         ),

@@ -81,6 +81,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     validate_recipe,
 )
+from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     simulator_dialect,
@@ -877,6 +878,12 @@ async def _prepare_circuit(
             # so without this no transistor sheet stages under a default
             # sandbox. Resolved per run from the simulator this job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
+            # A micro sign spelled 'u' changes what a value means only to an
+            # LTspice that decodes decks as cp1252, so only then is it reported.
+            # The identity is cached per executable, so this is a stat here.
+            cp1252_reader=cp1252_ltspice(
+                state, await asyncio.to_thread(executable_identity, simulator)
+            ),
         )
         findings = (
             []
@@ -918,8 +925,14 @@ async def _prepare_circuit(
             circuit_id=circuit_id,
             path=staged.staged_deck,
             text=staged.text,
+            codec=staged.codec,
             includes=tuple(
-                DeckFile(path=included.staged_path, text=included.text, sha256=included.sha256)
+                DeckFile(
+                    path=included.staged_path,
+                    text=included.text,
+                    sha256=included.sha256,
+                    codec=included.codec,
+                )
                 for included in staged.includes
             ),
             semantic_profile=(

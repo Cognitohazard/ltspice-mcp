@@ -139,7 +139,6 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -936,37 +935,6 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _reported_version(
-    state: SessionState,
-    executable: SimulatorExecutable | None,
-) -> tuple[str, dict[str, str]] | None:
-    """The build the latest run on this same executable reported, and which run.
-
-    Read from the jobs this session holds, its own and the recent ones loaded
-    at startup, so it is a run's own output rather than a probe: asking the
-    executable would launch the simulator. None until a run on this build has
-    finished and named itself.
-    """
-    if executable is None:
-        return None
-    latest = max(
-        (
-            (case.completed_at or job.started_at, job, case)
-            for job in state.all_jobs.values()
-            if same_executable(job.simulator_executable, executable)
-            for case in job.cases
-            if case.simulator_version
-        ),
-        key=lambda run: run[0],
-        default=None,
-    )
-    if latest is None:
-        return None
-    _, job, case = latest
-    assert case.simulator_version is not None
-    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
-
-
 def _do_capabilities(
     state: SessionState,
     raster: RasterSupport,
@@ -978,7 +946,7 @@ def _do_capabilities(
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
         executable = executables.get(name)
-        reported = _reported_version(state, executable)
+        reported = services.reported_version(state, executable)
         info: dict[str, Any] = {
             "available": True,
             "default": cls is state.default_simulator,
