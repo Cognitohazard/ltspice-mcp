@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
-from typing import Any, ClassVar, get_args
+from typing import Any, get_args
 
 import pytest
 from spicelib.simulators.qspice_simulator import Qspice
@@ -25,18 +25,22 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import simulator as simulator_mod
 from ltspice_mcp.lib import store
 from ltspice_mcp.lib.lint_rules import lint_deck
-from ltspice_mcp.lib.simulator import (
-    SIMULATORS,
-    SimulatorName,
-    simulator_remediation,
-)
+from ltspice_mcp.lib.simulator import SIMULATORS, SimulatorName, simulator_remediation
 from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+from ltspice_mcp.tools.experiments import RunExperimentsInput
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
-from tests.conftest import FakeSim, resolve_local_ref, terminal_experiment
+from tests.conftest import (
+    FakeSim,
+    capabilities_report,
+    job_runs,
+    ngspice_binary_raw,
+    resolve_local_ref,
+    stand_in_program,
+    submit_experiment,
+    terminal_experiment,
+)
 
 # The banner Xyce 7 opens its log with (the -l file spicelib asks for), in the
 # shape Xyce's startup code prints it.
@@ -96,106 +100,65 @@ def _qspice_ac_qraw() -> bytes:
 _TIMES = (0.0, 1e-3, 2e-3)
 _VOUT = (0.0, 0.632, 0.865)
 
+# A Xyce transient plot has ngspice's binary layout, every value a double, and
+# Xyce 7.9 writes no ``Command:`` field: nothing in these bytes says which
+# simulator wrote them, only the job's recorded simulator does.
+_XYCE_TRAN_RAW = ngspice_binary_raw(
+    list(zip(_TIMES, _VOUT, strict=True)), ["TIME", "V(OUT)"], declared=len(_TIMES)
+)
 
-def _xyce_tran_raw() -> bytes:
-    """A Xyce transient plot: every value a double, and no ``Command:`` field.
 
-    Xyce 7.9 does not name itself in the raw, so nothing in these bytes says
-    which simulator wrote them; only the job's recorded simulator does.
+def _stand_in(base: type, program: Path, raw: bytes, log: str) -> type:
+    """A subclass of spicelib's ``base`` whose every run leaves ``raw`` and ``log``.
+
+    It keeps spicelib's class name, because the job records that name and reads
+    its raw dialect back from it, and it launches ``program``, whose identity
+    the job records. The raw lands where spicelib looks for it: beside the deck
+    spicelib staged, with the class's own ``raw_extension`` (``.qraw`` for
+    QSPICE). ``launched`` lists the decks it ran.
     """
-    header = (
-        "Title: * rc\n"
-        "Date: Thu Oct  1 12:00:00 2026\n"
-        "Plotname: Transient Analysis\n"
-        "Flags: real\n"
-        "No. Variables: 2\n"
-        f"No. Points: {len(_TIMES)}\n"
-        "Variables:\n"
-        "\t0\tTIME\ttime\n"
-        "\t1\tV(OUT)\tvoltage\n"
-        "Binary:\n"
-    ).encode("ascii")
-    return header + b"".join(struct.pack("<2d", t, v) for t, v in zip(_TIMES, _VOUT, strict=True))
+    launched: list[str] = []
 
-
-class _RecordedQspice(Qspice):
-    """A QSPICE run: the ``.qraw`` and console log beside the deck spicelib staged."""
-
-    spice_exe = []  # noqa: RUF012 - spicelib declares it unannotated
-    process_name = "QSPICE64.exe"
-    launched: ClassVar[list[str]] = []
-
-    @classmethod
-    def run(
-        cls,
-        netlist_file,
-        cmd_line_switches=None,
-        timeout=None,
-        stdout=None,
-        stderr=None,
-        cwd=None,
-        exe_log=False,
-    ) -> int:
+    def run(cls: Any, netlist_file: Any, *_args: Any, **_kwargs: Any) -> int:
         netlist = Path(netlist_file)
-        cls.launched.append(netlist.name)
-        # spicelib reads the raw from the deck's path with the class's own
-        # raw_extension, so this is where a real run's result is looked for.
-        netlist.with_suffix(cls.raw_extension).write_bytes(_qspice_ac_qraw())
-        netlist.with_suffix(".log").write_text("Simulation completed.\n")
+        launched.append(netlist.name)
+        netlist.with_suffix(cls.raw_extension).write_bytes(raw)
+        netlist.with_suffix(".log").write_text(log)
         return 0
 
-
-class _RecordedXyce(XyceSimulator):
-    """A Xyce run: the raw and the ``-l`` log beside the deck spicelib staged."""
-
-    spice_exe = []  # noqa: RUF012 - spicelib declares it unannotated
-    process_name = "Xyce"
-    launched: ClassVar[list[str]] = []
-
-    @classmethod
-    def run(
-        cls,
-        netlist_file,
-        cmd_line_switches=None,
-        timeout=None,
-        stdout=None,
-        stderr=None,
-        cwd=None,
-        exe_log=False,
-    ) -> int:
-        netlist = Path(netlist_file)
-        cls.launched.append(netlist.name)
-        netlist.with_suffix(".raw").write_bytes(_xyce_tran_raw())
-        netlist.with_suffix(".log").write_text(XYCE_LOG)
-        return 0
+    return type(
+        base.__name__,
+        (base,),
+        {
+            "spice_exe": [str(program)],
+            "process_name": program.name,
+            "launched": launched,
+            "run": classmethod(run),
+        },
+    )
 
 
-def _named_as_spicelib(base: type, program: Path) -> type:
-    """A fresh subclass of ``base`` launching ``program``, under spicelib's class name."""
-    spicelib_name = base.__mro__[1].__name__
-    return type(spicelib_name, (base,), {"spice_exe": [str(program)], "launched": []})
-
-
-def _program(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"a build of " + path.name.encode())
-    return path
+def _host(monkeypatch: pytest.MonkeyPatch, platform_key: str) -> None:
+    """Run as if the server ran on ``platform_key``: windows, wsl, linux or darwin."""
+    monkeypatch.setattr(simulator_mod, "_platform_key", lambda: platform_key)
 
 
 @pytest.fixture
 def windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """This host is native Windows, the one place QSPICE runs."""
-    monkeypatch.setattr(simulator_mod, "_platform_key", lambda: "windows")
+    _host(monkeypatch, "windows")
 
 
 @pytest.fixture
 def qspice(work_dir: Path) -> type:
-    return _named_as_spicelib(_RecordedQspice, _program(work_dir / "sim" / "QSPICE64.exe"))
+    program = stand_in_program(work_dir / "sim" / "QSPICE64.exe", b"a QSPICE build")
+    return _stand_in(Qspice, program, _qspice_ac_qraw(), "Simulation completed.\n")
 
 
 @pytest.fixture
 def xyce(work_dir: Path) -> type:
-    return _named_as_spicelib(_RecordedXyce, _program(work_dir / "sim" / "Xyce"))
+    program = stand_in_program(work_dir / "sim" / "Xyce", b"a Xyce build")
+    return _stand_in(XyceSimulator, program, _XYCE_TRAN_RAW, XYCE_LOG)
 
 
 def _state(config: ServerConfig, **families: type) -> SessionState:
@@ -209,42 +172,34 @@ def _deck(work_dir: Path, name: str = "rc.cir") -> Path:
     return deck
 
 
-def _payload(deck: Path, request_id: str, simulator: str, **extra: Any) -> dict[str, Any]:
+def _payload(deck: Path, request_id: str, simulator: str | None, **extra: Any) -> dict[str, Any]:
+    """A one-circuit request; ``simulator`` None leaves the choice to the server."""
+    execution: dict[str, Any] = {"wait_s": 30}
+    if simulator is not None:
+        execution["simulator"] = simulator
     return {
         "request_id": request_id,
         "circuits": [{"path": str(deck), "id": "dut"}],
-        "execution": {"wait_s": 30, "simulator": simulator},
+        "execution": execution,
         **extra,
     }
 
 
-async def _submit(state: SessionState, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
-    data = result.structured_content
-    assert data is not None, result.content[0].text
-    return bool(result.is_error), data
+async def _recorded_run(
+    state: SessionState, work_dir: Path, job_id: str, simulator: Any, version: str
+) -> dict[str, Any]:
+    """Check what the job recorded about the build that ran it; return its run row.
 
-
-async def _runs(state: SessionState, job_id: str) -> list[dict[str, Any]]:
-    result = await handle_jobs(
-        JobsInput.model_validate({"action": "runs", "job_id": job_id}), state
-    )
-    assert result.structured_content is not None
-    return result.structured_content["items"]
-
-
-async def _capabilities(state: SessionState) -> dict[str, Any]:
-    result = await handle_inspect(
-        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
-    )
-    assert result.structured_content is not None
-    (item,) = result.structured_content["results"]
-    assert item["ok"], item
-    return item["data"]
-
-
-def _record(work_dir: Path, job_id: str) -> dict[str, Any]:
-    return json.loads(store.Store(work_dir).job_record(job_id).read_text())
+    The row names the build the run reported; the durable record names the
+    simulator class and the program it launched.
+    """
+    (run,) = await job_runs(state, job_id)
+    assert run["simulator_version"] == version
+    await state.job_registry.drain_pending()
+    record = json.loads(store.Store(work_dir).job_record(job_id).read_text())
+    assert record["simulator"] == simulator.__name__
+    assert record["simulator_executable"]["path"] == simulator.spice_exe[-1]
+    return run
 
 
 # ---------------------------------------------------------------------------
@@ -313,14 +268,9 @@ class TestRoundTrip:
         assert row["value"]["magnitude_linear"] == pytest.approx(2**-0.5)
         assert row["value"]["phase_deg"] == pytest.approx(-45.0)
 
-        (run,) = await _runs(state, receipt["job_id"])
-        assert run["raw"].endswith(".qraw")
         # QSPICE names its build in the raw's Command field.
-        assert run["simulator_version"] == QSPICE_COMMAND
-        await state.job_registry.drain_pending()
-        record = _record(work_dir, receipt["job_id"])
-        assert record["simulator"] == "Qspice"
-        assert record["simulator_executable"]["path"] == qspice.spice_exe[-1]
+        run = await _recorded_run(state, work_dir, receipt["job_id"], qspice, QSPICE_COMMAND)
+        assert run["raw"].endswith(".qraw")
 
     async def test_a_xyce_run_parses_with_the_dialect_its_job_recorded(
         self, config: ServerConfig, work_dir: Path, xyce: type
@@ -352,12 +302,7 @@ class TestRoundTrip:
         assert row["value"]["actual_x"] == pytest.approx(2e-3)
         assert row["value"]["value"] == pytest.approx(0.865)
 
-        (run,) = await _runs(state, receipt["job_id"])
-        assert run["simulator_version"] == XYCE_BUILD
-        await state.job_registry.drain_pending()
-        record = _record(work_dir, receipt["job_id"])
-        assert record["simulator"] == "XyceSimulator"
-        assert record["simulator_executable"]["path"] == xyce.spice_exe[-1]
+        await _recorded_run(state, work_dir, receipt["job_id"], xyce, XYCE_BUILD)
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +316,9 @@ class TestRefusal:
         self, config: ServerConfig, work_dir: Path
     ):
         state = _state(config)
-        is_error, data = await _submit(state, _payload(_deck(work_dir), "no-xyce", "xyce"))
+        is_error, data = await submit_experiment(
+            state, _payload(_deck(work_dir), "no-xyce", "xyce")
+        )
 
         assert is_error
         assert data["error"]["commit_state"] == "not_started"
@@ -382,9 +329,11 @@ class TestRefusal:
     async def test_qspice_off_windows_is_refused_with_the_reason(
         self, config: ServerConfig, work_dir: Path, qspice: type, monkeypatch
     ):
-        monkeypatch.setattr(simulator_mod, "_platform_key", lambda: "wsl")
+        _host(monkeypatch, "wsl")
         state = _state(config, qspice=qspice)
-        is_error, data = await _submit(state, _payload(_deck(work_dir), "qspice-wsl", "qspice"))
+        is_error, data = await submit_experiment(
+            state, _payload(_deck(work_dir), "qspice-wsl", "qspice")
+        )
 
         assert is_error
         assert data["error"]["commit_state"] == "not_started"
@@ -398,14 +347,13 @@ class TestRefusal:
     async def test_a_refused_default_is_refused_too(
         self, config: ServerConfig, work_dir: Path, qspice: type, monkeypatch
     ):
-        monkeypatch.setattr(simulator_mod, "_platform_key", lambda: "linux")
+        _host(monkeypatch, "linux")
         config.simulator = "qspice"
         state = SessionState.create(config, available={"qspice": qspice})
         assert state.default_simulator is qspice
-        payload = _payload(_deck(work_dir), "qspice-default", "qspice")
-        del payload["execution"]["simulator"]
-
-        is_error, data = await _submit(state, payload)
+        is_error, data = await submit_experiment(
+            state, _payload(_deck(work_dir), "qspice-default", None)
+        )
 
         assert is_error
         message = data["error"]["message"]
@@ -457,9 +405,7 @@ class TestLint:
     _KEYED_CAPACITOR = "* keyed\nV1 in 0 1\nR1 in out 1k\nC1 out 0 C=1u\n.tran 1m\n.end\n"
 
     def _arity(self, tmp_path: Path, dialect: str | None, simulator: type) -> list[str]:
-        deck = tmp_path / "keyed.cir"
-        deck.write_text(self._KEYED_CAPACITOR)
-        findings = lint_deck(deck.read_text(), deck, dialect, simulator)
+        findings = lint_deck(self._KEYED_CAPACITOR, tmp_path / "keyed.cir", dialect, simulator)
         return [f["subject"] for f in findings if f["rule_id"] == "directive-arity"]
 
     def test_ltspice_rejects_a_keyed_capacitor_value(self, tmp_path: Path):
@@ -504,10 +450,10 @@ class TestCapabilities:
     async def test_each_simulator_says_whether_a_run_can_select_it(
         self, config: ServerConfig, qspice: type, xyce: type, monkeypatch
     ):
-        monkeypatch.setattr(simulator_mod, "_platform_key", lambda: "linux")
+        _host(monkeypatch, "linux")
         state = _state(config, qspice=qspice, xyce=xyce)
 
-        simulators = (await _capabilities(state))["simulators"]
+        simulators = (await capabilities_report(state))["simulators"]
 
         assert simulators["xyce"]["selectable"] is True
         assert "refusal" not in simulators["xyce"]
@@ -523,7 +469,7 @@ class TestCapabilities:
     async def test_qspice_is_selectable_on_windows(
         self, config: ServerConfig, qspice: type, windows_host: None
     ):
-        simulators = (await _capabilities(_state(config, qspice=qspice)))["simulators"]
+        simulators = (await capabilities_report(_state(config, qspice=qspice)))["simulators"]
 
         assert simulators["qspice"]["selectable"] is True
         assert "refusal" not in simulators["qspice"]
@@ -550,7 +496,7 @@ class TestReference:
 
 class TestRemediation:
     def test_off_windows_qspice_is_not_sent_to_an_install(self, config: ServerConfig, monkeypatch):
-        monkeypatch.setattr(simulator_mod, "_platform_key", lambda: "wsl")
+        _host(monkeypatch, "wsl")
 
         remediation = simulator_remediation("qspice", config)
 

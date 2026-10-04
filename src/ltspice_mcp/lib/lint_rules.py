@@ -16,7 +16,12 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.simulator import current_ngbehavior
+from ltspice_mcp.lib.simulator import (
+    SIMULATOR_DISPLAY,
+    SIMULATORS,
+    current_ngbehavior,
+    simulator_family,
+)
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
@@ -54,23 +59,14 @@ class _LintContext:
     text: str
     path: Path
     cards: list[SpiceCard]
-    dialect: str | None
-    simulator_name: str
+    # The simulator family the deck is linted for (see ``lint_deck``).
+    family: str
     # The staged include closure, as (staged path, staged text) snapshots. On
     # a deck staged for a Windows simulator the rewritten references cannot be
     # re-read from the Linux side, so the snapshots are the authoritative
     # source for declarations the deck reaches through an include.
     includes: tuple[tuple[Path, str], ...] = ()
     ngbehavior: str | None = None
-
-    @property
-    def family(self) -> str:
-        """The simulator family the deck is linted for: named by the run's raw
-        dialect or simulator class, and LTspice when neither names another."""
-        for name in ("ngspice", "qspice", "xyce"):
-            if self.dialect == name or name in self.simulator_name.casefold():
-                return name
-        return "ltspice"
 
     @property
     def ngspice(self) -> bool:
@@ -338,9 +334,7 @@ def _directive_arity(
 ) -> list[LintFinding]:
     # The arity check's one simulator-specific rule (a C=/L= primary value) is
     # LTspice's, so only an LTspice deck may be held to it.
-    simulator = {"ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}.get(
-        context.family, "LTspice"
-    )
+    simulator = SIMULATOR_DISPLAY[context.family]
     return [
         _finding(
             context,
@@ -577,19 +571,15 @@ def lint_deck(
     instead of re-reading the deck's rewritten references from disk.
     """
     suppressed = set(suppress)
-    simulator_name = (
-        simulator
-        if isinstance(simulator, str)
-        else simulator.__name__
-        if simulator is not None
-        else ""
-    )
+    # A raw dialect names its family for every simulator but LTspice, so a
+    # non-LTspice dialect decides; otherwise the simulator class (or recorded
+    # class name) does, and a deck nothing names is linted as LTspice's.
+    named_by_dialect = dialect if dialect in SIMULATORS and dialect != "ltspice" else None
     context = _LintContext(
         text=deck_text,
         path=path,
         cards=lex(deck_text).cards,
-        dialect=dialect,
-        simulator_name=simulator_name,
+        family=named_by_dialect or simulator_family(simulator) or "ltspice",
         includes=tuple(includes),
         ngbehavior=ngbehavior,
     )

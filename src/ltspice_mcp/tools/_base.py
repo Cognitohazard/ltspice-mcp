@@ -35,7 +35,11 @@ from ltspice_mcp.lib.runner_base import (
 )
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
-from ltspice_mcp.lib.simulator import no_simulator_message, run_refusal
+from ltspice_mcp.lib.simulator import (
+    family_refusal,
+    no_simulator_message,
+    simulator_family,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._schema import (
     ToolInput,
@@ -1038,13 +1042,12 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
     so a caller can pick which detected simulator an experiment executes on.
     Raises SimulationError if the requested name is not among the detected
     simulators, if none is available at all (``require_simulator``), or if the
-    resolved simulator is one this host cannot run (``run_refusal``) — a
+    resolved simulator is one this host cannot run (``family_refusal``) — a
     refusal here, before anything is staged, rather than a run handed paths
     the simulator cannot open.
     """
     if requested is not None:
-        name = requested.lower()
-        sim_cls = state.available_simulators.get(name)
+        sim_cls = state.available_simulators.get(requested.lower())
         if sim_cls is None:
             raise SimulationError(
                 f"Simulator '{requested}' is not available on this server "
@@ -1056,18 +1059,17 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
         require_simulator(state)
         sim_cls = state.default_simulator
         assert sim_cls is not None  # guaranteed by require_simulator
-        name = next(
-            (key for key, cls in state.available_simulators.items() if cls is sim_cls),
-            sim_cls.__name__,
-        )
-    refusal = run_refusal(sim_cls)
+    family = simulator_family(sim_cls)
+    refusal = family_refusal(family)
     if refusal is not None:
         selectable = [
-            key for key, cls in state.available_simulators.items() if run_refusal(cls) is None
+            key
+            for key, cls in state.available_simulators.items()
+            if family_refusal(simulator_family(cls)) is None
         ]
         role = "Simulator" if requested is not None else "The server's default simulator"
         raise SimulationError(
-            f"{role} '{name}' cannot run here: {refusal} Selectable here: "
+            f"{role} '{family}' cannot run here: {refusal} Selectable here: "
             f"{selectable}; inspect(kind='capabilities') says which simulators a "
             "run can select.",
             show_hint=False,
