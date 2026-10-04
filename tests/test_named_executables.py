@@ -42,9 +42,14 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import resolve_run_simulator
 from ltspice_mcp.tools.experiments import RunExperimentsInput
-from tests.conftest import terminal_experiment
+from tests.conftest import (
+    capabilities_report,
+    stand_in_program,
+    submit_experiment,
+    terminal_experiment,
+)
 from tests.test_parallel_sessions import _FakeProc
-from tests.test_simulator_build import _capabilities, _program, _sha256, _submit
+from tests.test_simulator_build import _sha256
 
 FIXTURES = Path(__file__).parent / "fixtures"
 XVII_BUILD = "LTspice 17.1.8 for Windows"
@@ -146,9 +151,15 @@ def recording_families(monkeypatch: pytest.MonkeyPatch) -> None:
 def builds(work_dir: Path) -> dict[str, Path]:
     """Three LTspice builds installed side by side, at their usual file names."""
     return {
-        "default": _program(work_dir / "programs" / "ADI" / "LTspice.exe", DEFAULT_BUILD.encode()),
-        "xvii": _program(work_dir / "programs" / "LTC" / "XVIIx64.exe", XVII_BUILD.encode()),
-        "lt24": _program(work_dir / "programs" / "LT24" / "LTspice.exe", LT24_BUILD.encode()),
+        "default": stand_in_program(
+            work_dir / "programs" / "ADI" / "LTspice.exe", DEFAULT_BUILD.encode()
+        ),
+        "xvii": stand_in_program(
+            work_dir / "programs" / "LTC" / "XVIIx64.exe", XVII_BUILD.encode()
+        ),
+        "lt24": stand_in_program(
+            work_dir / "programs" / "LT24" / "LTspice.exe", LT24_BUILD.encode()
+        ),
     }
 
 
@@ -272,8 +283,8 @@ class TestBinding:
             ("wrapper", "run-sim.cmd", '"<family>:wrapper"'),
             # A name that is an LTspice, bound to ngspice.
             ("ngspice:odd", "XVIIx64.exe", "looks like a ltspice executable"),
-            # A family no run can be put on.
-            ("qspice:q", "QSPICE64.exe", "a run can be put on"),
+            # A family this server does not support.
+            ("spectre:s", "spectre", "a run can be put on"),
             # Upper case would make two spellings of one selector.
             ("ltspice:XVII!", "XVIIx64.exe", "not a valid executable name"),
         ],
@@ -281,7 +292,7 @@ class TestBinding:
     def test_an_entry_that_cannot_be_bound_says_why(
         self, config: ServerConfig, work_dir: Path, key: str, file_name: str, reason: str
     ):
-        exe = _program(work_dir / "programs" / file_name, b"build")
+        exe = stand_in_program(work_dir / "programs" / file_name, b"build")
         config.simulator_executables = {key: exe}
         diagnostics: list[str] = []
 
@@ -297,7 +308,9 @@ class TestBinding:
             "gone": work_dir / "programs" / "missing" / "XVIIx64.exe",
             # What an empty path becomes once it is a Path: the current folder.
             "ltspice:here": Path("."),
-            "ngspice:dev": _program(work_dir / "programs" / "ngspice", NGSPICE_BUILD.encode()),
+            "ngspice:dev": stand_in_program(
+                work_dir / "programs" / "ngspice", NGSPICE_BUILD.encode()
+            ),
         }
         config.enabled_simulators = ["ltspice"]
         diagnostics: list[str] = []
@@ -333,14 +346,17 @@ class TestBinding:
 
 
 class TestSelection:
-    @pytest.mark.parametrize("value", ["ltspice", "ngspice", "ltspice:xvii", "ngspice:dev-1.2"])
+    @pytest.mark.parametrize(
+        "value",
+        ["ltspice", "ngspice", "qspice", "xyce", "ltspice:xvii", "ngspice:dev-1.2", "xyce:7.8"],
+    )
     def test_the_field_takes_a_family_or_a_family_and_a_name(self, value: str):
         args = RunExperimentsInput.model_validate(
             {"circuits": [{"path": "a.cir"}], "execution": {"simulator": value}}
         )
         assert args.execution.simulator == value
 
-    @pytest.mark.parametrize("value", ["qspice", "qspice:x", "LTspice:XVII", "ltspice:", "xvii"])
+    @pytest.mark.parametrize("value", ["spectre", "spectre:x", "LTspice:XVII", "ltspice:", "xvii"])
     def test_the_field_refuses_anything_else(self, value: str):
         with pytest.raises(ValidationError):
             RunExperimentsInput.model_validate(
@@ -372,7 +388,7 @@ class TestSelection:
     ):
         state = _state(config, builds, {"xvii": builds["xvii"]})
 
-        is_error, data = await _submit(state, _payload(deck, "unknown", "ltspice:lt24"))
+        is_error, data = await submit_experiment(state, _payload(deck, "unknown", "ltspice:lt24"))
 
         assert is_error
         assert data["error"]["commit_state"] == "not_started"
@@ -442,12 +458,13 @@ class TestRoutedRuns:
         state = _state(config, builds)
         receipt = await terminal_experiment(state, _payload(deck, "caps", "ltspice:xvii"))
 
-        caps = await _capabilities(state)
+        caps = await capabilities_report(state)
 
         named = caps["named_executables"]
         assert set(named) == {"ltspice:xvii", "ltspice:lt24"}
         assert named["ltspice:xvii"] == {
             "family": "ltspice",
+            "selectable": True,
             "version": XVII_BUILD,
             "version_source": {
                 "job_id": receipt["job_id"],
@@ -489,7 +506,7 @@ class TestRoutedRuns:
         builds: dict[str, Path],
         recording_families: None,
     ):
-        ngspice = _program(
+        ngspice = stand_in_program(
             work_dir / "programs" / "ngspice-dev" / "ngspice", NGSPICE_BUILD.encode()
         )
         state = _state(config, builds, {"xvii": builds["xvii"], "ngspice:dev": ngspice})
@@ -539,7 +556,9 @@ class TestReplayAcrossNames:
         await self._first(config, deck, builds, "across-names")
         restarted = _state(config, builds)
 
-        is_error, data = await _submit(restarted, _payload(deck, "across-names", "ltspice:lt24"))
+        is_error, data = await submit_experiment(
+            restarted, _payload(deck, "across-names", "ltspice:lt24")
+        )
 
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
@@ -555,7 +574,9 @@ class TestReplayAcrossNames:
         # The same name, now pointing at the other install.
         restarted = _state(config, builds, {"xvii": builds["lt24"]})
 
-        is_error, data = await _submit(restarted, _payload(deck, "rebound", "ltspice:xvii"))
+        is_error, data = await submit_experiment(
+            restarted, _payload(deck, "rebound", "ltspice:xvii")
+        )
 
         assert is_error
         assert data["error"]["code"] == "idempotency_conflict"
@@ -573,7 +594,7 @@ class TestReplayAcrossNames:
         first = await self._first(config, deck, builds, "same")
         restarted = _state(config, builds, {"xvii": builds["xvii"]})
 
-        is_error, data = await _submit(restarted, _payload(deck, "same", "ltspice:xvii"))
+        is_error, data = await submit_experiment(restarted, _payload(deck, "same", "ltspice:xvii"))
 
         assert not is_error
         assert data["replayed"] is True

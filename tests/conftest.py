@@ -281,6 +281,58 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
     return data
 
 
+def stand_in_program(path: Path, content: bytes) -> Path:
+    """A file standing in for a simulator executable: its bytes are its build."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
+async def submit_experiment(
+    state: SessionState, payload: dict[str, typing.Any]
+) -> tuple[bool, dict[str, typing.Any]]:
+    """One run_experiments call: whether it answered as an error, and its reply,
+    checked against the tool's declared output schema."""
+    import jsonschema
+
+    from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+    from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
+
+    result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
+    data = result.structured_content
+    assert data is not None, result.content[0].text
+    jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+    return bool(result.is_error), data
+
+
+async def job_runs(
+    state: SessionState, job_id: str, **extra: typing.Any
+) -> list[dict[str, typing.Any]]:
+    """The full run rows ``jobs(action="runs")`` returns for a job."""
+    from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
+
+    result = await handle_jobs(
+        JobsInput.model_validate({"action": "runs", "job_id": job_id, **extra}), state
+    )
+    data = result.structured_content
+    assert data is not None
+    return data["items"]
+
+
+async def capabilities_report(state: SessionState) -> dict[str, typing.Any]:
+    """The whole ``inspect(kind="capabilities")`` report."""
+    from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+    result = await handle_inspect(
+        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
+    )
+    data = result.structured_content
+    assert data is not None
+    (item,) = data["results"]
+    assert item["ok"], item
+    return item["data"]
+
+
 def symlink_or_skip(link: Path, target: Path, **kwargs: typing.Any) -> None:
     """Create ``link`` -> ``target``, or skip: on Windows a symlink needs a
     privilege an ordinary account does not hold."""
@@ -327,7 +379,7 @@ def ngspice_binary_raw(
         f"No. Points: {declared:<8d}\n"
         "Variables:\n"
         + "".join(
-            f"\t{index}\t{name}\t{'time' if name == 'time' else 'voltage'}\n"
+            f"\t{index}\t{name}\t{'time' if name.lower() == 'time' else 'voltage'}\n"
             for index, name in enumerate(names)
         )
         + "Binary:\n"
