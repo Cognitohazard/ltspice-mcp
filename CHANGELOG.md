@@ -10,6 +10,10 @@ tool-surface changes.
 
 ### Fixed
 
+- `inspect(kind="model", mode="enumerate")` refused a `query` because it never
+  filtered. It now lists only the models whose name contains the query,
+  case-insensitively, and echoes the filter it applied; `search` keeps its
+  fuzzy match.
 - `analyze_results` refused several requests that asked for nothing harmful.
   A source's `label` is now optional (it defaults to the job_id or the raw
   file's stem, with a `-2` suffix where two sources would share one); a

@@ -37,7 +37,8 @@ is what lets a first edit commit in one call; an edit attempted without it is
 refused with the current digest attached, so that path costs one retry rather
 than a hunt.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
-  ``enumerate`` lists every model defined in the given ``libs``.
+  ``enumerate`` lists every model defined in the given ``libs``, narrowed to
+  the names containing ``query`` when one is given.
 * ``reference`` — the tools' own branch vocabulary (``tools/reference_index.py``):
   a plain-words ``query`` returns the closest analysis recipes, schematic ops,
   variation kinds, checks and job actions with their full field tables, and no
@@ -584,13 +585,12 @@ class ModelQuery(StrictModel):
     mode: Literal["search", "enumerate"] = Field(
         description=(
             "'search' fuzzy-matches 'query' and requires it; 'enumerate' lists "
-            "every model in 'libs' and rejects a 'query' rather than echoing "
-            "back a filter it never applied."
+            "every model in 'libs', or with 'query' those whose name contains it."
         )
     )
     query: str | None = Field(
         default=None,
-        description="Part name or fragment to match; required by 'search', refused by 'enumerate'.",
+        description="Part name or fragment; required by 'search', a name filter for 'enumerate'.",
     )
     libs: list[str] | None = Field(
         default=None,
@@ -611,14 +611,8 @@ class ModelQuery(StrictModel):
     def _mode_requirements(self) -> ModelQuery:
         if self.mode == "search" and not self.query:
             raise ValueError("model search requires 'query'")
-        if self.mode == "enumerate":
-            if not self.libs:
-                raise ValueError("model enumerate requires 'libs'")
-            # Enumerate lists every model in 'libs' unfiltered. Accepting a
-            # 'query' here would echo the caller's filter back on a response
-            # that never applied it — reject instead of silently ignoring.
-            if self.query is not None:
-                raise ValueError("model enumerate does not filter; use mode 'search' with 'query'")
+        if self.mode == "enumerate" and not self.libs:
+            raise ValueError("model enumerate requires 'libs'")
         return self
 
 
@@ -1586,7 +1580,16 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
             rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
-        identity: dict[str, Any] = {"mode": "enumerate", "libs": [str(p) for p in sources]}
+        if q.query:
+            # A listing narrowed by name, case-insensitively: the filter the
+            # response echoes is the one applied, unlike search's fuzzy score.
+            needle = q.query.casefold()
+            rows = [row for row in rows if needle in row["name"].casefold()]
+        identity: dict[str, Any] = {
+            "mode": "enumerate",
+            "libs": [str(p) for p in sources],
+            "query": q.query,
+        }
     else:
         assert q.query is not None  # guaranteed by the model validator
         if q.libs:
@@ -1831,7 +1834,7 @@ _REFERENCE_BRANCH_SCHEMA: dict[str, Any] = {
 
 _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     # Echoed by the 'reference' and 'model' kinds alike, and null on a 'model'
-    # enumerate, which asks for everything rather than for a match.
+    # enumerate that lists everything rather than the names containing it.
     "query": {"type": ["string", "null"]},
     "matches": {
         "type": "array",
