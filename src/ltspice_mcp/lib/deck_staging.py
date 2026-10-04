@@ -11,7 +11,11 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from ltspice_mcp.lib import atomic_write_bytes, wsl
-from ltspice_mcp.lib.encoding import decode_spice_bytes, encode_spice_text, rewrite_codec
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    encode_spice_text,
+    rewrite_codec,
+)
 from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
@@ -22,7 +26,11 @@ from ltspice_mcp.lib.spice_lex import (
     lex,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, fold_micro_suffix_cards
+from ltspice_mcp.lib.spice_lex_ops import (
+    MICRO_SIGN_READERS,
+    ValueSuffixSite,
+    fold_micro_suffix_cards,
+)
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -130,10 +138,8 @@ def _micro_fold_observation(
         "kind": "provenance",
         "detail": (
             f"The staged copy of {path.name} spells {len(folded)} micro-sign "
-            "suffix(es) as 'u', which every simulator reads as micro. The "
-            "simulator this job runs on decodes a deck as cp1252, and would read "
-            "a UTF-8 µ in the source as 'Âµ', dropping the scale: run the source "
-            "on it directly and those values lose their scale."
+            f"suffix(es) as 'u'. {MICRO_SIGN_READERS} This job's simulator decodes "
+            "decks as cp1252, so there the source and its staged copy can differ."
         ),
         "evidence": {
             "file": str(path),
@@ -345,7 +351,7 @@ def stage_deck(
             return destination
         processing.add(resolved)
         try:
-            text = decode_spice_bytes(data)
+            text, encoding = decode_spice_bytes_with_encoding(data)
             parsed = lex(text)
             changed = False
             anchor = stands_at if resolved == source else resolved
@@ -468,7 +474,7 @@ def stage_deck(
                 changed = True
                 if cp1252_reader is not None:
                     observations.append(_micro_fold_observation(resolved, folded, cp1252_reader))
-            codec = rewrite_codec(data)
+            codec = rewrite_codec(encoding)
             staged_text = emit(parsed.cards) if changed else text
             staged_bytes = encode_spice_text(staged_text, codec) if changed else data
             atomic_write_bytes(destination, staged_bytes, durable=True)

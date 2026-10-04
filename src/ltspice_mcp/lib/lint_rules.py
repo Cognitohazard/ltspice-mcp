@@ -18,7 +18,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.simulator import current_ngbehavior
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
-from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.spice_validator import (
     PROBE_REF_RE,
@@ -460,11 +460,8 @@ def value_suffix_evidence(site: ValueSuffixSite, *, generated_by: str | None) ->
         evidence["ascii_spelling"] = spelling
         evidence["reason"] = (
             f"'{site.suffix}' is a micro suffix only to a reader that decodes this "
-            "file in the encoding it was written in. In UTF-8, which LTspice 24 and "
-            "later write, it is two bytes (µ is C2 B5); LTspice XVII decodes a deck "
-            "as cp1252, reads them as two characters ('Âµ'), and drops the scale "
-            f"without a diagnostic, so {site.token} runs as {site.number}. Write "
-            f"{spelling}: 'u' is micro in every encoding and to every simulator."
+            f"file in the encoding it was written in. {MICRO_SIGN_READERS} Misread, "
+            f"{site.token} runs as {site.number}; write {spelling}."
         )
     else:
         evidence["reads_as"] = site.number

@@ -85,6 +85,7 @@ from ltspice_mcp.lib.spice_lex import (
     iter_by_kind,
     lex,
 )
+from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
@@ -105,11 +106,6 @@ _GROUND = "0"
 # a b) is still recognized as the same connection. Everything else keeps pin
 # order: a MOSFET's D/G/S/B, a source's +/-, a diode's anode/cathode all matter.
 _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
-
-# LTspice prefixes schematic-derived subcircuit instance names with a private
-# section sign (``X§RB``). Stripped so an export compares equal to a
-# hand-written ``XRB``.
-_LTSPICE_INSTANCE_MARKER = "§"
 
 # Directives that pull another file into the deck. Semantics mirror
 # ``sim_runner.deck_requests_raw`` / ``_include_target``: the walk is
@@ -451,12 +447,12 @@ def canon_net(name: str) -> str:
 
 def canon_ref(ref: str) -> str:
     """Canonicalize a reference for matching: drop the ``§`` marker, lowercase."""
-    return ref.replace(_LTSPICE_INSTANCE_MARKER, "").strip().lower()
+    return ref.replace(SECTION_SIGN, "").strip().lower()
 
 
 def _strip_marker(ref: str) -> str:
     """Drop the LTspice ``§`` marker while preserving reference casing."""
-    return ref.replace(_LTSPICE_INSTANCE_MARKER, "")
+    return ref.replace(SECTION_SIGN, "")
 
 
 def _normalize_value_text(text: str) -> str:

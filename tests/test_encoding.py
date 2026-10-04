@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes,
+    decode_spice_bytes_with_encoding,
     detect_utf16_endianness,
     encode_spice_text,
     read_spice_text,
@@ -172,13 +173,13 @@ class TestRewriteCodec:
         text = "R§1 a 0 1k\n"
         for codec in ("utf-8", "utf-8-sig", "cp1252"):
             raw = text.encode(codec)
-            assert rewrite_codec(raw) == codec
-            assert encode_spice_text(decode_spice_bytes(raw), codec) == raw
+            text, encoding = decode_spice_bytes_with_encoding(raw)
+            assert rewrite_codec(encoding) == codec
+            assert encode_spice_text(text, codec) == raw
 
     def test_utf16_and_utf32_are_rewritten_as_utf8(self) -> None:
-        assert rewrite_codec("R1 a 0 1k\n".encode("utf-16")) == "utf-8"
-        assert rewrite_codec("R1 a 0 1k\n".encode("utf-16-le")) == "utf-8"
-        assert rewrite_codec("R1 a 0 1k\n".encode("utf-32")) == "utf-8"
+        for raw in ("R1 a 0 1k\n".encode(codec) for codec in ("utf-16", "utf-16-le", "utf-32")):
+            assert rewrite_codec(decode_spice_bytes_with_encoding(raw)[1]) == "utf-8"
 
     def test_text_the_codec_cannot_spell_is_written_as_utf8(self) -> None:
         text = '.include "/stage/日本/core.inc"\n'
