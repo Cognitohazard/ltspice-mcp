@@ -1,7 +1,8 @@
 # LTSpice MCP Server Configuration
 # Copy to ltspice-mcp.toml and edit for your environment.
 # All settings have sensible defaults and can be overridden with environment variables
-# Each key is shown commented out at its default; uncomment one to set it.
+# Every key is commented out, showing its default or, where it has none to
+# write, an example. Uncomment a line to set it.
 
 [simulator]
 # Preferred simulator: ltspice, ngspice, qspice, xyce
@@ -14,7 +15,7 @@
 
 # Explicit path to simulator executable (overrides auto-detection)
 # Unset: auto-detect
-# path = 'C:\Program Files\ADI\LTspice\LTspice.exe'
+# path = "C:\\Program Files\\ADI\\LTspice\\LTspice.exe"
 
 # ngspice compatibility mode (ngbehavior). Unset = spicelib's default
 # 'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned
