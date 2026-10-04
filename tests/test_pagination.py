@@ -106,3 +106,10 @@ def test_retotal_reconciles_rows_a_caller_replaced_without_moving_the_total():
     assert (data["total"], data["returned"], data["truncated"]) == (10, 2, True)
     assert data["next_cursor"] is None
     assert next_offset == 2
+
+
+def test_retotal_of_the_final_page_reports_nothing_left():
+    data = page(list(range(6)), offset=4, limit=4)
+    next_offset = retotal_page(data, ["e", "f"], 4)
+    assert (data["total"], data["returned"], data["truncated"]) == (6, 2, False)
+    assert next_offset == 6

@@ -554,7 +554,7 @@ def worker_for(state: SessionState) -> CodeWorker:
         "step's traces, r.trace(name, step=k) on r.axis(step=k); "
         "compute_signal_stats and time_weighted_quantiles weight a derived "
         "trace's statistics and quantiles by time, which np.mean and "
-        "np.percentile do not (spice://guide, 'trace math'). "
+        "np.percentile do not (guide section 'signals'). "
         f"In scope: {_IN_SCOPE} — reference('run_experiments') lists an op's "
         "arguments, so read it before guessing them. Every call is a fresh "
         "namespace around the same live engine; keep state on disk (a job by "

@@ -186,12 +186,14 @@ async def test_every_discriminant_executes_against_recorded_raw(
         raw,
         [{"key": metric, "metric": metric, **fields}],
     )
-    # Some physical metrics legitimately find no feature in a tiny RC fixture
-    # (periodicity, resonance, or a loop crossover). They still must execute
-    # through their adapter and fail only their own item.
-    assert metric in data["results"] or any(
-        failure.get("stage") == "analyze" for failure in data["failures"]
-    )
+    # Every discriminant answers on its fixture, including the ones that find
+    # no feature there (no resonance peak, no loop crossover): that is a
+    # value, not a failure, so a metric that starts raising shows up here.
+    assert data["failures"] == []
+    assert data["outcome"] == "complete"
+    (row,) = data["results"][metric]["values"]
+    assert row["run_index"] == 0
+    assert row["value"]
 
 
 @pytest.mark.asyncio
@@ -218,15 +220,21 @@ async def test_values_and_extrema_carry_outer_and_inner_identity(
     # success outcome (formerly "success").
     assert data["outcome"] == "complete"
     record = data["results"]["vout"]["per_run"]["items"][0]
-    # Lean default: attribution keys that carry information survive; a
-    # null/empty one (no case, no steps on a standalone raw) is dropped —
-    # absent and empty mean the same thing on a row with no required keys.
+    # Lean default: the source (outer) and run/step (inner) identity survive;
+    # a null/empty attribution key (no case, no step values or assignments on
+    # a standalone raw) is dropped, since absent and empty mean the same thing
+    # on a row with no required keys.
+    assert record["source"] == "dut"
     assert record["run_index"] == 0
-    for field in ("case_id", "step_index", "step_values", "assignments"):
-        assert record.get(field) in (None, {}, []) or field in record
-    reduced = data["results"]["vout"]["reduced"]
-    assert {entry["stat"] for entry in reduced} == {"min", "mean"}
-    assert next(entry for entry in reduced if entry["stat"] == "min")["run_index"] == 0
+    assert record["step_index"] == 0
+    for field in ("case_id", "step_values", "assignments"):
+        assert field not in record
+    reduced = {entry["stat"]: entry for entry in data["results"]["vout"]["reduced"]}
+    assert set(reduced) == {"min", "mean"}
+    # An extremum names the run and step it came from; a mean belongs to none.
+    assert reduced["min"]["value"] == record["value"]["value"]
+    assert (reduced["min"]["run_index"], reduced["min"]["step_index"]) == (0, 0)
+    assert (reduced["mean"]["run_index"], reduced["mean"]["step_index"]) == (None, None)
 
 
 @pytest.mark.asyncio

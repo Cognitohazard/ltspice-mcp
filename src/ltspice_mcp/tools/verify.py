@@ -73,6 +73,7 @@ from mcp import types
 from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
@@ -208,8 +209,6 @@ def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]
         *errors,
     ]
 
-
-NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
 
 CHECK_ORDER = ("syntax", "symbols", "export", "layout", "quality", "compare")
 
@@ -725,7 +724,7 @@ RenderArgument: TypeAlias = Annotated[
 
 
 class VerifyCircuitInput(ToolInput):
-    path: str = Field(description="Circuit to check: .asc, .cir, .net or .sp.")
+    path: str = Field(description=f"Circuit to check: .asc or {NETLIST_SUFFIX_TEXT}.")
     checks: list[Literal["syntax", "symbols", "export", "layout", "quality", "compare"]] | None = (
         Field(
             default=None,
@@ -767,8 +766,8 @@ VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
     "it checks; with export_to='sidecar' the export check rewrites the .net next "
     "to an .asc. For a "
-    ".cir/.net/.sp: SPICE syntax, directive and element arity, non-ASCII value "
-    "suffixes such as µ, plus connectivity "
+    "netlist: SPICE syntax, directive and element arity, non-ASCII "
+    "value suffixes such as µ, and connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
     "declares, nets with no DC path to ground. For an .asc: symbol "
     "and pin resolution, the authoritative LTspice netlist export (which silently "
@@ -2028,7 +2027,7 @@ async def evaluate_verify_circuit(
         return _error_evaluation(
             data,
             f"'{suffix}' is not a circuit file this tool can check; pass a .asc "
-            "schematic or a .cir / .net / .sp netlist",
+            f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
         )
 
     kind = "asc" if suffix == ".asc" else "netlist"
