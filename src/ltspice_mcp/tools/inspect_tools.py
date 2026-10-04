@@ -952,11 +952,10 @@ def _do_capabilities(
     state: SessionState,
     raster: RasterSupport,
     executables: Mapping[str, SimulatorExecutable | None],
-    named: Mapping[str, SimulatorExecutable | None] | None = None,
 ) -> dict[str, Any]:
-    """The capabilities report. ``raster``, ``executables`` (each available
-    simulator's ``executable_identity``) and ``named`` (each named
-    executable's) are computed off the loop by the caller."""
+    """The capabilities report. ``raster`` and ``executables`` (the
+    ``executable_identity`` of each available simulator and named executable,
+    by family name or selector) are computed off the loop by the caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
         simulators[name] = {
@@ -981,7 +980,7 @@ def _do_capabilities(
     named_executables = {
         selector: {
             "family": selector.partition(":")[0],
-            **_build_facts(state, cls, (named or {}).get(selector)),
+            **_build_facts(state, cls, executables.get(selector)),
         }
         for selector, cls in sorted(state.named_simulators.items())
     }
@@ -1768,28 +1767,23 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
         wanted = set(query.fields) if query.fields is not None else None
-        # Executables are identified only for a report that shows them.
-        simulators = (
-            dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
-        )
-        named = (
-            dict(state.named_simulators) if wanted is None or "named_executables" in wanted else {}
-        )
+        # Executables are identified only for a report that shows them. A
+        # selector carries a ':' and a family name never does, so the two
+        # tables share one mapping.
+        simulators = {
+            **(state.available_simulators if wanted is None or "simulators" in wanted else {}),
+            **(state.named_simulators if wanted is None or "named_executables" in wanted else {}),
+        }
 
-        def probe() -> tuple[
-            RasterSupport,
-            dict[str, SimulatorExecutable | None],
-            dict[str, SimulatorExecutable | None],
-        ]:
+        def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
             # Off the loop: the first successful raster probe loads the native
             # Cairo library, and the first identification of an executable
             # digests it.
             identities = {name: executable_identity(cls) for name, cls in simulators.items()}
-            named_identities = {key: executable_identity(cls) for key, cls in named.items()}
-            return raster_support(), identities, named_identities
+            return raster_support(), identities
 
-        raster, executables, named_executables = await asyncio.to_thread(probe)
-        report = _do_capabilities(state, raster, executables, named_executables)
+        raster, executables = await asyncio.to_thread(probe)
+        report = _do_capabilities(state, raster, executables)
         if wanted is not None:
             report = {key: value for key, value in report.items() if key in wanted}
         return {"data": report}

@@ -126,11 +126,6 @@ SIM_PATH_ENV = "LTSPICE_MCP_SIMULATOR_EXE"
 SIM_ENABLED_ENV = "LTSPICE_MCP_ENABLED_SIMULATORS"
 SIM_EXECUTABLES_KEY = "executables"
 SIM_EXECUTABLES_ENV = "LTSPICE_MCP_SIMULATOR_EXECUTABLES"
-#: Separates one named executable from the next in ``SIM_EXECUTABLES_ENV``, on
-#: every platform. Not ``os.pathsep``: on POSIX that is ``:``, which is also
-#: what joins a family to a name (``ngspice:dev``), and a Windows path carries
-#: a ``:`` after its drive letter, so neither can be split on.
-SIM_EXECUTABLES_ENV_SEPARATOR = ";"
 # The sandbox keys, named for the same reason: every refusal names them.
 SANDBOX_SECTION = "security"
 SANDBOX_KEY = "allowed_paths"
@@ -157,20 +152,19 @@ def _toml_enabled_simulators(value: Any) -> Any:
     return _SKIP if names is None else [x.strip().lower() for x in names]
 
 
-def _executable_entry(key: object, path: object, source: str) -> tuple[str, Path] | None:
-    """One named executable as the loader keeps it: a normalized key and its path.
+def _add_executable(entries: dict[str, Path], key: str, path: object, source: str) -> None:
+    """Add one named executable under its lower-cased key, if it has a shape.
 
-    Only the shape is checked here. Whether the key names a family that can
-    run, and whether the path is a simulator at all, is decided at detection,
-    where the verdict reaches the capabilities report instead of the log only.
+    Whether the key names a family that can run, and whether the path is a
+    simulator at all, is decided at detection, where the verdict reaches the
+    capabilities report instead of the log only.
     """
-    if not isinstance(key, str) or not key.strip():
-        logger.warning("%s: a named executable needs a name; ignoring %r", source, key)
-        return None
-    if not isinstance(path, str) or not path.strip():
+    if not key.strip():
+        logger.warning("%s: a named executable needs a name; ignoring %r", source, path)
+    elif not isinstance(path, str) or not path.strip():
         logger.warning("%s: executable %r must be a path string; ignoring %r", source, key, path)
-        return None
-    return key.strip().lower(), Path(path.strip())
+    else:
+        entries[key.strip().lower()] = Path(path.strip())
 
 
 def _toml_simulator_executables(value: Any) -> Any:
@@ -187,13 +181,9 @@ def _toml_simulator_executables(value: Any) -> Any:
     for key, item in value.items():
         if isinstance(item, dict):
             for name, path in item.items():
-                entry = _executable_entry(f"{key}:{name}", path, source)
-                if entry is not None:
-                    entries[entry[0]] = entry[1]
-            continue
-        entry = _executable_entry(key, item, source)
-        if entry is not None:
-            entries[entry[0]] = entry[1]
+                _add_executable(entries, f"{key}:{name}", path, source)
+        else:
+            _add_executable(entries, key, item, source)
     return entries
 
 
@@ -264,20 +254,17 @@ def _env_enabled_simulators(value: str) -> Any:
 
 
 def _env_simulator_executables(value: str) -> Any:
-    # ``name=path`` entries, separated by SIM_EXECUTABLES_ENV_SEPARATOR; a name
-    # may carry its family (``ngspice:dev=/usr/bin/ngspice``). Split on the
-    # first ``=`` only, so a path may hold one.
+    # ``name=path`` entries, separated by ';' on every platform: not os.pathsep,
+    # which on POSIX is the ':' that joins a family to a name (``ngspice:dev``),
+    # and a Windows path has a ':' after its drive letter. Split on the first
+    # '=' only, so a path may hold one.
     entries: dict[str, Path] = {}
-    for item in value.split(SIM_EXECUTABLES_ENV_SEPARATOR):
-        if not item.strip():
-            continue
+    for item in filter(str.strip, value.split(";")):
         key, sep, path = item.partition("=")
-        if not sep:
+        if sep:
+            _add_executable(entries, key, path, SIM_EXECUTABLES_ENV)
+        else:
             logger.warning("%s: expected name=path, got %r; ignoring", SIM_EXECUTABLES_ENV, item)
-            continue
-        entry = _executable_entry(key, path, SIM_EXECUTABLES_ENV)
-        if entry is not None:
-            entries[entry[0]] = entry[1]
     return entries
 
 

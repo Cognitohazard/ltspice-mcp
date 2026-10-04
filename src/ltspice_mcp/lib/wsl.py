@@ -336,12 +336,8 @@ def kill_windows_ltspice_by_token(token: str, executable_names: Iterable[str] = 
         logger.warning("kill_windows_ltspice_by_token: refusing unsafe token %r", token)
         return 0
 
-    names = {name.casefold(): name for name in _LTSPICE_PROCESS_NAMES}
-    for name in executable_names:
-        if _SAFE_PROCESS_NAME_RE.match(name):
-            names.setdefault(name.casefold(), name)
-    # WQL compares strings without regard to case, so one spelling per name.
-    name_filter = " or ".join(f"Name='{name}'" for name in names.values())
+    names = [*_LTSPICE_PROCESS_NAMES, *filter(_SAFE_PROCESS_NAME_RE.match, executable_names)]
+    name_filter = " or ".join(f"Name='{name}'" for name in names)
     # Anchor the token at a run-filename boundary, mirroring the Linux twin
     # proc_kill._token_in_arg: the staged deck is ``{job_id}.{ext}`` (single
     # runs) or ``{job_id}_{n}.{ext}`` (batch sub-runs), so the id is always

@@ -15,7 +15,6 @@ as it is in production.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import shutil
 import subprocess
@@ -42,9 +41,10 @@ from ltspice_mcp.lib.simulator import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import resolve_run_simulator
-from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from ltspice_mcp.tools.experiments import RunExperimentsInput
 from tests.conftest import terminal_experiment
+from tests.test_parallel_sessions import _FakeProc
+from tests.test_simulator_build import _capabilities, _program, _sha256, _submit
 
 FIXTURES = Path(__file__).parent / "fixtures"
 XVII_BUILD = "LTspice 17.1.8 for Windows"
@@ -53,17 +53,6 @@ DEFAULT_BUILD = "LTspice 26.0.2 for Windows"
 NGSPICE_BUILD = "ngspice-45"
 
 _DECK = "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n"
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _program(path: Path, build: str) -> Path:
-    """A file standing in for a simulator executable; its bytes name its build."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(build)
-    return path
 
 
 def _ran_on(cls: type) -> str:
@@ -157,60 +146,48 @@ def recording_families(monkeypatch: pytest.MonkeyPatch) -> None:
 def builds(work_dir: Path) -> dict[str, Path]:
     """Three LTspice builds installed side by side, at their usual file names."""
     return {
-        "default": _program(work_dir / "programs" / "ADI" / "LTspice.exe", DEFAULT_BUILD),
-        "xvii": _program(work_dir / "programs" / "LTC" / "XVIIx64.exe", XVII_BUILD),
-        "lt24": _program(work_dir / "programs" / "LT24" / "LTspice.exe", LT24_BUILD),
+        "default": _program(work_dir / "programs" / "ADI" / "LTspice.exe", DEFAULT_BUILD.encode()),
+        "xvii": _program(work_dir / "programs" / "LTC" / "XVIIx64.exe", XVII_BUILD.encode()),
+        "lt24": _program(work_dir / "programs" / "LT24" / "LTspice.exe", LT24_BUILD.encode()),
     }
 
 
+@pytest.fixture
+def deck(work_dir: Path) -> Path:
+    deck = work_dir / "rc.cir"
+    deck.write_text(_DECK)
+    return deck
+
+
 def _state(
-    config: ServerConfig, default: Path, executables: dict[str, Path]
-) -> tuple[SessionState, list[str]]:
+    config: ServerConfig, builds: dict[str, Path], executables: dict[str, Path] | None = None
+) -> SessionState:
     """A session as startup builds one: the family's own executable, and the
-    named ones bound from the configuration."""
+    named ones bound from the configuration (XVII and LTspice 24 unless given)."""
     family = type("RecordingLTspice", (RecordingLTspice,), {})
-    family.create_from(str(default))
-    config.simulator_executables = executables
+    family.create_from(str(builds["default"]))
+    config.simulator_executables = (
+        executables
+        if executables is not None
+        else {"xvii": builds["xvii"], "lt24": builds["lt24"]}
+    )
     diagnostics: list[str] = []
     named = detect_named_simulators(config, diagnostics)
-    state = SessionState.create(config, {"ltspice": family}, diagnostics, named=named)
-    return state, diagnostics
+    return SessionState.create(config, {"ltspice": family}, diagnostics, named=named)
 
 
-def _payload(deck: Path, request_id: str, simulator: str | None, **extra: Any) -> dict[str, Any]:
-    execution: dict[str, Any] = {"wait_s": 30}
-    if simulator is not None:
-        execution["simulator"] = simulator
+def _payload(deck: Path, request_id: str, simulator: str) -> dict[str, Any]:
     return {
         "request_id": request_id,
         "circuits": [{"path": str(deck), "id": "dut"}],
-        "execution": execution,
+        "execution": {"wait_s": 30, "simulator": simulator},
         "lint": "off",
-        **extra,
     }
 
 
 async def _record(state: SessionState, job_id: str) -> dict[str, Any]:
     await state.job_registry.drain_pending()
     return json.loads(store.Store(state.working_dir).job_record(job_id).read_text())
-
-
-async def _submit(state: SessionState, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
-    data = result.structured_content
-    assert data is not None, result.content[0].text
-    return bool(result.is_error), data
-
-
-async def _capabilities(state: SessionState) -> dict[str, Any]:
-    result = await handle_inspect(
-        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
-    )
-    data = result.structured_content
-    assert data is not None
-    (item,) = data["results"]
-    assert item["ok"], item
-    return item["data"]
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +271,7 @@ class TestBinding:
     def test_an_entry_that_cannot_be_bound_says_why(
         self, config: ServerConfig, work_dir: Path, key: str, file_name: str, reason: str
     ):
-        exe = _program(work_dir / "programs" / file_name, "build")
+        exe = _program(work_dir / "programs" / file_name, b"build")
         config.simulator_executables = {key: exe}
         diagnostics: list[str] = []
 
@@ -303,18 +280,21 @@ class TestBinding:
         assert repr(key) in diagnostic
         assert reason in diagnostic
 
-    def test_a_missing_program_and_an_excluded_family_are_skipped(
+    def test_a_missing_program_a_folder_and_an_excluded_family_are_skipped(
         self, config: ServerConfig, work_dir: Path, builds: dict[str, Path]
     ):
         config.simulator_executables = {
             "gone": work_dir / "programs" / "missing" / "XVIIx64.exe",
-            "ngspice:dev": _program(work_dir / "programs" / "ngspice", NGSPICE_BUILD),
+            # What an empty path becomes once it is a Path: the current folder.
+            "ltspice:here": Path("."),
+            "ngspice:dev": _program(work_dir / "programs" / "ngspice", NGSPICE_BUILD.encode()),
         }
         config.enabled_simulators = ["ltspice"]
         diagnostics: list[str] = []
 
         assert detect_named_simulators(config, diagnostics) == {}
         assert any("does not exist" in note and "'gone'" in note for note in diagnostics)
+        assert any("not a file" in note and "'ltspice:here'" in note for note in diagnostics)
         assert any("excluded by simulator.enabled" in note for note in diagnostics)
 
     async def test_the_library_api_binds_them_from_an_override(
@@ -363,7 +343,7 @@ class TestSelection:
         builds: dict[str, Path],
         recording_families: None,
     ):
-        state, _ = _state(config, builds["default"], {"xvii": builds["xvii"]})
+        state = _state(config, builds, {"xvii": builds["xvii"]})
 
         assert resolve_run_simulator(None, state) is state.available_simulators["ltspice"]
         assert resolve_run_simulator("ltspice", state) is state.available_simulators["ltspice"]
@@ -376,13 +356,11 @@ class TestSelection:
     async def test_an_unknown_name_fails_the_call_naming_what_there_is(
         self,
         config: ServerConfig,
-        work_dir: Path,
+        deck: Path,
         builds: dict[str, Path],
         recording_families: None,
     ):
-        state, _ = _state(config, builds["default"], {"xvii": builds["xvii"]})
-        deck = work_dir / "rc.cir"
-        deck.write_text(_DECK)
+        state = _state(config, builds, {"xvii": builds["xvii"]})
 
         is_error, data = await _submit(state, _payload(deck, "unknown", "ltspice:lt24"))
 
@@ -401,15 +379,11 @@ class TestRoutedRuns:
     async def test_each_run_launches_the_build_it_named_and_its_record_says_so(
         self,
         config: ServerConfig,
-        work_dir: Path,
+        deck: Path,
         builds: dict[str, Path],
         recording_families: None,
     ):
-        state, _ = _state(
-            config, builds["default"], {"xvii": builds["xvii"], "lt24": builds["lt24"]}
-        )
-        deck = work_dir / "rc.cir"
-        deck.write_text(_DECK)
+        state = _state(config, builds)
 
         receipts = {
             simulator: await terminal_experiment(
@@ -451,15 +425,11 @@ class TestRoutedRuns:
     async def test_the_capabilities_report_lists_each_build_and_what_it_reported(
         self,
         config: ServerConfig,
-        work_dir: Path,
+        deck: Path,
         builds: dict[str, Path],
         recording_families: None,
     ):
-        state, _ = _state(
-            config, builds["default"], {"xvii": builds["xvii"], "lt24": builds["lt24"]}
-        )
-        deck = work_dir / "rc.cir"
-        deck.write_text(_DECK)
+        state = _state(config, builds)
         receipt = await terminal_experiment(state, _payload(deck, "caps", "ltspice:xvii"))
 
         caps = await _capabilities(state)
@@ -490,7 +460,7 @@ class TestRoutedRuns:
         builds: dict[str, Path],
         recording_families: None,
     ):
-        state, _ = _state(config, builds["default"], {"xvii": builds["xvii"]})
+        state = _state(config, builds, {"xvii": builds["xvii"]})
         sheet = work_dir / "rc.asc"
         sheet.write_text("Version 4\nSHEET 1 880 680\n")
 
@@ -509,11 +479,11 @@ class TestRoutedRuns:
         builds: dict[str, Path],
         recording_families: None,
     ):
-        ngspice = _program(work_dir / "programs" / "ngspice-dev" / "ngspice", NGSPICE_BUILD)
-        state, diagnostics = _state(
-            config, builds["default"], {"xvii": builds["xvii"], "ngspice:dev": ngspice}
+        ngspice = _program(
+            work_dir / "programs" / "ngspice-dev" / "ngspice", NGSPICE_BUILD.encode()
         )
-        assert diagnostics == []
+        state = _state(config, builds, {"xvii": builds["xvii"], "ngspice:dev": ngspice})
+        assert state.diagnostics == []
         # A swept deck: ngspice reads no .step, and the linter says so for it alone.
         deck = work_dir / "swept.cir"
         deck.write_text(_DECK.replace(".tran 1m", ".step param r 1k 2k 1k\n.tran 1m"))
@@ -541,29 +511,23 @@ class TestRoutedRuns:
 @pytest.mark.asyncio
 class TestReplayAcrossNames:
     async def _first(
-        self, config: ServerConfig, work_dir: Path, builds: dict[str, Path], request_id: str
-    ) -> tuple[Path, dict[str, Any]]:
-        state, _ = _state(
-            config, builds["default"], {"xvii": builds["xvii"], "lt24": builds["lt24"]}
-        )
-        deck = work_dir / "rc.cir"
-        deck.write_text(_DECK)
+        self, config: ServerConfig, deck: Path, builds: dict[str, Path], request_id: str
+    ) -> dict[str, Any]:
+        state = _state(config, builds)
         receipt = await terminal_experiment(state, _payload(deck, request_id, "ltspice:xvii"))
         assert receipt["status"] == "completed", receipt
         await state.job_registry.drain_pending()
-        return deck, receipt
+        return receipt
 
     async def test_a_request_id_replayed_on_another_name_conflicts(
         self,
         config: ServerConfig,
-        work_dir: Path,
+        deck: Path,
         builds: dict[str, Path],
         recording_families: None,
     ):
-        deck, _ = await self._first(config, work_dir, builds, "across-names")
-        restarted, _ = _state(
-            config, builds["default"], {"xvii": builds["xvii"], "lt24": builds["lt24"]}
-        )
+        await self._first(config, deck, builds, "across-names")
+        restarted = _state(config, builds)
 
         is_error, data = await _submit(restarted, _payload(deck, "across-names", "ltspice:lt24"))
 
@@ -573,13 +537,13 @@ class TestReplayAcrossNames:
     async def test_a_name_bound_to_another_build_conflicts(
         self,
         config: ServerConfig,
-        work_dir: Path,
+        deck: Path,
         builds: dict[str, Path],
         recording_families: None,
     ):
-        deck, first = await self._first(config, work_dir, builds, "rebound")
+        first = await self._first(config, deck, builds, "rebound")
         # The same name, now pointing at the other install.
-        restarted, _ = _state(config, builds["default"], {"xvii": builds["lt24"]})
+        restarted = _state(config, builds, {"xvii": builds["lt24"]})
 
         is_error, data = await _submit(restarted, _payload(deck, "rebound", "ltspice:xvii"))
 
@@ -592,12 +556,12 @@ class TestReplayAcrossNames:
     async def test_the_same_name_on_the_same_build_replays(
         self,
         config: ServerConfig,
-        work_dir: Path,
+        deck: Path,
         builds: dict[str, Path],
         recording_families: None,
     ):
-        deck, first = await self._first(config, work_dir, builds, "same")
-        restarted, _ = _state(config, builds["default"], {"xvii": builds["xvii"]})
+        first = await self._first(config, deck, builds, "same")
+        restarted = _state(config, builds, {"xvii": builds["xvii"]})
 
         is_error, data = await _submit(restarted, _payload(deck, "same", "ltspice:xvii"))
 
@@ -611,16 +575,6 @@ class TestReplayAcrossNames:
 # ---------------------------------------------------------------------------
 
 
-class _Proc:
-    def __init__(self, pid: int, name: str, cmdline: list[str]) -> None:
-        self.pid = pid
-        self.info = {"name": name, "cmdline": cmdline}
-        self.killed = False
-
-    def kill(self) -> None:
-        self.killed = True
-
-
 @pytest.mark.asyncio
 class TestScopedKill:
     async def test_each_runner_kills_its_own_builds_process(
@@ -631,9 +585,7 @@ class TestScopedKill:
         recording_families: None,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        state, _ = _state(
-            config, builds["default"], {"xvii": builds["xvii"], "lt24": builds["lt24"]}
-        )
+        state = _state(config, builds)
         loop = asyncio.get_running_loop()
         runners = {
             selector: state.runners.get_experiment_runner(
@@ -642,8 +594,8 @@ class TestScopedKill:
             for selector, cls in state.named_simulators.items()
         }
         xvii_job, lt24_job = "exp_dut_1790000000_ab12cd34", "exp_dut_1790000001_cd34ef56"
-        xvii = _Proc(11, "XVIIx64.exe", [str(builds["xvii"]), "-Run", "-b", f"{xvii_job}.net"])
-        lt24 = _Proc(12, "LTspice.exe", [str(builds["lt24"]), "-Run", "-b", f"{lt24_job}.net"])
+        xvii = _FakeProc(11, "XVIIx64.exe", [str(builds["xvii"]), "-Run", "-b", f"{xvii_job}.net"])
+        lt24 = _FakeProc(12, "LTspice.exe", [str(builds["lt24"]), "-Run", "-b", f"{lt24_job}.net"])
         monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda attrs: iter([xvii, lt24]))
 
         assert simulator_executable_names(runners["ltspice:xvii"].simulator_class) == {
@@ -669,7 +621,7 @@ class TestWsl:
         self, work_dir: Path, builds: dict[str, Path], monkeypatch: pytest.MonkeyPatch
     ):
         family_before = list(LTspiceWSL.spice_exe)
-        xvii = bind_named_executable(LTspiceWSL, "ltspice", "xvii", builds["xvii"])
+        xvii = bind_named_executable(LTspiceWSL, "ltspice:xvii", builds["xvii"])
         launched: list[list[str]] = []
         monkeypatch.setattr("ltspice_mcp.lib.ltspice_wsl.is_wsl", lambda: True)
         monkeypatch.setattr(
@@ -706,8 +658,8 @@ class TestWsl:
 
         (query,) = queries
         assert "Name='ltspice-24.1.exe'" in query
-        # LTspice's own names stay, once each, whatever case a class spelled them in.
-        assert query.count("XVIIx64.exe") == 1 and "xviix64.exe" not in query
+        # LTspice's own names stay matched beside the class's.
+        assert "Name='XVIIx64.exe'" in query and "Name='scad3.exe'" in query
         # Neither a launcher nor a name that could close the quoted string.
         assert "'wine'" not in query and "x'.exe" not in query
 
@@ -734,8 +686,8 @@ class TestLibraryRoots:
         return home
 
     def test_each_build_stages_against_its_own_library(self, home: Path, builds: dict[str, Path]):
-        xvii = bind_named_executable(LTspice, "ltspice", "xvii", builds["xvii"])
-        lt24 = bind_named_executable(LTspice, "ltspice", "lt24", builds["lt24"])
+        xvii = bind_named_executable(LTspice, "ltspice:xvii", builds["xvii"])
+        lt24 = bind_named_executable(LTspice, "ltspice:lt24", builds["lt24"])
 
         assert simulator_library_roots(xvii) == [
             (home / "Documents" / "LTspiceXVII" / "lib").resolve()
@@ -755,8 +707,8 @@ class TestLibraryRoots:
         monkeypatch.setattr(wsl_mod, "is_wsl", lambda: True)
         monkeypatch.setattr(wsl_mod, "_resolve_win_env", windows_env.get)
         monkeypatch.setenv("HOME", str(work_dir / "linux-home"))
-        xvii = bind_named_executable(LTspiceWSL, "ltspice", "xvii", builds["xvii"])
-        lt24 = bind_named_executable(LTspiceWSL, "ltspice", "lt24", builds["lt24"])
+        xvii = bind_named_executable(LTspiceWSL, "ltspice:xvii", builds["xvii"])
+        lt24 = bind_named_executable(LTspiceWSL, "ltspice:lt24", builds["lt24"])
 
         assert simulator_library_roots(xvii) == [
             (profile / "Documents" / "LTspiceXVII" / "lib").resolve()

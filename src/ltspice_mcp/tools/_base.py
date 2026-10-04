@@ -1060,26 +1060,17 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
     neither, or (via ``require_simulator``) if no simulator is available at all.
     """
     if requested is not None:
+        # A selector carries a ':' and a family name never does, so one lookup
+        # through both tables cannot pick the wrong one.
         key = requested.lower()
-        if ":" in key:
-            sim_cls = state.named_simulators.get(key)
-            if sim_cls is None:
-                raise SimulationError(
-                    f"Simulator '{requested}' is not a named executable on this server "
-                    f"(named: {sorted(state.named_simulators)}). They are read from "
-                    f"{_SIM_SECTION}.{_SIM_EXECUTABLES_KEY} at startup; "
-                    "inspect(kind='capabilities') lists them, and its diagnostics say "
-                    "why a configured one was skipped.",
-                    show_hint=False,
-                )
-            return sim_cls
-        sim_cls = state.available_simulators.get(key)
+        sim_cls = state.named_simulators.get(key) or state.available_simulators.get(key)
         if sim_cls is None:
             raise SimulationError(
-                f"Simulator '{requested}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}"
-                + (f", named: {sorted(state.named_simulators)}" if state.named_simulators else "")
-                + "). inspect(kind='capabilities') lists the detected simulators.",
+                f"Simulator '{requested}' is not available on this server (detected: "
+                f"{list(state.available_simulators)}, named: {sorted(state.named_simulators)}). "
+                f"Named executables are read from {_SIM_SECTION}.{_SIM_EXECUTABLES_KEY} at "
+                "startup; inspect(kind='capabilities') lists them, and its diagnostics say "
+                "why a configured one was skipped.",
                 show_hint=False,
             )
         return sim_cls
