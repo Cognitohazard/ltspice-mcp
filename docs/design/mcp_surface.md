@@ -684,6 +684,8 @@ in the result set, so a continuation replays them.
   cursor or continuation, or `include.provenance` asks for them, and are
   recorded with the result set. A call resuming the set compares them, so a
   rewrite that kept both size and timestamp still reads as `source_drift`.
+  Both hashes are bounded by the analysis budget, and one that does not finish
+  leaves the source to its size and time rather than failing a recipe.
 - A `raw_path` source has no job provenance, so its rows carry
   `deck_sha256: null` plus an observation. Provenance is never fabricated.
 - Bulk fidelity travels as artifact handles

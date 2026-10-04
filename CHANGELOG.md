@@ -121,8 +121,9 @@ tool-surface changes.
   log. Content digests are taken only when a reply hands out a cursor or
   continuation, or `include.provenance` asks for them, and the call resuming
   the set compares them, so a rewrite that kept both size and timestamp is
-  still reported as `source_drift`. A hash cut short when a cursor is handed
-  out fails nothing; that set is then checked by size and time alone.
+  still reported as `source_drift`. Both hashes are bounded and fail nothing:
+  a digest not taken in time, or a comparison cut short on resume, leaves the
+  source to its size and time.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call

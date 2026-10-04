@@ -91,7 +91,6 @@ class TestAnalysisDeadlineIsTyped:
             ],
             {"m1"},
             asyncio.get_running_loop().time() + 60.0,
-            {},
         )
         assert failures["m1"].code == "source_drift"
 
@@ -112,9 +111,33 @@ class TestAnalysisDeadlineIsTyped:
                 ],
                 {"m1"},
                 loop.time() + 60.0,
-                {},
             )
         assert failures["m1"].code == "analysis_deadline"
+
+    async def test_a_resumed_content_check_out_of_time_leaves_the_source_to_its_stamp(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The digest a resumed set compares is taken within a budget and may be
+        # skipped; comparing it is bounded the same way, and the stamp, which
+        # still matches, is what identifies the source.
+        raw = _copy_raw(work_dir, "probe.raw")
+        loop = asyncio.get_running_loop()
+        with services.analysis_deadline(loop.time() - 1.0):
+            failures = await analyze_mod._verify_direct_sources(
+                [
+                    {
+                        "manifest_id": "m1",
+                        "raw_path": str(raw),
+                        "log_path": None,
+                        **analyze_mod._source_stamp(raw, None),
+                        "composite_sha256": "0" * 64,
+                    }
+                ],
+                {"m1"},
+                loop.time() + 60.0,
+                contents=True,
+            )
+        assert failures == {}
 
     async def test_manifest_digest_out_of_quota_is_source_unavailable(
         self,
