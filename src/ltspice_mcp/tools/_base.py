@@ -466,6 +466,17 @@ ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
 ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
 
 
+def cap_note(name: str, requested: float, cap: float, unit: str = "") -> str | None:
+    """The warning for an argument held to its cap, or None when it was within it.
+
+    A cap bounds what one call costs, so a larger value is served at the cap
+    and said so, not refused: the caller asked for more of the same thing.
+    """
+    if requested <= cap:
+        return None
+    return f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used."
+
+
 def outcome_of(
     failures: Any,
     *,

@@ -326,7 +326,7 @@ non-terminal, since a terminal receipt's token authorizes nothing.
 
 **Receipt-then-dwell.** The receipt — job registered, persisted, cancel barrier
 raised, snapshots staged — is durable *before* any case is submitted and before
-any waiting. `execution.wait_s` (default 60, cap 120) bounds the dwell. If the
+any waiting. `execution.wait_s` (default 60, held to 120) bounds the dwell. If the
 job reaches full terminality (runs *and* attached analysis) inside it, terminal
 results return inline; otherwise the receipt returns with
 `outcome: "in_progress"`. Why 60: the wait must end well before the client
@@ -572,10 +572,10 @@ RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
 
 ```
 {action: "status", job_id | request_id}
-{action: "wait",   job_id | request_id, timeout_s (default 60, cap 300),
+{action: "wait",   job_id | request_id, timeout_s (default 60, held to 300),
                    wait_for: "all" (default) | "runs"}
 {action: "cancel", job_id | request_id, control_token?}
-{action: "list",   circuit?: path, limit?, cursor?}
+{action: "list",   circuit?: path, limit? (held to 50), cursor?}
 {action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
 ```
 
@@ -605,6 +605,16 @@ dispatch. Output shapes are discriminated on the echoed `action`:
 dozen status polls. Timing out is not a failure: the response comes back with
 `timed_out` set and the job keeps running.
 
+**Caps hold, they do not refuse.** `execution.wait_s` above 120, `timeout_s`
+above 300, a `list` `limit` above 50 and a `per_run.limit` above 100 are served
+at the cap, and the response says so: a warning on `run_experiments` and
+`jobs`, the `hint` on `analyze_results`, which has no top-level `warnings`.
+Each cap bounds what one call costs; a larger value asks for more of the same
+thing, which the next wait or page delivers, so refusing it cost a round trip
+and taught nothing. The schema no longer advertises a `maximum`, because a
+strict client checks one before sending and would refuse on the server's
+behalf.
+
 Cancel authority is the owning process or a valid control token; otherwise
 `cancel_not_authorized`. The acknowledgement guarantees that no further case
 enters submission: queued cases become cancelled, active ones get a
@@ -630,7 +640,7 @@ step       {axis, value} | null   for a deck carrying `.step`: read the one
                                   first
 all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
                                   exclusive with `step`
-include    {per_run?: {limit?, cursor?} | bool, outliers?, signals_available?,
+include    {per_run?: {limit? (held to 100), cursor?} | bool, outliers?, signals_available?,
             provenance?, fields?: [dotted row path]}
 budget     int | null
 continue   {result_set_id, cursor}   resumes a budget-truncated call; mutually

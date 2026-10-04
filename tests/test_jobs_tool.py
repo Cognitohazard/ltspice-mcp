@@ -31,6 +31,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
+    JOBS_WAIT_CAP_S,
     RunExperimentsInput,
     handle_run_experiments,
 )
@@ -42,6 +43,7 @@ from ltspice_mcp.tools.jobs import (
     handle_jobs,
 )
 from ltspice_mcp.tools.receipts import (
+    JOBS_PAGE_LIMIT,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     progress_from_completeness,
     project_receipt_runs,
@@ -297,11 +299,9 @@ _REJECTED_JOBS_ARGUMENTS: tuple[tuple[str, dict], ...] = (
     ("unknown-field", {"action": "status", "job_id": "exp-1", "verbose": True}),
     ("empty-job-id", {"action": "status", "job_id": ""}),
     ("empty-request-id", {"action": "status", "request_id": ""}),
-    ("dwell-past-the-cap", {"action": "wait", "job_id": "exp-1", "timeout_s": 301}),
     ("negative-dwell", {"action": "wait", "job_id": "exp-1", "timeout_s": -1}),
     ("unknown-wait-mode", {"action": "wait", "job_id": "exp-1", "wait_for": "cases"}),
     ("limit-below-one", {"action": "list", "limit": 0}),
-    ("limit-past-the-page-cap", {"action": "list", "limit": 51}),
     ("budget-below-the-floor", {"action": "status", "job_id": "exp-1", "budget": 1}),
 )
 
@@ -1177,6 +1177,34 @@ class TestWait:
         assert runs_done["status"] == "analyzing"
         assert runs_done["analysis_status"] == "running"
 
+    async def test_a_wait_past_its_cap_is_held_to_it_and_says_so(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # A timeout_s above 300 was refused at validation, so asking to wait
+        # longer cost a round trip; the wait runs at the cap and says so.
+        circuit = _circuit(work_dir)
+        running = _experiment(work_dir, circuit, status="running")
+        state_no_sim.all_jobs[running.job_id] = running
+        real_wait = jobs_module._wait_for_jobs_target
+        waited: list[float] = []
+
+        async def spy(job, state, *, timeout_s, wait_for):
+            waited.append(timeout_s)
+            return await real_wait(job, state, timeout_s=0, wait_for=wait_for)
+
+        monkeypatch.setattr(jobs_module, "_wait_for_jobs_target", spy)
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("wait", job_id=running.job_id, timeout_s=900), state_no_sim)
+        )
+
+        assert waited == [JOBS_WAIT_CAP_S]
+        assert data["timed_out"] is True
+        (note,) = [w for w in data["warnings"] if "timeout_s" in w]
+        assert "timeout_s=900s" in note and "300s was used" in note
+
     async def test_foreign_wait_refreshes_a_second_registry_from_sidecar(
         self,
         state_no_sim: SessionState,
@@ -1471,6 +1499,32 @@ class TestListAndRunsPagination:
         assert page_one["returned"] == page_two["returned"] == 1
         observations = [*page_one["observations"], *page_two["observations"]]
         assert any(item["code"] == "experiment_index_invalid" for item in observations)
+
+    async def test_a_list_limit_past_the_page_cap_is_held_to_it_and_says_so(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # The recent index keeps fewer groups than a page holds, so the page
+        # size served is read off the renderer it is handed to.
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
+        for index in range(3):
+            await asyncio.to_thread(recent.touch, _circuit(work_dir, f"c{index}.cir"))
+        real_render = jobs_module.render_jobs_data
+        limits: list[int | None] = []
+
+        def spy(evaluation, *, limit=None, rung=None):
+            limits.append(limit)
+            return real_render(evaluation, limit=limit, rung=rung)
+
+        monkeypatch.setattr(jobs_module, "render_jobs_data", spy)
+        data = _assert_jobs_schema(await handle_jobs(_args("list", limit=500), state_no_sim))
+
+        assert limits == [JOBS_PAGE_LIMIT]
+        assert data["returned"] == data["total"] == 3
+        (note,) = data["warnings"]
+        assert "limit=500" in note and f"{JOBS_PAGE_LIMIT} was used" in note
 
     async def test_submission_appears_in_unfiltered_recent_view(
         self,
