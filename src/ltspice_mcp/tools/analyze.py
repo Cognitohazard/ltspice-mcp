@@ -38,6 +38,7 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
+from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import (
@@ -104,10 +105,6 @@ _FAIL_CASES_OMITTED_WARNING = (
 _VALUES_OMITTED_WARNING = (
     "{omitted} value(s) omitted; request include.per_run for callable pagination."
 )
-
-# Per-call digest memo keyed by (path, mtime_ns, size), for the calls that take
-# content digests at all (include.provenance, a resumed set, a cursor issued).
-_DigestCache = dict[tuple[str, int, int], str]
 
 
 class CaseSelection(StrictModel):
@@ -1040,53 +1037,35 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
     return relayed
 
 
-async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
-    """Digest ``path``, memoized by (path, mtime, size) for this call.
-
-    A file whose mtime and size are unchanged since it was first digested is not
-    re-read — manifest creation and the source-drift checks before and after
-    evaluation share one hash per unchanged source. A drifting file gets a fresh
-    (mtime, size) key, so a real change is always re-digested.
-    """
-    key: tuple[str, int, int] | None
-    try:
-        # A cheap metadata stat on the loop (like the sibling .is_file() checks
-        # here); the expensive hash read is what bounded_parse offloads.
-        stat = os.stat(path)
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        key = None
-    if key is not None and key in cache:
-        return cache[key]
-    digest = await services.bounded_parse(
+async def _digest(path: Path, deadline: float) -> str:
+    return await services.bounded_parse(
         path,
         lambda: result_store.sha256_file(path),
         timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - asyncio.get_running_loop().time()),
     )
-    if key is not None:
-        cache[key] = digest
-    return digest
 
 
-def _file_stamp(path: Path) -> list[int]:
-    """``[size, mtime_ns]``, what a source file is identified by.
-
-    A metadata stat on the loop, like the sibling ``is_file`` checks here. The
-    file's content is read only when a digest is asked for: by
-    ``include.provenance``, or for a set the caller can resume (see
-    ``_record_source_digests``).
-    """
-    info = os.stat(path)
-    return [info.st_size, info.st_mtime_ns]
+def _manifest_paths(manifest: dict[str, Any]) -> tuple[Path, Path | None]:
+    log = manifest.get("log_path")
+    return Path(manifest["raw_path"]), Path(log) if log else None
 
 
 def _source_stamp(raw: Path, log: Path | None) -> dict[str, Any]:
-    """The stamps of a run's raw and log, the log's absence recorded as such."""
-    log_present = log is not None and log.is_file()
+    """What a run's sources are identified by: each file's ``cache.file_stamp``.
+
+    Metadata stats on the loop, like the sibling ``is_file`` checks here. The
+    files' content is read only when a digest is asked for: by
+    ``include.provenance``, or for a set handed to a caller to resume (see
+    ``_record_source_digests``). The log's absence is recorded as such.
+    """
+    log_stamp: list[int] | None = None
+    if log is not None:
+        with contextlib.suppress(FileNotFoundError):
+            log_stamp = list(file_stamp(log))
     return {
-        "raw_stamp": _file_stamp(raw),
-        "log_present": log_present,
-        "log_stamp": _file_stamp(log) if log_present and log is not None else None,
+        "raw_stamp": list(file_stamp(raw)),
+        "log_present": log_stamp is not None,
+        "log_stamp": log_stamp,
     }
 
 
@@ -1094,52 +1073,48 @@ def _same_stamp(manifest: dict[str, Any], stamp: dict[str, Any]) -> bool:
     return all(manifest.get(key) == stamp[key] for key in stamp)
 
 
-async def _content_digests(
-    raw: Path, log: Path | None, log_present: bool, deadline: float, cache: _DigestCache
-) -> dict[str, Any]:
-    """The raw's and the log's SHA-256, and their composite."""
-    raw_sha = await _digest(raw, deadline, cache)
-    log_sha = await _digest(log, deadline, cache) if log_present and log is not None else None
+async def _content_digests(raw: Path, log: Path | None, deadline: float) -> dict[str, Any]:
+    """The raw's and the log's SHA-256, and their composite; ``log`` None when absent."""
+    raw_sha = await _digest(raw, deadline)
+    log_sha = await _digest(log, deadline) if log is not None else None
     return {
         "raw_sha256": raw_sha,
         "log_sha256": log_sha,
-        "composite_sha256": result_store.composite_digest(raw_sha, log_sha, log_present),
+        "composite_sha256": result_store.composite_digest(raw_sha, log_sha, log is not None),
     }
 
 
-async def _manifest_for(
-    run: _ResolvedRun, *, digest: bool, deadline: float, cache: _DigestCache
-) -> dict[str, Any]:
+async def _manifest_for(run: _ResolvedRun, *, digest: bool, deadline: float) -> dict[str, Any]:
     """One run's source record: its paths, their stamps, and digests if asked.
 
-    The stamps identify the source: the drift checks compare them, and
-    ``source_identity`` names the artifacts derived from it. Content digests
-    cost a full read of every raw, so they are taken only when ``digest`` asks
-    (``include.provenance``) or the set is handed to a caller to resume.
+    The stamps identify the source, and the drift checks compare them. Content
+    digests cost a full read of every raw, so they are taken only when
+    ``digest`` asks (``include.provenance``) or the set is handed to a caller
+    to resume. A source that cannot be read records why instead.
     """
-    stamp = _source_stamp(run.source.raw, run.source.log)
-    log_path = str(run.source.log) if run.source.log else None
+    raw, log = run.source.raw, run.source.log
     manifest: dict[str, Any] = {
         "manifest_id": run.manifest_id,
         "label": run.label,
-        "raw_path": str(run.source.raw),
-        "log_path": log_path,
-        **stamp,
-        "source_identity": result_store.canonical_hash(
-            {"raw_path": str(run.source.raw), "log_path": log_path, **stamp}
-        ),
-        "raw_sha256": None,
-        "log_sha256": None,
-        "composite_sha256": None,
+        "raw_path": str(raw),
+        "log_path": str(log) if log else None,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
     }
-    if digest:
-        manifest.update(
-            await _content_digests(
-                run.source.raw, run.source.log, stamp["log_present"], deadline, cache
+    try:
+        stamp = _source_stamp(raw, log)
+        manifest.update(stamp, raw_sha256=None, log_sha256=None, composite_sha256=None)
+        if digest:
+            manifest.update(
+                await _content_digests(raw, log if stamp["log_present"] else None, deadline)
             )
+    except (LTSpiceMCPError, OSError) as exc:
+        manifest["digest_code"] = (
+            "analysis_deadline"
+            if isinstance(exc, AnalysisDeadlineExceeded)
+            else "source_unavailable"
         )
+        manifest["digest_error"] = str(exc)
     return manifest
 
 
@@ -1180,36 +1155,12 @@ def _request_hash(args: AnalyzeResultsInput) -> str:
     )
 
 
-async def _create_result_set(
-    args: AnalyzeResultsInput, state: SessionState, deadline: float, cache: _DigestCache
-):
+async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, deadline: float):
     assert args.sources is not None and args.recipes is not None
     runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
-    manifests: list[dict[str, Any]] = []
-    for run in runs:
-        try:
-            manifests.append(
-                await _manifest_for(
-                    run, digest=args.include.provenance, deadline=deadline, cache=cache
-                )
-            )
-        except (LTSpiceMCPError, OSError) as exc:
-            manifests.append(
-                {
-                    "manifest_id": run.manifest_id,
-                    "label": run.label,
-                    "raw_path": str(run.source.raw),
-                    "log_path": str(run.source.log) if run.source.log else None,
-                    "trusted_job_artifact": run.source.trusted_job_artifact,
-                    "job_id": run.job_id,
-                    "digest_code": (
-                        "analysis_deadline"
-                        if isinstance(exc, AnalysisDeadlineExceeded)
-                        else "source_unavailable"
-                    ),
-                    "digest_error": str(exc),
-                }
-            )
+    manifests = [
+        await _manifest_for(run, digest=args.include.provenance, deadline=deadline) for run in runs
+    ]
     work = _work_items(list(args.recipes))
     include = args.include.model_dump(mode="json")
     if isinstance(include.get("per_run"), dict):
@@ -1240,7 +1191,6 @@ async def _verify_direct_sources(
     manifests: list[dict[str, Any]],
     selected_ids: set[str],
     deadline: float,
-    cache: _DigestCache,
     *,
     contents: bool = False,
 ) -> dict[str, SourceFault]:
@@ -1249,8 +1199,10 @@ async def _verify_direct_sources(
     A changed stamp (size or modification time) is drift. With ``contents``,
     a source whose manifest records a content digest is also re-read and
     compared, which is how a set resumed by a later call is checked: a rewrite
-    that kept both the size and the timestamp still reads as drift. A manifest
-    written before stamps were recorded is checked by content alone.
+    that kept both the size and the timestamp still reads as drift. That
+    comparison is bounded like the digests it checks: one that cannot finish
+    before ``deadline`` leaves the source to its stamp. A manifest written
+    before stamps were recorded is checked by content alone.
     """
     failures: dict[str, SourceFault] = {}
     for manifest in manifests:
@@ -1261,27 +1213,24 @@ async def _verify_direct_sources(
             or manifest.get("digest_error")
         ):
             continue
+        stamped = "raw_stamp" in manifest
         try:
-            raw_path = Path(manifest["raw_path"])
-            log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
+            raw_path, log_path = _manifest_paths(manifest)
             stamp = _source_stamp(raw_path, log_path)
-            stamped = "raw_stamp" in manifest
             if stamped and not _same_stamp(manifest, stamp):
                 failures[manifest_id] = SourceFault("source_drift")
                 continue
             if manifest.get("composite_sha256") and (contents or not stamped):
                 digests = await _content_digests(
-                    raw_path, log_path, stamp["log_present"], deadline, cache
+                    raw_path, log_path if stamp["log_present"] else None, deadline
                 )
                 if digests["composite_sha256"] != manifest["composite_sha256"]:
                     failures[manifest_id] = SourceFault("source_drift")
+        except AnalysisDeadlineExceeded as exc:
+            if not stamped:
+                failures[manifest_id] = SourceFault("analysis_deadline", str(exc))
         except (LTSpiceMCPError, OSError) as exc:
-            failures[manifest_id] = SourceFault(
-                "analysis_deadline"
-                if isinstance(exc, AnalysisDeadlineExceeded)
-                else "source_drift",
-                str(exc),
-            )
+            failures[manifest_id] = SourceFault("source_drift", str(exc))
     return failures
 
 
@@ -1292,54 +1241,55 @@ async def _record_source_digests(item: result_store.ResultSet, state: SessionSta
     resumes the set compares these digests (``_verify_direct_sources`` with
     ``contents``), which a size and timestamp alone cannot match for a rewrite
     that kept both. Job artifacts are trusted server files and are not digested.
-    Bounded by the analysis budget; a source not digested in time, or whose
-    stamp moved meanwhile, is left to its stamp. Nothing here fails a recipe.
+    A reply that hands out a continuation has spent the call's budget, so this
+    gets one analysis budget of its own; a source not digested within it, or
+    whose stamp moved meanwhile, is left to its stamp. Nothing here fails a
+    recipe.
     """
     pending = [
         manifest
         for manifest in item.source_manifests
         if not manifest.get("trusted_job_artifact")
-        and not manifest.get("digest_error")
         and not manifest.get("composite_sha256")
         and "raw_stamp" in manifest
     ]
-    if not pending:
-        return
-    deadline = asyncio.get_running_loop().time() + state.config.analysis_budget_s
-    cache: _DigestCache = {}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + state.config.analysis_budget_s
     recorded: dict[str, dict[str, Any]] = {}
     for manifest in pending:
-        raw_path = Path(manifest["raw_path"])
-        log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
+        if loop.time() >= deadline:
+            break
+        raw_path, log_path = _manifest_paths(manifest)
         try:
             digests = await _content_digests(
-                raw_path, log_path, bool(manifest.get("log_present")), deadline, cache
+                raw_path, log_path if manifest.get("log_present") else None, deadline
             )
-            # The digests describe the stamped content only if nothing moved
-            # while they were taken.
-            if _same_stamp(manifest, _source_stamp(raw_path, log_path)):
-                recorded[str(manifest["manifest_id"])] = digests
         except (LTSpiceMCPError, OSError):
             continue
+        # The digests describe the stamped content only if nothing moved while
+        # they were taken.
+        if _same_stamp(manifest, _source_stamp(raw_path, log_path)):
+            recorded[str(manifest["manifest_id"])] = digests
     if recorded:
         await asyncio.to_thread(result_store.record_digests, item, recorded)
 
 
-def _resumable(data: dict[str, Any]) -> bool:
-    """Whether a reply hands the caller a cursor or continuation into its set."""
-    if data.get("next") is not None or data.get("cursor") is not None:
-        return True
-    coverage = data.get("coverage")
-    missing = coverage.get("missing_cases") if isinstance(coverage, dict) else None
-    if isinstance(missing, dict) and missing.get("next_cursor") is not None:
-        return True
-    results = data.get("results")
-    return isinstance(results, dict) and any(
-        isinstance(entry, dict)
-        and isinstance(entry.get("per_run"), dict)
-        and entry["per_run"].get("next_cursor") is not None
-        for entry in results.values()
-    )
+def _hands_out_cursor(value: Any) -> bool:
+    """Whether a reply carries a cursor or continuation into its result set.
+
+    Every handle a reply hands out is a string under a ``cursor`` or
+    ``next_cursor`` key, wherever it sits, so a new paged field needs no entry
+    here.
+    """
+    if isinstance(value, dict):
+        return any(
+            (key in ("cursor", "next_cursor") and isinstance(entry, str))
+            or _hands_out_cursor(entry)
+            for key, entry in value.items()
+        )
+    if isinstance(value, list):
+        return any(_hands_out_cursor(entry) for entry in value)
+    return False
 
 
 def _spice(value: float | str | None) -> str | None:
@@ -1604,7 +1554,7 @@ async def _waveform(
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest.get("source_identity") or manifest["composite_sha256"],
+        source_digest=str(manifest["manifest_id"]),
         recipe_hash=recipe_hash,
         suffix="csv",
     )
@@ -1665,7 +1615,7 @@ async def _plot(
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest.get("source_identity") or manifest["composite_sha256"],
+        source_digest=str(manifest["manifest_id"]),
         recipe_hash=recipe_hash,
         suffix="html",
     )
@@ -3408,7 +3358,6 @@ async def _resolve_drive_start(
     continuation: AnalysisContinuationPosition | None,
     loaded: result_store.ResultSet | None,
     call_deadline: float,
-    digest_cache: _DigestCache,
 ) -> _DriveStart:
     """Load or create the result set this drive runs over, and find its start.
 
@@ -3425,6 +3374,7 @@ async def _resolve_drive_start(
     )
     cursor_fields: list[str] | None = None
     inherited_view = False
+    resumed = False
     if continuation is not None:
         # The set is immutable, so a caller driving successive continuations can
         # hand back the one it already holds instead of re-reading it per drive.
@@ -3445,7 +3395,7 @@ async def _resolve_drive_start(
             list(continuation.view_fields) if continuation.view_fields is not None else None
         )
     elif args.continuation is None and page_cursor is None:
-        item = await _create_result_set(args, state, call_deadline, digest_cache)
+        item = await _create_result_set(args, state, call_deadline)
         position = 0
         intra_item = 0
         missing_offset = 0
@@ -3459,6 +3409,7 @@ async def _resolve_drive_start(
             args.continuation.cursor, item
         )
         inherited_view = True
+        resumed = True
         cursor_fields = result_store.cursor_view(args.continuation.cursor)
     else:
         assert page_cursor is not None
@@ -3468,6 +3419,7 @@ async def _resolve_drive_start(
             state.working_dir,
         )
         inherited_view = True
+        resumed = True
         cursor_fields = result_store.cursor_view(page_cursor)
         if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
             raise ResultError(
@@ -3485,7 +3437,6 @@ async def _resolve_drive_start(
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
     if inherited_view:
         include = include.model_copy(update={"fields": cursor_fields})
-    resumed = continuation is None and (args.continuation is not None or page_cursor is not None)
     return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
 
 
@@ -3500,14 +3451,10 @@ async def _evaluate_analysis_drive(
     """Implementation shared by the neutral seam and MCP's paged presentation."""
     loop = asyncio.get_running_loop()
     call_deadline = loop.time() + state.config.analysis_budget_s
-    # Per-call caches: one file hash per (path, mtime, size), shared across
-    # manifest build and verification; one resolved step plan per source.
-    digest_cache: _DigestCache = {}
+    # One resolved step plan per source, for this call.
     step_plans: dict[tuple[str, str], StepPlan] = {}
 
-    start = await _resolve_drive_start(
-        args, state, continuation, loaded, call_deadline, digest_cache
-    )
+    start = await _resolve_drive_start(args, state, continuation, loaded, call_deadline)
     item = start.item
     position, intra_item, missing_offset = start.position, start.intra_item, start.missing_offset
     include = start.include
@@ -3548,7 +3495,6 @@ async def _evaluate_analysis_drive(
         item.source_manifests,
         {run.manifest_id for run in runs},
         precheck_deadline,
-        digest_cache,
         contents=start.resumed,
     )
 
@@ -3664,7 +3610,6 @@ async def _evaluate_analysis_drive(
         item.source_manifests,
         evaluated_ids,
         postcheck_deadline,
-        digest_cache,
     )
     if postcheck:
         failed_ids = set(postcheck)
@@ -3832,6 +3777,6 @@ async def handle_analyze_results(
         data, text = await _negotiate_analysis(budget, assembly)
     # Sources are identified by their stamps within a call; a set handed to the
     # caller to resume gets content digests, which the resuming call compares.
-    if _resumable(data):
+    if _hands_out_cursor(data):
         await _record_source_digests(assembly.item, state)
     return format_response(text, data)
