@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import os
 import tempfile
+import tomllib
 import types
 from pathlib import Path
 
@@ -199,6 +200,30 @@ class TestServerConfig:
         monkeypatch.delenv("LTSPICE_MCP_MAX_PARALLEL", raising=False)
         config = ServerConfig.load(path)
         assert config.max_parallel_sims == 8
+
+    def test_the_generated_config_sets_nothing(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Every key is shown at its default and commented out, so the file pins
+        no default: a host with only ngspice is not told to use LTspice, and a
+        later release's default reaches a server whose file was written before."""
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+
+        assert all(not values for values in tomllib.loads(content).values())
+        assert "# default = " in content
+        assert "# timeout = 300.0" in content
+        assert "# default_budget = 4000" in content
+        assert "# open_plot = true" in content
+        for name in os.environ:
+            if name.startswith("LTSPICE_MCP_"):
+                monkeypatch.delenv(name)
+        loaded = ServerConfig.load(path)
+        assert loaded.simulator is None
+        defaults = ServerConfig(working_dir=work_dir)
+        for name in ("default_timeout", "default_budget", "open_plot", "max_points_returned"):
+            assert getattr(loaded, name) == getattr(defaults, name)
 
 
 class TestToolProfile:
