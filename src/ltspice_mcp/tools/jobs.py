@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
 
@@ -52,6 +52,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     failures_schema,
     format_response,
+    held_to_cap,
     outcome_of,
     page_schema,
     path_denied_text,
@@ -142,12 +143,12 @@ class JobsInput(ToolInput):
 
 
 class _AddressedJobsInput(JobsInput):
-    """The actions that name one job: exactly one of job_id or request_id."""
+    """The actions that name one job, by job_id, request_id, or both."""
 
     job_id: str | None = Field(
         default=None,
         min_length=1,
-        description="Address the job directly. Give this or request_id, never both.",
+        description="Address the job directly. With request_id too, both must name it.",
     )
     request_id: str | None = Field(
         default=None,
@@ -160,10 +161,10 @@ class _AddressedJobsInput(JobsInput):
 
     @model_validator(mode="after")
     def _one_selector(self) -> Self:
-        if int(self.job_id is not None) + int(self.request_id is not None) != 1:
-            raise ValueError(
-                f"jobs action {self.action!r} requires exactly one of job_id or request_id"
-            )
+        # Both is one job named twice, which the resolver checks; a call that
+        # names none has nothing to act on.
+        if self.job_id is None and self.request_id is None:
+            raise ValueError(f"jobs action {self.action!r} requires job_id or request_id")
         return self
 
 
@@ -180,9 +181,8 @@ class JobsWaitInput(_AddressedJobsInput):
     timeout_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=JOBS_WAIT_CAP_S,
         description=(
-            "How long to block, 0-300s. Timing out is not a failure: the "
+            "How long to block, held to 300s. Timing out is not a failure: the "
             "response says timed_out and the job keeps running, so wait again."
         ),
     )
@@ -225,8 +225,7 @@ class JobsListInput(JobsInput):
     limit: int = Field(
         default=JOBS_PAGE_LIMIT,
         ge=1,
-        le=JOBS_PAGE_LIMIT,
-        description="Circuit groups per page.",
+        description="Circuit groups per page, held to 50.",
     )
     cursor: str | None = Field(
         default=None,
@@ -604,8 +603,7 @@ def _without_control_tokens(value: Any) -> Any:
 
 async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -> ExperimentJob:
     job_id = args.job_id
-    if job_id is None:
-        assert args.request_id is not None
+    if args.request_id is not None:
         index = await asyncio.to_thread(
             experiment_store.load_request_index,
             args.request_id,
@@ -620,7 +618,16 @@ async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -
             raise JobNotFoundError(
                 f"The request index for {args.request_id!r} does not name a valid job"
             )
+        if job_id is not None and job_id != raw_job_id:
+            # Two selectors for two jobs: acting on either would be a guess.
+            raise _JobsActionError(
+                "selector_conflict",
+                f"job_id {job_id!r} and request_id {args.request_id!r} name different "
+                f"jobs (the request_id names {raw_job_id!r}); pass one of them.",
+                stage="resolution",
+            )
         job_id = raw_job_id
+    assert job_id is not None
     return await services.resolve_job_async(job_id, state)
 
 
@@ -993,6 +1000,8 @@ class JobsEvaluation:
     observations: tuple[dict[str, Any], ...] = ()
     circuit: Path | None = None
     error: _JobsError | None = None
+    # An argument held to its cap, said so in the response's warnings.
+    warnings: tuple[str, ...] = ()
 
     @property
     def is_error(self) -> bool:
@@ -1044,11 +1053,14 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             )
 
         timed_out: bool | None = None
+        held: tuple[str, ...] = ()
         if isinstance(args, JobsWaitInput):
+            timeout_s, note = held_to_cap("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
+            held = () if note is None else (f"{note} Wait again to keep waiting.",)
             job, timed_out = await _wait_for_jobs_target(
                 job,
                 state,
-                timeout_s=args.timeout_s,
+                timeout_s=timeout_s,
                 wait_for=args.wait_for,
             )
         # A runs page carries no observations, so it skips the progress reads.
@@ -1064,6 +1076,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
             job_id=snapshot.job_id,
             request_id=snapshot.request_id,
             status=snapshot.status,
+            warnings=held,
         )
     except Exception as exc:
         return _failed_jobs_evaluation(args, exc, state)
@@ -1114,7 +1127,7 @@ def render_jobs_data(
             "outcome": outcome_of(list_failures),
             **page,
             "observations": list(evaluation.observations),
-            "warnings": [],
+            "warnings": list(evaluation.warnings),
             "failures": list_failures,
             "hint": (
                 (
@@ -1180,6 +1193,8 @@ def render_jobs_data(
         analysis_answer_channel=rung is not None and rung.answer_channel,
         analysis_rows_cap=limit if rung is not None and rung.shrink else None,
     )
+    if evaluation.warnings:
+        data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
     if action == "status":
         text = f"Job {snapshot.job_id}: {snapshot.status}"
     elif evaluation.timed_out:
@@ -1216,7 +1231,16 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
     evaluation = await evaluate_jobs(args, state)
     built: _JobsBuilt | None = None
     if evaluation.error is None:
-        page_limit = args.limit if isinstance(args, JobsListInput) else JOBS_PAGE_LIMIT
+        page_limit = JOBS_PAGE_LIMIT
+        if isinstance(args, JobsListInput):
+            # A page size is an MCP control; the Python API returns every group,
+            # so only this page says it was held.
+            page_limit, held = held_to_cap("limit", args.limit, JOBS_PAGE_LIMIT)
+            if held is not None:
+                evaluation = replace(
+                    evaluation,
+                    warnings=(f"{held} Page on with next_cursor.", *evaluation.warnings),
+                )
         try:
             budget = resolve_response_budget(args.budget, state)
             if budget.tokens is None:

@@ -350,6 +350,90 @@ async def test_missing_expected_sha_refusal_hands_back_the_current_digest(asc_st
     assert (work_dir / "needsha.asc").read_bytes() == before
 
 
+async def test_dry_run_needs_no_expected_sha_and_hands_back_the_digest(asc_state, work_dir):
+    """The token prevents a lost update, which only a write can cause. A dry run
+    used to be refused without it, so validating an edit cost a read first."""
+    await _build_blank(asc_state, "drysha", _DIVIDER_OPS)
+    target = work_dir / "drysha.asc"
+    current = _sha(target)
+    before = _fingerprint(work_dir)
+
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="drysha.asc",
+                dry_run=True,
+                ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
+            ),
+            asc_state,
+        )
+    )
+
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "not_committed"
+    assert "error" not in data
+    assert data["sha256"] == current
+    assert "expected_sha256" in data["hint"]
+    assert data["observations"] == []
+    assert _fingerprint(work_dir) == before
+
+
+async def test_op_less_read_needs_no_expected_sha(asc_state, work_dir):
+    """Paging the preexisting view is an op-less read; it writes nothing."""
+    await _build_blank(asc_state, "readsha", _DIVIDER_OPS)
+    current = _sha(work_dir / "readsha.asc")
+
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(target="readsha.asc", ops=[], return_views=["pin_legend"]),
+            asc_state,
+        )
+    )
+
+    assert data["outcome"] == "complete"
+    assert {row["ref"] for row in data["views"]["pin_legend"]["items"]} == {"R1", "R2"}
+    assert data["sha256"] == current
+    assert _sha(work_dir / "readsha.asc") == current
+
+
+async def test_dry_run_reports_a_stale_expected_sha_as_a_fact(asc_state, work_dir):
+    await _build_blank(asc_state, "stalesha", _DIVIDER_OPS)
+    current = _sha(work_dir / "stalesha.asc")
+    stale = "0" * 64
+
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="stalesha.asc",
+                expected_sha256=stale,
+                dry_run=True,
+                ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
+            ),
+            asc_state,
+        )
+    )
+
+    assert data["outcome"] == "complete"
+    assert "error" not in data
+    assert data["sha256"] == current
+    (note,) = data["observations"]
+    assert stale in note and current in note and "revision_conflict" in note
+    assert {"stage": "revision_check", "ok": False, "error": "sha mismatch"} in data["stages"]
+    # A commit quoting the same stale token is still refused.
+    committed = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="stalesha.asc",
+                expected_sha256=stale,
+                ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
+            ),
+            asc_state,
+        )
+    )
+    assert committed["error"]["code"] == "revision_conflict"
+    assert _sha(work_dir / "stalesha.asc") == current
+
+
 # ---------------------------------------------------------------------------
 # Commit-protocol crash injection
 # ---------------------------------------------------------------------------

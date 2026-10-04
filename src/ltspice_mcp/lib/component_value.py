@@ -26,7 +26,9 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, body_has_stray_kv_remnant
 
-_POSITIONAL_KINDS = (
+#: The token kinds that stand in a positional slot of an element card; with
+#: ``KEY_VALUE`` they are every kind a well-formed value is made of.
+POSITIONAL_KINDS = (
     TokenKind.BARE,
     TokenKind.QUOTED,
     TokenKind.BRACED,
@@ -78,7 +80,7 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
         raise NetlistError(f"Component {ref!r} value {raw_value!r} failed to parse: {e}") from e
     if not user_tokens:
         raise NetlistError(f"Component {ref!r} value parsed to no tokens")
-    if any(t.kind not in (*_POSITIONAL_KINDS, TokenKind.KEY_VALUE) for t in user_tokens):
+    if any(t.kind not in (*POSITIONAL_KINDS, TokenKind.KEY_VALUE) for t in user_tokens):
         raise NetlistError(
             f"Component {ref!r} value {raw_value!r} contains an "
             "unrecognised token (stray equals sign or unbalanced quote)."
@@ -87,7 +89,7 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
     for tok in user_tokens:
         if tok.kind == TokenKind.KEY_VALUE:
             seen_kv = True
-        elif seen_kv and tok.kind in _POSITIONAL_KINDS:
+        elif seen_kv and tok.kind in POSITIONAL_KINDS:
             raise NetlistError(
                 f"Component {ref!r} value {raw_value!r} contains trailing tokens "
                 "after a KEY=VALUE assignment. Wrap expressions in braces or "
@@ -112,7 +114,7 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
         ref=ref,
         raw_value=raw_value,
         body_tokens=body_tokens,
-        user_pos=[t for t in user_tokens if t.kind in _POSITIONAL_KINDS],
+        user_pos=[t for t in user_tokens if t.kind in POSITIONAL_KINDS],
         user_kv=[t for t in user_tokens if t.kind == TokenKind.KEY_VALUE],
     )
     return handler(ctx)
@@ -129,7 +131,7 @@ def _positional_after_ref(body_tokens: list[Token]) -> list[Token]:
     for tok in body_tokens[1:]:
         if tok.kind == TokenKind.KEY_VALUE:
             break
-        if tok.kind in _POSITIONAL_KINDS:
+        if tok.kind in POSITIONAL_KINDS:
             out.append(tok)
     return out
 
