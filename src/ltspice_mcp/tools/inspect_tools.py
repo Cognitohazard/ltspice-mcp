@@ -139,7 +139,6 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    same_executable,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -929,37 +928,6 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
-def _reported_version(
-    state: SessionState,
-    executable: SimulatorExecutable | None,
-) -> tuple[str, dict[str, str]] | None:
-    """The build the latest run on this same executable reported, and which run.
-
-    Read from the jobs this session holds, its own and the recent ones loaded
-    at startup, so it is a run's own output rather than a probe: asking the
-    executable would launch the simulator. None until a run on this build has
-    finished and named itself.
-    """
-    if executable is None:
-        return None
-    latest = max(
-        (
-            (case.completed_at or job.started_at, job, case)
-            for job in state.all_jobs.values()
-            if same_executable(job.simulator_executable, executable)
-            for case in job.cases
-            if case.simulator_version
-        ),
-        key=lambda run: run[0],
-        default=None,
-    )
-    if latest is None:
-        return None
-    _, job, case = latest
-    assert case.simulator_version is not None
-    return case.simulator_version, {"job_id": job.job_id, "case_id": case.case_id}
-
-
 def _do_capabilities(
     state: SessionState,
     raster: RasterSupport,
@@ -971,7 +939,7 @@ def _do_capabilities(
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
         executable = executables.get(name)
-        reported = _reported_version(state, executable)
+        reported = services.reported_version(state, executable)
         info: dict[str, Any] = {
             "available": True,
             "default": cls is state.default_simulator,
@@ -2170,17 +2138,15 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
                     item.pop(key, None)
 
 
-#: This tool's budget epilogue. The hint mirror is why it is a value: the note's
-#: detail is written twice under a hint key, and the reserve has to know that.
-#: Structured-aware clients render only structuredContent, and 'hint' is where
-#: this tool puts guidance, so the mirror is not optional.
+#: This tool's budget epilogue, on ``observations``. Its trim rung drops only
+#: an exhausted item's page metadata, which the rows it returned restate, so the
+#: server's default budget never has anything to report here.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no query was dropped and no error was hidden.",
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on "
         "with each item's next_cursor."
     ),
-    hint_key="hint",
 )
 
 
@@ -2232,9 +2198,7 @@ async def _negotiate_inspect(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)

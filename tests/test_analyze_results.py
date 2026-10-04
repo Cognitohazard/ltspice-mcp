@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import time
 from datetime import timedelta
@@ -935,16 +936,21 @@ async def test_mutation_during_adapter_read_is_caught_by_postcheck(
 
 
 @pytest.mark.asyncio
-async def test_digest_deadline_records_failure_and_progresses(
+async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Sources are identified by size and modification time. Hashing every raw
+    and log on every call spent the call's budget on reading files whole, and a
+    hash that ran out of it failed the recipe that had nothing to do with it."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 0.01
+    hashed: list[Path] = []
     original = result_store.sha256_file
 
     def slow_digest(path):
+        hashed.append(Path(path))
         time.sleep(0.2)
         return original(path)
 
@@ -954,8 +960,52 @@ async def test_digest_deadline_records_failure_and_progresses(
         raw,
         [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
     )
-    assert any(failure["code"] == "analysis_deadline" for failure in data["failures"])
+    assert hashed == []
+    assert data["failures"] == []
+    assert data["results"]["v"]["values"]
     assert data["next"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_handed_out_records_the_sources_digests(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The call that resumes a set compares content, so the set records it."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
+    assert first["next"] is not None
+
+    stored = result_store.load(first["result_set_id"], work_dir)
+    (manifest,) = stored.source_manifests
+    assert manifest["raw_sha256"] == result_store.sha256_file(raw)
+    assert manifest["composite_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_set_catches_a_rewrite_that_kept_size_and_timestamp(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Size and modification time identify a source within a call. Across
+    calls the recorded digest does: a rewrite that kept both still drifts."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
+    before = os.stat(raw)
+    data = bytearray(raw.read_bytes())
+    data[-1] ^= 0xFF
+    raw.write_bytes(bytes(data))
+    os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert os.stat(raw).st_size == before.st_size
+
+    continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
+    result = await handle_analyze_results(continuation, state_no_sim)
+    assert result.structured_content is not None
+    assert any(
+        failure["code"] == "source_drift" for failure in result.structured_content["failures"]
+    )
 
 
 def test_multi_source_job_invalidation_and_raw_only_ttl(work_dir: Path):

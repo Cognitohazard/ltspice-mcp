@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +43,6 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
-    REPLAY_RECORD_DETAIL,
     AnalysisCallback,
     ExperimentReceipt,
     ExperimentRunRequest,
@@ -80,6 +78,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     validate_recipe,
 )
+from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     simulator_dialect,
@@ -878,6 +877,12 @@ async def _prepare_circuit(
             # so without this no transistor sheet stages under a default
             # sandbox. Resolved per run from the simulator this job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
+            # A micro sign spelled 'u' changes what a value means only to an
+            # LTspice that decodes decks as cp1252, so only then is it reported.
+            # The identity is cached per executable, so this is a stat here.
+            cp1252_reader=cp1252_ltspice(
+                state, await asyncio.to_thread(executable_identity, simulator)
+            ),
         )
         findings = (
             []
@@ -919,8 +924,14 @@ async def _prepare_circuit(
             circuit_id=circuit_id,
             path=staged.staged_deck,
             text=staged.text,
+            codec=staged.codec,
             includes=tuple(
-                DeckFile(path=included.staged_path, text=included.text, sha256=included.sha256)
+                DeckFile(
+                    path=included.staged_path,
+                    text=included.text,
+                    sha256=included.sha256,
+                    codec=included.codec,
+                )
                 for included in staged.includes
             ),
             semantic_profile=(
@@ -1219,21 +1230,8 @@ async def _load_matching_replay(
     await asyncio.to_thread(
         lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
-    noted = experiment_store.note_once(
-        job.observations,
-        {
-            "code": "idempotent_replay",
-            "kind": "submission",
-            "detail": REPLAY_RECORD_DETAIL,
-        },
-    )
-    # Only the owner writes a job's record. Another process's copy was read
-    # while the job may still have been running, and writing it back can land
-    # after the owner's terminal write; the owner then looks gone from a
-    # record that says running, and the next reader recovers it as
-    # interrupted. The note still reaches this caller through its receipt.
-    if noted and job.owner_pid == os.getpid():
-        state.persist_job(job)
+    # The record is left as it is: the receipt's ``replayed`` is the fact about
+    # this call, and only the owner writes a job's record.
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 

@@ -113,6 +113,37 @@ class TestAssignExpansion:
         assert "R1 in out 2.2k" in variants[0].text
         assert variants[0].sha256 == hashlib.sha256(variants[0].text.encode("utf-8")).hexdigest()
 
+    def test_case_files_are_written_in_the_staged_codec(self, tmp_path: Path):
+        """A case deck and the include copy a case edits keep the bytes of every
+        character the case did not change: a cp1252 '§' stays the one byte A7
+        LTspice XVII reads, and each recorded digest is of the bytes written."""
+        include = tmp_path / "core.inc"
+        include_text = "R§2 out 0 1k\n.param rload=1k\n"
+        include.write_bytes(include_text.encode("cp1252"))
+        path = tmp_path / "dut.cir"
+        text = '* dut\n.include "core.inc"\nR§1 in out {rload}\n.op\n.end\n'
+        path.write_bytes(text.encode("cp1252"))
+        circuit = CircuitDeck(
+            "dut",
+            path,
+            text,
+            includes=(DeckFile(include, include_text, codec="cp1252"),),
+            codec="cp1252",
+        )
+        variation = AssignVariation(kind="assign", assign={"rload": ["2k"]})
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+
+        assert case.path.read_bytes() == case.text.encode("cp1252")
+        assert b"R\xa71 in out {rload}" in case.path.read_bytes()
+        copies = [written for written, _ in case.file_digests if written != case.path]
+        assert [p.name for p in copies] == ["case-0000__core.inc"]
+        assert b"R\xa72 out 0 1k\n.param rload=2k" in copies[0].read_bytes()
+        for written, digest in case.file_digests:
+            assert hashlib.sha256(written.read_bytes()).hexdigest() == digest
+
     def test_b_source_assignment_preserves_source_kind_and_nodes(self, tmp_path: Path):
         path = tmp_path / "behavioral.cir"
         text = "V1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
@@ -1642,13 +1673,13 @@ class TestCaseBundleIsWrittenWhole:
         written: list[str] = []
         import ltspice_mcp.lib.variations as variations
 
-        real = variations.atomic_write_text
+        real = variations.atomic_write_bytes
 
-        def record(path, text, **kwargs):
+        def record(path, data, **kwargs):
             written.append(Path(path).name)
-            return real(path, text, **kwargs)
+            return real(path, data, **kwargs)
 
-        variations.atomic_write_text = record
+        variations.atomic_write_bytes = record
         try:
             variation = RandomVariation.model_validate(
                 {
@@ -1662,7 +1693,7 @@ class TestCaseBundleIsWrittenWhole:
                 circuit, expand_variations([circuit], [variation]), tmp_path / "out"
             )
         finally:
-            variations.atomic_write_text = real
+            variations.atomic_write_bytes = real
 
         for case in cases:
             include_copy = f"case-{case.case_index:04d}__dut.spice"

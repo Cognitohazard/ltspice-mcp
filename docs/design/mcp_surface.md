@@ -270,8 +270,8 @@ Passed explicitly, `request_id` is the durability key. At submission the
 server persists `{request_id -> job_id, fingerprint}`, where the fingerprint is
 the sha256 of the canonical (sorted-key) input payload. Same id with the same
 fingerprint returns the existing receipt, with `replayed: true` on it — that
-field is the fact about *this* call, while the record's `idempotent_replay`
-observation is the durable note and reads the same to every later reader. Same
+field is the fact about *this* call, and the replay leaves the job's record as
+it was (only the process that owns a job writes its record). Same
 id with a different fingerprint is an `idempotency_conflict`. Scope is the server working directory's job store;
 retention matches job retention. Transport cancellation ends only the dwell,
 never the durable job.
@@ -710,6 +710,14 @@ in the result set, so a continuation replays them.
   more than one call's worth — every waveform of a 300-run Monte Carlo, say —
   and you get what was computed plus a continuation handle rather than an hour
   of compute.
+- A source is identified by the size and modification time of its raw and
+  log, which every drift check within a call compares; nothing is read whole
+  to identify it. Content digests are taken only when a reply hands out a
+  cursor or continuation, or `include.provenance` asks for them, and are
+  recorded with the result set. A call resuming the set compares them, so a
+  rewrite that kept both size and timestamp still reads as `source_drift`.
+  Both hashes are bounded by the analysis budget, and one that does not finish
+  leaves the source to its size and time rather than failing a recipe.
 - A `raw_path` source has no job provenance, so its rows carry
   `deck_sha256: null` plus an observation. Provenance is never fabricated.
 - Bulk fidelity travels as artifact handles
@@ -952,7 +960,8 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+Output: `outcome, target, sha256, build_id, stages[] (the stages that did not
+complete; empty on success), netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
@@ -971,7 +980,7 @@ render        {format: "png"|"svg", scale?, max_pixels?,
                delivery: "artifact"|"inline"|"both"}
               `true` selects the default policy; `false` or omitted renders
               nothing
-export_to     "managed" (default) | "sidecar"
+export_to     "sidecar" (default) | "managed"
 ```
 
 `compare` is shared with `edit_schematic`, `mode` included: `{reference,
@@ -984,12 +993,17 @@ the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
 said nothing the object did not, and a call carrying both was refused rather
 than resolved.
 
-`managed` export is non-destructive: it exports into a staged scratch directory
-in the store and writes nothing beside the caller's file (the lock it takes
-while copying lives in the per-user home). A compare of that export resolves
-its relative includes from the schematic's folder, not from the scratch copy. `sidecar` overwrites the deck's `.net`
-under lock and returns `{path, sha256, diff_vs_prior?}`; that makes the call
-destructive, which the annotation table reflects.
+`sidecar`, the default, overwrites the schematic's `<name>.net` under lock and
+returns `{path, sha256, diff_vs_prior?}`. That is the file LTspice itself
+writes beside a schematic it runs, and the one `run_experiments` exports
+through, so the default export adds nothing a run would not; it does make the
+call destructive, which the annotation table reflects. `managed` is the
+non-destructive alternative: it copies the schematic and the project-local
+`.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under its folder into a staged scratch
+directory in the store, exports there, and writes nothing beside the caller's
+file (the lock it takes while copying lives in the per-user home). A compare of
+that export resolves its relative includes from the schematic's folder, not
+from the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 controls format, scale, pixel cap, and whether the image comes back inline or
@@ -1176,7 +1190,7 @@ symbol browser.
 | `jobs` | false | true (cancel) | true | false |
 | `analyze_results` | false (artifact writes) | false | true | false |
 | `edit_schematic` | false | true | false | false |
-| `verify_circuit` | false (render, sidecar) | true (export_to: sidecar) | true (managed mode) | false |
+| `verify_circuit` | false (render, export) | true (export_to: sidecar, the default) | true | false |
 | `inspect` | true | false | true | false |
 
 **Ownership.** Visibility covers all persisted jobs; cancel authority is the
@@ -1267,8 +1281,9 @@ ngspice), `lib-section-ngspice` (blocking, ngspice in `kiltpsa` mode),
 (blocking), `value-suffix-nonascii` (blocking: a non-ASCII character where a
 scale suffix goes, such as the `Âµ` a UTF-8 `µ` becomes under cp1252 — the
 simulator reads the bare number; a `µ`/`μ` itself is spelled `u` by staging
-before the deck is linted, and `verify_circuit` warns about it for a deck run
-elsewhere), and `op-degenerate` (a post-run observation with neutral evidence —
+before the deck is linted, and `verify_circuit` reports it for a deck run
+elsewhere: one observation per file, or a warning per value when a reader the
+server knows of, an LTspice XVII, would decode the file otherwise), and `op-degenerate` (a post-run observation with neutral evidence —
 device list, currents, threshold, step — whose hint mentions `.nodeset`).
 
 ---

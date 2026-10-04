@@ -1,4 +1,8 @@
-"""Immutable persistence for continuable ``analyze_results`` calls."""
+"""Persistence for continuable ``analyze_results`` calls.
+
+A result set is immutable but for one step: its source manifests gain content
+digests when a reply hands the set to a caller to resume (``record_digests``).
+"""
 
 from __future__ import annotations
 
@@ -102,7 +106,7 @@ def create(
     source_jobs: dict[str, str | None],
     ttl_hours: float,
 ) -> ResultSet:
-    """Persist a new immutable result set after opportunistic cleanup."""
+    """Persist a new result set after opportunistic cleanup."""
     cleanup(working_dir)
     created = now()
     result_set_id = f"rs_{secrets.token_hex(16)}"
@@ -119,11 +123,31 @@ def create(
         work_hash=canonical_hash(work),
         snapshot_hash="",
     )
-    item = replace(item, snapshot_hash=canonical_hash(item.snapshot()))
     store = Store(working_dir)
     store.ensure_root()
-    atomic_write_json(store.result_set(result_set_id), item.to_dict())
+    return _persist(item, store)
+
+
+def _persist(item: ResultSet, store: Store) -> ResultSet:
+    """Stamp ``item``'s snapshot hash and write it, replacing any earlier record."""
+    item = replace(item, snapshot_hash=canonical_hash(item.snapshot()))
+    atomic_write_json(store.result_set(item.result_set_id), item.to_dict())
     return item
+
+
+def record_digests(item: ResultSet, digests: dict[str, dict[str, Any]]) -> None:
+    """Rewrite ``item`` with content digests added to the named source manifests.
+
+    A set's manifests identify each source by its size and modification time,
+    and gain their content digests once, when a reply hands the set to a caller
+    to resume. Nothing else in the record changes: a cursor binds the set's id
+    and work hash, both untouched, and the snapshot hash is recomputed.
+    """
+    manifests = [
+        {**manifest, **digests.get(str(manifest.get("manifest_id")), {})}
+        for manifest in item.source_manifests
+    ]
+    _persist(replace(item, source_manifests=manifests), Store(Path(item.inputs["working_dir"])))
 
 
 def _decode(data: dict[str, Any], path: Path) -> ResultSet:
