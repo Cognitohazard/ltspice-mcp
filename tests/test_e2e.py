@@ -460,7 +460,9 @@ class TestSchematicTools:
             assert (tmp_path / "divider.asc").exists()
             # Only a stage that did not complete is listed.
             assert data["stages"] == []
-            assert data["hint"] == "Committed."
+            # The counts are in 'wiring'; the hint does not restate them.
+            assert data["hint"].startswith("Committed.")
+            assert "pins" not in data["hint"]
 
             wiring = data["wiring"]
             assert wiring["pins_total"] == 4
