@@ -757,9 +757,9 @@ class VerifyCircuitInput(ToolInput):
     export_to: Literal["sidecar", "managed"] = Field(
         default="sidecar",
         description=(
-            "'sidecar' writes <name>.net next to the schematic, as LTspice does "
-            "when it runs one; 'managed' exports a copy in the server's scratch "
-            "and writes nothing there."
+            "'sidecar' overwrites <name>.net next to the schematic, as LTspice "
+            "does when it runs one; 'managed' exports a copy in the server's "
+            "scratch and writes nothing there."
         ),
     )
 
@@ -1390,6 +1390,10 @@ class _ExportOutcome(NamedTuple):
     findings: Sequence[dict[str, Any]] = ()
 
 
+# What every failed export can fall back to: the checks that need no LTspice.
+_OFFLINE_REMEDY = "drop 'export' from checks to run the offline checks only"
+
+
 async def _run_export(
     asc_path: Path, state: SessionState, export_to: str, simulator_cls: Any
 ) -> _ExportOutcome:
@@ -1454,10 +1458,10 @@ async def _run_export(
                 f"LTspice netlist export failed: {exc}",
                 where=str(asc_path),
                 remedy=(
-                    "pass export_to='managed' if the schematic's folder cannot be "
-                    "written, or drop 'export' from checks to run the offline checks only"
+                    f"pass export_to='managed' if the schematic's folder cannot be "
+                    f"written, or {_OFFLINE_REMEDY}"
                     if export_to == "sidecar"
-                    else "drop 'export' from checks to run the offline checks only"
+                    else _OFFLINE_REMEDY
                 ),
             ),
             observations,
