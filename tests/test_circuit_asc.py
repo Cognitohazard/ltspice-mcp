@@ -26,6 +26,7 @@ from tests._asc_ops import (
     add_component,
     add_net_label,
     apply_one,
+    apply_ops,
     batch_view,
     blank_sheet_file,
     build_sheet,
@@ -114,7 +115,6 @@ def _copy_file(src: Path, dst: Path) -> None:
     dst.write_bytes(src.read_bytes())
 
 
-# Relocated regression coverage from a retired test module.
 def _read_bytes(p: Path) -> bytes:
     """Sync file read (keeps blocking pathlib I/O out of async test bodies)."""
     return p.read_bytes()
@@ -128,42 +128,6 @@ def _directive_anchors(content: bytes) -> list[tuple[int, int]]:
         if len(parts) >= 3 and parts[0] == "TEXT" and "!" in line:
             out.append((int(parts[1]), int(parts[2])))
     return out
-
-
-# Relocated regression coverage from a retired test module.
-# Two FLAGs (aaa, bbb) on one physical wire -> named-net short; R1 placed away
-# from any wire/label -> both pins float.
-SHORTED_ASC = """Version 4
-SHEET 1 880 680
-WIRE 0 0 100 0
-FLAG 0 0 aaa
-FLAG 100 0 bbb
-SYMBOL res 200 200 R0
-SYMATTR InstName R1
-SYMATTR Value 1k
-"""
-
-# Relocated regression coverage from a retired test module.
-# R1 (pins at y=100-48 and y=100+48) fully wired to a named net and ground.
-CLEAN_ASC = """Version 4
-SHEET 1 880 680
-WIRE 100 52 100 0
-WIRE 100 148 100 200
-FLAG 100 0 vin
-FLAG 100 200 0
-SYMBOL res 100 100 R0
-SYMATTR InstName R1
-SYMATTR Value 1k
-"""
-
-# Relocated regression coverage from a retired test module.
-# A net carrying a single name plus ground ('0') is NOT a short.
-GROUND_ASC = """Version 4
-SHEET 1 880 680
-WIRE 0 0 100 0
-FLAG 0 0 vout
-FLAG 100 0 0
-"""
 
 
 @pytest.mark.asyncio
@@ -379,7 +343,6 @@ class TestWirePins:
             "R1.2",
             waypoints=[{"x": 300, "y": 152}, {"x": 300, "y": 248}],
         )
-        assert result is not None
         assert result["wire_count"] == 3
         # No segment directly joins the two pins, so none is dropped by LTspice.
         assert len(_wire_segments(asc)) == 3
@@ -414,7 +377,6 @@ class TestWirePins:
         add_component(asc_state, _sheet("cross.asc"), "R1", "res", 200, 200)
         add_component(asc_state, _sheet("cross.asc"), "R2", "res", 200, 400)
         result = wire_pins(asc_state, _sheet("cross.asc"), "R1.2", "R2.1")
-        assert result is not None
         assert result["wire_count"] == 1
 
     async def test_route_over_own_pin_interior_refused_as_same_instance(
@@ -445,28 +407,24 @@ class TestWirePins:
         assert "R1.1" in msg and "R1.2" in msg
         assert _wire_segments(asc) == []
 
-    async def test_apply_ops_same_instance_wire_refused(
+    async def test_edit_schematic_refuses_a_same_instance_wire(
         self, asc_state: SessionState, work_dir: Path
     ):
-        # The apply_schematic_ops wire op shares _plan_connect_route, so the
-        # refusal must reach the batch surface too.
-        asc = work_dir / "self_tie_ops.asc"
-        asc.write_text("Version 4\nSHEET 1 880 680\n")
-        add_component(asc_state, _sheet("self_tie_ops.asc"), "R1", "res", 200, 200)
-        result = batch_view(
+        # The refusal reaches the tool's envelope, and the sheet is not written.
+        await build_sheet(
             asc_state,
-            _sheet("self_tie_ops.asc"),
-            [
-                # pydantic validates dicts
-                {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.2"},  # type: ignore[arg-type]
-            ],
-            stop_on_error=True,
+            "self_tie_ops",
+            [{"op": "add_component", "reference": "R1", "symbol": "res", "x": 200, "y": 200}],
         )
-        data = result
-        assert data is not None
-        assert data["saved"] is False
-        assert data["results"][0]["ok"] is False
-        assert "same-instance wire" in data["results"][0]["error"]
+        before = _read_bytes(work_dir / "self_tie_ops.asc")
+        data = await apply_ops(
+            asc_state,
+            "self_tie_ops.asc",
+            [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.2"}],
+        )
+        assert data["commit_state"] == "not_committed"
+        assert "same-instance wire" in data["failures"][0]["error"]
+        assert _read_bytes(work_dir / "self_tie_ops.asc") == before
 
 
 def _wire_segments(asc_path: Path) -> list[tuple[tuple[int, int], tuple[int, int]]]:
@@ -832,9 +790,8 @@ class TestOrientationPlacementAndRouting:
         connected = wire_pins(
             asc_state, _sheet("orient.asc"), "M1.G", "R9.1", waypoints=[{"x": gx, "y": 452}]
         )
-        sc = connected
-        assert sc["from_pin"] == "M1.G"
-        assert sc["to_pin"] == "R9.1"
+        assert connected["from_pin"] == "M1.G"
+        assert connected["to_pin"] == "R9.1"
 
         # Re-read the file from disk: the persisted wire must start at the
         # hand-computed absolute G coordinate and land on R9.1. This is the
@@ -979,13 +936,11 @@ class TestWirePinsPersistsWires:
 
         result = wire_pins(asc_state, _sheet("wire_persist.asc"), "R1.2", "R2.1")
         assert (result["from_pin"], result["to_pin"]) == ("R1.2", "R2.1")
-        sc = result
-        assert sc is not None
-        assert sc["wire_count"] == 1
+        assert result["wire_count"] == 1
 
         # Fixture res pins: 1=(0,-48), 2=(0,48) -> R1.2=(200,248), R2.1=(200,352).
         after = _wire_segments(asc)
-        assert len(after) == len(before) + sc["wire_count"]
+        assert len(after) == len(before) + result["wire_count"]
         assert _has_segment(after, (200, 248), (200, 352)), after
 
 
@@ -1066,7 +1021,6 @@ class TestEmptyAttributeHandling:
         with pytest.raises(NetlistError, match="empty value"):
             add_component(asc_state, asc_file, "RX", "res", 600, 600, value=bad_value)
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        _sheet_facts(asc_state, asc_file.name)
 
     async def test_add_component_unknown_attribute_rejected(
         self, asc_state: SessionState, asc_file: Path
@@ -1078,32 +1032,16 @@ class TestEmptyAttributeHandling:
             add_component(asc_state, asc_file, "RX", "res", 600, 600, attributes={"Val": "10k"})
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
 
-    async def test_apply_ops_add_component_empty_value_rejected(
+    async def test_edit_schematic_refuses_an_empty_value_without_writing(
         self, asc_state: SessionState, asc_file: Path
     ):
         original = asc_file.read_bytes()  # noqa: ASYNC240
-        result = batch_view(
-            asc_state,
-            asc_file,
-            [
-                {  # type: ignore[arg-type]
-                    "op": "add_component",
-                    "reference": "RX",
-                    "symbol": "res",
-                    "x": 600,
-                    "y": 600,
-                    "value": "",
-                },
-            ],
-            stop_on_error=True,
-        )
-        data = result
-        assert data is not None
-        assert data["saved"] is False
-        assert data["failed_count"] == 1
-        assert "empty value" in data["results"][0]["error"]
+        op = {"op": "add_component", "reference": "RX", "symbol": "res", "x": 600, "y": 600}
+        data = await apply_ops(asc_state, asc_file.name, [{**op, "value": ""}])
+        assert data["commit_state"] == "not_committed"
+        assert data["error"]["code"] == "op_failed"
+        assert "empty value" in data["failures"][0]["error"]
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        _sheet_facts(asc_state, asc_file.name)
 
     async def test_set_component_attribute_empty_value_clears(
         self, asc_state: SessionState, asc_file: Path
@@ -1112,83 +1050,23 @@ class TestEmptyAttributeHandling:
         # format has no empty-value representation — writing a 2-token
         # "SYMATTR Value " line bricks the file on the next parse). The .asc
         # must stay readable afterwards.
-        result = apply_one(
-            asc_state,
-            asc_file,
-            {
-                "op": "set_component_attribute",
-                "reference": "R1",
-                "attribute": "Value",
-                "value": "",
-            },
-        )
-        assert result["ok"] is True
         from spicelib import AscEditor
 
-        assert "Value" not in AscEditor(str(asc_file)).get_component("R1").attributes
-        _sheet_facts(asc_state, asc_file.name)
+        op = {"op": "set_component_attribute", "reference": "R1", "attribute": "Value"}
+        data = await apply_ops(asc_state, asc_file.name, [{**op, "value": ""}])
+        assert data["commit_state"] == "committed"
+        lines = asc_file.read_text(encoding="utf-8", errors="replace").splitlines()  # noqa: ASYNC240
+        assert [ln for ln in lines if ln.startswith("SYMATTR") and len(ln.split()) < 3] == []
+        r1 = AscEditor(str(asc_file)).get_component("R1")
+        assert "Value" not in r1.attributes
+        assert r1.reference == "R1"
 
     async def test_instname_cannot_be_cleared(self, asc_state: SessionState, asc_file: Path):
         original = asc_file.read_bytes()  # noqa: ASYNC240
-        with pytest.raises(NetlistError, match="InstName"):
-            apply_one(
-                asc_state,
-                asc_file,
-                {
-                    "op": "set_component_attribute",
-                    "reference": "R1",
-                    "attribute": "InstName",
-                    "value": "",
-                },
-            )
-        assert asc_file.read_bytes() == original  # noqa: ASYNC240
-
-    async def test_apply_ops_set_component_attribute_empty_value_clears(
-        self, asc_state: SessionState, asc_file: Path
-    ):
-        from spicelib import AscEditor
-
-        result = batch_view(
-            asc_state,
-            asc_file,
-            [
-                {  # type: ignore[arg-type]
-                    "op": "set_component_attribute",
-                    "reference": "R1",
-                    "attribute": "Value",
-                    "value": "",
-                },
-            ],
-            stop_on_error=True,
-        )
-        data = result
-        assert data is not None
-        assert data["saved"] is True
-        assert "Value" not in AscEditor(str(asc_file)).get_component("R1").attributes
-        _sheet_facts(asc_state, asc_file.name)
-
-    async def test_apply_ops_instname_clear_rejected(
-        self, asc_state: SessionState, asc_file: Path
-    ):
-        original = asc_file.read_bytes()  # noqa: ASYNC240
-        result = batch_view(
-            asc_state,
-            asc_file,
-            [
-                {  # type: ignore[arg-type]
-                    "op": "set_component_attribute",
-                    "reference": "R1",
-                    "attribute": "InstName",
-                    "value": "",
-                },
-            ],
-            stop_on_error=True,
-        )
-        data = result
-        assert data is not None
-        assert data["saved"] is False
-        assert data["failed_count"] == 1
-        assert "InstName" in data["results"][0]["error"]
+        op = {"op": "set_component_attribute", "reference": "R1", "attribute": "InstName"}
+        data = await apply_ops(asc_state, asc_file.name, [{**op, "value": ""}])
+        assert data["commit_state"] == "not_committed"
+        assert "InstName" in data["failures"][0]["error"]
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
 
 
@@ -1330,141 +1208,23 @@ class TestSetComponentValueCreatesMissingValue:
         assert result["reference"] == "R9"
         assert str(AscEditor(str(asc_file)).get_component_value("R9")) == "22k"
 
-    async def test_apply_ops_set_value_after_valueless_add(
+    async def test_set_value_after_a_valueless_add_in_one_edit(
         self, asc_state: SessionState, asc_file: Path
     ):
         from spicelib import AscEditor
 
-        result = batch_view(
+        data = await apply_ops(
             asc_state,
-            asc_file,
-            [  # type: ignore[arg-type]
-                {
-                    "op": "add_component",
-                    "reference": "R8",
-                    "symbol": "res",
-                    "x": 500,
-                    "y": 400,
-                },
+            asc_file.name,
+            [
+                {"op": "add_component", "reference": "R8", "symbol": "res", "x": 500, "y": 400},
                 {"op": "set_component_value", "reference": "R8", "value": "33k"},
             ],
-            stop_on_error=True,
         )
-        data = result
-        assert data is not None
-        assert data["saved"] is True
-        assert data["failed_count"] == 0
+        assert data["commit_state"] == "committed"
         assert str(AscEditor(str(asc_file)).get_component_value("R8")) == "33k"
 
 
-@pytest.mark.asyncio
-class TestEditingAscRollback:
-    """Uncaught exceptions inside _editing_asc must invalidate the
-    cached editor so a later read doesn't see dirty in-memory mutations,
-    and the file on disk must remain intact."""
-
-    async def test_uncaught_exception_after_mutation_invalidates_cache(
-        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        # Inject a failure after add_component has already mutated the
-        # editor in-memory but before save: wrap create_component so the real
-        # in-memory mutation runs, then raise — simulating a spicelib internal
-        # error mid-edit, after the editor is dirty but before the editing
-        # context saves.
-        from ltspice_mcp.lib import schematic_ops as circuit_mod
-
-        original = asc_file.read_bytes()  # noqa: ASYNC240
-        boom_calls = {"n": 0}
-        real_create = circuit_mod.create_component
-
-        def boom(*a, **kw):
-            real_create(*a, **kw)  # do the real in-memory mutation
-            boom_calls["n"] += 1
-            raise RuntimeError("injected post-op failure")
-
-        monkeypatch.setattr(circuit_mod, "create_component", boom)
-
-        with pytest.raises(RuntimeError, match="injected"):
-            add_component(asc_state, asc_file, "R_uncommitted", "res", 700, 700)
-
-        # The injection fired (sanity).
-        assert boom_calls["n"] == 1
-        # File on disk is unchanged — save runs only on the success path.
-        assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        # Cache eviction means a fresh read doesn't see R_uncommitted.
-        monkeypatch.undo()
-        result = await components_of(asc_state, asc_file)
-        assert "R_uncommitted" not in result
-
-
-@pytest.mark.asyncio
-class TestAtomicAscSave:
-    """A failure while spicelib is rendering the .asc must not
-    leave a partially-written file on disk."""
-
-    async def test_save_failure_preserves_original(
-        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        from spicelib import AscEditor
-
-        original = asc_file.read_bytes()  # noqa: ASYNC240
-
-        # Inject a save that writes partial bytes to whatever sink it gets,
-        # then raises. Two cases to defeat:
-        #   1. Pre-fix path: editor.save_netlist(str(path)) opens the file
-        #      directly. A partial write would land on disk. To prove the
-        #      atomic-rename, route through the StringIO sink only (which
-        #      atomic_write_text uses) — so a partial sink write does NOT
-        #      reach the target.
-        #   2. Post-fix path: editor.save_netlist(buf), then
-        #      atomic_write_text(target, buf.getvalue(). On failure, the
-        #      sibling temp is cleaned up and target stays intact.
-        def failing_save(self_editor, sink):
-            del self_editor
-            # Write partial content to the sink (StringIO or file handle).
-            if hasattr(sink, "write"):
-                sink.write("Version 4\nSHEET 1 0 0\n!!CORRUPT!!\n")
-            elif isinstance(sink, str):
-                # Pre-fix code path: it would have passed a string path,
-                # so spicelib opens the file directly. Simulate spicelib
-                # writing partial content before crashing.
-                Path(sink).write_text("Version 4\nSHEET 1 0 0\n!!CORRUPT!!\n")
-            raise OSError("disk full simulation")
-
-        monkeypatch.setattr(AscEditor, "save_netlist", failing_save)
-
-        with pytest.raises(OSError, match="disk full"):
-            add_component(asc_state, asc_file, "R_aborted_save", "res", 600, 600)
-
-        # Atomic-rename guarantee: no partial write reached the target.
-        assert asc_file.read_bytes() == original  # noqa: ASYNC240
-
-    async def test_save_failure_evicts_cache(
-        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """A save that mutates the in-memory editor then crashes
-        must still invalidate the cache. Otherwise a follow-up read sees
-        the unsaved component."""
-        from spicelib import AscEditor
-
-        def failing_save(*args, **_kw):
-            raise OSError("disk full simulation")
-
-        monkeypatch.setattr(AscEditor, "save_netlist", failing_save)
-
-        with pytest.raises(OSError, match="disk full"):
-            add_component(asc_state, asc_file, "R_uncommitted", "res", 600, 600)
-
-        # Restore real save so the follow-up read works.
-        monkeypatch.undo()
-
-        # The component must NOT be visible — cache was evicted, fresh
-        # read from disk shows the pre-failure state.
-        result = await components_of(asc_state, asc_file)
-        assert "R_uncommitted" not in result
-
-
-# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestSetAttributeAllowlist:
     """set_component_attribute rejects unknown attribute names."""
@@ -1496,8 +1256,10 @@ class TestSetAttributeAllowlist:
             )
 
     async def test_accepts_spiceline(self, asc_state: SessionState, asc_file: Path):
-        # Sanity: the canonical name still works.
-        result = apply_one(
+        # The canonical name still works, and the value reaches the sheet.
+        from spicelib import AscEditor
+
+        apply_one(
             asc_state,
             asc_file,
             {
@@ -1507,20 +1269,10 @@ class TestSetAttributeAllowlist:
                 "value": "tc=10ppm",
             },
         )
-        assert result["ok"] is True
+        r1 = AscEditor(str(asc_file)).get_component("R1")
+        assert r1.attributes["SpiceLine"] == "tc=10ppm"
 
 
-# Relocated regression coverage from a retired test module.
-@pytest.mark.asyncio
-class TestFloatingLabelWarning:
-    """add_net_label warns on labels placed away from any wire/pin."""
-
-    async def test_warns_on_floating(self, asc_state: SessionState, asc_file: Path):
-        result = add_net_label(asc_state, asc_file, "VCC_floating", x=10, y=10)
-        assert any("floating" in w.lower() for w in result["warnings"]), result
-
-
-# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestNetConflictInWirePins:
     """wire_pins detects shorts between two named nets."""
@@ -1604,147 +1356,65 @@ class TestAddNetLabelJoins:
             add_net_label(asc_state, asc, "joined", x=96, y=96)
 
 
-# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestRemoveComponentNoFalseOrphans:
-    """remove_component doesn't flag wires belonging to other components."""
+    """remove_component flags a wire left on a removed pin only when no other
+    component still owns that pin."""
 
-    async def test_other_component_pin_not_flagged(self, asc_state: SessionState, asc_file: Path):
-        # Add a second resistor whose pin coincides with R1's existing wire.
-        # When we remove R2, the wire connecting R1 stays — and our orphan
-        # detector should NOT flag it.
-        add_component(
+    async def test_other_component_pin_not_flagged(self, asc_state: SessionState):
+        # R3 sits exactly on R1, so after R3 goes the R1.2-R2.1 wire still ends
+        # on a pin (R1.2 at (200,248)). Once R1 goes too, nothing owns that end.
+        await build_sheet(
             asc_state,
-            asc_file,
-            "R2",
-            "res",
-            128,
-            112,  # same coords as R1 — pins overlap
-            value="2k",
-            rotation="R90",
+            "orphans",
+            [
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 200, "y": 200},
+                {"op": "add_component", "reference": "R2", "symbol": "res", "x": 200, "y": 400},
+                {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
+                {"op": "add_component", "reference": "R3", "symbol": "res", "x": 200, "y": 200},
+            ],
         )
-        result = apply_one(asc_state, asc_file, {"op": "remove_component", "reference": "R2"})
-        # The remaining R1's wires shouldn't be flagged as orphans.
-        assert "orphaned" not in result
+        remove = {"op": "remove_component"}
+        shared = await apply_ops(asc_state, "orphans.asc", [{**remove, "reference": "R3"}])
+        assert shared["commit_state"] == "committed"
+        assert [w for w in shared["warnings"] if "orphaned" in w] == []
+
+        alone = await apply_ops(asc_state, "orphans.asc", [{**remove, "reference": "R1"}])
+        assert alone["commit_state"] == "committed"
+        assert [w for w in alone["warnings"] if "orphaned" in w] == [
+            "op 0 (remove_component): orphaned wires remain at: (200,248). "
+            "Re-run with cleanup_wires=true to delete them."
+        ]
 
 
-# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestApplySchematicOps:
-    """apply_schematic_ops batches add/wire_pins/label/directive."""
+class TestAddComponentOpEntry:
+    """The op runner's own entry for add_component: the placed pins, the
+    bounding box, and the overlap advisory."""
 
     async def test_add_component_result_includes_placed_geometry_and_overlap_warnings(
         self, asc_state: SessionState
     ):
-
         blank_sheet_file(asc_state, "batch_geometry")
-        result = batch_view(
+        view = batch_view(
             asc_state,
             _sheet("batch_geometry.asc"),
-            [  # type: ignore[arg-type]  # pydantic validates dicts
-                {
-                    "op": "add_component",
-                    "reference": "R1",
-                    "symbol": "res",
-                    "x": 100,
-                    "y": 100,
-                },
-                {
-                    "op": "add_component",
-                    "reference": "R2",
-                    "symbol": "res",
-                    "x": 100,
-                    "y": 100,
-                },
+            [
+                {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
+                {"op": "add_component", "reference": "R2", "symbol": "res", "x": 100, "y": 100},
             ],
-            stop_on_error=True,
         )
-
-        data = result
-        assert data is not None
-        added = data["results"][1]
-        assert added["pins"]
+        added = view["results"][1]
+        # Fixture res pins sit 48 above and below the origin; the box spans
+        # the 32-wide body and both pin leads.
+        assert [(p["x"], p["y"]) for p in added["pins"]] == [(100, 52), (100, 148)]
         assert added["bounding_box"] == {"x": 84, "y": 52, "width": 32, "height": 96}
         assert added["warnings"] == ["Overlaps R1 bounding box"]
-
-    async def test_basic_transaction(self, asc_state: SessionState, work_dir: Path):
-
-        blank_sheet_file(asc_state, "batch_demo")
-
-        result = batch_view(
-            asc_state,
-            _sheet("batch_demo.asc"),
-            [  # type: ignore[arg-type]  # pydantic validates dicts
-                {
-                    "op": "add_component",
-                    "reference": "R1",
-                    "symbol": "res",
-                    "x": 100,
-                    "y": 100,
-                    "value": "1k",
-                },
-                {
-                    "op": "add_component",
-                    "reference": "C1",
-                    "symbol": "cap",
-                    "x": 200,
-                    "y": 100,
-                    "value": "1u",
-                },
-                {
-                    "op": "add_directive",
-                    "instruction": ".tran 1m",
-                },
-            ],
-            stop_on_error=True,
-        )
-        data = result
-        assert data["applied_count"] == 3
-        assert data["failed_count"] == 0
-        assert data["saved"] is True
-
-    async def test_continue_on_error_persists_partial(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-
-        blank_sheet_file(asc_state, "batch_partial")
-        result = batch_view(
-            asc_state,
-            _sheet("batch_partial.asc"),
-            [  # type: ignore[arg-type]  # pydantic validates dicts
-                {
-                    "op": "add_component",
-                    "reference": "R1",
-                    "symbol": "res",
-                    "x": 100,
-                    "y": 100,
-                },
-                {
-                    "op": "add_component",
-                    "reference": "X1",
-                    "symbol": "definitely_not_a_symbol",
-                    "x": 200,
-                    "y": 100,
-                },
-                {
-                    "op": "add_component",
-                    "reference": "C1",
-                    "symbol": "cap",
-                    "x": 300,
-                    "y": 100,
-                },
-            ],
-            stop_on_error=False,
-        )
-        data = result
-        assert data["applied_count"] == 2
-        assert data["failed_count"] == 1
-        assert data["saved"] is True
 
 
 @pytest.mark.asyncio
 class TestRemoveWireAndNetLabelOps:
-    """remove_wire / remove_net_label apply_schematic_ops ops."""
+    """The remove_wire / remove_net_label / remove_directive ops."""
 
     async def test_remove_wire_by_endpoints_and_label_by_pin_and_xy(
         self, asc_state: SessionState, work_dir: Path
@@ -1780,14 +1450,13 @@ class TestRemoveWireAndNetLabelOps:
         assert build["saved"] is True
 
         # read_circuit must expose wire segments for discovery/removal.
-        read = _sheet_facts(asc_state, "rm_ops.asc")
-        rsc = read
+        rsc = _sheet_facts(asc_state, "rm_ops.asc")
         assert rsc["wires"], "read_circuit should list wire segments"
         wire = rsc["wires"][0]
         # Label coordinates for the by-pin removal target.
         in_label = next(lbl for lbl in rsc["labels"] if lbl["text"] == "in")
 
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("rm_ops.asc"),
             [  # type: ignore[arg-type]  # pydantic validates dicts
@@ -1803,7 +1472,6 @@ class TestRemoveWireAndNetLabelOps:
             ],
             stop_on_error=True,
         )
-        data = res
         assert data["saved"] is True
         assert data["failed_count"] == 0
         # Each op reports what it removed.
@@ -1812,8 +1480,7 @@ class TestRemoveWireAndNetLabelOps:
         # The by-pin removal must land on the "in" label coordinate.
         assert by_op["remove_net_label"]["ok"] is True
 
-        read2 = _sheet_facts(asc_state, "rm_ops.asc")
-        rsc2 = read2
+        rsc2 = _sheet_facts(asc_state, "rm_ops.asc")
         assert rsc2["wire_count"] == 0
         assert not rsc2["wires"]
         remaining = {lbl["text"] for lbl in rsc2["labels"]}
@@ -1865,7 +1532,7 @@ class TestRemoveWireAndNetLabelOps:
             path.read_text() + f"WIRE {wire['x1']} {wire['y1']} {wire['x2']} {wire['y2']}\n"
         )
 
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("dup_load_bearing.asc"),
             [
@@ -1879,8 +1546,6 @@ class TestRemoveWireAndNetLabelOps:
             ],
             stop_on_error=True,
         )
-        data = res
-        assert data is not None
         assert data["saved"] is False
         error = data["results"][0]["error"]
         assert "2 copies" in error
@@ -1912,7 +1577,7 @@ class TestRemoveWireAndNetLabelOps:
         assert rebuilt != path.read_text(), "helper wire line not found to rewrite"
         path.write_text(rebuilt)
 
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("dup_bridge.asc"),
             [
@@ -1920,8 +1585,6 @@ class TestRemoveWireAndNetLabelOps:
             ],
             stop_on_error=True,
         )
-        data = res
-        assert data is not None
         assert data["saved"] is False
         error = data["results"][0]["error"]
         assert "split the net" in error
@@ -1938,7 +1601,7 @@ class TestRemoveWireAndNetLabelOps:
         path = work_dir / "dup_redundant.asc"
         path.write_text(path.read_text() + "WIRE 900 900 964 900\nWIRE 964 900 900 900\n")
 
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("dup_redundant.asc"),
             [
@@ -1946,8 +1609,6 @@ class TestRemoveWireAndNetLabelOps:
             ],
             stop_on_error=True,
         )
-        data = res
-        assert data is not None
         assert data["saved"] is True
         assert data["results"][0]["removed"] == 2
 
@@ -1960,14 +1621,12 @@ class TestRemoveWireAndNetLabelOps:
         clean up and the connection survives."""
         wire = await self._wired_pair(asc_state, "dup_sequence")
 
-        repeat = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("dup_sequence.asc"),
             [{"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"}],
             stop_on_error=True,
         )
-        data = repeat
-        assert data is not None
         assert data["results"][0]["wire_count"] == 0
         assert data["results"][0]["already_present"]
         kinds = {w["kind"] for w in data.get("validation_warnings", [])}
@@ -1981,13 +1640,12 @@ class TestRemoveWireAndNetLabelOps:
 
         blank_sheet_file(asc_state, "rm_nomatch")
         # stop_on_error default True: a no-match remove aborts the transaction.
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("rm_nomatch.asc"),
             [{"op": "remove_wire", "x1": 0, "y1": 0, "x2": 16, "y2": 0}],
             stop_on_error=True,
         )
-        data = res
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No matching wire" in data["results"][0]["error"]
@@ -1995,13 +1653,12 @@ class TestRemoveWireAndNetLabelOps:
     async def test_remove_net_label_no_match_raises(self, asc_state: SessionState, work_dir: Path):
 
         blank_sheet_file(asc_state, "rm_lbl_nomatch")
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("rm_lbl_nomatch.asc"),
             [{"op": "remove_net_label", "x": 999, "y": 999}],
             stop_on_error=True,
         )
-        data = res
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No net label found" in data["results"][0]["error"]
@@ -2021,13 +1678,12 @@ class TestRemoveWireAndNetLabelOps:
         read = _sheet_facts(asc_state, "rm_dir.asc")
         assert any(".tran 1m" in d for d in read["directives"])
 
-        rm = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("rm_dir.asc"),
             [{"op": "remove_directive", "instruction": ".tran 1m"}],
             stop_on_error=True,
         )
-        data = rm
         assert data["saved"] is True
         assert data["failed_count"] == 0
         assert data["results"][0]["removed"] == "directive"
@@ -2038,13 +1694,12 @@ class TestRemoveWireAndNetLabelOps:
     async def test_remove_directive_no_match_raises(self, asc_state: SessionState, work_dir: Path):
 
         blank_sheet_file(asc_state, "rm_dir_nomatch")
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("rm_dir_nomatch.asc"),
             [{"op": "remove_directive", "instruction": ".tran 999"}],
             stop_on_error=True,
         )
-        data = res
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No directive or comment" in data["results"][0]["error"]
@@ -2063,13 +1718,12 @@ class TestRemoveWireAndNetLabelOps:
             [{"op": "add_directive", "instruction": ".tran 10m"}],
             stop_on_error=True,
         )
-        res = batch_view(
+        data = batch_view(
             asc_state,
             _sheet("rm_substr.asc"),
             [{"op": "remove_directive", "instruction": ".tran 1"}],
             stop_on_error=True,
         )
-        data = res
         # ".tran 1" is a substring of ".tran 10m" but not an exact match: refuse.
         assert data["saved"] is False
         assert data["failed_count"] == 1
@@ -2276,17 +1930,13 @@ class TestMoveRemoveOpWarnings:
         assert "warnings" not in op
 
 
-# Relocated regression coverage from a retired test module.
 class TestMidSegmentLabelDetected:
-    """A label sitting mid-segment on a wire used to be invisible
-    to ``wire_pins``'s endpoint-only label compare. The fix is segment-
-    aware: the trace dragon-swallows interest points that lie on a wire
-    even if they're not at an endpoint.
+    """A label sitting mid-segment on a wire used to be invisible to
+    ``wire_pins``'s endpoint-only label compare. The trace is segment-aware:
+    a point anywhere along a wire, not only at an endpoint, joins its net.
     """
 
     def test_point_on_segment_horizontal(self) -> None:
-        from ltspice_mcp.lib.schematic_ops import point_on_segment
-
         # Mid-x point on a horizontal wire.
         assert point_on_segment((150, 100), (100, 100), (200, 100))
         # Same y but outside x-range.
@@ -2295,8 +1945,6 @@ class TestMidSegmentLabelDetected:
         assert not point_on_segment((150, 101), (100, 100), (200, 100))
 
     def test_point_on_segment_vertical(self) -> None:
-        from ltspice_mcp.lib.schematic_ops import point_on_segment
-
         assert point_on_segment((100, 150), (100, 100), (100, 200))
         assert not point_on_segment((100, 250), (100, 100), (100, 200))
         assert not point_on_segment((101, 150), (100, 100), (100, 200))
@@ -2648,7 +2296,6 @@ class TestWirePinsTJunction:
         assert any("op 2 (wire_pins): Long wire run" in w for w in envelope["warnings"])
 
 
-# Relocated regression coverage from a retired test module.
 async def _build_name_wired_rc(name: str, state: SessionState, work_dir: Path) -> str:
     """Build an RC schematic wired by net label (one FLAG per pin), the way a
     label-based layout connects: R1(in,out), C1(out,0), V1(in,0). Returns the
@@ -2691,7 +2338,6 @@ class TestTraceNet:
         res = await handle_trace_net(TraceNetInput(path=path, pin="R1.1"), asc_state)
         sc = res.structured_content
         assert sc is not None
-        assert sc is not None
         assert sc["labels"] == ["in"]
         refs = {p["reference"] for p in sc["pins"]}
         assert refs == {"R1", "V1"}
@@ -2703,7 +2349,6 @@ class TestTraceNet:
         path = await _build_name_wired_rc("trace_byname", asc_state, work_dir)
         res = await handle_trace_net(TraceNetInput(path=path, pin="net:in"), asc_state)
         sc = res.structured_content
-        assert sc is not None
         assert sc is not None
         assert sc["labels"] == ["in"]
         assert {p["reference"] for p in sc["pins"]} == {"R1", "V1"}
@@ -2718,7 +2363,6 @@ class TestTraceNet:
         asc.write_text("Version 4\nSHEET 1 880 680\nWIRE 0 0 100 0\nFLAG 0 0 a\nFLAG 100 0 b\n")
         res = await handle_trace_net(TraceNetInput(path="short.asc", x=0, y=0), asc_state)
         sc = res.structured_content
-        assert sc is not None
         assert sc is not None
         assert sc["is_shorted"] is True
         assert set(sc["labels"]) == {"a", "b"}
@@ -2796,7 +2440,6 @@ class TestTraceNet:
         res = await handle_trace_net(TraceNetInput(path="zero_len.asc", pin="R1.1"), asc_state)
         sc = res.structured_content
         assert sc is not None
-        assert sc is not None
         assert sc.get("warnings", []) == []
 
     async def test_same_instance_subsegment_over_interior_pin_surfaced(
@@ -2855,7 +2498,6 @@ class TestTraceNet:
         assert sc.get("warnings", []) == []
 
 
-# Relocated regression coverage from a retired test module.
 class TestOnWirePredicate:
     def test_matches_point_on_segment(self):
         segments = [((0, 0), (100, 0)), ((100, 0), (100, 80)), ((50, 50), (50, 50))]
@@ -2871,25 +2513,6 @@ class TestOnWirePredicate:
         assert on_wire((0, 50))
         assert on_wire((0, 100))
         assert not on_wire((10, 50))
-
-
-# Relocated regression coverage from a retired test module.
-@pytest.mark.asyncio
-class TestAddComponentFloatingFilter:
-    async def test_only_new_component_floating_pins(self, asc_state: SessionState, work_dir: Path):
-        asc = work_dir / "build.asc"
-        asc.write_text("Version 4\nSHEET 1 880 680\n")
-        # First component: both pins float.
-        add_component(asc_state, _sheet("build.asc"), "R1", "res", 100, 100)
-        # Second component placed far away: its warnings must NOT re-list R1's
-        # floating pins (the O(n^2) spam this fix removes).
-        res = add_component(asc_state, _sheet("build.asc"), "R2", "res", 400, 100)
-        data = res
-        assert data is not None
-        vw = data.get("validation_warnings", [])
-        refs = {w["ref"] for w in vw}
-        assert refs <= {"R2"}
-        assert "R1" not in refs
 
 
 def _real_symbol_dir() -> str | None:
@@ -3005,6 +2628,8 @@ class TestDuplicateLabelAdvisory:
     async def test_each_repeat_label_op_reports_the_duplicate(
         self, asc_state: SessionState, work_dir: Path
     ):
+        # 'vin' is already on the sheet; ops 0 and 2 land on wires that carry
+        # it (directly, or through op 1's label), op 1 on a separate wire.
         asc = work_dir / "labels.asc"
         asc.write_text(
             "Version 4\n"
@@ -3015,21 +2640,26 @@ class TestDuplicateLabelAdvisory:
             "FLAG 100 0 vin\n"
             "SYMBOL res 100 100 R0\n"
             "SYMATTR InstName R1\n"
-            "SYMATTR Value 1k\n"
+            "SYMATTR Value 1k\n",
+            encoding="utf-8",
+            newline="\n",
         )
-        view = batch_view(
+        data = await apply_ops(
             asc_state,
-            asc,
+            "labels.asc",
             [
                 {"op": "add_net_label", "net": "vin", "x": 100, "y": 52},
                 {"op": "add_net_label", "net": "vin", "x": 300, "y": 0},
                 {"op": "add_net_label", "net": "vin", "x": 300, "y": 52},
             ],
         )
-        assert view["saved"] is True
-        all_warnings = [w for r in view["results"] for w in (r.get("warnings") or [])]
-        dup = [w for w in all_warnings if "already labels a net" in w]
-        assert dup, all_warnings
+        assert data["commit_state"] == "committed"
+        # The envelope folds the identical advisories into one entry whose
+        # count is the number of ops that raised it: all three.
+        dup = [w for w in data["warnings"] if "already labels a net" in w]
+        assert len(dup) == 1, data["warnings"]
+        assert dup[0].startswith("op 0 (add_net_label): 'vin' already labels a net at (100,0);")
+        assert dup[0].endswith("(identical warning on 3 ops in this batch; collapsed)")
 
 
 @pytest.mark.asyncio

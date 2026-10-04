@@ -174,8 +174,8 @@ A client loads every tool definition before it can call anything, and pays
 for it in every turn of the conversation afterwards. That cost is managed by
 writing each argument description short — the unit, the sign or direction
 convention, the default, how the field interacts with its siblings — and
-putting the depth in `docs/design/mcp_surface.md` or the packaged
-`spice://guide`, with a pointer on the field. It is not managed by filtering
+putting the depth in `docs/design/mcp_surface.md` or a section of the packaged
+guide, with a pointer on the field naming the section. It is not managed by filtering
 the descriptions on the way out: what a model declares is what a client is
 shown, so a reader of the source knows what ships, and the one text also
 serves `api.reference()` and the guide.
@@ -449,7 +449,7 @@ Key `lib/` modules:
 
 ### The tool surface
 
-There is one tool surface and nothing selects it: the guide is one document,
+There is one tool surface and nothing selects it: the guide has one edition,
 the prompts have one edition, and no config key names a profile.
 `inspect(kind="capabilities")` reports `tool_profile: "consolidated"` so a
 client can read which surface it is talking to. What `[tools]` does select is
