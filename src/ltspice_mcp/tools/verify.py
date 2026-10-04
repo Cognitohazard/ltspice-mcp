@@ -49,10 +49,12 @@ have to make assumptions?"), free-text with one thing to fix. It also keeps the
 channel consistent with ``diff_circuit``, which has surfaced these same messages,
 from this same helper, in ``warnings`` all along.
 
-``export_to`` is ``managed`` by default — a non-destructive export into a staged
-scratch directory that leaves the caller's files untouched. ``sidecar`` overwrites
-the deck's conventional ``<name>.net`` next to the schematic under the export lock,
-which is what makes that mode destructive.
+``export_to`` is ``sidecar`` by default: the export overwrites the schematic's
+conventional ``<name>.net`` under the export lock, the file LTspice itself writes
+beside a schematic it runs (and ``run_experiments`` exports through), and reports
+the structural delta from the prior one. ``managed`` is the non-destructive
+alternative: it stages the schematic with its project-local files in the store's
+scratch and exports there, writing nothing beside the caller's file.
 """
 
 from __future__ import annotations
@@ -752,21 +754,20 @@ class VerifyCircuitInput(ToolInput):
         ),
     )
 
-    export_to: Literal["managed", "sidecar"] = Field(
-        default="managed",
+    export_to: Literal["sidecar", "managed"] = Field(
+        default="sidecar",
         description=(
-            "Where the exported netlist goes: 'managed' writes into the "
-            "server's scratch directory and leaves your files alone; 'sidecar' "
-            "writes <name>.net next to the schematic, overwriting any existing "
-            "one."
+            "'sidecar' writes <name>.net next to the schematic, as LTspice does "
+            "when it runs one; 'managed' exports a copy in the server's scratch "
+            "and writes nothing there."
         ),
     )
 
 
 VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
-    "it checks; with export_to='sidecar' the export check rewrites the .net next "
-    "to an .asc. For a "
+    "it checks; the export check writes the .net next to an .asc unless "
+    "export_to='managed'. For a "
     ".cir/.net/.sp: SPICE syntax, directive and element arity, non-ASCII value "
     "suffixes such as µ, plus connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
@@ -1452,7 +1453,12 @@ async def _run_export(
                 "export",
                 f"LTspice netlist export failed: {exc}",
                 where=str(asc_path),
-                remedy="drop 'export' from checks to run the offline checks only",
+                remedy=(
+                    "pass export_to='managed' if the schematic's folder cannot be "
+                    "written, or drop 'export' from checks to run the offline checks only"
+                    if export_to == "sidecar"
+                    else "drop 'export' from checks to run the offline checks only"
+                ),
             ),
             observations,
             warnings,
@@ -2308,9 +2314,9 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     title="Check Circuit",
     description=VERIFY_DESCRIPTION,
     input_model=VerifyCircuitInput,
-    # Not read-only: export writes a file on every path (managed scratch by
-    # default), and export_to:sidecar overwrites the deck's .net. The annotation
-    # states the worst case; the description carries the conditional nuance.
+    # Not read-only: export writes a file on every path, by default the deck's
+    # .net beside the schematic (export_to:managed writes scratch instead). The
+    # annotation states the worst case; the description carries the nuance.
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=_OUTPUT_SCHEMA,
 )
