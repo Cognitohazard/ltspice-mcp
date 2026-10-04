@@ -10,6 +10,77 @@ tool-surface changes.
 
 ### Fixed
 
+- The guide described what ngspice prints for a top-level `.meas` and for a
+  sectioned `.lib` under the default compatibility mode, but `run_experiments`
+  refuses both decks before they run (lint `meas-ngspice-batch` and
+  `lib-section-ngspice`); it now says so, and its core no longer tells an
+  ngspice session to put scalars in `.meas`. It also counted six tools where
+  there are eight, and described the ngspice build it was checked on as the
+  reader's.
+- A path containing `..` was refused before it was resolved, even when it
+  landed inside the sandbox. A deck in a subfolder with
+  `.include ../models/x.lib` got an error-severity `path_denied` finding from
+  `verify_circuit` and from `edit_schematic`'s compare, saying the include
+  resolved outside the allowed roots, although `run_experiments` staged the
+  same include. `inspect` and `verify_circuit` also refused
+  `path="sub/../x.asc"`. A path is now judged by where it resolves, with
+  symlinks followed; a `..` that climbs out of the sandbox is still refused,
+  as outside the allowed directories.
+- `inspect` model queries refused a `libs` file inside the detected
+  simulator's own model library (LTspice's `lib/cmp/standard.bjt`, say) under
+  the default sandbox, although staging, the include resolver and the
+  hierarchy reader all read that library. These reads now admit it too, and
+  `verify_circuit`'s compare reads an include into any detected simulator's
+  library rather than only the default simulator's, so the two agree on every
+  file a model search names.
+- An `inspect` model search with `libs` omitted always returned nothing: it
+  searched only libraries loaded through a call nothing makes any more. It now
+  searches the detected simulators' own model libraries, which are the
+  directories a `libs` entry may name, so every `source_path` it returns can
+  be read back through `libs` and staged by a run. The first such search
+  parses the whole install, in a worker thread so other requests are not held
+  up. The `missing_model` failure hint points there instead of at loaded
+  libraries.
+- `inspect` model rows differed by route: a search or enumerate naming `libs`
+  returned name, type, source_path, ports and params, while a search of the
+  simulator's libraries also returned `include_directive`, `device_type` and
+  `usage`, and ranked equal scores differently. Every route now returns the
+  same row from the same ranking, so a `.MODEL` found through `libs` carries
+  its connection order too.
+- On WSL a model row's `include_directive` was converted to a Windows path
+  with one `wslpath` process per row, thousands on a search of a full install,
+  and a library on the Linux side came back as a `\\wsl.localhost` path that
+  staging and `verify_circuit` cannot resolve. It now names `source_path` as
+  the server sees it, which is what staging reads; staging already hands
+  LTspice its staged copy in Windows form.
+- `run_experiments`, `verify_circuit` and the `inspect` net, components and
+  hierarchy queries refused `.spice` netlists, the extension xschem and the
+  sky130 testbenches write. Every surface that reads a netlist now takes
+  `.cir`, `.net`, `.sp` and `.spice`; a run hands the simulator a `.cir` copy
+  of a `.spice` deck, so a simulator that needs a known extension still
+  reads it.
+- The `circuits[].path` description of `run_experiments` told agents to export
+  an `.asc` through LTspice first. An `.asc` is accepted and exported
+  automatically, and the description now says so.
+- A notch whose null fell midway between two sweep samples was reported
+  without the under-sampling warning. Those two samples read the same level,
+  so the check, which wanted both neighbours of the lowest sample well above
+  it, never fired, and `stopband_rejection_db` came back as a finite figure
+  (12.96 dB for an ideal notch at 10 points per decade) with nothing saying it
+  was only a lower bound. The warning now fires when either neighbour is more
+  than 3 dB higher, as its description always said.
+- A runner's cap on simulators in flight could be exceeded by one. Each new
+  submission rebuilt the runner's launch permits whenever none were out, and
+  that included the moment a released permit had been handed to a waiting run
+  that had not yet resumed; the woken run and a newcomer then both launched.
+  The permits are now rebuilt only when nothing holds or waits for one, and a
+  lowered cap takes effect as soon as the runner drains rather than at the next
+  submission.
+- An unterminated single quote in a netlist was reported with the hint "add a
+  closing \" after the opening quote". The hint now names the quote that was
+  opened, and a quote left open inside a braced or parenthesized expression is
+  reported at the quote, with the same hint, rather than at the enclosing
+  bracket with none.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -206,6 +277,26 @@ tool-surface changes.
 
 ### Added
 
+- The guide is now a short core plus topic sections and task playbooks, and
+  every interface can read it. `inspect` has a `guide` query kind: with no
+  `section` it returns the core (how to work with the server, when to use
+  Python or the tools, the rules that cause silent errors) ending in an index
+  of the sections, grouped as topics and tasks; `section` reads one
+  (`"ltspice"`, `"bench-craft"`). The Python API has the same text as
+  `Api.guide(section=None)`, a static method that needs no engine session, and
+  `python -m ltspice_mcp.api guide [SECTION]` prints it without starting the
+  engine. The resources are `spice://guide` (the core) and
+  `spice://guide/{section}`. A client that could not read resources had no way
+  to reach the guide before.
+- The guide has a section on working in Python: where `api` comes from, the six
+  operations as methods, waiting on jobs, raw traces and measurements, the
+  analysis primitives, errors, detached jobs, and running a second LTspice
+  build. The design document that held this is not in the package, so a model
+  had no way to read it.
+- The first tool reply of a session that has not read the guide carries a
+  one-time reminder to read its core, on the text channel and in the
+  structured `hint`. Reading the guide through `inspect` or a `spice://guide`
+  resource retires it.
 - `plot_waveform` replies summarize each plotted trace: `min` and `max` with
   the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
   `final`, and the time-weighted `mean` on a transient, read from every sample
@@ -358,6 +449,36 @@ tool-surface changes.
 
 ### Changed
 
+- The guide states each rule once, in the section it belongs to, and points to
+  it from elsewhere. LTspice-only syntax (`.step`, PWL extras, `startup`) moved
+  from the fundamentals into the LTspice section, and `run_experiments` Monte
+  Carlo and mismatch from the LTspice section into variations. Test-log notes,
+  arguments against positions nobody holds, and repeated examples are gone.
+- The Claude Code plugin ships one skill, `spice-guide`, in place of
+  `spice-experiments`, `ltspice`, `ngspice` and `spice-bench-craft`. Those four
+  were hand-kept copies of what the guide says, and had drifted from it: the
+  `ngspice` skill said a `GND` node floats unless declared global (ngspice
+  converts `gnd` to node 0 by default) and that a `.step` line is rejected (lint
+  warns, and ngspice runs the deck once), the `ltspice` skill listed five of
+  the seven pin transforms, and the workflow skill's `verify_circuit` example
+  passed `reference` at the top level instead of inside `compare`. Their
+  content now lives only in the guide, with what the guide lacked moved into
+  it (a sweep-in-one-call example and per-tool notes in `tools`, more on
+  ngspice's `.meas` types, statistical functions and `.control` variables).
+  `spice-guide` loads on circuit and SPICE work and tells the session to read
+  the guide.
+- The server instructions send the model to the guide first, say when to use
+  Python and when the tools (Python for anything past a single call: loops and
+  complete results in one call; tools for one sandboxed step, charts, and jobs
+  the server owns), and keep the rules that cost a wrong answer. The per-tool
+  map they carried moved to the guide's core.
+- `spice://guide` returns the guide's core and index rather than the whole
+  guide; each section is `spice://guide/{section}`. The packaged file
+  `assets/spice_guide.md` became `assets/guide/`, one file per section. Pointers
+  in tool descriptions and hints name the section they mean
+  (`guide section 'signals'`).
+- `plot_waveform`'s output schema declares `hint`, which carries the guide
+  reminder when that is the session's first reply.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and
@@ -439,6 +560,18 @@ tool-surface changes.
   ships, so PNG rendering was impossible through them; installing native Cairo
   is now the only step. The README documents the extra and the per-platform
   Cairo install.
+- CI: lint and type check run once, in a new `checks / static` job, instead of
+  on every interpreter. They gave the same answer on each: ruff and pyright
+  both target 3.11, and the lockfile resolves one package set for 3.11 through
+  3.13. The Linux test legs run the suite on one xdist worker per core, which
+  takes about 90 s on a four-core machine instead of about 200 s serially. The
+  Windows leg still runs serially, so it now sets how long the checks take. The
+  existing status-check contexts keep their names.
+- The alias publish workflow no longer runs its own copy of the checks. An
+  alias already waits for the canonical `ltspice-mcp` release to appear on
+  PyPI, and that release publishes only after the checks pass, so the second
+  run doubled every release's test matrix without gating anything more. The
+  wait now allows 30 minutes, long enough to cover the checks.
 
 - An `edit_schematic` call on an existing sheet reports only the sheet findings
   in `warnings` (floating pins, dangling labels, duplicate wires, a label
@@ -472,6 +605,19 @@ tool-surface changes.
   `.sub`, `.inc` and `.mod` under its folder into the store to avoid that file,
   and is where a relative include was once refused as `path_denied`. `managed`
   is still available for a call that must write nothing beside the schematic.
+
+### Removed
+
+- The `spice://models/` resource. It listed libraries loaded through
+  `load_library`, which was removed in 0.6.0, so it has answered with an empty
+  list since. `inspect(kind="model", mode="search")` searches the simulator's
+  own libraries, and its `libs` names any other file.
+- The `suggestions` key of the `analyze_results` summary recipe, and the fuzzy
+  matching behind it, which searched the same loaded libraries and so never
+  produced one. A failed run's receipt already names the unresolved models
+  (`missing_model`, with `evidence.missing_refs`) and the model search that
+  finds them. The server does not run that search itself on a failure path:
+  the first search parses the whole install, which takes seconds.
 
 ### Security
 

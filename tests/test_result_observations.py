@@ -10,7 +10,6 @@ results surface nothing.
 # fails the test loudly), so the not-required-access check adds no value here.
 # pyright: reportTypedDictNotRequiredAccess=false
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -28,23 +27,13 @@ from ltspice_mcp.lib.result_observations import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import format_observations
-from tests.conftest import LTSPICE_TRAN_RC_VFINAL
+from tests.conftest import LTSPICE_TRAN_RC_VFINAL, make_raw_mock
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 # The source-relative trigger's canonical runaway: ±850 V oscillation, far
 # below the absolute extreme-value floor but huge next to any small drive.
 RUNAWAY_WAVE = 850.0 * np.sin(np.linspace(0, 30, 500))
-
-
-def _make_raw_mock(trace_names, axis, waves, plotname="Transient Analysis"):
-    raw = MagicMock()
-    raw.get_raw_property.return_value = plotname
-    raw.get_trace_names.return_value = trace_names
-    raw.get_steps.return_value = [0]
-    raw.get_axis.return_value = axis
-    raw.get_wave = lambda name, step=0: waves[name]
-    return raw
 
 
 class TestParseRequestedOutputs:
@@ -501,14 +490,14 @@ class TestFormatObservations:
 
 class TestBuildSummaryWiring:
     def test_observations_always_present(self):
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"], np.array([0.0, 1.0]), {"V(out)": np.array([0.0, 1.0])}
         )
         summary = build_simulation_summary(raw, None)
         assert summary["observations"] == []
 
     def test_scan_surfaces_extreme_value(self):
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(n2)"],
             np.array([0.0]),
             {"V(n2)": np.array([1e30])},
@@ -522,14 +511,14 @@ class TestBuildSummaryWiring:
         # A device-heavy raw (hundreds of traces) must not re-ship its whole
         # name list in structuredContent on every poll: capped + total count.
         names = ["time"] + [f"V(n{i})" for i in range(149)]
-        raw = _make_raw_mock(names, np.array([0.0, 1.0]), {})
+        raw = make_raw_mock(names, np.array([0.0, 1.0]), {})
         summary = build_simulation_summary(raw, None)
         assert len(summary["signals"]) == 100
         assert summary["signals"] == names[:100]
         assert summary["signals_truncated"] == 150
 
     def test_small_signals_list_not_truncated(self):
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(out)"], np.array([0.0, 1.0]), {"V(out)": np.array([0.0, 1.0])}
         )
         summary = build_simulation_summary(raw, None)
@@ -540,7 +529,7 @@ class TestBuildSummaryWiring:
         # Pins the build_simulation_summary -> surface_observations hand-off:
         # dropping the kwarg leaves every direct-function test green while the
         # feature goes silently dead.
-        raw = _make_raw_mock(
+        raw = make_raw_mock(
             ["time", "V(n2)"],
             np.array([0.0, 1.0]),
             {"V(n2)": np.array([0.0, 850.0])},
@@ -589,7 +578,7 @@ class TestOperatingPointValueScan:
     sweep axis and skipped it — correct for .tran/.ac/.dc, but an .op has no axis,
     so a degenerate node that sorts first was silently never scanned. Uses a
     recorded real LTspice .op raw whose extreme node (V(hot)=1e9) is trace 0 —
-    the no-axis shape ``_make_raw_mock`` (always axis-first) never constructs.
+    the no-axis shape ``make_raw_mock`` (always axis-first) never constructs.
     """
 
     def test_extreme_first_trace_is_surfaced(self):
