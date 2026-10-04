@@ -495,13 +495,7 @@ def finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
     raw = data["completeness"]
     completeness = raw if isinstance(raw, Completeness) else Completeness(**raw)
     data["completeness"] = asdict(completeness)
-    progress = progress_from_completeness(completeness)
-    data["progress"] = progress
-    response_budget.append_hint(
-        data,
-        f"Progress: {progress['terminal']}/{progress['expanded']} terminal; "
-        f"{progress['remaining']} remaining.",
-    )
+    data["progress"] = progress_from_completeness(completeness)
     return data
 
 
@@ -838,13 +832,6 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     )
 
 
-# Case count at which a terminal receipt starts pointing at the in-process
-# interface. Ten is past any spot-check and squarely in sweep/corner territory —
-# the workload class where the per-call cost of going through the tool surface
-# is large enough to be worth avoiding.
-_API_POINTER_MIN_CASES = 10
-
-
 def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     """Every recovery route this receipt has, not the first one that matched.
 
@@ -855,11 +842,10 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     was to re-run an experiment whose results were sitting on disk.
     """
     if truncated:
-        routes = [
+        return (
             f"The inline run page is truncated; use jobs(runs) with job_id "
             f"{snapshot.job_id} for the remaining cases."
-        ]
-        return " ".join(routes + _api_pointer_route(snapshot))
+        )
     routes: list[str] = []
     if snapshot.analysis_status in {"failed", "cancelled"}:
         routes.append(
@@ -870,23 +856,8 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
     if snapshot.failures:
         routes.append("Inspect failures and lint findings before retrying omitted cases.")
     if not routes:
-        routes.append("All declared experiment cases reached terminality.")
-    return " ".join(routes + _api_pointer_route(snapshot))
-
-
-def _api_pointer_route(snapshot: ReceiptSnapshot) -> list[str]:
-    """The second discovery surface for the Python API (the first is the
-    initialize instructions): it lands exactly on the caller who is iterating —
-    a many-case receipt is the loop shape where per-call wire overhead
-    compounds and the Python API pays for itself. Appended on EVERY terminal
-    experiment route, the truncated one included: a receipt big enough to
-    truncate is the biggest loop of all."""
-    if snapshot.completeness.expanded < _API_POINTER_MIN_CASES:
-        return []
-    return [
-        "To run follow-up calls in a loop, use the in-process Python API: "
-        "from ltspice_mcp.api import Api (same ops; api.reference() documents them)."
-    ]
+        routes.append(f"Experiment {snapshot.job_id} is {snapshot.status}.")
+    return " ".join(routes)
 
 
 #: Statuses on which a job delivered nothing at all, so the whole call failed.

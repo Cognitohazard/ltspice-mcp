@@ -440,7 +440,8 @@ class TestRender:
         assert "uPlot" in html
         blob = _data_blob(html)
         assert blob["analysis_type"] == "transient" and len(blob["panels"]) == 1
-        assert any(o["code"] == "open_skipped" for o in data["observations"])
+        # Nothing restates the reply's own fields (counts, `opened`).
+        assert data["observations"] == []
 
     async def test_a_raw_in_its_own_folder_plots_into_the_store(
         self, state_no_sim: SessionState, project_dir: Path
@@ -464,7 +465,35 @@ class TestRender:
         assert blob["panels"][0]["y_label"] == "Magnitude (dB)"
         assert blob["panels"][1]["y_label"] == "Phase (deg)"
         assert blob["panels"][0]["x_scale"] == "log"
-        assert any(o["code"] == "phase_unwrapped" for o in data["observations"])
+        # One RC pole stays within ±180 deg, where unwrapped and wrapped agree.
+        assert not any(o["code"] == "phase_unwrapped" for o in data["observations"])
+
+    async def test_a_phase_past_180_degrees_is_reported_unwrapped(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Three poles take the phase to -270 deg: the summary reports the
+        unwrapped value, which the CSV's wrapped angle spells as +90."""
+        freqs = np.logspace(0, 6, 61)
+        response = 1 / (1 + 1j * freqs / 1e3) ** 3
+        rows = "".join(
+            f"{i}\t{f:.15e},0.0\n\t{h.real:.15e},{h.imag:.15e}\n"
+            for i, (f, h) in enumerate(zip(freqs, response, strict=True))
+        )
+        raw = work_dir / "three_pole.raw"
+        raw.write_text(
+            "Title: * three pole\nDate: x\nPlotname: AC Analysis\nFlags: complex forward log\n"
+            f"No. Variables: 2\nNo. Points: {len(freqs)}\nOffset: 0.0\n"
+            "Command: Linear Technology Corporation LTspice XVII\nVariables:\n"
+            "\t0\tfrequency\tfrequency\n\t1\tV(out)\tvoltage\nValues:\n" + rows,
+            encoding="ascii",
+        )
+
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+
+        (trace,) = data["traces"]
+        assert trace["phase_final_deg"] < -180
+        (note,) = [o for o in data["observations"] if o["code"] == "phase_unwrapped"]
+        assert "V(out)" in note["detail"]
 
     async def test_ac_annotate_emits_corner_and_nmp(
         self, state_no_sim: SessionState, work_dir: Path
@@ -514,8 +543,9 @@ class TestRender:
         assert data["n_steps"] > 1
         assert data["steps_plotted"] == data["n_steps"]
         assert data["series_count"] == data["n_steps"]  # one trace per step
-        # the step_tran fixture has distinct per-step time vectors -> union-x
-        assert any(o["code"] == "step_axis_unioned" for o in data["observations"])
+        # Distinct per-step time vectors change no number in the reply, so
+        # nothing is said about them.
+        assert not data["observations"]
         blob = _data_blob(_read(Path(data["path"])))
         # One table per step: each step keeps its own time vector.
         assert len(blob["panels"][0]["tables"]) == data["n_steps"]
@@ -685,7 +715,7 @@ class TestWidgetDelivery:
         sc = result.structured_content
         assert sc["delivery"] == "ui"
         assert sc["opened"] is False
-        assert any(o["code"] == "widget_delivered" for o in sc["observations"])
+        assert sc["observations"] == []
 
     async def test_ui_widget_spec_is_decimated_small(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -1151,8 +1181,8 @@ class TestOpenDefault:
         assert opens == []
         sc = result.structured_content
         assert sc["opened"] is False
-        (obs,) = [o for o in sc["observations"] if o["code"] == "open_skipped"]
-        assert "open_plot" in obs["detail"]
+        # The caller's own setting is not echoed back as an observation.
+        assert sc["observations"] == []
 
     async def test_a_call_overrides_the_config(
         self, state_no_sim: SessionState, work_dir: Path, opens: list[Path]

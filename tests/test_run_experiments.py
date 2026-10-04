@@ -362,9 +362,8 @@ class TestReceiptThenDwell:
         assert data["progress"]["terminal"] == 0
         assert data["progress"]["remaining"] == 1
         assert "jobs(wait)" in data["hint"]
-        counts = data["progress"]
-        assert f"{counts['terminal']}/{counts['expanded']}" in data["hint"]
-        assert f"{counts['remaining']} remaining" in data["hint"]
+        # The counts are in 'progress'; the hint does not restate them.
+        assert "remaining" not in data["hint"]
 
         await await_until(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
@@ -481,13 +480,12 @@ class TestReceiptThenDwell:
 
 
 @pytest.mark.asyncio
-class TestApiDoorPointer:
-    """A many-case terminal receipt points at the Python API; a
-    spot-check receipt does not. The pointer is aimed at the loop shape,
-    where per-call wire overhead compounds — pointing every receipt at the
-    Python API would be noise on exactly the calls it cannot help."""
+class TestTerminalReceiptHint:
+    """A terminal receipt's hint is what the caller acts on next, and nothing
+    the structured fields already say. The Python API is introduced once, in
+    the server's instructions, not on every sweep's receipt."""
 
-    async def test_sweep_receipt_points_at_the_python_door(
+    async def test_a_sweep_receipt_carries_no_api_pitch(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -508,32 +506,15 @@ class TestApiDoorPointer:
             )
         )
         assert data["completeness"]["expanded"] == 10
-        assert "from ltspice_mcp.api import Api" in data["hint"]
+        assert data["status"] == "completed"
+        assert data["hint"] == f"Experiment {data['job_id']} is completed."
 
-    async def test_spot_check_receipt_does_not(
+    async def test_a_truncated_receipt_names_the_route_to_the_rest(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        recorded_fixture_simulator(monkeypatch)
-        deck = _deck(work_dir / "spot-pointer.cir")
-        data = _assert_schema(
-            await handle_run_experiments(_args(deck, "spot-pointer", wait_s=30), state_with_sim)
-        )
-        assert data["completeness"]["expanded"] == 1
-        assert "ltspice_mcp.api" not in data["hint"]
-
-    async def test_truncated_receipt_keeps_the_pointer(
-        self,
-        state_with_sim: SessionState,
-        work_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """A receipt big enough to truncate its inline run page is the biggest
-        loop of all — the truncation route must not displace the pointer
-        (found in review: the truncated branch returned early and every
-        50+-case receipt silently lost it)."""
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "trunc-pointer.cir")
         values = [f"{k}k" for k in range(1, 56)]
@@ -550,8 +531,10 @@ class TestApiDoorPointer:
         )
         assert data["completeness"]["expanded"] == 55
         assert data["runs"]["truncated"] is True
-        assert "jobs(runs)" in data["hint"]
-        assert "from ltspice_mcp.api import Api" in data["hint"]
+        assert data["hint"] == (
+            f"The inline run page is truncated; use jobs(runs) with job_id "
+            f"{data['job_id']} for the remaining cases."
+        )
 
 
 @pytest.mark.asyncio

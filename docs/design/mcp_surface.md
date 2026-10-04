@@ -908,7 +908,8 @@ builds in one `edit_schematic{base: "blank"}` call with zero rejections. What
 that costs is block *definition* (ops can instance an existing subcircuit
 symbol but cannot define a new block) and a whole-document validation pass.
 
-Output: `outcome, target, sha256, build_id, stages[], netlist? (only when a
+Output: `outcome, target, sha256, build_id, stages[] (the stages that did not
+complete; empty on success), netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
