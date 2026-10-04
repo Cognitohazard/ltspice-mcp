@@ -135,7 +135,7 @@ from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     dialect_for_simulator_name,
     family_refusal,
-    run_refusal,
+    simulator_family,
     simulator_library_roots,
     simulator_remediation,
 )
@@ -982,7 +982,7 @@ def _do_capabilities(
     for name, cls in state.available_simulators.items():
         executable = executables.get(name)
         reported = _reported_version(state, executable)
-        refusal = run_refusal(cls)
+        refusal = family_refusal(simulator_family(cls))
         info: dict[str, Any] = {
             "available": True,
             # Whether run_experiments' execution.simulator may name it: detected
