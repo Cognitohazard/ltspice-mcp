@@ -13,9 +13,7 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
-from ltspice_mcp.lib.metrics import (
-    classify_analysis as _classify_analysis,
-)
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.lib.metrics import (
     window_indices as _window_indices,
 )
@@ -25,6 +23,7 @@ from ltspice_mcp.tools.analysis import (
     build_waveform_csv,
 )
 from tests.conftest import stage_recorded_fixture
+from tests.test_decoded_raw import header as decoded_header
 
 
 def _read_csv(path: Path) -> tuple[list[str], list[list[str]]]:
@@ -101,16 +100,21 @@ class TestBuildAndWriteWorker:
         axis = np.array([0.0, 1.0, 2.0, 3.0])
         wave = np.array([0.0, np.nan, 2.0, 3.0])
 
-        class _MockRaw:
-            def get_axis(self, step: int = 0):
-                return axis
-
-            def get_wave(self, name: str, step: int = 0):
-                return wave
+        raw = DecodedRaw(
+            [
+                DecodedPlot(
+                    decoded_header(
+                        "Transient Analysis", [("time", "time"), ("V(out)", "voltage")], len(axis)
+                    ),
+                    [axis, wave],
+                    snapshot_id="non-finite-example",
+                )
+            ]
+        )
 
         out = work_dir / "out.csv"
         facts = build_waveform_csv(
-            _MockRaw(),
+            raw,
             work_dir / "mock.raw",
             [services.Signal("V(out)", "V(out)")],
             1,
@@ -135,16 +139,26 @@ class TestBuildAndWriteWorker:
             1: np.array([0.0, 1.0, 2.0]),
         }
 
-        class _StepMock:
-            def get_axis(self, step: int = 0):
-                return axes[step]
-
-            def get_wave(self, name: str, step: int = 0):
-                return axes[step] * 10.0
+        axis = np.concatenate([axes[0], axes[1]])
+        raw = DecodedRaw(
+            [
+                DecodedPlot(
+                    decoded_header(
+                        "Transient Analysis",
+                        [("time", "time"), ("V(o)", "voltage")],
+                        len(axis),
+                        flags=("real", "stepped"),
+                    ),
+                    [axis, axis * 10],
+                    snapshot_id="window-example",
+                    step_offsets=[0, len(axes[0])],
+                )
+            ]
+        )
 
         out = work_dir / "stepped.csv"
         facts = build_waveform_csv(
-            _StepMock(),
+            raw,
             work_dir / "m.raw",
             [services.Signal("V(o)", "V(o)")],
             2,
@@ -159,23 +173,30 @@ class TestBuildAndWriteWorker:
         assert header == ["step_index", "step_value", "time_s", "V(o)"]
         assert all(int(r[0]) == 0 for r in rows)  # only step 0 contributed
 
-    def test_no_log_blanks_step_value(self, work_dir: Path):
-        # n_steps>1 with no sibling .log -> the .step param map is unrecoverable:
-        # step_value cells blank, step_values_available False. (A real LTspice
-        # stepped .raw needs its .log to parse at all, so this no-log path is
-        # exercised at the worker level with a mock raw.)
+    def test_no_captured_step_values_blanks_step_value(self, work_dir: Path):
+        # Known boundaries without captured parameter rows retain the samples
+        # and leave labels blank.
         axis = np.array([0.0, 1.0, 2.0])
 
-        class _StepMock:
-            def get_axis(self, step: int = 0):
-                return axis
-
-            def get_wave(self, name: str, step: int = 0):
-                return axis * (step + 1.0)
+        raw = DecodedRaw(
+            [
+                DecodedPlot(
+                    decoded_header(
+                        "Transient Analysis",
+                        [("time", "time"), ("V(o)", "voltage")],
+                        len(axis) * 2,
+                        flags=("real", "stepped"),
+                    ),
+                    [np.concatenate([axis, axis]), np.concatenate([axis, axis * 2])],
+                    snapshot_id="missing-parameters-example",
+                    step_offsets=[0, len(axis)],
+                )
+            ]
+        )
 
         out = work_dir / "nolog.csv"
         facts = build_waveform_csv(
-            _StepMock(),
+            raw,
             work_dir / "nolog.raw",
             [services.Signal("V(o)", "V(o)")],
             2,
@@ -194,8 +215,10 @@ class TestBuildAndWriteWorker:
         # bare "sweep" placeholder and not the time/frequency header of another
         # analysis type — a CSV consumer reads the axis meaning from that header.
         raw_path = stage_recorded_fixture(work_dir, "ltspice_dc_div")
-        raw = services.load_raw_sync(raw_path, state_no_sim)
-        _, analysis_type, _, _ = _classify_analysis(raw)
+        raw = services.load_raw_sync(
+            services.source_for_raw_path(raw_path, state_no_sim), state_no_sim
+        )
+        analysis_type = raw.descriptor.analysis
         out = work_dir / "dc.csv"
         build_waveform_csv(
             raw,

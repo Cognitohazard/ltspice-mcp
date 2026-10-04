@@ -29,8 +29,8 @@ import csv
 import json
 import math
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired
@@ -46,13 +46,8 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
 from ltspice_mcp.lib.format import si_prefix
-from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.metrics import (
-    classify_analysis,
     guarded_axis,
-    is_input_noise,
-    noise_input_source_unit,
-    noise_trace_unit,
     parse_time,
     window_indices,
 )
@@ -64,10 +59,8 @@ from ltspice_mcp.lib.plot_html import (
 from ltspice_mcp.lib.plot_svg import render_plot_svg
 from ltspice_mcp.lib.raster import RasterSupport, RenderedImage, raster_support, render_image
 from ltspice_mcp.lib.raw_parser import (
-    dc_axis_name,
     get_step_count,
     safe_magnitude_db,
-    trace_unit,
 )
 from ltspice_mcp.lib.signal_analysis import (
     TraceStats,
@@ -79,6 +72,7 @@ from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
+    RawSelectionFields,
     ToolInput,
     format_observations,
     format_response,
@@ -94,7 +88,12 @@ from ltspice_mcp.tools._schema import schema_from_typeddict
 
 
 def _direct_source(
-    raw_file: str | None, job_id: str | None, state: SessionState
+    raw_file: str | None,
+    job_id: str | None,
+    state: SessionState,
+    *,
+    plot_index: int = 0,
+    dialect: str | None = None,
 ) -> services.AnalysisSource:
     """The source a direct call names, refusing an ambiguous or empty pair.
 
@@ -115,7 +114,9 @@ def _direct_source(
         )
     # Only ``raw_file`` is forwarded: an experiment's runs are case-addressed,
     # so ``_experiment_case`` has already answered every call that named a job.
-    return services.resolve_analysis_source(state, raw_file=raw_file)
+    return services.resolve_analysis_source(
+        state, raw_file=raw_file, plot_index=plot_index, dialect=dialect
+    )
 
 
 async def _experiment_case(
@@ -151,26 +152,23 @@ async def _experiment_case(
 # never silently truncates (no silent caps).
 _EXPORT_MAX_ROWS = 20_000_000
 
-# x-column header per analysis type (unit-tagged so the CSV is self-describing).
-_X_HEADER = {
-    "transient": "time_s",
-    "ac": "freq_Hz",
-    "noise": "freq_Hz",
-    "dc": "sweep",
-}
-
 
 def _csv_x_header(raw, analysis_type: str) -> str:
-    """X-column header. Transient/AC/noise are fixed (time_s/freq_Hz); a .dc
-    sweep names the swept variable from the raw (e.g. ``Vin_V``) instead of a
-    bare ``sweep`` so the column is self-describing."""
-    if analysis_type != "dc":
-        return _X_HEADER[analysis_type]
-    name, unit = dc_axis_name(raw)
-    if name:
-        base = re.sub(r"[^0-9A-Za-z]+", "_", name).strip("_") or "sweep"
-        return f"{base}_{unit}" if unit else base
-    return "sweep"
+    """Name the selected descriptor's axis and its declared unit."""
+    axis = raw.descriptor.axis
+    if axis is None:
+        raise ResultError("This plot has no sampled axis.")
+    base = re.sub(r"[^0-9A-Za-z]+", "_", axis.name).strip("_") or "axis"
+    if analysis_type in {"ac", "noise"} and axis.quantity == "frequency":
+        base = "freq"
+    return f"{base}_{axis.unit}" if axis.unit else base
+
+
+def _step_label(values: Mapping[str, Any]) -> str:
+    return ";".join(
+        f"{key}={value:g}" if isinstance(value, (int, float)) else f"{key}={value}"
+        for key, value in values.items()
+    )
 
 
 def _complex_columns(
@@ -208,7 +206,7 @@ def build_waveform_csv(
     out_path: Path,
     should_abort: Callable[[], bool] | None = None,
     steps_to_export: list[int] | None = None,
-    step_log_path: Path | None = None,
+    step_values: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict:
     """Assemble tidy/long rows for every step, render CSV, write it atomically.
 
@@ -218,15 +216,13 @@ def build_waveform_csv(
     response building off worker threads).
     """
     stepped = n_steps > 1
-    x_header = _csv_x_header(raw, analysis_type)
-
-    # Per-step .step parameter values for the step_value column. spicelib's
-    # get_steps() carries only integers, not the name=value map, so recover it
-    # from the sibling .log (same source query_value(step_axis=) uses).
-    # parse_step_iterations returns [] for a missing/unreadable log.
-    step_dicts: list[dict[str, float]] = (
-        parse_step_iterations(step_log_path or raw_path.with_suffix(".log")) if stepped else []
-    )
+    if not cols:
+        raise ResultError("Pass at least one signal to export.")
+    has_axis = raw.descriptor.axis is not None
+    if not has_axis and (ts is not None or te is not None):
+        raise ResultError("A table plot has no axis to window.")
+    x_header = _csv_x_header(raw, analysis_type) if has_axis else None
+    step_dicts = step_values or []
 
     header: list[str] | None = None
     row_count = 0
@@ -244,7 +240,7 @@ def build_waveform_csv(
         csv_writer = csv.writer(f)
         selected_steps = steps_to_export if steps_to_export is not None else list(range(n_steps))
         for step in selected_steps:
-            axis = guarded_axis(raw, step)
+            axis = guarded_axis(raw, step) if has_axis else np.arange(len(cols[0].wave(raw, step)))
             lo, hi = window_indices(axis, ts, te)
             if lo >= hi:
                 # This step's axis does not intersect the window (a step may end
@@ -265,7 +261,9 @@ def build_waveform_csv(
                 # a real trace, and a stray complex trace must not become one column.
                 if np.iscomplexobj(wave_w):
                     had_complex = True
-                    names, arrays = _complex_columns(name, wave_w, complex_format)
+                    names, arrays = _complex_columns(
+                        name, wave_w, complex_format if analysis_type == "ac" else "re_im"
+                    )
                 else:
                     names, arrays = [name], [wave_w]
                 col_names.extend(names)
@@ -273,22 +271,19 @@ def build_waveform_csv(
 
             if header is None:
                 prefix = ["step_index", "step_value"] if stepped else []
-                header = [*prefix, x_header, *col_names]
+                header = [*prefix, *([x_header] if x_header else []), *col_names]
                 csv_writer.writerow(header)
 
-            lo0, hi0 = float(axis_w[0]), float(axis_w[-1])
-            win_lo = lo0 if win_lo is None else min(win_lo, lo0)
-            win_hi = hi0 if win_hi is None else max(win_hi, hi0)
+            if has_axis:
+                lo0, hi0 = float(axis_w[0]), float(axis_w[-1])
+                win_lo = lo0 if win_lo is None else min(win_lo, lo0)
+                win_hi = hi0 if win_hi is None else max(win_hi, hi0)
 
             # .tolist() converts numpy -> python floats (full round-trippable repr)
             # at C speed; zip transposes columns into tidy/long rows.
-            columns = [axis_w.tolist(), *(a.tolist() for a in col_arrays)]
+            columns = [*([axis_w.tolist()] if has_axis else []), *(a.tolist() for a in col_arrays)]
             if stepped:
-                label = (
-                    ";".join(f"{k}={v:g}" for k, v in step_dicts[step].items())
-                    if step < len(step_dicts)
-                    else ""
-                )
+                label = _step_label(step_dicts[step]) if step < len(step_dicts) else ""
                 rows = ([step, label, *values] for values in zip(*columns, strict=True))
             else:
                 rows = zip(*columns, strict=True)
@@ -333,7 +328,7 @@ def build_waveform_csv(
         "non_finite": non_finite,
         "had_complex": had_complex,
         "empty_steps": empty_steps,
-        "step_values_available": bool(step_dicts) if stepped else None,
+        "step_values_available": any(bool(values) for values in step_dicts) if stepped else None,
     }
 
 
@@ -397,49 +392,30 @@ _IMAGE_SERIES_POINTS = (200, 1_400)
 # Most panels a caller may lay out by hand.
 _MAX_PANELS = 8
 
-# x-axis label and unit per analysis type; a .dc sweep is named from the raw.
-_X_AXIS: dict[str, tuple[str, str | None]] = {
-    "transient": ("Time (s)", "s"),
-    "ac": ("Frequency (Hz)", "Hz"),
-    "noise": ("Frequency (Hz)", "Hz"),
-    "dc": ("Sweep", None),
-}
-
 
 def _x_axis(raw, analysis_type: str) -> tuple[str, str | None]:
-    """The x-axis label and unit. A .dc sweep is labelled with its swept
-    variable (``V1 (V)``) when the raw names it."""
-    if analysis_type == "dc":
-        name, unit = dc_axis_name(raw)
-        if name:
-            return (f"{name} ({unit})" if unit else name), unit
-    return _X_AXIS[analysis_type]
+    """Name the selected descriptor's axis and its declared unit."""
+    axis = raw.descriptor.axis
+    if axis is None:
+        raise ResultError("This plot has no sampled axis; inspect its table instead.")
+    return (f"{axis.name} ({axis.unit})" if axis.unit else axis.name), axis.unit
 
 
 def _trace_units(
     raw,
     cols: list[services.Signal],
-    analysis_type: str,
-    input_source_unit: str | None,
 ) -> tuple[dict[str, str | None], list[str]]:
-    """The unit of each signal's plotted values, and the input-noise traces whose
-    unit the deck did not confirm.
-
-    The unit is the one the simulator declared (``trace_unit``), never one
-    guessed from a name. A noise run plots spectral densities, so its units are
-    per √Hz, and the input-referred trace's comes from the deck's .NOISE source
-    (:func:`~ltspice_mcp.lib.metrics.noise_trace_unit`).
-    """
+    """Selected descriptor units, with unknown dimensions explicitly reported."""
     units: dict[str, str | None] = {}
     unverified: list[str] = []
+    descriptors = {trace.name: trace for trace in raw.descriptor.traces}
     for sig in cols:
-        if analysis_type != "noise":
-            units[sig.name] = trace_unit(raw, sig.trace)
-            continue
-        unit, verified = noise_trace_unit(raw, sig.trace, input_source_unit)
-        if not verified:
+        unit = descriptors[sig.trace].unit
+        if sig.minus is not None and descriptors[sig.minus].unit != unit:
+            unit = None
+        units[sig.name] = unit
+        if unit is None:
             unverified.append(sig.name)
-        units[sig.name] = f"{unit}/√Hz" if unit else None
     return units, unverified
 
 
@@ -471,7 +447,7 @@ class PlotPlan:
     groups: list[list[services.Signal]]
     units: dict[str, str | None]
     steps: list[int]
-    step_dicts: list[dict[str, float]]
+    step_dicts: list[dict[str, Any]]
     analysis_type: str
     x_is_log: bool
     x_label: str
@@ -482,7 +458,7 @@ class PlotPlan:
     #: The run is a .step sweep, so each summary names its step even when one
     #: step was selected.
     stepped: bool = False
-    #: Input-referred noise traces whose unit no .NOISE line confirmed.
+    #: Signals whose descriptor does not establish a unit.
     unverified_units: tuple[str, ...] = ()
 
     @property
@@ -497,7 +473,7 @@ def plan_plot(
     split_by_unit: bool,
     netlist: Path | None,
     steps: list[int],
-    step_dicts: list[dict[str, float]],
+    step_dicts: list[dict[str, Any]],
     analysis_type: str,
     x_is_log: bool,
     ts: float | None,
@@ -507,16 +483,10 @@ def plan_plot(
     """Resolve what a plot draws. ``groups`` are the requested signals, one list
     per panel; with ``split_by_unit`` they are regrouped into one panel per unit.
 
-    Runs in a worker thread: an input-noise trace sends it to the deck
-    (``netlist``) for the .NOISE source its unit is referred to.
+    Uses resident descriptors without reopening a source deck or log.
     """
     cols = [sig for group in groups for sig in group]
-    input_source_unit = (
-        noise_input_source_unit(netlist)
-        if analysis_type == "noise" and any(is_input_noise(sig.trace) for sig in cols)
-        else None
-    )
-    units, unverified = _trace_units(raw, cols, analysis_type, input_source_unit)
+    units, unverified = _trace_units(raw, cols)
     x_label, x_unit = _x_axis(raw, analysis_type)
     return PlotPlan(
         groups=_unit_groups(cols, units) if split_by_unit else groups,
@@ -535,10 +505,12 @@ def plan_plot(
     )
 
 
-def _plot_filename(raw_path: Path, analysis_type: str, job_id: str | None, run_index: int) -> str:
+def _plot_filename(
+    raw_path: Path, analysis_type: str, job_id: str | None, run_index: int, *, plot_index: int = 0
+) -> str:
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
     run = f"_run{run_index}" if job_id else ""
-    return f"{raw_path.stem}_{analysis_type}{run}_{stamp}.html"
+    return f"{raw_path.stem}_{analysis_type}{run}_plot{plot_index}_{stamp}.html"
 
 
 def _to_json_floats(arr: np.ndarray) -> list[float | None]:
@@ -725,11 +697,7 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
     def _label(col: str, step: int) -> str:
         if not multi:
             return col
-        sv = (
-            ";".join(f"{k}={v:g}" for k, v in plan.step_dicts[step].items())
-            if step < len(plan.step_dicts)
-            else ""
-        )
+        sv = _step_label(plan.step_dicts[step]) if step < len(plan.step_dicts) else ""
         return f"{col} [{sv}]" if sv else f"{col} [step {step}]"
 
     windows: dict[int, tuple[np.ndarray, int, int]] = {}
@@ -779,10 +747,16 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
                     if annotate_one:
                         annotations, nmp = _ac_annotations(x, h)
                 else:
-                    # np.real: defensive, for a stray complex trace in a non-AC raw.
                     x, ys = axis_w, (np.real(wave) if np.iscomplexobj(wave) else wave,)
+                    if np.iscomplexobj(wave):
+                        traces.append(
+                            _Trace(f"{_label(col.name, step)} (imag)", x, (np.imag(wave),))
+                        )
+                        non_finite += int(np.count_nonzero(~np.isfinite(np.imag(wave))))
                 non_finite += sum(int(np.count_nonzero(~np.isfinite(y))) for y in ys)
                 label = _label(col.name, step)
+                if not is_ac and np.iscomplexobj(wave):
+                    label += " (real)"
                 if total < summary_limit:
                     summaries.append(_trace_summary(plan, col, step, label, panel, x, ys))
                 total += 1
@@ -798,7 +772,9 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
             min(float(t.x[0]) for t in everything),
             max(float(t.x[-1]) for t in everything),
         ],
-        "step_values_available": (bool(plan.step_dicts) if multi else None),
+        "step_values_available": (
+            any(bool(values) for values in plan.step_dicts) if multi else None
+        ),
         "traces": summaries,
         "traces_total": total,
     }
@@ -968,7 +944,7 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
     return lines
 
 
-class PlotWaveformInput(ToolInput):
+class PlotWaveformInput(RawSelectionFields, ToolInput):
     raw_file: str | None = Field(
         default=None,
         description="Path to .raw result file. Pass this or ``job_id`` (a job run), not both.",
@@ -1109,7 +1085,9 @@ _IMAGE_SCHEMA: dict[str, Any] = {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
-            "analysis_type": {"type": "string", "enum": ["transient", "ac", "dc", "noise"]},
+            "analysis_type": {"type": "string"},
+            "plot_index": {"type": "integer", "minimum": 0},
+            "descriptor": {"type": "object"},
             "signals": {"type": "array", "items": {"type": "string"}},
             "n_steps": {"type": "integer"},
             "steps_plotted": {"type": "integer"},
@@ -1137,28 +1115,35 @@ _IMAGE_SCHEMA: dict[str, Any] = {
 async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     case = await _experiment_case(args.raw_file, args.job_id, args.run_index, args.case_id, state)
     if case is not None:
-        raw_path = case.raw
+        source = services.source_for_run(case, plot_index=args.plot_index, dialect=args.dialect)
         run_index = case.identity["run_index"]
         netlist: Path | None = case.netlist
     else:
-        source = _direct_source(args.raw_file, args.job_id, state)
-        raw_path = source.raw
+        source = _direct_source(
+            args.raw_file, args.job_id, state, plot_index=args.plot_index, dialect=args.dialect
+        )
         run_index = args.run_index
         netlist = source.netlist
+    raw_path = source.raw
     fmt = args.format
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
     if args.panels is not None and args.signals != "all":
         raise ResultError("Pass signals or panels, not both: panels names the signals it plots.")
 
-    raw = await services.load_raw(raw_path, state)
-    # A .op raw has no sweep axis to plot — refuse early with the clean pointer.
+    raw = await services.load_raw(source, state)
+    assert raw_path is not None
+    if raw.descriptor.axis is None:
+        raise ResultError("This plot has no sampled axis; use inspect results table instead.")
+    # Refuse unsupported coordinates before building a plot.
     guarded_axis(raw, 0, raw_path)
 
-    _, analysis_type, _, x_is_log = classify_analysis(raw)
+    analysis_type = raw.descriptor.analysis
+    x_is_log = raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"
 
     trace_names = raw.get_trace_names()
-    axis_name = trace_names[0]
+    assert raw.descriptor.axis is not None
+    axis_name = raw.descriptor.axis.name
     # A signal list is one panel's worth; resolved once, whatever the spelling.
     requested = (
         args.panels
@@ -1169,7 +1154,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     )
     groups: list[list[services.Signal]]
     if requested is None:
-        groups = [[services.Signal(name, name) for name in trace_names[1:]]]
+        groups = [[services.Signal(name, name) for name in trace_names if name != axis_name]]
     else:
         groups = []
         panel_of: dict[str, int] = {}
@@ -1203,10 +1188,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     ts = parse_time(args.t_start, "t_start")
     te = parse_time(args.t_end, "t_end")
 
-    # parse_step_iterations returns [] for a missing/unreadable log.
-    step_dicts: list[dict[str, float]] = (
-        parse_step_iterations(raw_path.with_suffix(".log")) if len(steps_to_plot) > 1 else []
-    )
+    step_dicts = [dict(step.parameters) for step in raw.descriptor.steps]
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, PLOT_MAX_POINTS_CEILING)
     open_locally = state.config.open_plot if args.open is None else args.open
@@ -1230,7 +1212,9 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # Into ``out_dir`` when named, else the store: never beside a raw the
     # caller named, which on WSL can sit in a Windows temp the client cannot read.
     dest_dir = safe_path(args.out_dir, state) if args.out_dir else state.store.plots_dir
-    out_path = dest_dir / _plot_filename(raw_path, analysis_type, args.job_id, run_index)
+    out_path = dest_dir / _plot_filename(
+        raw_path, analysis_type, args.job_id, run_index, plot_index=raw.plot_index
+    )
 
     title = f"{raw_path.stem} — {analysis_type}"
     try:
@@ -1315,13 +1299,11 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     if plan.unverified_units:
         observations.append(
             {
-                "code": "noise_input_unit_unverified",
+                "code": "trace_unit_unknown",
                 "kind": "value",
                 "detail": (
-                    f"{', '.join(plan.unverified_units)} carries the simulator's declared "
-                    "unit; no .NOISE line was found to check it against, and LTspice "
-                    "declares input-referred noise as a voltage even when the input "
-                    "source is a current source (then it is A/√Hz)."
+                    "The selected descriptor does not establish a unit for "
+                    f"{', '.join(plan.unverified_units)}."
                 ),
             }
         )
@@ -1427,6 +1409,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     data: dict[str, Any] = {
         "path": str(out_path),
         "analysis_type": analysis_type,
+        "plot_index": raw.plot_index,
+        "descriptor": asdict(raw.descriptor),
         "signals": [sig.name for sig in cols],
         "n_steps": n_steps,
         "steps_plotted": len(steps_to_plot),

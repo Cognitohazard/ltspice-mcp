@@ -2,7 +2,7 @@
 
 The LIB tests call ``analyze_ac_structure`` directly on synthesized complex
 ``H(jw)`` over a log-spaced sweep; the RECIPE tests drive the ac_structure
-metric with an AC raw mock injected into the result cache (reusing the mock
+metric with analytic waves supplied at its loading seam (reusing the mock
 helpers from ``test_analysis_tools``); the REJECTION test confirms a transient
 raw is refused.
 """
@@ -19,6 +19,8 @@ from ltspice_mcp.lib.recipes import AcStructureRecipe
 from ltspice_mcp.state import SessionState
 from tests.conftest import make_raw_mock
 from tests.test_analysis_tools import _inject_raw_mock, _metric
+
+pytestmark = pytest.mark.usefixtures("numeric_raw_inputs")
 
 # Shared log-spaced sweep: 1 Hz .. 10 MHz, dense enough to read corners.
 FREQS = np.logspace(0, 7, 351)
@@ -211,7 +213,7 @@ class TestAcStructureObservationShape:
     ):
         import ltspice_mcp.lib.metrics as metrics_mod
 
-        async def _fake_solve_failures(source):
+        async def _fake_solve_failures(source, state):
             return ["singular matrix: node V(x) has no DC path"]
 
         monkeypatch.setattr(metrics_mod, "solve_failures", _fake_solve_failures)

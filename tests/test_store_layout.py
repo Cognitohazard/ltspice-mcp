@@ -41,6 +41,7 @@ DECLARED_ROOTS: dict[str, str] = {
     "edit-exports": "edit_schematic exports",
     "exports": "the schematic exports experiments ran, named by their job records",
     "plots": "plot_waveform charts written without an out_dir",
+    "parsing": "temporary captured parser inputs and decoded numeric arrays",
     "locks": "cross-process store locks",
 }
 
@@ -225,11 +226,16 @@ _PATH_MEMBERS: dict[str, Any] = {
     "lock": ("a-lock",),
     "request_lock": ("some-request-id",),
     "cancellation_lock": ("exp_1",),
+    "recovery_journal": ("some-request-id",),
+    "recovery_lock": ("some-request-id",),
     "runs_root": (),
     "run_dir": ("exp_1",),
     "staged_deck_root": ("exp_1", "dut"),
     "native_input": ("exp_1", "exp_1_case_0"),
     "native_driver": ("exp_1", "exp_1_case_0"),
+    "recovery_spinit": ("exp_1",),
+    "recovery_ini_template": ("exp_1",),
+    "recovery_ini": ("exp_1", "exp_1_case_0"),
     "detached_dir": (),
     "detached_request": ("some-request-id", "0123abcd"),
     "detached_receipt": ("some-request-id", "0123abcd"),
@@ -242,6 +248,8 @@ _PATH_MEMBERS: dict[str, Any] = {
     "exports_dir": (),
     "export_snapshot": ("amp.run-0123456789ab.net",),
     "plots_dir": (),
+    "parser_dir": ("parse_1",),
+    "parser_file": ("parse_1", "source.raw"),
 }
 
 # Paths that deliberately live outside the working-directory store, and why.
@@ -250,6 +258,7 @@ _OUTSIDE_THE_STORE: dict[str, str] = {
         "per user: every session editing the file contends on it, whatever its working directory"
     ),
     "artifact_base": "returns the routing decision, not a path",
+    "lineage_run_dir": "validates an already recorded Store run directory",
 }
 
 

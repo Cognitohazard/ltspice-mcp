@@ -17,7 +17,17 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib import experiment_store, now
-from ltspice_mcp.lib.deck_staging import verify_staged_manifest
+from ltspice_mcp.lib.controlled_ngspice import (
+    controlled_ngspice,
+    verify_execution_policy,
+    verify_seeded_driver,
+)
+from ltspice_mcp.lib.deck_staging import sha256_file, verify_staged_manifest
+from ltspice_mcp.lib.experiment_inputs import (
+    capture_produced_artifacts,
+    verify_case_inputs,
+    verify_startup,
+)
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
     TERMINAL_CASE_STATUSES,
@@ -29,10 +39,22 @@ from ltspice_mcp.lib.experiment_types import (
     failure_row,
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
-from ltspice_mcp.lib.job_lifecycle import transition
+from ltspice_mcp.lib.job_lifecycle import (
+    VALID_EXPERIMENT_TRANSITIONS,
+    InvalidTransitionError,
+    transition,
+)
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.native_execution import prepare_native_cases
-from ltspice_mcp.lib.pdk_native import NativeCaseError, verify_launch
+from ltspice_mcp.lib.ngspice_driver import validate_seed
+from ltspice_mcp.lib.pdk_native import (
+    ArtifactDigest,
+    NativeCaseError,
+    NativeLaunchPolicy,
+    verify_launch,
+)
 from ltspice_mcp.lib.raw_parser import read_partial_raw_progress
+from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     NativeLaunchContext,
@@ -43,7 +65,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     describe_executable,
@@ -53,6 +75,7 @@ from ltspice_mcp.lib.store import Store, run_dir_in, run_filename_in, validate_j
 from ltspice_mcp.lib.sweep_utils import generate_id
 
 if TYPE_CHECKING:
+    from ltspice_mcp.lib.decoded_log import DecodedLog
     from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -150,7 +173,14 @@ class SubmissionCommitted(SimulationError):
 
     code = "submission_committed"
 
-    def __init__(self, request_id: str, cause: BaseException) -> None:
+    def __init__(
+        self,
+        request_id: str,
+        cause: BaseException,
+        *,
+        receipt: ExperimentReceipt | None = None,
+    ) -> None:
+        self.receipt = receipt
         super().__init__(
             f"The submission for request_id {request_id!r} is recorded, but the "
             f"call could not be completed: {cause}. Ask again with the same "
@@ -165,7 +195,7 @@ class ExperimentCancellationError(SimulationError):
 
 
 @contextlib.asynccontextmanager
-async def _request_gate(gate: Path, request_id: str) -> AsyncIterator[None]:
+async def request_gate(gate: Path, request_id: str) -> AsyncIterator[None]:
     """Hold one request id's gate, naming a wait that ran out for what it means.
 
     Only the acquisition is translated. A timeout raised by the work inside
@@ -326,7 +356,7 @@ def verify_replay(
     )
 
 
-def _already_staged() -> StagedDecks:
+async def already_staged() -> StagedDecks:
     """Stand-in for a staging pass that has run.
 
     An execution keeps its request for the life of the job, and a real staging
@@ -365,6 +395,8 @@ class ExperimentRunRequest:
     kill_grace_s: float = DEFAULT_KILL_GRACE_S
     analysis_request: dict[str, Any] | None = None
     analysis_callback: AnalysisCallback | None = None
+    recoverable: bool = False
+    simulator_seed: int | None = None
 
 
 def effective_run_timeout(
@@ -405,9 +437,10 @@ class StagedDecks:
 
 
 @dataclass(frozen=True)
-class _BarrierResult:
+class AdmissionResult:
     job: ExperimentJob
     replayed: bool
+    start: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -445,6 +478,7 @@ class _Execution:
     # kill lands, so two cancels arriving in that window would each take their
     # own snapshot and each report the same transition.
     claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
+    persistence_error: Exception | None = None
 
 
 class ExperimentRunner(RunnerBase):
@@ -486,6 +520,15 @@ class ExperimentRunner(RunnerBase):
 
     def _validate_request(self, request: ExperimentRunRequest) -> None:
         """Check what can be checked before a single deck is copied."""
+        if request.simulator_seed is not None:
+            try:
+                validate_seed(request.simulator_seed)
+            except ValueError as exc:
+                raise RecoveryError("recovery_seed_unsupported", str(exc)) from exc
+            if not request.recoverable or not is_ngspice(self.simulator_class):
+                raise RecoveryError(
+                    "recovery_seed_unsupported", "Explicit seed requires recoverable ngspice"
+                )
         if not request.request_id:
             raise SimulationError("request_id is required for durable experiment submission")
         if request.canonicalizer_version != CANONICALIZER_VERSION:
@@ -493,12 +536,10 @@ class ExperimentRunner(RunnerBase):
                 "Unsupported request canonicalizer version "
                 f"{request.canonicalizer_version}; this server uses {CANONICALIZER_VERSION}"
             )
-        if self._case_capacity(request) < 1:
+        if self.case_capacity(request) < 1:
             raise SimulationError("max_parallel must be at least 1")
 
-    def _materialize_job(
-        self, request: ExperimentRunRequest, staged: StagedDecks
-    ) -> ExperimentJob:
+    def materialize_job(self, request: ExperimentRunRequest, staged: StagedDecks) -> ExperimentJob:
         job_id = request.job_id or generate_id("exp")
         validate_job_id(job_id)
         control_token = secrets.token_urlsafe(32)
@@ -513,6 +554,15 @@ class ExperimentRunner(RunnerBase):
             raise SimulationError("Experiment run_index values must be non-negative and unique")
         for case in staged.cases:
             case.run_token = f"{job_id}_case_{case.run_index}"
+            if case.recovery is not None:
+                case.recovery = replace(
+                    case.recovery,
+                    attempt=replace(
+                        case.recovery.attempt,
+                        execution_job_id=job_id,
+                        run_token=case.run_token,
+                    ),
+                )
         completeness = Completeness(
             declared=request.declared if request.declared is not None else len(staged.cases),
             expanded=len(staged.cases),
@@ -569,17 +619,23 @@ class ExperimentRunner(RunnerBase):
             self._validate_request(request)
             barrier = await self._durable_barrier(request)
             try:
-                await self._start_committed(request, barrier, receipt_ready)
+                await self.start_committed(request, barrier, receipt_ready)
             except Exception as exc:
-                raise SubmissionCommitted(request.request_id, exc) from exc
+                raise SubmissionCommitted(
+                    request.request_id,
+                    exc,
+                    receipt=ExperimentReceipt(
+                        barrier.job, barrier.replayed, barrier.job.control_token
+                    ),
+                ) from exc
         except Exception as exc:
             if not receipt_ready.done():
                 receipt_ready.set_exception(exc)
 
-    async def _start_committed(
+    async def start_committed(
         self,
         request: ExperimentRunRequest,
-        barrier: _BarrierResult,
+        barrier: AdmissionResult,
         receipt_ready: asyncio.Future[ExperimentReceipt],
     ) -> None:
         """Register the durable job and start it.
@@ -592,13 +648,29 @@ class ExperimentRunner(RunnerBase):
         # therefore never observe a durable job that this process has not
         # either registered or recognized as already registered.
         registered = request.state.all_jobs.get(barrier.job.job_id)
-        if registered is not None:
+        should_start = not barrier.replayed if barrier.start is None else barrier.start
+        if should_start and registered is not barrier.job:
+            if self.owns_experiment_job(barrier.job.job_id) or (
+                registered is not None
+                and registered.task is not None
+                and not registered.task.done()
+            ):
+                raise RecoveryError(
+                    "recovery_owner_active", "A live coordinator owns this attempt"
+                )
+            job = barrier.job
+            request.state.add_experiment_job(job, already_persisted=True)
+        elif registered is not None:
             job = registered
         else:
             job = barrier.job
             request.state.add_experiment_job(job, already_persisted=True)
         execution = None
-        if not barrier.replayed and job.task is None:
+        if (
+            should_start
+            and not self.owns_experiment_job(job.job_id)
+            and (job.task is None or job.task.done())
+        ):
             execution = self._new_execution(request, job)
             self._executions[job.job_id] = execution
         # A replay leaves the record as it is: the receipt's ``replayed`` says
@@ -613,7 +685,7 @@ class ExperimentRunner(RunnerBase):
         if execution is not None:
             job.task = self.loop.create_task(self._run_job(execution))
 
-    async def _durable_barrier(self, request: ExperimentRunRequest) -> _BarrierResult:
+    async def _durable_barrier(self, request: ExperimentRunRequest) -> AdmissionResult:
         """Claim the request id first, then stage under it.
 
         The gate is one file lock per ``request_id``, so holding it across
@@ -629,15 +701,19 @@ class ExperimentRunner(RunnerBase):
         id stages afresh; whatever the dead process had copied under
         ``runs/{job_id}/`` is a crash residual that no record names.
         """
+        if request.recoverable:
+            from ltspice_mcp.lib.experiment_resume import admit_initial
+
+            return await admit_initial(self, request)
         working_dir = request.state.working_dir
         gate = Store(working_dir).request_lock(request.request_id)
-        async with _request_gate(gate, request.request_id):
-            lookup = await asyncio.to_thread(self._read_request_index, request)
+        async with request_gate(gate, request.request_id):
+            lookup = await asyncio.to_thread(self.read_request_index, request)
             if lookup.existing is not None:
-                return _BarrierResult(lookup.existing, replayed=True)
+                return AdmissionResult(lookup.existing, replayed=True)
             try:
                 staged = await request.stage()
-                candidate = self._materialize_job(request, staged)
+                candidate = self.materialize_job(request, staged)
                 if any(case.native_statistics is not None for case in candidate.cases):
                     await asyncio.to_thread(
                         prepare_native_cases, candidate, working_dir, self.simulator_class
@@ -658,7 +734,7 @@ class ExperimentRunner(RunnerBase):
                 # Staged, then refused. The decks are already copied and the
                 # claim never landed, so this is the one window in which a run
                 # tree exists that no record will ever name.
-                await asyncio.to_thread(self._discard_staged_run_dir, request, working_dir)
+                await asyncio.to_thread(self.discard_staged_run_dir, request, working_dir)
                 raise
         # Outside the gate: the per-circuit index is discovery, not identity,
         # so a slow directory here holds up nothing but this submission.
@@ -666,9 +742,9 @@ class ExperimentRunner(RunnerBase):
             await asyncio.to_thread(self._register_circuits, candidate, working_dir)
         except Exception as exc:
             raise SubmissionCommitted(request.request_id, exc) from exc
-        return _BarrierResult(candidate, replayed=False)
+        return AdmissionResult(candidate, replayed=False)
 
-    def _discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
+    def discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
         """Remove the run tree of a submission that staged and then failed.
 
         Called only from inside the request gate, only for a job id this
@@ -694,9 +770,12 @@ class ExperimentRunner(RunnerBase):
             logger.warning("could not discard the unclaimed run directory %s: %s", run_dir, exc)
 
     @staticmethod
-    def _read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
+    def read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
         """The gate's lookup half: a replay, a conflict, or nothing recorded yet."""
         working_dir = request.state.working_dir
+        from ltspice_mcp.lib.experiment_resume import refuse_reserved_request
+
+        refuse_reserved_request(request)
         index = experiment_store.load_request_index(request.request_id, working_dir)
         if index is None:
             return _IndexLookup(existing=None, dangling=False)
@@ -787,7 +866,7 @@ class ExperimentRunner(RunnerBase):
                     "could not record the circuit-index failure on %s", candidate.job_id
                 )
 
-    def _case_capacity(self, request: ExperimentRunRequest) -> int:
+    def case_capacity(self, request: ExperimentRunRequest) -> int:
         """One job's share of the runner's cap.
 
         A request's own ``max_parallel`` divides that share; it can never raise
@@ -802,12 +881,30 @@ class ExperimentRunner(RunnerBase):
         request: ExperimentRunRequest,
         job: ExperimentJob,
     ) -> _Execution:
-        capacity = self._case_capacity(request)
+        capacity = self.case_capacity(request)
         run_timeout_s, run_timeout_source = effective_run_timeout(request)
+        if job.recovery is not None:
+            recorded = job.recovery.execution
+            capacity = recorded.max_parallel
+            run_timeout_s = recorded.run_timeout_s
+            if recorded.timeout_source in {"request", "server_default"}:
+                run_timeout_source = (
+                    "request" if recorded.timeout_source == "request" else "server_default"
+                )
+            elif recorded.timeout_source == "unbounded":
+                run_timeout_source = None
+            else:
+                raise RecoveryError("recovery_execution_invalid", "Unsupported timeout source")
+            request = replace(
+                request,
+                kill_grace_s=recorded.kill_grace_s,
+                job_deadline_s=recorded.job_deadline_s,
+                simulator_seed=recorded.simulator_seed,
+            )
         return _Execution(
             # Without the staging closure: this execution outlives the
             # submission call, and the closure holds that whole scope.
-            request=replace(request, stage=_already_staged),
+            request=replace(request, stage=already_staged),
             job=job,
             semaphore=asyncio.Semaphore(capacity),
             capacity=capacity,
@@ -840,7 +937,7 @@ class ExperimentRunner(RunnerBase):
             execution.external_cancel_task = self.loop.create_task(
                 self._external_cancel_watch(execution)
             )
-            transition(job, "running", state=request.state, total_cases=len(job.cases))
+            await self._transition_job(execution, "running", total_cases=len(job.cases))
             for case in job.cases:
                 if case.status in TERMINAL_CASE_STATUSES:
                     continue
@@ -854,8 +951,8 @@ class ExperimentRunner(RunnerBase):
                 await asyncio.gather(*execution.case_tasks.values(), return_exceptions=True)
             self._reconcile_unfinished_cases(execution)
             job.completeness.validate_terminal()
+            await self._persist_job(execution)
             job.runs_done_event.set()
-            request.state.persist_job(job)
 
             if execution.stop_reason == "cancelled":
                 self._finish_unstarted_analysis(
@@ -864,7 +961,7 @@ class ExperimentRunner(RunnerBase):
                     error="Experiment cancelled before attached analysis started",
                 )
                 if job.status not in {"cancelled", "failed"}:
-                    transition(job, "cancelled", state=request.state)
+                    await self._transition_job(execution, "cancelled")
                 return
             if execution.stop_reason == "job_deadline":
                 self._finish_unstarted_analysis(
@@ -872,20 +969,20 @@ class ExperimentRunner(RunnerBase):
                     status="cancelled",
                     error="Experiment deadline elapsed before attached analysis started",
                 )
-                transition(job, "completed_with_failures", state=request.state)
+                await self._transition_job(execution, "completed_with_failures")
                 return
 
             analysis_failed = await self._run_analysis(execution)
             if execution.stop_reason == "cancelled":
-                transition(job, "cancelled", state=request.state)
+                await self._transition_job(execution, "cancelled")
             elif (
                 execution.stop_reason == "job_deadline"
                 or analysis_failed
                 or job.completeness.fell_short
             ):
-                transition(job, "completed_with_failures", state=request.state)
+                await self._transition_job(execution, "completed_with_failures")
             else:
-                transition(job, "completed", state=request.state)
+                await self._transition_job(execution, "completed")
         except Exception as exc:
             logger.exception("Experiment job %s failed", job.job_id)
             job.error = str(exc)
@@ -904,7 +1001,13 @@ class ExperimentRunner(RunnerBase):
                 "cancelled",
                 "interrupted",
             }:
-                transition(job, "failed", state=request.state, error=job.error)
+                try:
+                    await self._transition_job(execution, "failed", error=job.error)
+                except Exception as checkpoint_error:
+                    # The committed identity remains replayable even when the
+                    # storage device will not accept its failure checkpoint.
+                    job.error += f"; failure checkpoint: {checkpoint_error}"
+                    transition(job, "failed", error=job.error)
         finally:
             if execution.deadline_task is not None:
                 execution.deadline_task.cancel()
@@ -937,7 +1040,7 @@ class ExperimentRunner(RunnerBase):
                     }
                 )
                 self._request_stop(execution, "cancelled")
-                execution.request.state.persist_job(execution.job)
+                await self._persist_job(execution)
                 return
             await asyncio.sleep(0.5)
 
@@ -956,6 +1059,130 @@ class ExperimentRunner(RunnerBase):
             }
         )
         self._request_stop(execution, "job_deadline")
+
+    async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> None:
+        """Await recovery checkpoints in the registry's existing per-job order."""
+        if execution.job.recovery is None:
+            execution.request.state.persist_job(execution.job)
+            return
+        try:
+            await execution.request.state.job_registry.persist_strict(job or execution.job)
+        except Exception as exc:
+            execution.persistence_error = exc
+            raise
+
+    async def _transition_job(self, execution: _Execution, status: str, **extra: Any) -> None:
+        """Publish terminal recovery state only after its durable checkpoint."""
+        job = execution.job
+        if job.recovery is None:
+            transition(job, status, state=execution.request.state, **extra)
+            return
+        if status in TERMINAL_STATUSES:
+            if status not in VALID_EXPERIMENT_TRANSITIONS.get(job.status, frozenset()):
+                raise InvalidTransitionError(
+                    f"Illegal recovery transition {job.status} to {status}"
+                )
+            snapshot = replace(job, status=status, completed_at=now())
+            await self._persist_job(execution, snapshot)
+            transition(job, status, **extra)
+            job.completed_at = snapshot.completed_at
+        else:
+            transition(job, status, **extra)
+            await self._persist_job(execution)
+
+    def _verify_recovery_case(self, execution: _Execution, case: ExperimentCase) -> Path:
+        """Check frozen policy and bytes at staging and again immediately before spawn."""
+        if execution.persistence_error is not None:
+            raise RecoveryError("recovery_persistence_failed", "A durable checkpoint failed")
+        job = execution.job
+        recovery = job.recovery
+        if recovery is None or case.recovery is None or job.output_folder is None:
+            raise RecoveryError("recovery_record_invalid", "Recovery launch facts are missing")
+        recorded = recovery.execution
+        root = Store(execution.request.state.working_dir).lineage_run_dir(
+            recovery.root_job_id, job.output_folder, self.simulator_class
+        )
+        if case.recovery.inputs.lineage_root != root:
+            raise RecoveryError("recovery_path_escape", "Case inputs name a different lineage")
+        verify_execution_policy(recorded, self.simulator_class)
+        verify_case_inputs(
+            case.recovery.inputs,
+            native=case.native_statistics is not None,
+            seeded=recorded.simulator_seed is not None,
+        )
+        verify_seeded_driver(case, recorded, root)
+        verify_startup(recorded.startup, root)
+        return root
+
+    def _record_launch_intent(
+        self, execution: _Execution, case: ExperimentCase, copied: Path
+    ) -> None:
+        """Spicelib has copied the deck but has not constructed a RunTask yet."""
+        root = self._verify_recovery_case(execution, case)
+        assert case.recovery is not None
+        attempt = case.recovery.attempt
+        if (
+            attempt.launch is not None
+            or attempt.execution_job_id != execution.job.job_id
+            or attempt.reused
+        ):
+            raise RecoveryError("recovery_attempt_invalid", "An attempt cannot be launched twice")
+        copied = copied.resolve(strict=True)
+        if not copied.is_relative_to(root):
+            raise RecoveryError("recovery_path_escape", "Executed copy is outside its lineage")
+        copied_digest = sha256_file(copied)
+        adaptation: Literal["identity", "logopinfo", "native_driver", "seeded_driver"]
+        if case.native_statistics is not None:
+            adaptation = "native_driver"
+        elif attempt.seeded_driver is not None:
+            if copied_digest != attempt.seeded_driver.sha256:
+                raise RecoveryError("recovery_input_drift", "Executed seeded driver bytes changed")
+            adaptation = "seeded_driver"
+        elif copied_digest == case.recovery.inputs.electrical.sha256:
+            adaptation = "identity"
+        else:
+            if is_ngspice(self.simulator_class):
+                raise RecoveryError(
+                    "recovery_input_drift",
+                    "Executed copy differs from the frozen electrical input",
+                )
+            adaptation = "logopinfo"
+        intent = LaunchIntent(
+            now(),
+            case.recovery.inputs.electrical.sha256,
+            ArtifactDigest(copied, copied_digest),
+            adaptation,
+        )
+        case.recovery = replace(case.recovery, attempt=replace(attempt, launch=intent))
+        # The loop remains free for cancellation and the ordered registry lock;
+        # only this worker waits. Never hold launch_lock across this barrier.
+        asyncio.run_coroutine_threadsafe(self._persist_job(execution), self.loop).result()
+        self._verify_executed_copy(execution, case)
+        if execution.cancel_event.is_set():
+            raise RecoveryError("recovery_launch_cancelled", "Cancelled before simulator spawn")
+
+    def _verify_executed_copy(self, execution: _Execution, case: ExperimentCase) -> None:
+        root = self._verify_recovery_case(execution, case)
+        assert case.recovery is not None
+        intent = case.recovery.attempt.launch
+        if intent is None or sha256_file(intent.executed.path) != intent.executed.sha256:
+            raise RecoveryError("recovery_input_drift", "Executed copy changed before launch")
+        assert execution.job.recovery is not None
+        recorded = execution.job.recovery.execution
+        if recorded.startup.ini_template is not None:
+            from ltspice_mcp.lib.controlled_ltspice import verify_attempt_ini
+
+            ini = Store(execution.request.state.working_dir).recovery_ini(
+                execution.job.recovery.root_job_id, case.run_token, self.simulator_class
+            )
+            verify_attempt_ini(recorded.startup.ini_template, ini, root)
+        if execution.job.recovery.execution.simulator_seed is not None and any(
+            path.exists() or path.is_symlink()
+            for path in (root / (case.run_token + ".raw"), root / (case.run_token + ".log"))
+        ):
+            raise RecoveryError(
+                "recovery_input_drift", "Refusing to overwrite previous seeded outputs"
+            )
 
     def _submit_case_under_cancel_gate(
         self,
@@ -978,11 +1205,21 @@ class ExperimentRunner(RunnerBase):
         """
         working_dir = execution.request.state.working_dir
         job_id = execution.job.job_id
+        recovery = execution.job.recovery
+        recoverable = recovery is not None
+        lineage_id = recovery.root_job_id if recovery is not None else job_id
+        run_dir = (
+            self._verify_recovery_case(execution, case)
+            if recoverable
+            else run_dir_in(self.output_folder, job_id)
+        )
         native = None
         prepared = case.native_statistics.prepared if case.native_statistics else None
         if case.native_statistics is not None:
             if prepared is None:
                 raise NativeCaseError("preparation", "native setup was not prepared")
+            if recovery is not None and prepared.policy != recovery.execution.native_policy:
+                raise RecoveryError("recovery_execution_changed", "Native launch policy changed")
             verify_launch(prepared)
             native = NativeLaunchContext(
                 input_deck=Path(prepared.paths.electrical_input),
@@ -991,16 +1228,19 @@ class ExperimentRunner(RunnerBase):
                 policy=prepared.policy,
             )
             suffix = ".cir"
-        with file_lock(Store(working_dir).cancellation_lock(job_id)):
-            if experiment_store.cancellation_requested(job_id, working_dir):
-                return False
-        with execution.launch_lock:
-            if execution.cancel_event.is_set():
-                return False
-            case.status = "submitted"
-            case.submitted_at = now()
         if prepared is not None:
             run_deck = Path(prepared.paths.prepared_driver)
+        elif recovery is not None and recovery.execution.simulator_seed is not None:
+            assert case.recovery is not None and case.recovery.attempt.seeded_driver is not None
+            run_deck = case.recovery.attempt.seeded_driver.path
+            native = NativeLaunchContext(
+                input_deck=case.recovery.inputs.electrical.path,
+                cwd=run_dir,
+                policy=NativeLaunchPolicy(
+                    ngbehavior=recovery.execution.ngbehavior or "", ng_nomodcheck=False
+                ),
+            )
+            suffix = ".cir"
         else:
             # On LTspice .op cases, hand the simulator a sibling copy carrying
             # '.options logopinfo' — without it the log has no per-device
@@ -1019,7 +1259,6 @@ class ExperimentRunner(RunnerBase):
             # chaining on run_deck is safe. The injection is a fact about the run,
             # not about the deck the record pins: the staged deck and its digest
             # stay byte-identical either way.
-            run_dir = run_dir_in(self.output_folder, job_id)
             run_dir.mkdir(parents=True, exist_ok=True)
             scripted_deck = inject_ngspice_control_write(
                 run_deck, self.simulator_class, case.run_token, run_dir
@@ -1039,40 +1278,85 @@ class ExperimentRunner(RunnerBase):
                         ),
                     }
                 )
-        native_args = {"native": native} if native is not None else {}
-        run_timeout = execution.run_timeout_s
-        try:
-            self.submit_netlist(
-                run_deck,
-                # A sub-path, not a bare name: the simulator layer joins it onto
-                # the runner's output folder, so this is what lands the run's
-                # deck copy, raw and log in the job's own directory without the
-                # runner (and its shared concurrency semaphore) ever moving.
-                run_filename_in(job_id, f"{case.run_token}{suffix}"),
-                lambda outcome: self._handle_case_completion(
-                    execution.job.job_id,
-                    case.case_id,
-                    outcome,
-                ),
-                timeout_s=(
-                    run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
-                    if run_timeout is not None
-                    else None
-                ),
-                **native_args,
+        native_args: dict[str, Any] = {"native": native} if native is not None else {}
+        if recoverable:
+            assert execution.job.recovery is not None
+            recorded = execution.job.recovery.execution
+
+            def verify_copy() -> None:
+                self._verify_executed_copy(execution, case)
+
+            if recorded.startup.ini_template is not None:
+                from ltspice_mcp.lib.controlled_ltspice import controlled_ltspice
+
+                ini = Store(working_dir).recovery_ini(
+                    lineage_id, case.run_token, self.simulator_class
+                )
+                adapter = controlled_ltspice(recorded, ini, verify_copy)
+            else:
+                adapter = controlled_ngspice(recorded, verify_copy)
+            native_args.update(
+                simulator_class=adapter,
+                prelaunch_check=lambda copied: self._record_launch_intent(execution, case, copied),
             )
+        run_timeout = execution.run_timeout_s
+
+        def completion_logs(raw: Path | None, log: Path | None) -> DecodedLog:
+            from ltspice_mcp.lib.services import AnalysisSource, load_logs_sync
+
+            source = AnalysisSource(
+                raw=raw,
+                log=log,
+                console=log.with_suffix(".exe.log") if log is not None else None,
+                netlist=native.input_deck if native is not None else run_deck,
+                dialect=dialect_for_simulator_name(self.simulator_class.__name__),
+                identity=None,
+                trusted_job_artifact=True,
+            )
+            return load_logs_sync(source, execution.request.state)
+
+        try:
+            with file_lock(Store(working_dir).cancellation_lock(job_id)):
+                if experiment_store.cancellation_requested(job_id, working_dir):
+                    return False
+                with execution.launch_lock:
+                    if execution.cancel_event.is_set():
+                        return False
+                    case.status = "submitted"
+                    case.submitted_at = now()
+                self.submit_netlist(
+                    run_deck,
+                    # A sub-path, not a bare name: the simulator layer joins it onto
+                    # the runner's output folder, so this is what lands the run's
+                    # deck copy, raw and log in the job's own directory without the
+                    # runner (and its shared concurrency semaphore) ever moving.
+                    run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
+                    lambda outcome: self._handle_case_completion(
+                        execution.job.job_id,
+                        case.case_id,
+                        outcome,
+                    ),
+                    timeout_s=(
+                        run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
+                        if run_timeout is not None
+                        else None
+                    ),
+                    completion_logs=completion_logs,
+                    **native_args,
+                )
         except NativePrelaunchRefused:
             # The stamp guarded cancellation while launch was in progress, but
             # this refusal happened before spicelib could create a RunTask.
-            with execution.launch_lock:
-                case.submitted_at = None
+            if not recoverable:
+                with execution.launch_lock:
+                    case.submitted_at = None
             raise
         finally:
             # spicelib stages the deck synchronously inside run(), so the copy
             # has done its job by the time submit returns — and on a submit that
             # raised, nothing will ever read it. The marker guard inside the
             # helper makes this incapable of touching the staged deck itself.
-            if native is None:
+            if native is None and not recoverable:
                 discard_generated_netlist(run_deck)
         return True
 
@@ -1099,6 +1383,14 @@ class ExperimentRunner(RunnerBase):
             execution.futures[case.case_id] = future
             suffix = case.staged_deck.suffix or ".net"
             try:
+                if execution.job.recovery is not None:
+                    from ltspice_mcp.lib.experiment_resume import mark_attempt_launched
+
+                    try:
+                        await mark_attempt_launched(execution.job, execution.request.state)
+                    except Exception as exc:
+                        execution.persistence_error = exc
+                        raise
                 submitted = await asyncio.to_thread(
                     self._submit_case_under_cancel_gate,
                     execution,
@@ -1135,7 +1427,41 @@ class ExperimentRunner(RunnerBase):
             elif outcome is not None:
                 self._apply_outcome(case, outcome)
                 if outcome.error is None:
-                    self._mark_case(execution, case, "produced")
+                    if execution.job.recovery is not None:
+                        assert case.recovery is not None
+                        if case.raw_file is None or case.log_file is None:
+                            raise RecoveryError(
+                                "recovery_artifact_missing", "Completed run lacks raw/log pair"
+                            )
+                        outputs = await asyncio.to_thread(
+                            capture_produced_artifacts,
+                            case.raw_file,
+                            case.log_file,
+                            lineage_root=case.recovery.inputs.lineage_root,
+                        )
+                        produced = replace(
+                            case,
+                            status="produced",
+                            completed_at=now(),
+                            recovery=replace(
+                                case.recovery,
+                                attempt=replace(case.recovery.attempt, outputs=outputs),
+                            ),
+                        )
+                        checkpoint = replace(
+                            execution.job,
+                            cases=[
+                                produced if item is case else item for item in execution.job.cases
+                            ],
+                            completeness=replace(execution.job.completeness),
+                        )
+                        self._recount_completeness(checkpoint)
+                        await self._persist_job(execution, checkpoint)
+                        case.recovery = produced.recovery
+                        self._mark_case(execution, case, "produced")
+                        case.completed_at = produced.completed_at
+                    else:
+                        self._mark_case(execution, case, "produced")
                 else:
                     self._mark_case(
                         execution,
@@ -1150,6 +1476,20 @@ class ExperimentRunner(RunnerBase):
             if acquired and case.case_id in execution.slots_held and case.status == "queued":
                 self._release_slot(execution, case.case_id)
             raise
+        except Exception as exc:
+            if execution.job.recovery is None:
+                raise
+            self._mark_case(
+                execution,
+                case,
+                "failed",
+                code="recovery_persistence_failed"
+                if execution.persistence_error is not None
+                else "recovery_artifact_invalid",
+                error=str(exc),
+            )
+            if acquired and case.case_id not in execution.retained_slots:
+                self._release_slot(execution, case.case_id)
 
     async def _await_case(
         self,
@@ -1212,11 +1552,14 @@ class ExperimentRunner(RunnerBase):
                 }
             )
             execution.retained_slots.add(case.case_id)
-            execution.request.state.persist_job(execution.job)
+            await self._persist_job(execution)
             self._fail_if_capacity_retained(execution)
             return
 
-        self._apply_stopped_outcome(case, outcome)
+        if execution.job.recovery is not None:
+            self._apply_outcome(case, outcome)
+        else:
+            self._apply_stopped_outcome(case, outcome)
         progress = await asyncio.to_thread(self._read_progress_and_remove, execution.job, case)
         if progress is not None:
             case.observations.append(progress)
@@ -1298,7 +1641,10 @@ class ExperimentRunner(RunnerBase):
         case = next((item for item in execution.job.cases if item.case_id == case_id), None)
         if case is None:
             return
-        self._apply_stopped_outcome(case, outcome)
+        if execution.job.recovery is not None:
+            self._apply_outcome(case, outcome)
+        else:
+            self._apply_stopped_outcome(case, outcome)
         case.observations.append(
             {
                 "code": "late_simulator_exit",
@@ -1314,9 +1660,8 @@ class ExperimentRunner(RunnerBase):
                 },
             }
         )
-        # The permit is free the moment the process is gone; what is left is
-        # reading the partial raw before it is deleted, off the loop, and then
-        # saving the record once.
+        # The permit is free once the process is gone. Read progress off-loop,
+        # preserve recovery artifacts, and save the final facts.
         task = self.loop.create_task(self._retire_late_exit(execution, case))
         self._pipeline_tasks.add(task)
         task.add_done_callback(self._pipeline_tasks.discard)
@@ -1325,13 +1670,13 @@ class ExperimentRunner(RunnerBase):
             self._executions.pop(job_id, None)
 
     async def _retire_late_exit(self, execution: _Execution, case: ExperimentCase) -> None:
-        """Record how far a late-exiting case got, remove its artifacts, and save."""
+        """Record late-exit progress and persist final artifact facts."""
         try:
             progress = await asyncio.to_thread(self._read_progress_and_remove, execution.job, case)
             if progress is not None:
                 case.observations.append(progress)
         finally:
-            execution.request.state.persist_job(execution.job)
+            await self._persist_job(execution)
 
     def _read_progress_and_remove(
         self, job: ExperimentJob, case: ExperimentCase
@@ -1400,7 +1745,7 @@ class ExperimentRunner(RunnerBase):
         execution.case_event_count += 1
         total = len(execution.job.cases)
         step = max(1, total // 20) if total else 1
-        if execution.case_event_count % step == 0:
+        if execution.job.recovery is None and execution.case_event_count % step == 0:
             execution.request.state.persist_job(execution.job)
 
     def _release_slot(self, execution: _Execution, case_id: str) -> None:
@@ -1441,7 +1786,8 @@ class ExperimentRunner(RunnerBase):
                 ),
             }
         )
-        execution.request.state.persist_job(execution.job)
+        if execution.job.recovery is None:
+            execution.request.state.persist_job(execution.job)
 
     def _request_stop(
         self,
@@ -1511,13 +1857,17 @@ class ExperimentRunner(RunnerBase):
                     execution,
                     case,
                     "failed",
-                    code="missing_completion",
-                    error="The case task ended without a terminal result",
+                    code="recovery_persistence_failed"
+                    if execution.persistence_error is not None
+                    else "missing_completion",
+                    error=f"Durable checkpoint failed: {execution.persistence_error}"
+                    if execution.persistence_error is not None
+                    else "The case task ended without a terminal result",
                 )
 
     @staticmethod
     def _recount_completeness(job: ExperimentJob) -> None:
-        job.completeness.recount(job.cases)
+        job.completeness.recount(job.cases, execution_job_id=job.job_id)
 
     @staticmethod
     def _finish_unstarted_analysis(
@@ -1543,13 +1893,13 @@ class ExperimentRunner(RunnerBase):
                 "Attached analysis was requested but no analysis callback is wired"
             )
             job.analysis.completed_at = now()
-            request.state.persist_job(job)
+            await self._persist_job(execution)
             return True
 
-        transition(job, "analyzing", state=request.state)
+        await self._transition_job(execution, "analyzing")
         job.analysis.status = "running"
         job.analysis.started_at = now()
-        request.state.persist_job(job)
+        await self._persist_job(execution)
         try:
             analysis_task = asyncio.ensure_future(request.analysis_callback(job))
             stop_wait = self.loop.create_task(execution.cancel_event.wait())
@@ -1584,7 +1934,7 @@ class ExperimentRunner(RunnerBase):
             return True
         finally:
             job.analysis.completed_at = now()
-            request.state.persist_job(job)
+            await self._persist_job(execution)
 
     async def cancel(
         self,
@@ -1639,6 +1989,8 @@ class ExperimentRunner(RunnerBase):
 
     def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
         """Best-effort removal of a killed case's exact heavy-artifact paths."""
+        if job.recovery is not None:
+            return
         raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
         run_suffix = ".cir" if case.native_statistics else case.staged_deck.suffix or ".net"
         # The job's own run directory, which is also what the record persists —

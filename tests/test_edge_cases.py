@@ -645,23 +645,13 @@ class TestValueRecipeRejectsNaNInf:
 
     @pytest.mark.parametrize("spelling", ["nan", "inf"])
     async def test_non_finite_at_rejected(self, state_no_sim, work_dir, spelling):
-        import numpy as np
-
         from ltspice_mcp.errors import ResultError
         from ltspice_mcp.lib.metrics import value
         from ltspice_mcp.lib.recipes import ValueRecipe
+        from tests.conftest import stage_recorded_fixture
         from tests.test_analysis_tools import _source
 
-        raw_file = work_dir / "x.raw"
-        raw_file.write_bytes(b"placeholder")
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [0]
-        axis = np.array([0.0, 1.0, 2.0])
-        raw.get_axis.return_value = axis
-        raw.get_wave = lambda n, step=0: axis
-        state_no_sim.results.set(raw_file, raw)
+        raw_file = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
 
         with pytest.raises(ResultError, match="finite"):
             await value(

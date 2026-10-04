@@ -26,6 +26,7 @@ from ltspice_mcp.lib import (
     metrics,
     now,
     result_store,
+    services,
 )
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -38,7 +39,7 @@ from ltspice_mcp.lib.recipes import RECIPE_MODELS
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
-from ltspice_mcp.tools import experiments
+from ltspice_mcp.tools import experiments, inspect_tools
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
     evaluate_analysis_results,
@@ -66,6 +67,24 @@ async def _analyze(
     result = await handle_analyze_results(_args(raw, recipes, **extra), state)
     assert result.structured_content is not None
     return result.structured_content
+
+
+async def _analyze_initialized(
+    state: SessionState,
+    raw: Path,
+    recipes: list[dict[str, Any]],
+    **extra: Any,
+) -> dict[str, Any]:
+    """Start recipe policy checks from an actual captured set and public cursor."""
+    request = _args(raw, recipes, **extra)
+    item = await analyze_mod._create_result_set(request, state, time.monotonic() + 30)
+    cursor = result_store.encode_cursor(item, 0, view_fields=request.include.fields)
+    continued = AnalyzeResultsInput.model_validate(
+        {"continue": {"result_set_id": item.result_set_id, "cursor": cursor}}
+    )
+    response = await handle_analyze_results(continued, state)
+    assert response.structured_content is not None
+    return response.structured_content
 
 
 @pytest.mark.asyncio
@@ -517,15 +536,16 @@ async def test_neutral_evaluator_resumes_to_the_same_work_as_one_shot(
             {"key": "summary", "metric": "summary"},
         ],
     )
-    state_no_sim.config.analysis_budget_s = 0.01
+    item = await analyze_mod._create_result_set(args, state_no_sim, time.monotonic() + 30)
+    state_no_sim.config.analysis_budget_s = 2.0
     monkeypatch.setattr(
         analyze_mod,
         "_artifact_estimate",
-        lambda recipe, _runs: 0.01 if recipe.key != "first" else 0.0,
+        lambda recipe, _runs: 2.0 if recipe.key != "first" else 0.0,
     )
 
     accumulated: list[tuple[Any, ...]] = []
-    position = None
+    position = analyze_mod.AnalysisContinuationPosition(item.result_set_id, 0)
     drives = 0
     while True:
         evaluation = await evaluate_analysis_results(
@@ -538,7 +558,7 @@ async def test_neutral_evaluator_resumes_to_the_same_work_as_one_shot(
         position = evaluation.continuation
         if position is None:
             break
-    assert drives > 1, "the tiny drive budget must exercise internal resumption"
+    assert drives > 1, "the bounded drive budget must exercise internal resumption"
 
     state_no_sim.config.analysis_budget_s = 60.0
     one_shot = await evaluate_analysis_results(args, state_no_sim)
@@ -627,9 +647,9 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
     monkeypatch: pytest.MonkeyPatch,
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 0.1
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 1.0)
-    data = await _analyze(
+    state_no_sim.config.analysis_budget_s = 1.0
+    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 10.0)
+    data = await _analyze_initialized(
         state_no_sim,
         raw,
         [
@@ -654,7 +674,7 @@ async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
     from ltspice_mcp.tools import analysis
 
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 0.01
+    state_no_sim.config.analysis_budget_s = 1.0
     monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 0.0)
 
     def slow_writer(*args):
@@ -669,7 +689,7 @@ async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
             raise AnalysisDeadlineExceeded("CSV artifact exceeded its analysis item deadline")
 
     monkeypatch.setattr(analysis, "build_waveform_csv", slow_writer)
-    data = await _analyze(
+    data = await _analyze_initialized(
         state_no_sim,
         raw,
         [
@@ -941,11 +961,8 @@ async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Sources are identified by size and modification time. Hashing every raw
-    and log on every call spent the call's budget on reading files whole, and a
-    hash that ran out of it failed the recipe that had nothing to do with it."""
+    """Worker capture supplies digests without a second parent-side hash pass."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 0.01
     hashed: list[Path] = []
     original = result_store.sha256_file
 
@@ -989,8 +1006,7 @@ async def test_a_resumed_set_catches_a_rewrite_that_kept_size_and_timestamp(
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Size and modification time identify a source within a call. Across
-    calls the recorded digest does: a rewrite that kept both still drifts."""
+    """A worker snapshot detects rewrites even when metadata is unchanged."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
     before = os.stat(raw)
@@ -1377,8 +1393,8 @@ async def test_value_says_when_the_input_noise_unit_is_unchecked(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
-    """A bare raw path names no deck, so the input-referred trace keeps the
-    simulator's declared unit and carries the same caveat noise_integral adds.
+    """A bare raw path names no deck, so the input-referred unit is unresolved
+    and carries the same caveat noise_integral adds.
     The output-referred trace is not affected by the ``.NOISE`` source type and
     carries no caveat."""
     raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
@@ -1399,7 +1415,14 @@ async def test_value_says_when_the_input_noise_unit_is_unchecked(
     )
     assert data["failures"] == []
     results = data["results"]
-    assert results["input"]["values"][0]["value"]["unit"] == "V/√Hz"
+    assert "unit" not in results["input"]["values"][0]["value"]
+    loaded = await services.load_raw(services.source_for_raw_path(raw, state_no_sim), state_no_sim)
+    input_trace = next(
+        trace for trace in loaded.descriptor.traces if trace.name.casefold() == "v(inoise)"
+    )
+    assert input_trace.declared_type == "voltage"
+    assert input_trace.unit is None
+    assert input_trace.unit_evidence == "input_source_unresolved"
     assert results["output"]["values"][0]["value"]["unit"] == "V/√Hz"
     (input_caveat,) = [w for w in results["input"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
     (integral_caveat,) = [w for w in results["total"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
@@ -1408,7 +1431,7 @@ async def test_value_says_when_the_input_noise_unit_is_unchecked(
 
 
 @pytest.mark.asyncio
-async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
+async def test_summary_and_measurement_resident_processing_respects_item_deadline(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1416,15 +1439,17 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
     from ltspice_mcp.lib import metrics
 
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 0.05
+    state_no_sim.config.analysis_budget_s = 1.0
+    processing_calls: list[str] = []
 
     def slow_summary(*args, **kwargs):
         del args, kwargs
-        time.sleep(0.2)
+        processing_calls.append("summary")
+        time.sleep(1.2)
         return {}
 
     monkeypatch.setattr(metrics, "build_simulation_summary", slow_summary)
-    summary = await _analyze(
+    summary = await _analyze_initialized(
         state_no_sim,
         raw,
         [{"key": "summary", "metric": "summary"}],
@@ -1433,6 +1458,7 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
         failure["code"] == "analysis_deadline" and failure["stage"] == "analyze"
         for failure in summary["failures"]
     )
+    assert processing_calls == ["summary"]
 
     # A fresh path avoids the shared cooldown from the deliberately wedged raw.
     second = work_dir / "second.raw"
@@ -1441,11 +1467,12 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
 
     def slow_measurements(*args, **kwargs):
         del args, kwargs
-        time.sleep(0.2)
+        processing_calls.append("measurements")
+        time.sleep(1.2)
         return {}, {}, "0 step(s)", {}
 
     monkeypatch.setattr(metrics, "aggregate_log_measurements", slow_measurements)
-    measurements = await _analyze(
+    measurements = await _analyze_initialized(
         state_no_sim,
         second,
         [{"key": "measurements", "metric": "measurements"}],
@@ -1454,6 +1481,7 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
         failure["code"] == "analysis_deadline" and failure["stage"] == "analyze"
         for failure in measurements["failures"]
     )
+    assert processing_calls == ["summary", "measurements"]
 
 
 # ---------------------------------------------------------------------------
@@ -1536,9 +1564,9 @@ async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     """The estimate reads raw size and signal count, nothing else — so telling
     the caller to lower max_points or narrow the window sends them in a loop."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 0.1
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 1.0)
-    data = await _analyze(
+    state_no_sim.config.analysis_budget_s = 1.0
+    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 10.0)
+    data = await _analyze_initialized(
         state_no_sim,
         raw,
         [{"key": "csv", "metric": "waveform", "signals": ["V(out)"], "format": "csv"}],
@@ -1754,6 +1782,9 @@ _FULL_ROW_KEYS = {
     "assignments",
     "circuit",
     "deck_sha256",
+    "plot_index",
+    "snapshot_id",
+    "dialect",
     "value",
 }
 
@@ -1812,6 +1843,9 @@ async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
     assert rows
     for row in rows:
         assert set(row) <= _FULL_ROW_KEYS
+        assert row["plot_index"] == 0
+        assert row["snapshot_id"] == data["source_hashes"][0]["snapshot_id"]
+        assert row["dialect"] == "ltspice"
         assert "deck_sha256" not in row
         assert not any(isinstance(item, (dict, list)) for item in row["value"].values()), (
             "default value must be scalar leaves only"
@@ -1899,7 +1933,13 @@ async def test_projection_leaves_spec_attribution_rows_whole(
         "step_index",
         "step_values",
         "assignments",
+        "plot_index",
+        "snapshot_id",
+        "dialect",
     }
+    assert case["plot_index"] == 0
+    assert case["snapshot_id"] == data["source_hashes"][0]["snapshot_id"]
+    assert case["dialect"] == "ltspice"
     assert entry["spec"]["outliers"][0]["run_index"] == 0
 
 
@@ -2091,11 +2131,9 @@ async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
 ):
     """The route the server's own instructions advertise: bring your own raw.
 
-    ngspice before version 44 writes no ``Command:`` field, so spicelib cannot
-    name the writer, and the fallback asked the *session default* instead —
-    which is ``None`` whenever LTspice is the default, the configuration this
-    project is built around. Every such raw was refused as corrupt. Nothing
-    about the file changed between then and now; only what we ask about it.
+    A writer named in the header needs no import hint. Older ngspice files
+    omit ``Command:`` and need an explicit dialect when their layout is
+    ambiguous. Neither route may depend on the session's default simulator.
     """
     raw = work_dir / "brought_along.raw"
     raw.write_text(
@@ -2114,7 +2152,21 @@ async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
         "\t5.0000000000000000e-01\n"
     )
 
-    data = await _analyze(state_no_sim, raw, [{"key": "op", "metric": "operating_point"}])
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [
+                {
+                    "raw_path": str(raw),
+                    "label": "dut",
+                    "dialect": None if command else "ngspice",
+                }
+            ],
+            "recipes": [{"key": "op", "metric": "operating_point"}],
+        }
+    )
+    result = await handle_analyze_results(request, state_no_sim)
+    data = result.structured_content
+    assert data is not None
 
     assert data["failures"] == []
     assert data["results"]["op"]["values"][0]["value"]["voltages"]["v(out)"] == pytest.approx(0.5)
@@ -2136,7 +2188,8 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     Pole-Zero Analysis, Sensitivity Analysis, DISTORTION — and each was
     answered: poles in rad/s came back as node voltages in V, and point 0 of a
     251-point distortion sweep came back as the bias, with no warning either
-    time. The traces stay readable through the recipe that reads traces.
+    time. Native quantities stay readable through the existing table view,
+    which retains the first trace without inventing a sampled axis.
     """
     raw = _transfer_function_raw(work_dir, impedance_type)
 
@@ -2152,12 +2205,39 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
 
     refusals = [failure["message"] for failure in data["failures"]]
     assert any("Transfer Function" in message for message in refusals), refusals
+    bias_refusal = next(message for message in refusals if "Transfer Function" in message)
+    assert "inspect(kind='results', view='table')" in bias_refusal
+    assert "value recipe" not in bias_refusal
     assert "op" not in data["results"]
-    assert data["results"]["gain"]["values"][0]["value"]["value"] == pytest.approx(0.5)
-    assert data["results"]["gain"]["values"][0]["value"]["unit"] is None
-    impedance = data["results"]["impedance"]["values"][0]["value"]
+    assert {failure["where"] for failure in data["failures"]} == {"dut:0"}
+    assert "gain" not in data["results"]
+    assert "impedance" not in data["results"]
+    assert sum("no sampled axis" in message for message in refusals) == 2
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "view": "table", "path": str(raw)}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    result = reply.structured_content["results"][0]
+    assert result["ok"], result
+    table = result["data"]
+    assert table["analysis"] == "tf"
+    assert table["axis"] is None
+    rows = {row["signal"]: row for row in table["table"]}
+    assert set(rows) == {
+        "v(Transfer_function)",
+        "v(v1#Input_impedance)",
+        "v(output_impedance_at_V(out))",
+    }
+    assert rows["v(Transfer_function)"]["value"] == pytest.approx(0.5)
+    assert rows["v(Transfer_function)"]["unit"] is None
+    impedance = rows["v(v1#Input_impedance)"]
     assert impedance["value"] == pytest.approx(2000)
-    assert impedance["unit"] == ("Ω" if impedance_type == "impedance" else None)
+    assert impedance["unit"] == "Ω"
+    assert rows["v(output_impedance_at_V(out))"]["value"] == pytest.approx(500)
+    assert rows["v(output_impedance_at_V(out))"]["unit"] == "Ω"
 
 
 @pytest.mark.asyncio
@@ -2353,9 +2433,8 @@ class TestSourceHashProvenance:
         lean = await _analyze(state_no_sim, raw, recipes)
         entry = lean["source_hashes"][0]
         assert entry["manifest_id"]
-        # The default is exactly the attribution legend rows join against —
-        # anything past {manifest_id, label} is provenance and opt-in.
-        assert set(entry) == {"manifest_id", "label"}
+        # Plot selection is identity even when file provenance is omitted.
+        assert set(entry) == {"manifest_id", "label", "plot_index", "dialect", "snapshot_id"}
 
         full = await _analyze(state_no_sim, raw, recipes, include={"provenance": True})
         full_entry = full["source_hashes"][0]
@@ -2985,9 +3064,7 @@ def _recorded_traces(state: SessionState, raw: Path, *names: str) -> list[Any]:
     """The time axis and the named traces of a raw, read the way the server reads it."""
     import numpy as np
 
-    from ltspice_mcp.lib import services
-
-    loaded = services.load_raw_sync(raw, state)
+    loaded = services.load_raw_sync(services.source_for_raw_path(raw, state), state)
     return [np.asarray(loaded.get_axis(0), dtype=float)] + [
         np.asarray(loaded.get_trace(name).get_wave(0), dtype=float) for name in names
     ]

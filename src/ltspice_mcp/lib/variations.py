@@ -921,12 +921,7 @@ def materialize_variants(
             assignments["_random_run"] = case.random_index
             if case.random.id is not None:
                 assignments["_random_id"] = case.random.id
-        if unchanged_case:
-            referrers: dict[int, set[int]] = {}
-        else:
-            current = _case_closure(case_closure, _closure_files(case_closure, texts))
-            referrers = _include_referrers(current)
-        text, written = _write_case_includes(case_closure, referrers, texts, case.case_index)
+        text, written = _write_case_includes(case_closure, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
         data = encode_spice_text(text, case_closure.files[0].codec)
         written[circuit.path.resolve()] = (path.resolve(), hashlib.sha256(data).hexdigest())
@@ -1862,7 +1857,6 @@ def _case_copy_name(case_index: int, name: str) -> str:
 
 def _write_case_includes(
     closure: _DeckClosure,
-    referrers: dict[int, set[int]],
     texts: dict[int, str],
     case_index: int,
 ) -> tuple[str, dict[Path, tuple[Path, str]]]:
@@ -1883,6 +1877,12 @@ def _write_case_includes(
     can bring the sign back.
     """
     edited = {index for index, text in texts.items() if text != closure.files[index].text}
+    referrers: dict[int, set[int]] = {}
+    if edited - {0}:
+        # Root-only assignments keep every include in place. Reverse edges
+        # are needed only to route callers to a changed dependency's copy.
+        current = _case_closure(closure, _closure_files(closure, texts))
+        referrers = _include_referrers(current)
     copies = {0}
     pending = list(edited)
     while pending:

@@ -3,8 +3,8 @@ name: python
 description: >
   Working in Python, through run_code or your own script: where `api` comes
   from, the six operations as methods, running and waiting on jobs, raw
-  traces and measurements, the analysis primitives, errors, detached jobs,
-  and a second LTspice build.
+  traces and log facts, the analysis primitives, errors, detached and resumed
+  jobs, and a second LTspice build.
 ---
 
 # Working in Python
@@ -55,7 +55,7 @@ Read it before guessing an argument. From a shell, without starting the engine:
 
 - `run_experiments` waits until the job is terminal and returns the whole
   receipt: `outcome` (`"complete"`, `"partial"` or `"failed"`), `completeness`
-  (declared, produced, failed, cancelled, skipped), one row per case under
+  (declared, produced, failed, cancelled, skipped, reused), one row per case under
   `runs["items"]` (`case_id`, `assignments`, and a `status` of `"produced"`
   when the case ran), `failures`, `observations`, and the `analysis` block
   when you attached `analyze`.
@@ -70,6 +70,22 @@ Read it before guessing an argument. From a shell, without starting the engine:
   an owner process of its own, so it outlives yours; `api.wait(job_id)` or
   `jobs(action="wait")` reads it from anywhere.
 
+For recovery, submit with `execution={"simulator": "ngspice", "recoverable": True}`
+and keep the root receipt's `control_token`. Once the job is terminal, use
+`api.jobs(action="resume", job_id=parent_id, resume_request_id="retry-1",
+control_token=parent_token)`. Save the child's token too, including when it
+finishes immediately. Selection, retry flags, reused successes and no-op receipts
+are described in guide section 'tools'; static simulator seeds are in guide
+section 'ngspice'.
+The audited native Windows LTspice startup contract and its `ltspice_ini`
+configuration are also described in guide section 'tools'.
+
+`api.jobs(detach=True, action="resume", ...)` gives the child its own supervising
+process. Detach applies only to resume and cannot accompany `raw_page=True`.
+The owner independently authorizes the request; a handoff does not grant
+authority. The resume's `wait_s` is honored, defaults to zero and is capped at
+120 s. For a full wait, call `api.wait` on the child receipt's job id.
+
 ## Reading results
 
 ```python
@@ -81,6 +97,38 @@ t = r.axis(step=0)  # time or frequency
 v = r.trace("V(out)", step=0)  # numpy array, complex on an .AC run
 meas = api.measurements(job_id=job_id, case_id=case_id)  # parsed .meas values
 ```
+
+`api.load_raw(..., plot_index=1, dialect=None)` selects a plot independently of
+case/run and step. `plot_index` defaults to zero and takes a nonnegative integer;
+`dialect` is `None` or `ltspice`, `ngspice`, `qspice`, `xyce`, and must agree
+with captured producer/header evidence. `r.plots`, `r.descriptor` and
+`r.plot_index` expose detached inventory and selected descriptor facts. The
+descriptor owns analysis type, axis and physical units. `r.table(step=0)` reads
+native quantities, keeping the first quantity and complex values as real/imaginary
+components; `r.axis()` refuses a native table. Step metadata comes from the same
+captured snapshot.
+
+For logs without RAW:
+
+```python
+meas = api.measurements(log_path="result.log")  # log_path XOR job_id
+facts = api.inspect(queries=[{
+    "kind": "results", "path": "result.log", "view": "native_tables",
+}])
+measured = api.analyze_results(
+    sources=[{"log_path": "result.log", "label": "imported"}],
+    recipes=[{"metric": "measurements", "key": "meas"}],
+)
+```
+
+The `measurements` inspect view gives values and recorded range/AT metadata;
+`native_tables` gives literal printed entries and frequency rows. These are
+detached plain facts for caller code to arrange or export, with unknown units
+left unknown and no invented plot or step identity. Omit `plot_index` on log
+views. Whole-log measurements reject `step`/`all_steps`. Direct log imports
+guess no RAW sibling; malformed RAW in a mixed request fails only RAW recipes.
+Capture identity, companion drift and initialization timeouts follow guide
+section 'tools'.
 
 Arrays are copies, safe to modify. Trace math across steps and its statistics
 are in guide section 'signals'. `api.analyze_results(...)` returns every row of

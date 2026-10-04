@@ -1,0 +1,19 @@
+
+Note: No compatibility mode selected!
+
+
+Circuit: divider transfer
+
+Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+
+No. of Data Rows : 1
+List of plots available:
+
+Current tf1	divider transfer (Transfer Function)
+	const	Constant values (constants)
+transfer_function = 6.666666666666666e-01
+output_impedance_at_v(out) = 6.666666666666666e+02
+v1#input_impedance = 3.000000000000000e+03
+ngspice-42 done

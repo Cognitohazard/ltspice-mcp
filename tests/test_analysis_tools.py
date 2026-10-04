@@ -65,8 +65,10 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import safe_path
-from tests.conftest import make_raw_mock
+from tests.conftest import inject_numeric_raw, make_raw_mock
 from tests.conftest import stage_recorded_fixture as _stage_recorded
+
+pytestmark = pytest.mark.usefixtures("numeric_raw_inputs")
 
 
 def _source(state: SessionState, raw_file: str | Path) -> services.AnalysisSource:
@@ -89,10 +91,8 @@ async def _metric(
 
 
 def _inject_raw_mock(state: SessionState, path: Path, raw: MagicMock) -> None:
-    """Insert a mock RawRead into the FileCache so load_raw returns it."""
-    # Touch the file so cache mtime check works
-    path.write_bytes(b"placeholder")
-    state.results.set(path, raw)
+    """Supply analytic waves to the recipe's result-loading seam."""
+    inject_numeric_raw(state, path, raw)
 
 
 @pytest.fixture
@@ -1361,8 +1361,7 @@ class TestParseFreqUnitTolerance:
 
 
 def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
-    path.write_bytes(b"placeholder")
-    state.results.set(path, raw)
+    inject_numeric_raw(state, path, raw)
 
 
 def _ac_raw_mock() -> MagicMock:
@@ -1981,7 +1980,7 @@ class TestQueryValueDcLabelAndUnit:
         assert data["unit"] == "V"
         # The DC sweep axis is the swept variable, not time, and the label a
         # reader puts on the requested point says so.
-        loaded = await services.load_raw(raw, state_no_sim)
+        loaded = await services.load_raw(_source(state_no_sim, raw), state_no_sim)
         assert metrics.query_x_label(loaded, "DC transfer characteristic") not in ("t", "f")
 
     async def test_noise_density_labels_per_root_hz(

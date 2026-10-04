@@ -263,8 +263,9 @@ Enable the repository hooks once per clone with
 annotated tag messages, filenames and each file revision being introduced,
 including content added in one commit and removed in a later one. It checks
 the receiving remote's current refs for new branches and refuses to proceed
-when the required history cannot be inspected. Findings name their category
-and location without printing the matched private value.
+when the required history cannot be inspected. Unrelated remote refs absent
+locally contribute no exclusions; they do not require an extra fetch. Findings
+name their category and location without printing the matched private value.
 
 Run `uv run python scripts/privacy_scan.py tracked` to check the tracked working
 tree, or `uv run python scripts/privacy_scan.py local` to preview unpublished
@@ -322,6 +323,19 @@ with Python 3.13 in a separate environment. Read the skip reasons: a green run
 without these dependencies does not validate simulation or PNG rendering.
 Worker timeout, cancellation and descendant cleanup tests require no simulator
 and run in the ordinary suite.
+
+Parser containment currently admits Linux and native Windows. macOS remains
+refused before the supervisor writes control files or launches a process; the
+bootstrap also refuses before reading its admission gate or importing a decoder.
+`test_parser_process.py` checks both entry points. Its portable platform-string
+checks establish refusal behavior only. The `test_native_macos_bootstrap_*`
+checks use an actual macOS interpreter and otherwise skip; even a native pass
+there establishes refusal, not a working macOS parser backend.
+
+Enabling macOS requires native proof of the configured hard memory bound before
+decoder import and cleanup after deadline, repeated cancellation and owner
+death, including attempted child-process escape. Linux or Windows checks do
+not establish these macOS guarantees.
 
 The optional Sky130 integration tests use `LTSPICE_MCP_TEST_PDK_ROOT` to
 locate a `sky130A` root containing `libs.ref` and `libs.tech`.

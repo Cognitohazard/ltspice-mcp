@@ -24,6 +24,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "enabled_simulators",
         "simulator_exe",
         "simulator_executables",
+        "ltspice_ini",
         "ngbehavior",
         "allowed_paths",
         "max_parallel_sims",
@@ -40,7 +41,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "preload_recent_count",
     }
 )
-_PATH_OVERRIDE_NAMES = frozenset({"simulator_exe"})
+_PATH_OVERRIDE_NAMES = frozenset({"simulator_exe", "ltspice_ini"})
 _PATH_LIST_OVERRIDE_NAMES = frozenset({"allowed_paths", "symbol_paths"})
 
 

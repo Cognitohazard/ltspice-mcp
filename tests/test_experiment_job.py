@@ -942,17 +942,19 @@ class TestRequestBarrier:
         assert len({job_id for job_id, _replayed, _error in outcomes}) == 1
         assert sorted(replayed for _job_id, replayed, _error in outcomes) == [False, True]
 
+    @pytest.mark.parametrize("recorded_version", [5, CANONICALIZER_VERSION + 1])
     async def test_canonicalizer_version_mismatch_is_an_honest_conflict(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
+        recorded_version: int,
     ):
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         experiment_store.save_request_index(
             request_id="versioned-request",
             fingerprint="a" * 64,
-            canonicalizer_version=CANONICALIZER_VERSION + 1,
+            canonicalizer_version=recorded_version,
             job_id="exp_old_version",
             working_dir=work_dir,
         )

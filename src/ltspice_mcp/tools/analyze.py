@@ -9,11 +9,12 @@ import math
 import os
 import statistics
 import time
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
+from weakref import WeakValueDictionary
 
 import numpy as np
 from mcp import types
@@ -38,15 +39,13 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
-from ltspice_mcp.lib.cache import file_stamp
+from ltspice_mcp.lib.decoded_log import DecodedLog
+from ltspice_mcp.lib.decoded_raw import PlotDescriptor
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.log_parser import (
-    diagnostic_collapse_key,
-    extract_log_diagnostics,
-    parse_step_iterations,
-)
+from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.pagination import retotal_page
+from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
     ABSENT,
     escape_field_segment,
@@ -57,6 +56,7 @@ from ltspice_mcp.lib.projection import (
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     KeyedRecipe,
+    MeasurementsRecipe,
     MultiRecipe,
     OperatingPointRecipe,
     PlotRecipe,
@@ -71,6 +71,7 @@ from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     NotedModel,
+    OptionalRawSelectionFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -80,7 +81,6 @@ from ltspice_mcp.tools._base import (
     page_schema,
     registry,
     resolve_response_budget,
-    safe_path,
     sanitize_payload,
 )
 from ltspice_mcp.tools.reference_index import validation_error_detail
@@ -123,12 +123,12 @@ class CaseSelection(NotedModel):
         return self
 
 
-class AnalyzeSourceInput(NotedModel):
+class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
             "Analyze the results of a job this server ran. Exactly one of "
-            "job_id or raw_path. A job still running is reported under "
+            "job_id, raw_path or log_path. A job still running is reported under "
             "coverage.missing_cases instead of failing the call."
         ),
     )
@@ -137,8 +137,12 @@ class AnalyzeSourceInput(NotedModel):
         description=(
             "Analyze a .raw file this server did not run. It has no job "
             "provenance, so its rows carry deck_sha256: null. Exactly one of "
-            "job_id or raw_path."
+            "job_id, raw_path or log_path."
         ),
+    )
+    log_path: str | None = Field(
+        default=None,
+        description="Imported log for whole-log measurements; exactly one of job_id, raw_path or log_path. No RAW sibling is read.",
     )
     runs: Literal["all"] | list[int] | CaseSelection = Field(
         default="all",
@@ -159,21 +163,23 @@ class AnalyzeSourceInput(NotedModel):
 
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
-        if bool(self.job_id) == bool(self.raw_path):
-            raise ValueError("provide exactly one of job_id or raw_path")
+        if sum(bool(value) for value in (self.job_id, self.raw_path, self.log_path)) != 1:
+            raise ValueError("provide exactly one of job_id, raw_path or log_path")
+        if self.log_path is not None and self.plot_index is not None:
+            raise ValueError("log_path does not select a RAW plot")
         if isinstance(self.runs, list):
             if not self.runs:
                 raise ValueError("runs must be 'all' or a non-empty list")
             if any(index < 0 for index in self.runs):
                 raise ValueError("run indices must be non-negative integers")
             self.keep_first("runs")
-        if isinstance(self.runs, CaseSelection) and self.raw_path is not None:
+        if isinstance(self.runs, CaseSelection) and self.job_id is None:
             raise ValueError("case_ids selection is available only for experiment jobs")
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
             # AnalyzeResultsInput makes a repeat unique.
-            derived = self.job_id or Path(str(self.raw_path)).stem
+            derived = self.job_id or Path(str(self.raw_path or self.log_path)).stem
             object.__setattr__(self, "label", derived)
         return self
 
@@ -201,6 +207,9 @@ class RowIdentity:
     assignments: dict[str, Any] = field(default_factory=dict)
     circuit: str | None = None
     deck_sha256: str | None = None
+    plot_index: int | None = None
+    dialect: str | None = None
+    snapshot_id: str | None = None
 
     def wire(self, keys: tuple[str, ...]) -> dict[str, Any]:
         return {key: getattr(self, key) for key in keys}
@@ -320,11 +329,9 @@ class WorkUnit:
     observations: list[Observation]
 
 
-# Reduced/spec attribution rows omit the trailing provenance pair (their output
-# schema forbids the extra keys), so they take the first five — a slice of the
-# one definition, never a parallel list.
+# Reduced/spec rows omit circuit/deck provenance while retaining plot selection.
 _IDENTITY_KEYS: tuple[str, ...] = tuple(f.name for f in fields(RowIdentity))
-_ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
+_ATTRIBUTION_KEYS: tuple[str, ...] = (*_IDENTITY_KEYS[:5], "plot_index", "dialect", "snapshot_id")
 # Every key a per_run/values row carries, in emission order. ``include.fields``
 # paths are rooted here, so this one list is both the projector's alphabet and
 # the answer a caller gets when a path names something that does not exist.
@@ -514,7 +521,7 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
         default=None,
         max_length=64,
         description=(
-            "What to read — up to 64 jobs and/or .raw files, each under a "
+            "What to read — up to 64 jobs, RAW or log files, each under a "
             "unique label. Every recipe runs against every source unless it "
             "names a subset. Required unless 'continue' is given."
         ),
@@ -602,6 +609,51 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
             raise ValueError("recipe keys must be unique")
         self.keep_first("group_by")
         return self
+
+
+class _CaptureKey(NamedTuple):
+    """One whole-file capture, independent of its source label and RAW plot."""
+
+    raw: Path | None
+    log: Path | None
+    console: Path | None
+    dialect: str | None
+    explicit_dialect: str | None
+    snapshot_id: str | None
+    trusted_job_artifact: bool
+
+
+def _capture_key(source: services.AnalysisSource) -> _CaptureKey:
+    return _CaptureKey(
+        source.raw,
+        source.log,
+        source.console,
+        source.dialect,
+        source.explicit_dialect,
+        (source.identity or {}).get("snapshot_id"),
+        source.trusted_job_artifact,
+    )
+
+
+async def _captured_source(
+    source: services.AnalysisSource,
+    state: SessionState,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
+    *,
+    require_raw: bool,
+) -> services.AnalysisSource:
+    """Share resident facts across recipes, aliases and plots in one drive.
+
+    The first read still captures content in the contained worker and checks
+    the manifest snapshot. Prechecks and postchecks always use fresh sources;
+    this map is never persisted or carried into a continuation.
+    """
+    key = _capture_key(source)
+    artifacts = captures.get(key)
+    if artifacts is None or (require_raw and artifacts.raw is None):
+        artifacts = await services.load_artifacts(source, state, require_raw=require_raw)
+        captures[key] = artifacts
+    return replace(source, captured=artifacts)
 
 
 @dataclass(frozen=True)
@@ -775,7 +827,11 @@ def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _identity(
-    source: services.AnalysisSource, step: int | None, values: dict[str, Any]
+    source: services.AnalysisSource,
+    step: int | None,
+    values: dict[str, Any],
+    *,
+    plot_index: int | None,
 ) -> RowIdentity:
     """The identity of one step of one resolved run."""
     base = dict(source.identity or {})
@@ -787,6 +843,9 @@ def _identity(
         assignments=dict(base.get("assignments") or {}),
         circuit=base.get("circuit"),
         deck_sha256=base.get("deck_sha256"),
+        plot_index=plot_index,
+        dialect=base.get("dialect"),
+        snapshot_id=base.get("snapshot_id"),
     )
 
 
@@ -794,10 +853,13 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
     return {
         "manifest_id": run.manifest_id,
         "label": run.label,
-        "raw": str(run.source.raw),
+        "raw": str(run.source.raw) if run.source.raw is not None else None,
         "log": str(run.source.log) if run.source.log else None,
         "netlist": str(run.source.netlist) if run.source.netlist else None,
+        "console": str(run.source.console) if run.source.console else None,
         "dialect": run.source.dialect,
+        "explicit_dialect": run.source.explicit_dialect,
+        "plot_index": run.source.plot_index,
         "identity": run.source.identity,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
@@ -807,9 +869,8 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
 def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list[_ResolvedRun]:
     runs: list[_ResolvedRun] = []
     for data in item.inputs.get("resolved_runs", []):
-        raw = Path(data["raw"])
+        raw = Path(data["raw"]) if data["raw"] is not None else None
         dialect = data.get("dialect")
-        state.raw_dialect_hints[raw] = dialect
         runs.append(
             _ResolvedRun(
                 manifest_id=str(data["manifest_id"]),
@@ -818,7 +879,10 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
                     raw=raw,
                     log=Path(data["log"]) if data.get("log") else None,
                     netlist=Path(data["netlist"]) if data.get("netlist") else None,
+                    console=Path(data["console"]) if data.get("console") else None,
                     dialect=dialect,
+                    explicit_dialect=data.get("explicit_dialect"),
+                    plot_index=data.get("plot_index", 0),
                     identity=dict(data.get("identity") or {}),
                     trusted_job_artifact=bool(data.get("trusted_job_artifact")),
                 ),
@@ -836,7 +900,8 @@ async def _resolve_sources(
     source_jobs: dict[str, str | None] = {}
     observations: list[Observation] = []
     for source_input in inputs:
-        if source_input.raw_path is not None:
+        imported_path = source_input.raw_path or source_input.log_path
+        if imported_path is not None:
             requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
             for index in sorted(requested_indices - {0}):
                 missing.append(
@@ -845,14 +910,19 @@ async def _resolve_sources(
                         "case_id": None,
                         "run_index": index,
                         "code": "run_not_found",
-                        "detail": "A raw_path source has exactly one outer run (index 0).",
+                        "detail": "An imported source has exactly one outer run (index 0).",
                     }
                 )
             if 0 not in requested_indices:
                 continue
             try:
-                raw = safe_path(source_input.raw_path, state)
-                resolved = services.source_for_raw_path(raw, state)
+                resolved = services.resolve_analysis_source(
+                    state,
+                    raw_file=source_input.raw_path,
+                    log_file=source_input.log_path,
+                    plot_index=source_input.plot_index or 0,
+                    dialect=source_input.dialect,
+                )
             except (LTSpiceMCPError, OSError) as exc:
                 row = {
                     "label": source_input.label,
@@ -867,19 +937,17 @@ async def _resolve_sources(
                     row.update(code=exc.code, hint=state.sandbox_guidance())
                 missing.append(row)
                 continue
-            # Preserve the expected sibling-log path even while it is absent:
-            # an absent→present transition changes the composite manifest.
             source = replace(
                 resolved,
-                log=raw.with_suffix(".log"),
                 identity={
                     "case_id": None,
                     "run_index": 0,
                     "assignments": {},
-                    "circuit": raw.stem,
+                    "circuit": Path(imported_path).stem,
                     "deck_sha256": None,
                     "step_index": None,
                     "step_values": {},
+                    "requested_plot_index": source_input.plot_index,
                 },
             )
             runs.append(
@@ -892,10 +960,14 @@ async def _resolve_sources(
             )
             observations.append(
                 Observation(
-                    code="raw_path_without_deck_provenance",
+                    code=(
+                        "raw_path_without_deck_provenance"
+                        if source_input.raw_path is not None
+                        else "log_path_without_deck_provenance"
+                    ),
                     kind="provenance",
                     detail=(
-                        f"Source {source_input.label!r} is a caller-supplied raw path; "
+                        f"Source {source_input.label!r} is an imported result path; "
                         "deck_sha256 is null because no producing job was supplied."
                     ),
                 )
@@ -963,7 +1035,7 @@ async def _resolve_sources(
         else:
             selected = list(job.cases)
         for case in selected:
-            if case.status != "produced" or case.raw_file is None:
+            if case.status != "produced":
                 missing.append(
                     {
                         "label": source_input.label,
@@ -974,8 +1046,19 @@ async def _resolve_sources(
                     }
                 )
                 continue
-            ctx = services.experiment_run_context(job, state, case_id=case.case_id)
-            resolved = services.source_for_run(ctx)
+            ctx = services.experiment_run_context(
+                job, state, case_id=case.case_id, require_raw=False
+            )
+            resolved = services.source_for_run(
+                ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
+            )
+            resolved = replace(
+                resolved,
+                identity={
+                    **(resolved.identity or {}),
+                    "requested_plot_index": source_input.plot_index,
+                },
+            )
             runs.append(
                 _ResolvedRun(
                     f"{source_input.label}:{case.case_id}",
@@ -986,7 +1069,6 @@ async def _resolve_sources(
             )
             await state.note_recent_circuit(case.circuit_path.resolve())
 
-    observations.extend(await _relay_solve_failures(runs))
     return runs, missing, source_jobs, observations
 
 
@@ -994,15 +1076,16 @@ _SOLVE_FAILURE_RUN_CAP = 10
 """How many run labels a relayed solve failure names before deferring to ``runs``."""
 
 
-async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
-    """Relay each resolved run's simulator-declared solve failures.
+def _relay_solve_failures(
+    runs: list[_ResolvedRun], captured_logs: Mapping[str, DecodedLog]
+) -> list[Observation]:
+    """Relay solve failures from the capture that established each manifest.
 
     The one chokepoint for this rule on this surface: a run that produced a raw
     despite a failed solve is analyzed and reported like any other, so unless
     the simulator's own line is relayed here the caller reads a number with no
-    way to know the solve behind it collapsed. The internal metric adapters
-    enforce the same rule at ``analysis._finish_metric``; both classify through
-    ``services.solve_failure_lines`` so they cannot drift.
+    way to know the solve behind it collapsed. Numeric metrics enforce the
+    same rule through ``services.solve_failure_lines`` so they cannot drift.
 
     One observation per distinct cause rather than per run: a sweep that fails
     to converge fails the same way in every case, and the run labels are what
@@ -1010,19 +1093,23 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
     :func:`diagnostic_collapse_key`, because the simulator's line ends in the
     run's own numbers (``time = 4.4e-05, timestep = 1.2e-19``) and no two runs
     of a sweep abort at the same instant; the relayed line is the first run's,
-    verbatim. A log the bounded parse could not read is reported as such — an
-    unread log is a gap in this relay's coverage, not an absence of failures.
+    verbatim. Log facts the contained parser could not read are reported as
+    such — an unread log is a gap in coverage, not an absence of failures.
     """
     grouped: dict[str, tuple[str, list[str]]] = {}
     unread: list[str] = []
     for run in runs:
-        log = run.source.log
-        if log is None or not log.exists():
+        if run.source.log is None and run.source.console is None:
             continue
         try:
-            diagnostics = await services.bounded_parse(
-                log, lambda log=log: extract_log_diagnostics(log)
-            )
+            logs = captured_logs.get(run.manifest_id)
+            if logs is None:
+                unread.append(run.label)
+                continue
+            section = logs.section("diagnostics")
+            if section["status"] == "error":
+                raise ResultError(section["error"]["message"])
+            diagnostics = section["value"]
         except ResultError:
             unread.append(run.label)
             continue
@@ -1051,8 +1138,8 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
                 code="log_unread",
                 kind="coverage",
                 detail=(
-                    f"{len(unread)} run log(s) could not be parsed within the analysis "
-                    "deadline, so a solve failure on them would not be reported here."
+                    f"{len(unread)} run log(s) could not be read or parsed, "
+                    "so solve failures may be missing from this report."
                 ),
                 evidence={
                     "runs": unread[:_SOLVE_FAILURE_RUN_CAP],
@@ -1071,76 +1158,43 @@ async def _digest(path: Path, deadline: float) -> str:
     )
 
 
-def _manifest_paths(manifest: dict[str, Any]) -> tuple[Path, Path | None]:
-    log = manifest.get("log_path")
-    return Path(manifest["raw_path"]), Path(log) if log else None
-
-
-def _source_stamp(raw: Path, log: Path | None) -> dict[str, Any]:
-    """What a run's sources are identified by: each file's ``cache.file_stamp``.
-
-    Metadata stats on the loop, like the sibling ``is_file`` checks here. The
-    files' content is read only when a digest is asked for: by
-    ``include.provenance``, or for a set handed to a caller to resume (see
-    ``_record_source_digests``). The log's absence is recorded as such.
-    """
-    log_stamp: list[int] | None = None
-    if log is not None:
-        with contextlib.suppress(FileNotFoundError):
-            log_stamp = list(file_stamp(log))
-    return {
-        "raw_stamp": list(file_stamp(raw)),
-        "log_present": log_stamp is not None,
-        "log_stamp": log_stamp,
+def _manifest_for(run: _ResolvedRun, artifacts: ParsedArtifacts) -> dict[str, Any]:
+    files = {item.role: item for item in artifacts.logs.captured.files}
+    digests = {
+        role: files[role].sha256 if role in files else None for role in ("raw", "log", "console")
     }
-
-
-def _same_stamp(manifest: dict[str, Any], stamp: dict[str, Any]) -> bool:
-    return all(manifest.get(key) == stamp[key] for key in stamp)
-
-
-async def _content_digests(raw: Path, log: Path | None, deadline: float) -> dict[str, Any]:
-    """The raw's and the log's SHA-256, and their composite; ``log`` None when absent."""
-    raw_sha = await _digest(raw, deadline)
-    log_sha = await _digest(log, deadline) if log is not None else None
-    return {
-        "raw_sha256": raw_sha,
-        "log_sha256": log_sha,
-        "composite_sha256": result_store.composite_digest(raw_sha, log_sha, log is not None),
-    }
-
-
-async def _manifest_for(run: _ResolvedRun, *, digest: bool, deadline: float) -> dict[str, Any]:
-    """One run's source record: its paths, their stamps, and digests if asked.
-
-    The stamps identify the source, and the drift checks compare them. Content
-    digests cost a full read of every raw, so they are taken only when
-    ``digest`` asks (``include.provenance``) or the set is handed to a caller
-    to resume. A source that cannot be read records why instead.
-    """
-    raw, log = run.source.raw, run.source.log
+    composite = result_store.composite_digest(
+        raw_sha256=digests["raw"], log_sha256=digests["log"], console_sha256=digests["console"]
+    )
+    # This is request selection, not a claim that RAW has decoded successfully.
+    plot_index = run.source.plot_index if "raw" in files else None
+    dialect = run.source.explicit_dialect or run.source.dialect
     manifest: dict[str, Any] = {
         "manifest_id": run.manifest_id,
         "label": run.label,
-        "raw_path": str(raw),
-        "log_path": str(log) if log else None,
+        "composite_sha256": composite,
+        "plot_index": plot_index,
+        "dialect": dialect,
+        "producing_dialect": run.source.dialect,
+        "explicit_dialect": run.source.explicit_dialect,
+        "snapshot_id": artifacts.snapshot_id,
+        "selection_sha256": result_store.canonical_hash(
+            {
+                "composite_sha256": composite,
+                "plot_index": plot_index,
+                "dialect": dialect,
+                "snapshot_id": artifacts.snapshot_id,
+            }
+        ),
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
     }
-    try:
-        stamp = _source_stamp(raw, log)
-        manifest.update(stamp, raw_sha256=None, log_sha256=None, composite_sha256=None)
-        if digest:
-            manifest.update(
-                await _content_digests(raw, log if stamp["log_present"] else None, deadline)
-            )
-    except (LTSpiceMCPError, OSError) as exc:
-        manifest["digest_code"] = (
-            "analysis_deadline"
-            if isinstance(exc, AnalysisDeadlineExceeded)
-            else "source_unavailable"
-        )
-        manifest["digest_error"] = str(exc)
+    for role in ("raw", "log", "console"):
+        path = getattr(run.source, role)
+        manifest[f"{role}_path"] = str(path) if path is not None else None
+        manifest[f"{role}_sha256"] = digests[role]
+        manifest[f"{role}_present"] = role in files
+        manifest[f"{role}_bytes"] = files[role].size_bytes if role in files else None
     return manifest
 
 
@@ -1191,10 +1245,57 @@ def _request_hash(args: AnalyzeResultsInput) -> str:
 
 async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, deadline: float):
     assert args.sources is not None and args.recipes is not None
+    loop = asyncio.get_running_loop()
+    initialization_deadline = max(deadline, loop.time() + _MIN_ITEM_DEADLINE_S)
     runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
-    manifests = [
-        await _manifest_for(run, digest=args.include.provenance, deadline=deadline) for run in runs
-    ]
+    manifests: list[dict[str, Any]] = []
+    captured_logs: dict[str, DecodedLog] = {}
+    captures: dict[_CaptureKey, ParsedArtifacts] = {}
+    for index, run in enumerate(runs):
+        try:
+            capture_key = _capture_key(run.source)
+            artifacts = captures.get(capture_key)
+            if artifacts is None:
+                with services.analysis_deadline(initialization_deadline):
+                    artifacts = await services.load_artifacts(run.source, state, require_raw=False)
+                captures[capture_key] = artifacts
+            manifest = _manifest_for(run, artifacts)
+            manifests.append(manifest)
+            captured_logs[run.manifest_id] = artifacts.logs
+            runs[index] = replace(
+                run,
+                source=replace(
+                    run.source,
+                    identity={
+                        **(run.source.identity or {}),
+                        "dialect": manifest["dialect"],
+                        "snapshot_id": manifest["snapshot_id"],
+                    },
+                ),
+            )
+        except AnalysisDeadlineExceeded as exc:
+            raise AnalysisDeadlineExceeded(
+                "Analysis initialization exceeded its deadline; no result set was created. "
+                "Retry the original request with fewer sources or a larger "
+                "[analysis] analysis_budget_s."
+            ) from exc
+        except (LTSpiceMCPError, OSError) as exc:
+            manifests.append(
+                {
+                    "manifest_id": run.manifest_id,
+                    "label": run.label,
+                    "raw_path": str(run.source.raw) if run.source.raw is not None else None,
+                    "log_path": str(run.source.log) if run.source.log else None,
+                    "trusted_job_artifact": run.source.trusted_job_artifact,
+                    "job_id": run.job_id,
+                    "plot_index": run.source.plot_index if run.source.raw is not None else None,
+                    "dialect": run.source.explicit_dialect or run.source.dialect,
+                    "snapshot_id": None,
+                    "digest_code": "source_unavailable",
+                    "digest_error": str(exc),
+                }
+            )
+    observations.extend(_relay_solve_failures(runs, captured_logs))
     request = _request_inputs(args)
     work = request.pop("work")
     inputs = {
@@ -1205,6 +1306,12 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
         "missing": missing,
         "observations": [observation.wire() for observation in observations],
     }
+    if loop.time() >= initialization_deadline:
+        raise AnalysisDeadlineExceeded(
+            "Analysis initialization exceeded its deadline; no result set was created. "
+            "Retry the original request with fewer sources or a larger "
+            "[analysis] analysis_budget_s."
+        )
     return await asyncio.to_thread(
         result_store.create,
         working_dir=state.working_dir,
@@ -1221,104 +1328,47 @@ async def _verify_direct_sources(
     selected_ids: set[str],
     deadline: float,
     *,
-    contents: bool = False,
+    state: SessionState,
 ) -> dict[str, SourceFault]:
     """The selected direct sources that no longer read as their manifest recorded.
 
-    A changed stamp (size or modification time) is drift. With ``contents``,
-    a source whose manifest records a content digest is also re-read and
-    compared, which is how a set resumed by a later call is checked: a rewrite
-    that kept both the size and the timestamp still reads as drift. That
-    comparison is bounded like the digests it checks: one that cannot finish
-    before ``deadline`` leaves the source to its stamp. A manifest written
-    before stamps were recorded is checked by content alone.
+    Recapture validates the worker snapshot, including artifact presence and
+    console bytes. Equal size and modification time alone cannot prove that
+    the bytes are unchanged. No parent-side content read is required.
     """
     failures: dict[str, SourceFault] = {}
+    checked: dict[_CaptureKey, SourceFault | None] = {}
     for manifest in manifests:
         manifest_id = str(manifest["manifest_id"])
-        if (
-            manifest_id not in selected_ids
-            or manifest.get("trusted_job_artifact")
-            or manifest.get("digest_error")
-        ):
+        if manifest_id not in selected_ids or manifest.get("digest_error"):
             continue
-        stamped = "raw_stamp" in manifest
-        try:
-            raw_path, log_path = _manifest_paths(manifest)
-            stamp = _source_stamp(raw_path, log_path)
-            if stamped and not _same_stamp(manifest, stamp):
-                failures[manifest_id] = SourceFault("source_drift")
-                continue
-            if manifest.get("composite_sha256") and (contents or not stamped):
-                digests = await _content_digests(
-                    raw_path, log_path if stamp["log_present"] else None, deadline
-                )
-                if digests["composite_sha256"] != manifest["composite_sha256"]:
-                    failures[manifest_id] = SourceFault("source_drift")
-        except AnalysisDeadlineExceeded as exc:
-            if not stamped:
-                failures[manifest_id] = SourceFault("analysis_deadline", str(exc))
-        except (LTSpiceMCPError, OSError) as exc:
-            failures[manifest_id] = SourceFault("source_drift", str(exc))
-    return failures
-
-
-async def _record_source_digests(item: result_store.ResultSet, state: SessionState) -> None:
-    """Record content digests for the direct sources of a set a caller can resume.
-
-    Called when a reply hands out a cursor or continuation: the call that
-    resumes the set compares these digests (``_verify_direct_sources`` with
-    ``contents``), which a size and timestamp alone cannot match for a rewrite
-    that kept both. Job artifacts are trusted server files and are not digested.
-    A reply that hands out a continuation has spent the call's budget, so this
-    gets one analysis budget of its own; a source not digested within it, or
-    whose stamp moved meanwhile, is left to its stamp. Nothing here fails a
-    recipe.
-    """
-    pending = [
-        manifest
-        for manifest in item.source_manifests
-        if not manifest.get("trusted_job_artifact")
-        and not manifest.get("composite_sha256")
-        and "raw_stamp" in manifest
-    ]
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + state.config.analysis_budget_s
-    recorded: dict[str, dict[str, Any]] = {}
-    for manifest in pending:
-        if loop.time() >= deadline:
-            break
-        raw_path, log_path = _manifest_paths(manifest)
-        try:
-            digests = await _content_digests(
-                raw_path, log_path if manifest.get("log_present") else None, deadline
-            )
-        except (LTSpiceMCPError, OSError):
-            continue
-        # The digests describe the stamped content only if nothing moved while
-        # they were taken.
-        if _same_stamp(manifest, _source_stamp(raw_path, log_path)):
-            recorded[str(manifest["manifest_id"])] = digests
-    if recorded:
-        await asyncio.to_thread(result_store.record_digests, item, recorded)
-
-
-def _hands_out_cursor(value: Any) -> bool:
-    """Whether a reply carries a cursor or continuation into its result set.
-
-    Every handle a reply hands out is a string under a ``cursor`` or
-    ``next_cursor`` key, wherever it sits, so a new paged field needs no entry
-    here.
-    """
-    if isinstance(value, dict):
-        return any(
-            (key in ("cursor", "next_cursor") and isinstance(entry, str))
-            or _hands_out_cursor(entry)
-            for key, entry in value.items()
+        source = services.AnalysisSource(
+            raw=Path(manifest["raw_path"]) if manifest["raw_path"] is not None else None,
+            log=Path(manifest["log_path"]) if manifest["log_path"] is not None else None,
+            console=Path(manifest["console_path"])
+            if manifest["console_path"] is not None
+            else None,
+            netlist=None,
+            dialect=manifest["producing_dialect"],
+            explicit_dialect=manifest["explicit_dialect"],
+            plot_index=manifest["plot_index"] or 0,
+            identity={"snapshot_id": manifest["snapshot_id"]},
+            trusted_job_artifact=bool(manifest["trusted_job_artifact"]),
         )
-    if isinstance(value, list):
-        return any(_hands_out_cursor(entry) for entry in value)
-    return False
+        key = _capture_key(source)
+        if key not in checked:
+            try:
+                with services.analysis_deadline(deadline):
+                    await services.load_artifacts(source, state, require_raw=False)
+                checked[key] = None
+            except AnalysisDeadlineExceeded as exc:
+                checked[key] = SourceFault("analysis_deadline", str(exc))
+            except (LTSpiceMCPError, OSError) as exc:
+                checked[key] = SourceFault("source_drift", str(exc))
+        failure = checked[key]
+        if failure is not None:
+            failures[manifest_id] = failure
+    return failures
 
 
 def _spice(value: float | str | None) -> str | None:
@@ -1368,12 +1418,18 @@ class StepSelection(NamedTuple):
 StepPlan = list[tuple[int, dict[str, Any]]]
 
 
+@dataclass(frozen=True)
+class _RawStepPlan:
+    steps: StepPlan
+    descriptor: PlotDescriptor
+
+
 async def _step_plan(
     steps: StepSelection,
     source: services.AnalysisSource,
     state: SessionState,
-    plan_cache: dict[tuple[str, str], StepPlan],
-) -> StepPlan:
+    plan_cache: dict[tuple[_CaptureKey, int], _RawStepPlan],
+) -> _RawStepPlan:
     """The steps one source contributes, built once per source per call.
 
     The step choice belongs to the call rather than to a recipe, so every
@@ -1381,7 +1437,7 @@ async def _step_plan(
     cached, not just the log parse behind it, and the read is shared rather
     than repeated per (recipe, run). Treat the result as read-only.
     """
-    key = (str(source.raw), str(source.log))
+    key = (_capture_key(source), source.plot_index)
     cached = plan_cache.get(key)
     if cached is not None:
         return cached
@@ -1393,53 +1449,55 @@ async def _build_step_plan(
     steps: StepSelection,
     source: services.AnalysisSource,
     state: SessionState,
-) -> StepPlan:
-    raw = await services.load_raw(source.raw, state)
+) -> _RawStepPlan:
+    raw = await services.load_raw(source, state)
     count = get_step_count(raw)
-    step_values: list[dict[str, Any]] = []
-    if source.log is not None and count > 1:
-        step_values = await services.bounded_parse(
-            source.log,
-            lambda: parse_step_iterations(source.log),
-        )
+    step_values = [dict(step.parameters) for step in raw.descriptor.steps]
     if steps.all_steps:
-        return [
+        plan = [
             (index, step_values[index] if index < len(step_values) else {})
             for index in range(count)
         ]
-    if steps.step is None:
-        return [(0, step_values[0] if step_values else {})]
-    step_sel = steps.step
-    candidates = [
-        (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
-    ]
-    if not candidates:
-        raise ResultError(f"step axis {step_sel.axis!r} is not present in the source log")
-    try:
-        target = float(format_spice_value(step_sel.value))
-        index, values = min(
-            candidates,
-            key=lambda pair: abs(float(pair[1][step_sel.axis]) - target),
-        )
-    except (TypeError, ValueError):
-        index, values = next(
-            (pair for pair in candidates if str(pair[1][step_sel.axis]) == str(step_sel.value)),
-            candidates[0],
-        )
-    return [(index, values)]
+    elif steps.step is None:
+        plan = [(0, step_values[0] if step_values else {})]
+    else:
+        step_sel = steps.step
+        candidates = [
+            (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
+        ]
+        if not candidates:
+            raise ResultError(
+                f"step axis {step_sel.axis!r} is not present in the captured step metadata"
+            )
+        try:
+            target = float(format_spice_value(step_sel.value))
+            index, values = min(
+                candidates, key=lambda pair: abs(float(pair[1][step_sel.axis]) - target)
+            )
+        except (TypeError, ValueError):
+            index, values = next(
+                (
+                    pair
+                    for pair in candidates
+                    if str(pair[1][step_sel.axis]) == str(step_sel.value)
+                ),
+                candidates[0],
+            )
+        plan = [(index, values)]
+    return _RawStepPlan(plan, raw.descriptor)
 
 
 async def _adapter_value(
     recipe: Recipe,
     source: services.AnalysisSource,
-    step: int,
+    step: int | None,
     state: SessionState,
 ) -> dict[str, Any]:
     """One recipe's value, read by the metric function registered for its class.
 
-    ``lib.metrics.METRICS`` is the whole dispatch: every recipe class that
-    produces a value maps to the function that computes it, and a class with no
-    entry fails at import rather than at the one call that needed it.
+    RAW recipes use ``lib.metrics.METRICS``. Whole-log measurements call its
+    existing measurement function with a nullable step, independently of RAW
+    planning. Every recipe class must still have a registered metric.
 
     Non-finite floats are nulled here rather than inside the metric, because
     that substitution is a property of what can cross the wire — a caller
@@ -1447,6 +1505,9 @@ async def _adapter_value(
     this edge also keeps the substitution note attached to the value it
     describes rather than to the whole response.
     """
+    if isinstance(recipe, MeasurementsRecipe):
+        return sanitize_payload(await metrics.measurements(source, recipe, step, state))
+    assert step is not None
     return sanitize_payload(await metrics.METRICS[type(recipe)](source, recipe, step, state))
 
 
@@ -1490,9 +1551,32 @@ def _artifact_estimate(recipe: Recipe, runs: list[_ResolvedRun]) -> float:
         return 0.0
     size = 0
     for run in runs:
-        with contextlib.suppress(OSError):
-            size += run.source.raw.stat().st_size
+        if run.source.raw is not None:
+            with contextlib.suppress(OSError):
+                size += run.source.raw.stat().st_size
     return 0.05 + size / 25_000_000 * max(1, len(recipe.signals))
+
+
+def _inline_series(
+    axis: np.ndarray, wave: np.ndarray, analysis: str, limit: int
+) -> dict[str, Any]:
+    """Render resident samples, using AC magnitude/phase only for AC plots."""
+    if not np.iscomplexobj(wave):
+        components = {"y": wave}
+    elif analysis == "ac":
+        components = {
+            "magnitude_db": safe_magnitude_db(wave),
+            "phase_deg": np.degrees(np.angle(wave)),
+        }
+    else:
+        components = {"real": np.real(wave), "imag": np.imag(wave)}
+    x = axis
+    values: dict[str, Any] = {}
+    for name, samples in components.items():
+        if len(axis) > limit:
+            x, samples = downsample_minmax(axis, samples, limit)
+        values[name] = samples.tolist()
+    return {"x": x.tolist(), **values}
 
 
 async def _waveform(
@@ -1508,9 +1592,14 @@ async def _waveform(
 ) -> tuple[dict[str, Any], list[_PendingArtifact]]:
     from ltspice_mcp.tools import analysis as an
 
-    raw = await services.load_raw(run.source.raw, state)
+    raw = await services.load_raw(run.source, state)
+    assert run.source.raw is not None
     start, end = _window_fields(recipe.window)
     if recipe.format == "inline":
+        if raw.descriptor.axis is None:
+            raise ResultError(
+                "This plot has no sampled axis; use inspect results table or CSV export."
+            )
         values: list[dict[str, Any]] = []
         total_max = 0
         point_limit = min(recipe.max_points, state.config.max_points_returned)
@@ -1526,34 +1615,7 @@ async def _waveform(
                 )
                 axis, wave = axis[lo:hi], wave[lo:hi]
             total_max = max(total_max, len(axis))
-            if len(axis) > point_limit:
-                if np.iscomplexobj(wave):
-                    x, mag = downsample_minmax(
-                        axis,
-                        safe_magnitude_db(wave),
-                        point_limit,
-                    )
-                    _, phase = downsample_minmax(
-                        axis,
-                        np.degrees(np.angle(wave)),
-                        point_limit,
-                    )
-                    series: Any = {
-                        "x": x.tolist(),
-                        "magnitude_db": mag.tolist(),
-                        "phase_deg": phase.tolist(),
-                    }
-                else:
-                    x, y = downsample_minmax(axis, wave, point_limit)
-                    series = {"x": x.tolist(), "y": y.tolist()}
-            elif np.iscomplexobj(wave):
-                series = {
-                    "x": axis.tolist(),
-                    "magnitude_db": safe_magnitude_db(wave).tolist(),
-                    "phase_deg": np.degrees(np.angle(wave)).tolist(),
-                }
-            else:
-                series = {"x": axis.tolist(), "y": wave.tolist()}
+            series = _inline_series(axis, wave, raw.descriptor.analysis, point_limit)
             values.append({"signal": signal.name, **series})
         return (
             {
@@ -1564,13 +1626,14 @@ async def _waveform(
                     default=0,
                 ),
                 "points_total": total_max,
-                **_identity(run.source, step, step_values).wire(_IDENTITY_KEYS),
+                **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
+                    _IDENTITY_KEYS
+                ),
             },
             [],
         )
 
-    trace_names = raw.get_trace_names()
-    axis_name = trace_names[0]
+    axis_name = raw.descriptor.axis.name if raw.descriptor.axis is not None else None
     cols: list[services.Signal] = []
     for requested in recipe.signals:
         signal = services.resolve_signal(raw, requested)
@@ -1578,12 +1641,12 @@ async def _waveform(
             raise ResultError(f"{requested!r} is the sweep axis, not a signal")
         if signal not in cols:
             cols.append(signal)
-    _, analysis_type, _, _ = metrics.classify_analysis(raw)
+    analysis_type = raw.descriptor.analysis
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=str(manifest["manifest_id"]),
+        source_digest=manifest["selection_sha256"],
         recipe_hash=recipe_hash,
         suffix="csv",
     )
@@ -1601,7 +1664,7 @@ async def _waveform(
         pending,
         lambda: time.monotonic() >= item_deadline,
         export_steps,
-        run.source.log,
+        [dict(step.parameters) for step in raw.descriptor.steps],
     )
     return (
         {
@@ -1617,6 +1680,7 @@ async def _waveform(
                 run.source,
                 step if export_steps is None or len(export_steps) == 1 else None,
                 step_values if export_steps is None or len(export_steps) == 1 else {},
+                plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
         [_PendingArtifact(pending, final, "text/csv", run.manifest_id)],
@@ -1633,18 +1697,23 @@ async def _plot(
 ) -> tuple[dict[str, Any], list[_PendingArtifact]]:
     from ltspice_mcp.tools import analysis as an
 
-    raw = await services.load_raw(run.source.raw, state)
-    trace_names = raw.get_trace_names()
-    axis_name = trace_names[0]
+    raw = await services.load_raw(run.source, state)
+    assert run.source.raw is not None
+    if raw.descriptor.axis is None:
+        raise ResultError(
+            "This plot has no sampled axis; use inspect results table or CSV export."
+        )
+    axis_name = raw.descriptor.axis.name
     cols = [services.resolve_signal(raw, signal) for signal in recipe.signals]
     if axis_name in (col.name for col in cols):
         raise ResultError("The sweep axis cannot be plotted as a signal")
-    _, analysis_type, _, x_is_log = metrics.classify_analysis(raw)
+    analysis_type = raw.descriptor.analysis
+    x_is_log = raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"
     recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=str(manifest["manifest_id"]),
+        source_digest=manifest["selection_sha256"],
         recipe_hash=recipe_hash,
         suffix="html",
     )
@@ -1657,7 +1726,7 @@ async def _plot(
         split_by_unit=True,
         netlist=run.source.netlist,
         steps=[step for step, _ in steps],
-        step_dicts=[values for _, values in steps],
+        step_dicts=[dict(step.parameters) for step in raw.descriptor.steps],
         analysis_type=analysis_type,
         x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
         ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
@@ -1685,6 +1754,7 @@ async def _plot(
                 run.source,
                 steps[0][0] if len(steps) == 1 else None,
                 steps[0][1] if len(steps) == 1 else {},
+                plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
         [_PendingArtifact(pending, final, "text/html", run.manifest_id)],
@@ -1979,8 +2049,9 @@ async def _evaluate_item(
     state: SessionState,
     item: result_store.ResultSet,
     item_deadline: float,
-    step_plans: dict[tuple[str, str], StepPlan],
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan],
     steps: StepSelection,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
 ) -> tuple[list[Record], list[Failure], list[_PendingArtifact]]:
     selected = set(recipe.sources or [run.label for run in runs])
     selected_runs = [run for run in runs if run.label in selected]
@@ -2001,7 +2072,58 @@ async def _evaluate_item(
             continue
         try:
             with services.analysis_deadline(item_deadline):
-                step_plan = await _step_plan(steps, run.source, state, step_plans)
+                if isinstance(recipe, MeasurementsRecipe):
+                    if steps.step is not None or steps.all_steps:
+                        raise ResultError(
+                            "RAW step selectors do not apply to whole-log measurements"
+                        )
+                    if (
+                        run.source.raw is None
+                        and (run.source.identity or {}).get("requested_plot_index") is not None
+                    ):
+                        raise ResultError("Cannot select a RAW plot when RAW is absent")
+                    run = replace(
+                        run,
+                        source=await _captured_source(
+                            run.source, state, captures, require_raw=False
+                        ),
+                    )
+                    value = _promote_headlines(
+                        recipe.metric, await _adapter_value(recipe, run.source, None, state)
+                    )
+                    log_source = replace(
+                        run.source,
+                        identity={
+                            **(run.source.identity or {}),
+                            "dialect": run.source.dialect,
+                        },
+                    )
+                    records.append(
+                        Record(
+                            manifest_id=run.manifest_id,
+                            source=run.label,
+                            identity=_identity(log_source, None, {}, plot_index=None),
+                            value=value,
+                        )
+                    )
+                    continue
+                run = replace(
+                    run,
+                    source=await _captured_source(run.source, state, captures, require_raw=True),
+                )
+                planned = await _step_plan(steps, run.source, state, step_plans)
+                step_plan = planned.steps
+                run = replace(
+                    run,
+                    source=replace(
+                        run.source,
+                        identity={
+                            **(run.source.identity or {}),
+                            "dialect": planned.descriptor.dialect,
+                            "dialect_evidence": list(planned.descriptor.dialect_evidence),
+                        },
+                    ),
+                )
                 if isinstance(recipe, PlotRecipe):
                     value, artifacts = await _plot(
                         recipe,
@@ -2052,7 +2174,9 @@ async def _evaluate_item(
                         Record(
                             manifest_id=run.manifest_id,
                             source=run.label,
-                            identity=_identity(run.source, step, step_values),
+                            identity=_identity(
+                                run.source, step, step_values, plot_index=run.source.plot_index
+                            ),
                             value=value,
                         )
                     )
@@ -2240,15 +2364,25 @@ def _result_entry(
 # against. In one measured response the trail was a sixth of the whole receipt
 # (1,174 of 7,835 characters), naming files the analysis tools already resolve
 # by id.
-_RUN_IDENTITY_KEYS = ("manifest_id", "label")
+_RUN_IDENTITY_KEYS = ("manifest_id", "label", "plot_index", "dialect", "snapshot_id")
 _RUN_PROVENANCE_KEYS = (
+    "explicit_dialect",
+    "producing_dialect",
+    "raw_present",
     "log_present",
+    "console_present",
+    "raw_bytes",
+    "log_bytes",
+    "console_bytes",
+    "console_path",
+    "console_sha256",
     "job_id",
     "raw_path",
     "raw_sha256",
     "log_path",
     "log_sha256",
     "composite_sha256",
+    "selection_sha256",
 )
 
 
@@ -2285,6 +2419,9 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
     ),
     "properties": {
         "source": {"type": "string"},
+        "plot_index": {"type": ["integer", "null"], "minimum": 0},
+        "dialect": {"type": ["string", "null"]},
+        "snapshot_id": {"type": ["string", "null"]},
         "case_id": {"type": ["string", "null"]},
         "run_index": {"type": ["integer", "null"]},
         "step_index": {"type": ["integer", "null"]},
@@ -2303,6 +2440,9 @@ _REDUCED_SCHEMA: dict[str, Any] = {
         "field": {"type": "string"},
         "stat": {"type": "string"},
         "value": {"type": ["number", "integer", "null"]},
+        "plot_index": {"type": ["integer", "null"], "minimum": 0},
+        "dialect": {"type": ["string", "null"]},
+        "snapshot_id": {"type": ["string", "null"]},
         "case_id": {"type": ["string", "null"]},
         "run_index": {"type": ["integer", "null"]},
         "step_index": {"type": ["integer", "null"]},
@@ -2427,12 +2567,25 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "manifest_id": {"type": "string"},
                     "label": {"type": "string"},
-                    "raw_path": {"type": "string"},
+                    "plot_index": {"type": ["integer", "null"], "minimum": 0},
+                    "dialect": {"type": ["string", "null"]},
+                    "snapshot_id": {"type": ["string", "null"]},
+                    "explicit_dialect": {"type": ["string", "null"]},
+                    "producing_dialect": {"type": ["string", "null"]},
+                    "raw_path": {"type": ["string", "null"]},
                     "raw_sha256": {"type": ["string", "null"]},
                     "log_path": {"type": ["string", "null"]},
+                    "raw_present": {"type": ["boolean", "null"]},
                     "log_present": {"type": ["boolean", "null"]},
+                    "console_present": {"type": ["boolean", "null"]},
+                    "raw_bytes": {"type": ["integer", "null"]},
+                    "log_bytes": {"type": ["integer", "null"]},
+                    "console_bytes": {"type": ["integer", "null"]},
+                    "console_path": {"type": ["string", "null"]},
+                    "console_sha256": {"type": ["string", "null"]},
                     "log_sha256": {"type": ["string", "null"]},
                     "composite_sha256": {"type": ["string", "null"]},
+                    "selection_sha256": {"type": ["string", "null"]},
                     "job_id": {"type": ["string", "null"]},
                 },
                 # Only the identity a caller addresses a run by is always
@@ -3222,8 +3375,9 @@ async def _evaluate_unit(
     state: SessionState,
     item: result_store.ResultSet,
     item_deadline: float,
-    step_plans: dict[tuple[str, str], StepPlan],
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan],
     steps: StepSelection,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
     *,
     per_run_offset: int,
     position: int,
@@ -3278,6 +3432,7 @@ async def _evaluate_unit(
         item_deadline,
         step_plans,
         steps,
+        captures,
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
@@ -3528,8 +3683,10 @@ async def _evaluate_analysis_drive(
     """Implementation shared by the neutral seam and MCP's paged presentation."""
     loop = asyncio.get_running_loop()
     call_deadline = loop.time() + state.config.analysis_budget_s
-    # One resolved step plan per source, for this call.
-    step_plans: dict[tuple[str, str], StepPlan] = {}
+    # RAW recipes share one resolved step plan per source per call.
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan] = {}
+    # Share only while the bounded result cache or an active reader owns it.
+    captures: WeakValueDictionary[_CaptureKey, ParsedArtifacts] = WeakValueDictionary()
 
     start = await _resolve_drive_start(args, state, continuation, loaded, call_deadline)
     item = start.item
@@ -3565,14 +3722,14 @@ async def _evaluate_analysis_drive(
         work_done = True
 
     # Source-drift precheck (once per call): verify every direct source before
-    # any recipe reads it, by its stamp, and by content too when a caller
-    # resumed a set that recorded digests.
+    # any recipe reads it. Recapture validates the stored parser identity,
+    # including console bytes and explicitly absent companions.
     precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
     precheck = await _verify_direct_sources(
         item.source_manifests,
         {run.manifest_id for run in runs},
         precheck_deadline,
-        contents=start.resumed,
+        state=state,
     )
 
     processed: list[WorkUnit] = []
@@ -3623,8 +3780,8 @@ async def _evaluate_analysis_drive(
                     where=key,
                     message=(
                         "Artifact estimate exceeds the per-call safety bound. The "
-                        "bound is computed from raw file size and signal count "
-                        "before any data is read, so request fewer signals or "
+                        "bound uses raw file size and signal count rather than "
+                        "decoded sample counts, so request fewer signals or "
                         "select fewer/smaller runs; narrowing the window or "
                         "lowering max_points does not move it. A single large "
                         "raw read for a single signal has no request-side lever "
@@ -3652,6 +3809,7 @@ async def _evaluate_analysis_drive(
             item_deadline,
             step_plans,
             steps,
+            captures,
             per_run_offset=intra_item,
             position=position,
         )
@@ -3687,6 +3845,7 @@ async def _evaluate_analysis_drive(
         item.source_manifests,
         evaluated_ids,
         postcheck_deadline,
+        state=state,
     )
     if postcheck:
         failed_ids = set(postcheck)
@@ -3700,13 +3859,25 @@ async def _evaluate_analysis_drive(
 
     signals: dict[str, list[str]] | None = None
     if include.signals_available:
-        signals = {}
+        signals = {run.manifest_id: [] for run in runs}
         for run in runs:
+            if loop.time() >= call_deadline:
+                break
+            if (
+                not manifests[run.manifest_id].get("raw_present")
+                or run.manifest_id in precheck
+                or run.manifest_id in postcheck
+            ):
+                continue
             try:
-                raw = await services.load_raw(run.source.raw, state)
+                with services.analysis_deadline(call_deadline):
+                    source = await _captured_source(run.source, state, captures, require_raw=True)
+                    raw = await services.load_raw(source, state)
                 signals[run.manifest_id] = list(raw.get_trace_names())
+            except AnalysisDeadlineExceeded:
+                break
             except LTSpiceMCPError:
-                signals[run.manifest_id] = []
+                continue
 
     return AnalysisEvaluation(
         item=item,
@@ -3807,7 +3978,7 @@ async def capture_attached_analysis(
     title="Analyze Results",
     description=(
         "Measure finished simulation results: apply typed recipes to completed "
-        "jobs and/or .raw files and get values, reductions, group splits and spec "
+        "jobs, RAW or log files and get values, reductions, group splits and spec "
         "verdicts attributed to case, run and .step. One call spans many sources "
         "and many metrics, so batch them instead of calling per metric. Work is "
         "bounded by a compute budget; a partial response returns a result_set_id "
@@ -3861,6 +4032,4 @@ async def handle_analyze_results(
         data, text = await _negotiate_analysis(budget, assembly)
     # Sources are identified by their stamps within a call; a set handed to the
     # caller to resume gets content digests, which the resuming call compares.
-    if _hands_out_cursor(data):
-        await _record_source_digests(assembly.item, state)
     return format_response(text, data)

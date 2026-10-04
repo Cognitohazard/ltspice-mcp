@@ -21,12 +21,14 @@ from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import (
     SUBPROCESS_TIMEOUT_CEILING_S,
     RunnerBase,
+    _raw_completion_outcome,
     collect_run_outcome,
-    deck_requests_raw,
+    deck_requirements,
     discard_generated_netlist,
 )
 from ltspice_mcp.lib.spice_lex import lex
 from tests.conftest import submit_through_spicelib
+from tests.test_completion_logs import captured_completion_facts
 
 
 @pytest.fixture
@@ -826,8 +828,9 @@ class TestRawLocationClassification:
     def test_posix_reports_the_broken_location(self, tmp_path: Path):
         raw, log = self._broken_layout(tmp_path)
 
-        outcome = collect_run_outcome(str(raw), str(log), exit_code=0)
+        outcome = _raw_completion_outcome(str(raw), str(log))
 
+        assert outcome is not None
         assert outcome.error is not None
         assert "not a directory" in outcome.error.lower()
 
@@ -849,8 +852,9 @@ class TestRawLocationClassification:
 
         monkeypatch.setattr(Path, "stat", windows_shaped_stat)
 
-        outcome = collect_run_outcome(str(raw), str(log), exit_code=0)
+        outcome = _raw_completion_outcome(str(raw), str(log))
 
+        assert outcome is not None
         assert outcome.error is not None, (
             "a raw under a file-shaped parent read as a clean run that produced nothing"
         )
@@ -867,7 +871,11 @@ def test_missing_raw_detection_follows_windows_include_separators(tmp_path: Path
     log.write_text("Circuit: test\nTotal elapsed time: 0.01 seconds.\n", encoding="utf-8")
 
     outcome = collect_run_outcome(
-        str(tmp_path / "main.raw"), str(log), requirements=deck_requests_raw(deck), exit_code=0
+        str(tmp_path / "main.raw"),
+        str(log),
+        requirements=deck_requirements(deck),
+        exit_code=0,
+        logs=captured_completion_facts(tmp_path, log),
     )
 
     assert outcome.error is not None, "the included transient analysis requires a raw"
@@ -962,7 +970,9 @@ def test_failed_run_keeps_its_log_excerpt_apart_from_the_error(tmp_path: Path):
     log = tmp_path / "run.fail"
     log.write_text("Circuit: x\nTime step too small; time = 1.7e-05\n")
 
-    outcome = collect_run_outcome("", str(log), exit_code=-9)
+    outcome = collect_run_outcome(
+        "", str(log), exit_code=-9, logs=captured_completion_facts(tmp_path, log)
+    )
 
     assert outcome.log_excerpt is not None
     assert "Time step too small" in outcome.log_excerpt

@@ -125,11 +125,11 @@ stop. So:
 4. Run `state.shutdown()` on the private loop: cache clears, `cancel_running`,
    `drain_pending`, in that existing order. Step 3 guarantees no bridge task is
    still using the caches it clears.
-5. Bounded-drain the residual loop tasks shutdown left behind, *without*
-   joining abandoned bounded-parser worker threads — those are unjoinable by
-   design, their loop-facing task settles, and a late worker completion cannot
-   re-enter a closed loop. Then `shutdown_asyncgens`, stop the loop, close it on
-   its own thread, join.
+5. Bounded-drain the residual loop tasks shutdown left behind. Shared artifact
+   loaders settle their contained parser processes before releasing ownership;
+   unconfirmed cleanup retains parser admission and scratch rather than claiming
+   the worker exited. Then `shutdown_asyncgens`, stop the loop, close it on its
+   own thread, join.
 6. `close()` is idempotent. Concurrent callers get a deterministic
    `ApiClosedError` (or a `CancelledError` mapped to one). The session lease is
    released last.
@@ -185,7 +185,7 @@ its own completion strategy:
 
 | Operation | Strategy |
 |-|-|
-| `analyze_results` | A **bounded resumable neutral evaluator**. The seam returns neutral work — rows, reductions, facts, failures, missing cases — plus an internal continuation position, honoring `analysis_budget_s` per drive so the whole-call bound stays (untrusted artifacts get a hard bound either way). MCP renders that position as its opaque cursor; Python drives the evaluator repeatedly, accumulating neutral results until the position is exhausted. "No cursor merging" means no merging of *rendered* MCP pages; accumulating neutral, unprojected, unrendered work is well-defined by construction. |
+| `analyze_results` | A **bounded resumable neutral evaluator**. The seam returns neutral work — rows, reductions, facts, failures, missing cases — plus an internal continuation position, honoring `analysis_budget_s` per drive so the whole-call bound stays (untrusted artifacts get a hard bound either way). Source capture and diagnostics must finish before a resumable set exists: an initialization timeout raises `AnalysisDeadlineExceeded`, creates no set/cursor, and requires retrying the original request with fewer sources or a larger `[analysis] analysis_budget_s`. MCP renders a completed initialization's continuation position as its opaque cursor; Python drives the evaluator repeatedly, accumulating neutral results until the position is exhausted. "No cursor merging" means no merging of *rendered* MCP pages; accumulating neutral, unprojected, unrendered work is well-defined by construction. |
 | `verify_circuit` | Evaluator seam: uncapped findings per rule. The MCP interface keeps its per-rule cap plus a truncation observation on top. |
 | `edit_schematic` | The mutation executes once and is never replayed. The seam is the **neutral in-memory view the handler already computes while holding the edit guard**: MCP paginates that view, Python returns it whole. Views are produced inside the edit transaction and bound to the committed `sha256`, never from a post-guard file re-read — a peer session's next revision could interleave. `dry_run` gets full views the same way, in memory, with nothing on disk to read. |
 | `run_experiments`, `jobs(status\|wait)`, `jobs(runs)` | A **loop-atomic neutral receipt snapshot**: one non-suspending evaluation on the private loop copies every mutable job-derived receipt field together — canonical rows keyed `(case_id, run_index)`, status, completeness, `outcome`, `failures`, `observations`, `artifacts`, and the attached analysis's status, result, error and observations. Never multi-page collection over live mutable state: time-A completeness beside time-C rows violates the completeness rule, and a stale `outcome` or `hint` beside a fresh failed row is the same fork one level up. `outcome` and `hint` are derived *from* the snapshot after the copy; static submission fields and a wait's historical `timed_out` fact come from the same evaluation that produced the snapshot. For the three `jobs` actions this is literal: one `evaluate_jobs` call does the control-plane work, and the wire page and the Python dict are two renderings of that one evaluation, chosen by a presentation argument. Rendering by invoking the wire handler and then reading the job again — which is how this interface once assembled its complete receipt — reports two reads as one answer, with a window in between for the job to move. MCP pages the snapshot created for its current invocation, and a continuation request takes a fresh atomic snapshot and applies its existing offset, so live-status semantics are unchanged. Python takes one whole snapshot because it returns one whole response, then applies the original receipt's projection policy (`run_fields`, or the lean default) to it whole — returning the existing page shape with `returned == total`, `truncated == false`, `next_cursor == null`. No `assembled` field, no shape fork, no provenance change. If snapshot or assembly fails after submission, `ApiCallError` carries the original receipt and control token. A direct `api.jobs(action="runs")` goes through the same seam: treating it as an "other action" would recreate the mixed-time inventory the seam eliminates. |
@@ -210,6 +210,117 @@ Ctrl-C; it settles either to a pre-submit failure or to a durable receipt.
   the job survives this process (§11). It is the one combination that does not
   submit in-process.
 - Exiting the `Api` context still cancels owned live jobs (§4).
+
+**Recovery through `Api.jobs`.** Opt in at initial submission with
+`execution={"recoverable": True}`. `api.jobs(action="resume", job_id=parent_id,
+resume_request_id="retry-1", control_token=parent_token)` returns the complete
+resume receipt, including lineage, per-case attempt provenance and reused
+accounting. Optional `case_ids`, `retry_failed`, and `retry_cancelled` select
+eligible cases; `wait_s` bounds dwell and defaults to zero. A child receipt keeps
+its control token even after completion. A no-op has `resumed=false` and no child
+token; use standalone `analyze_results` when only analysis needs retrying.
+
+Controlled startup supports ngspice on Linux and native Windows, and the audited
+LTspice 26.0.2 executable on native Windows. Other LTspice builds and platforms
+refuse recovery before submission. LTspice captures established settings from
+`simulator.ltspice_ini` (environment `LTSPICE_MCP_LTSPICE_INI`, API override
+`ltspice_ini`) or `%APPDATA%/LTspice.ini`. Relative configured paths resolve
+from the working directory. The source remains unchanged; every attempt gets
+its own writable copy of the captured template.
+
+The LTspice template must contain the application's actual update-query time
+within the preceding 15 days, checked again on resume and before launch. Resolve
+the update reminder in LTspice before submitting if this check refuses. Recovery
+never changes the timestamp, chooses usage consent or answers dialogs. The build
+restriction and freshness check bind the inspected reminder behavior; they are
+not a permanent vendor-supported update suppression mechanism.
+
+For reproducible static ngspice randomness, pass
+`execution={"simulator": "ngspice", "recoverable": True, "simulator_seed": 17}`
+to `api.run_experiments`. The API preserves this execution field when removing
+the wire dwell. The seed must be a strict integer in `1..2147483646`; every case
+and retry uses the same initial seed. It does not define a Monte Carlo sampling
+policy, select PDK statistics, or change startup files. Explicit seeds cannot
+mix with native statistical families.
+
+Seeded recovery admits static `agauss`, `gauss`, `aunif`, `unif`, and `limit`
+with exactly one `.op`, `.ac`, `.dc`, or `.tran` analysis. Noise, stepped inputs
+and combinations refuse before claim with `recovery_seed_analysis_unsupported`.
+Unknown functions, transient random functions, caller controls and external
+modules remain unsupported. The recorded compatibility mode remains in force:
+statistical two-argument `limit` works in `hsa`; default `kiltpsa` supplies a
+different three-argument clamping function. Configure the appropriate mode for
+the deck separately; the seed does not override it.
+
+Only resume accepts `api.jobs(detach=True, ...)`; `raw_page=True` cannot accompany
+detach. It reuses the existing detached owner and its operation discriminant.
+Before spawning, the caller authorizes against a fresh durable parent record. A
+tokenless caller must match both the owning process's PID and creation time;
+its parent token is then carried privately to the new owner. That owner
+independently authorizes the resume under the lineage lock. The handoff and a
+caller-supplied PID grant no authority. Token, detach and dwell do not change the
+resume fingerprint. Save root and child tokens from submission/resume receipts:
+`status`, `list`, and `runs` remain read-only and do not return them.
+
+For example, this synthetic corner/temperature/supply campaign interrupts its
+initial attempt, resumes cancelled cases, and checks every operating point.
+The condition mapping and analytic oracle belong to caller code; the server
+preserves case identity and captured electrical inputs. These synthetic library
+sections are not measured process data or foundry models.
+
+```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from ltspice_mcp.api import Api
+
+with TemporaryDirectory() as directory:
+    folder = Path(directory)
+    (folder / "corners.lib").write_text(
+        ".lib low\n.param rbase=800\n.endl low\n"
+        ".lib high\n.param rbase=1200\n.endl high\n",
+        encoding="utf-8",
+    )
+    circuits, conditions = [], {}
+    for corner, rbase in (("low", 800), ("high", 1200)):
+        for temperature in (-20, 27, 77):
+            label = f"{corner}_{temperature}"
+            deck = folder / f"{label}.cir"
+            deck.write_text(
+                f'* divider\n.lib "corners.lib" {corner}\n'
+                f".param supply=1\n.temp {temperature}\n"
+                "V1 in 0 {supply}\nR1 in out {rbase} tc1=0.01\n"
+                "R2 out 0 1000\n.op\n.end\n",
+                encoding="utf-8",
+            )
+            circuits.append({"path": str(deck), "id": label})
+            conditions[label] = (rbase, temperature)
+    with Api(working_dir=folder, allowed_paths=[folder],
+             simulator="ngspice", ngbehavior="hsa", max_parallel_sims=1) as api:
+        root = api.run_experiments(
+            wait=False, request_id="divider-campaign", circuits=circuits,
+            variations=[{"kind": "assign", "assign": {"supply": [0.9, 1.1]}}],
+            execution={"recoverable": True},
+        )
+        api.jobs(action="cancel", job_id=root["job_id"])
+        api.wait(root["job_id"])
+        resumed = api.jobs(
+            action="resume", job_id=root["job_id"], resume_request_id="retry-1",
+            control_token=root["control_token"], retry_cancelled=True,
+        )
+        api.wait(resumed["job_id"])
+        result = api.analyze_results(
+            sources=[{"label": "pvt", "job_id": resumed["job_id"]}],
+            recipes=[{"key": "out", "metric": "value", "expr": "V(out)"}],
+            include={"per_run": True},
+        )
+        rows = result["results"]["out"]["per_run"]["items"]
+        assert len(rows) == 12 and not result["failures"]
+        for row in rows:
+            rbase, temperature = conditions[row["circuit"]]
+            resistance = rbase * (1 + 0.01 * (temperature - 27))
+            expected = row["assignments"]["supply"] * 1000 / (1000 + resistance)
+            assert abs(row["value"]["value"] - expected) < 1e-10
+```
 
 **`Api.reference(op=None) -> str`** is the argument catalogue.
 `reference()` returns the six-operation index; `reference('edit_schematic')`
@@ -297,26 +408,75 @@ handler page. It is the preview mode, and the one way to get MCP-identical pagin
 ## 8. Curated primitives
 
 ```python
-raw = api.load_raw(raw_path=...)                    # XOR: raw_path | job_id
+raw = api.load_raw(raw_path=..., plot_index=0, dialect=None)  # XOR: raw_path | job_id
 raw = api.load_raw(job_id=..., run_index=0, case_id=None)
 raw.signals                    # list[str]
-raw.trace("V(out)", step=0)    # np.ndarray — complex preserved for .AC
-raw.axis(step=0)               # real array (time or frequency)
-raw.step_count; raw.steps      # metadata list aligned per step (log fallback)
+raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
+raw.axis(step=0)               # real sampled axis; refuses a native table
+raw.step_count; raw.steps      # captured metadata aligned per step
+raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
+raw.table(step=0)              # native table rows; complex values use real/imag
 raw.analysis_type; raw.dialect; raw.source          # provenance
 api.measurements(job_id=..., run_index=0, case_id=None)
+api.measurements(log_path="result.log")  # XOR: log_path | job_id; RAW is optional
 ```
 
 - `RawResult` is this project's wrapper; spicelib types never cross the
   boundary.
+- `plot_index` is a strict nonnegative integer, independent of case/run and
+  step selection. `dialect` is `None` or `ltspice`, `ngspice`, `qspice`, `xyce`;
+  explicit dialect evidence must agree with the producer and captured header.
+  The selected descriptor owns analysis type, axis, trace units, and step
+  status. A native table retains its first quantity and has no fabricated axis.
+  Inventory and descriptor metadata are detached dictionaries; table values
+  are numeric facts, with no inferred engineering formulas.
 - **Arrays are detached copies.** The parsed object is shared with the handler
   cache, which assumes immutability; caller mutation must not fork later results
   between the two interfaces.
-- A job id resolves through `resolve_experiment_run`, which addresses one
-  case; a caller-supplied path resolves through `resolve_raw_file`. `load_raw`
-  routes on which of the two it was given.
-- All parsing goes through the bounded-parse wrapper, and `measurements`
-  performs a bounded log parse — the synchronous inline loader is not called.
+- A job id resolves one experiment case; a caller-supplied path passes through
+  path admission. Both routes carry one `AnalysisSource` into the shared loader.
+  Step metadata belongs to the captured snapshot; consumers do not reopen a
+  parent or sibling log to reconstruct it.
+- RAW decoding runs in the contained parser worker and returns fully resident
+  numeric views after validation and process cleanup. `measurements` reads
+  detached captured log facts; it does not interpret native RAW table quantities.
+
+Logs with no RAW use the existing programmable operations:
+
+```python
+facts = api.inspect(queries=[{
+    "kind": "results", "view": "native_tables", "path": "result.log",
+}])
+measured = api.analyze_results(
+    sources=[{"log_path": "result.log", "label": "imported"}],
+    recipes=[{"metric": "measurements", "key": "meas"}],
+)
+```
+
+The `measurements` inspect view pages value observations and their recorded
+range/AT metadata. `native_tables` pages literal scalar entries or printed
+frequency rows, retaining section boundaries, printed labels and real/imaginary
+components. Units and analysis extent remain unknown where the log does not
+prove them. There are no fabricated plot or step identities; measurement
+vector ordinals are not RAW steps. Rows and metadata are detached plain values,
+so agent code can arrange arrays or export them without another result class.
+
+Direct log imports capture no RAW sibling, even when one exists. Log views
+require `plot_index` omission. Analysis and attached analysis accept an omitted
+selector; it selects plot zero only for a RAW recipe. Whole-log measurements run
+once per source and reject `step`/`all_steps`; RAW recipes in a mixed batch can
+still use those selectors. Malformed or missing RAW fails only RAW recipes.
+Manifests bind captured RAW/log/console presence and bytes, including an empty
+file versus absence. Snapshot hashing runs in the contained worker; the parent
+does not reread whole artifacts to hash them. Repeated references share captured
+work within a call. Initialization records all captured artifact-role hashes,
+and source checks recapture those roles in the worker; size and modification
+time alone cannot establish unchanged content.
+Continuations reject companion/content drift. Manifests
+keep explicit dialect hints separate from recorded producing evidence under
+`include.provenance`; a whole-log row's producer dialect can remain null.
+Log facts alone do not establish that a simulator solve completed or a case was admitted
+as produced; job readers retain the existing terminal/produced gates.
 
 The AC and transient metric functions are re-exported under their existing
 names: arrays in, dict- or TypedDict-shaped mappings out, complex `H` for AC
@@ -435,7 +595,7 @@ module so that `__all__` stays the pinned stability boundary and does not move.
   job and the owner; the owner killed mid-run leaving a job that classifies as
   interrupted rather than running; `detach=True, wait=True` refused; and parent
   and child holding their own engine leases at the same time.
-- **`RawResult`.** Step slicing, experiment-case resolution, log fallback,
+- **`RawResult`.** Step slicing, experiment-case resolution, captured step metadata,
   array-mutation isolation (mutate a returned array, cached result unchanged),
   parse-deadline propagation, and AC complex-dtype pins on recorded fixtures.
 - **Door policy.** Budget and cursor rejection in automatic mode; exact

@@ -53,6 +53,12 @@ distribution: "normal"|"uniform"}`; `model` adds `param`. Full field tables:
 own assumptions; for a PDK's own statistical models, see guide section
 'sky130'.
 
+The variation's `seed` controls these caller-assumed draws. A recoverable
+ngspice execution's `simulator_seed` instead controls static randomness inside
+the electrical deck (guide section 'ngspice'); native statistical families
+retain their own sample seeds. An execution seed does not select PDK statistics,
+and it cannot be mixed with a native statistical family.
+
 ## Pelgrom mismatch
 
 One `random` entry with a `mismatch` rule draws per-instance `delvto`/`mulu0`

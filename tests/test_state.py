@@ -16,6 +16,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.job_registry import JobRegistry
+from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -79,9 +80,9 @@ class TestSessionStateCreate:
     def test_create_initializes_empty_caches(self, config: ServerConfig):
         state = SessionState.create(config, {})
         assert isinstance(state.editors, FileCache)
-        assert isinstance(state.results, FileCache)
+        assert isinstance(state.results, ResultCache)
         assert len(state.editors) == 0
-        assert len(state.results) == 0
+        assert state.results.entry_count == state.results.byte_count == 0
 
     def test_create_initializes_runner_manager(self, config: ServerConfig):
         state = SessionState.create(config, {})
@@ -107,10 +108,19 @@ class TestSessionStateShutdown:
         p.write_text("data")
         state.editors.get(p, lambda path: path.read_text())
         assert len(state.editors) == 1
+        from ltspice_mcp.lib.decoded_log import DecodedLog
+        from ltspice_mcp.lib.log_decode import decode_logs
+        from tests.test_log_decode import LIMITS, capture
+        from tests.test_result_cache import parsed, raw
+
+        captured, directory = capture(tmp_path, text="")
+        logs = DecodedLog(decode_logs(captured, directory, limits=LIMITS))
+        state.results.put("a" * 64, parsed(raw([0, 1]), "a" * 64, logs))
+        assert state.results.entry_count == 1
 
         await state.shutdown()
         assert len(state.editors) == 0
-        assert len(state.results) == 0
+        assert state.results.entry_count == state.results.byte_count == 0
 
 
 class TestPersistDuringInterpreterTeardown:

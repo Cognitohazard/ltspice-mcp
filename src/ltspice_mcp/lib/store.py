@@ -13,9 +13,13 @@ The layout, rooted at the working directory::
     |-- experiments/
     |   |-- {job_id}.json                   the job record
     |   |-- by-request/{digest}.json        request_id -> job_id (idempotency)
+    |   |-- recovery/{digest}.json          authoritative lineage admission
     |   |-- by-circuit/{digest}/{job_id}     which jobs used a circuit
     |   `-- cancellations/{job_id}.json     durable cancellation marker
     |-- runs/{job_id}/                      everything one job produced
+    |   |-- startup/spinit                  controlled recoverable ngspice startup
+    |   |-- startup/template.ini            immutable established LTspice settings
+    |   |-- startup/{run_token}/LTspice.ini  one attempt's writable settings
     |   `-- staged/{circuit_id}/            the decks it actually ran
     |-- results/
     |   |-- {result_set_id}.json            an immutable analyze_results set
@@ -28,6 +32,7 @@ The layout, rooted at the working directory::
     |-- edit-exports/{build_id}/            edit_schematic exports
     |-- exports/{name}.run-{hash}.net       schematic exports experiments ran
     |-- plots/                              plot_waveform charts with no out_dir
+    |-- parsing/{parse_id}/                 temporary captured inputs and decoded arrays
     `-- locks/                              cross-process store locks
 
 ``$LTSPICE_MCP_STORE_DIR`` moves that root, whole, to one directory per working
@@ -89,7 +94,7 @@ STORE_SCHEMA = "ltspice-mcp/store"
 
 #: The one version for the whole store. Bump it when ANY record's shape
 #: changes; the manifest at the store root records which version wrote it.
-STORE_VERSION = 3
+STORE_VERSION = 4
 
 #: Versions this build can read. Older entries appear here only once this build
 #: can actually decode them.
@@ -100,7 +105,9 @@ STORE_VERSION = 3
 #: because nothing shows it ran on the executable in use now. The bump is what
 #: stops a version-2 build reading a version-3 record and dropping both fields
 #: when it writes the record back.
-SUPPORTED_STORE_VERSIONS: frozenset[int] = frozenset({2, STORE_VERSION})
+#: 4 adds grouped frozen-input, lineage and execution facts. Older records
+#: remain inspectable, with no recovery claim added while reading them.
+SUPPORTED_STORE_VERSIONS: frozenset[int] = frozenset({2, 3, STORE_VERSION})
 
 MANIFEST_FILENAME = "store.json"
 
@@ -113,6 +120,7 @@ KIND_CANCELLATION = "cancellation"
 KIND_RESULT_SET = "result-set"
 KIND_ANALYSIS_SNAPSHOT = "attached-analysis"
 KIND_RECENT = "recent-circuits"
+KIND_RECOVERY_JOURNAL = "recovery-journal"
 # The two sides of the detached-owner hand-off. Transient rather than durable —
 # both are consumed by the call that created them — but they live in the store
 # tree and carry the same envelope, so a file that is not one of ours is
@@ -603,6 +611,18 @@ class Store:
         """The gate shared by cancellation and case submission."""
         return self.lock(f"cancel-{validate_job_id(job_id)}")
 
+    def recovery_journal(self, root_request_id: str) -> Path:
+        """Authoritative lineage admission, locatable before derived indexes."""
+        return _record(
+            self.experiments_dir / "recovery",
+            f"{path_digest(root_request_id)}.json",
+            "Invalid recovery journal path",
+        )
+
+    def recovery_lock(self, root_request_id: str) -> Path:
+        """The gate shared by lineage admission, reconstruction and deletion."""
+        return self.lock(f"recovery-{path_digest(root_request_id)}")
+
     # -- run artifacts ------------------------------------------------------
 
     def artifact_base(self, simulator: type | None = None) -> ArtifactRoot:
@@ -658,6 +678,36 @@ class Store:
         set instead of by guessing at a filename prefix.
         """
         return run_dir_in(self.runs_root(simulator), job_id)
+
+    def lineage_run_dir(
+        self, root_job_id: str, recorded: Path, simulator: type | None = None
+    ) -> Path:
+        """Validate the retained initial artifact directory before reuse."""
+        runs = self.runs_root(simulator).resolve()
+        expected = run_dir_in(runs, root_job_id)
+        resolved = expected.resolve()
+        if not recorded.is_absolute() or recorded.resolve() != resolved or resolved != expected:
+            raise StoreError("Recorded lineage directory is outside its Store run root")
+        return resolved
+
+    def recovery_spinit(self, root_job_id: str, simulator: type | None = None) -> Path:
+        """Inert system startup input retained inside the initial run root."""
+        return self.run_dir(root_job_id, simulator) / "startup" / "spinit"
+
+    def recovery_ini_template(self, root_job_id: str, simulator: type | None = None) -> Path:
+        """Immutable established settings retained for every LTspice attempt."""
+        return self.run_dir(root_job_id, simulator) / "startup" / "template.ini"
+
+    def recovery_ini(
+        self, root_job_id: str, run_token: str, simulator: type | None = None
+    ) -> Path:
+        """Writable LTspice settings owned by exactly one case attempt."""
+        return (
+            self.run_dir(root_job_id, simulator)
+            / "startup"
+            / _validate_name(run_token, "run_token")
+            / "LTspice.ini"
+        )
 
     def staged_deck_root(
         self,
@@ -735,6 +785,19 @@ class Store:
         """
         return self.root / "plots"
 
+    def parser_dir(self, parse_id: str) -> Path:
+        """One parser process's temporary capture and numeric output directory."""
+        name = _validate_name(parse_id, "parser id")
+        base = (self.root / "parsing").resolve()
+        candidate = base / name
+        if candidate.resolve() != candidate:
+            raise StoreError("Parser directory must not redirect to another location")
+        return candidate
+
+    def parser_file(self, parse_id: str, name: str) -> Path:
+        """One bounded parser input, output or control file."""
+        return parser_file_in(self.parser_dir(parse_id), name)
+
     # -- per-user ----------------------------------------------------------
     #
     # Shared by every session this user runs, whatever its working directory,
@@ -766,6 +829,15 @@ def run_dir_in(runs_root: Path, job_id: str) -> Path:
     able to name a job's directory without re-deciding where the tree lives.
     """
     return runs_root / validate_job_id(job_id)
+
+
+def parser_file_in(directory: Path, name: str) -> Path:
+    """Name a file in the already admitted directory handed to a parser worker."""
+    return _record(
+        directory,
+        _validate_name(name, "parser artifact name"),
+        "Parser artifact must remain inside its temporary directory",
+    )
 
 
 def run_filename_in(job_id: str, name: str) -> str:

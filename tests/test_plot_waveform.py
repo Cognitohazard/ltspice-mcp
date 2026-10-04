@@ -417,7 +417,7 @@ class TestErrors:
 
     async def test_op_raw_refused(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "op_extreme_node")
-        with pytest.raises(ResultError, match="operating_point"):
+        with pytest.raises(ResultError, match="inspect results table"):
             await handle_plot_waveform(
                 PlotWaveformInput(raw_file=str(raw), signals="all"), state_no_sim
             )
@@ -844,7 +844,7 @@ class TestWidgetTemplateAndResource:
 
 async def _raw_series(state: SessionState, raw_path: Path, name: str, step: int = 0):
     """One trace straight from the raw, independent of the plot path."""
-    raw = await services.load_raw(raw_path, state)
+    raw = await services.load_raw(services.source_for_raw_path(raw_path, state), state)
     return guarded_axis(raw, step), np.asarray(raw.get_wave(name, step=step))
 
 
@@ -1051,9 +1051,8 @@ class TestPanelLayout:
         assert units["gain"] is None
         panel_of = {t["signal"]: t["panel"] for t in data["traces"]}
         assert panel_of["gain"] != panel_of["v(onoise)"]
-        # No deck beside this raw to read the .NOISE source from: the input-
-        # referred unit is the simulator's declared one, and the reply says so.
-        assert any(o["code"] == "noise_input_unit_unverified" for o in data["observations"])
+        # Unknown dimensions remain explicit rather than guessed from a name.
+        assert any(o["code"] == "trace_unit_unknown" for o in data["observations"])
 
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"

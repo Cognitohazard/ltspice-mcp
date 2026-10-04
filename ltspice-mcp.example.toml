@@ -16,6 +16,9 @@
 # Explicit path to simulator executable (overrides auto-detection)
 # Unset: auto-detect
 # path = "C:\\Program Files\\ADI\\LTspice\\LTspice.exe"
+# Established native Windows settings for recoverable LTspice runs.
+# Unset uses APPDATA/LTspice.ini; the original file is never written.
+# ltspice_ini = "C:/SPICE/LTspice.ini"
 
 # ngspice compatibility mode (ngbehavior). Unset = spicelib's default
 # 'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned

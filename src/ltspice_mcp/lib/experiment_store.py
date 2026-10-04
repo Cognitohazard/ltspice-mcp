@@ -30,7 +30,9 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
 from ltspice_mcp.lib.native_records import NativeCaseRecord
+from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
+from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
     KIND_CANCELLATION,
@@ -76,7 +78,7 @@ def replace_code(observations: list[Any], code: str, observation: dict[str, Any]
     observations.append(observation)
 
 
-CANONICALIZER_VERSION = 5
+CANONICALIZER_VERSION = 6
 # How a request's identity was computed — NOT a storage schema version. It says
 # which fields the canonical fingerprint covers, so a reused ``request_id``
 # whose record was hashed under an older definition raises the loud idempotency
@@ -91,6 +93,8 @@ CANONICALIZER_VERSION = 5
 #      hashes two more keys than it did before the move.
 #   5: assignment variations include an instances list, and mismatch rules
 #      carry an optional exact instance selector in their normalized payload.
+#   6: attached analysis includes plot_index and dialect, which select the
+#      result data and participate even when normalized to their defaults.
 
 _LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
 _TERMINAL_STATUSES = frozenset(
@@ -156,6 +160,7 @@ def _path_or_none(value: Any) -> Path | None:
 
 def serialize_job(job: ExperimentJob) -> dict[str, Any]:
     """Return the durable JSON shape for an experiment coordinator."""
+    _validate_recovery_job(job)
     cases: list[dict[str, Any]] = []
     for case in job.cases:
         cases.append(
@@ -183,6 +188,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                     case.native_statistics.to_record() if case.native_statistics else None
                 ),
                 "simulator_version": case.simulator_version,
+                "recovery": case.recovery.to_record() if case.recovery is not None else None,
             }
         )
 
@@ -237,6 +243,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         observations=job.observations,
         artifacts=job.artifacts,
         analysis=analysis,
+        recovery=job.recovery.to_record() if job.recovery is not None else None,
     )
 
 
@@ -392,6 +399,11 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
             else None
         ),
         simulator_version=_optional_str(data.get("simulator_version")),
+        recovery=(
+            CaseRecovery.from_record(data["recovery"])
+            if data.get("recovery") is not None
+            else None
+        ),
     )
 
 
@@ -440,6 +452,11 @@ def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path,
     output folder was persisted: the honest direction when the artifacts cannot
     be located at all.
     """
+    # Recoverable completion needs a durable intent and complete solve evidence.
+    # The coordinator owns that probe; generic reload must never promote from
+    # just a raw header before the stricter reconciliation has run.
+    if job.recovery is not None:
+        return None
     raw = case_raw_path(job, case)
     if raw is None or job.output_folder is None:
         return None
@@ -539,7 +556,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
                 "evidence": {"case_ids": [case.case_id for case in recovered]},
             }
         )
-    job.completeness.recount(job.cases)
+    job.completeness.recount(job.cases, execution_job_id=job.job_id)
     if runs_terminal(job.status) or runs_were_terminal:
         has_failure = job.completeness.fell_short or job.analysis.status in {
             "failed",
@@ -553,12 +570,18 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
     reconcile_experiment_restart(job, "interrupted")
 
 
-def _deserialize_job(
+def deserialize_job(
     data: dict[str, Any],
     store_path: Path,
     *,
     liveness: OwnerLiveness,
 ) -> ExperimentJob:
+    has_recovery = data.get("recovery") is not None or any(
+        isinstance(case, dict) and case.get("recovery") is not None
+        for case in data.get("cases", [])
+    )
+    if has_recovery and data.get("store_version") != 4:
+        raise RecoveryError("recovery_record_invalid", "Legacy records cannot claim recovery")
     started_at = parse_iso_datetime(data.get("started_at")) or now()
     completeness_data = data.get("completeness") or {}
     completeness = Completeness(
@@ -569,6 +592,7 @@ def _deserialize_job(
         failed=int(completeness_data.get("failed", 0)),
         cancelled=int(completeness_data.get("cancelled", 0)),
         skipped=int(completeness_data.get("skipped", 0)),
+        reused=int(completeness_data.get("reused", 0)),
     )
     job = ExperimentJob(
         job_id=str(data["job_id"]),
@@ -594,13 +618,61 @@ def _deserialize_job(
         artifacts=list(data.get("artifacts") or []),
         analysis=_analysis_stage(data.get("analysis")),
         owner_pid=pid_of(data) or 0,
+        recovery=(
+            JobRecovery.from_record(data["recovery"]) if data.get("recovery") is not None else None
+        ),
     )
+    _validate_recovery_job(job)
     _reconcile_restart(job, liveness=liveness)
     if all(case.status in TERMINAL_CASE_STATUSES for case in job.cases):
         job.runs_done_event.set()
     if job.status in _TERMINAL_STATUSES:
         job.done_event.set()
     return job
+
+
+def _validate_recovery_job(job: ExperimentJob) -> None:
+    """Keep case execution paths and identity bound to their frozen records."""
+    lineage = job.recovery
+    if lineage is None:
+        if any(case.recovery is not None for case in job.cases):
+            raise RecoveryError("recovery_record_invalid", "Case recovery has no lineage record")
+        return
+    if job.owner_pid != lineage.owner.pid:
+        raise RecoveryError("recovery_record_invalid", "Recovery owner identities disagree")
+    if lineage.parent_job_id is None and (
+        lineage.root_job_id != job.job_id or lineage.root_request_id != job.request_id
+    ):
+        raise RecoveryError("recovery_record_invalid", "Recovery root identity disagrees")
+    for case in job.cases:
+        record = case.recovery
+        if record is None:
+            raise RecoveryError("recovery_record_invalid", "Recoverable job has unfrozen cases")
+        inputs, attempt = record.inputs, record.attempt
+        if (
+            job.output_folder != inputs.lineage_root
+            or case.staged_deck != inputs.electrical.path
+            or case.deck_sha256 != inputs.electrical.sha256
+            or case.run_token != attempt.run_token
+        ):
+            raise RecoveryError(
+                "recovery_record_invalid", "Case paths or bytes disagree with frozen input"
+            )
+        if attempt.attempt_index > lineage.attempt_index or (
+            attempt.execution_job_id == job.job_id
+            and attempt.attempt_index != lineage.attempt_index
+        ):
+            raise RecoveryError(
+                "recovery_record_invalid", "Case attempt identity disagrees with lineage"
+            )
+        if case.status == "produced" and (
+            attempt.outputs is None
+            or case.raw_file != attempt.outputs.raw.path
+            or case.log_file != attempt.outputs.log.path
+        ):
+            raise RecoveryError(
+                "recovery_record_invalid", "Produced case is missing its exact artifact snapshot"
+            )
 
 
 def load_job_from_path(
@@ -622,16 +694,26 @@ def load_job_from_path(
         liveness = OwnerLiveness.UNKNOWN
         if data.get("status") in _LIVE_STATUSES:
             pid = pid_of(data)
-            liveness = owner_liveness(pid, own_is_alive=own_is_alive)
+            recovery_data = data.get("recovery")
+            if recovery_data is not None:
+                identity = JobRecovery.from_record(recovery_data).owner
+                presence = process_identity_presence(identity.pid, identity.start_marker)
+                liveness = {
+                    ProcessPresence.PRESENT: OwnerLiveness.ALIVE,
+                    ProcessPresence.ABSENT: OwnerLiveness.DEAD,
+                    ProcessPresence.UNKNOWN: OwnerLiveness.UNKNOWN,
+                }[presence]
+            else:
+                liveness = owner_liveness(pid, own_is_alive=own_is_alive)
             if liveness.is_dead:
                 # The owner may have saved its final state and exited after
                 # our first read. Reconcile only a snapshot read after death.
                 data = _read_job_record(resolved)
                 if data is None:
                     return None
-                if pid_of(data) != pid:
+                if pid_of(data) != pid or data.get("recovery") != recovery_data:
                     liveness = OwnerLiveness.UNKNOWN
-        return _deserialize_job(data, resolved, liveness=liveness)
+        return deserialize_job(data, resolved, liveness=liveness)
     except Exception as exc:
         logger.warning("Skipping malformed experiment job %s: %s", resolved, exc)
         return None
@@ -722,9 +804,44 @@ def load_jobs_for_circuit(
     return jobs, observations
 
 
+def guard_recovery_retention(job: ExperimentJob, working_dir: Path) -> None:
+    """Refuse deletion before indexes, results or retained inputs are mutated.
+
+    Missing/corrupt journals cannot license deletion of their recoverable
+    records. Releasing lineage retention requires a separate explicit policy.
+    Callers removing result sets must invoke this guard before invalidation.
+    """
+    if job.recovery is not None or any(case.recovery is not None for case in job.cases):
+        raise RecoveryError(
+            "recovery_retained",
+            "Recoverable lineage records and artifacts are retained",
+            evidence={"job_id": job.job_id},
+        )
+    # Check disk too: a stale legacy object cannot delete a newly retained job.
+    store = Store(working_dir)
+    if store.recovery_journal(job.request_id).exists():
+        raise RecoveryError("recovery_retained", "Authoritative recovery admission is retained")
+    record = _read_job_record(store.job_record(job.job_id))
+    if record is not None and (
+        record.get("recovery") is not None
+        or any(
+            isinstance(case, dict) and case.get("recovery") is not None
+            for case in record.get("cases", [])
+        )
+    ):
+        raise RecoveryError("recovery_retained", "Recoverable lineage record is retained")
+
+
 def delete_job(job: ExperimentJob, working_dir: Path) -> None:
     """Delete a coordinator, its circuit index entries, and its request index."""
     store = Store(working_dir)
+    root_request_id = job.recovery.root_request_id if job.recovery else job.request_id
+    with file_lock(store.recovery_lock(root_request_id)):
+        guard_recovery_retention(job, working_dir)
+        _delete_unretained_job(job, working_dir, store)
+
+
+def _delete_unretained_job(job: ExperimentJob, working_dir: Path, store: Store) -> None:
     for source in job.sources:
         try:
             store.circuit_index(source.path, job.job_id).unlink()

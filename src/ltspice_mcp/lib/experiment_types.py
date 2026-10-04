@@ -17,6 +17,7 @@ from ltspice_mcp.lib import now
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.native_records import NativeCaseRecord
+    from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery
     from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 
 ExperimentStatus = Literal[
@@ -82,6 +83,7 @@ class ExperimentCase:
     #: banner or raw ``Command:``), read once the run ended. None until then,
     #: and for a run whose output named none.
     simulator_version: str | None = None
+    recovery: CaseRecovery | None = None
 
 
 def failure_row(case: ExperimentCase) -> dict[str, Any]:
@@ -118,6 +120,7 @@ class Completeness:
     failed: int = 0
     cancelled: int = 0
     skipped: int = 0
+    reused: int = 0
 
     @property
     def terminal(self) -> int:
@@ -142,18 +145,28 @@ class Completeness:
         """
         return self.terminal != self.expanded or self.produced != self.expanded
 
-    def recount(self, cases: list[ExperimentCase]) -> None:
+    def recount(self, cases: list[ExperimentCase], *, execution_job_id: str | None = None) -> None:
         """Recompute all case-derived counters from the current case records."""
-        submitted = produced = failed = cancelled = skipped = 0
+        submitted = produced = failed = cancelled = skipped = reused = 0
         for case in cases:
-            if case.submitted_at is not None or case.status in {
-                "submitted",
-                "running",
-                "produced",
-            }:
+            attempt = case.recovery.attempt if case.recovery is not None else None
+            carried = attempt is not None and (
+                attempt.reused
+                or (execution_job_id is not None and attempt.execution_job_id != execution_job_id)
+            )
+            if not carried and (
+                case.submitted_at is not None
+                or case.status
+                in {
+                    "submitted",
+                    "running",
+                    "produced",
+                }
+            ):
                 submitted += 1
             if case.status == "produced":
                 produced += 1
+                reused += int(carried)
             elif case.status == "failed":
                 failed += 1
             elif case.status == "cancelled":
@@ -165,6 +178,7 @@ class Completeness:
         self.failed = failed
         self.cancelled = cancelled
         self.skipped = skipped
+        self.reused = reused
 
     def validate_terminal(self) -> None:
         """Raise when terminal accounting does not reconcile to expansion."""
@@ -255,6 +269,7 @@ class ExperimentJob:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     analysis: AnalysisStage = field(default_factory=AnalysisStage)
     owner_pid: int = field(default_factory=os.getpid)
+    recovery: JobRecovery | None = None
     #: Set when the store reconciled this record as it loaded it — the owning
     #: process had died mid-run, so the object in memory now differs from the
     #: bytes on disk and whoever loaded it owes the record a write-back. A fact

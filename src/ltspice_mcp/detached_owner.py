@@ -73,9 +73,12 @@ class _Handshake:
         # this is only the fallback for a receipt naming no job.
         self._write(ok=True, supervisor_pid=os.getpid(), receipt=receipt)
 
-    def failure(self, code: str, message: str) -> int:
+    def failure(self, code: str, message: str, *, payload: dict[str, Any] | None = None) -> int:
         logger.error("%s: %s", code, message)
-        self._write(ok=False, error={"code": code, "message": message})
+        error: dict[str, Any] = {"code": code, "message": message}
+        if payload is not None:
+            error["payload"] = payload
+        self._write(ok=False, error=error)
         return 1
 
 
@@ -90,7 +93,7 @@ def _read_request(path: Path) -> dict[str, Any]:
 
 def run(request: dict[str, Any], handshake: _Handshake) -> int:
     """Submit the request, report the receipt, then supervise to terminality."""
-    from ltspice_mcp.api import Api
+    from ltspice_mcp.api import Api, ApiCallError
     from ltspice_mcp.lib.observability import configure_stderr_logging
 
     api = Api(
@@ -110,12 +113,26 @@ def run(request: dict[str, Any], handshake: _Handshake) -> int:
     configure_stderr_logging("DEBUG" if configured == "DEBUG" else "INFO")
     try:
         try:
-            receipt = api.run_experiments(wait=False, **request["arguments"])
+            operation = request.get("operation", "run_experiments")
+            if operation == "run_experiments":
+                receipt = api.run_experiments(wait=False, **request["arguments"])
+            elif operation == "resume":
+                # The core authorizes the delegated parent token again under
+                # the lineage lock. The handoff itself grants no authority.
+                receipt = api.jobs(**request["arguments"])
+            else:
+                raise ValueError(f"Unknown detached operation: {operation!r}")
         except Exception as exc:
+            if isinstance(exc, ApiCallError):
+                return handshake.failure(
+                    str(exc.code or "detached_submission_failed"), str(exc), payload=exc.payload
+                )
             return handshake.failure("detached_submission_failed", str(exc))
 
         job_id = receipt.get("job_id")
         handshake.receipt(receipt)
+        if operation == "resume" and not receipt.get("resumed"):
+            return 0
         if not isinstance(job_id, str):
             # A receipt naming no job names nothing to supervise. The parent
             # has the receipt already and can read whatever it does name.

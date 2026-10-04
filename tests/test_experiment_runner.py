@@ -28,6 +28,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
 from tests.conftest import await_until, ngspice_binary_raw, staged_decks
+from tests.test_completion_logs import captured_completion_facts
 
 
 class MockSimulator:
@@ -439,7 +440,7 @@ class TestArtifactCleanup:
             case.run_token = "exp_case_0"
             # The job names its own artifact directory; cleanup reconstructs
             # the paths inside it, not beside the runner's output folder.
-            job = SimpleNamespace(job_id="exp_cleanup", output_folder=work_dir)
+            job = SimpleNamespace(job_id="exp_cleanup", output_folder=work_dir, recovery=None)
             case.log_file = work_dir / f"{case.run_token}.fail"
             run_netlist = work_dir / f"{case.run_token}.cir"
             raw = work_dir / f"{case.run_token}.raw"
@@ -1017,7 +1018,11 @@ def _deliver_killed_run(
     fail_log.write_text(log_text)
     if raw is not None:
         (run_dir / f"{token}.raw").write_bytes(raw)
-    callback(collect_run_outcome("", str(fail_log), exit_code=-9))
+    callback(
+        collect_run_outcome(
+            "", str(fail_log), exit_code=-9, logs=captured_completion_facts(run_dir, fail_log)
+        )
+    )
 
 
 @pytest.mark.asyncio

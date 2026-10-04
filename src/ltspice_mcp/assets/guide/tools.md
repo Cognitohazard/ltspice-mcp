@@ -2,8 +2,9 @@
 name: tools
 description: >
   Calling the tools directly: which call does what, a sweep in one call,
-  notes per tool, progress on a running job, the reference lookup, the
-  recipes the schema lists by name only, and the response budget.
+  notes per tool, progress and recovery on a job, RAW plots and log facts,
+  the reference lookup, recipes the schema lists by name only, and the
+  response budget.
 ---
 
 # Using the tools
@@ -16,9 +17,10 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 |-|-|
 | run a deck — once, swept, or perturbed | `run_experiments(circuits=[{"path": …}], variations=[…])` |
 | get the measurements without a second round trip | `run_experiments(analyze={"recipes": […]})` |
-| follow, cancel, or page a job's runs | `jobs(action="status"\|"wait"\|"cancel"\|"list"\|"runs")` |
+| follow, cancel, resume, or page a job's runs | `jobs(action="status"\|"wait"\|"cancel"\|"resume"\|"list"\|"runs")` |
 | measure a finished job | `analyze_results(sources=[{"job_id": …}], recipes=[…])` |
 | read `.meas` results | recipe `{"metric": "measurements"}` |
+| page RAW plots, trace descriptors, or printed log facts | `inspect(queries=[{"kind": "results", "path": …, "view": …}])` |
 | a scalar, a trace, a chart | recipes `value`, `waveform`, `plot` |
 | device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
@@ -42,6 +44,38 @@ check or job action from plain words (`query="phase margin"`) and returns its
 fields, types, defaults and units; with no `query` it lists them all. Use it
 instead of guessing a name, and always on the compact tool listing, where the
 argument descriptions are not on the wire.
+
+## Recovering a job
+
+Submit with `execution={"simulator": "ngspice", "recoverable": true}` and save
+the receipt's `control_token`, even if the job finishes immediately. Recovery
+captures validated electrical inputs and controlled startup; it currently
+supports ngspice on Linux and native Windows, plus the audited LTspice 26.0.2
+executable on native Windows. Live dependencies, caller control
+scripts, external modules and unbound simulator randomness refuse before
+submission. For static randomness, see guide section 'ngspice'.
+
+For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.
+Established settings come from `simulator.ltspice_ini` (environment
+`LTSPICE_MCP_LTSPICE_INI`) or `%APPDATA%/LTspice.ini`. Each attempt gets a private
+copy; the original is unchanged. The captured profile needs an actual LTspice
+update-query time within 15 days, including at resume. Resolve startup prompts
+in LTspice first; the server does not answer dialogs or change consent. Other
+LTspice builds are refused until their startup behavior is verified.
+
+Recover a terminal lineage head with
+`jobs(action="resume", job_id=..., resume_request_id="retry-1", control_token=...)`.
+Interrupted cases are retried by default; add `retry_failed=true` for simulator
+failures or `retry_cancelled=true` for explicit cancellation. `case_ids` selects
+eligible unfinished cases; `wait_s` defaults to zero and is capped at 120 s.
+Successful cases retain their original artifacts: `completeness.reused` counts
+them, and each run's `attempt` identifies the execution that produced it.
+
+The child has a new job id and token. Repeating the same resume request returns
+that same child; changing its selection or retry flags conflicts. An empty
+eligible selection is a no-op (`resumed=false`) with no child token. Retry
+analysis on its own with `analyze_results`. Read-only job replies never return
+tokens. For a child with its own owner process, see guide section 'python'.
 
 ## A sweep in one call
 
@@ -86,7 +120,7 @@ lint blocks a mismatch. A case that produced nothing is counted in
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur
   the levels.
-- `inspect` reads decks, schematics and libraries, never results:
+- `inspect` reads decks, schematics, libraries and result facts:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
 - `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`
   to commit to a sheet that exists (`inspect` and a dry run report it). `verify_circuit` checks a
@@ -94,6 +128,52 @@ lint blocks a mismatch. A case that produced nothing is counted in
   `{"path": "amp.asc", "compare": {"reference": "golden.net"}}`.
 - Charts: `plot_waveform` draws an interactive chart (`attach_plot` adds a PNG
   you can look at); the `plot` recipe writes a static chart file.
+
+## Reading RAW plots and logs
+
+A RAW artifact can contain several plots. `plot_index` selects one independently
+of the job's case and the plot's step; omit it to read the first plot. When
+supplied, it must be a nonnegative integer. Page the inventory with
+`inspect(queries=[{"kind": "results", "path": "run.raw", "view": "plots"}])`.
+Use `view:"signals"` for the selected trace descriptors or `view:"table"` for
+native quantities without a sampled axis. Tables keep their first quantity;
+complex values are `{real, imag}`, and units come from the selected descriptor.
+Job reads take `job_id` plus `run_index` or `case_id` instead of `path`.
+
+The same plot selection sits on each `analyze_results` source, `plot_waveform`
+and `run_experiments.analyze`. `dialect` is null or `ltspice`, `ngspice`,
+`qspice`, `xyce`; explicit evidence must agree with the producer and captured
+header. Step metadata belongs to that capture, not a later sibling-log read.
+Python arrays and native tables are in guide section 'python'.
+
+Logs without RAW use the existing `measurements` recipe:
+
+```json
+{"sources": [{"log_path": "result.log", "label": "imported"}],
+ "recipes": [{"metric": "measurements", "key": "meas"}]}
+```
+
+Measurements run once over the whole log, with no plot or step identity.
+`step`/`all_steps` refuse for these facts; a measurement vector's ordinal is not
+a RAW step. Missing or malformed RAW fails RAW recipes in a mixed request
+without discarding valid measurements. A direct log import guesses no RAW sibling.
+
+For pages of literal log facts, use
+`inspect(queries=[{"kind": "results", "path": "result.log", "view": "measurements"}])`
+for values and range/AT metadata, or `view:"native_tables"` for printed entries
+and frequency rows. Omit `plot_index` on log views. Native rows keep physical
+section boundaries, closure facts and printed labels; complex values keep
+real/imaginary components, unknown units stay null, and no plot or step identity
+is invented. Complete scanning does not prove a complete solve. Job-addressed
+reads still require terminal jobs and produced cases.
+
+Cursors bind the source snapshot and selection, including RAW/log/console bytes
+and explicit absence. Changed companions require a fresh read. Analysis captures
+source identities and diagnostics before resumable recipe work starts. An
+initialization timeout returns `analysis_deadline` without a result set or cursor;
+retry the original request with fewer sources or a larger configured analysis
+time budget. It is not saved as a permanent source fault. After initialization,
+the existing minimum-work and continuation policy applies.
 
 ## Recipes the schema lists by name only
 

@@ -10,81 +10,23 @@ import logging
 import re
 import tempfile
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TypedDict
+from uuid import uuid4
 
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
+from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
+from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
+from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
+from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
 from ltspice_mcp.lib.spice_validator import validate_directive
+from ltspice_mcp.lib.store import parser_file_in
 
 logger = logging.getLogger(__name__)
-
-
-class MeasErrorEntry(TypedDict):
-    """One .MEAS parse failure with an optional fix suggestion."""
-
-    directive: str
-    raw_block: str
-    suggestion: str | None
-
-
-class LogDiagnostics(TypedDict):
-    """Return shape of :func:`extract_log_diagnostics`."""
-
-    warnings: list[str]
-    errors: list[str]
-    meas_errors: list[MeasErrorEntry]
-
-
-class _MeasurementMetadata(TypedDict, total=False):
-    """Optional metadata folded into a .MEAS result.
-
-    Each metadata field is either a scalar (when the value is constant
-    across .step iterations — e.g. a literal ``FROM=2m``) or a list of
-    per-step values (when LTspice computed a different marker per step,
-    e.g. TRIG/TARG times of a per-step rise time).
-    """
-
-    range_from: float | list[float | None] | None
-    range_to: float | list[float | None] | None
-    at: float | list[float | None] | None
-
-
-class MeasurementEntry(_MeasurementMetadata):
-    """One .MEAS result, with optional range/at metadata folded in.
-
-    ``values`` is one entry per .step iteration (length 1 for unstepped runs).
-    ``range_from`` / ``range_to`` carry the FROM/TO bounds for windowed measurements.
-    ``at`` carries the AT/WHEN time/freq for point measurements. Missing when
-    not applicable (use ``.get`` rather than ``[]`` to access). When the
-    underlying value varies per .step, the field is a list aligned with
-    ``values`` rather than a single scalar.
-    """
-
-    values: list[float | None]
-
-
-class MeasurementsOutput(TypedDict):
-    """Return shape of :func:`parse_measurements`.
-
-    ``errors`` is populated only on the empty-measurements path (the log
-    had no .MEAS results and the parser surfaced why). Always present in
-    the return value — ``None`` when the measurement parse succeeded.
-
-    ``measurements`` is keyed by .meas name; each entry is a structured
-    :class:`MeasurementEntry` with ``values`` plus folded-in ``range_from``,
-    ``range_to``, and ``at`` metadata. The flat ``name_from`` / ``name_to`` /
-    ``name_at`` keys that spicelib emits are not surfaced separately.
-    """
-
-    measurements: dict[str, MeasurementEntry]
-    step_count: int
-    errors: list[str] | None
-    warnings: list[str] | None
-    failed_measurements: list[str]
 
 
 # Cap on how much of a log ``extract_error_context`` reads (total bytes; half
@@ -336,6 +278,11 @@ def missing_includes_from_text(text: str) -> list[str]:
 _LOG_READ_CAP_BYTES = 64 * 1024 * 1024
 
 
+def log_read_limit() -> int:
+    """Maximum full-file bytes the shared text helper can read without truncation."""
+    return _LOG_READ_CAP_BYTES
+
+
 def read_log_text(log_path: Path) -> str:
     """Read a log file, returning empty string on I/O failure.
 
@@ -367,7 +314,29 @@ def read_log_text(log_path: Path) -> str:
         return ""
 
 
-def read_device_op_points(log_path: Path) -> dict[str, float]:
+@contextlib.contextmanager
+def normalized_log(text: str, scratch_dir: Path | None) -> Iterator[Path]:
+    """Close normalized UTF-8 input before a dependency reopens it on Windows."""
+    if scratch_dir is None:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False, encoding="utf-8", newline=""
+        ) as tmp:
+            tmp.write(text)
+            path = Path(tmp.name)
+    else:
+        path = parser_file_in(scratch_dir, f"normalized-{uuid4().hex}.log")
+        with path.open("x", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+    try:
+        yield path
+    finally:
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+
+def read_device_op_points(
+    log_path: Path, *, scratch_dir: Path | None = None, strict: bool = False
+) -> dict[str, float]:
     """Per-device small-signal op-point params from an LTspice ``.log``.
 
     LTspice writes the operating point of each semiconductor (gm, gds, vth,
@@ -384,6 +353,9 @@ def read_device_op_points(log_path: Path) -> dict[str, float]:
     (``@q:q2:1:2[gm]``); ``operating_point(device=...)`` matches those by
     instance. Non-numeric fields (the ``Model:`` row) are dropped. Empty dict
     when the block is absent or unparseable.
+
+    ``scratch_dir`` puts normalized input under the supplied parser directory.
+    ``strict`` preserves read/parse failures for worker section status.
     """
     out: dict[str, float] = {}
     # opLogReader reads the file by path with spicelib's own encoding detection,
@@ -396,24 +368,22 @@ def read_device_op_points(log_path: Path) -> dict[str, float]:
     try:
         text = read_spice_text(log_path)
     except OSError:
+        if strict:
+            raise
         return out
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".log", delete=False, encoding="utf-8", newline=""
-        ) as tmp:
-            tmp.write(text)
-            tmp_path = Path(tmp.name)
-        try:
+        with normalized_log(text, scratch_dir) as tmp_path:
             parsed = opLogReader(str(tmp_path))
-        finally:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
     except (OSError, ValueError):
+        if strict:
+            raise
         return out
     for devices in parsed.values():  # categories: 'mosfet transistors', 'diodes', …
         for dev, params in devices.items():
             for pname, pval in params.items():
                 if not isinstance(pval, (int, float)):
+                    if strict and pname.lower() != "model":
+                        raise ResultError(f"Device operating-point field {pname!r} is not numeric")
                     continue  # skip the 'Model:' string row (opLogReader yields float | str)
                 out[f"@{dev.lower()}[{pname.lower()}]"] = float(pval)
     return out
@@ -1124,7 +1094,7 @@ def _preprocess_ngspice_log(content: str) -> str | None:
     return content[idx:].lstrip("\n")
 
 
-def make_log_reader(log_path: Path) -> LTSpiceLogReader:
+def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpiceLogReader:
     """Build an LTSpiceLogReader, sanitizing known crash patterns on retry.
 
     Spicelib's Fourier-block parser crashes on ``-nan``/``inf`` THD values
@@ -1133,6 +1103,8 @@ def make_log_reader(log_path: Path) -> LTSpiceLogReader:
 
     Also preprocesses ngspice logs whose preamble trips up spicelib's
     start-of-file regex.
+
+    ``scratch_dir`` keeps retry normalization in the supplied parser directory.
     """
     try:
         return LTSpiceLogReader(str(log_path))
@@ -1157,23 +1129,11 @@ def make_log_reader(log_path: Path) -> LTSpiceLogReader:
             raise ResultError(f"Could not parse log file: {first_err}") from first_err
 
         for candidate in candidates:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=log_path.suffix,
-                prefix=f"{log_path.stem}.sanitized.",
-                delete=False,
-                encoding="utf-8",
-                newline="",
-            ) as tmp:
-                tmp.write(candidate)
-                tmp_path = Path(tmp.name)
-            try:
-                return LTSpiceLogReader(str(tmp_path))
-            except Exception:
-                continue
-            finally:
-                with contextlib.suppress(OSError):
-                    tmp_path.unlink()
+            with normalized_log(candidate, scratch_dir) as tmp_path:
+                try:
+                    return LTSpiceLogReader(str(tmp_path))
+                except Exception:
+                    continue
         raise ResultError(f"Could not parse log file: {first_err}") from first_err
 
 
@@ -1340,7 +1300,9 @@ def parse_measurements(
     }
 
 
-def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -> list[dict]:
+def parse_fourier_data(
+    log_path: Path, reader: LTSpiceLogReader | None = None, *, strict: bool = False
+) -> list[dict]:
     """Extract Fourier analysis (.FOUR) results from log file.
 
     Args:
@@ -1351,11 +1313,16 @@ def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -
         List of dicts, each containing signal name, THD, fundamental frequency,
         and list of harmonics (number, frequency, magnitude, phase).
         All values are Python float.
+
+    ``strict`` propagates parse/conversion failures instead of returning empty
+    or partially extracted data; worker section status depends on that fact.
     """
     if reader is None:
         try:
             reader = make_log_reader(log_path)
         except Exception:
+            if strict:
+                raise
             # If log parsing fails, return empty (graceful degradation)
             return []
 
@@ -1410,6 +1377,8 @@ def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -
                     }
                 )
     except Exception:
+        if strict:
+            raise
         # Graceful degradation - return partial data if format is unexpected
         pass
 
