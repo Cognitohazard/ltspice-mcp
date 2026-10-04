@@ -18,6 +18,7 @@ from pydantic import (
     SkipValidation,
     ValidationError,
     field_serializer,
+    model_validator,
 )
 
 from ltspice_mcp.errors import (
@@ -108,11 +109,12 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
     NEW_WORK_ANNOTATIONS,
+    NotedModel,
     ResponseBudget,
     StrictModel,
     ToolInput,
-    cap_note,
     format_response,
+    held_to_cap,
     outcome_of,
     path_denied_text,
     registry,
@@ -233,7 +235,7 @@ class AnalysisPerRun(analyze.CappedPerRunLimit):
     )
 
 
-class AnalysisInclude(StrictModel):
+class AnalysisInclude(NotedModel):
     per_run: Annotated[
         AnalysisPerRun | None,
         BeforeValidator(
@@ -269,11 +271,17 @@ class AnalysisInclude(StrictModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _fields_read_once(self) -> AnalysisInclude:
+        if self.fields is not None:
+            self.keep_first("fields")
+        return self
+
 
 coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
-class AttachedAnalysis(StepSelectionFields):
+class AttachedAnalysis(StepSelectionFields, NotedModel):
     # The same typed union analyze_results advertises, not a free-form object:
     # this block IS an analyze_results request, and a schema that said
     # "any object" left a caller to discover the recipe grammar by having a
@@ -307,6 +315,14 @@ class AttachedAnalysis(StepSelectionFields):
             "a bare list of flag names switches them on."
         ),
     )
+
+    @model_validator(mode="after")
+    def _group_by_read_once(self) -> AttachedAnalysis:
+        # Normalized here, not only when the analysis runs: group_by is part
+        # of the request fingerprint, so a repeat must not make a resend of
+        # the same request look like a different one.
+        self.keep_first("group_by")
+        return self
 
     @field_serializer("recipes")
     def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
@@ -542,8 +558,10 @@ async def handle_run_experiments(
     )
     fingerprint = canonical_fingerprint(args)
     budget = resolve_response_budget(args.budget, state)
-    wait_s = min(args.execution.wait_s, SUBMISSION_DWELL_CAP_S)
-    cap_warnings = _cap_warnings(args)
+    wait_s, wait_note = held_to_cap(
+        "execution.wait_s", args.execution.wait_s, SUBMISSION_DWELL_CAP_S, "s"
+    )
+    cap_warnings = _argument_warnings(args, wait_note)
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
@@ -580,7 +598,7 @@ async def handle_run_experiments(
         )
         check_case_cap(projected, state.config.max_experiment_cases)
         if args.analyze is not None:
-            cap_warnings.extend(_validate_attached_analysis(args.analyze))
+            _validate_attached_analysis(args.analyze)
 
         # The first circuit's id (the deck's file stem unless the caller named
         # it) rides in the job id so the handle says what it ran.
@@ -1069,19 +1087,18 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
     return payload
 
 
-def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> list[str]:
+def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
     """Refuse a malformed attached analyze block BEFORE anything is staged.
 
     Validated only at the analysis stage, a typo'd recipe burns the whole
     simulation cycle — and the corrected block then changes the canonical
     fingerprint, so the retry re-runs every case. The placeholder job id used
     for this shape check never resolves, because validation does not touch the
-    registry. Returns what the block asked for that will be read differently
-    (a repeated group_by or include.fields entry read once), for the receipt.
+    registry.
     """
     request = analyze_block.model_dump(mode="json", exclude_unset=False)
     try:
-        validated = analyze.AnalyzeResultsInput.model_validate(
+        analyze.AnalyzeResultsInput.model_validate(
             _attached_analysis_payload("preflight", request)
         )
         # The input model deliberately skips per-recipe validation
@@ -1095,10 +1112,6 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> list[str]:
             "The attached analyze block is not a valid analyze_results request: "
             f"{validation_error_detail('analyze_results', exc)}"
         ) from exc
-    # The preflight source is this tool's own, so only the block's notes count.
-    return [
-        f"analyze.{note}" for note in validated.argument_notes() if not note.startswith("sources[")
-    ]
 
 
 def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
@@ -1137,20 +1150,17 @@ def _circuit_decks_for_validation(
     derived = derive_circuit_ids(
         [circuit.path for circuit in circuits], [circuit.id for circuit in circuits]
     )
-    decks = [
-        CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text="")
-        for circuit, (circuit_id, _note) in zip(circuits, derived, strict=True)
-    ]
-    notes = {
-        circuit_id: {
-            "code": "circuit_id_derived",
-            "kind": "provenance",
-            "detail": note,
-            "evidence": {"path": circuit.path, "circuit_id": circuit_id},
-        }
-        for circuit, (circuit_id, note) in zip(circuits, derived, strict=True)
-        if note is not None
-    }
+    decks: list[CircuitDeck] = []
+    notes: dict[str, dict[str, Any]] = {}
+    for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
+        decks.append(CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text=""))
+        if note is not None:
+            notes[circuit_id] = {
+                "code": "circuit_id_derived",
+                "kind": "provenance",
+                "detail": note,
+                "evidence": {"path": circuit.path, "circuit_id": circuit_id},
+            }
     return decks, notes
 
 
@@ -1227,20 +1237,22 @@ async def _load_matching_replay(
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
-def _cap_warnings(args: RunExperimentsInput) -> list[str]:
-    """What this call asked for past a cap, and the value used instead."""
-    notes: list[str | None] = [
-        cap_note("execution.wait_s", args.execution.wait_s, SUBMISSION_DWELL_CAP_S, "s"),
-    ]
-    if notes[0] is not None:
-        notes[0] += (
-            " The job keeps running; continue with "
+def _argument_warnings(args: RunExperimentsInput, wait_note: str | None) -> list[str]:
+    """What this call asked for that is served differently: a value held to its
+    cap, and a repeat in the attached analysis read once."""
+    notes: list[str] = []
+    if wait_note is not None:
+        notes.append(
+            f"{wait_note} The job keeps running; continue with "
             f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g})."
         )
-    per_run = args.analyze.include.per_run if args.analyze and args.analyze.include else None
-    if per_run is not None:
-        notes.append(per_run.cap_note("analyze.include.per_run.limit"))
-    return [note for note in notes if note is not None]
+    if args.analyze is not None:
+        notes.extend(f"analyze.{note}" for note in args.analyze.argument_notes())
+        per_run = args.analyze.include.per_run if args.analyze.include else None
+        held = per_run.limit_note() if per_run is not None else None
+        if held is not None:
+            notes.append(f"analyze.include.per_run.{held}")
+    return notes
 
 
 async def _dwell_and_respond(

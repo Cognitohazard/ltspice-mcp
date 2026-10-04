@@ -99,7 +99,7 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
     )
     analyze_block = args.strip_presentation()["analyze"]
     assert analyze_block["include"]["per_run"]["limit"] == analyze_mod.MAX_PAGE_SIZE
-    (note,) = experiments_mod._cap_warnings(args)
+    (note,) = experiments_mod._argument_warnings(args, None)
     assert f"analyze.include.per_run.limit={analyze_mod.MAX_PAGE_SIZE + 1}" in note
 
 

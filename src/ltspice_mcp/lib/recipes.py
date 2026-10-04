@@ -7,6 +7,7 @@ or ``field`` is rejected by schema validation instead of being ignored.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
@@ -313,6 +314,26 @@ class MultiRecipe(RecipeBase):
         # this abstract base doesn't declare it, so read it dynamically.
         return REDUCIBLE_FIELDS.get(getattr(self, "metric"), ())  # noqa: B009
 
+    def reduction_fields(self) -> list[tuple[str, str]]:
+        """The (field, row key) pairs a reduction reads in each row.
+
+        With 'field' set, that one. Without it, every reducible field, each row
+        key read once: two names for one key (a disturbance's 'deviation' and
+        'undershoot') are one number, reported under the first in table order.
+        """
+        keys = MULTI_FIELD_KEYS.get(getattr(self, "metric"), {})  # noqa: B009
+        if self.field:
+            return [(self.field, keys.get(self.field, self.field))]
+        pairs: dict[str, str] = {}
+        for name in self.reducible_fields():
+            pairs.setdefault(keys.get(name, name), name)
+        return [(name, key) for key, name in pairs.items()]
+
+    def field_for_row(self, field: str, row: Mapping[str, Any]) -> str:
+        """The name ``field`` is reported under for ``row``; a recipe whose
+        field names depend on what each row measured overrides this."""
+        return field
+
     @model_validator(mode="after")
     def _field_for_cross_run_work(self) -> MultiRecipe:
         # A spec is one verdict on one number. A reduction is per field, so
@@ -444,6 +465,13 @@ class EdgesRecipe(MultiRecipe):
     levels: Levels | None = None
     edge: Literal["rising", "falling", "auto"] = "auto"
     window: Window | None = None
+
+    def field_for_row(self, field: str, row: Mapping[str, Any]) -> str:
+        # 'rise_time' and 'fall_time' both read the row's transition time; a
+        # bare reduction reports it as the one the row measured.
+        if self.field is None and field in ("rise_time", "fall_time"):
+            return "rise_time" if row.get("is_rise_time", True) else "fall_time"
+        return field
 
 
 class TimingEndpoint(StrictModel):
