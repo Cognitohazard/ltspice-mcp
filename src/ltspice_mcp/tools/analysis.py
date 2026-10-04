@@ -1132,6 +1132,9 @@ _IMAGE_SCHEMA: dict[str, Any] = {
             "image": _IMAGE_SCHEMA,
             "image_path": {"type": "string"},
             "observations": OBSERVATIONS_SCHEMA,
+            # Carried only when the server adds its one read-the-guide
+            # reminder to a session's first reply (server.call_tool).
+            "hint": {"type": "string"},
         },
     },
 )

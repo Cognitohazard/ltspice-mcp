@@ -996,10 +996,6 @@ async def summary(
         # recipe, which is the thing that just failed (self-referential).
         raise ResultError(f"Failed to build summary: {e}", show_hint=False) from e
 
-    suggestions = services.suggestions_from_errors(facts.get("errors"), state.libraries)
-    if suggestions:
-        facts["suggestions"] = suggestions
-
     # Compute AC bandwidth metrics on AC raws. When ``signal`` is omitted,
     # auto-pick the first V(...) trace and warn — silently dropping
     # ac_bandwidth_metrics leaves the caller wondering why their AC summary had
