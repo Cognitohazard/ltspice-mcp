@@ -31,7 +31,7 @@ from ltspice_mcp.lib.deck_staging import (
     rewrite_staged_reference_cards,
     staged_reference_targets,
 )
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import parse_spice_value, unique_name
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
@@ -553,11 +553,7 @@ def derive_circuit_ids(
             continue
         stem = Path(path).stem
         base = sanitize_circuit_id(stem)
-        candidate, counter = base, 2
-        while candidate.casefold() in taken:
-            suffix = f"-{counter}"
-            candidate = base[: 64 - len(suffix)] + suffix
-            counter += 1
+        candidate = unique_name(base, taken, fold=True, max_len=64)
         taken.add(candidate.casefold())
         if candidate == stem:
             derived.append((candidate, None))
@@ -699,11 +695,10 @@ def expand_variations(
     circuits = normalize_circuit_decks(circuits)
     if validate_applies_to:
         validate_variation_circuit_ids(circuits, variations)
-    random_entries = [item for item in variations if isinstance(item, RandomVariation)]
     native_entries = [item for item in variations if isinstance(item, PdkNativeVariation)]
     if len({item.id.casefold() for item in native_entries}) != len(native_entries):
         raise VariationError("duplicate_native_family", "native family ids must be unique")
-    check_random_families([circuit.circuit_id for circuit in circuits], random_entries)
+    check_random_families([circuit.circuit_id for circuit in circuits], variations)
     projected = sum(projected_case_count(circuit.circuit_id, variations) for circuit in circuits)
     check_case_cap(projected, max_cases)
 

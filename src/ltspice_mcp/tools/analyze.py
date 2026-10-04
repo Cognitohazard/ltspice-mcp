@@ -38,7 +38,7 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
-from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import (
     diagnostic_collapse_key,
@@ -55,7 +55,6 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
-    MULTI_FIELD_KEYS,
     KeyedRecipe,
     MultiRecipe,
     OperatingPointRecipe,
@@ -70,11 +69,12 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    NotedModel,
     ResponseBudget,
     StrictModel,
     ToolInput,
-    cap_note,
     format_response,
+    held_to_cap,
     outcome_of,
     page_schema,
     registry,
@@ -111,38 +111,7 @@ _VALUES_OMITTED_WARNING = (
 _DigestCache = dict[tuple[str, int, int], str]
 
 
-def _first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
-    """``values`` without repeats, in first-seen order, and the repeats dropped."""
-    seen: set[Any] = set()
-    kept: list[Any] = []
-    repeats: list[Any] = []
-    for value in values:
-        (repeats if value in seen else kept).append(value)
-        seen.add(value)
-    return kept, repeats
-
-
-def _repeat_note(name: str, repeats: list[Any]) -> str:
-    """The note for repeated entries read once."""
-    listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
-    return f"{name} repeated {listed}; each is read once."
-
-
-class _NotedModel(StrictModel):
-    """A request model that adjusts what it was given and keeps a note saying so.
-
-    The notes are what a response reports in its hint or warnings; they ride
-    beside the fields, so the request identity built from the fields names the
-    adjusted request.
-    """
-
-    _notes: list[str] = PrivateAttr(default_factory=list)
-
-    def argument_notes(self) -> list[str]:
-        return list(self._notes)
-
-
-class CaseSelection(_NotedModel):
+class CaseSelection(NotedModel):
     case_ids: list[str] = Field(
         min_length=1,
         description=(
@@ -153,15 +122,11 @@ class CaseSelection(_NotedModel):
 
     @model_validator(mode="after")
     def _unique_cases(self) -> CaseSelection:
-        kept, repeats = _first_seen(self.case_ids)
-        if repeats:
-            # Past validate_assignment, which would run this validator again.
-            object.__setattr__(self, "case_ids", kept)
-            self._notes.append(_repeat_note("case_ids", repeats))
+        self.keep_first("case_ids")
         return self
 
 
-class AnalyzeSourceInput(_NotedModel):
+class AnalyzeSourceInput(NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
@@ -204,14 +169,9 @@ class AnalyzeSourceInput(_NotedModel):
                 raise ValueError("runs must be 'all' or a non-empty list")
             if any(index < 0 for index in self.runs):
                 raise ValueError("run indices must be non-negative integers")
-            kept, repeats = _first_seen(self.runs)
-            if repeats:
-                object.__setattr__(self, "runs", kept)
-                self._notes.append(_repeat_note("runs", repeats))
-        if isinstance(self.runs, CaseSelection):
-            if self.raw_path is not None:
-                raise ValueError("case_ids selection is available only for experiment jobs")
-            self._notes.extend(self.runs.argument_notes())
+            self.keep_first("runs")
+        if isinstance(self.runs, CaseSelection) and self.raw_path is not None:
+            raise ValueError("case_ids selection is available only for experiment jobs")
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
@@ -391,28 +351,26 @@ def coerce_per_run_default(value: Any) -> Any:
 class CappedPerRunLimit(StrictModel):
     """A per-run page size, held to ``MAX_PAGE_SIZE`` rather than refused.
 
-    The cap bounds one page, not what the caller may read, so a larger limit is
-    served at the cap and reported through :meth:`cap_note`. The held value is
-    what the model carries, so a request identity built from it names the page
-    actually served.
+    The cap bounds one MCP page, not what the caller may read, so a larger limit
+    is served at the cap and said so through :meth:`limit_note`, which only the
+    MCP page reports: the Python API returns every row whatever the page size.
+    The held value is what the model carries, so a request identity built from
+    it names the page actually served.
     """
 
     limit: int = Field(default=50, ge=1, description="Rows per page, held to 100.")
-    _requested_limit: int | None = PrivateAttr(default=None)
+    _limit_note: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _hold_limit_to_cap(self) -> CappedPerRunLimit:
-        if self.limit > MAX_PAGE_SIZE:
-            self._requested_limit = self.limit
-            # Past validate_assignment, which would run this validator again.
-            object.__setattr__(self, "limit", MAX_PAGE_SIZE)
+        limit, self._limit_note = held_to_cap("limit", self.limit, MAX_PAGE_SIZE)
+        # Past validate_assignment, which would run this validator again.
+        object.__setattr__(self, "limit", limit)
         return self
 
-    def cap_note(self, name: str) -> str | None:
+    def limit_note(self) -> str | None:
         """The warning that the limit was held to the cap, or None."""
-        if self._requested_limit is None:
-            return None
-        return cap_note(name, self._requested_limit, MAX_PAGE_SIZE)
+        return self._limit_note
 
 
 class PerRunInclude(CappedPerRunLimit):
@@ -425,7 +383,7 @@ class PerRunInclude(CappedPerRunLimit):
     )
 
 
-class AnalyzeInclude(_NotedModel):
+class AnalyzeInclude(NotedModel):
     """Optional response blocks. The default carries reductions, groups and spec
     verdicts; per-run rows, outliers and signal listings are opt-in."""
 
@@ -500,12 +458,10 @@ class AnalyzeInclude(_NotedModel):
                 # A bare name is the number's own name, which lives under 'value'.
                 path = f"value.{path}"
             resolved.append(path)
-        # A path named twice, or once bare and once under 'value', keeps one copy.
-        resolved, repeats = _first_seen(resolved)
-        if repeats:
-            self._notes.append(_repeat_note("include.fields", repeats))
         if resolved != self.fields:
             object.__setattr__(self, "fields", resolved)  # not re-validated
+        # A path named twice, or once bare and once under 'value', keeps one copy.
+        self.keep_first("fields")
         return self
 
 
@@ -556,9 +512,7 @@ class ContinueInput(StrictModel):
     )
 
 
-class AnalyzeResultsInput(StepSelectionFields, ToolInput):
-    _notes: list[str] = PrivateAttr(default_factory=list)
-
+class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
     sources: list[AnalyzeSourceInput] | None = Field(
         default=None,
         max_length=64,
@@ -639,12 +593,9 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput):
         for source in sources:
             if "label" in source.model_fields_set:
                 continue
-            label, counter = source.label, 2
-            while label in taken:
-                label, counter = f"{source.label}-{counter}", counter + 1
+            label = unique_name(source.label, taken)
             taken.add(label)
-            if label != source.label:
-                object.__setattr__(source, "label", label)
+            object.__setattr__(source, "label", label)
         keys = [
             str(item.get("key", "")) if isinstance(item, dict) else str(getattr(item, "key", ""))
             for item in self.recipes or []
@@ -652,20 +603,8 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput):
         nonempty = [key for key in keys if key]
         if len(set(nonempty)) != len(nonempty):
             raise ValueError("recipe keys must be unique")
-        kept, repeats = _first_seen(self.group_by)
-        if repeats:
-            object.__setattr__(self, "group_by", kept)
-            self._notes.append(_repeat_note("group_by", repeats))
+        self.keep_first("group_by")
         return self
-
-    def argument_notes(self) -> list[str]:
-        """What this request asked for that was read differently, one note each:
-        repeated entries read once, from here and from the nested models."""
-        notes = list(self._notes)
-        for index, source in enumerate(self.sources or []):
-            notes.extend(f"sources[{index}].{note}" for note in source.argument_notes())
-        notes.extend(self.include.argument_notes())
-        return notes
 
 
 @dataclass(frozen=True)
@@ -1190,6 +1129,24 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
     return work
 
 
+def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
+    """The request as a result set stores it: what a continuation replays.
+
+    ``work`` is the recipes as work items, and the per_run cursor is cleared,
+    since it is a position in the result rather than part of the request.
+    """
+    include = args.include.model_dump(mode="json")
+    if isinstance(include.get("per_run"), dict):
+        include["per_run"]["cursor"] = None
+    return {
+        "sources": [source.model_dump(mode="json") for source in args.sources or []],
+        "work": _work_items(list(args.recipes or [])),
+        "group_by": list(args.group_by),
+        **StepSelection.of(args).as_inputs(),
+        "include": include,
+    }
+
+
 def _request_hash(args: AnalyzeResultsInput) -> str:
     """The identity a per_run cursor is checked against.
 
@@ -1198,19 +1155,9 @@ def _request_hash(args: AnalyzeResultsInput) -> str:
     not a different request.
     """
     assert args.sources is not None and args.recipes is not None
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
-    include.pop("fields", None)
-    return result_store.canonical_hash(
-        {
-            "sources": [source.model_dump(mode="json") for source in args.sources],
-            "work": _work_items(list(args.recipes)),
-            "group_by": list(args.group_by),
-            **StepSelection.of(args).as_inputs(),
-            "include": include,
-        }
-    )
+    request = _request_inputs(args)
+    request["include"].pop("fields", None)
+    return result_store.canonical_hash(request)
 
 
 async def _create_result_set(
@@ -1239,16 +1186,11 @@ async def _create_result_set(
                     "digest_error": str(exc),
                 }
             )
-    work = _work_items(list(args.recipes))
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
+    request = _request_inputs(args)
+    work = request.pop("work")
     inputs = {
         "working_dir": str(state.working_dir),
-        "sources": [source.model_dump(mode="json") for source in args.sources],
-        "group_by": list(args.group_by),
-        **StepSelection.of(args).as_inputs(),
-        "include": include,
+        **request,
         "request_hash": _request_hash(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
         "missing": missing,
@@ -1775,38 +1717,11 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 _WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
 
 
-def _multi_fields(recipe: MultiRecipe, value: dict[str, Any]) -> list[tuple[str, str]]:
-    """The (field, row key) pairs a multi-field recipe's reduction reads in one row.
-
-    With 'field' set, that one. Without it, every reducible field, each row key
-    read once: two names for one key (a disturbance's 'deviation' and
-    'undershoot') are one number, reported under the first in table order. An
-    edge's transition time is reported as the rise or the fall time the row
-    measured.
-    """
-    # ``metric`` is the discriminant every concrete subclass sets; the base
-    # does not declare it.
-    metric: str = getattr(recipe, "metric")  # noqa: B009
-    keys = MULTI_FIELD_KEYS.get(metric, {})
-    if recipe.field:
-        return [(recipe.field, keys.get(recipe.field, recipe.field))]
-    pairs: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for name in recipe.reducible_fields():
-        actual = keys.get(name, name)
-        if actual in seen:
-            continue
-        seen.add(actual)
-        if metric == "edges" and actual == "transition_time":
-            name = "rise_time" if value.get("is_rise_time", True) else "fall_time"
-        pairs.append((name, actual))
-    return pairs
-
-
 def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Record, float]]]:
     # The reducer category is the base the recipe inherits (exactly one); a
     # variable-length recipe matches none and yields no samples.
     out: dict[str, list[tuple[Record, float]]] = {}
+    pairs = recipe.reduction_fields() if isinstance(recipe, MultiRecipe) else []
     for record in records:
         value = record.value
         if isinstance(recipe, ScalarRecipe):
@@ -1823,10 +1738,10 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
             if number is not None:
                 out.setdefault(field, []).append((record, number))
         elif isinstance(recipe, MultiRecipe):
-            for field, actual in _multi_fields(recipe, value):
+            for field, actual in pairs:
                 number = _number(value.get(actual))
                 if number is not None:
-                    out.setdefault(field, []).append((record, number))
+                    out.setdefault(recipe.field_for_row(field, value), []).append((record, number))
         elif isinstance(recipe, KeyedRecipe):
             # 'field' means one thing on every category: the single number both
             # a reduction and a spec read. Absent, a keyed recipe covers every
@@ -2573,10 +2488,9 @@ class AnalysisEvaluation:
     #: The session's tools, set only when rendering an MCP page, so a failure
     #: can say where its Python snippet runs; the neutral evaluation has none.
     served: frozenset[str] | None = None
-    # Arguments this call read differently from how it was asked (held to a
-    # cap, a repeat read once), each said in the hint. Set by the MCP handler:
-    # the request an evaluation carries is the stored one, already adjusted,
-    # so it no longer knows what was asked.
+    # What this call's arguments asked for that was read differently (a
+    # repeat read once; on an MCP page, a page size held to its cap), each
+    # said in the hint.
     argument_notes: tuple[str, ...] = ()
 
     @property
@@ -3389,11 +3303,17 @@ class _DriveStart:
     include: AnalyzeInclude
 
 
-#: The request fields a ``continue`` call may echo; it replays them from the
-#: stored result set, so a copy is accepted only when it is the same request.
-_CONTINUATION_ECHO_FIELDS = frozenset(
-    {"sources", "recipes", "include", "group_by", "step", "all_steps"}
-)
+#: The request fields a ``continue`` call may echo, each with the key the
+#: result set stores it under; it replays them, so a copy is accepted only when
+#: it is the same request.
+_CONTINUATION_ECHO_KEYS = {
+    "sources": "sources",
+    "recipes": "work",
+    "include": "include",
+    "group_by": "group_by",
+    "step": "step",
+    "all_steps": "all_steps",
+}
 
 
 def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.ResultSet) -> None:
@@ -3404,31 +3324,16 @@ def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.Re
     source, a recipe, the grouping, the step selection or an include option is
     refused, naming what changed.
     """
-    supplied = _CONTINUATION_ECHO_FIELDS & args.model_fields_set
+    supplied = _CONTINUATION_ECHO_KEYS.keys() & args.model_fields_set
     if not supplied:
         return
-    inputs = item.inputs
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
-    steps = StepSelection.of(args).as_inputs()
-    stored = {
-        "sources": inputs.get("sources"),
-        "recipes": item.work,
-        "include": inputs.get("include"),
-        "group_by": inputs.get("group_by"),
-        "step": inputs.get("step"),
-        "all_steps": inputs.get("all_steps"),
-    }
-    sent = {
-        "sources": [source.model_dump(mode="json") for source in args.sources or []],
-        "recipes": _work_items(list(args.recipes or [])),
-        "include": include,
-        "group_by": list(args.group_by),
-        "step": steps["step"],
-        "all_steps": steps["all_steps"],
-    }
-    changed = sorted(name for name in supplied if sent[name] != stored[name])
+    sent = _request_inputs(args)
+    stored = {**item.inputs, "work": item.work}
+    changed = sorted(
+        name
+        for name in supplied
+        if sent[_CONTINUATION_ECHO_KEYS[name]] != stored.get(_CONTINUATION_ECHO_KEYS[name])
+    )
     if changed:
         raise ResultError(
             "'continue' replays the stored request, and " + "/".join(changed) + " differ "
@@ -3735,6 +3640,7 @@ async def _evaluate_analysis_drive(
         natural_intra=intra_item,
         deferred=deferred,
         signals=signals,
+        argument_notes=tuple(args.argument_notes()),
     )
 
 
@@ -3856,14 +3762,15 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
-    notes = args.argument_notes()
-    held = args.include.per_run.cap_note("include.per_run.limit") if args.include.per_run else None
-    if held is not None:
-        notes.append(f"{held} Page on with per_run.next_cursor.")
+    assembly = await _evaluate_analysis_drive(args, state, page_stop=_PageStop())
+    held = args.include.per_run.limit_note() if args.include.per_run else None
     assembly = replace(
-        await _evaluate_analysis_drive(args, state, page_stop=_PageStop()),
+        assembly,
         served=frozenset(state.tool_dispatch),
-        argument_notes=tuple(notes),
+        argument_notes=(
+            *assembly.argument_notes,
+            *([f"include.per_run.{held} Page on with per_run.next_cursor."] if held else []),
+        ),
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
 
@@ -50,9 +50,9 @@ from ltspice_mcp.tools._base import (
     REPEATABLE_CHANGE_ANNOTATIONS,
     ResponseBudget,
     ToolInput,
-    cap_note,
     failures_schema,
     format_response,
+    held_to_cap,
     outcome_of,
     page_schema,
     path_denied_text,
@@ -1055,12 +1055,12 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
         timed_out: bool | None = None
         held: tuple[str, ...] = ()
         if isinstance(args, JobsWaitInput):
-            note = cap_note("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
+            timeout_s, note = held_to_cap("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
             held = () if note is None else (f"{note} Wait again to keep waiting.",)
             job, timed_out = await _wait_for_jobs_target(
                 job,
                 state,
-                timeout_s=min(args.timeout_s, JOBS_WAIT_CAP_S),
+                timeout_s=timeout_s,
                 wait_for=args.wait_for,
             )
         # A runs page carries no observations, so it skips the progress reads.
@@ -1127,7 +1127,7 @@ def render_jobs_data(
             "outcome": outcome_of(list_failures),
             **page,
             "observations": list(evaluation.observations),
-            "warnings": [],
+            "warnings": list(evaluation.warnings),
             "failures": list_failures,
             "hint": (
                 (
@@ -1230,13 +1230,17 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
     """Execute one jobs control-plane action with an action-discriminated response."""
     evaluation = await evaluate_jobs(args, state)
     built: _JobsBuilt | None = None
-    held: str | None = None
     if evaluation.error is None:
         page_limit = JOBS_PAGE_LIMIT
         if isinstance(args, JobsListInput):
-            # A page size is an MCP control; the Python API returns every group.
-            held = cap_note("limit", args.limit, JOBS_PAGE_LIMIT)
-            page_limit = min(args.limit, JOBS_PAGE_LIMIT)
+            # A page size is an MCP control; the Python API returns every group,
+            # so only this page says it was held.
+            page_limit, held = held_to_cap("limit", args.limit, JOBS_PAGE_LIMIT)
+            if held is not None:
+                evaluation = replace(
+                    evaluation,
+                    warnings=(f"{held} Page on with next_cursor.", *evaluation.warnings),
+                )
         try:
             budget = resolve_response_budget(args.budget, state)
             if budget.tokens is None:
@@ -1262,8 +1266,6 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
         built = render_jobs_data(evaluation)
 
     data, text = built
-    if held is not None and not evaluation.is_error:
-        data["warnings"] = [f"{held} Page on with next_cursor.", *data.get("warnings", [])]
     result = format_response(text, data)
     result.is_error = evaluation.is_error
     return result

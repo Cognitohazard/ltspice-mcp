@@ -11,10 +11,10 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, TypedDict, get_args, get_origin
+from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from ltspice_mcp.errors import PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
@@ -448,15 +448,66 @@ ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
 ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
 
 
-def cap_note(name: str, requested: float, cap: float, unit: str = "") -> str | None:
-    """The warning for an argument held to its cap, or None when it was within it.
+_Number = TypeVar("_Number", int, float)
+
+
+def held_to_cap(
+    name: str, requested: _Number, cap: _Number, unit: str = ""
+) -> tuple[_Number, str | None]:
+    """The value to use for an argument with a cap, and the warning when it was held.
 
     A cap bounds what one call costs, so a larger value is served at the cap
     and said so, not refused: the caller asked for more of the same thing.
     """
     if requested <= cap:
-        return None
-    return f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used."
+        return requested, None
+    return (
+        cap,
+        f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used.",
+    )
+
+
+def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
+    """``values`` without repeats, in first-seen order, and the repeats dropped."""
+    seen: set[Any] = set()
+    kept: list[Any] = []
+    repeats: list[Any] = []
+    for value in values:
+        (repeats if value in seen else kept).append(value)
+        seen.add(value)
+    return kept, repeats
+
+
+class NotedModel(StrictModel):
+    """A request model that normalizes what it was given and keeps a note saying so.
+
+    The notes ride beside the fields, so a request identity built from the
+    fields names the normalized request while the response can still say what
+    changed. :meth:`argument_notes` gathers a model's notes and those of every
+    nested ``NotedModel`` under its field path.
+    """
+
+    _notes: list[str] = PrivateAttr(default_factory=list)
+
+    def keep_first(self, name: str) -> None:
+        """Drop repeated entries from list field ``name``, first-seen order kept, and note it."""
+        kept, repeats = first_seen(getattr(self, name))
+        if repeats:
+            # Past validate_assignment, which would run the model's validators again.
+            object.__setattr__(self, name, kept)
+            listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
+            self._notes.append(f"{name} repeated {listed}; each is read once.")
+
+    def argument_notes(self) -> list[str]:
+        notes = list(self._notes)
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            items = enumerate(value) if isinstance(value, list) else [(None, value)]
+            for index, item in items:
+                if isinstance(item, NotedModel):
+                    path = name if index is None else f"{name}[{index}]"
+                    notes.extend(f"{path}.{note}" for note in item.argument_notes())
+        return notes
 
 
 def outcome_of(
