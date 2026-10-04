@@ -76,9 +76,9 @@ tool-surface changes.
   `preexisting` view, on an existing sheet unless it carried
   `expected_sha256`. The token guards against a lost update, which only a
   write can cause, so it is now required only to commit. A dry run returns the
-  sheet's current `sha256` (and names it in `hint`), and a token it is given
-  that does not match is reported in `observations` rather than refused; a
-  commit quoting that token is still `revision_conflict`.
+  sheet's current `sha256`, and a token it is given that does not match is
+  reported in `observations` rather than refused; a commit quoting that token
+  is still `revision_conflict`.
 - `edit_schematic`'s `set_component_value` refused any value with a space
   outside braces, quotes, a waveform's parentheses or a `MODEL KEY=VALUE` list,
   so a source's `AC 1` or `DC 5 AC 1`, a BJT's `2N3904 2` or `NPN 8`, and a
@@ -91,6 +91,21 @@ tool-surface changes.
   as LTspice netlists it, not the instance name. A waveform followed by a
   parameter (`PULSE(...) Rser=1`) keeps its parentheses in Value and puts the
   parameter in SpiceLine.
+- Running a schematic on ngspice replaced every `µ` and `μ` in the exported
+  netlist with `u` and deleted every `§`, including in comments, quoted strings
+  and include paths, so an `.include` naming a folder with either character in
+  it pointed at a file that does not exist. Only what ngspice cannot read is
+  changed now: the `.backanno` card is dropped, and the `§` LTspice writes into
+  an instance name (`R§Load`) leaves that name wherever the deck names it,
+  `.meas` references included. A value's micro sign is left to staging, which
+  spells it `u` for every simulator without touching a path.
+- A deck or include that staging had to rewrite, and a case deck a variation
+  wrote, was always written as UTF-8. A cp1252 deck, which is what LTspice XVII
+  writes, came out with every other non-ASCII character re-encoded, and XVII
+  read a `§` in an instance name as `Â§`, renaming the instance. A rewritten
+  file is now written in the encoding it was read in, with UTF-8 used only for
+  text that encoding cannot spell. A UTF-16 or UTF-32 deck is still rewritten
+  as UTF-8, since the edits made to a deck at run time are ASCII bytes.
 - The guide described what ngspice prints for a top-level `.meas` and for a
   sectioned `.lib` under the default compatibility mode, but `run_experiments`
   refuses both decks before they run (lint `meas-ngspice-batch` and
@@ -186,15 +201,34 @@ tool-surface changes.
   record, read while the job was still running, and that write could land
   after the owner's `completed` one. The owner had exited by then, so the next
   reader found a running job with no owner and recovered it as interrupted.
-  Seen with two scripts detaching the same request. Only the owning process
-  writes a job's record now; the caller that replayed still gets the
-  `idempotent_replay` observation in its receipt.
+  Seen with two scripts detaching the same request. A replay now leaves the
+  job's record as it was, in every process: it used to add an
+  `idempotent_replay` observation to the record, which every later reader saw,
+  the original submitter included. The receipt's `replayed: true` is the fact
+  about the call that replayed, and that observation is no longer written.
+- The configuration file written on the first tool call set every key to the
+  default of the release that wrote it, `default = "ltspice"` included. A host
+  with only ngspice then logged a fallback warning on every start, and a later
+  release's default (`default_budget`, `open_plot`, `timeout` and the rest)
+  never reached a server whose file predated it. Every key is now written
+  commented out with its default shown, so the file sets nothing until a line
+  is uncommented. A file written by an earlier release keeps its values.
 - On Windows, a job record read while its running job rewrote it could read as
   missing: opening a file at the instant a rename replaces it fails with access
   denied for a moment. The request gate then minted a second job for a repeated
   `request_id` instead of replaying the first, and a lookup, a listing or a
   cancel could report a live job as not found. Reading a job record now retries
   that denial on the same short schedule writing one already did.
+- `analyze_results` read every raw and log whole on every call, to hash them,
+  against the call's own time budget: a large raw spent most of the budget
+  before any recipe ran, and a hash that ran out of it failed the recipe. A
+  source is now identified by the size and modification time of its raw and
+  log. Content digests are taken only when a reply hands out a cursor or
+  continuation, or `include.provenance` asks for them, and the call resuming
+  the set compares them, so a rewrite that kept both size and timestamp is
+  still reported as `source_drift`. Both hashes are bounded and fail nothing:
+  a digest not taken in time, or a comparison cut short on resume, leaves the
+  source to its size and time.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
   progress claimed the worker only after it had booted, so a second call
@@ -355,6 +389,25 @@ tool-surface changes.
   sheets in different folders each keep their own. A redrawn local symbol is
   read again. A `base="blank"` build looks beside its target, not beside the
   temporary template it starts from.
+- The server's default response budget added "presentation was reduced" to
+  any response over it, even when its trim removed nothing, and receipts and
+  `jobs` then told the caller to "ask again with a larger 'budget'", a field
+  the caller had not set. The note is now written only when the trim emptied
+  something with content, names what it emptied, and under the server default
+  sends the caller to no budget: `analyze_results` says each row still names
+  its source and `include.provenance` keeps `source_hashes`. `inspect` no
+  longer repeats the note in its `hint`.
+- Hint and observation text that restated the structured fields is gone.
+  Every receipt's hint no longer repeats the `progress` counts, and a finished
+  receipt for ten or more cases no longer carries a pitch for the Python API
+  (the server's instructions introduce it). A clean terminal receipt's hint is
+  one status line. `plot_waveform` drops `plot_written`, `step_axis_unioned`,
+  `open_skipped` and `widget_delivered`, whose facts are the reply's own
+  counts, `opened` and `delivery`, and reports `phase_unwrapped` only when a
+  summary's phase lies outside ±180 deg, where it differs from the wrapped
+  angle. `edit_schematic` lists in `stages` only the stages that did not
+  complete (the no-op `stage_assets` is gone), and its commit hint no longer
+  restates the `wiring` counts.
 
 ### Added
 
@@ -530,6 +583,20 @@ tool-surface changes.
 
 ### Changed
 
+- `verify_circuit` reports micro-sign value suffixes (`value_suffix_micro_sign`)
+  as one observation per file, with their count, lines and tokens, which leaves
+  the outcome `complete`. LTspice 24 and later read the UTF-8 `µ` they write, so
+  an LTspice export was otherwise `partial` with one warning per value. A
+  warning per value remains where the server knows of a reader that would
+  misread the file: the session's LTspice is XVII or earlier (from the
+  executable's name, or the build a run on it reported) or the deck names XVII
+  as its writer, and the file is not cp1252. The warning's evidence names that
+  reader. Both value-suffix rules are now under the per-rule finding cap, with
+  the usual `showing N of M` observation.
+- `run_experiments` reports the `micro_sign_folded` observation only when the
+  job runs on an LTspice that decodes decks as cp1252. Staging still spells
+  every micro-sign suffix `u`; for every other simulator that reads the same as
+  the source, so the observation was on nearly every LTspice run.
 - The guide states each rule once, in the section it belongs to, and points to
   it from elsewhere. LTspice-only syntax (`.step`, PWL extras, `startup`) moved
   from the fundamentals into the LTspice section, and `run_experiments` Monte
@@ -679,6 +746,13 @@ tool-surface changes.
   (`"LX*"` names `"LX"`), and one that is empty or holds a space is refused
   too. Both kinds report these as `invalid_prefix`; `hierarchy` reported
   `invalid_query`.
+- `verify_circuit`'s `export` check writes `<name>.net` beside the schematic by
+  default (`export_to: "sidecar"`), the file LTspice itself writes beside a
+  schematic it runs and the one `run_experiments` exports through. The default
+  used to be `managed`, which copied the schematic and every `.asy`, `.lib`,
+  `.sub`, `.inc` and `.mod` under its folder into the store to avoid that file,
+  and is where a relative include was once refused as `path_denied`. `managed`
+  is still available for a call that must write nothing beside the schematic.
 
 ### Removed
 

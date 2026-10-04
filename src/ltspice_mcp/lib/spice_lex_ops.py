@@ -23,6 +23,9 @@ Public surface:
   comments, ``.control`` blocks, include paths and double-quoted strings.
 - ``fold_micro_suffix_cards(cards)`` — the same scan, with each micro sign
   found at a suffix position rewritten as ``u`` in place.
+- ``strip_instance_section_signs(cards)`` — drop the ``§`` LTspice's
+  netlister writes into an instance name, from that name wherever the deck
+  names it, and nowhere else.
 
 Future cross-card transformations (component rename, subcircuit
 inline/extract, structural diff, atomic change-set commit) will land
@@ -367,6 +370,19 @@ def _unquoted_spans(body: str) -> Iterator[tuple[int, int]]:
         start = closing + 1
 
 
+def _text_spans(card: SpiceCard) -> Iterator[tuple[int, int]]:
+    """The spans of ``card``'s body that hold SPICE text rather than a name.
+
+    An include-family directive's operand is a path, and a double-quoted string
+    is a file name or a label, so neither is yielded. Comments never reach a
+    body, and a ``.control`` block has none.
+    """
+    body = card.body
+    if card.kind == "directive" and body.split(None, 1)[0].casefold() in INCLUDE_HEADS:
+        return
+    yield from _unquoted_spans(body)
+
+
 def value_suffix_sites(cards: Iterable[SpiceCard]) -> list[ValueSuffixSite]:
     """Every number in ``cards`` whose suffix position holds a non-ASCII character.
 
@@ -380,9 +396,7 @@ def value_suffix_sites(cards: Iterable[SpiceCard]) -> list[ValueSuffixSite]:
         body = card.body
         if not body or body.isascii():
             continue
-        if card.kind == "directive" and body.split(None, 1)[0].casefold() in INCLUDE_HEADS:
-            continue
-        for start, end in _unquoted_spans(body):
+        for start, end in _text_spans(card):
             for match in _SUFFIX_SITE_RE.finditer(body, start, end):
                 number, suffix, tail = match.groups()
                 sites.append(
@@ -398,19 +412,58 @@ def value_suffix_sites(cards: Iterable[SpiceCard]) -> list[ValueSuffixSite]:
     return sites
 
 
+#: Why a micro sign's meaning depends on its reader, said once for every
+#: surface that reports one (the linter, verify_circuit, staging).
+MICRO_SIGN_READERS = (
+    "LTspice 24 and later write a micro sign in UTF-8 (C2 B5) and read it back as "
+    "micro; LTspice XVII decodes a deck as cp1252, reads those two bytes as 'Âµ' "
+    "and drops the scale without a diagnostic. 'u' is micro in every encoding and "
+    "to every simulator."
+)
+
+
 def fold_micro_suffix_cards(cards: list[SpiceCard]) -> tuple[ValueSuffixSite, ...]:
     """Spell every micro-sign scale suffix in ``cards`` as ``u``, in place.
 
     Returns the sites folded, whose ``token`` keeps the original spelling.
     Only the suffix character changes: comments, names, paths and every other
-    character of the deck are left as they are.
-
-    LTspice 24 and later write ``µ`` as UTF-8 (``C2 B5``); LTspice XVII
-    decodes a deck as cp1252, reads those bytes as ``Âµ``, and drops the
-    scale without a diagnostic, so ``23µ`` runs as 23. ``u`` means micro in
-    every encoding and to every simulator.
+    character of the deck are left as they are. Why: ``MICRO_SIGN_READERS``.
     """
     folded = tuple(site for site in value_suffix_sites(cards) if site.micro)
     for site in folded:
         site.card.replace_span(site.offset, site.offset + 1, "u")
     return folded
+
+
+#: What LTspice's netlister writes between the element letter it prefixes and
+#: an instance name that does not start with that letter: ``R§Load``.
+SECTION_SIGN = "§"
+
+
+def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
+    """Drop ``§`` from every instance name that holds one, wherever it is named.
+
+    ngspice's parser does not accept the character, so a deck LTspice exported
+    names those instances without it for ngspice: on the instance card itself
+    and in every other card that names the instance (``I(R§Load)`` in a
+    ``.meas``). Nothing else changes: a ``§`` in a comment, a double-quoted
+    string or an include path is part of a file name or text, not an instance.
+    """
+    renamed = {
+        card.instance_ref: card.instance_ref.replace(SECTION_SIGN, "")
+        for card in cards
+        if card.kind == "instance" and card.instance_ref and SECTION_SIGN in card.instance_ref
+    }
+    if not renamed:
+        return
+    by_name = {old.casefold(): new for old, new in renamed.items()}
+    names = "|".join(re.escape(old) for old in sorted(renamed, key=len, reverse=True))
+    pattern = re.compile(rf"(?<![\w{SECTION_SIGN}])(?:{names})(?![\w{SECTION_SIGN}])", re.I)
+    for card in cards:
+        if SECTION_SIGN not in card.body:
+            continue
+        found = [
+            m for start, end in _text_spans(card) for m in pattern.finditer(card.body, start, end)
+        ]
+        for match in reversed(found):
+            card.replace_span(match.start(), match.end(), by_name[match.group(0).casefold()])

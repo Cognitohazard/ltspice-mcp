@@ -14,7 +14,7 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock
 
 import jsonschema
@@ -402,9 +402,8 @@ class TestReceiptThenDwell:
         assert data["progress"]["terminal"] == 0
         assert data["progress"]["remaining"] == 1
         assert "jobs(wait)" in data["hint"]
-        counts = data["progress"]
-        assert f"{counts['terminal']}/{counts['expanded']}" in data["hint"]
-        assert f"{counts['remaining']} remaining" in data["hint"]
+        # The counts are in 'progress'; the hint does not restate them.
+        assert "remaining" not in data["hint"]
 
         await await_until(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
@@ -521,13 +520,12 @@ class TestReceiptThenDwell:
 
 
 @pytest.mark.asyncio
-class TestApiDoorPointer:
-    """A many-case terminal receipt points at the Python API; a
-    spot-check receipt does not. The pointer is aimed at the loop shape,
-    where per-call wire overhead compounds — pointing every receipt at the
-    Python API would be noise on exactly the calls it cannot help."""
+class TestTerminalReceiptHint:
+    """A terminal receipt's hint is what the caller acts on next, and nothing
+    the structured fields already say. The Python API is introduced once, in
+    the server's instructions, not on every sweep's receipt."""
 
-    async def test_sweep_receipt_points_at_the_python_door(
+    async def test_a_sweep_receipt_carries_no_api_pitch(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -548,32 +546,15 @@ class TestApiDoorPointer:
             )
         )
         assert data["completeness"]["expanded"] == 10
-        assert "from ltspice_mcp.api import Api" in data["hint"]
+        assert data["status"] == "completed"
+        assert data["hint"] == f"Experiment {data['job_id']} is completed."
 
-    async def test_spot_check_receipt_does_not(
+    async def test_a_truncated_receipt_names_the_route_to_the_rest(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        recorded_fixture_simulator(monkeypatch)
-        deck = _deck(work_dir / "spot-pointer.cir")
-        data = _assert_schema(
-            await handle_run_experiments(_args(deck, "spot-pointer", wait_s=30), state_with_sim)
-        )
-        assert data["completeness"]["expanded"] == 1
-        assert "ltspice_mcp.api" not in data["hint"]
-
-    async def test_truncated_receipt_keeps_the_pointer(
-        self,
-        state_with_sim: SessionState,
-        work_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """A receipt big enough to truncate its inline run page is the biggest
-        loop of all — the truncation route must not displace the pointer
-        (found in review: the truncated branch returned early and every
-        50+-case receipt silently lost it)."""
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "trunc-pointer.cir")
         values = [f"{k}k" for k in range(1, 56)]
@@ -590,8 +571,10 @@ class TestApiDoorPointer:
         )
         assert data["completeness"]["expanded"] == 55
         assert data["runs"]["truncated"] is True
-        assert "jobs(runs)" in data["hint"]
-        assert "from ltspice_mcp.api import Api" in data["hint"]
+        assert data["hint"] == (
+            f"The inline run page is truncated; use jobs(runs) with job_id "
+            f"{data['job_id']} for the remaining cases."
+        )
 
 
 @pytest.mark.asyncio
@@ -729,7 +712,7 @@ class TestPostClaimFailures:
 
 
 class TestIdempotency:
-    async def test_matching_replay_returns_token_and_observation(
+    async def test_matching_replay_returns_the_same_token(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -747,44 +730,39 @@ class TestIdempotency:
 
         assert replay["job_id"] == first["job_id"]
         assert replay["control_token"] == first["control_token"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         # A zero dwell returns before the coordinator has necessarily reached the
         # simulator, so wait for the one submission rather than racing it.
         await await_until(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
-    async def test_only_the_call_that_replayed_is_told_it_replayed(
+    async def test_a_replay_leaves_the_record_as_it_was(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """Replaying is a fact about a call; the note on the record is not.
-
-        The record's observation is read by everyone who looks at the job
-        afterwards, the original submitter included — and that caller did
-        submit. So the per-call fact is the receipt's own ``replayed`` field,
-        and the durable note says only what happened to the record.
-        """
+        """Replaying is a fact about a call, and the receipt's ``replayed``
+        carries it. The record is not changed: everyone who reads the job later,
+        the original submitter included, did not replay anything."""
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / "replay-voice.cir")
         args = _args(deck, "replay-voice")
 
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         assert first["replayed"] is False
-        assert _observation_code(first, "idempotent_replay") is None
+        await state_with_sim.job_registry.drain_pending()
+        record = Store(work_dir).job_record(first["job_id"])
+        before = record.read_bytes()
 
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        assert replay["replayed"] is True
+        await state_with_sim.job_registry.drain_pending()
 
-        # The note itself reads the same to the caller that replayed and to
-        # every later reader, because it describes the record either way.
+        assert replay["replayed"] is True
+        assert record.read_bytes() == before
         recorded = await _status_payload(first["job_id"], state_with_sim)
         for payload in (replay, recorded):
-            note = next(
-                item for item in payload["observations"] if item["code"] == "idempotent_replay"
-            )
-            assert "A later call carrying this request_id" in note["detail"], note
+            assert _observation_code(payload, "idempotent_replay") is None
 
     async def test_a_replay_in_another_process_leaves_the_owners_record_alone(
         self,
@@ -842,8 +820,6 @@ class TestIdempotency:
             "the replay loaded its own job"
         )
         assert replay["replayed"] is True
-        # The caller that replayed is still told so, from its own copy.
-        assert _observation_code(replay, "idempotent_replay") is not None
         assert on_disk_status() == "completed"
 
     async def test_different_payload_replay_conflicts(
@@ -1322,7 +1298,7 @@ class TestReplayRejectsChangedSources:
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         assert replay["job_id"] == first["job_id"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         assert len(submitted) == 1
 
     async def test_deleted_source_conflicts_rather_than_replaying(
@@ -1416,7 +1392,7 @@ class TestReplayRejectsChangedSources:
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         assert replay["job_id"] == first["job_id"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         assert len(submissions) == 1
 
     async def test_live_include_conflicts_rather_than_replaying(
@@ -1696,17 +1672,37 @@ class TestLintModes:
             if line.startswith(".include")
         )
         assert await asyncio.to_thread(Path(include).read_bytes) == b"C1 out 0 23u\n"
-        folded = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
-        assert {Path(item["evidence"]["file"]).name for item in folded} == {
-            "micro.cir",
-            "core.inc",
-        }
+        # The simulator reads 'u' as the source's µ meant, so nothing is reported.
+        assert not [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
         assert not [
             finding
             for block in data["lint"]
             for finding in block["findings"]
             if finding["rule_id"].startswith("value-suffix")
         ]
+
+    async def test_the_fold_is_reported_when_the_simulator_decodes_decks_as_cp1252(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """On LTspice XVII the source's UTF-8 µ and the staged 'u' read
+        differently, so the receipt says the staged copy is not the source."""
+
+        class FakeXVII(FakeSim):
+            spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
+
+        state = SessionState.create(config, available={"ltspice": FakeXVII})
+        fake_simulator(monkeypatch)
+        deck = work_dir / "micro.cir"
+        deck.write_bytes("* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 23µ\n.op\n.end\n".encode())
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "micro-xvii"), state))
+
+        (folded,) = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
+        assert folded["evidence"]["tokens"] == ["23µ"]
+        assert folded["evidence"]["reader"] == FakeXVII.spice_exe[0]
 
     async def test_mis_decoded_micro_blocks_submission(
         self,
@@ -2545,7 +2541,7 @@ class TestAttachedAnalysis:
         )
 
         assert wide["request_id"] == lean["request_id"]
-        assert any(item["code"] == "idempotent_replay" for item in wide["observations"])
+        assert wide["replayed"] is True
 
         lean_value = lean["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
         wide_value = wide["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
@@ -2686,7 +2682,7 @@ class TestAttachedAnalysis:
         )
         full = _assert_schema(await handle_run_experiments(request, state_with_sim))
         replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         await state_with_sim.job_registry.drain_pending()
         job = state_with_sim.all_jobs[full["job_id"]]
         assert job.analysis.result is not None
@@ -2697,12 +2693,7 @@ class TestAttachedAnalysis:
         snapshot_identity = job.analysis.result
         pristine_snapshot = copy.deepcopy(job.analysis.result)
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
-        trim_rung = response_budget.Rung(
-            response_budget.RUNG_TRIM,
-            budget=10_000,
-            measured=0,
-            reserve=receipts_mod._RUN_BUDGET_NOTES.reserve,
-        )
+        trim_rung = response_budget.Rung(response_budget.RUNG_TRIM, budget=10_000, measured=0)
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
         manual_snapshot = experiments_mod.snapshot_receipt(
             job,
@@ -2731,10 +2722,8 @@ class TestAttachedAnalysis:
         # does not (replay observation, progress-augmented hint), so aim the
         # budget a third of the rung gap above the measured answer size —
         # still below trim — instead of exactly at it.
-        budget = (
-            answer_size + (trim_size - answer_size) // 3 + receipts_mod._RUN_BUDGET_NOTES.reserve
-        )
-        assert trim_size > budget - receipts_mod._RUN_BUDGET_NOTES.reserve
+        budget = answer_size + (trim_size - answer_size) // 3 + response_budget.NOTE_RESERVE_TOKENS
+        assert trim_size > budget - response_budget.NOTE_RESERVE_TOKENS
         answer = _assert_schema(
             await handle_run_experiments(
                 request.model_copy(update={"budget": budget}),
@@ -3345,7 +3334,9 @@ class TestReceiptWeight:
             )
         )
 
-        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        # The default's trim found nothing with content to take, so nothing
+        # says the receipt was reduced.
+        assert _observation_code(data, "budget_truncated") is None
         assert data["source"][0]["sha256"] == sha256_file(deck)
 
     async def test_the_server_default_budget_keeps_a_staging_disclosure(
@@ -3374,7 +3365,7 @@ class TestReceiptWeight:
             )
         )
 
-        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        assert _observation_code(data, "budget_truncated") is None
         entries = [e for src in data["source"] for e in src.get("manifest", [])]
         assert [e for e in entries if e["live"]], "the live include must still be disclosed"
 

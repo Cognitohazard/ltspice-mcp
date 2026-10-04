@@ -373,7 +373,7 @@ async def test_dry_run_needs_no_expected_sha_and_hands_back_the_digest(asc_state
     assert data["commit_state"] == "not_committed"
     assert "error" not in data
     assert data["sha256"] == current
-    assert current in data["hint"]
+    assert "expected_sha256" in data["hint"]
     assert data["observations"] == []
     assert _fingerprint(work_dir) == before
 
@@ -1318,7 +1318,8 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
     else:
         assert Path(named).resolve() == (work_dir / "ref.cir").resolve()  # noqa: ASYNC240
     assert "netlist" not in data
-    assert data["stages"][-1] == {"stage": "reference", "ok": True}
+    # Every stage completed, so none is listed.
+    assert data["stages"] == []
 
 
 async def test_reference_outside_sandbox_names_the_text_alternative(asc_state):
@@ -1627,14 +1628,8 @@ async def test_failure_after_a_completed_stage_is_not_reported_against_it(
     )
     assert data["commit_state"] == "committed"
     assert data["outcome"] == "partial"
-    assert [s for s in data["stages"] if s["stage"] == "reference"] == [
-        {"stage": "reference", "ok": True}
-    ]
-    assert data["stages"][-1] == {
-        "stage": "response",
-        "ok": False,
-        "error": "hint assembly blew up",
-    }
+    # The reference stage completed, so the one entry is the response stage's.
+    assert data["stages"] == [{"stage": "response", "ok": False, "error": "hint assembly blew up"}]
     assert data["error"]["stage"] == "response"
 
 

@@ -5,7 +5,7 @@ import os
 import tempfile
 import tomllib
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -774,8 +774,29 @@ def default_allowed_paths(working_dir: Path) -> list[Path]:
     return [working_dir] + ([scratch] if scratch else [])
 
 
+def _shown_default(tbl: Any, field_name: str, *, example: Any = MISSING) -> None:
+    """Show ``field_name``'s setting in ``tbl`` as a comment, never as a live key.
+
+    The comment holds the field's default, or ``example`` for a field whose
+    default is not a value a file can spell (unset, or computed at start-up).
+    The key is the one the loader reads (``config_key``), so the two cannot
+    drift apart. Written live, the key would pin the default of the release
+    that wrote the file: a later release's default, or a value detection would
+    have chosen, would never reach the server reading it.
+    """
+    key = config_key(field_name).rsplit(".", 1)[1]
+    value = (
+        ServerConfig.__dataclass_fields__[field_name].default if example is MISSING else example
+    )
+    tbl.add(comment(f"{key} = {tomlkit.item(value).as_string()}"))
+
+
 def generate_default_config(path: Path) -> None:
     """Generate a self-documenting default configuration file.
+
+    Every key is commented out, its default shown, so the file sets nothing:
+    each setting keeps the default of the release reading it until a user
+    uncomments it.
 
     Args:
         path: Path where the TOML config file should be written.
@@ -789,28 +810,28 @@ def generate_default_config(path: Path) -> None:
             "All settings have sensible defaults and can be overridden with environment variables"
         )
     )
+    doc.add(comment("Every key is commented out, showing its default or, where it has none to"))
+    doc.add(comment("write, an example. Uncomment a line to set it."))
     doc.add(nl())
 
     sim = table()
     sim.add(comment("Preferred simulator: ltspice, ngspice, qspice, xyce"))
-    sim.add(
-        comment("Leave empty or set to null for auto-detection (prefers LTSpice if available)")
-    )
-    sim.add("default", "ltspice")
+    sim.add(comment("Unset: auto-detect, preferring LTspice when it is found"))
+    _shown_default(sim, "simulator", example="ltspice")
     sim.add(nl())
     sim.add(comment('Allowlist of simulators to expose, e.g. ["ltspice", "ngspice"].'))
     sim.add(comment("Empty = auto-detect every supported simulator."))
-    sim.add(SIM_ENABLED_KEY, [])
+    _shown_default(sim, "enabled_simulators", example=[])
     sim.add(nl())
     sim.add(comment("Explicit path to simulator executable (overrides auto-detection)"))
-    sim.add(comment("Leave empty for auto-detection"))
-    sim.add(SIM_PATH_KEY, "")
+    sim.add(comment("Unset: auto-detect"))
+    _shown_default(sim, "simulator_exe", example="C:\\Program Files\\ADI\\LTspice\\LTspice.exe")
     sim.add(nl())
     sim.add(comment("ngspice compatibility mode (ngbehavior). Unset = spicelib's default"))
     sim.add(comment("'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned"))
     sim.add(comment("'.lib <file> <section>' PDK corner selection. Set a mode with neither,"))
     sim.add(comment('"hsa" or "kia", for standard-SPICE / PDK decks.'))
-    sim.add(comment('ngbehavior = "hsa"'))
+    _shown_default(sim, "ngbehavior", example="hsa")
     doc.add(SIM_SECTION, sim)
     doc.add(nl())
 
@@ -821,51 +842,51 @@ def generate_default_config(path: Path) -> None:
     sec.add(comment("writes its throwaway decks: <tempdir>/claude-<uid> on Linux and macOS,"))
     sec.add(comment("%TEMP%\\claude on Windows. Set your own list to replace that default;"))
     sec.add(comment("the server re-reads this list on the next call after you save the file:"))
-    sec.add(comment('allowed_paths = ["."]'))
+    _shown_default(sec, "allowed_paths", example=["."])
     doc.add(SANDBOX_SECTION, sec)
     doc.add(nl())
 
     # Simulation section
     sim_conf = table()
     sim_conf.add(comment("Maximum number of concurrent simulations."))
-    sim_conf.add(comment("Default: number of CPU cores, capped at 8. Uncomment to override."))
-    sim_conf.add(comment("max_parallel = 4"))
+    sim_conf.add(comment("Default: number of CPU cores, capped at 8."))
+    _shown_default(sim_conf, "max_parallel_sims", example=4)
     sim_conf.add(nl())
     sim_conf.add(comment("Maximum cases after run_experiments variation expansion."))
-    sim_conf.add("max_experiment_cases", 1024)
+    _shown_default(sim_conf, "max_experiment_cases")
     sim_conf.add(nl())
     sim_conf.add(comment("Bound on one LTspice schematic netlist export, in seconds"))
-    sim_conf.add("timeout", 300.0)
+    _shown_default(sim_conf, "default_timeout")
     sim_conf.add(nl())
     sim_conf.add(comment("Per-case simulation timeout in seconds when a request sets none."))
     sim_conf.add(comment("Default: no limit. execution.run_timeout_s overrides it."))
-    sim_conf.add(comment("run_timeout = 3600"))
+    _shown_default(sim_conf, "run_timeout", example=3600)
     sim_conf.add(nl())
     sim_conf.add(comment("Preflight size guard, estimated from .tran/.ac/.dc directives."))
     sim_conf.add(comment("Warn when the estimated point count exceeds this:"))
-    sim_conf.add("max_estimated_points", 20_000_000)
+    _shown_default(sim_conf, "max_estimated_points")
     sim_conf.add(comment("Refuse a run whose estimated raw (MB, single-trace) exceeds this:"))
-    sim_conf.add("max_raw_mb", 4096)
+    _shown_default(sim_conf, "max_raw_mb")
     doc.add("simulation", sim_conf)
     doc.add(nl())
 
     # Analysis section
     analysis = table()
     analysis.add(comment("Maximum waveform data points to return per trace"))
-    analysis.add("max_points", 10000)
+    _shown_default(analysis, "max_points_returned")
     analysis.add(comment("Whole-call work budget for analyze_results, in seconds"))
-    analysis.add("analysis_budget_s", 60.0)
+    _shown_default(analysis, "analysis_budget_s")
     analysis.add(comment("Default response budget in tokens for consolidated calls (0 disables)"))
-    analysis.add("default_budget", 4000)
+    _shown_default(analysis, "default_budget")
     analysis.add(comment("Retention for raw-path-only analysis result sets, in hours"))
-    analysis.add("result_set_ttl_hours", 24.0)
+    _shown_default(analysis, "result_set_ttl_hours")
     analysis.add(
         comment("Open plot_waveform's chart in a local browser window (a call's open wins)")
     )
-    analysis.add("open_plot", True)
+    _shown_default(analysis, "open_plot")
     analysis.add(comment("Attach a PNG of plot_waveform's chart for a vision model (needs the"))
     analysis.add(comment("raster extra; a call's attach_plot wins)"))
-    analysis.add("attach_plot", False)
+    _shown_default(analysis, "attach_plot")
     doc.add("analysis", analysis)
     doc.add(nl())
 
@@ -875,7 +896,7 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(comment("(the default) advertises the tools with the per-argument descriptions"))
     tools_tbl.add(comment('removed, read on demand through inspect(kind="reference"); "full"'))
     tools_tbl.add(comment("advertises them as registered. No tool gains or loses a capability."))
-    tools_tbl.add("listing", "compact")
+    _shown_default(tools_tbl, "tool_listing")
     tools_tbl.add(
         comment("run_code = false removes the tool that runs a Python snippet with the engine")
     )
@@ -891,7 +912,7 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(
         comment("reachable by more than one trusted client, for example through a proxy.")
     )
-    tools_tbl.add("run_code", True)
+    _shown_default(tools_tbl, "run_code")
     doc.add("tools", tools_tbl)
     doc.add(nl())
 
@@ -900,8 +921,7 @@ def generate_default_config(path: Path) -> None:
     schem.add(comment("Custom paths to LTspice symbol (.asy) files for .asc schematic support"))
     schem.add(comment("On Windows and WSL these are auto-detected from the LTspice installation"))
     schem.add(comment("Set this to override auto-detection or for non-standard installs"))
-    schem.add(comment('Example: symbol_paths = ["/path/to/LTspice/lib/sym"]'))
-    schem.add("symbol_paths", [])
+    _shown_default(schem, "symbol_paths", example=["/path/to/LTspice/lib/sym"])
     doc.add("schematic", schem)
     doc.add(nl())
 
@@ -909,7 +929,7 @@ def generate_default_config(path: Path) -> None:
     logging_tbl = table()
     logging_tbl.add(comment("Stderr logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL."))
     logging_tbl.add(comment('Set "INFO" for the startup banner and per-run detail.'))
-    logging_tbl.add("level", "WARNING")
+    _shown_default(logging_tbl, "log_level")
     doc.add("logging", logging_tbl)
     doc.add(nl())
 
@@ -924,14 +944,14 @@ def generate_default_config(path: Path) -> None:
             "Lets a restarted server surface prior runs and recent circuits; set to false to disable."
         )
     )
-    state_tbl.add("persist_jobs", True)
+    _shown_default(state_tbl, "persist_jobs")
     state_tbl.add(
         comment(
             "preload_recent_count: at startup, eagerly load persisted jobs for this many "
             "recently-touched circuits. 0 disables preload (lazy-only)."
         )
     )
-    state_tbl.add("preload_recent_count", 10)
+    _shown_default(state_tbl, "preload_recent_count")
     doc.add("state", state_tbl)
 
     atomic_write_text(path, tomlkit.dumps(doc), durable=False)

@@ -287,6 +287,11 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "stages": {
             "type": "array",
+            "description": (
+                "The commit-protocol stages that did not complete (revision_check, "
+                "apply_ops, stage_asc, rename, then the post-commit views, reference "
+                "and response); empty when every stage did."
+            ),
             "items": {
                 "type": "object",
                 "properties": {
@@ -657,18 +662,16 @@ def _preexisting_block(findings: int, label_only_pins: int) -> dict[str, Any]:
     }
 
 
-def _dry_run_hint(has_ops: bool, current: str | None) -> str:
-    """What a dry run or an op-less read hands the caller for the commit that follows.
+def _dry_run_hint(has_ops: bool, exists: bool) -> str:
+    """The route from a dry run or an op-less read to the commit that follows.
 
-    ``current`` is the target's sha256 as it stood under the edit guard, or None
-    when the target does not exist yet (a create needs no token).
+    A sheet that exists needs its digest, which the reply carries as ``sha256``;
+    a create needs no token.
     """
-    lead = "Dry run — resubmit without dry_run to commit." if has_ops else "Read only."
-    if current is None:
-        return lead
-    return (
-        f"{lead} The sheet's current sha256 is {current}; quote it as expected_sha256 to commit."
-    )
+    lead = "Dry run — resubmit without dry_run to commit" if has_ops else "Read only"
+    if not exists:
+        return f"{lead}."
+    return f"{lead}; quote this reply's sha256 as expected_sha256 to commit."
 
 
 def _preexisting_hint(block: dict[str, Any], *, listed: bool) -> str | None:
@@ -1092,20 +1095,18 @@ async def _evaluate_edit_schematic(
             present_mcp_views=present_mcp_views,
         )
 
-    def _stage(name: str, ok: bool = True, error: str | None = None) -> None:
-        """Append one commit-protocol stage entry (the ok path omits ``error``).
+    def _failed(name: str, error: str | None = None) -> None:
+        """Record a commit-protocol stage that did not complete.
 
-        Recording an outcome also ends that stage: ``post_commit_stage`` drops
-        back to "response", so a later failure cannot be appended as a second,
-        contradictory entry for a stage that already reported ok. A stage names
-        itself right before it runs; nothing has to remember to un-name it.
+        A stage that completed adds nothing a caller acts on: the protocol's
+        order is fixed and ``commit_state`` says how far it got, so ``stages``
+        lists only the stage that failed (or the reference check that found a
+        mismatch).
         """
-        nonlocal post_commit_stage
-        entry: dict[str, Any] = {"stage": name, "ok": ok}
+        entry: dict[str, Any] = {"stage": name, "ok": False}
         if error is not None:
             entry["error"] = error
         stages.append(entry)
-        post_commit_stage = "response"
 
     async with edit_guard(target):
         # --- revision guard (inside the guard so a peer's committed write is seen)
@@ -1124,7 +1125,7 @@ async def _evaluate_edit_schematic(
                 # write would take, so a retry that quotes it is exactly as
                 # safe as one quoting a prior read: a peer's write between the
                 # two still loses the race and comes back as revision_conflict.
-                _stage("revision_check", False, "expected_sha256 missing")
+                _failed("revision_check", "expected_sha256 missing")
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1159,7 +1160,7 @@ async def _evaluate_edit_schematic(
                     )
                 )
             if current != expected:
-                _stage("revision_check", False, "sha mismatch")
+                _failed("revision_check", "sha mismatch")
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1191,13 +1192,11 @@ async def _evaluate_edit_schematic(
         revision_notes: list[str] = []
         if current is not None and expected is not None and current != expected:
             # Only a dry run reaches here with a stale token: a write refused above.
-            _stage("revision_check", False, "sha mismatch")
+            _failed("revision_check", "sha mismatch")
             revision_notes.append(
                 f"expected_sha256 {expected} does not match the current file "
                 f"({current}); a commit quoting it would return revision_conflict."
             )
-        else:
-            _stage("revision_check")
 
         use_template = args.base == "blank" or not exists
         editor = _build_editor(target, use_template, state)
@@ -1222,7 +1221,7 @@ async def _evaluate_edit_schematic(
             # --- op failure → transactional abort (nothing written)
             if abort_reason is not None:
                 state.editors.invalidate(target)
-                _stage("apply_ops", False, abort_reason)
+                _failed("apply_ops", abort_reason)
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1247,7 +1246,6 @@ async def _evaluate_edit_schematic(
                         ),
                     )
                 )
-            _stage("apply_ops")
 
             profile = wiring_profile(editor)
             legend, label_only = _pin_tables(
@@ -1310,7 +1308,7 @@ async def _evaluate_edit_schematic(
                                 filter(
                                     None,
                                     (
-                                        _dry_run_hint(bool(args.ops), current),
+                                        _dry_run_hint(bool(args.ops), current is not None),
                                         left_out_hint,
                                     ),
                                 )
@@ -1324,16 +1322,15 @@ async def _evaluate_edit_schematic(
                     )
                 )
 
-            # --- commit protocol: assets (none today) → stage → rename LAST.
+            # --- commit protocol: stage → rename LAST.
             # The whole write path runs off the loop as one shielded unit so a
             # transport cancel can't abandon a half-commit while the guard releases.
-            _stage("stage_assets")
             outcome = await asyncio.shield(
                 asyncio.to_thread(_commit_asc, committed_text, target, build_id, encoding)
             )
             if not outcome.staged:
                 state.editors.invalidate(target)
-                _stage("stage_asc", False, outcome.error)
+                _failed("stage_asc", outcome.error)
                 return _commit_failure_response(
                     args,
                     target,
@@ -1342,10 +1339,9 @@ async def _evaluate_edit_schematic(
                     outcome.error or "",
                     present_mcp_views=present_mcp_views,
                 )
-            _stage("stage_asc")
             if not outcome.renamed:
                 state.editors.invalidate(target)
-                _stage("rename", False, outcome.error)
+                _failed("rename", outcome.error)
                 return _commit_failure_response(
                     args,
                     target,
@@ -1354,15 +1350,14 @@ async def _evaluate_edit_schematic(
                     outcome.error or "",
                     present_mcp_views=present_mcp_views,
                 )
-            _stage("rename")
             state.editors.invalidate(target)
             # The bytes we just staged and renamed ARE the file — hash them in
             # memory instead of re-reading the target back off disk.
             committed_sha = hashlib.sha256(committed_text.encode(encoding)).hexdigest()
 
             # --- post-commit: everything below keeps commit_state='committed'
-            # Views report no stage entry of their own, so they open and close
-            # their name by hand; a stage that calls _stage() only opens it.
+            # Each post-commit stage names itself while it runs and hands back
+            # to "response" when it is over.
             post_commit_stage = "views"
             neutral_views = _build_edit_views(
                 profile, legend, pins_reported, preexisting_rows, committed_sha
@@ -1386,7 +1381,11 @@ async def _evaluate_edit_schematic(
                 exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
                 mismatch = comparison_mismatch(verification)
-                _stage("reference", not mismatch)
+                # The stage is over: a later failure is the response's, never
+                # a second verdict on the reference.
+                post_commit_stage = "response"
+                if mismatch:
+                    _failed("reference")
                 # A confirmed match is the answer, and the exported deck only
                 # restates the reference the caller supplied. A mismatch, a
                 # compare error or no verdict keeps it: it is the sheet's side
@@ -1394,7 +1393,7 @@ async def _evaluate_edit_schematic(
                 if mismatch:
                     netlist = exported
 
-            hint = _commit_hint(profile, verification, left_out_hint)
+            hint = _commit_hint(verification, left_out_hint)
             return finish(
                 EditSchematicEvaluation(
                     data=_envelope(
@@ -1425,10 +1424,8 @@ async def _evaluate_edit_schematic(
             state.editors.invalidate(target)
             if committed_sha is None:
                 raise
-            # Read the name before recording it: _stage ends the stage it
-            # records, so post_commit_stage is "response" by the time it returns.
             failed_stage = post_commit_stage
-            _stage(failed_stage, False, str(exc))
+            _failed(failed_stage, str(exc))
             return _post_commit_failure_response(
                 args,
                 target,
@@ -1693,11 +1690,9 @@ def _post_commit_failure_response(
     )
 
 
-def _commit_hint(profile: dict[str, int], verification: dict | None, left_out: str | None) -> str:
-    parts = [
-        f"Committed. Of {profile['pins_total']} pins, {profile['pins_wired']} are on wires and "
-        f"{profile['pins_label_only']} carry a net-label only."
-    ]
+def _commit_hint(verification: dict | None, left_out: str | None) -> str:
+    """What a committed batch leaves the caller to act on; ``wiring`` has the counts."""
+    parts = ["Committed."]
     if left_out:
         parts.append(left_out)
     if verification is not None:
