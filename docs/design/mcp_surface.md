@@ -1100,7 +1100,9 @@ Python API), which are never capped. The gate stays a whole-file answer.
     each instance's own reference (the last segment), so a one-letter
     prefix still selects an element type
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
-    search requires query; enumerate requires libs
+    search requires query and fuzzy-matches it; enumerate requires libs and,
+    given a query, lists the names containing it (case-insensitive) rather
+    than refusing it
 {kind: "reference", query?, limit? (default 5, cap 20)}
     the tools' own vocabulary: each tool's top-level arguments, plus the
     branches — recipes, ops, variation kinds, query kinds, checks and job
