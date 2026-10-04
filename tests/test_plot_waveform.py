@@ -480,12 +480,14 @@ class TestRender:
             for i, (f, h) in enumerate(zip(freqs, response, strict=True))
         )
         raw = work_dir / "three_pole.raw"
-        raw.write_text(
-            "Title: * three pole\nDate: x\nPlotname: AC Analysis\nFlags: complex forward log\n"
-            f"No. Variables: 2\nNo. Points: {len(freqs)}\nOffset: 0.0\n"
-            "Command: Linear Technology Corporation LTspice XVII\nVariables:\n"
-            "\t0\tfrequency\tfrequency\n\t1\tV(out)\tvoltage\nValues:\n" + rows,
-            encoding="ascii",
+        # Bytes, so the file holds exactly these newlines on every platform.
+        raw.write_bytes(
+            (
+                "Title: * three pole\nDate: x\nPlotname: AC Analysis\nFlags: complex forward log\n"
+                f"No. Variables: 2\nNo. Points: {len(freqs)}\nOffset: 0.0\n"
+                "Command: Linear Technology Corporation LTspice XVII\nVariables:\n"
+                "\t0\tfrequency\tfrequency\n\t1\tV(out)\tvoltage\nValues:\n" + rows
+            ).encode("ascii")
         )
 
         data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
