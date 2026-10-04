@@ -287,6 +287,11 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "stages": {
             "type": "array",
+            "description": (
+                "The commit-protocol stages that did not complete (revision_check, "
+                "apply_ops, stage_asc, rename, then the post-commit views, reference "
+                "and response); empty when every stage did."
+            ),
             "items": {
                 "type": "object",
                 "properties": {
@@ -1079,18 +1084,22 @@ async def _evaluate_edit_schematic(
         )
 
     def _stage(name: str, ok: bool = True, error: str | None = None) -> None:
-        """Append one commit-protocol stage entry (the ok path omits ``error``).
+        """End one commit-protocol stage, recording it only when it did not succeed.
 
-        Recording an outcome also ends that stage: ``post_commit_stage`` drops
-        back to "response", so a later failure cannot be appended as a second,
-        contradictory entry for a stage that already reported ok. A stage names
-        itself right before it runs; nothing has to remember to un-name it.
+        A stage that completed adds nothing a caller acts on: the protocol's
+        order is fixed and ``commit_state`` says how far it got, so ``stages``
+        lists only the stage that failed (or the reference check that found a
+        mismatch). Recording an outcome also ends that stage:
+        ``post_commit_stage`` drops back to "response", so a later failure
+        cannot be reported against a stage that already completed. A stage
+        names itself right before it runs; nothing has to remember to un-name it.
         """
         nonlocal post_commit_stage
-        entry: dict[str, Any] = {"stage": name, "ok": ok}
-        if error is not None:
-            entry["error"] = error
-        stages.append(entry)
+        if not ok:
+            entry: dict[str, Any] = {"stage": name, "ok": ok}
+            if error is not None:
+                entry["error"] = error
+            stages.append(entry)
         post_commit_stage = "response"
 
     async with edit_guard(target):
@@ -1296,10 +1305,9 @@ async def _evaluate_edit_schematic(
                     )
                 )
 
-            # --- commit protocol: assets (none today) → stage → rename LAST.
+            # --- commit protocol: stage → rename LAST.
             # The whole write path runs off the loop as one shielded unit so a
             # transport cancel can't abandon a half-commit while the guard releases.
-            _stage("stage_assets")
             outcome = await asyncio.shield(
                 asyncio.to_thread(_commit_asc, committed_text, target, build_id, encoding)
             )
@@ -1366,7 +1374,7 @@ async def _evaluate_edit_schematic(
                 if mismatch:
                     netlist = exported
 
-            hint = _commit_hint(profile, verification, left_out_hint)
+            hint = _commit_hint(verification, left_out_hint)
             return finish(
                 EditSchematicEvaluation(
                     data=_envelope(
@@ -1665,11 +1673,9 @@ def _post_commit_failure_response(
     )
 
 
-def _commit_hint(profile: dict[str, int], verification: dict | None, left_out: str | None) -> str:
-    parts = [
-        f"Committed. Of {profile['pins_total']} pins, {profile['pins_wired']} are on wires and "
-        f"{profile['pins_label_only']} carry a net-label only."
-    ]
+def _commit_hint(verification: dict | None, left_out: str | None) -> str:
+    """What a committed batch leaves the caller to act on; ``wiring`` has the counts."""
+    parts = ["Committed."]
     if left_out:
         parts.append(left_out)
     if verification is not None:
