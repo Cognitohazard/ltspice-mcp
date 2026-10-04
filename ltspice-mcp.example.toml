@@ -23,6 +23,12 @@
 # "hsa" or "kia", for standard-SPICE / PDK decks.
 # ngbehavior = "hsa"
 
+# More executables of one family, each run by naming it per call as
+# execution.simulator = "ltspice:<name>"; the plain family name keeps
+# running the one above. The family is read off the file name; when the
+# name says nothing, write the key as "family:name". Probed at startup.
+# executables = {xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"}
+
 [security]
 # Paths accessible to the server (sandbox). Left unset, the default is the
 # working directory plus the Claude Code scratch directory, where an agent

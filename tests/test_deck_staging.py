@@ -540,7 +540,7 @@ class TestSimulatorLibraryRoots:
         monkeypatch.setattr(
             wsl,
             "get_ltspice_lib_paths",
-            lambda: [str(install / "sym"), str(install), str(missing)],
+            lambda generation=None: [str(install / "sym"), str(install), str(missing)],
         )
         roots = simulator_library_roots(LTspice)
 

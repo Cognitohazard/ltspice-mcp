@@ -433,6 +433,7 @@ CapabilityField: TypeAlias = Literal[
     "config_path",
     "python",
     "simulators",
+    "named_executables",
     "default_simulator",
     "exporter_available",
     "render",
@@ -451,9 +452,9 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, whether the .asc exporter is available,
-    job persistence, allowed roots, the configured limits, and the linter
-    version."""
+    reported builds and raw dialects, the named executables, whether the .asc
+    exporter is available, job persistence, allowed roots, the configured
+    limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -928,33 +929,42 @@ def _python_runtime_facts() -> dict[str, Any]:
     }
 
 
+def _build_facts(
+    state: SessionState, cls: type, executable: SimulatorExecutable | None
+) -> dict[str, Any]:
+    """What one simulator class runs: its last reported build, its dialect, and
+    the program it launches."""
+    reported = services.reported_version(state, executable)
+    info: dict[str, Any] = {
+        # What a run on this same executable said about itself; nothing
+        # is launched to ask. Null until one has run.
+        "version": reported[0] if reported else None,
+        "version_source": reported[1] if reported else None,
+        "dialect": dialect_for_simulator_name(cls.__name__),
+    }
+    if executable is not None:
+        # The simulator itself, not its launcher: under Wine the command
+        # starts with "wine".
+        info["executable"] = executable.path
+        info["executable_sha256"] = executable.sha256
+    return info
+
+
 def _do_capabilities(
     state: SessionState,
     raster: RasterSupport,
     executables: Mapping[str, SimulatorExecutable | None],
 ) -> dict[str, Any]:
-    """The capabilities report. ``raster`` and ``executables`` (each available
-    simulator's ``executable_identity``) are computed off the loop by the
-    caller."""
+    """The capabilities report. ``raster`` and ``executables`` (the
+    ``executable_identity`` of each available simulator and named executable,
+    by family name or selector) are computed off the loop by the caller."""
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
-        executable = executables.get(name)
-        reported = services.reported_version(state, executable)
-        info: dict[str, Any] = {
+        simulators[name] = {
             "available": True,
             "default": cls is state.default_simulator,
-            # What a run on this same executable said about itself; nothing
-            # is launched to ask. Null until one has run.
-            "version": reported[0] if reported else None,
-            "version_source": reported[1] if reported else None,
-            "dialect": dialect_for_simulator_name(cls.__name__),
+            **_build_facts(state, cls, executables.get(name)),
         }
-        if executable is not None:
-            # The simulator itself, not its launcher: under Wine the command
-            # starts with "wine".
-            info["executable"] = executable.path
-            info["executable_sha256"] = executable.sha256
-        simulators[name] = info
     # Every known-but-undetected simulator appears with the exact keys that
     # would turn it on — the config self-diagnosis surface. Detection runs at
     # startup, so a fix always ends in a server restart; the remediation says
@@ -966,10 +976,22 @@ def _do_capabilities(
                 "remediation": simulator_remediation(name, state.config),
             }
 
+    # The other builds a run can be put on, by the selector that names one in
+    # execution.simulator. A configured executable that could not be bound is
+    # not here; the diagnostics below say why.
+    named_executables = {
+        selector: {
+            "family": selector.partition(":")[0],
+            **_build_facts(state, cls, executables.get(selector)),
+        }
+        for selector, cls in sorted(state.named_simulators.items())
+    }
+
     return {
         "config_path": str(state.config.config_path),
         "python": _python_runtime_facts(),
         "simulators": simulators,
+        "named_executables": named_executables,
         "default_simulator": (
             state.default_simulator.__name__ if state.default_simulator else None
         ),
@@ -1771,10 +1793,13 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
         wanted = set(query.fields) if query.fields is not None else None
-        # Executables are identified only for a report that shows them.
-        simulators = (
-            dict(state.available_simulators) if wanted is None or "simulators" in wanted else {}
-        )
+        # Executables are identified only for a report that shows them. A
+        # selector carries a ':' and a family name never does, so the two
+        # tables share one mapping.
+        simulators = {
+            **(state.available_simulators if wanted is None or "simulators" in wanted else {}),
+            **(state.named_simulators if wanted is None or "named_executables" in wanted else {}),
+        }
 
         def probe() -> tuple[RasterSupport, dict[str, SimulatorExecutable | None]]:
             # Off the loop: the first successful raster probe loads the native

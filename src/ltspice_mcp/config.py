@@ -124,6 +124,8 @@ SIM_PATH_KEY = "path"
 SIM_ENABLED_KEY = "enabled"
 SIM_PATH_ENV = "LTSPICE_MCP_SIMULATOR_EXE"
 SIM_ENABLED_ENV = "LTSPICE_MCP_ENABLED_SIMULATORS"
+SIM_EXECUTABLES_KEY = "executables"
+SIM_EXECUTABLES_ENV = "LTSPICE_MCP_SIMULATOR_EXECUTABLES"
 # The sandbox keys, named for the same reason: every refusal names them.
 SANDBOX_SECTION = "security"
 SANDBOX_KEY = "allowed_paths"
@@ -148,6 +150,41 @@ def _toml_simulator_exe(value: Any) -> Any:
 def _toml_enabled_simulators(value: Any) -> Any:
     names = _validated_string_list(value, f"{SIM_SECTION}.{SIM_ENABLED_KEY}")
     return _SKIP if names is None else [x.strip().lower() for x in names]
+
+
+def _add_executable(entries: dict[str, Path], key: str, path: object, source: str) -> None:
+    """Add one named executable under its lower-cased key, if it has a shape.
+
+    Whether the key names a family that can run, and whether the path is a
+    simulator at all, is decided at detection, where the verdict reaches the
+    capabilities report instead of the log only.
+    """
+    if not key.strip():
+        logger.warning("%s: a named executable needs a name; ignoring %r", source, path)
+    elif not isinstance(path, str) or not path.strip():
+        logger.warning("%s: executable %r must be a path string; ignoring %r", source, key, path)
+    else:
+        entries[key.strip().lower()] = Path(path.strip())
+
+
+def _toml_simulator_executables(value: Any) -> Any:
+    """``[simulator.executables]``: ``name = "path"``, or a table per family.
+
+    ``[simulator.executables.ngspice]`` with ``dev = "..."`` is the same entry
+    as ``"ngspice:dev" = "..."`` one level up.
+    """
+    source = f"config: {SIM_SECTION}.{SIM_EXECUTABLES_KEY}"
+    if not isinstance(value, dict):
+        logger.warning("%s must be a table of name = path; ignoring %r", source, value)
+        return _SKIP
+    entries: dict[str, Path] = {}
+    for key, item in value.items():
+        if isinstance(item, dict):
+            for name, path in item.items():
+                _add_executable(entries, f"{key}:{name}", path, source)
+        else:
+            _add_executable(entries, key, item, source)
+    return entries
 
 
 def _toml_ngbehavior(value: Any) -> Any:
@@ -214,6 +251,21 @@ def _env_enabled_simulators(value: str) -> Any:
     # Comma- or os.pathsep-separated list of simulator names.
     sep = "," if "," in value else os.pathsep
     return [x.strip().lower() for x in value.split(sep) if x.strip()]
+
+
+def _env_simulator_executables(value: str) -> Any:
+    # ``name=path`` entries, separated by ';' on every platform: not os.pathsep,
+    # which on POSIX is the ':' that joins a family to a name (``ngspice:dev``),
+    # and a Windows path has a ':' after its drive letter. Split on the first
+    # '=' only, so a path may hold one.
+    entries: dict[str, Path] = {}
+    for item in filter(str.strip, value.split(";")):
+        key, sep, path = item.partition("=")
+        if sep:
+            _add_executable(entries, key, path, SIM_EXECUTABLES_ENV)
+        else:
+            logger.warning("%s: expected name=path, got %r; ignoring", SIM_EXECUTABLES_ENV, item)
+    return entries
 
 
 def _env_ngbehavior(value: str) -> Any:
@@ -324,6 +376,14 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_toml=_toml_enabled_simulators,
         env=SIM_ENABLED_ENV,
         from_env=_env_enabled_simulators,
+    ),
+    _Setting(
+        field="simulator_executables",
+        section=SIM_SECTION,
+        key=SIM_EXECUTABLES_KEY,
+        from_toml=_toml_simulator_executables,
+        env=SIM_EXECUTABLES_ENV,
+        from_env=_env_simulator_executables,
     ),
     _Setting(
         field="ngbehavior",
@@ -525,6 +585,16 @@ class ServerConfig:
 
     simulator_exe: Path | None = None
     """Explicit path to simulator executable. Overrides auto-detection."""
+
+    simulator_executables: dict[str, Path] = field(default_factory=dict)
+    """Further executables of a simulator family, by name, each selected per
+    run as ``execution.simulator = "<family>:<name>"`` (``"ltspice:xvii"``)
+    while the plain family name keeps running ``simulator_exe`` or the detected
+    install. A key is ``name`` or ``family:name``; without the family it is
+    read off the executable's file name (``XVIIx64.exe`` is LTspice), and an
+    executable whose name says nothing needs it written. Lower-cased as read.
+    ``[simulator.executables]``, or ``LTSPICE_MCP_SIMULATOR_EXECUTABLES`` as
+    ``name=path`` entries separated by ``;``. Probed at startup."""
 
     ngbehavior: str | None = None
     """ngspice compatibility mode (``ngbehavior``). ``None`` leaves spicelib's
@@ -832,6 +902,14 @@ def generate_default_config(path: Path) -> None:
     sim.add(comment("'.lib <file> <section>' PDK corner selection. Set a mode with neither,"))
     sim.add(comment('"hsa" or "kia", for standard-SPICE / PDK decks.'))
     _shown_default(sim, "ngbehavior", example="hsa")
+    sim.add(nl())
+    sim.add(comment("More executables of one family, each run by naming it per call as"))
+    sim.add(comment('execution.simulator = "ltspice:<name>"; the plain family name keeps'))
+    sim.add(comment("running the one above. The family is read off the file name; when the"))
+    sim.add(comment('name says nothing, write the key as "family:name". Probed at startup.'))
+    xvii = tomlkit.inline_table()
+    xvii.update({"xvii": "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"})
+    _shown_default(sim, "simulator_executables", example=xvii)
     doc.add(SIM_SECTION, sim)
     doc.add(nl())
 
