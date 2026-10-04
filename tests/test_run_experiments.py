@@ -14,7 +14,7 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock
 
 import jsonschema
@@ -76,32 +76,34 @@ def test_step_and_all_steps_are_exclusive_on_the_attached_block():
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
-    """One cap, both surfaces.
+    """One cap, both surfaces, held rather than refused.
 
-    The attached block is handed straight to analyze_results, so a per_run
-    limit run_experiments advertises but that engine rejects would be a lever
-    that cannot work. Both bounds must come from the same constant, and the
-    over-cap request must be refused at submission, not at the analysis stage.
+    The attached block is handed straight to analyze_results, so its limit is
+    that engine's own model: an over-cap request is held to the cap at
+    submission, and the request the job records names the page it will serve.
     """
-    advertised = AnalysisPerRun.model_json_schema()["properties"]["limit"]["maximum"]
-    engine = analyze_mod.PerRunInclude.model_json_schema()["properties"]["limit"]["maximum"]
+    assert issubclass(AnalysisPerRun, analyze_mod.CappedPerRunLimit)
+    assert issubclass(analyze_mod.PerRunInclude, analyze_mod.CappedPerRunLimit)
+    for model in (AnalysisPerRun, analyze_mod.PerRunInclude):
+        assert "maximum" not in model.model_json_schema()["properties"]["limit"]
 
-    assert advertised == engine == analyze_mod.MAX_PAGE_SIZE
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": "over-cap",
+            "circuits": [{"path": "dut.cir"}],
+            "analyze": {
+                "recipes": [{"key": "vout", "metric": "summary"}],
+                "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
+            },
+        }
+    )
+    analyze_block = args.strip_presentation()["analyze"]
+    assert analyze_block["include"]["per_run"]["limit"] == analyze_mod.MAX_PAGE_SIZE
+    (note,) = experiments_mod._argument_warnings(args, None)
+    assert f"analyze.include.per_run.limit={analyze_mod.MAX_PAGE_SIZE + 1}" in note
 
-    with pytest.raises(ValidationError):
-        RunExperimentsInput.model_validate(
-            {
-                "request_id": "over-cap",
-                "circuits": [{"path": "dut.cir"}],
-                "analyze": {
-                    "recipes": [{"key": "vout", "metric": "summary"}],
-                    "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
-                },
-            }
-        )
 
-
-def test_wait_caps_keep_the_submission_and_control_plane_contracts():
+def test_wait_caps_are_held_not_advertised_as_a_maximum():
     run_schema = build_input_schema(RunExperimentsInput)
     execution_schema = resolve_local_ref(
         run_schema,
@@ -119,14 +121,32 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
         ),
     )
 
-    assert execution_schema["properties"]["wait_s"]["maximum"] == 120
-    assert wait_branch["properties"]["timeout_s"]["maximum"] == 300
+    # A strict client checks a maximum before sending and would refuse on the
+    # server's behalf; the descriptions name the cap instead.
+    assert "maximum" not in execution_schema["properties"]["wait_s"]
+    assert "maximum" not in wait_branch["properties"]["timeout_s"]
+    assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
-    with pytest.raises(ValidationError) as excinfo:
-        experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})
-    message = str(excinfo.value)
-    assert 'jobs(action="wait"' in message
-    assert "timeout_s<=300" in message
+
+@pytest.mark.asyncio
+async def test_a_dwell_past_its_cap_is_held_and_names_the_continuation(
+    state_with_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    submissions: list[str] = []
+    fake_simulator(monkeypatch, submissions)
+    deck = _deck(work_dir / "dwell.cir")
+
+    data = _assert_schema(
+        await handle_run_experiments(_args(deck, "dwell-past-cap", wait_s=900), state_with_sim)
+    )
+
+    assert "error" not in data, data.get("error")
+    assert len(submissions) == 1
+    (note,) = [w for w in data["warnings"] if "execution.wait_s" in w]
+    assert "execution.wait_s=900s" in note and "120s was used" in note
+    assert "jobs(action='wait', timeout_s<=300)" in note
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():
@@ -335,6 +355,26 @@ class TestReceiptThenDwell:
         assert set(data["progress"]) == {"expanded", "terminal", "remaining"}
         assert len(submissions) == 1
 
+    async def test_a_spice_suffixed_deck_runs_from_a_cir_copy(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """``.spice`` is what xschem and the sky130 testbenches write. The
+        simulator is handed a ``.cir`` copy, which every simulator reads."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "tb.spice")
+
+        result = await handle_run_experiments(_args(deck, "spice-suffix"), state_with_sim)
+        data = _assert_schema(result)
+
+        assert data["outcome"] == "complete", data
+        assert data["completeness"]["produced"] == 1
+        assert len(submissions) == 1
+        assert Path(submissions[0]).suffix == ".cir"
+
     async def test_zero_dwell_returns_receipt_then_job_finishes(
         self,
         state_with_sim: SessionState,
@@ -362,9 +402,8 @@ class TestReceiptThenDwell:
         assert data["progress"]["terminal"] == 0
         assert data["progress"]["remaining"] == 1
         assert "jobs(wait)" in data["hint"]
-        counts = data["progress"]
-        assert f"{counts['terminal']}/{counts['expanded']}" in data["hint"]
-        assert f"{counts['remaining']} remaining" in data["hint"]
+        # The counts are in 'progress'; the hint does not restate them.
+        assert "remaining" not in data["hint"]
 
         await await_until(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
@@ -481,13 +520,12 @@ class TestReceiptThenDwell:
 
 
 @pytest.mark.asyncio
-class TestApiDoorPointer:
-    """A many-case terminal receipt points at the Python API; a
-    spot-check receipt does not. The pointer is aimed at the loop shape,
-    where per-call wire overhead compounds — pointing every receipt at the
-    Python API would be noise on exactly the calls it cannot help."""
+class TestTerminalReceiptHint:
+    """A terminal receipt's hint is what the caller acts on next, and nothing
+    the structured fields already say. The Python API is introduced once, in
+    the server's instructions, not on every sweep's receipt."""
 
-    async def test_sweep_receipt_points_at_the_python_door(
+    async def test_a_sweep_receipt_carries_no_api_pitch(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -508,32 +546,15 @@ class TestApiDoorPointer:
             )
         )
         assert data["completeness"]["expanded"] == 10
-        assert "from ltspice_mcp.api import Api" in data["hint"]
+        assert data["status"] == "completed"
+        assert data["hint"] == f"Experiment {data['job_id']} is completed."
 
-    async def test_spot_check_receipt_does_not(
+    async def test_a_truncated_receipt_names_the_route_to_the_rest(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        recorded_fixture_simulator(monkeypatch)
-        deck = _deck(work_dir / "spot-pointer.cir")
-        data = _assert_schema(
-            await handle_run_experiments(_args(deck, "spot-pointer", wait_s=30), state_with_sim)
-        )
-        assert data["completeness"]["expanded"] == 1
-        assert "ltspice_mcp.api" not in data["hint"]
-
-    async def test_truncated_receipt_keeps_the_pointer(
-        self,
-        state_with_sim: SessionState,
-        work_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """A receipt big enough to truncate its inline run page is the biggest
-        loop of all — the truncation route must not displace the pointer
-        (found in review: the truncated branch returned early and every
-        50+-case receipt silently lost it)."""
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "trunc-pointer.cir")
         values = [f"{k}k" for k in range(1, 56)]
@@ -550,8 +571,10 @@ class TestApiDoorPointer:
         )
         assert data["completeness"]["expanded"] == 55
         assert data["runs"]["truncated"] is True
-        assert "jobs(runs)" in data["hint"]
-        assert "from ltspice_mcp.api import Api" in data["hint"]
+        assert data["hint"] == (
+            f"The inline run page is truncated; use jobs(runs) with job_id "
+            f"{data['job_id']} for the remaining cases."
+        )
 
 
 @pytest.mark.asyncio
@@ -689,7 +712,7 @@ class TestPostClaimFailures:
 
 
 class TestIdempotency:
-    async def test_matching_replay_returns_token_and_observation(
+    async def test_matching_replay_returns_the_same_token(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -707,44 +730,39 @@ class TestIdempotency:
 
         assert replay["job_id"] == first["job_id"]
         assert replay["control_token"] == first["control_token"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         # A zero dwell returns before the coordinator has necessarily reached the
         # simulator, so wait for the one submission rather than racing it.
         await await_until(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
-    async def test_only_the_call_that_replayed_is_told_it_replayed(
+    async def test_a_replay_leaves_the_record_as_it_was(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """Replaying is a fact about a call; the note on the record is not.
-
-        The record's observation is read by everyone who looks at the job
-        afterwards, the original submitter included — and that caller did
-        submit. So the per-call fact is the receipt's own ``replayed`` field,
-        and the durable note says only what happened to the record.
-        """
+        """Replaying is a fact about a call, and the receipt's ``replayed``
+        carries it. The record is not changed: everyone who reads the job later,
+        the original submitter included, did not replay anything."""
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / "replay-voice.cir")
         args = _args(deck, "replay-voice")
 
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         assert first["replayed"] is False
-        assert _observation_code(first, "idempotent_replay") is None
+        await state_with_sim.job_registry.drain_pending()
+        record = Store(work_dir).job_record(first["job_id"])
+        before = record.read_bytes()
 
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        assert replay["replayed"] is True
+        await state_with_sim.job_registry.drain_pending()
 
-        # The note itself reads the same to the caller that replayed and to
-        # every later reader, because it describes the record either way.
+        assert replay["replayed"] is True
+        assert record.read_bytes() == before
         recorded = await _status_payload(first["job_id"], state_with_sim)
         for payload in (replay, recorded):
-            note = next(
-                item for item in payload["observations"] if item["code"] == "idempotent_replay"
-            )
-            assert "A later call carrying this request_id" in note["detail"], note
+            assert _observation_code(payload, "idempotent_replay") is None
 
     async def test_a_replay_in_another_process_leaves_the_owners_record_alone(
         self,
@@ -802,8 +820,6 @@ class TestIdempotency:
             "the replay loaded its own job"
         )
         assert replay["replayed"] is True
-        # The caller that replayed is still told so, from its own copy.
-        assert _observation_code(replay, "idempotent_replay") is not None
         assert on_disk_status() == "completed"
 
     async def test_different_payload_replay_conflicts(
@@ -1054,17 +1070,13 @@ class TestAttachedBlockPreflight:
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "attached_dup.cir")
+        recipe = {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
 
         result = await handle_run_experiments(
             _args(
                 deck,
-                "attached-dup-group",
-                analyze={
-                    "recipes": [
-                        {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
-                    ],
-                    "group_by": ["R1", "R1"],
-                },
+                "attached-dup-key",
+                analyze={"recipes": [recipe, {**recipe, "at": "800u"}]},
             ),
             state_with_sim,
         )
@@ -1072,6 +1084,37 @@ class TestAttachedBlockPreflight:
         assert result.is_error
         assert "attached analyze block" in json.dumps(result.structured_content)
         assert submissions == []
+
+    async def test_a_repeated_group_by_entry_is_read_once_and_said(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # Refused at the door before; a repeat asks for nothing extra.
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_dup_group.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-dup-group",
+                    analyze={
+                        "recipes": [
+                            {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
+                        ],
+                        "group_by": ["R1", "R1"],
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "error" not in data, data.get("error")
+        assert len(submissions) == 1
+        assert "analyze.group_by repeated 'R1'; each is read once." in data["warnings"]
 
 
 class TestOptionalRequestId:
@@ -1255,7 +1298,7 @@ class TestReplayRejectsChangedSources:
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         assert replay["job_id"] == first["job_id"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         assert len(submitted) == 1
 
     async def test_deleted_source_conflicts_rather_than_replaying(
@@ -1349,7 +1392,7 @@ class TestReplayRejectsChangedSources:
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         assert replay["job_id"] == first["job_id"]
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         assert len(submissions) == 1
 
     async def test_live_include_conflicts_rather_than_replaying(
@@ -1629,17 +1672,37 @@ class TestLintModes:
             if line.startswith(".include")
         )
         assert await asyncio.to_thread(Path(include).read_bytes) == b"C1 out 0 23u\n"
-        folded = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
-        assert {Path(item["evidence"]["file"]).name for item in folded} == {
-            "micro.cir",
-            "core.inc",
-        }
+        # The simulator reads 'u' as the source's µ meant, so nothing is reported.
+        assert not [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
         assert not [
             finding
             for block in data["lint"]
             for finding in block["findings"]
             if finding["rule_id"].startswith("value-suffix")
         ]
+
+    async def test_the_fold_is_reported_when_the_simulator_decodes_decks_as_cp1252(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """On LTspice XVII the source's UTF-8 µ and the staged 'u' read
+        differently, so the receipt says the staged copy is not the source."""
+
+        class FakeXVII(FakeSim):
+            spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
+
+        state = SessionState.create(config, available={"ltspice": FakeXVII})
+        fake_simulator(monkeypatch)
+        deck = work_dir / "micro.cir"
+        deck.write_bytes("* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 23µ\n.op\n.end\n".encode())
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "micro-xvii"), state))
+
+        (folded,) = [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
+        assert folded["evidence"]["tokens"] == ["23µ"]
+        assert folded["evidence"]["reader"] == FakeXVII.spice_exe[0]
 
     async def test_mis_decoded_micro_blocks_submission(
         self,
@@ -1666,9 +1729,42 @@ class TestLintModes:
             finding
             for block in data["lint"]
             for finding in block["findings"]
-            if finding["rule_id"] == "value-suffix-nonascii"
+            if finding["rule_id"] == "value-suffix-mojibake"
         ]
         assert finding["evidence"]["likely_intended"] == "23u"
+
+    async def test_valid_ltspice_device_forms_reach_the_simulator(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A bandgap core under its own title: an area-factored BJT pair, a
+        subckt called with ``params:``, comma-continued initial conditions and
+        a behavioural resistor. Every card is one LTspice runs, so the default
+        lint mode submits the deck instead of refusing it."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "bandgap.cir",
+            "Bandgap core\n"
+            ".model QN NPN\n"
+            ".subckt load a b params: R=1k\nR1 a b {R}\n.ends load\n"
+            "V1 vdd 0 1.8\n"
+            "Q1 vdd vdd e1 QN\n"
+            "Q2 vdd vdd e2 QN 8 IC=0.7,1\n"
+            "X1 e1 0 load params: R=10k\n"
+            "X2 e2 0 load params: R=12k\n"
+            "B1 vdd 0 R=V(vdd)*1k\n"
+            ".op\n.end\n",
+        )
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "bandgap"), state_with_sim))
+
+        assert len(submissions) == 1
+        assert [
+            finding["rule_id"] for block in data["lint"] for finding in block["findings"]
+        ] == []
 
     async def test_warn_proceeds_and_preserves_findings(
         self,
@@ -1833,6 +1929,68 @@ class TestPerCircuitFailuresAndAccounting:
         assert [item["run_index"] for item in data["runs"]["items"]] == [0, 1]
         assert data["failures"][0]["case_id"] == "missing-case-0000"
 
+    async def test_ids_from_file_stems_are_made_valid_and_unique(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # A stem was refused as invalid_circuit_id ("amp.v2") or as
+        # duplicate_circuit_id (two "amp" files), although the caller never
+        # wrote an id. The server picked the name, so it now makes one that
+        # works and says which.
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        (work_dir / "a").mkdir()
+        (work_dir / "b").mkdir()
+        first = _deck(work_dir / "a" / "amp.cir")
+        second = _deck(work_dir / "b" / "amp.cir")
+        dotted = _deck(work_dir / "amp.v2.cir")
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "stem-ids",
+                "circuits": [{"path": str(p)} for p in (first, second, dotted)],
+                "execution": {"wait_s": 1},
+            }
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert "error" not in data, data.get("error")
+        assert len(submissions) == 3
+        assert [item["circuit"] for item in data["runs"]["items"]] == ["amp", "amp-2", "amp_v2"]
+        derived = {
+            item["evidence"]["circuit_id"]: item["detail"]
+            for item in data["observations"]
+            if item["code"] == "circuit_id_derived"
+        }
+        assert set(derived) == {"amp-2", "amp_v2"}
+        assert "'amp' is another circuit's id" in derived["amp-2"]
+        assert "'amp.v2' is not a valid id" in derived["amp_v2"]
+
+    async def test_an_id_the_caller_wrote_is_still_validated(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "amp.cir")
+        for circuits, code in (
+            ([{"path": str(deck), "id": "amp.v2"}], "invalid_circuit_id"),
+            (
+                [{"path": str(deck), "id": "amp"}, {"path": str(deck), "id": "AMP"}],
+                "duplicate_circuit_id",
+            ),
+        ):
+            args = RunExperimentsInput.model_validate(
+                {"request_id": f"caller-id-{code}", "circuits": circuits}
+            )
+            data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+            assert data["error"]["code"] == code
+        assert submissions == []
+
     async def test_case_deck_keeps_staged_relative_includes_reachable(
         self,
         state_with_sim: SessionState,
@@ -1893,28 +2051,51 @@ class TestPerCircuitFailuresAndAccounting:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        submissions: list[str] = []
-        fake_simulator(monkeypatch, submissions)
+        """Every requested run lands in exactly one counter, failures included.
+
+        Four values over two circuits: the simulator aborts two of the first
+        circuit's runs, and none of the second's reach it because its file is
+        missing. The counters account for all eight, and the outcome reports
+        the shortfall.
+        """
+        values = ["1k", "2k", "3k", "4k"]
+        aborted = {1, 3}
+        submitted: list[int] = []
+
+        def log_for(index: int) -> str | None:
+            submitted.append(index)
+            return "Fatal Error: the run aborted\n" if index in aborted else None
+
+        _per_case_simulator(monkeypatch, log_for)
         deck = _deck(work_dir / "grid.cir")
-        args = _args(
-            deck,
-            "counter-grid",
-            variations=[
-                {
-                    "kind": "assign",
-                    "assign": {"R1": ["1k", "2k", "3k"]},
-                }
-            ],
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": "counter-grid",
+                "circuits": [
+                    {"path": str(deck), "id": "grid"},
+                    {"path": str(work_dir / "missing.cir"), "id": "missing"},
+                ],
+                "variations": [{"kind": "assign", "assign": {"R1": values}}],
+                "execution": {"wait_s": 1},
+            }
         )
 
         data = _assert_schema(await handle_run_experiments(args, state_with_sim))
         counts = data["completeness"]
 
-        assert counts["expanded"] == 3
+        assert sorted(submitted) == list(range(len(values)))
+        assert counts["expanded"] == 2 * len(values)
+        assert counts["produced"] == len(values) - len(aborted)
+        assert counts["failed"] == len(aborted) + len(values)
+        assert (counts["cancelled"], counts["skipped"]) == (0, 0)
         assert (
             counts["produced"] + counts["failed"] + counts["cancelled"] + counts["skipped"]
             == counts["expanded"]
         )
+        assert data["outcome"] == "partial"
+        statuses = [item["status"] for item in data["runs"]["items"]]
+        assert statuses.count("produced") == counts["produced"]
+        assert statuses.count("failed") == counts["failed"]
 
     async def test_recent_circuit_is_noted_explicitly(
         self,
@@ -1956,10 +2137,11 @@ def _failing_simulator(
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
 
 
-def _per_case_failing_simulator(
-    monkeypatch: pytest.MonkeyPatch, log_for: Callable[[int], str]
+def _per_case_simulator(
+    monkeypatch: pytest.MonkeyPatch, log_for: Callable[[int], str | None]
 ) -> None:
-    """Every case aborts with its OWN log, the way a real Monte Carlo aborts.
+    """Every case aborts with its OWN log, the way a real Monte Carlo aborts,
+    except where ``log_for`` returns None: that case produces.
 
     Each case runs a different deck, so each writes a different abort time and a
     different node-voltage dump. A stub that hands every case one fixed string
@@ -1975,9 +2157,17 @@ def _per_case_failing_simulator(
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         stem = Path(run_filename).stem
         match = re.search(r"_case_(\d+)", stem)
-        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
-        log.write_text(log_for(int(match.group(1)) if match else next(counter)))
-        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
+        text = log_for(int(match.group(1)) if match else next(counter))
+        if text is None:
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        else:
+            fail = log.with_suffix(".fail")
+            fail.write_text(text)
+            outcome = collect_run_outcome(".", str(fail))
+        self.loop.call_soon_threadsafe(callback, outcome)
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
@@ -2046,7 +2236,7 @@ class TestFailureChannel:
         never byte-identical, and a verbatim key groups nothing. One cause has
         to arrive as one row whatever the numbers in it say.
         """
-        _per_case_failing_simulator(monkeypatch, _convergence_abort_log)
+        _per_case_simulator(monkeypatch, _convergence_abort_log)
         deck = _deck(work_dir / "diverging.cir")
         args = _args(
             deck,
@@ -2082,7 +2272,7 @@ class TestFailureChannel:
                 'Unable to find definition of model "mystery"\n'
             )
 
-        _per_case_failing_simulator(monkeypatch, log_for)
+        _per_case_simulator(monkeypatch, log_for)
         deck = _deck(work_dir / "mixed-causes.cir")
         args = _args(
             deck,
@@ -2179,6 +2369,10 @@ class TestFailureChannel:
         row = data["failures"][0]
         assert row["code"] == "missing_model"
         assert row["evidence"] == {"missing_refs": ["mystery"]}
+        # The recovery is a model search over the simulator's own libraries,
+        # which the failure names rather than running on the agent's behalf.
+        assert "model query" in row["hint"]
+        assert "simulator's own libraries" in row["hint"]
 
 
 @pytest.mark.asyncio
@@ -2380,7 +2574,7 @@ class TestAttachedAnalysis:
         )
 
         assert wide["request_id"] == lean["request_id"]
-        assert any(item["code"] == "idempotent_replay" for item in wide["observations"])
+        assert wide["replayed"] is True
 
         lean_value = lean["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
         wide_value = wide["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
@@ -2521,7 +2715,7 @@ class TestAttachedAnalysis:
         )
         full = _assert_schema(await handle_run_experiments(request, state_with_sim))
         replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
-        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert replay["replayed"] is True
         await state_with_sim.job_registry.drain_pending()
         job = state_with_sim.all_jobs[full["job_id"]]
         assert job.analysis.result is not None
@@ -2532,12 +2726,7 @@ class TestAttachedAnalysis:
         snapshot_identity = job.analysis.result
         pristine_snapshot = copy.deepcopy(job.analysis.result)
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
-        trim_rung = response_budget.Rung(
-            response_budget.RUNG_TRIM,
-            budget=10_000,
-            measured=0,
-            reserve=receipts_mod._RUN_BUDGET_NOTES.reserve,
-        )
+        trim_rung = response_budget.Rung(response_budget.RUNG_TRIM, budget=10_000, measured=0)
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
         manual_snapshot = experiments_mod.snapshot_receipt(
             job,
@@ -2566,10 +2755,8 @@ class TestAttachedAnalysis:
         # does not (replay observation, progress-augmented hint), so aim the
         # budget a third of the rung gap above the measured answer size —
         # still below trim — instead of exactly at it.
-        budget = (
-            answer_size + (trim_size - answer_size) // 3 + receipts_mod._RUN_BUDGET_NOTES.reserve
-        )
-        assert trim_size > budget - receipts_mod._RUN_BUDGET_NOTES.reserve
+        budget = answer_size + (trim_size - answer_size) // 3 + response_budget.NOTE_RESERVE_TOKENS
+        assert trim_size > budget - response_budget.NOTE_RESERVE_TOKENS
         answer = _assert_schema(
             await handle_run_experiments(
                 request.model_copy(update={"budget": budget}),
@@ -2921,6 +3108,60 @@ class TestVariationsReachIntoIncludes:
         assert len(set(values)) == 2
         assert all(float(value) != 1000.0 for value in values)
 
+    async def test_random_entries_on_different_circuits_share_one_job(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # Refused per call before, so two designs could not be Monte-Carlo'd
+        # in one job; one random entry per circuit is the rule that holds.
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        first, second = _deck(work_dir / "a.cir"), _deck(work_dir / "b.cir")
+
+        def entry(circuit: str, runs: int) -> dict[str, Any]:
+            return {
+                "kind": "random",
+                "runs": runs,
+                "seed": 5,
+                "applies_to": [circuit],
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    first,
+                    "random-per-circuit",
+                    lint="off",
+                    circuits=[{"path": str(first), "id": "a"}, {"path": str(second), "id": "b"}],
+                    variations=[entry("a", 2), entry("b", 3)],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "error" not in data, data.get("error")
+        assert data["completeness"]["produced"] == 5
+        assert len(submitted) == 5
+
+        refused = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    first,
+                    "random-same-circuit",
+                    lint="off",
+                    circuits=[{"path": str(first), "id": "a"}, {"path": str(second), "id": "b"}],
+                    variations=[entry("a", 2), {**entry("b", 2), "applies_to": ["a", "b"]}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert refused["error"]["code"] == "multiple_random_variations"
+        assert "'a'" in refused["error"]["message"]
+        assert len(submitted) == 5
+
     async def test_two_level_include_chain_resolves_and_is_rewired(
         self,
         state_with_sim: SessionState,
@@ -3126,7 +3367,9 @@ class TestReceiptWeight:
             )
         )
 
-        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        # The default's trim found nothing with content to take, so nothing
+        # says the receipt was reduced.
+        assert _observation_code(data, "budget_truncated") is None
         assert data["source"][0]["sha256"] == sha256_file(deck)
 
     async def test_the_server_default_budget_keeps_a_staging_disclosure(
@@ -3155,7 +3398,7 @@ class TestReceiptWeight:
             )
         )
 
-        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        assert _observation_code(data, "budget_truncated") is None
         entries = [e for src in data["source"] for e in src.get("manifest", [])]
         assert [e for e in entries if e["live"]], "the live include must still be disclosed"
 

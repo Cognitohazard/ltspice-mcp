@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 
 import numpy as np
 from mcp import types
-from pydantic import BeforeValidator, Field, SkipValidation, model_validator
+from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_validator
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -38,7 +38,8 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
-from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.cache import file_stamp
+from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import (
     diagnostic_collapse_key,
@@ -55,7 +56,6 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
-    MULTI_FIELD_KEYS,
     KeyedRecipe,
     MultiRecipe,
     OperatingPointRecipe,
@@ -70,10 +70,12 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    NotedModel,
     ResponseBudget,
     StrictModel,
     ToolInput,
     format_response,
+    held_to_cap,
     outcome_of,
     page_schema,
     registry,
@@ -105,12 +107,8 @@ _VALUES_OMITTED_WARNING = (
     "{omitted} value(s) omitted; request include.per_run for callable pagination."
 )
 
-# Per-call digest memo keyed by (path, mtime_ns, size); one hash per unchanged
-# source across manifest build, precheck and postcheck.
-_DigestCache = dict[tuple[str, int, int], str]
 
-
-class CaseSelection(StrictModel):
+class CaseSelection(NotedModel):
     case_ids: list[str] = Field(
         min_length=1,
         description=(
@@ -121,12 +119,11 @@ class CaseSelection(StrictModel):
 
     @model_validator(mode="after")
     def _unique_cases(self) -> CaseSelection:
-        if len(set(self.case_ids)) != len(self.case_ids):
-            raise ValueError("case_ids must be unique")
+        self.keep_first("case_ids")
         return self
 
 
-class AnalyzeSourceInput(StrictModel):
+class AnalyzeSourceInput(NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
@@ -151,11 +148,12 @@ class AnalyzeSourceInput(StrictModel):
         ),
     )
     label: str = Field(
+        default="",
         min_length=1,
         description=(
             "Short unique name for this source; it tags every returned row and is "
             "what a recipe's own 'sources' list refers to. Name the condition "
-            "('nominal', 'hot'), not the file."
+            "('nominal', 'hot'). Default: the job_id, or the raw file's stem."
         ),
     )
 
@@ -166,10 +164,17 @@ class AnalyzeSourceInput(StrictModel):
         if isinstance(self.runs, list):
             if not self.runs:
                 raise ValueError("runs must be 'all' or a non-empty list")
-            if any(index < 0 for index in self.runs) or len(set(self.runs)) != len(self.runs):
-                raise ValueError("run indices must be unique non-negative integers")
+            if any(index < 0 for index in self.runs):
+                raise ValueError("run indices must be non-negative integers")
+            self.keep_first("runs")
         if isinstance(self.runs, CaseSelection) and self.raw_path is not None:
             raise ValueError("case_ids selection is available only for experiment jobs")
+        if "label" not in self.model_fields_set:
+            # One source, or several that name themselves: the label only has
+            # to tell this source's rows apart, and its job or file does that.
+            # AnalyzeResultsInput makes a repeat unique.
+            derived = self.job_id or Path(str(self.raw_path)).stem
+            object.__setattr__(self, "label", derived)
         return self
 
 
@@ -340,8 +345,32 @@ def coerce_per_run_default(value: Any) -> Any:
     return value
 
 
-class PerRunInclude(StrictModel):
-    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
+class CappedPerRunLimit(StrictModel):
+    """A per-run page size, held to ``MAX_PAGE_SIZE`` rather than refused.
+
+    The cap bounds one MCP page, not what the caller may read, so a larger limit
+    is served at the cap and said so through :meth:`limit_note`, which only the
+    MCP page reports: the Python API returns every row whatever the page size.
+    The held value is what the model carries, so a request identity built from
+    it names the page actually served.
+    """
+
+    limit: int = Field(default=50, ge=1, description="Rows per page, held to 100.")
+    _limit_note: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _hold_limit_to_cap(self) -> CappedPerRunLimit:
+        limit, self._limit_note = held_to_cap("limit", self.limit, MAX_PAGE_SIZE)
+        # Past validate_assignment, which would run this validator again.
+        object.__setattr__(self, "limit", limit)
+        return self
+
+    def limit_note(self) -> str | None:
+        """The warning that the limit was held to the cap, or None."""
+        return self._limit_note
+
+
+class PerRunInclude(CappedPerRunLimit):
     cursor: str | None = Field(
         default=None,
         description=(
@@ -351,7 +380,7 @@ class PerRunInclude(StrictModel):
     )
 
 
-class AnalyzeInclude(StrictModel):
+class AnalyzeInclude(NotedModel):
     """Optional response blocks. The default carries reductions, groups and spec
     verdicts; per-run rows, outliers and signal listings are opt-in."""
 
@@ -411,8 +440,6 @@ class AnalyzeInclude(StrictModel):
         # rather than returning empty rows the caller has to explain.
         if self.fields is None:
             return self
-        if len(set(self.fields)) != len(self.fields):
-            raise ValueError("include.fields paths must be unique")
         resolved: list[str] = []
         for path in self.fields:
             segments = split_field_path(path)
@@ -430,6 +457,8 @@ class AnalyzeInclude(StrictModel):
             resolved.append(path)
         if resolved != self.fields:
             object.__setattr__(self, "fields", resolved)  # not re-validated
+        # A path named twice, or once bare and once under 'value', keeps one copy.
+        self.keep_first("fields")
         return self
 
 
@@ -480,7 +509,7 @@ class ContinueInput(StrictModel):
     )
 
 
-class AnalyzeResultsInput(StepSelectionFields, ToolInput):
+class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
     sources: list[AnalyzeSourceInput] | None = Field(
         default=None,
         max_length=64,
@@ -534,50 +563,44 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput):
         alias="continue",
         description=(
             "Resume a budget-truncated response using its stored execution request "
-            "and cursor fields view. Other request fields are rejected."
+            "and cursor fields view. Request fields sent with it must match it."
         ),
     )
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
-        if self.continuation is not None:
-            # A continuation replays the execution request stored in the result
-            # set and takes its presentation view from the cursor, never these
-            # args. Reject them rather than accept and drop them: raising
-            # include.per_run.limit on resume is the obvious thing to try, and
-            # silently ignoring it hands back a page the caller did not ask for.
-            supplied = {
-                "sources",
-                "recipes",
-                "include",
-                "group_by",
-                "step",
-                "all_steps",
-            } & self.model_fields_set
-            if supplied:
-                raise ValueError(
-                    "'continue' is mutually exclusive with "
-                    + "/".join(sorted(supplied))
-                    + "; a continuation replays the stored execution request and "
-                    "the cursor's fields view. "
-                    "To change sources, recipes, grouping, step selection or "
-                    "include options, start a new analysis."
-                )
-            return self
-        if not self.sources or not self.recipes:
+        # A continuation replays the execution request stored in the result set
+        # and takes its presentation view from the cursor. Fields sent with it
+        # are normalized like a new request's here and compared with that
+        # stored request once it is loaded (_continuation_echo_mismatch): an
+        # echo of the original call is accepted, and a change is refused rather
+        # than dropped, because raising include.per_run.limit on resume is the
+        # obvious thing to try and ignoring it hands back a page the caller did
+        # not ask for.
+        if self.continuation is None and (not self.sources or not self.recipes):
             raise ValueError("a new analysis requires non-empty sources and recipes")
-        labels = [source.label for source in self.sources]
-        if len(set(labels)) != len(labels):
+        sources = self.sources or []
+        given = [source.label for source in sources if "label" in source.model_fields_set]
+        if len(set(given)) != len(given):
             raise ValueError("source labels must be unique")
+        # A label the caller left out is its source's job or file, which two
+        # sources can share (one job read twice, for different runs); a -2, -3
+        # suffix tells them apart, after every label the caller wrote.
+        taken = set(given)
+        for source in sources:
+            if "label" in source.model_fields_set:
+                continue
+            label = unique_name(source.label, taken)
+            taken.add(label)
+            object.__setattr__(source, "label", label)
         keys = [
             str(item.get("key", "")) if isinstance(item, dict) else str(getattr(item, "key", ""))
-            for item in self.recipes
+            for item in self.recipes or []
         ]
         nonempty = [key for key in keys if key]
         if len(set(nonempty)) != len(nonempty):
             raise ValueError("recipe keys must be unique")
-        if len(set(self.group_by)) != len(self.group_by):
-            raise ValueError("group_by dimensions must be unique")
+        self.keep_first("group_by")
         return self
 
 
@@ -1040,53 +1063,85 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
     return relayed
 
 
-async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
-    """Digest ``path``, memoized by (path, mtime, size) for this call.
-
-    A file whose mtime and size are unchanged since it was first digested is not
-    re-read — manifest creation and the source-drift checks before and after
-    evaluation share one hash per unchanged source. A drifting file gets a fresh
-    (mtime, size) key, so a real change is always re-digested.
-    """
-    key: tuple[str, int, int] | None
-    try:
-        # A cheap metadata stat on the loop (like the sibling .is_file() checks
-        # here); the expensive hash read is what bounded_parse offloads.
-        stat = os.stat(path)
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        key = None
-    if key is not None and key in cache:
-        return cache[key]
-    digest = await services.bounded_parse(
+async def _digest(path: Path, deadline: float) -> str:
+    return await services.bounded_parse(
         path,
         lambda: result_store.sha256_file(path),
         timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - asyncio.get_running_loop().time()),
     )
-    if key is not None:
-        cache[key] = digest
-    return digest
 
 
-async def _manifest_for(run: _ResolvedRun, deadline: float, cache: _DigestCache) -> dict[str, Any]:
-    raw_sha = await _digest(run.source.raw, deadline, cache)
-    log_present = run.source.log is not None and run.source.log.is_file()
-    log_sha = (
-        await _digest(run.source.log, deadline, cache) if log_present and run.source.log else None
-    )
-    composite = result_store.composite_digest(raw_sha, log_sha, log_present)
+def _manifest_paths(manifest: dict[str, Any]) -> tuple[Path, Path | None]:
+    log = manifest.get("log_path")
+    return Path(manifest["raw_path"]), Path(log) if log else None
+
+
+def _source_stamp(raw: Path, log: Path | None) -> dict[str, Any]:
+    """What a run's sources are identified by: each file's ``cache.file_stamp``.
+
+    Metadata stats on the loop, like the sibling ``is_file`` checks here. The
+    files' content is read only when a digest is asked for: by
+    ``include.provenance``, or for a set handed to a caller to resume (see
+    ``_record_source_digests``). The log's absence is recorded as such.
+    """
+    log_stamp: list[int] | None = None
+    if log is not None:
+        with contextlib.suppress(FileNotFoundError):
+            log_stamp = list(file_stamp(log))
     return {
+        "raw_stamp": list(file_stamp(raw)),
+        "log_present": log_stamp is not None,
+        "log_stamp": log_stamp,
+    }
+
+
+def _same_stamp(manifest: dict[str, Any], stamp: dict[str, Any]) -> bool:
+    return all(manifest.get(key) == stamp[key] for key in stamp)
+
+
+async def _content_digests(raw: Path, log: Path | None, deadline: float) -> dict[str, Any]:
+    """The raw's and the log's SHA-256, and their composite; ``log`` None when absent."""
+    raw_sha = await _digest(raw, deadline)
+    log_sha = await _digest(log, deadline) if log is not None else None
+    return {
+        "raw_sha256": raw_sha,
+        "log_sha256": log_sha,
+        "composite_sha256": result_store.composite_digest(raw_sha, log_sha, log is not None),
+    }
+
+
+async def _manifest_for(run: _ResolvedRun, *, digest: bool, deadline: float) -> dict[str, Any]:
+    """One run's source record: its paths, their stamps, and digests if asked.
+
+    The stamps identify the source, and the drift checks compare them. Content
+    digests cost a full read of every raw, so they are taken only when
+    ``digest`` asks (``include.provenance``) or the set is handed to a caller
+    to resume. A source that cannot be read records why instead.
+    """
+    raw, log = run.source.raw, run.source.log
+    manifest: dict[str, Any] = {
         "manifest_id": run.manifest_id,
         "label": run.label,
-        "raw_path": str(run.source.raw),
-        "raw_sha256": raw_sha,
-        "log_path": str(run.source.log) if run.source.log else None,
-        "log_present": log_present,
-        "log_sha256": log_sha,
-        "composite_sha256": composite,
+        "raw_path": str(raw),
+        "log_path": str(log) if log else None,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
     }
+    try:
+        stamp = _source_stamp(raw, log)
+        manifest.update(stamp, raw_sha256=None, log_sha256=None, composite_sha256=None)
+        if digest:
+            manifest.update(
+                await _content_digests(raw, log if stamp["log_present"] else None, deadline)
+            )
+    except (LTSpiceMCPError, OSError) as exc:
+        manifest["digest_code"] = (
+            "analysis_deadline"
+            if isinstance(exc, AnalysisDeadlineExceeded)
+            else "source_unavailable"
+        )
+        manifest["digest_error"] = str(exc)
+    return manifest
 
 
 def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
@@ -1103,6 +1158,24 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
     return work
 
 
+def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
+    """The request as a result set stores it: what a continuation replays.
+
+    ``work`` is the recipes as work items, and the per_run cursor is cleared,
+    since it is a position in the result rather than part of the request.
+    """
+    include = args.include.model_dump(mode="json")
+    if isinstance(include.get("per_run"), dict):
+        include["per_run"]["cursor"] = None
+    return {
+        "sources": [source.model_dump(mode="json") for source in args.sources or []],
+        "work": _work_items(list(args.recipes or [])),
+        "group_by": list(args.group_by),
+        **StepSelection.of(args).as_inputs(),
+        "include": include,
+    }
+
+
 def _request_hash(args: AnalyzeResultsInput) -> str:
     """The identity a per_run cursor is checked against.
 
@@ -1111,57 +1184,22 @@ def _request_hash(args: AnalyzeResultsInput) -> str:
     not a different request.
     """
     assert args.sources is not None and args.recipes is not None
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
-    include.pop("fields", None)
-    return result_store.canonical_hash(
-        {
-            "sources": [source.model_dump(mode="json") for source in args.sources],
-            "work": _work_items(list(args.recipes)),
-            "group_by": list(args.group_by),
-            **StepSelection.of(args).as_inputs(),
-            "include": include,
-        }
-    )
+    request = _request_inputs(args)
+    request["include"].pop("fields", None)
+    return result_store.canonical_hash(request)
 
 
-async def _create_result_set(
-    args: AnalyzeResultsInput, state: SessionState, deadline: float, cache: _DigestCache
-):
+async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, deadline: float):
     assert args.sources is not None and args.recipes is not None
     runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
-    manifests: list[dict[str, Any]] = []
-    for run in runs:
-        try:
-            manifests.append(await _manifest_for(run, deadline, cache))
-        except (LTSpiceMCPError, OSError) as exc:
-            manifests.append(
-                {
-                    "manifest_id": run.manifest_id,
-                    "label": run.label,
-                    "raw_path": str(run.source.raw),
-                    "log_path": str(run.source.log) if run.source.log else None,
-                    "trusted_job_artifact": run.source.trusted_job_artifact,
-                    "job_id": run.job_id,
-                    "digest_code": (
-                        "analysis_deadline"
-                        if isinstance(exc, AnalysisDeadlineExceeded)
-                        else "source_unavailable"
-                    ),
-                    "digest_error": str(exc),
-                }
-            )
-    work = _work_items(list(args.recipes))
-    include = args.include.model_dump(mode="json")
-    if isinstance(include.get("per_run"), dict):
-        include["per_run"]["cursor"] = None
+    manifests = [
+        await _manifest_for(run, digest=args.include.provenance, deadline=deadline) for run in runs
+    ]
+    request = _request_inputs(args)
+    work = request.pop("work")
     inputs = {
         "working_dir": str(state.working_dir),
-        "sources": [source.model_dump(mode="json") for source in args.sources],
-        "group_by": list(args.group_by),
-        **StepSelection.of(args).as_inputs(),
-        "include": include,
+        **request,
         "request_hash": _request_hash(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
         "missing": missing,
@@ -1182,8 +1220,19 @@ async def _verify_direct_sources(
     manifests: list[dict[str, Any]],
     selected_ids: set[str],
     deadline: float,
-    cache: _DigestCache,
+    *,
+    contents: bool = False,
 ) -> dict[str, SourceFault]:
+    """The selected direct sources that no longer read as their manifest recorded.
+
+    A changed stamp (size or modification time) is drift. With ``contents``,
+    a source whose manifest records a content digest is also re-read and
+    compared, which is how a set resumed by a later call is checked: a rewrite
+    that kept both the size and the timestamp still reads as drift. That
+    comparison is bounded like the digests it checks: one that cannot finish
+    before ``deadline`` leaves the source to its stamp. A manifest written
+    before stamps were recorded is checked by content alone.
+    """
     failures: dict[str, SourceFault] = {}
     for manifest in manifests:
         manifest_id = str(manifest["manifest_id"])
@@ -1193,25 +1242,83 @@ async def _verify_direct_sources(
             or manifest.get("digest_error")
         ):
             continue
+        stamped = "raw_stamp" in manifest
         try:
-            raw_path = Path(manifest["raw_path"])
-            raw_sha = await _digest(raw_path, deadline, cache)
-            log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
-            log_present = log_path is not None and log_path.is_file()
-            log_sha = (
-                await _digest(log_path, deadline, cache) if log_present and log_path else None
-            )
-            composite = result_store.composite_digest(raw_sha, log_sha, log_present)
-            if composite != manifest["composite_sha256"]:
+            raw_path, log_path = _manifest_paths(manifest)
+            stamp = _source_stamp(raw_path, log_path)
+            if stamped and not _same_stamp(manifest, stamp):
                 failures[manifest_id] = SourceFault("source_drift")
+                continue
+            if manifest.get("composite_sha256") and (contents or not stamped):
+                digests = await _content_digests(
+                    raw_path, log_path if stamp["log_present"] else None, deadline
+                )
+                if digests["composite_sha256"] != manifest["composite_sha256"]:
+                    failures[manifest_id] = SourceFault("source_drift")
+        except AnalysisDeadlineExceeded as exc:
+            if not stamped:
+                failures[manifest_id] = SourceFault("analysis_deadline", str(exc))
         except (LTSpiceMCPError, OSError) as exc:
-            failures[manifest_id] = SourceFault(
-                "analysis_deadline"
-                if isinstance(exc, AnalysisDeadlineExceeded)
-                else "source_drift",
-                str(exc),
-            )
+            failures[manifest_id] = SourceFault("source_drift", str(exc))
     return failures
+
+
+async def _record_source_digests(item: result_store.ResultSet, state: SessionState) -> None:
+    """Record content digests for the direct sources of a set a caller can resume.
+
+    Called when a reply hands out a cursor or continuation: the call that
+    resumes the set compares these digests (``_verify_direct_sources`` with
+    ``contents``), which a size and timestamp alone cannot match for a rewrite
+    that kept both. Job artifacts are trusted server files and are not digested.
+    A reply that hands out a continuation has spent the call's budget, so this
+    gets one analysis budget of its own; a source not digested within it, or
+    whose stamp moved meanwhile, is left to its stamp. Nothing here fails a
+    recipe.
+    """
+    pending = [
+        manifest
+        for manifest in item.source_manifests
+        if not manifest.get("trusted_job_artifact")
+        and not manifest.get("composite_sha256")
+        and "raw_stamp" in manifest
+    ]
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + state.config.analysis_budget_s
+    recorded: dict[str, dict[str, Any]] = {}
+    for manifest in pending:
+        if loop.time() >= deadline:
+            break
+        raw_path, log_path = _manifest_paths(manifest)
+        try:
+            digests = await _content_digests(
+                raw_path, log_path if manifest.get("log_present") else None, deadline
+            )
+        except (LTSpiceMCPError, OSError):
+            continue
+        # The digests describe the stamped content only if nothing moved while
+        # they were taken.
+        if _same_stamp(manifest, _source_stamp(raw_path, log_path)):
+            recorded[str(manifest["manifest_id"])] = digests
+    if recorded:
+        await asyncio.to_thread(result_store.record_digests, item, recorded)
+
+
+def _hands_out_cursor(value: Any) -> bool:
+    """Whether a reply carries a cursor or continuation into its result set.
+
+    Every handle a reply hands out is a string under a ``cursor`` or
+    ``next_cursor`` key, wherever it sits, so a new paged field needs no entry
+    here.
+    """
+    if isinstance(value, dict):
+        return any(
+            (key in ("cursor", "next_cursor") and isinstance(entry, str))
+            or _hands_out_cursor(entry)
+            for key, entry in value.items()
+        )
+    if isinstance(value, list):
+        return any(_hands_out_cursor(entry) for entry in value)
+    return False
 
 
 def _spice(value: float | str | None) -> str | None:
@@ -1476,7 +1583,7 @@ async def _waveform(
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest["composite_sha256"],
+        source_digest=str(manifest["manifest_id"]),
         recipe_hash=recipe_hash,
         suffix="csv",
     )
@@ -1537,7 +1644,7 @@ async def _plot(
     pending, final = result_store.artifact_paths(
         item,
         recipe_key=recipe.key,
-        source_digest=manifest["composite_sha256"],
+        source_digest=str(manifest["manifest_id"]),
         recipe_hash=recipe_hash,
         suffix="html",
     )
@@ -1692,6 +1799,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
     # The reducer category is the base the recipe inherits (exactly one); a
     # variable-length recipe matches none and yields no samples.
     out: dict[str, list[tuple[Record, float]]] = {}
+    pairs = recipe.reduction_fields() if isinstance(recipe, MultiRecipe) else []
     for record in records:
         value = record.value
         if isinstance(recipe, ScalarRecipe):
@@ -1708,12 +1816,10 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
             if number is not None:
                 out.setdefault(field, []).append((record, number))
         elif isinstance(recipe, MultiRecipe):
-            field = recipe.field
-            if field:
-                actual = MULTI_FIELD_KEYS.get(recipe.metric, {}).get(field, field)
+            for field, actual in pairs:
                 number = _number(value.get(actual))
                 if number is not None:
-                    out.setdefault(field, []).append((record, number))
+                    out.setdefault(recipe.field_for_row(field, value), []).append((record, number))
         elif isinstance(recipe, KeyedRecipe):
             # 'field' means one thing on every category: the single number both
             # a reduction and a spec read. Absent, a keyed recipe covers every
@@ -2460,6 +2566,10 @@ class AnalysisEvaluation:
     #: The session's tools, set only when rendering an MCP page, so a failure
     #: can say where its Python snippet runs; the neutral evaluation has none.
     served: frozenset[str] | None = None
+    # What this call's arguments asked for that was read differently (a
+    # repeat read once; on an MCP page, a page size held to its cap), each
+    # said in the hint.
+    argument_notes: tuple[str, ...] = ()
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
@@ -2651,6 +2761,7 @@ def _assemble(
             "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
             "for the next page of missing cases (no work is replayed)."
         )
+    hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
     text = (
@@ -3045,7 +3156,9 @@ def _degrade_analysis(
         # echo is the ladder working as specified, not a second revocation.
         keep = preserve_provenance and not rung.answer_channel
         empty = () if keep else _TRIM_EMPTY_ENVELOPE
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        rung.cut.extend(
+            response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+        )
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3060,12 +3173,16 @@ _BUDGET_NOTES = response_budget.Notes(
         "Ask again with a larger 'budget' for the full presentation, or continue "
         "with continue={result_set_id, cursor}."
     ),
+    default_route=(
+        "Each row still names its source by manifest_id and label; "
+        "include.provenance keeps source_hashes."
+    ),
 )
 
 
 async def _negotiate_analysis(
     budget: ResponseBudget, a: AnalysisEvaluation
-) -> types.CallToolResult:
+) -> tuple[dict[str, Any], str]:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
     base = _Limits.of(a.include)
     text = ""
@@ -3090,11 +3207,9 @@ async def _negotiate_analysis(
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(
-        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
-    )
+    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
-    return format_response(text, result.data)
+    return result.data, text
 
 
 async def _evaluate_unit(
@@ -3268,6 +3383,49 @@ class _DriveStart:
     intra_item: int
     missing_offset: int
     include: AnalyzeInclude
+    #: Resumed from a cursor or continuation a caller handed back: the set may
+    #: have been written by an earlier call, so its sources are checked by
+    #: content where it recorded digests.
+    resumed: bool = False
+
+
+#: The request fields a ``continue`` call may echo, each with the key the
+#: result set stores it under; it replays them, so a copy is accepted only when
+#: it is the same request.
+_CONTINUATION_ECHO_KEYS = {
+    "sources": "sources",
+    "recipes": "work",
+    "include": "include",
+    "group_by": "group_by",
+    "step": "step",
+    "all_steps": "all_steps",
+}
+
+
+def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.ResultSet) -> None:
+    """Refuse request fields sent with ``continue`` that differ from the stored request.
+
+    Each field is compared in the form the result set stored it, so the
+    original call resent with ``continue`` passes, and one that changes a
+    source, a recipe, the grouping, the step selection or an include option is
+    refused, naming what changed.
+    """
+    supplied = _CONTINUATION_ECHO_KEYS.keys() & args.model_fields_set
+    if not supplied:
+        return
+    sent = _request_inputs(args)
+    stored = {**item.inputs, "work": item.work}
+    changed = sorted(
+        name
+        for name in supplied
+        if sent[_CONTINUATION_ECHO_KEYS[name]] != stored.get(_CONTINUATION_ECHO_KEYS[name])
+    )
+    if changed:
+        raise ResultError(
+            "'continue' replays the stored request, and " + "/".join(changed) + " differ "
+            "from it. Resend them unchanged or leave them out; to change sources, "
+            "recipes, grouping, step selection or include options, start a new analysis."
+        )
 
 
 async def _resolve_drive_start(
@@ -3276,7 +3434,6 @@ async def _resolve_drive_start(
     continuation: AnalysisContinuationPosition | None,
     loaded: result_store.ResultSet | None,
     call_deadline: float,
-    digest_cache: _DigestCache,
 ) -> _DriveStart:
     """Load or create the result set this drive runs over, and find its start.
 
@@ -3293,6 +3450,7 @@ async def _resolve_drive_start(
     )
     cursor_fields: list[str] | None = None
     inherited_view = False
+    resumed = False
     if continuation is not None:
         # The set is immutable, so a caller driving successive continuations can
         # hand back the one it already holds instead of re-reading it per drive.
@@ -3313,7 +3471,7 @@ async def _resolve_drive_start(
             list(continuation.view_fields) if continuation.view_fields is not None else None
         )
     elif args.continuation is None and page_cursor is None:
-        item = await _create_result_set(args, state, call_deadline, digest_cache)
+        item = await _create_result_set(args, state, call_deadline)
         position = 0
         intra_item = 0
         missing_offset = 0
@@ -3323,10 +3481,12 @@ async def _resolve_drive_start(
             args.continuation.result_set_id,
             state.working_dir,
         )
+        _continuation_echo_mismatch(args, item)
         position, intra_item, missing_offset = result_store.decode_cursor(
             args.continuation.cursor, item
         )
         inherited_view = True
+        resumed = True
         cursor_fields = result_store.cursor_view(args.continuation.cursor)
     else:
         assert page_cursor is not None
@@ -3336,6 +3496,7 @@ async def _resolve_drive_start(
             state.working_dir,
         )
         inherited_view = True
+        resumed = True
         cursor_fields = result_store.cursor_view(page_cursor)
         if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
             raise ResultError(
@@ -3353,7 +3514,7 @@ async def _resolve_drive_start(
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
     if inherited_view:
         include = include.model_copy(update={"fields": cursor_fields})
-    return _DriveStart(item, position, intra_item, missing_offset, include)
+    return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
 
 
 async def _evaluate_analysis_drive(
@@ -3367,14 +3528,10 @@ async def _evaluate_analysis_drive(
     """Implementation shared by the neutral seam and MCP's paged presentation."""
     loop = asyncio.get_running_loop()
     call_deadline = loop.time() + state.config.analysis_budget_s
-    # Per-call caches: one file hash per (path, mtime, size), shared across
-    # manifest build and verification; one resolved step plan per source.
-    digest_cache: _DigestCache = {}
+    # One resolved step plan per source, for this call.
     step_plans: dict[tuple[str, str], StepPlan] = {}
 
-    start = await _resolve_drive_start(
-        args, state, continuation, loaded, call_deadline, digest_cache
-    )
+    start = await _resolve_drive_start(args, state, continuation, loaded, call_deadline)
     item = start.item
     position, intra_item, missing_offset = start.position, start.intra_item, start.missing_offset
     include = start.include
@@ -3408,15 +3565,14 @@ async def _evaluate_analysis_drive(
         work_done = True
 
     # Source-drift precheck (once per call): verify every direct source before
-    # any recipe reads it. The shared digest cache makes this free for the
-    # sources a fresh set just hashed; a continuation re-checks them against the
-    # manifest.
+    # any recipe reads it, by its stamp, and by content too when a caller
+    # resumed a set that recorded digests.
     precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
     precheck = await _verify_direct_sources(
         item.source_manifests,
         {run.manifest_id for run in runs},
         precheck_deadline,
-        digest_cache,
+        contents=start.resumed,
     )
 
     processed: list[WorkUnit] = []
@@ -3531,7 +3687,6 @@ async def _evaluate_analysis_drive(
         item.source_manifests,
         evaluated_ids,
         postcheck_deadline,
-        digest_cache,
     )
     if postcheck:
         failed_ids = set(postcheck)
@@ -3567,6 +3722,7 @@ async def _evaluate_analysis_drive(
         natural_intra=intra_item,
         deferred=deferred,
         signals=signals,
+        argument_notes=tuple(args.argument_notes()),
     )
 
 
@@ -3674,7 +3830,7 @@ async def capture_attached_analysis(
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
         "searches these by plain words and returns a recipe's fields. A signal is "
         "one trace or V(a,b), not an expression; other trace math is numpy "
-        "(spice://guide, 'trace math')."
+        "(guide section 'signals')."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(
@@ -3688,12 +3844,23 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
+    assembly = await _evaluate_analysis_drive(args, state, page_stop=_PageStop())
+    held = args.include.per_run.limit_note() if args.include.per_run else None
     assembly = replace(
-        await _evaluate_analysis_drive(args, state, page_stop=_PageStop()),
+        assembly,
         served=frozenset(state.tool_dispatch),
+        argument_notes=(
+            *assembly.argument_notes,
+            *([f"include.per_run.{held} Page on with per_run.next_cursor."] if held else []),
+        ),
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
         data, text = _assemble(assembly, None, _Limits.of(assembly.include))
-        return format_response(text, data)
-    return await _negotiate_analysis(budget, assembly)
+    else:
+        data, text = await _negotiate_analysis(budget, assembly)
+    # Sources are identified by their stamps within a call; a set handed to the
+    # caller to resume gets content digests, which the resuming call compares.
+    if _hands_out_cursor(data):
+        await _record_source_digests(assembly.item, state)
+    return format_response(text, data)

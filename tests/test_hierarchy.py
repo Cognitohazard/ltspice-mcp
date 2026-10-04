@@ -65,6 +65,15 @@ async def test_repeated_hierarchy_values_ports_and_active_model(state_no_sim, hi
     assert mos["address"]["device"] == "m.xa.xleaf.m0"
 
 
+async def test_spice_suffixed_deck_is_read(state_no_sim, hierarchy_deck):
+    """``.spice`` is what xschem and the sky130 testbenches write."""
+    deck = hierarchy_deck.with_suffix(".spice")
+    deck.write_bytes(hierarchy_deck.read_bytes())
+    result = await _inspect(state_no_sim, deck)
+    assert result["ok"], result
+    assert len(result["data"]["instances"]) == 10
+
+
 async def _inspect(state, path, **query):
     (result,) = await _run(
         state, [{"kind": "hierarchy", "path": str(path), "simulator": "ltspice", **query}]

@@ -11,6 +11,7 @@ lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 """
 
 import asyncio
+import math
 import shutil
 from pathlib import Path
 
@@ -488,6 +489,19 @@ async def test_transient_runs_and_parses(ngspice_state: SessionState, work_dir: 
     summary = await _summary(ngspice_state, receipt["job_id"])
     assert "Transient" in summary["sim_type"]
 
+    # A 1 V step into a 1k/1uF RC (tau = 1 ms) charges as 1 - exp(-t/tau).
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [
+            {"key": f"at_{at}", "metric": "value", "expr": "v(out)", "at": at}
+            for at in ("1m", "3m")
+        ],
+    )
+    for at, tau_count in (("1m", 1), ("3m", 3)):
+        value = data["results"][f"at_{at}"]["values"][0]["value"]["value"]
+        assert value == pytest.approx(1 - math.exp(-tau_count), rel=1e-2), at
+
 
 async def test_control_script_deck_produces_readable_raw(
     ngspice_state: SessionState, work_dir: Path
@@ -520,6 +534,26 @@ async def test_control_script_deck_produces_readable_raw(
     )
     # 5 RC of a 1k/1uF step response: nearly fully charged.
     assert data["results"]["vout"]["values"][0]["value"]["value"] > 0.9
+
+
+async def test_a_gnd_node_is_ground(ngspice_state: SessionState, work_dir: Path):
+    # The guide says ngspice converts a node named gnd to node 0 by default
+    # (`set no_auto_gnd` turns it off); a skill once said the opposite, that
+    # gnd floats unless declared global. A divider referenced only to gnd
+    # settles at half the supply only if gnd is ground; a floating gnd leaves
+    # the circuit with no DC path to node 0.
+    net = _write(
+        work_dir,
+        "gnddiv.cir",
+        "* divider referenced to gnd\nV1 in gnd 10\nR1 in out 1k\nR2 out gnd 1k\n.op\n.end\n",
+    )
+    receipt = await _run_one(ngspice_state, "ng-gnd-is-ground", net)
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [{"key": "vout", "metric": "value", "expr": "v(out)"}],
+    )
+    assert data["results"]["vout"]["values"][0]["value"]["value"] == pytest.approx(5.0, rel=1e-6)
 
 
 async def test_dc_sweep_endpoint_value(ngspice_state: SessionState, work_dir: Path):
@@ -583,14 +617,14 @@ async def test_job_status_reports_result_files_that_exist(
     assert hashes["raw_sha256"]
 
 
-async def test_tran_meas_is_refused_before_submission_in_batch_mode(
+async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
     ngspice_state: SessionState, work_dir: Path
 ):
     # Verified against real ngspice-42: batch mode (-b with -r rawfile) does
-    # NOT evaluate .meas at all ("No .measure possible in batch mode"). The deck
-    # lint refuses the case up front rather than running it and reporting an
-    # unmet request afterwards, so nothing fabricates a 'vfinal' entry and the
-    # caller learns why before paying for a simulation.
+    # NOT evaluate .meas at all ("No .measure possible in batch mode"), but it
+    # does run the deck. The lint warns before submission and the run goes
+    # ahead; reading the result relays ngspice's own notice of the skip, no
+    # 'vfinal' entry is fabricated, and the waveform is there to measure.
     net = _write(
         work_dir,
         "meas.cir",
@@ -610,15 +644,34 @@ async def test_tran_meas_is_refused_before_submission_in_batch_mode(
             "execution": {"wait_s": 90, "simulator": "ngspice"},
         },
     )
-    assert receipt["status"] == "completed_with_failures"
-    assert receipt["completeness"]["skipped"] == 1
-    assert receipt["completeness"]["produced"] == 0
+    assert receipt["status"] == "completed"
+    assert receipt["completeness"]["produced"] == 1
+    assert receipt["failures"] == []
 
     (finding,) = receipt["lint"][0]["findings"]
     assert finding["rule_id"] == "meas-ngspice-batch"
+    assert finding["severity"] == "warning"
     assert finding["subject"] == "vfinal"
     assert "batch mode" in finding["evidence"]["reason"]
-    assert [f["code"] for f in receipt["failures"]] == ["lint_blocked"]
+
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [
+            {"key": "sum", "metric": "summary"},
+            {"key": "measured", "metric": "measurements"},
+            {"key": "vout", "metric": "signal_stats", "signal": "V(out)"},
+        ],
+    )
+    assert any(
+        "No .measure possible in batch mode" in warning
+        for warning in data["results"]["sum"]["warnings"]
+    )
+    assert "measured" not in data["results"]
+    assert [f["code"] for f in data["failures"] if "No .MEAS results" in f["message"]] == [
+        "recipe_failed"
+    ]
+    assert data["results"]["vout"]["values"]
 
 
 #: 10^8 steps of an RC under a sine: still solving seconds after launch, so a

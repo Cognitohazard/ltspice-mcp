@@ -6,6 +6,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_validator import (
+    ARITY_CHECKS,
     estimate_analysis_points,
     list_rules,
     validate_directive,
@@ -299,6 +300,42 @@ class TestElementArity:
             "C1" not in str(i["message"]) and "L1" not in str(i["message"]) for i in issues
         ), issues
 
+    @pytest.mark.parametrize(
+        "card",
+        [
+            # A comma-continued key=value is one value: initial conditions and
+            # temperature coefficients are written this way.
+            "M1 d g s s N1 L=1u W=1u IC=1,2,3",
+            "Q1 c b e QN IC=0.7,5",
+            "R1 a 0 1k tc=0.001,1e-6",
+            # LTspice's behavioural resistor and power forms (spice_guide.md,
+            # Behavioral Sources).
+            "B1 a 0 R=V(a)*1k",
+            "B1 a 0 P=1",
+            # The value lives in a keyword: a charge-defined capacitor, a
+            # flux-defined inductor, a source playing a .wav file.
+            "C1 a 0 Q=1n*x",
+            "L1 b 0 Flux=1m*tanh(I(L1))",
+            'V1 a 0 wavefile="in.wav" chan=0',
+        ],
+    )
+    def test_valid_ltspice_cards_raise_no_issue(self, card):
+        assert self._arity(f"{card}\n.end") == []
+
+    def test_b_source_resistor_and_power_forms_are_ltspice_only(self):
+        # ngspice's B-source takes V= or I= only.
+        cards = lex("B1 a 0 R=V(a)*1k\nB2 b 0 P=1\n.end\n").cards
+        issues = validate_netlist_arity(cards, simulator="ngspice")
+        assert [i["check"] for i in issues] == ["bsource-value-prefix"] * 2
+
+    def test_every_issue_names_its_check_and_severity(self):
+        # One card per check, so each check's issues are told apart by the
+        # check that raised them, and each carries the severity it declares.
+        issues = self._arity("R1 a 1k\nB1 b 0 {V(a)}\nC1 c d C=1n\nB2 e 0 V = V(a) + V(b)\n.end")
+        assert sorted(str(i["check"]) for i in issues) == sorted(ARITY_CHECKS)
+        for issue in issues:
+            assert issue["severity"] == ARITY_CHECKS[str(issue["check"])]
+
 
 class TestControlBlockIsOpaque:
     """ngspice ``.control`` commands collide with SPICE element prefixes
@@ -415,6 +452,12 @@ class TestDanglingNodes:
         issues = self._dangling("X1 a b myamp gain=2\nR1 a b 1k\n.end")
         assert issues == []
 
+    def test_x_card_params_keyword_does_not_make_the_subckt_name_a_node(self):
+        # ``params:`` introduces the overrides; it is not the subckt name, so
+        # the name before it must not be read as a node wired once.
+        issues = self._dangling("V1 a 0 1\nX1 a 0 myamp params: gain=2\n.end")
+        assert issues == []
+
     def test_f_source_controlling_ref_not_counted(self):
         # F1's third positional is the controlling V-source name, not a node.
         issues = self._dangling("V1 in 0 1\nR1 in 0 1k\nF1 out 0 V1 2\nR2 out 0 1k\n.end")
@@ -458,6 +501,18 @@ class TestDanglingNodes:
         # T: four port nodes; the line parameters are KEY=VALUE tokens.
         issues = self._dangling("V1 in 0 1\nT1 in 0 out 0 Td=10n Z0=50\nR1 out 0 50\n.end")
         assert issues == []
+
+    def test_lossy_line_counts_exactly_four_port_nodes(self):
+        # O: two port pairs, then the model. A dangling far end is warned,
+        # while a stray positional between the ports and the model (here a
+        # mistyped length) is not a fifth terminal: it feeds the suppressor
+        # set, so a mis-modelled shape can only hide a warning.
+        dangling = self._dangling("V1 in 0 1\nO1 in 0 out 0 LTRA\n.end")
+        assert len(dangling) == 1
+        assert "'out'" in str(dangling[0]["message"])
+        assert "O1" in str(dangling[0]["message"])
+        stray = self._dangling("V1 in 0 1\nO1 in 0 out 0 10m LTRA\nR1 out 0 50\n.end")
+        assert stray == []
 
     def test_w_switch_controlling_ref_and_model_not_counted(self):
         # W's third positional is the controlling V-source name, then the
@@ -745,6 +800,27 @@ class TestBiasTopology:
         issues = self._bias("V1 in 0 1\nR1 in 0 1k\nC1 m1 m2 1u\nC2 m2 0 1u\nR2 m1 m3 1k\n.op")
         assert len(issues) == 1, issues
         assert "m3" not in str(issues[0]["message"])
+
+    def test_value_text_in_a_node_slot_is_not_a_wire(self):
+        # Both resistors lost a node, so the same braced value lands in each
+        # one's second node slot. Shared value text is not a net: it must not
+        # carry 'a' to ground through R2.
+        issues = self._bias("V1 in 0 1\nC1 in a 1u\nR1 a {rload}\nR2 0 {rload}\n.op")
+        assert len(issues) == 1, issues
+        assert "'a'" in str(issues[0]["message"])
+
+    def test_port_grounded_through_a_later_defined_subckt_clean(self):
+        # OUTER grounds its port only through INNER, which is defined after
+        # it, so the first pass over OUTER does not yet know INNER is
+        # grounded. The fixed point must take a second pass to carry it up.
+        deck = (
+            ".subckt OUTER p\nX1 p INNER\n.ends\n"
+            ".subckt INNER q\nR1 q 0 1k\n.ends\n"
+            "V1 vin 0 AC 1\nC1 vin n1 1u\nX1 n1 OUTER\n.op"
+        )
+        assert self._bias(deck) == []
+        # Control: with nothing grounding INNER's port, n1 really floats.
+        assert len(self._bias(deck.replace("R1 q 0 1k", "C2 q 0 1n"))) == 1
 
     # --- behavioral B-source: I= is a current source (no DC voltage path) ---
 

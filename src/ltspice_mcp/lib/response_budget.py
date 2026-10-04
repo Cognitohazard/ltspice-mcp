@@ -8,7 +8,9 @@ the tool re-renders one rung further down a fixed ladder:
 0. ``trim``   — suppress presentation blocks named on an explicit per-tool
    allowlist: optional keys are REMOVED when empty, required keys are EMPTIED
    in place. An allowlist rather than a predicate because a rung that exempts
-   content is the one place a checker silently loses coverage.
+   content is the one place a checker silently loses coverage. Removing an
+   empty block loses nothing, so a response this rung only tidied carries no
+   note; one it emptied a block of names the block.
 1. ``answer`` — revoke the caller's payload-growing opt-ins so the response
    falls back to the answer channel it would have had by default.
 2. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
@@ -38,7 +40,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # The convention for estimating tokens from a payload: compact-JSON characters
@@ -73,12 +75,12 @@ LADDER: tuple[int, ...] = tuple(sorted(_RUNG_NAMES))
 
 # One sentence per fact a caller needs to decide whether to set this: the unit,
 # that presentation is all it touches, and that omitting it is not "no budget".
-# The ladder's per-tool mechanics live in spice://guide — they are what a caller
+# The ladder's per-tool mechanics live in guide section 'tools' — they are what a caller
 # reads once, not what every session should pay for on the wire.
 BUDGET_DESCRIPTION = (
     "Approximate response-token cap (compact characters / 4, minimum 500). "
     "Presentation only: facts are never cut. Omitted, the server's default "
-    "applies. Ladder: spice://guide."
+    "applies. Ladder: guide section 'tools'."
 )
 
 
@@ -93,10 +95,9 @@ class Rung:
     level: int
     budget: int
     measured: int
-    #: Room held back for the budget's own epilogue. ``None`` means one copy of
-    #: the truncation note; :class:`Notes` sets it for the tool that is
-    #: negotiating, because a tool mirroring the note into a hint writes it twice.
-    reserve: int | None = None
+    #: The blocks this rung's trim emptied of content, as :func:`apply_trim`
+    #: reports them. The renderer adds to it; the epilogue reads it.
+    cut: list[str] = field(default_factory=list, compare=False)
 
     @property
     def trim(self) -> bool:
@@ -117,7 +118,7 @@ class Rung:
     @property
     def body_budget(self) -> int:
         """The budget less the room the budget notes themselves will take."""
-        return self.budget - (NOTE_RESERVE_TOKENS if self.reserve is None else self.reserve)
+        return self.budget - NOTE_RESERVE_TOKENS
 
 
 def estimate_tokens(payload: Any) -> int:
@@ -152,17 +153,21 @@ def remove_when_empty(container: dict[str, Any], key: str) -> None:
         del container[key]
 
 
-def empty_required(container: dict[str, Any], key: str) -> None:
+def empty_required(container: dict[str, Any], key: str) -> bool:
     """Empty a REQUIRED presentation key in place — never delete it.
 
     Deleting it would break the tool's own output schema under
     ``additionalProperties: false``; emptying keeps every emission valid.
+    Returns whether the key held anything before.
     """
     value = container.get(key)
     if isinstance(value, list):
         container[key] = []
     elif isinstance(value, dict):
         container[key] = {}
+    else:
+        return False
+    return bool(value)
 
 
 def apply_trim(
@@ -170,7 +175,7 @@ def apply_trim(
     *,
     remove: Sequence[str] = (),
     empty: Sequence[str] = (),
-) -> None:
+) -> list[str]:
     """Rung 0 over one container, from a tool's declared key lists.
 
     ``remove`` names optional keys, dropped only when they carry nothing;
@@ -179,12 +184,15 @@ def apply_trim(
     exempts content is the one place a checker can silently lose coverage, so
     the allowlist has to be something a test can read.
 
+    Returns the keys it emptied of content, which a renderer adds to its
+    rung's ``cut``. A removed empty key is not among them: it carried nothing,
+    and a note saying it was cut would send the caller after nothing.
+
     Idempotent, so the ladder may re-apply it to an already-trimmed envelope.
     """
     for key in remove:
         remove_when_empty(container, key)
-    for key in empty:
-        empty_required(container, key)
+    return [key for key in empty if empty_required(container, key)]
 
 
 # --------------------------------------------------------------------------
@@ -245,16 +253,21 @@ OBSERVATION_KIND = "presentation"
 
 
 def truncated_observation(rung: Rung, estimate: int, cut: str, route: str) -> dict[str, Any]:
-    """The fact that a budget degraded this response, and how to get it back."""
+    """The fact that a budget degraded this response, and how to get it back.
+
+    ``rung.cut`` names the blocks the trim emptied; ``route`` may be empty when
+    there is nothing to go back for.
+    """
+    emptied = f" Emptied: {', '.join(rung.cut)}." if rung.cut else ""
     return {
         "code": "budget_truncated",
         "kind": OBSERVATION_KIND,
         "detail": (
             f"budget={rung.budget} est. tokens degraded this response to rung "
             f"{rung.level} ({rung.name}), leaving an estimated {estimate} tokens "
-            f"before this note: {cut} "
+            f"before this note: {cut}{emptied} "
             f"Facts (failures, observations, warnings, completeness) were not cut. {route}"
-        ),
+        ).rstrip(),
     }
 
 
@@ -288,7 +301,7 @@ def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
 NOTE_RESERVE_TOKENS = estimate_tokens(
     [
         truncated_observation(
-            Rung(level=RUNG_SHRINK, budget=999_999, measured=999_999),
+            Rung(level=RUNG_SHRINK, budget=999_999, measured=999_999, cut=["x" * 40]),
             999_999,
             cut="x" * 160,
             route="x" * 160,
@@ -299,34 +312,22 @@ NOTE_RESERVE_TOKENS = estimate_tokens(
 
 @dataclass(frozen=True)
 class Notes:
-    """A tool's budget epilogue: what it says, and what saying it costs.
+    """A tool's budget epilogue, which :func:`attach_notes` writes.
 
-    One value drives both ends of the ladder — :func:`negotiate` holds back the
-    room the notes will need, :func:`attach_notes` writes them — so the two
-    cannot disagree about how much room that is. That is the whole reason this
-    is an object rather than two argument lists: the reserve is derived from the
-    same ``hint_key`` that decides how many copies get written.
+    The note lands on ``observations`` only: that channel is structured
+    content, so a client that reads nothing else still reads it, and a second
+    copy in a hint would say the same thing twice. The room it takes is
+    ``NOTE_RESERVE_TOKENS``, held back by every rung's ``body_budget``.
     """
 
     #: What this tool gave up, in its own terms.
     cut: str
-    #: How the caller gets the rest back.
+    #: How a caller who set ``budget`` gets the rest back.
     route: str
-    #: The guidance key to mirror the last note into, for tools whose
-    #: structured-aware clients read guidance only from there.
-    hint_key: str | None = None
-
-    @property
-    def reserve(self) -> int:
-        """Room to hold back for the epilogue itself.
-
-        Two copies when a hint key is set, because that is literally how many
-        get written: the detail lands on ``observations`` AND again in the hint.
-        Reserving one would let a response that reports its own truncation land
-        over the cap the caller asked for — flagged as truncated, and silently
-        wrong about having met the budget.
-        """
-        return NOTE_RESERVE_TOKENS * (2 if self.hint_key is not None else 1)
+    #: Where the server's default budget leaves what it emptied, for a caller
+    #: who set no budget and so has none to raise. Empty when the trim rung
+    #: this tool runs never empties anything with content.
+    default_route: str = ""
 
 
 @dataclass(frozen=True)
@@ -334,13 +335,26 @@ class Negotiated:
     data: dict[str, Any]
     rung: Rung
     estimate: int
-    #: Whether the ladder was stopped short of its last rung by policy rather
-    #: than by fitting. A capped run that does not fit is the policy working,
-    #: not a shortfall, so it reports no unmet-budget note.
-    capped: bool = False
+    #: The last rung this ladder was allowed: the trim rung under the server's
+    #: default budget, the shrink rung under a caller's.
+    max_rung: int = RUNG_SHRINK
+
+    @property
+    def capped(self) -> bool:
+        """Whether the ladder was stopped short of its last rung by policy rather
+        than by fitting. A capped run that does not fit is the policy working,
+        not a shortfall, so it reports no unmet-budget note."""
+        return not self.met and self.max_rung < RUNG_SHRINK
 
     @property
     def degraded(self) -> bool:
+        """Whether the response carries less than the undegraded one did.
+
+        The trim rung counts only when it emptied a block with content: one
+        that removed nothing but empty blocks changed nothing a caller reads.
+        """
+        if self.rung.level == RUNG_TRIM:
+            return bool(self.rung.cut)
         return self.rung.level > RUNG_NONE
 
     @property
@@ -351,7 +365,6 @@ class Negotiated:
 async def negotiate(
     budget: int,
     render: Callable[[Rung], Awaitable[dict[str, Any]]],
-    notes: Notes,
     *,
     max_rung: int = RUNG_SHRINK,
 ) -> Negotiated:
@@ -367,28 +380,21 @@ async def negotiate(
     0) but must not revoke opt-ins the caller DID ask for (rung 1 and below) —
     doing that unasked would answer a different question than the one asked.
 
-    Fit is judged against the budget less ``notes.reserve``, the room this
-    tool's own budget notes will take once appended.
+    Fit is judged against each rung's ``body_budget``: the budget less the
+    room the budget notes will take once appended.
     """
     measured = 0
     data: dict[str, Any] = {}
-    rung = Rung(level=RUNG_NONE, budget=budget, measured=0, reserve=notes.reserve)
-    met = False
+    rung = Rung(level=RUNG_NONE, budget=budget, measured=0)
     for level in LADDER:
         if level > max_rung:
             break
-        rung = Rung(level=level, budget=budget, measured=measured, reserve=notes.reserve)
+        rung = Rung(level=level, budget=budget, measured=measured)
         data = await render(rung)
         measured = estimate_tokens(data)
-        met = measured <= rung.body_budget
-        if met:
+        if measured <= rung.body_budget:
             break
-    return Negotiated(
-        data=data,
-        rung=rung,
-        estimate=measured,
-        capped=not met and max_rung < RUNG_SHRINK,
-    )
+    return Negotiated(data=data, rung=rung, estimate=measured, max_rung=max_rung)
 
 
 def append_hint(data: dict[str, Any], detail: str, *, key: str = "hint") -> None:
@@ -409,20 +415,17 @@ def attach_notes(result: Negotiated, notes: Notes) -> None:
     assignment: a tool that already put facts there keeps them, which is the
     whole point of a channel a budget cannot cut.
 
-    ``notes.hint_key`` mirrors the last note into the tool's guidance key — the
-    second copy ``Notes.reserve`` already made room for.
+    Under the server's default budget the caller set no budget, so the note
+    never sends them to raise one: it says where what was emptied still is
+    (``notes.default_route``).
     """
     written: list[dict[str, Any]] = []
     if result.degraded:
+        route = notes.route if result.max_rung > RUNG_TRIM else notes.default_route
         written.append(
-            truncated_observation(result.rung, result.estimate, cut=notes.cut, route=notes.route)
+            truncated_observation(result.rung, result.estimate, cut=notes.cut, route=route)
         )
     if not result.met and not result.capped:
         written.append(not_met_observation(result.rung, result.estimate))
-    if not written:
-        return
-    data = result.data
-    observations = data.setdefault("observations", [])
-    observations.extend(written)
-    if notes.hint_key is not None:
-        append_hint(data, written[-1]["detail"], key=notes.hint_key)
+    if written:
+        result.data.setdefault("observations", []).extend(written)

@@ -18,9 +18,10 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.simulator import current_ngbehavior
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
-from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.spice_validator import (
+    ARITY_CHECKS,
     PROBE_REF_RE,
     drop_title_card,
     validate_netlist_arity,
@@ -29,7 +30,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "3"
+linter_version = "4"
 
 _SIGNAL_RE = PROBE_REF_RE
 _MILLI_SUFFIX_RE = re.compile(
@@ -53,6 +54,9 @@ class LintRule:
 class _LintContext:
     text: str
     path: Path
+    # The deck's cards without its line-1 title. Both simulators skip line 1
+    # of a netlist, so a title that starts with an element letter (``Diode
+    # clamp test``) is prose, not a card, for every rule.
     cards: list[SpiceCard]
     dialect: str | None
     simulator_name: str
@@ -68,9 +72,28 @@ class _LintContext:
         return self.dialect == "ngspice" or "ngspice" in self.simulator_name.casefold()
 
     @functools.cached_property
+    def arity_issues(self) -> list[dict[str, object]]:
+        """``validate_netlist_arity`` over the deck, run once for every arity rule."""
+        simulator = "ngspice" if self.ngspice else "LTspice"
+        return validate_netlist_arity(self.cards, simulator=simulator)
+
+    @functools.cached_property
     def include_cards(self) -> tuple[tuple[Path, str, list[SpiceCard]], ...]:
         """Each staged include snapshot with its cards, lexed once for every rule."""
         return tuple((path, text, lex(text).cards) for path, text in self.includes)
+
+
+# The severity a finding reports for its rule's disposition.
+DISPOSITION_SEVERITY: dict[Disposition, str] = {
+    "blocking": "error",
+    "warning": "warning",
+    "observation": "observation",
+}
+
+
+def rule_severity(rule_id: str) -> str:
+    """The severity a finding of ``rule_id`` reports."""
+    return DISPOSITION_SEVERITY[RULES_BY_ID[rule_id].disposition]
 
 
 def _finding(
@@ -82,14 +105,9 @@ def _finding(
     evidence: Any,
     file: Path | None = None,
 ) -> LintFinding:
-    severity = {
-        "blocking": "error",
-        "warning": "warning",
-        "observation": "observation",
-    }[rule.disposition]
     return {
         "rule_id": rule.rule_id,
-        "severity": severity,
+        "severity": DISPOSITION_SEVERITY[rule.disposition],
         "ok": False,
         "evidence": evidence,
         "at": {"file": str(file or context.path), "line": line},
@@ -153,7 +171,13 @@ def _meas_ngspice_batch(
             subject=card.name or ".meas",
             evidence={
                 "directive": card.body,
-                "reason": "ngspice batch mode with a raw output skips top-level .meas",
+                "reason": (
+                    "ngspice batch mode with a raw output skips top-level .meas: "
+                    "the deck runs but this measurement is not evaluated, and "
+                    "reading the run relays ngspice's notice of the skip. Measure "
+                    "the waveform with analyze_results (signal_stats or value), or "
+                    "inside a .control block."
+                ),
             },
         )
         for card in context.cards
@@ -323,11 +347,11 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
     return declared
 
 
-def _directive_arity(
+def _arity_check(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    simulator = "ngspice" if context.ngspice else "LTspice"
+    """The issues of the one ``validate_netlist_arity`` check named ``rule_id``."""
     return [
         _finding(
             context,
@@ -339,7 +363,8 @@ def _directive_arity(
                 "suggestion": issue.get("suggestion"),
             },
         )
-        for issue in validate_netlist_arity(context.cards, simulator=simulator)
+        for issue in context.arity_issues
+        if issue["check"] == rule.rule_id
     ]
 
 
@@ -460,11 +485,8 @@ def value_suffix_evidence(site: ValueSuffixSite, *, generated_by: str | None) ->
         evidence["ascii_spelling"] = spelling
         evidence["reason"] = (
             f"'{site.suffix}' is a micro suffix only to a reader that decodes this "
-            "file in the encoding it was written in. In UTF-8, which LTspice 24 and "
-            "later write, it is two bytes (µ is C2 B5); LTspice XVII decodes a deck "
-            "as cp1252, reads them as two characters ('Âµ'), and drops the scale "
-            f"without a diagnostic, so {site.token} runs as {site.number}. Write "
-            f"{spelling}: 'u' is micro in every encoding and to every simulator."
+            f"file in the encoding it was written in. {MICRO_SIGN_READERS} Misread, "
+            f"{site.token} runs as {site.number}; write {spelling}."
         )
     else:
         evidence["reads_as"] = site.number
@@ -476,6 +498,15 @@ def value_suffix_evidence(site: ValueSuffixSite, *, generated_by: str | None) ->
                 "micro sign decoded as cp1252. Neither character is a scale "
                 f"suffix, so the simulator reads {site.number}, a factor of 1e6 "
                 f"from {intended}. Write {intended} if micro was meant."
+            )
+        elif site.mojibake:
+            evidence["reason"] = (
+                f"'{site.suffix}' is how cp1252 shows the first byte of a "
+                "multi-byte UTF-8 character, so this text was decoded in an "
+                "encoding it was not written in. It is not a scale suffix, so the "
+                f"simulator reads {site.number}; if a micro sign was damaged this "
+                "way, that is a factor of 1e6. Write the suffix in ASCII: "
+                "f p n u m k meg g t."
             )
         else:
             evidence["reason"] = (
@@ -489,11 +520,23 @@ def value_suffix_evidence(site: ValueSuffixSite, *, generated_by: str | None) ->
     return evidence
 
 
-def _value_suffix_nonascii(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+def _value_suffix_findings(
+    context: _LintContext, rule: LintRule, *, mojibake: bool
+) -> list[LintFinding]:
+    """Non-ASCII suffix sites in the deck and its staged includes.
+
+    ``mojibake`` picks the sites whose suffix shows a mis-decoded file, or
+    every other one. A micro sign itself is neither: staging has spelled it
+    'u' by the time the deck is linted.
+    """
     findings: list[LintFinding] = []
-    files = [(context.path, context.text, drop_title_card(context.cards)), *context.include_cards]
+    files = [(context.path, context.text, context.cards), *context.include_cards]
     for path, text, cards in files:
-        sites = [site for site in value_suffix_sites(cards) if not site.micro]
+        sites = [
+            site
+            for site in value_suffix_sites(cards)
+            if not site.micro and site.mojibake == mojibake
+        ]
         if not sites:
             continue
         generated_by = deck_generator(text)
@@ -518,16 +561,27 @@ def _normalize_signal(value: str) -> str:
     return re.sub(r"\s+", "", value).casefold()
 
 
+_ARITY_DISPOSITION: dict[str, Disposition] = {
+    severity: disposition for disposition, severity in DISPOSITION_SEVERITY.items()
+}
+
 RULES: tuple[LintRule, ...] = (
     LintRule("save-meas-coverage", "blocking", _save_meas_coverage),
-    LintRule("meas-ngspice-batch", "blocking", _meas_ngspice_batch),
+    # A warning, not blocking: ngspice runs the deck and skips only the
+    # top-level .meas, and reading the run relays ngspice's own notice of the
+    # skip. Refusing the deck would cost the caller the rest of the run.
+    LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch),
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
     LintRule("model-missing", "blocking", _model_missing),
-    LintRule("directive-arity", "blocking", _directive_arity),
+    # One rule per validate_netlist_arity check, each at the disposition its
+    # declared severity names, so suppressing one never silences another.
+    *(
+        LintRule(check, _ARITY_DISPOSITION[severity], _arity_check)
+        for check, severity in ARITY_CHECKS.items()
+    ),
     # A warning, not blocking: the run still answers a real question at the base
-    # value, and the single-run path's hard refusal of the same deck is the
-    # stricter reading of one behavior. What matters is that the caller learns
-    # the sweep did not happen, since ngspice itself says nothing.
+    # value. What matters is that the caller learns the sweep did not happen,
+    # since ngspice itself says nothing.
     LintRule("step-ngspice", "warning", _step_ngspice),
     LintRule("include-relative", "warning", _include_relative),
     LintRule("suffix-mega-milli", "warning", _suffix_mega_milli),
@@ -536,12 +590,24 @@ RULES: tuple[LintRule, ...] = (
     # several. That silent-wrong-answer class is what this linter exists to
     # stop, and a warning under the default lint mode does not stop it.
     LintRule("temp-as-param", "blocking", _temp_as_param),
-    # Blocking: a non-ASCII character where a scale suffix goes is never a
-    # scale, so the deck runs at the bare number. 'Âµ' — a UTF-8 micro sign
-    # decoded as cp1252 — lands here and is a factor of 1e6 off. A micro sign
-    # itself never reaches the linter: staging has spelled it 'u' by then, and
-    # verify_circuit reports it for a deck that will run elsewhere.
-    LintRule("value-suffix-nonascii", "blocking", _value_suffix_nonascii),
+    # Blocking: a suffix that shows a file decoded in an encoding it was not
+    # written in. 'Âµ' — a UTF-8 micro sign decoded as cp1252 — is never a
+    # scale, so the deck runs at the bare number, a factor of 1e6 off. A micro
+    # sign itself never reaches the linter: staging has spelled it 'u' by then,
+    # and verify_circuit reports it for a deck that will run elsewhere, as a
+    # warning only where a reader it knows of decodes the file otherwise.
+    LintRule(
+        "value-suffix-mojibake",
+        "blocking",
+        functools.partial(_value_suffix_findings, mojibake=True),
+    ),
+    # A warning: any other symbol after a number ('10Ω', '25°C') is read as the
+    # bare number, which is usually what it means.
+    LintRule(
+        "value-suffix-nonascii",
+        "warning",
+        functools.partial(_value_suffix_findings, mojibake=False),
+    ),
 )
 
 RULES_BY_ID: dict[str, LintRule] = {rule.rule_id: rule for rule in RULES}
@@ -574,7 +640,7 @@ def lint_deck(
     context = _LintContext(
         text=deck_text,
         path=path,
-        cards=lex(deck_text).cards,
+        cards=drop_title_card(lex(deck_text).cards),
         dialect=dialect,
         simulator_name=simulator_name,
         includes=tuple(includes),

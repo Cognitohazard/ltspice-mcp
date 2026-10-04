@@ -4,7 +4,8 @@
 # prints PASS, FAIL or SKIP (with why); the script exits non-zero on any FAIL.
 #
 # Shapes:
-#   1. Linux, the suite serially (what CI runs)
+#   1. Linux, the suite serially (CI runs it in parallel; this keeps the
+#      one-process test order covered)
 #   2. Linux with WSL detection forced off (Linux CI is not WSL; this box is)
 #   3. Ubuntu container, non-root, with an init process, ngspice + libcairo2
 #   4. Windows native, Python 3.12, checkout with line-ending conversion ON

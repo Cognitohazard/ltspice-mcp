@@ -10,6 +10,29 @@ permissions:
   contents: read
 
 jobs:
+  static:
+    # Lint and type check once, not once per interpreter: ruff targets py311,
+    # pyrightconfig.json pins pythonVersion 3.11, and uv.lock resolves one
+    # package set for 3.11 through 3.13, so every leg of the test matrix would
+    # check the same thing. Its own job, so the test legs start testing sooner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+      - name: Type check
+        run: uv run pyright
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -34,20 +57,17 @@ jobs:
       - name: Pin Python ${{ matrix.python }}
         run: uv python pin "${{ matrix.python }}"
 
-      - name: Lint
-        run: uv run ruff check src/ tests/
-
-      - name: Type check
-        run: uv run pyright
-
       - name: Install ngspice and cairo (the real-ngspice e2e tier and the raster tier)
         run: sudo apt-get update && sudo apt-get install -y ngspice libcairo2
 
       # Coverage is gated here rather than in the pytest addopts so the repo's
       # documented single-file debug commands (e.g. `uv run pytest
       # tests/test_pathutil.py`) don't fail on a whole-package coverage floor.
+      # One xdist worker per core (four on a hosted runner) runs the suite in
+      # under half its serial time; pytest-cov combines the workers' data
+      # before the floor is checked.
       - name: Test
-        run: uv run pytest tests/ -v --cov=ltspice_mcp --cov-fail-under=80
+        run: uv run pytest tests/ -v -n auto --cov=ltspice_mcp --cov-fail-under=80
 
   check-windows:
     # Windows native is a supported platform with win32-only code (the msvcrt
@@ -71,7 +91,7 @@ jobs:
         run: uv python pin "3.12"
 
       # No lint step: ruff results are platform-independent and already
-      # enforced on the Linux job — this job exists for win32 code paths.
+      # enforced by the static job — this job exists for win32 code paths.
       # No coverage gate here: ngspice is not installed on this runner (the
       # real-ngspice e2e tier is Linux-only above), so its tests skip and the
       # whole-package coverage would fall below the threshold for reasons

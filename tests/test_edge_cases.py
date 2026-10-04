@@ -678,15 +678,17 @@ class TestValueRecipeRejectsNaNInf:
 
 
 class TestPageLimitFloor:
-    def test_the_page_cap_is_the_input_model_s_bound(self):
-        # The cap moved from the paginator to the field that takes the number:
-        # a limit out of range is refused at validation, not clamped after it.
+    def test_the_page_floor_is_the_input_model_s_bound(self):
+        # Below one names no page and is refused at validation; above the cap
+        # is a larger page of the same listing, held to the cap by the handler
+        # (test_jobs_tool's list cap test pins that).
         from pydantic import ValidationError
 
         from ltspice_mcp.tools.jobs import JobsInput
 
         with pytest.raises(ValidationError):
-            JobsInput.model_validate({"action": "list", "limit": 999})
+            JobsInput.model_validate({"action": "list", "limit": 0})
+        JobsInput.model_validate({"action": "list", "limit": 999})
 
 
 # ---------------------------------------------------------------------------
