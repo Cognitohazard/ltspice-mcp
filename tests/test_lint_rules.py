@@ -412,10 +412,13 @@ def test_a_spaced_expression_is_a_warning_naming_the_edit_limit(tmp_path: Path):
     assert finding["severity"] == "warning"
 
 
-def test_arity_checks_take_the_validators_severity():
-    for check, severity in ARITY_CHECKS.items():
-        expected = {"error": "blocking", "warning": "warning"}[severity]
-        assert RULES_BY_ID[check].disposition == expected
+def test_each_arity_rule_reports_the_validators_severity(tmp_path: Path):
+    """One card per arity check: each lints under its own rule id, at the
+    severity its validator check declares."""
+    deck = "* t\nR1 a 1k\nB1 b 0 {V(a)}\nC1 c d C=1n\nB2 e 0 V = V(a) + V(b)\n.op\n.end\n"
+    findings = lint_deck(deck, tmp_path / "deck.cir", None, "LTspice")
+
+    assert {item["rule_id"]: item["severity"] for item in findings} == ARITY_CHECKS
 
 
 @pytest.mark.parametrize(

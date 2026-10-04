@@ -356,12 +356,11 @@ class ValueSuffixSite:
     def mojibake(self) -> bool:
         """The suffix shows a file decoded in an encoding it was not written in.
 
-        Either a micro sign read that way, or a cp1252 reading of a UTF-8 lead
-        byte a micro sign can start with (``MICRO_MOJIBAKE_LEADS``), which is
-        what a twice-encoded one, or the same damage to another character,
-        looks like.
+        It is a cp1252 reading of a UTF-8 lead byte a micro sign starts with
+        (``MICRO_MOJIBAKE_LEADS``): every ``misdecoded_micro`` site, a
+        twice-encoded micro sign, and the same damage to another character.
         """
-        return self.misdecoded_micro or self.suffix in MICRO_MOJIBAKE_LEADS
+        return self.suffix in MICRO_MOJIBAKE_LEADS
 
 
 def _unquoted_spans(body: str) -> Iterator[tuple[int, int]]:

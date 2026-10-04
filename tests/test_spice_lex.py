@@ -1112,6 +1112,13 @@ class TestInstanceLine:
         view.set_model("other")
         assert emit(cards).strip() == "X1 n1 0 other params: R=2k"
 
+    def test_rerender_keeps_the_params_keyword(self) -> None:
+        # Adding a parameter re-renders the card from the view; the keyword
+        # the call was written with stays in front of its overrides.
+        cards = lex("X1 n1 0 mysub PARAMS: R=2k\n").cards
+        InstanceLine.from_card(cards[0]).set_param("C", "1n")
+        assert emit(cards).strip() == "X1 n1 0 mysub PARAMS: R=2k C=1n"
+
     @pytest.mark.parametrize(
         ("card", "nodes", "model", "value"),
         [

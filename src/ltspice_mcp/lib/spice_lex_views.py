@@ -13,12 +13,12 @@ after each mutation.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
 from ltspice_mcp.lib.format import format_spice_value as _format_value
+from ltspice_mcp.lib.format import is_scaled_number
 from ltspice_mcp.lib.spice_lex import (
     MEAS_ANALYSIS_TOKENS,
     SpiceCard,
@@ -345,12 +345,6 @@ _SWITCH_STATES = frozenset({"on", "off"})
 # ``M1 d g s b NCH off``.
 _DEVICE_TAIL_PREFIXES = frozenset({"Q", "J", "M"})
 
-# A plain SPICE number with an optional scale suffix. Deliberately strict: a
-# model name that starts with digits (``2N2222``) must not read as a number.
-_PLAIN_NUMBER_RE = re.compile(
-    r"[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:meg|mil|[tgkmunpf])?", re.IGNORECASE
-)
-
 
 def _is_device_tail_value(token: Token) -> bool:
     """A positional that can only be a device's trailing area factor or state.
@@ -364,7 +358,9 @@ def _is_device_tail_value(token: Token) -> bool:
         return token.text.startswith("'")
     if token.kind != TokenKind.BARE:
         return False
-    return token.text.casefold() in _SWITCH_STATES or bool(_PLAIN_NUMBER_RE.fullmatch(token.text))
+    # Strictly a number: a model name that starts with digits (``2N2222``)
+    # must not read as an area factor.
+    return token.text.casefold() in _SWITCH_STATES or is_scaled_number(token.text)
 
 
 def _exact_node_span(positional: list[Token], exact: int | None) -> tuple[int, int] | None:
@@ -424,6 +420,9 @@ class InstanceLine:
     _model_token: Token | None = None
     _param_tokens: dict[str, Token] = field(default_factory=dict)
     _value_param_key: str | None = None
+    # A subckt call's ``params:`` keyword as written, put back in front of the
+    # overrides when the card is re-rendered.
+    _params_marker: str | None = None
     # Body span (start, end) covering exactly the positional node tokens, so
     # set_nodes can rewrite connectivity without disturbing the value/params
     # tail. None when there are no nodes or their offsets are synthesized.
@@ -458,6 +457,7 @@ class InstanceLine:
         model: str | None = None
         value: str | None = None
         model_token: Token | None = None
+        params_marker: str | None = None
         nodes_tokens: list[Token]
 
         if not positional:
@@ -507,6 +507,7 @@ class InstanceLine:
                 tail = [pos[-1]]
                 pos = pos[:-1]
             elif prefix == "X" and pos[-1].text.casefold() == "params:":
+                params_marker = pos[-1].text
                 pos = pos[:-1]
             elif prefix in _DEVICE_TAIL_PREFIXES:
                 while len(pos) > spec.min_nodes + 1 and _is_device_tail_value(pos[-1]):
@@ -570,6 +571,7 @@ class InstanceLine:
             _model_token=model_token,
             _param_tokens=param_tokens,
             _value_param_key=value_param_key,
+            _params_marker=params_marker,
             _node_span=node_span,
         )
 
@@ -728,6 +730,8 @@ class InstanceLine:
                 parts.append(self.value)
         elif self.value is not None and self._value_param_key is None:
             parts.append(self.value)
+        if self._params_marker is not None:
+            parts.append(self._params_marker)
         for k, v in self.params.items():
             parts.append(f"{k}={v}")
         body = " ".join(parts)
