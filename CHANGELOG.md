@@ -209,6 +209,12 @@ tool-surface changes.
   opened, and a quote left open inside a braced or parenthesized expression is
   reported at the quote, with the same hint, rather than at the enclosing
   bracket with none.
+- `run_experiments` linted a QSPICE or Xyce deck with LTspice's reading of
+  the two arity checks that encode it: a capacitor or inductor written with a
+  keyed primary value (`C1 out 0 C=1u`) was a blocking `value-keyword-ltspice`
+  finding, and a B-source written in LTspice's own `R=`/`P=` forms passed.
+  Both readings are LTspice's, so they now apply to LTspice decks only; a
+  QSPICE or Xyce deck is read as an ngspice deck is.
 - The `value` recipe of `analyze_results` reported input-referred noise
   (`V(inoise)`, ngspice's `inoise_spectrum`) in V/√Hz even when the deck's
   `.NOISE` input source is a current source, where the density is A/√Hz.
@@ -463,6 +469,22 @@ tool-surface changes.
   one-time reminder to read its core, on the text channel and in the
   structured `hint`. Reading the guide through `inspect` or a `spice://guide`
   resource retires it.
+- `run_experiments` accepts `execution.simulator: "qspice"` and `"xyce"`.
+  The field admitted only LTspice and ngspice (and their named executables),
+  so QSPICE and Xyce could run only as the server default, after a config
+  change and a restart. Its pattern now admits all four families, each with
+  named executables of its own, and a name is accepted when the family is
+  detected and this host can run it. An undetected family is refused with
+  the existing "not available" error, which lists what was detected. A QSPICE
+  run's `.qraw` and a Xyce run's raw parse with their own dialect, read from
+  the job's recorded simulator (Xyce's raw does not name its writer).
+- `inspect(kind="capabilities")` reports, for every simulator, whether a run
+  can select it (`selectable`), and for a family this host cannot run, the
+  `refusal` saying why. The reference lookup finds `run_experiments`' argument
+  table, where `execution.simulator` lists the families, for "qspice", "xyce"
+  and "choose the simulator".
+- A Xyce run records the release its log banner names
+  (`Xyce Release 7.8.0-opensource`) as the case's `simulator_version`.
 - `plot_waveform` replies summarize each plotted trace: `min` and `max` with
   the axis value where each occurs (`x_at_min`, `x_at_max`), `initial` and
   `final`, and the time-weighted `mean` on a transient, read from every sample
@@ -617,8 +639,8 @@ tool-surface changes.
   gets the whole `max_parallel_sims`, as each family already did. Its records,
   replay check, scoped kill, raw dialect, linter, `.asc` exporter and model
   library roots follow the build the run selected. Startup binds them; an
-  entry that cannot be bound (missing file, a family no run can use or the
-  allowlist excludes, a file that looks like another simulator) is left out
+  entry that cannot be bound (missing file, a family the allowlist excludes,
+  a file that looks like another simulator) is left out
   with a startup diagnostic. `inspect(kind="capabilities")` lists them under
   `named_executables`, keyed by the selector, each with its executable,
   `executable_sha256` and last reported `version`. A `request_id` replayed
@@ -707,6 +729,17 @@ tool-surface changes.
   (`guide section 'signals'`).
 - `plot_waveform`'s output schema declares `hint`, which carries the guide
   reminder when that is the session's first reply.
+- A run on QSPICE is refused unless the server runs natively on Windows, with
+  the reason, including when QSPICE is the server default and no simulator is
+  named. spicelib starts QSPICE with the host's own file paths, and only
+  LTspice has a path adapter for a Windows simulator under WSL or Wine, so such
+  a run used to be launched with paths QSPICE cannot open. Off Windows the
+  capabilities remediation for QSPICE now says it cannot run there instead of
+  suggesting an install path.
+- A `.asc` circuit on QSPICE or Xyce fails with `asc_export_unavailable`
+  before LTspice is launched. A schematic runs through LTspice's netlist
+  export, in LTspice's own dialect, which is scrubbed only for ngspice; a run
+  on QSPICE or Xyce takes a hand-written `.cir`/`.net`/`.sp`.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles carry the unit, and

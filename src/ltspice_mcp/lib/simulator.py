@@ -57,10 +57,91 @@ SIMULATORS: dict[str, type] = {
     "xyce": XyceSimulator,
 }
 
+#: How a person names each family, in messages and the server instructions.
+SIMULATOR_DISPLAY: dict[str, str] = {
+    "ltspice": "LTspice",
+    "ngspice": "ngspice",
+    "qspice": "QSPICE",
+    "xyce": "Xyce",
+}
+
+# Each family's spicelib base class: the detected class, except that LTspice's
+# platform subclass (LTspiceWSL) is widened to its base, so every LTspice class
+# belongs to the family.
+_FAMILY_BASES: dict[str, type] = {**SIMULATORS, "ltspice": LTspice}
+
+# The family of each class name a job records (``job.simulator`` is the class's
+# ``__name__``), so a persisted record resolves without the class at hand.
+_FAMILY_BY_CLASS_NAME: dict[str, str] = {
+    cls.__name__: family for family, cls in (*SIMULATORS.items(), *_FAMILY_BASES.items())
+}
+
+# Families that read the netlist LTspice exports from a schematic: LTspice as
+# exported, ngspice once ``deck_prep`` has scrubbed it.
+_READS_LTSPICE_EXPORT = frozenset({"ltspice", "ngspice"})
+
+
+def simulator_family(simulator: type | str | None) -> str | None:
+    """The supported family a simulator belongs to, or None for anything else.
+
+    A class is judged by its spicelib lineage; a string is a recorded class
+    name (``job.simulator``), judged by the classes the families are made of.
+    """
+    if isinstance(simulator, str):
+        return _FAMILY_BY_CLASS_NAME.get(simulator)
+    if not isinstance(simulator, type):
+        return None
+    return next(
+        (family for family, base in _FAMILY_BASES.items() if issubclass(simulator, base)),
+        None,
+    )
+
+
+def family_refusal(family: str | None) -> str | None:
+    """Why runs on ``family`` cannot happen on this host, or None when they can.
+
+    QSPICE is a Windows program, and spicelib starts it with this host's own
+    file paths. Only LTspice has an adapter that translates them for a Windows
+    simulator (``LTspiceWSL``, and spicelib's Wine prefix for LTspice), so off
+    native Windows a QSPICE run is handed paths it cannot open. spicelib itself
+    looks for QSPICE only on Windows and documents no Wine support for it.
+    """
+    host = _platform_key()
+    if family == "qspice" and host != "windows":
+        return (
+            "QSPICE runs only when this server itself runs on Windows: it is a "
+            "Windows program, spicelib starts it with this host's own file paths, "
+            f"and under {'WSL' if host == 'wsl' else 'Wine'} it cannot open them "
+            "(only LTspice has a path adapter here)."
+        )
+    return None
+
+
+def asc_export_refusal(simulator_class: type | None) -> str | None:
+    """Why a schematic cannot be run on ``simulator_class``, or None when it can.
+
+    A schematic runs through the netlist LTspice exports from it, which is in
+    LTspice's own dialect (``.backanno``, its ``§`` name prefix and ``µ`` unit
+    suffix, ``.lib`` lines into LTspice's model library). LTspice reads it, and
+    ngspice reads it once ``deck_prep`` has scrubbed those; any other family is
+    refused rather than handed a dialect it was never checked against. A class
+    outside the supported families is left to the export as before.
+    """
+    family = simulator_family(simulator_class)
+    if family is None or family in _READS_LTSPICE_EXPORT:
+        return None
+    display = SIMULATOR_DISPLAY[family]
+    return (
+        "LTspice exports a schematic in its own netlist dialect, which is not "
+        f"prepared for {display}, so a run on {display} takes a hand-written "
+        ".cir/.net/.sp netlist."
+    )
+
 
 #: The families a run can be put on (``run_experiments``' ``execution.simulator``),
-#: and so the families a named executable may belong to.
-_RUN_FAMILIES: tuple[str, ...] = ("ltspice", "ngspice")
+#: and so the families a named executable may belong to: every supported one.
+#: Whether this host can run a family is asked per run (``family_refusal``).
+_RUN_FAMILIES: tuple[str, ...] = tuple(SIMULATORS)
 
 #: A named executable's own name: lower case, so a selector is spelled one way.
 _EXECUTABLE_NAME_PATTERN = r"[a-z0-9][a-z0-9._-]{0,31}"
@@ -383,7 +464,7 @@ def simulator_library_roots(simulator_class: type | None) -> list[Path]:
 def is_ltspice(simulator_class: type | None) -> bool:
     """True when the simulator is an LTspice: the family default, its WSL
     class, or a named executable of the family."""
-    return simulator_class is not None and issubclass(simulator_class, LTspice)
+    return simulator_family(simulator_class) == "ltspice"
 
 
 def is_ngspice(simulator_class: type | None) -> bool:
@@ -391,7 +472,7 @@ def is_ngspice(simulator_class: type | None) -> bool:
     quirks the ngbehavior diagnostic keys off. Checks class identity, not the
     RawRead dialect table (a header-parsing concern), so the two can't drift.
     """
-    return simulator_class is not None and issubclass(simulator_class, NGspiceSimulator)
+    return simulator_family(simulator_class) == "ngspice"
 
 
 def _autodetect_wsl_ltspice(diagnostics: list[str] | None = None) -> None:
@@ -429,10 +510,10 @@ def _autodetect_wsl_ltspice(diagnostics: list[str] | None = None) -> None:
         logger.warning(f"WSL LTspice auto-detection failed for {exe}: {e}")
 
 
+# Every family but LTspice names its RawRead dialect after itself; LTspice is
+# auto-detected from the raw's ``Command:`` header (see below).
 _DIALECT_MAP: dict[str, str] = {
-    "NGspiceSimulator": "ngspice",
-    "Qspice": "qspice",
-    "XyceSimulator": "xyce",
+    cls.__name__: family for family, cls in _FAMILY_BASES.items() if family != "ltspice"
 }
 
 
@@ -563,7 +644,9 @@ def _platform_key() -> str:
 # Realistic executable locations per simulator and platform, shown as the
 # example value beside the config key that takes them. WSL reaches Windows
 # binaries through /mnt/c — the LTspice example is the path this project's
-# own development box uses.
+# own development box uses. QSPICE has a Windows entry only: elsewhere it
+# cannot run (``family_refusal``), so no path is suggested. The Windows Xyce
+# path is the install location spicelib's own detection looks in.
 _SIMULATOR_EXE_EXAMPLES: dict[str, dict[str, str]] = {
     "ltspice": {
         "wsl": "/mnt/c/Program Files/ADI/LTspice/LTspice.exe",
@@ -578,13 +661,13 @@ _SIMULATOR_EXE_EXAMPLES: dict[str, dict[str, str]] = {
         "windows": "C:\\Spice64\\bin\\ngspice_con.exe",
     },
     "qspice": {
-        "wsl": "/mnt/c/Program Files/QSPICE/QSPICE64.exe",
         "windows": "C:\\Program Files\\QSPICE\\QSPICE64.exe",
     },
     "xyce": {
         "linux": "/usr/local/bin/Xyce",
         "wsl": "/usr/local/bin/Xyce",
         "darwin": "/usr/local/bin/Xyce",
+        "windows": "C:\\Program Files\\Xyce 7.9 NORAD\\bin\\xyce.exe",
     },
 }
 
@@ -602,7 +685,12 @@ def simulator_remediation(name: str, config: ServerConfig) -> dict[str, object]:
     excluded = name not in enabled
     key = f"{SIM_SECTION}.{SIM_PATH_KEY}"
     restart = "then restart this MCP server — detection runs at startup."
-    if excluded:
+    refusal = family_refusal(name)
+    if refusal is not None:
+        # Installing it would not help: a run on it would still be refused, so
+        # the platform is the fact to state, not a path to set.
+        action = f"{refusal} Installing it on this host would not make it runnable."
+    elif excluded:
         action = (
             f"'{name}' is excluded by {SIM_SECTION}.{SIM_ENABLED_KEY} = "
             f"{config.enabled_simulators} in {config.config_path}; add it there "
