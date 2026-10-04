@@ -80,7 +80,7 @@ from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
-from ltspice_mcp.lib.lint_rules import deck_generator, value_suffix_evidence
+from ltspice_mcp.lib.lint_rules import deck_generator, rule_severity, value_suffix_evidence
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -103,6 +103,7 @@ from ltspice_mcp.lib.schematic_scene import (
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
 from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.simulator import is_ngspice
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_ops import (
@@ -984,9 +985,9 @@ def _rule_finding(
     )
 
 
-#: The two value-suffix rules, both under ``FINDING_RULE_CAP``: one deck can
-#: spell every value of a sheet with the same character.
-_VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_nonascii")
+#: The value-suffix rules, all under ``FINDING_RULE_CAP``: one deck can spell
+#: every value of a sheet with the same character.
+_VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_mojibake", "value_suffix_nonascii")
 
 
 def _micro_sign_observation(
@@ -1035,9 +1036,12 @@ def _value_suffix_findings(
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
     One scan and one evidence builder with the ``run_experiments`` linter's
-    ``value-suffix-nonascii`` rule, so both surfaces say the same thing. Any
-    character other than a micro sign is an error per value: it is never a
-    scale, so the deck runs at the bare number.
+    ``value-suffix-*`` rules, so both surfaces say the same thing. A suffix
+    that shows the file was decoded in an encoding it was not written in
+    (``Âµ``) is an error per value: the deck runs at the bare number, and a
+    micro sign lost that way is a factor of 1e6. Any other symbol (``10Ω``) is
+    a warning per value: it is read as the bare number, which is usually what
+    it means.
 
     A micro sign is micro to a reader that decodes the file in the encoding it
     was written in. It is a warning per value only when a reader this server
@@ -1066,10 +1070,15 @@ def _value_suffix_findings(
         evidence["encoding"] = encoding
         if site.micro:
             evidence["reader"] = cp1252_reader
+            rule_id, severity = "value_suffix_micro_sign", "warning"
+        elif site.mojibake:
+            rule_id, severity = "value_suffix_mojibake", rule_severity("value-suffix-mojibake")
+        else:
+            rule_id, severity = "value_suffix_nonascii", rule_severity("value-suffix-nonascii")
         findings.append(
             _finding(
-                rule_id="value_suffix_micro_sign" if site.micro else "value_suffix_nonascii",
-                severity="warning" if site.micro else "error",
+                rule_id=rule_id,
+                severity=severity,
                 at={"file": str(path), "line": site.line},
                 subject=site.token,
                 evidence=evidence,
@@ -1081,21 +1090,31 @@ def _value_suffix_findings(
 
 
 def _syntax_findings(
-    text: str, path: Path, deck: _LexedDeck, encoding: str, *, cp1252_reader: str | None
+    text: str,
+    path: Path,
+    deck: _LexedDeck,
+    encoding: str,
+    *,
+    cp1252_reader: str | None,
+    simulator: str,
 ) -> list[dict[str, Any]]:
     """Directive, lex, element-arity and value-suffix findings in a netlist.
 
-    Everything here changes what the simulator reads, so every finding is an
-    error except a micro-sign suffix, whose meaning depends on the reader (see
-    ``_value_suffix_findings``). The facts that are legal-but-notable live in
-    the quality check.
+    Everything here changes what the simulator reads. A finding is an error
+    unless its rule says the deck still runs as meant: an element-arity issue
+    carries the severity its validator check declares, and a suffix finding
+    is an error only for a mis-decoded file (see ``_value_suffix_findings``).
+    ``simulator`` is the one the session runs decks on, ``"LTspice"`` or
+    ``"ngspice"``: some directive and element forms are a fault for one and
+    valid for the other. The facts that are legal-but-notable live in the
+    quality check.
     """
     findings: list[dict[str, Any]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line.startswith("."):
             continue
-        err = validate_directive(line)
+        err = validate_directive(line, simulator)
         if err is None:
             continue
         detail = err.message + (f" {err.suggestion}" if err.suggestion else "")
@@ -1120,8 +1139,8 @@ def _syntax_findings(
             )
         )
     findings.extend(
-        _rule_finding(issue, path, rule_id="element_arity", severity="error")
-        for issue in validate_netlist_arity(deck.cards)
+        _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
+        for issue in validate_netlist_arity(deck.cards, simulator=simulator)
     )
     findings.extend(
         _value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader=cp1252_reader)
@@ -2198,9 +2217,17 @@ async def evaluate_verify_circuit(
 
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
+        # The simulator a run_experiments call with no override would use.
+        simulator = "ngspice" if is_ngspice(state.default_simulator) else "LTspice"
         findings.extend(
             await asyncio.to_thread(
-                _syntax_findings, text, path, deck, encoding, cp1252_reader=cp1252_reader
+                _syntax_findings,
+                text,
+                path,
+                deck,
+                encoding,
+                cp1252_reader=cp1252_reader,
+                simulator=simulator,
             )
         )
         checks_run.append("syntax")
@@ -2345,7 +2372,7 @@ async def evaluate_verify_circuit(
             render_task.cancel()
         raise
 
-    # A sheet can spell every value with the same character, so the two
+    # A sheet can spell every value with the same character, so the
     # value-suffix rules are capped like the layout rules.
     suffix_totals = Counter(
         str(f["rule_id"]) for f in findings if f["rule_id"] in _VALUE_SUFFIX_RULES

@@ -397,10 +397,73 @@ async def test_syntax_blocks_a_mis_decoded_micro_suffix(state_no_sim, work_dir):
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_nonascii"]
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_mojibake"]
     assert finding["severity"] == "error"
     assert finding["evidence"]["reads_as"] == "23"
     assert finding["evidence"]["likely_intended"] == "23u"
+
+
+async def test_syntax_warns_on_a_symbol_after_a_number(state_no_sim, work_dir):
+    """'10Ω' runs as 10, which is what it says; only a mis-decoded character
+    is an error, because that is where a scale can have been lost."""
+    deck = work_dir / "rc.cir"
+    deck.write_bytes("* rc\nV1 in 0 1\nR1 in 0 10Ω\n.temp 25°C\n.end\n".encode())
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    assert [(f["rule_id"], f["severity"]) for f in data["findings"]] == [
+        ("value_suffix_nonascii", "warning"),
+        ("value_suffix_nonascii", "warning"),
+    ]
+
+
+async def test_syntax_reports_each_arity_issue_at_its_own_severity(state_no_sim, work_dir):
+    """A spaced expression runs; the validator calls it a warning, and so does
+    the syntax check, beside a one-node resistor that stays an error."""
+    deck = _write(work_dir, "b.cir", "* b\nV1 a 0 1\nB1 c 0 V = V(a) + 1\nR1 c 1k\n.end\n")
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    assert sorted(
+        (f["subject"].split()[0], f["severity"])
+        for f in data["findings"]
+        if f["rule_id"] == "element_arity"
+    ) == [("B1", "warning"), ("R1", "error")]
+
+
+_SIMULATOR_SPECIFIC = (
+    "* rules that depend on the simulator\n"
+    "V1 in 0 AC 1\n"
+    "C1 in out C=1n\n"
+    "R1 out 0 1k\n"
+    ".tran 0 1m\n"
+    ".meas ac g FIND vdb(out) AT=1k\n"
+    ".end\n"
+)
+
+
+async def test_syntax_checks_against_an_ngspice_default(config, work_dir):
+    """An ngspice session is told about ngspice faults (a zero .tran step) and
+    not about LTspice ones (vdb() in .meas, C= as the value)."""
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
+    deck = _write(work_dir, "sim.cir", _SIMULATOR_SPECIFIC)
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    assert [f["subject"] for f in data["findings"]] == [".tran 0 1m"]
+
+
+async def test_syntax_checks_against_an_ltspice_default(state_no_sim, work_dir):
+    deck = _write(work_dir, "sim.cir", _SIMULATOR_SPECIFIC)
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    assert sorted(f["subject"] for f in data["findings"]) == [
+        ".meas ac g FIND vdb(out) AT=1k",
+        "C1 in out C=1n",
+    ]
 
 
 async def test_export_stage_reports_micro_signs_in_the_exported_netlist(

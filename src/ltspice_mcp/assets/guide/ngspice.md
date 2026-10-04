@@ -32,13 +32,13 @@ ngspice shares guide section 'fundamentals', with these deltas:
   wrapper). Inside `.control`, `param` and `par` are not available: compute
   with `let`. The interactive `meas` command also takes an `SP` analysis, for
   measurements on a spectrum.
-- `run_experiments` refuses a deck with a top-level `.meas` on ngspice (lint
-  `meas-ngspice-batch`; the case reports `skipped`), because ngspice run in
-  batch mode with a raw output (`-b -r`, as the server runs it) does not
-  evaluate `.meas`. Read the trace with a recipe instead (`waveform`, `value`,
-  `operating_point`), or measure inside a `.control ... run ... .endc` block
-  with the dot-less interactive `meas` command (`meas tran vmax MAX V(out)`),
-  whose result prints to the run's log. A dotted `.meas` inside `.control` is
+- ngspice run in batch mode with a raw output (`-b -r`, as the server runs it)
+  does not evaluate a top-level `.meas`. `run_experiments` warns (lint
+  `meas-ngspice-batch`) and runs the deck; the measurement comes back absent,
+  and reading the run relays ngspice's notice of the skip. Read the trace with
+  a recipe instead (`waveform`, `value`, `operating_point`), or measure inside
+  a `.control ... run ... .endc` block with the dot-less interactive `meas`
+  command (`meas tran vmax MAX V(out)`), whose result prints to the run's log. A dotted `.meas` inside `.control` is
   not a command and computes nothing.
 - `.backanno` is LTspice-only: ngspice rejects it ("unimplemented dot command
   '.backanno'") and aborts the run. Probe currents with
