@@ -1,4 +1,8 @@
-"""Immutable persistence for continuable ``analyze_results`` calls."""
+"""Persistence for continuable ``analyze_results`` calls.
+
+A result set is immutable but for one step: its source manifests gain content
+digests when a reply hands the set to a caller to resume (``record_digests``).
+"""
 
 from __future__ import annotations
 
@@ -124,6 +128,25 @@ def create(
     store.ensure_root()
     atomic_write_json(store.result_set(result_set_id), item.to_dict())
     return item
+
+
+def record_digests(item: ResultSet, digests: dict[str, dict[str, Any]]) -> ResultSet:
+    """Rewrite ``item`` with content digests added to the named source manifests.
+
+    A set's manifests identify each source by its size and modification time,
+    and gain their content digests once, when a reply hands the set to a caller
+    to resume. Nothing else in the record changes: a cursor binds the set's id
+    and work hash, both untouched, and the snapshot hash is recomputed.
+    """
+    manifests = [
+        {**manifest, **digests.get(str(manifest.get("manifest_id")), {})}
+        for manifest in item.source_manifests
+    ]
+    updated = replace(item, source_manifests=manifests)
+    updated = replace(updated, snapshot_hash=canonical_hash(updated.snapshot()))
+    store = Store(Path(item.inputs["working_dir"]))
+    atomic_write_json(store.result_set(item.result_set_id), updated.to_dict())
+    return updated
 
 
 def _decode(data: dict[str, Any], path: Path) -> ResultSet:

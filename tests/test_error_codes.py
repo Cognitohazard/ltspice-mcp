@@ -126,8 +126,17 @@ class TestAnalysisDeadlineIsTyped:
         # storage fault, not a deadline, and the manifest must say so.
         raw = _copy_raw(work_dir, "probe.raw")
         monkeypatch.setattr(result_store, "sha256_file", _out_of_quota)
-        data = await _analyze(state_no_sim, raw, [{"key": "summary", "metric": "summary"}])
-        assert _failure_codes(data) == {"source_unavailable"}
+        # Provenance is the call that digests its sources up front.
+        args = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [{"key": "summary", "metric": "summary"}],
+                "include": {"provenance": True},
+            }
+        )
+        result = await handle_analyze_results(args, state_no_sim)
+        assert result.structured_content is not None
+        assert _failure_codes(result.structured_content) == {"source_unavailable"}
 
     async def test_signal_named_deadline_is_recipe_failed(
         self, state_no_sim: SessionState, work_dir: Path
