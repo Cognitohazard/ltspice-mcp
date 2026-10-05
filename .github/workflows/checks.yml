@@ -76,7 +76,12 @@ jobs:
     # interpreter guards those paths — this proves platform correctness, not
     # every interpreter version.
     runs-on: windows-latest
-    timeout-minutes: 20
+    # Serial, and every result parse starts its own guardian and worker
+    # processes, which Windows starts slowly: the suite went from about 4
+    # minutes to 10-20 when parsing moved into processes. A hung test is still
+    # caught by the per-test faulthandler_timeout (pyproject.toml), whose dump
+    # needs the job to outlive it.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
