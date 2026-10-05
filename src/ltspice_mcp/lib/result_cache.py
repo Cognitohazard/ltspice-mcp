@@ -3,7 +3,13 @@
 Byte accounting includes reachable Python metadata and distinct NumPy backing
 storage, including corrected time arrays. It bounds retained entries, not total
 process RSS or client references. Snapshots keep entries alive while a worker
-uses their keys; no file stamp or in-flight parser is shared between requests.
+uses their keys; no in-flight parser is shared between requests.
+
+Entries are keyed by content, which only a parser process can establish. A
+second, bounded index maps the stat stamps a read's sources carried when that
+content was captured to its key, so a later read of the same unchanged files is
+answered without one (``parser_service._source_stamps``). The index is
+consulted only while admission is open: a retained parser failure closes it too.
 """
 
 from __future__ import annotations
@@ -26,6 +32,9 @@ from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 
 RESULT_CACHE_BYTES = 512 * 1024 * 1024
 RESULT_CACHE_ENTRIES = 32
+STAMP_ENTRIES = 256
+"""Source stamps remembered at once. A stamp outliving its entry answers
+nothing, so this only bounds the index's own size."""
 _KEY = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -88,6 +97,7 @@ class ResultCache:
         self.max_bytes = max_bytes
         self.max_entries = max_entries
         self._entries: OrderedDict[str, tuple[ParsedArtifacts, int]] = OrderedDict()
+        self._stamps: OrderedDict[str, str] = OrderedDict()
         self._bytes = 0
         self._lock = threading.Lock()
         self._parser_slot = threading.Lock()
@@ -148,7 +158,38 @@ class ResultCache:
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+            self._stamps.clear()
             self._bytes = 0
+
+    def stamped(self, stamp: str) -> ParsedArtifacts | None:
+        """The entry ``stamp`` was recorded against, while both are held.
+
+        None while a parser failure keeps admission closed, so a read then
+        reaches ``parse_slot`` and its refusal exactly as before.
+        """
+        with self._lock:
+            if self._parser_failure is not None:
+                return None
+            key = self._stamps.get(stamp)
+            if key is None:
+                return None
+            entry = self._entries.get(key)
+            if entry is None:
+                del self._stamps[stamp]
+                return None
+            self._stamps.move_to_end(stamp)
+            self._entries.move_to_end(key)
+            return entry[0]
+
+    def record_stamp(self, stamp: str, key: str) -> None:
+        """Remember that sources carrying ``stamp`` hold the content ``key`` names."""
+        with self._lock:
+            if key not in self._entries:
+                return
+            self._stamps[stamp] = key
+            self._stamps.move_to_end(stamp)
+            while len(self._stamps) > STAMP_ENTRIES:
+                self._stamps.popitem(last=False)
 
     def retain_parser_slot(self, directory: Path, *, worker_pid: int | None = None) -> None:
         """Keep admission closed when the active call cannot confirm tree exit."""
