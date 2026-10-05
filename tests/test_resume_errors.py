@@ -25,6 +25,7 @@ from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store, path_digest
 from ltspice_mcp.tools import experiments, receipts
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA
+from tests.conftest import LIVENESS_S
 from tests.test_resume_surface import _DECK, _fail_second_case, _state
 
 pytestmark = [
@@ -51,7 +52,7 @@ async def test_failure_fixture_targets_case_identity_once(
     for filename in names:
         received: asyncio.Future[RunOutcome] = loop.create_future()
         runner.submit_netlist(work_dir / "deck.cir", filename, received.set_result)
-        outcomes.append(await asyncio.wait_for(received, 5))
+        outcomes.append(await asyncio.wait_for(received, LIVENESS_S))
 
     assert submissions == names
     assert [outcome.failure_code for outcome in outcomes] == [

@@ -1,8 +1,9 @@
 """Unit tests for the lib/services application service layer."""
 
 import asyncio
+import contextlib
 import json
-import time
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,7 +13,7 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
 from ltspice_mcp.lib import parser_service, services
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR, stage_recorded_fixture
+from tests.conftest import FIXTURES_DIR, await_until, stage_recorded_fixture, written
 from tests.test_parser_process import _FIXTURE, _assert_gone
 
 
@@ -206,6 +207,14 @@ def contained_runaway(monkeypatch):
     return calls
 
 
+def _runaway_started(calls) -> dict | None:
+    """The contained worker's record of its pids, once it is at its runaway seam."""
+    directories = calls["directories"]
+    if not directories:
+        return None
+    return written(parser_file_in(directories[0], "started.json"), json.loads)()
+
+
 class TestLoadRawParseDeadline:
     async def test_timeout_reaps_owned_tree_and_allows_fresh_parse(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch, contained_runaway
@@ -230,17 +239,16 @@ class TestLoadRawParseDeadline:
         path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         source = services.source_for_raw_path(path, state_no_sim)
         task = asyncio.create_task(services.load_raw(source, state_no_sim))
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            directories = contained_runaway["directories"]
-            if directories and parser_file_in(directories[0], "started.json").exists():
-                break
-            await asyncio.sleep(0.01)
-        else:
+        try:
+            await await_until(
+                lambda: _runaway_started(contained_runaway),
+                what="the contained worker to reach its GIL-holding seam",
+            )
+        except BaseException:
             task.cancel()
-            with pytest.raises(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            pytest.fail("Contained worker did not reach its GIL-holding seam")
+            raise
         task.cancel()
         await asyncio.sleep(0)
         task.cancel()
@@ -264,23 +272,36 @@ class TestLoadRawParseDeadline:
 
 
 async def test_log_parser_and_raw_parser_share_cancellable_admission(
-    state_no_sim, work_dir, contained_runaway
+    state_no_sim, work_dir, contained_runaway, monkeypatch
 ):
     path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     source = services.source_for_raw_path(path, state_no_sim)
+    # Admission is taken in a worker thread; this says when the raw parse has
+    # queued behind the log parse, which is the state the cancel must find.
+    slot = state_no_sim.results.parse_slot
+    entries: list[None] = []
+    queued = threading.Event()
+    lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def watched_slot(**kwargs):
+        with lock:
+            entries.append(None)
+            if len(entries) == 2:
+                queued.set()
+        with slot(**kwargs):
+            yield
+
+    monkeypatch.setattr(state_no_sim.results, "parse_slot", watched_slot)
     logs_task = asyncio.create_task(services.load_logs(source, state_no_sim))
     raw_task = None
     try:
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            directories = contained_runaway["directories"]
-            if directories and parser_file_in(directories[0], "started.json").exists():
-                break
-            await asyncio.sleep(0.01)
-        else:
-            pytest.fail("Log worker did not reach its contained runaway seam")
+        await await_until(
+            lambda: _runaway_started(contained_runaway),
+            what="the log worker to reach its contained runaway seam",
+        )
         raw_task = asyncio.create_task(services.load_raw(source, state_no_sim))
-        await asyncio.sleep(0.05)
+        await await_until(queued.is_set, what="the raw parse to queue behind the log parse")
         raw_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await raw_task

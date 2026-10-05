@@ -20,7 +20,7 @@ from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
-from tests.conftest import terminal_experiment
+from tests.conftest import LIVENESS_S, terminal_experiment
 
 
 @pytest.fixture
@@ -334,7 +334,7 @@ async def test_cancelled_native_case_keeps_preparation_without_claiming_submissi
     assert response.structured_content is not None
     receipt = response.structured_content
     job = state.all_jobs[receipt["job_id"]]
-    await asyncio.wait_for(waiting.wait(), 10)
+    await asyncio.wait_for(waiting.wait(), LIVENESS_S)
     try:
         cancelled = await handle_jobs(
             JobsInput.model_validate(
@@ -345,7 +345,7 @@ async def test_cancelled_native_case_keeps_preparation_without_claiming_submissi
         assert not cancelled.is_error, cancelled
     finally:
         release.set()
-    await asyncio.wait_for(job.done_event.wait(), 10)
+    await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
     case = job.cases[0]
     assert job.status == "cancelled"
     assert case.status == "cancelled"

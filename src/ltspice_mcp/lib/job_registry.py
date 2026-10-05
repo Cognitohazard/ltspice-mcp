@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
@@ -114,8 +115,8 @@ class JobRegistry:
     observations: list[dict] = field(default_factory=list)
     _loaded_circuits: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
-    _pending_persist: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
-    """In-flight persistence writes; drained on shutdown."""
+    _pending_persist: BackgroundTasks = field(default_factory=BackgroundTasks, repr=False)
+    """In-flight persistence writes, keyed by job id; drained on shutdown."""
     _persist_locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
     """Per-job-id locks serialising successive writes.
 
@@ -316,9 +317,7 @@ class JobRegistry:
             # Not in an event loop (tests, CLI usage) — write synchronously.
             self._persist_sync(job)
             return
-        task = loop.create_task(self._persist_async(job))
-        self._pending_persist.add(task)
-        task.add_done_callback(self._pending_persist.discard)
+        self._pending_persist.spawn(self._persist_async(job), key=job.job_id, loop=loop)
 
     async def persist_strict(self, job: ExperimentJob) -> None:
         """Await an ordered durable checkpoint and propagate storage failures."""
@@ -326,9 +325,7 @@ class JobRegistry:
             raise RuntimeError("Recovery requires durable job persistence")
         # Queue this writer in the same event-loop order as persist_job. Taking
         # its lock inline could overtake an older task that has not run yet.
-        task = asyncio.create_task(self._persist_async(job, strict=True))
-        self._pending_persist.add(task)
-        task.add_done_callback(self._pending_persist.discard)
+        task = self._pending_persist.spawn(self._persist_async(job, strict=True), key=job.job_id)
         await self._await_persistence(task)
 
     @staticmethod
@@ -410,9 +407,7 @@ class JobRegistry:
             self._delete_persisted_sync(job)
             self._persist_locks.pop(job.job_id, None)
             return
-        task = loop.create_task(self._delete_persisted_async(job))
-        self._pending_persist.add(task)
-        task.add_done_callback(self._pending_persist.discard)
+        self._pending_persist.spawn(self._delete_persisted_async(job), key=job.job_id, loop=loop)
 
     async def _delete_persisted_async(self, job: ExperimentJob) -> None:
         """Delete only after earlier writes for the same job have drained."""
@@ -580,9 +575,17 @@ class JobRegistry:
     # ------------------------------------------------------------------
 
     async def drain_pending(self) -> None:
-        """Wait for any outstanding persistence writes to complete."""
-        if self._pending_persist:
-            await asyncio.gather(*self._pending_persist, return_exceptions=True)
+        """Wait for the persistence writes outstanding now to complete.
+
+        Only those: at shutdown a coordinator that declined to stop could
+        keep scheduling writes, and the flush must still end.
+        """
+        if pending := self._pending_persist.pending():
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    def pending_writes(self, job_id: str | None = None) -> list[asyncio.Task[Any]]:
+        """The unfinished record writes and deletions, or only ``job_id``'s."""
+        return self._pending_persist.pending(job_id)
 
     async def cancel_running(self, runners, session_state) -> None:
         """Cancel any jobs still in running/queued state.

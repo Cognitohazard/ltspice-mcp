@@ -60,11 +60,6 @@ def _extract_circuit_path(arguments: dict | None) -> str | None:
     return None
 
 
-_recent_touch_tasks: set[asyncio.Task[None]] = set()
-"""Strong refs to in-flight recent-index writes — ``create_task`` results are
-garbage-collectable while pending; each task discards itself when done."""
-
-
 async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     """Side effects for any tool call that references a circuit file.
 
@@ -78,9 +73,9 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     wedged ``/mnt/c`` would otherwise freeze the whole loop from this common
     dispatch path); its registry mutation stays on the loop. It is awaited so
     a job the handler is about to read is present. The recent-index write is
-    fire-and-forget: ``recent.touch`` can poll a contended cross-process lock
-    for up to 10 s, and a best-effort bookkeeping write must not gate tool
-    dispatch on that. The debounce set is updated before the write's first
+    a session background task, not awaited here: ``recent.touch`` can poll a
+    contended cross-process lock for up to 10 s, and a best-effort
+    bookkeeping write must not gate tool dispatch on that. The debounce set is updated before the write's first
     await, so back-to-back calls cannot double-write. A touch still in flight
     at shutdown may be lost — acceptable for best-effort state, and the atomic
     write keeps ``recent.json`` consistent either way.
@@ -95,9 +90,7 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
         return
     await state.ensure_jobs_loaded_for_async(resolved)
-    task = asyncio.create_task(state.note_recent_circuit(resolved))
-    _recent_touch_tasks.add(task)
-    task.add_done_callback(_recent_touch_tasks.discard)
+    state.background.spawn(state.note_recent_circuit(resolved))
 
 
 # Error type → hint appended to error messages. Hints name only tools the

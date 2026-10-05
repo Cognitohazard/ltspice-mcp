@@ -12,6 +12,7 @@ import pytest
 from ltspice_mcp.lib.parser_process import ParserProcessLimits, run_parser_sync
 from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
 from ltspice_mcp.lib.store import Store
+from tests.conftest import LIVENESS_S
 from tests.test_raw_header import LIMITS
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -60,7 +61,7 @@ def test_real_worker_returns_complete_resident_plots_after_reaping(tmp_path, nam
     reply = run_parser_sync(
         request,
         work_dir=directory,
-        deadline=time.monotonic() + 15,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=PROCESS_LIMITS,
     )
     assert not psutil.pid_exists(reply.worker_pid)
@@ -89,7 +90,7 @@ def test_cache_hit_recaptures_bytes_and_companion_presence(tmp_path):
         reply = run_parser_sync(
             request,
             work_dir=directory,
-            deadline=time.monotonic() + 15,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=PROCESS_LIMITS,
         )
         assert not psutil.pid_exists(reply.worker_pid)
@@ -123,7 +124,7 @@ def test_log_operation_captures_facts_without_requiring_raw_decode(tmp_path, raw
     reply = run_parser_sync(
         request,
         work_dir=directory,
-        deadline=time.monotonic() + 15,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=PROCESS_LIMITS,
     )
     assert not psutil.pid_exists(reply.worker_pid)
@@ -149,7 +150,7 @@ def test_raw_and_log_operations_share_captured_identity(tmp_path):
     first = run_parser_sync(
         request,
         work_dir=first_dir,
-        deadline=time.monotonic() + 15,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=PROCESS_LIMITS,
     )
     request["op"] = "load_logs"
@@ -159,7 +160,7 @@ def test_raw_and_log_operations_share_captured_identity(tmp_path):
     second = run_parser_sync(
         request,
         work_dir=second_dir,
-        deadline=time.monotonic() + 15,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=PROCESS_LIMITS,
     )
     assert second.metadata == {

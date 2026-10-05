@@ -17,6 +17,7 @@ from ltspice_mcp.lib.pdk_native import PROFILE, NativePaths, NativeRequest, Prep
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import NativeLaunchContext, RunnerBase
 from ltspice_mcp.lib.store import Store
+from tests.conftest import LIVENESS_S
 from tests.test_experiment_job import _job
 from tests.test_experiment_runner import _request
 
@@ -56,7 +57,7 @@ async def test_setup_sources_and_writes_in_its_own_directory(tmp_path):
         result.set_result,
         native=NativeLaunchContext(input_deck=source, cwd=folder, verify_execution=verify_copy),
     )
-    outcome = await asyncio.wait_for(result, 20)
+    outcome = await asyncio.wait_for(result, LIVENESS_S)
     assert not outcome.error, outcome
     assert checks == [True]
     assert Path(outcome.raw_file) == folder / "sample.raw"

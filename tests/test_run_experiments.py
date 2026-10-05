@@ -10,7 +10,6 @@ import itertools
 import json
 import re
 import threading
-import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -49,12 +48,14 @@ from ltspice_mcp.tools.jobs import (
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests._fake_netlister import install_fixed_exporter
 from tests.conftest import (
+    LIVENESS_S,
     FakeSim,
     await_until,
     fake_artifact_paths,
     fake_simulator,
     recorded_fixture_simulator,
     resolve_local_ref,
+    wait_until,
 )
 from tests.test_completion_logs import captured_completion_facts
 
@@ -249,7 +250,7 @@ def _args(
     path: Path,
     request_id: str,
     *,
-    wait_s: float = 1.0,
+    wait_s: float = LIVENESS_S,
     lint: str = "block",
     **overrides,
 ) -> RunExperimentsInput:
@@ -425,7 +426,7 @@ class TestReceiptThenDwell:
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         job = state_with_sim.all_jobs[data["job_id"]]
-        await asyncio.wait_for(job.done_event.wait(), 1)
+        await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
 
     async def test_failure_after_submit_reports_committed_with_handles(
         self,
@@ -454,7 +455,7 @@ class TestReceiptThenDwell:
         deck = _deck(work_dir / "post-submit.cir")
 
         result = await handle_run_experiments(
-            _args(deck, "post-submit-failure", wait_s=1.0),
+            _args(deck, "post-submit-failure", wait_s=LIVENESS_S),
             state_with_sim,
         )
         data = _assert_schema(result)
@@ -475,7 +476,7 @@ class TestReceiptThenDwell:
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         job = state_with_sim.all_jobs[data["job_id"]]
-        await asyncio.wait_for(job.done_event.wait(), 1)
+        await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
 
     async def test_receipt_builder_failure_still_returns_handles(
         self,
@@ -616,21 +617,21 @@ class TestRequestGateContention:
         release = threading.Event()
 
         def hold_the_gate() -> None:
-            with file_lock(gate, timeout=5.0):
+            with file_lock(gate, timeout=LIVENESS_S):
                 holding.set()
-                release.wait(20.0)
+                release.wait(LIVENESS_S)
 
         holder = threading.Thread(target=hold_the_gate, daemon=True)
         holder.start()
         try:
-            assert holding.wait(5.0), "the gate holder never acquired the lock"
+            assert holding.wait(LIVENESS_S), "the gate holder never acquired the lock"
             result = await handle_run_experiments(
                 _args(deck, "held-by-a-peer"),
                 state_with_sim,
             )
         finally:
             release.set()
-            holder.join(timeout=5.0)
+            holder.join(timeout=LIVENESS_S)
 
         data = _assert_schema(result)
         assert result.is_error
@@ -678,7 +679,7 @@ class TestPostClaimFailures:
         deck = _deck(work_dir / "unwritable-index.cir")
 
         result = await handle_run_experiments(
-            _args(deck, "unwritable-index", wait_s=1.0),
+            _args(deck, "unwritable-index", wait_s=LIVENESS_S),
             state_with_sim,
         )
         data = _assert_schema(result)
@@ -711,7 +712,7 @@ class TestPostClaimFailures:
         deck = _deck(work_dir / "post-claim.cir")
 
         result = await handle_run_experiments(
-            _args(deck, "post-claim-failure", wait_s=1.0),
+            _args(deck, "post-claim-failure", wait_s=LIVENESS_S),
             state_with_sim,
         )
         data = _assert_schema(result)
@@ -790,16 +791,21 @@ class TestIdempotency:
         back put a stale "running" over the owner's "completed", and the next
         reader, finding the owner gone, recovered the job as interrupted.
         """
-        # Built before the owner's clock starts, so the replay reads the record
-        # while the job is still running even on a slow runner.
         replayer = SessionState.create(
             state_with_sim.config, available=dict(state_with_sim.available_simulators)
         )
-        submissions = fake_simulator(monkeypatch, delay_s=2.0)
+        # The owner's case finishes only when the replay is in flight, so the
+        # replay always reads the record while the job is running.
+        finish_owner: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=finish_owner)
         deck = _deck(work_dir / "foreign-replay.cir")
         args = _args(deck, "foreign-replay", wait_s=0)
         job_id = _assert_schema(await handle_run_experiments(args, state_with_sim))["job_id"]
-        await await_until(lambda: len(submissions) == 1)
+        # The owner marks the case running once its launch thread hands back,
+        # and writes the record then; drain that write, not the job, which is
+        # held open until the replay.
+        owner_job = state_with_sim.all_jobs[job_id]
+        await await_until(lambda: owner_job.cases[0].status == "running")
         await state_with_sim.job_registry.drain_pending()
         record = Store(work_dir).job_record(job_id)
 
@@ -818,10 +824,11 @@ class TestIdempotency:
         experiment_store.save_job(running)
 
         def owner_finishes_meanwhile(job, request_id: str, executable) -> None:
-            deadline = time.monotonic() + 10
-            while on_disk_status() != "completed":
-                assert time.monotonic() < deadline, "the owner never completed"
-                time.sleep(0.02)
+            finish_owner[0]()
+            wait_until(
+                lambda: on_disk_status() == "completed",
+                what="the owner to record its completion",
+            )
             experiment_runner_mod.verify_replay(job, request_id, executable)
 
         monkeypatch.setattr(experiments_mod, "verify_replay", owner_finishes_meanwhile)
@@ -1225,7 +1232,7 @@ class TestOptionalRequestId:
         args = RunExperimentsInput.model_validate(
             {
                 "circuits": [{"path": str(deck), "id": "dut"}],
-                "execution": {"wait_s": 1.0},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -1826,7 +1833,7 @@ class TestLintModes:
             _args(
                 deck,
                 "ngspice-step",
-                execution={"wait_s": 1.0, "simulator": "ngspice"},
+                execution={"wait_s": LIVENESS_S, "simulator": "ngspice"},
             ),
             state_with_sim,
         )
@@ -1925,7 +1932,7 @@ class TestPerCircuitFailuresAndAccounting:
                     {"path": str(valid), "id": "valid"},
                     {"path": str(missing), "id": "missing"},
                 ],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -1962,7 +1969,7 @@ class TestPerCircuitFailuresAndAccounting:
             {
                 "request_id": "stem-ids",
                 "circuits": [{"path": str(p)} for p in (first, second, dotted)],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -2088,7 +2095,7 @@ class TestPerCircuitFailuresAndAccounting:
                     {"path": str(work_dir / "missing.cir"), "id": "missing"},
                 ],
                 "variations": [{"kind": "assign", "assign": {"R1": values}}],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -2884,10 +2891,11 @@ class TestAttachedAnalysis:
         )
         job_id = receipt["job_id"]
 
-        runs_done = await _jobs_wait(state_with_sim, job_id, "runs", 2.0)
+        runs_done = await _jobs_wait(state_with_sim, job_id, "runs", LIVENESS_S)
         assert runs_done["timed_out"] is False
         assert runs_done["status"] == "analyzing"
 
+        # timing: asserts this wait times out while the analysis is held
         still_analyzing = await _jobs_wait(state_with_sim, job_id, "all", 0.05)
         assert still_analyzing["timed_out"] is True
 

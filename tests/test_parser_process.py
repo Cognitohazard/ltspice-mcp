@@ -28,6 +28,7 @@ from ltspice_mcp.lib.parser_process import (
 )
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.lib.windows_job import python_launch
+from tests.conftest import LIVENESS_S, await_until, wait_until, written
 
 _FIXTURE = """
 import ctypes, json, os, struct, subprocess, sys
@@ -108,13 +109,10 @@ def call_dir(tmp_path):
 
 
 async def _started(directory: Path) -> dict[str, int]:
-    deadline = time.monotonic() + 5
-    path = parser_file_in(directory, "started.json")
-    while time.monotonic() < deadline:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-        await asyncio.sleep(0.01)
-    pytest.fail("The real decoder did not reach its runaway seam")
+    return await await_until(
+        written(parser_file_in(directory, "started.json"), json.loads),
+        what="the real decoder to reach its runaway seam",
+    )
 
 
 def _assert_gone(pids):
@@ -126,7 +124,7 @@ async def _success(directory, limits):
     reply = await run_parser(
         {},
         work_dir=directory,
-        deadline=time.monotonic() + 5,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=limits,
         _worker_module="parser_fixture",
     )
@@ -144,7 +142,9 @@ async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(call_di
         run_parser(
             {"mode": "runaway"},
             work_dir=directory,
-            deadline=time.monotonic() + 1,
+            # timing: the deadline under test; the decoder reaches its runaway
+            # seam well inside it, and the test lasts as long as it does
+            deadline=time.monotonic() + 5,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -163,7 +163,7 @@ async def test_repeated_cancellation_waits_for_tree_reaping(call_dir, limits):
         run_parser(
             {"mode": "runaway"},
             work_dir=directory,
-            deadline=time.monotonic() + 20,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -183,12 +183,13 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
     cancel = threading.Event()
 
     def request_cancel():
-        deadline = time.monotonic() + 5
-        while (
-            not parser_file_in(directory, "started.json").exists() and time.monotonic() < deadline
-        ):
-            time.sleep(0.01)
-        cancel.set()
+        try:
+            wait_until(
+                written(parser_file_in(directory, "started.json"), json.loads),
+                what="the real decoder to reach its runaway seam",
+            )
+        finally:
+            cancel.set()
 
     canceller = threading.Thread(target=request_cancel)
     canceller.start()
@@ -197,7 +198,7 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
             run_parser_sync(
                 {"mode": "runaway"},
                 work_dir=directory,
-                deadline=time.monotonic() + 20,
+                deadline=time.monotonic() + LIVENESS_S,
                 limits=limits,
                 cancel=cancel,
                 _worker_module="parser_fixture",
@@ -207,7 +208,7 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
         _assert_gone(started.values())
     finally:
         cancel.set()
-        canceller.join(timeout=6)
+        canceller.join(timeout=LIVENESS_S)
 
 
 def test_owner_death_kills_and_reaps_decoder_tree(call_dir, limits):
@@ -231,31 +232,35 @@ run_parser_sync({"mode": "runaway"}, work_dir=Path.cwd(),
     )
     owned = []
     try:
-        started_path = parser_file_in(directory, "started.json")
-        deadline = time.monotonic() + 5
-        while not started_path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert started_path.exists()
-        owned = list(json.loads(started_path.read_text()).values())
+        started = wait_until(
+            written(parser_file_in(directory, "started.json"), json.loads),
+            what="the real decoder to reach its runaway seam",
+        )
+        owned = list(started.values())
         owner.kill()
-        owner.wait(timeout=5)
-        deadline = time.monotonic() + 5
-        while any(psutil.pid_exists(pid) for pid in owned) and time.monotonic() < deadline:
-            time.sleep(0.01)
+        owner.wait(timeout=LIVENESS_S)
+        wait_until(
+            lambda: not any(psutil.pid_exists(pid) for pid in owned),
+            what="the guardian to reap the decoder tree",
+        )
         _assert_gone(owned)
         if sys.platform == "linux":
-            assert (
-                json.loads(parser_file_in(directory, "cleanup.json").read_text())["reaped"] is True
+            # The guardian writes its record after the reap returns, so the
+            # processes are gone before it lands.
+            cleanup = wait_until(
+                written(parser_file_in(directory, "cleanup.json"), json.loads),
+                what="the guardian's cleanup record",
             )
+            assert cleanup["reaped"] is True
     finally:
         if owner.poll() is None:
             owner.kill()
-        owner.wait(timeout=5)
+        owner.wait(timeout=LIVENESS_S)
         for pid in owned:
             try:
                 process = psutil.Process(pid)
                 process.kill()
-                process.wait(timeout=3)
+                process.wait(timeout=LIVENESS_S)
             except psutil.NoSuchProcess:
                 pass
 
@@ -270,7 +275,7 @@ async def test_worker_failure_is_bounded_and_next_worker_succeeds(call_dir, limi
         await run_parser(
             {"mode": mode},
             work_dir=directory,
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -297,7 +302,7 @@ async def test_invalid_json_result_is_not_published(call_dir, limits, text):
         await run_parser(
             {"mode": "invalid", "text": text},
             work_dir=directory,
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=replace(limits, metadata_bytes=16384),
             _worker_module="parser_fixture",
         )
@@ -309,7 +314,7 @@ async def test_oversize_metadata_is_rejected_after_reaping(call_dir, limits):
         await run_parser(
             {"mode": "invalid", "text": '{"x":"' + "x" * 10000 + '"}'},
             work_dir=call_dir(),
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -324,7 +329,7 @@ async def test_blas_environment_is_clamped_only_in_children(call_dir, limits, mo
     reply = await run_parser(
         {"mode": "environment"},
         work_dir=call_dir(),
-        deadline=time.monotonic() + 5,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=limits,
         _worker_module="parser_fixture",
     )
@@ -382,7 +387,7 @@ def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limit
         for process in spawned:
             if process.poll() is None:
                 process.kill()
-            process.wait(timeout=3)
+            process.wait(timeout=LIVENESS_S)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Requires native Windows Job enforcement")
@@ -390,7 +395,7 @@ async def test_native_windows_parser_cannot_break_away(call_dir, limits):
     reply = await run_parser(
         {"mode": "breakaway"},
         work_dir=call_dir(),
-        deadline=time.monotonic() + 5,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=limits,
         _worker_module="parser_fixture",
     )
@@ -414,7 +419,7 @@ async def test_failed_windows_job_assignment_never_opens_gate(call_dir, limits, 
         await run_parser(
             {},
             work_dir=directory,
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -428,7 +433,7 @@ async def test_stderr_near_bound_is_accepted_and_overflow_is_bounded(call_dir, l
     await run_parser(
         {"mode": "stderr", "bytes": 200},
         work_dir=directory,
-        deadline=time.monotonic() + 5,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=limits,
         _worker_module="parser_fixture",
     )
@@ -438,7 +443,7 @@ async def test_stderr_near_bound_is_accepted_and_overflow_is_bounded(call_dir, l
         await run_parser(
             {"mode": "stderr", "bytes": 100000},
             work_dir=overflow_dir,
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -455,7 +460,7 @@ def test_oversize_request_refuses_before_spawn(call_dir, limits, monkeypatch):
         run_parser_sync(
             {"data": "x" * 100000},
             work_dir=call_dir(),
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
         )
     assert caught.value.code == "request_limit" and caught.value.reaped
@@ -471,7 +476,7 @@ def test_unsupported_platform_refuses_before_control_files_or_launch(
         run_parser_sync(
             {},
             work_dir=directory,
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
@@ -519,14 +524,16 @@ raise SystemExit(parser_bootstrap.main())
         env=env,
     )
     try:
-        _, stderr = process.communicate(b'{"version":1,"op":"go","request":{}}\n', timeout=10)
+        _, stderr = process.communicate(
+            b'{"version":1,"op":"go","request":{}}\n', timeout=LIVENESS_S
+        )
         assert process.returncode != 0
         assert b"containment" in stderr
         assert {path.name for path in directory.iterdir()} == {"parser_fixture.py"}
     finally:
         if process.poll() is None:
             process.kill()
-        process.wait(timeout=5)
+        process.wait(timeout=LIVENESS_S)
 
 
 @pytest.mark.parametrize("platform", ["darwin", "freebsd14"])
@@ -548,7 +555,9 @@ def test_preparation_failure_confirms_no_child(call_dir, limits, failure):
     if failure == "directory":
         directory = directory / "missing"
     with pytest.raises(ParserProcessError) as caught:
-        run_parser_sync(request, work_dir=directory, deadline=time.monotonic() + 5, limits=limits)
+        run_parser_sync(
+            request, work_dir=directory, deadline=time.monotonic() + LIVENESS_S, limits=limits
+        )
     assert caught.value.code == "supervisor_error" and caught.value.reaped
     assert caught.value.worker_pid is None
 
@@ -563,7 +572,7 @@ def test_stdio_setup_failure_confirms_no_child_and_allows_fresh_worker(
             run_parser_sync(
                 {},
                 work_dir=directory,
-                deadline=time.monotonic() + 5,
+                deadline=time.monotonic() + LIVENESS_S,
                 limits=limits,
                 _worker_module="parser_fixture",
             )
@@ -575,7 +584,7 @@ def test_stdio_setup_failure_confirms_no_child_and_allows_fresh_worker(
     reply = run_parser_sync(
         {},
         work_dir=fresh,
-        deadline=time.monotonic() + 5,
+        deadline=time.monotonic() + LIVENESS_S,
         limits=limits,
         _worker_module="parser_fixture",
     )
@@ -663,7 +672,7 @@ print(json.dumps({'descriptor_failure_reaped': True, 'fresh_call_succeeded': Tru
         env=environment,
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=LIVENESS_S,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -685,20 +694,24 @@ def test_error_after_child_creation_remains_unconfirmed(call_dir, limits, monkey
     monkeypatch.setattr(parser_process.subprocess, "Popen", fail_after_creation)
     try:
         with pytest.raises(ParserProcessError) as caught:
-            run_parser_sync({}, work_dir=directory, deadline=time.monotonic() + 5, limits=limits)
+            run_parser_sync(
+                {}, work_dir=directory, deadline=time.monotonic() + LIVENESS_S, limits=limits
+            )
         assert caught.value.code == "supervisor_error" and not caught.value.reaped
         assert not parser_file_in(directory, "imported.txt").exists()
     finally:
         for process in started:
             process.kill()
-            process.wait(timeout=3)
+            process.wait(timeout=LIVENESS_S)
 
 
 def test_existing_control_files_do_not_claim_empty_tree(call_dir, limits):
     directory = call_dir()
     parser_file_in(directory, "process.json").write_text('{"worker_pid": 1}', encoding="utf-8")
     with pytest.raises(ParserProcessError) as caught:
-        run_parser_sync({}, work_dir=directory, deadline=time.monotonic() + 5, limits=limits)
+        run_parser_sync(
+            {}, work_dir=directory, deadline=time.monotonic() + LIVENESS_S, limits=limits
+        )
     assert not caught.value.reaped
 
 
@@ -727,17 +740,18 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
         env=env,
     )
     try:
+        # timing: a negative window; nothing may import before the gate opens
         time.sleep(0.2)
         assert process.poll() is None
         assert not (directory / "imported.txt").exists()
         assert process.stdin is not None
         process.stdin.close()
-        process.wait(timeout=5)
+        process.wait(timeout=LIVENESS_S)
         assert not (directory / "imported.txt").exists()
     finally:
         if process.poll() is None:
             process.kill()
-        process.wait(timeout=5)
+        process.wait(timeout=LIVENESS_S)
 
 
 def test_windows_job_default_and_parser_limits(monkeypatch):

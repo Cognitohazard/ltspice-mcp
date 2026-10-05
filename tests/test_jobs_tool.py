@@ -50,7 +50,13 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import await_until, fake_simulator, ngspice_binary_raw, staged_decks
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    fake_simulator,
+    ngspice_binary_raw,
+    staged_decks,
+)
 from tests.test_native_records import _record
 
 
@@ -1266,8 +1272,23 @@ class TestWait:
             0.01,
         )
 
+        # The owner finishes only once the waiter has read the record as
+        # running, so the wait has to refresh it from the sidecar to return.
+        polled = asyncio.Event()
+        refresh = foreign_state.job_registry.refresh_foreign_job_async
+
+        async def observed_refresh(job):
+            fresh = await refresh(job)
+            if fresh.status == "running":
+                polled.set()
+            return fresh
+
+        monkeypatch.setattr(
+            foreign_state.job_registry, "refresh_foreign_job_async", observed_refresh
+        )
+
         async def finish_owner() -> None:
-            await asyncio.sleep(0.02)
+            await polled.wait()
             completed = _experiment(
                 work_dir,
                 circuit,
@@ -1280,7 +1301,7 @@ class TestWait:
         writer = asyncio.create_task(finish_owner())
         data = _assert_jobs_schema(
             await handle_jobs(
-                _args("wait", job_id=owner_job.job_id, timeout_s=1),
+                _args("wait", job_id=owner_job.job_id, timeout_s=LIVENESS_S),
                 foreign_state,
             )
         )
@@ -1581,7 +1602,7 @@ class TestListAndRunsPagination:
                 {
                     "request_id": "recent-submission",
                     "circuits": [{"path": str(circuit), "id": "submitted"}],
-                    "execution": {"wait_s": 1},
+                    "execution": {"wait_s": LIVENESS_S},
                 }
             ),
             state_with_sim,

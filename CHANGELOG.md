@@ -151,6 +151,11 @@ tool-surface changes.
   deck never runs, nothing else told the caller how to fix it. The finding now
   names `[simulator] ngbehavior = "hsa"` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and
   the restart it needs.
+- A case stopped for a timeout or a cancel had its partial raw read for
+  progress and removed in one step, with the `partial_progress` observation
+  recorded only afterwards, so a status read in between found neither the raw
+  nor the progress read from it. The observation is now recorded before the
+  raw is removed.
 - A path containing `..` was refused before it was resolved, even when it
   landed inside the sandbox. A deck in a subfolder with
   `.include ../models/x.lib` got an error-severity `path_denied` finding from

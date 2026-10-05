@@ -107,6 +107,10 @@ class RunnerManager:
         self._runners.clear()
         self._loop = None
 
+    def background_pending(self) -> list[asyncio.Task[Any]]:
+        """Every cached runner's unfinished background tasks."""
+        return [task for runner in self._runners.values() for task in runner.background_pending()]
+
     def get_experiment_runner_for(self, job: Any) -> ExperimentRunner | None:
         """Return the live coordinator that owns an experiment job."""
         for (kind, _cls, _folder), runner in self._runners.items():
