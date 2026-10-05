@@ -51,7 +51,16 @@ else
   report FAIL "linux non-WSL: $(summary "$scratch/nonwsl.txt") (see $scratch/nonwsl.txt)"
 fi
 
-# 3. Container, non-root, --init (clones the LOCAL master, so commit first or
+# 3. Linux under schedule jitter, the seeds the CI jitter leg runs
+for seed in 1 2; do
+  if uv run pytest tests/ -q -n auto -p no:cacheprovider --no-header --jitter-seed="$seed" > "$scratch/jitter_$seed.txt" 2>&1; then
+    report PASS "linux jitter seed $seed: $(summary "$scratch/jitter_$seed.txt")"
+  else
+    report FAIL "linux jitter seed $seed: $(summary "$scratch/jitter_$seed.txt") (see $scratch/jitter_$seed.txt)"
+  fi
+done
+
+# 4. Container, non-root, --init (clones the LOCAL master, so commit first or
 #    accept that the container tests the last commit, not the working tree)
 if command -v docker >/dev/null; then
   docker run --rm --init -v "$PWD":/src:ro ubuntu:24.04 bash -c '
@@ -70,7 +79,7 @@ else
   report SKIP "container: docker not on PATH"
 fi
 
-# 4/5. Windows native, both interpreters, checkout with conversion on
+# 5/6. Windows native, both interpreters, checkout with conversion on
 if [ -n "${LTSPICE_MCP_WINDOWS_CLONE:-}" ] && [ -d "$LTSPICE_MCP_WINDOWS_CLONE/.git" ]; then
   clone=$LTSPICE_MCP_WINDOWS_CLONE
   winclone=$(wslpath -w "$clone")
@@ -95,7 +104,7 @@ else
   report SKIP "windows 3.12 / 3.13: set LTSPICE_MCP_WINDOWS_CLONE to a Windows-disk clone"
 fi
 
-# 6. The publisher's own metadata check
+# 7. The publisher's own metadata check
 if command -v docker >/dev/null; then
   rm -rf "$scratch/dist" && uv build -q -o "$scratch/dist" > "$scratch/build.txt" 2>&1 \
     && docker run --rm --entrypoint python -v "$scratch/dist":/dist:ro "$PUBLISH_IMAGE" -m twine check --strict /dist/* > "$scratch/twine.txt" 2>&1

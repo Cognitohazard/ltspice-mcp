@@ -30,6 +30,13 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
+from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
+    _schedule_jitter,
+    pytest_addoption,
+    pytest_configure,
+    pytest_report_header,
+    pytest_runtest_makereport,
+)
 
 _T = typing.TypeVar("_T")
 
@@ -623,6 +630,13 @@ def patch_stub_bootstrap(monkeypatch: pytest.MonkeyPatch, state: object) -> None
 #: about to pass does not pay for the poll, long enough not to spin.
 _POLL_INTERVAL_S = 0.01
 
+#: How long a test waits for something it expects before calling it a hang.
+#: A cap, never a claim about speed: a wait returns the moment its condition
+#: holds, so a generous value costs nothing when the code is right, and a
+#: slow runner (Windows, a loaded CI box, a jitter seed) cannot fail a correct
+#: test. ``tests/test_test_hygiene.py`` holds the suite's waits to it.
+LIVENESS_S = 30.0
+
 
 def make_raw_mock(
     trace_names: list[str] | None = None,
@@ -709,7 +723,7 @@ def release_into_held_request_gate(
 def wait_until(
     predicate: Callable[[], _T | None],
     *,
-    timeout_s: float = 5.0,
+    timeout_s: float = LIVENESS_S,
     what: str = "the condition",
     interval_s: float = _POLL_INTERVAL_S,
 ) -> _T:
@@ -734,7 +748,7 @@ def wait_until(
 async def await_until(
     predicate: Callable[[], _T | None],
     *,
-    timeout_s: float = 5.0,
+    timeout_s: float = LIVENESS_S,
     what: str = "the condition",
     interval_s: float = _POLL_INTERVAL_S,
 ) -> _T:
