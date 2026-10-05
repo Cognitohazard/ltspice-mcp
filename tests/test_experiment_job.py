@@ -49,6 +49,7 @@ from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     FIXTURES_DIR,
+    LIVENESS_S,
     check_in,
     release_into_held_request_gate,
     staged_decks,
@@ -608,7 +609,7 @@ class TestExperimentLifecycle:
         )
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
-        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
 
         assert len(entered) == 3
         assert following.status == "cancelled"
@@ -650,7 +651,7 @@ class TestExperimentLifecycle:
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         # The real shutdown sequence: cancel the live work, then flush.
-        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
         await registry.drain_pending()
 
         reloaded = experiment_store.load_job(job.job_id, work_dir)
@@ -685,7 +686,9 @@ class TestExperimentLifecycle:
 
         # No monkeypatched timeout: under a per-job bound the first cancel waits
         # out the real one and this outer wait expires first.
-        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=3)
+        await asyncio.wait_for(
+            registry.cancel_running(runners, None), timeout=3
+        )  # timing: must expire before one real per-job cancel bound would; see above
 
         assert len(entered) == 3
         assert released.is_set()
@@ -730,7 +733,7 @@ class TestExperimentLifecycle:
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         # The real shutdown sequence: cancel the live work, then flush.
-        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
         await registry.drain_pending()
 
         # Both tasks really did refuse — otherwise this passes for the wrong reason.
@@ -936,7 +939,7 @@ class TestRequestBarrier:
         )
         outcomes = [result.get(timeout=60) for _ in processes]
         for process in processes:
-            process.join(20)
+            process.join(LIVENESS_S)
             assert process.exitcode == 0
         assert all(error is None for _job_id, _replayed, error in outcomes)
         assert len({job_id for job_id, _replayed, _error in outcomes}) == 1

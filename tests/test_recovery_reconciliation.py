@@ -14,6 +14,7 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.recovery_journal import new_root_journal, save_journal
 from ltspice_mcp.lib.recovery_records import ProcessIdentity
 from ltspice_mcp.state import SessionState
+from tests.conftest import LIVENESS_S
 from tests.test_recovery_launch import RecordedNGspice, _process
 from tests.test_recovery_launch import committed as committed
 
@@ -40,13 +41,13 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
 
     def delayed_read_write(job):
         reader_entered.set()
-        assert reader_release.wait(10)
+        assert reader_release.wait(LIVENESS_S)
         persist(job)
 
     def launch_checkpoint(argv, kwargs):
         launch_entered.set()
         if checkpoint == "intent":
-            assert launch_release.wait(10)
+            assert launch_release.wait(LIVENESS_S)
 
     monkeypatch.setattr(observer, "_persist_sync", delayed_read_write)
     calls = _process(monkeypatch, inspect=launch_checkpoint)
@@ -65,7 +66,7 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
             assert await asyncio.to_thread(launch_entered.wait, 5)
             if checkpoint == "completed":
                 assert job.task is not None
-                await asyncio.wait_for(asyncio.shield(job.task), 10)
+                await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
         before = job.store_path.read_bytes()
         reader_release.set()
         await observer.drain_pending()
@@ -94,14 +95,14 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
             assert case_recovery.attempt.outputs is not None
         launch_release.set()
         assert job.task is not None
-        await asyncio.wait_for(asyncio.shield(job.task), 10)
+        await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
         assert len(calls) == 1
     finally:
         reader_release.set()
         launch_release.set()
         await observer.drain_pending()
         if job is not None and job.task is not None:
-            await asyncio.wait_for(asyncio.shield(job.task), 10)
+            await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
 
 
 async def test_dead_owner_reconciliation_is_saved(committed, caplog):

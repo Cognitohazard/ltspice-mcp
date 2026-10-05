@@ -14,6 +14,7 @@ from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_capture import CapturedInputs
 from ltspice_mcp.lib.result_cache import ResultCache, resident_size
+from tests.conftest import LIVENESS_S
 from tests.test_decoded_raw import header
 
 
@@ -117,11 +118,11 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
     def active():
         with cache.parse_slot(deadline=time.monotonic() + 5):
             entered.set()
-            release.wait(5)
+            release.wait(LIVENESS_S)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(active)
-        assert entered.wait(2)
+        assert entered.wait(LIVENESS_S)
         cancel = threading.Event()
         cancel.set()
         try:
@@ -133,7 +134,7 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
             assert not future.done()
         finally:
             release.set()
-        future.result(timeout=2)
+        future.result(timeout=LIVENESS_S)
     with cache.parse_slot(deadline=time.monotonic() + 1):
         pass
 

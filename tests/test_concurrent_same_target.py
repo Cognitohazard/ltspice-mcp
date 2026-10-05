@@ -31,6 +31,7 @@ from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
+    LIVENESS_S,
     FakeSim,
     await_until,
     fake_artifact_paths,
@@ -71,7 +72,7 @@ def _run_payload(deck: Path, request_id: str, **overrides: Any) -> dict[str, Any
     payload: dict[str, Any] = {
         "request_id": request_id,
         "circuits": [{"path": str(deck), "id": "dut"}],
-        "execution": {"wait_s": 5},
+        "execution": {"wait_s": LIVENESS_S},
         "lint": "off",
     }
     payload.update(overrides)

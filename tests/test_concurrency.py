@@ -20,6 +20,7 @@ import pytest
 
 from ltspice_mcp.lib import filelock, recent
 from ltspice_mcp.lib.filelock import file_lock
+from tests.conftest import LIVENESS_S
 
 # ---------------------------------------------------------------------------
 # Cross-process: recent.json
@@ -109,12 +110,12 @@ class TestFileLock:
         holder = threading.Thread(target=hold_lock)
         holder.start()
         try:
-            assert held.wait(timeout=5)
+            assert held.wait(timeout=LIVENESS_S)
             with pytest.raises(TimeoutError), file_lock(target, timeout=0.1):
                 pass
         finally:
             release.set()
-            holder.join(timeout=5)
+            holder.join(timeout=LIVENESS_S)
 
 
 class TestAsyncFileLock:
@@ -141,7 +142,7 @@ class TestAsyncFileLock:
         def held_open_lock(target: Path, **kwargs: object):
             with real_file_lock(target, **kwargs):  # type: ignore[arg-type]
                 mid_attempt.set()
-                cancelled.wait(10)
+                cancelled.wait(LIVENESS_S)
                 yield
 
         # The attempt's arguments, the hand-off among them, stay referenced so

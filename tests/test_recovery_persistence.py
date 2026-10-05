@@ -8,6 +8,7 @@ import pytest
 
 from ltspice_mcp import lib
 from ltspice_mcp.lib import experiment_store
+from tests.conftest import LIVENESS_S
 from tests.test_experiment_job import _job
 
 
@@ -39,7 +40,7 @@ async def test_strict_checkpoint_orders_after_pending_write(
     def delayed(job):
         if not entered.is_set():
             entered.set()
-            assert release.wait(5)
+            assert release.wait(LIVENESS_S)
         save(job)
         writes.append(job.job_id)
 
@@ -119,7 +120,7 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
     def delayed(job):
         if job is older:
             entered.set()
-            assert release.wait(5)
+            assert release.wait(LIVENESS_S)
         save(job)
         if job is older:
             finished.set()
@@ -140,7 +141,9 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
         second = asyncio.create_task(registry.persist_strict(newer))
         tasks.append(second)
         # Let the later write finish if cancellation prematurely freed its lock.
-        await asyncio.wait({second}, timeout=0.1)
+        await asyncio.wait(
+            {second}, timeout=0.1
+        )  # timing: a negative window: the later write must not finish early
         completed_before_release = second.done()
         release.set()
         await second
@@ -174,7 +177,7 @@ async def test_strict_atomic_replace_failure_survives_repeated_cancellation(
             # The real writer has created and flushed its temporary record.
             assert src.is_file()
             entered.set()
-            assert release.wait(5)
+            assert release.wait(LIVENESS_S)
             raise OSError("atomic replacement unavailable")
         replace_file(src, dst)
 

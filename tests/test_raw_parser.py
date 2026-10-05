@@ -31,6 +31,7 @@ from ltspice_mcp.lib.raw_parser import (
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     FIXTURES_DIR,
+    LIVENESS_S,
     make_raw_mock,
     ngspice_binary_raw,
     stage_recorded_fixture,
@@ -329,7 +330,7 @@ class TestMultiPlotNoiseRaw:
 
         t = threading.Thread(target=_parse, daemon=True)
         t.start()
-        t.join(timeout=20)
+        t.join(timeout=LIVENESS_S)
         assert not t.is_alive(), "parsing the two-plot noise raw hung (guard regressed)"
         assert result["plots"] == 2  # both plots preserved, not just the first
         assert "onoise_spectrum" in result["traces"]

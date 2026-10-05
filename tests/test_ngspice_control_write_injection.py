@@ -24,7 +24,7 @@ from ltspice_mcp.tools.experiments import (
     RunExperimentsInput,
     handle_run_experiments,
 )
-from tests.conftest import fake_simulator
+from tests.conftest import LIVENESS_S, fake_simulator
 
 
 class _NotNgspice:
@@ -213,7 +213,7 @@ class TestControlWriteThroughRunExperiments:
             {
                 "request_id": request_id,
                 "circuits": [{"path": str(deck), "id": "dut"}],
-                "execution": {"wait_s": 5.0, "simulator": "ngspice"},
+                "execution": {"wait_s": LIVENESS_S, "simulator": "ngspice"},
             }
         )
         return args, decks

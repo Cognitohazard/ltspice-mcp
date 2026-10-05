@@ -12,7 +12,7 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs
 from ltspice_mcp.lib.store import Store
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, LIVENESS_S
 
 
 def captured_completion_facts(root, log=None, *, text=None, console=None):
@@ -166,9 +166,9 @@ async def test_submission_loads_only_cold_completion_once(tmp_path, monkeypatch,
 
     thread = threading.Thread(target=submit, daemon=True)
     thread.start()
-    thread.join(timeout=2)
+    thread.join(timeout=LIVENESS_S)
     assert not thread.is_alive()
-    outcome = await asyncio.wait_for(received, 2)
+    outcome = await asyncio.wait_for(received, LIVENESS_S)
     if raw_state == "missing":
         assert len(calls) == 1
         assert calls[0][:2] == (raw, log)
@@ -204,7 +204,7 @@ async def test_submission_loader_failure_retains_identifiers_and_exit(tmp_path, 
     monkeypatch.setattr(base, "_build_sim_runner", lambda **_kwargs: FakeHandle())
     received = asyncio.get_running_loop().create_future()
     base.submit_netlist(deck, "run.cir", received.set_result, completion_logs=unavailable)
-    outcome = await asyncio.wait_for(received, 2)
+    outcome = await asyncio.wait_for(received, LIVENESS_S)
     assert outcome.log_file == str(log)
     assert outcome.failure_evidence == {"exit_code": -2, "simulator_exception": "recorded timeout"}
     assert "synthetic capture refusal" in outcome.error
@@ -302,5 +302,5 @@ async def test_coordinator_injects_explicit_fail_and_console_sources(
     callbacks[submissions[0]](
         runner_base.collect_run_outcome("", str(log), exit_code=-9, logs=facts)
     )
-    assert await runner.wait(receipt.job, 2)
+    assert await runner.wait(receipt.job, LIVENESS_S)
     assert not list((state_no_sim.store.root / "parsing").glob("*"))

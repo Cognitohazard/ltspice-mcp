@@ -51,6 +51,7 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.windows_job import python_launch
 from ltspice_mcp.state import SessionState
 from tests._asc_ops import apply_ops, sha_of
+from tests.conftest import LIVENESS_S
 
 #: The line a peer session appends while holding the lock.
 _PEER_MARKER = b"TEXT -48 320 Left 2 ;external marker\n"
@@ -69,7 +70,7 @@ def _hold_lock_then_write(target: Path, content: bytes, hold_s: float) -> thread
 
     t = threading.Thread(target=peer, daemon=True)
     t.start()
-    if not held.wait(5):
+    if not held.wait(LIVENESS_S):
         raise RuntimeError("peer thread failed to take the lock")
     return t
 
@@ -87,7 +88,7 @@ def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading
 
     t = threading.Thread(target=peer, daemon=True)
     t.start()
-    if not held.wait(5):
+    if not held.wait(LIVENESS_S):
         raise RuntimeError("peer thread failed to take the lock")
     return t, release
 
@@ -111,7 +112,7 @@ class TestCircuitFileLock:
             [{"op": "set_component_value", "reference": "R1", "value": "2k2"}],
             expected_sha256=sha_before,
         )
-        t.join(5)
+        t.join(LIVENESS_S)
         assert data["outcome"] == "failed"
         assert data["error"]["code"] == "revision_conflict"
         assert data["commit_state"] == "not_committed"
@@ -134,7 +135,7 @@ class TestCircuitFileLock:
             [{"op": "set_component_value", "reference": "R1", "value": "2k2"}],
             expected_sha256=peer_sha,
         )
-        t.join(5)
+        t.join(LIVENESS_S)
         assert data["outcome"] == "complete"
         payload = asc_file.read_bytes()  # noqa: ASYNC240
         assert b"2k2" in payload, "our edit must survive"
@@ -158,7 +159,7 @@ class TestCircuitFileLock:
                 )
         finally:
             release.set()
-            t.join(5)
+            t.join(LIVENESS_S)
 
     async def test_pin_geometry_resolved_under_the_lock(
         self, asc_state: SessionState, asc_file: Path
@@ -179,7 +180,7 @@ class TestCircuitFileLock:
             [{"op": "add_net_label", "net": "probe", "pin": "R1.1"}],
             expected_sha256=moved_sha,
         )
-        t.join(5)
+        t.join(LIVENESS_S)
         assert data["outcome"] == "complete"
         x, y = resolve_pin("R1.1", get_asc_editor(asc_file, asc_state))
         text = asc_file.read_text(errors="replace")  # noqa: ASYNC240
@@ -202,7 +203,7 @@ class TestCircuitFileLock:
                     pass
         finally:
             release.set()
-            t.join(5)
+            t.join(LIVENESS_S)
 
 
 _SET_R1 = [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
@@ -593,7 +594,7 @@ class TestScopedKill:
         grandchild = int(launcher.stdout.readline())
         try:
             assert kill_simulator_by_token(token, {"ngspice"}) == 1
-            assert launcher.wait(timeout=10) is not None
+            assert launcher.wait(timeout=LIVENESS_S) is not None
         finally:
             with contextlib.suppress(psutil.Error):
                 psutil.Process(grandchild).kill()
@@ -623,7 +624,7 @@ class TestScopedKill:
         ]
         try:
             assert kill_simulator_by_token(token, {"ngspice"}) == 1
-            assert launched.wait(timeout=10) is not None
+            assert launched.wait(timeout=LIVENESS_S) is not None
             assert all(proc.poll() is None for proc in bystanders)
         finally:
             for proc in (launched, *bystanders):

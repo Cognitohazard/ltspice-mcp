@@ -29,7 +29,13 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from tests.conftest import SyncApi, check_in, release_into_held_request_gate, wait_until
+from tests.conftest import (
+    LIVENESS_S,
+    SyncApi,
+    check_in,
+    release_into_held_request_gate,
+    wait_until,
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ngspice") is None,
@@ -362,7 +368,7 @@ def test_taskkill_failure_preserves_the_handshake_error(
         assert command[0] == "taskkill"
         if owner_exits:
             owner.kill()
-            owner.wait(timeout=10)
+            owner.wait(timeout=LIVENESS_S)
             raise subprocess.CalledProcessError(128, command)
         raise subprocess.TimeoutExpired(command, 10)
 
@@ -376,11 +382,11 @@ def test_taskkill_failure_preserves_the_handshake_error(
             assert "were stopped" in str(caught.value)
         else:
             assert "Processes may still be running" in str(caught.value)
-        owner.wait(timeout=10)
+        owner.wait(timeout=LIVENESS_S)
     finally:
         if owner.poll() is None:
             owner.kill()
-        owner.wait(timeout=10)
+        owner.wait(timeout=LIVENESS_S)
 
 
 def test_a_worker_can_detach_an_experiment_that_survives_its_reset(work_dir: Path) -> None:
@@ -432,7 +438,7 @@ def test_a_worker_can_detach_an_experiment_that_survives_its_reset(work_dir: Pat
                     owner.kill()
                 else:
                     os.killpg(owner.pid, signal.SIGKILL)
-            owner.wait(timeout=10)
+            owner.wait(timeout=LIVENESS_S)
 
 
 def _write_handoff_logs(detached_dir: Path, count: int) -> list[Path]:
@@ -595,7 +601,7 @@ def test_killing_a_detached_owner_leaves_an_interrupted_job(work_dir: Path) -> N
                 what="the killed owner's job to stop reporting as running",
             )
             assert interrupted["status"] == "interrupted", interrupted
-            child.wait(timeout=10)
+            child.wait(timeout=LIVENESS_S)
         finally:
             if child.is_running():
                 child.kill()
