@@ -25,6 +25,7 @@ from ltspice_mcp.lib import (
     experiment_store,
     metrics,
     now,
+    parser_service,
     result_store,
     services,
 )
@@ -1437,12 +1438,26 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    settled_stamps: None,
 ):
-    from ltspice_mcp.lib import metrics
+    """The item deadline bounds processing of resident results, not only parsing.
 
+    Each source is loaded before its budgeted call, so every read inside the
+    call is answered from its stamp and the one-second budget goes to the slow
+    processing step alone. Left to the call, the raw's first parse ran inside
+    that second, and a slow process start used it up before processing began.
+    """
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 1.0
     processing_calls: list[str] = []
+    parser_requests: list[str] = []
+    run_parser = parser_service.run_parser_sync
+
+    def counted(request, **kwargs):
+        parser_requests.append(request["op"])
+        return run_parser(request, **kwargs)
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", counted)
 
     def slow_summary(*args, **kwargs):
         del args, kwargs
@@ -1452,6 +1467,8 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
         return {}
 
     monkeypatch.setattr(metrics, "build_simulation_summary", slow_summary)
+    await services.load_raw(services.source_for_raw_path(raw, state_no_sim), state_no_sim)
+    parser_requests.clear()
     summary = await _analyze_initialized(
         state_no_sim,
         raw,
@@ -1462,6 +1479,7 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
         for failure in summary["failures"]
     )
     assert processing_calls == ["summary"]
+    assert parser_requests == []
 
     # A fresh path avoids the shared cooldown from the deliberately wedged raw.
     second = work_dir / "second.raw"
@@ -1476,6 +1494,8 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
         return {}, {}, "0 step(s)", {}
 
     monkeypatch.setattr(metrics, "aggregate_log_measurements", slow_measurements)
+    await services.load_raw(services.source_for_raw_path(second, state_no_sim), state_no_sim)
+    parser_requests.clear()
     measurements = await _analyze_initialized(
         state_no_sim,
         second,
@@ -1486,6 +1506,7 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
         for failure in measurements["failures"]
     )
     assert processing_calls == ["summary", "measurements"]
+    assert parser_requests == []
 
 
 # ---------------------------------------------------------------------------
