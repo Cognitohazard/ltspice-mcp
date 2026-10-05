@@ -252,7 +252,11 @@ def _lib_section_ngspice(
                     "directive": card.body,
                     "ngbehavior": mode,
                     "reason": (
-                        "this compatibility mode treats a sectioned .lib as plain includes"
+                        "this compatibility mode treats a sectioned .lib as plain "
+                        "includes and drops the section, so ngspice cannot find the "
+                        'file. Set [simulator] ngbehavior = "hsa" in the server '
+                        "config (or LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the "
+                        "server; ngspice then loads the section."
                     ),
                 },
             )
