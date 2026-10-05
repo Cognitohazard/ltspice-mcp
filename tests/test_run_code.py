@@ -324,17 +324,27 @@ class TestLifetime:
                 child.kill()
 
     async def test_a_second_call_while_one_runs_is_busy(self, state: SessionState):
-        first = asyncio.ensure_future(run(state, "import time\ntime.sleep(2)\n'first'"))
+        # The first snippet runs until the test releases it, so both later
+        # calls land while it is running however long they take to arrive.
+        release = state.working_dir / "release"
+        held = (
+            "import pathlib, time\n"
+            f"while not pathlib.Path({str(release)!r}).exists():\n"
+            "    time.sleep(0.01)\n"
+            "'first'"
+        )
+        first = asyncio.ensure_future(run(state, held))
         await await_until(lambda: worker_for(state).running is not None)
         second = await run(state, "2")
         assert second["status"] == "busy"
         assert second["running"]["phase"] == "running"
         assert second["running"]["same_code"] is False
-        assert 0 <= second["running"]["elapsed_s"] < 3
+        assert 0 <= second["running"]["elapsed_s"] < LIVENESS_S
         assert "One snippet" in second["hint"]
-        same = await run(state, "import time\ntime.sleep(2)\n'first'")
+        same = await run(state, held)
         assert same["status"] == "busy"
         assert same["running"]["same_code"] is True
+        release.write_text("go")
         done = await first
         assert done["status"] == "ok"
         assert done["result"] == "'first'"
@@ -348,15 +358,19 @@ class TestLifetime:
         worker = worker_for(state)
         await run(state, "", reset=True)
         boot = worker._ensure  # pyright: ignore[reportPrivateUsage]
+        booting = asyncio.Event()
+        boot_released = asyncio.Event()
 
-        async def slow_boot() -> None:
-            await asyncio.sleep(0.5)
+        async def held_boot() -> None:
+            booting.set()
+            await boot_released.wait()
             await boot()
 
-        monkeypatch.setattr(worker, "_ensure", slow_boot)
+        monkeypatch.setattr(worker, "_ensure", held_boot)
         first = asyncio.ensure_future(run(state, "'first'"))
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(booting.wait(), LIVENESS_S)
         second = await run(state, "2")
+        boot_released.set()
         assert second["status"] == "busy", second
         done = await first
         assert done["status"] == "ok", done
@@ -389,20 +403,29 @@ class TestLifetime:
         self, state: SessionState
     ):
         before = (await run(state, "1"))["worker_pid"]
-        task = asyncio.ensure_future(run(state, "import time\ntime.sleep(30)"))
-        await asyncio.sleep(0.5)
+        started = state.working_dir / "started"
+        snippet = (
+            f"import pathlib, time\npathlib.Path({str(started)!r}).write_text('1')\ntime.sleep(30)"
+        )
+        task = asyncio.ensure_future(run(state, snippet))
+        # The interrupt must land in the snippet's sleep, not before it starts.
+        await await_until(written(started, str.strip), what="the snippet to start")
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
         # The interrupted reply is drained in the background; a call landing
         # inside that window is busy in the interrupting phase, never queued.
-        reply = await run(state, "1")
-        for _ in range(20):
-            if reply["status"] != "busy":
-                break
-            assert reply["running"]["phase"] == "interrupting"
-            await asyncio.sleep(0.25)
+        async def served() -> dict | None:
             reply = await run(state, "1")
+            if reply["status"] == "busy":
+                assert reply["running"]["phase"] == "interrupting"
+                return None
+            return reply
+
+        reply = await await_until(
+            served, what="the interrupted worker to be served", interval_s=0.05
+        )
         assert reply["status"] == "ok"
         assert reply["worker_pid"] == before
 

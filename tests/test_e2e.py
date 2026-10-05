@@ -31,7 +31,14 @@ from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
 from pydantic import BaseModel, ConfigDict
 
-from tests.conftest import FIXTURES_DIR, LIVENESS_S, REGISTERED_TOOLS, SERVED_WITHOUT_RUN_CODE
+from tests.conftest import (
+    FIXTURES_DIR,
+    LIVENESS_S,
+    REGISTERED_TOOLS,
+    SERVED_WITHOUT_RUN_CODE,
+    await_until,
+    written,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -818,27 +825,31 @@ class TestRunCode:
             warm = await session.call_tool("run_code", {"code": "1"}, read_timeout_seconds=60)
             assert _data(warm)["status"] == "ok"
             pid = _data(warm)["worker_pid"]
-            task = asyncio.ensure_future(
-                session.call_tool(
-                    "run_code", {"code": "import time\ntime.sleep(30)"}, read_timeout_seconds=60
-                )
+            started = tmp_path / "started"
+            snippet = (
+                f"import pathlib, time\npathlib.Path({str(started)!r}).write_text('1')\n"
+                "time.sleep(30)"
             )
-            await asyncio.sleep(1.0)
+            task = asyncio.ensure_future(
+                session.call_tool("run_code", {"code": snippet}, read_timeout_seconds=60)
+            )
+            # The cancel must interrupt the snippet's sleep, not arrive before it.
+            await await_until(written(started, str.strip), what="the snippet to start")
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+
             # Abandoning the request sent notifications/cancelled; the server
             # interrupted the snippet. A call inside that window is busy.
-            reply = _data(
-                await session.call_tool("run_code", {"code": "2 + 2"}, read_timeout_seconds=60)
-            )
-            for _ in range(20):
-                if reply["status"] != "busy":
-                    break
-                await asyncio.sleep(0.25)
+            async def served() -> dict | None:
                 reply = _data(
                     await session.call_tool("run_code", {"code": "2 + 2"}, read_timeout_seconds=60)
                 )
+                return None if reply["status"] == "busy" else reply
+
+            reply = await await_until(
+                served, what="the interrupted worker to be served", interval_s=0.05
+            )
             assert reply["status"] == "ok"
             assert reply["result"] == "4"
             assert reply["worker_pid"] == pid
