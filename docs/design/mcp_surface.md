@@ -878,13 +878,31 @@ in the result set, so a continuation replays them.
   and you get what was computed plus a continuation handle rather than an hour
   of compute.
 - Initialization records the contained worker's hashes for every captured
-  artifact role: RAW, log and console, including absence. Source checks
-  recapture those roles in the worker and compare snapshot identity; size and
-  modification time alone cannot establish unchanged content, so even a
-  same-size, same-timestamp rewrite reads as `source_drift`. The parent neither
-  hashes whole artifacts nor rewrites captured inputs. Repeated source
-  references share captured work within a call. A deadline cannot downgrade
-  content verification to stat-only success.
+  artifact role: RAW, log and console, including absence. A source check first
+  re-stamps those roles in the parent: device, inode, size, modification time
+  and change time, or absence. A source whose every role still carries the
+  stamps recorded when its content was hashed is answered from the resident
+  cache without a parser process; any other source is recaptured in the worker
+  and compared by snapshot identity. No tool can set the change time, so a
+  same-size rewrite that puts the modification time back still reads as
+  `source_drift` (on Windows the stamp reads the NTFS change time, since
+  `st_ctime` there is the creation time).
+- A stamp is recorded only while it holds both before and after the worker's
+  capture, and only once both its times are older than a filesystem timestamp
+  tick (100 ms, or two seconds for a whole-second time, which marks a coarse
+  filesystem). A rewrite landing in the tick of the change before it could
+  otherwise keep every field. The rule relies on the filesystem moving the
+  change time on every write and metadata change, as POSIX filesystems and
+  NTFS do; a file whose stamp cannot be read in full, including one on a
+  filesystem that reports no change time, is never stamped.
+  A stamp cannot see two things: a same-size rewrite through a handle the
+  writer still holds open, on a filesystem that defers its timestamps until
+  that handle closes (Windows guarantees a file time only then), and a writer
+  whose filesystem clock runs more than the margin behind this machine's. A job's artifacts are read only once the job is terminal
+  and the case produced them.
+- The parent neither hashes whole artifacts nor rewrites captured inputs.
+  Repeated source references share captured work within a call. A deadline
+  never turns a moved stamp into a pass: that source is recaptured or reported.
 - Initialization must finish capturing source identities and diagnostics before
   resumable recipe work begins. An initialization timeout raises
   `analysis_deadline` without creating a result set or cursor; retry the original
@@ -1398,8 +1416,11 @@ truncation.
 **Untrusted parses.** Every raw or log parse — completion summaries included —
 runs in a contained parser process under a deadline, on top of the whole-call
 budgets. The shared loader validates captured bytes and snapshot identity before
-returning fully resident facts. Unconfirmed worker cleanup retains parser
-admission and scratch; moving a parse to a thread alone does not contain it.
+returning fully resident facts. A read of a source whose stat stamps are
+unchanged parses nothing: it is answered from the resident cache (the source
+check rules are under 3.3). Unconfirmed worker cleanup retains parser
+admission and scratch, and closes that cache path too; moving a parse to a
+thread alone does not contain it.
 
 **Schema residency.** Every authorable field lives in the tool's
 `inputSchema`: `oneOf`, literal discriminants, `additionalProperties: false`,

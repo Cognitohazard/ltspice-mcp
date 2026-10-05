@@ -469,9 +469,12 @@ still use those selectors. Malformed or missing RAW fails only RAW recipes.
 Manifests bind captured RAW/log/console presence and bytes, including an empty
 file versus absence. Snapshot hashing runs in the contained worker; the parent
 does not reread whole artifacts to hash them. Repeated references share captured
-work within a call. Initialization records all captured artifact-role hashes,
-and source checks recapture those roles in the worker; size and modification
-time alone cannot establish unchanged content.
+work within a call. Initialization records all captured artifact-role hashes.
+A source check answers from the resident cache only while every role still
+carries the stat stamp (identity, size, modification and change time) recorded
+when that content was hashed, and recaptures in the worker otherwise; the
+`analyze_results` section of the MCP surface design gives the settle margin
+and what a stamp cannot see.
 Continuations reject companion/content drift. Manifests
 keep explicit dialect hints separate from recorded producing evidence under
 `include.provenance`; a whole-log row's producer dialect can remain null.
