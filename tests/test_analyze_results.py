@@ -683,6 +683,7 @@ async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
         with atomic_write(out_path) as handle:
             handle.write("partial\n")
             while not should_abort():
+                # timing: a fake writer spinning until its abort callback fires
                 time.sleep(0.002)
             # What the real writer raises when its abort callback fires: the
             # deadline is carried by the exception type, not its wording.
@@ -968,6 +969,7 @@ async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
 
     def slow_digest(path):
         hashed.append(Path(path))
+        # timing: a trap; the call under test must never reach it
         time.sleep(0.2)
         return original(path)
 
@@ -1445,6 +1447,7 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
     def slow_summary(*args, **kwargs):
         del args, kwargs
         processing_calls.append("summary")
+        # timing: fake work past the 1.0 s analysis budget
         time.sleep(1.2)
         return {}
 
@@ -1468,6 +1471,7 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
     def slow_measurements(*args, **kwargs):
         del args, kwargs
         processing_calls.append("measurements")
+        # timing: fake work past the 1.0 s analysis budget
         time.sleep(1.2)
         return {}, {}, "0 step(s)", {}
 

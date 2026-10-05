@@ -161,10 +161,10 @@ async def test_terminal_root_token_noop_replay_and_read_only_views(
     noop = _data(
         await handle_jobs(JobsInput.model_validate(resume_args), state), JOBS_OUTPUT_SCHEMA
     )
+    # timing: this replay differs from the first call only in its dwell,
+    # which must not change what the replay returns
     replay = _data(
-        await handle_jobs(
-            JobsInput.model_validate({**resume_args, "wait_s": 1}), state
-        ),  # timing: differs from the first call only in its dwell, which must not change the replay
+        await handle_jobs(JobsInput.model_validate({**resume_args, "wait_s": 1}), state),
         JOBS_OUTPUT_SCHEMA,
     )
     assert noop["resumed"] is replay["resumed"] is False

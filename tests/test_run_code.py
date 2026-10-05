@@ -25,7 +25,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
 from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
-from tests.conftest import LIVENESS_S, await_until, wait_until
+from tests.conftest import LIVENESS_S, await_until, wait_until, written
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -240,6 +240,7 @@ class TestLifetime:
     @pytest.mark.skipif(POSIX, reason="Windows kills and replaces a timed-out worker")
     async def test_windows_timeout_reports_timeout_and_restarts(self, state: SessionState):
         before = (await run(state, "1"))["worker_pid"]
+        # timing: the snippet timeout under test
         reply = await run(state, "import time\ntime.sleep(60)", timeout_s=1)
         assert reply["status"] == "timeout", reply
         after = await run(state, "'ready'")
@@ -264,6 +265,7 @@ class TestLifetime:
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
     async def test_timeout_interrupts_and_keeps_the_worker(self, state: SessionState):
         before = (await run(state, "1"))["worker_pid"]
+        # timing: the snippet timeout under test
         reply = await run(state, "import time\nprint('started')\ntime.sleep(30)", timeout_s=1)
         assert reply["status"] == "timeout"
         assert reply["elapsed_s"] < 5
@@ -286,6 +288,7 @@ class TestLifetime:
             "try:\n    time.sleep(30)\n"
             "except KeyboardInterrupt:\n    time.sleep(30)\n"
         )
+        # timing: the snippet timeout under test
         reply = await run(state, code, timeout_s=1)
         assert reply["status"] == "timeout"
         assert reply["elapsed_s"] < 3
@@ -315,7 +318,7 @@ class TestLifetime:
                 assert (await run(state, "", reset=True))["status"] == "reset"
             else:
                 assert (await run(state, "import os; os._exit(3)"))["status"] == "error"
-            await asyncio.to_thread(child.wait, timeout=10)
+            await asyncio.to_thread(child.wait, timeout=LIVENESS_S)
         finally:
             if child.is_running():
                 child.kill()
@@ -453,8 +456,8 @@ class TestWorkerProcess:
         )
         owned = []
         try:
-            wait_until(pid_file.is_file, timeout_s=30, what="the worker and child to start")
-            owned = [psutil.Process(pid) for pid in json.loads(pid_file.read_text())]
+            pids = wait_until(written(pid_file, json.loads), what="the worker and child to start")
+            owned = [psutil.Process(pid) for pid in pids]
             parent.kill()
             parent.wait(timeout=LIVENESS_S)
             for process in owned:

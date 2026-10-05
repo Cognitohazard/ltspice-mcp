@@ -686,9 +686,8 @@ class TestExperimentLifecycle:
 
         # No monkeypatched timeout: under a per-job bound the first cancel waits
         # out the real one and this outer wait expires first.
-        await asyncio.wait_for(
-            registry.cancel_running(runners, None), timeout=3
-        )  # timing: must expire before one real per-job cancel bound would; see above
+        # timing: shorter than one real per-job cancel bound, which is the point
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=3)
 
         assert len(entered) == 3
         assert released.is_set()

@@ -111,6 +111,7 @@ class TestFileLock:
         holder.start()
         try:
             assert held.wait(timeout=LIVENESS_S)
+            # timing: asserts the lock times out while the holder has it
             with pytest.raises(TimeoutError), file_lock(target, timeout=0.1):
                 pass
         finally:
@@ -196,5 +197,5 @@ class TestAsyncFileLock:
         handoff.abandon()  # the waiting coroutine was cancelled
         handoff.publish(held)  # and only then did the worker win the lock
 
-        with file_lock(target, timeout=0.5):
+        with file_lock(target, timeout=LIVENESS_S):
             pass

@@ -348,6 +348,9 @@ class SessionState:
         tasks, until none is left, counting the ones started while this
         waits. Nothing outside the process is waited on: a simulator that has
         not exited is not this session's work until its exit is reported.
+        A running job is this session's work, so this waits for it to finish;
+        to wait only for the record writes queued so far, use
+        ``job_registry.drain_pending``.
         """
         while True:
             pending = [

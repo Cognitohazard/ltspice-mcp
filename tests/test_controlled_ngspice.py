@@ -12,6 +12,7 @@ import pytest
 from ltspice_mcp.lib.pdk_native import ArtifactDigest
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, StartupPolicy
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
+from tests.conftest import LIVENESS_S
 
 
 def _execution(folder: Path, mode: str):
@@ -102,7 +103,7 @@ def test_real_ngspice_uses_only_the_recorded_startup(tmp_path, monkeypatch):
     deck.write_text("* Controlled startup\nV1 n 0 1\nR1 n 0 1000\n.op\n.end\n")
     checked = []
     adapter = controlled_ngspice(execution, lambda: checked.append(True))
-    assert adapter.run(deck, timeout=10, cwd=ambient, exe_log=True) == 0
+    assert adapter.run(deck, timeout=LIVENESS_S, cwd=ambient, exe_log=True) == 0
     assert checked == [True]
     raw = OffsetAwareRawRead(deck.with_suffix(".raw"), dialect="ngspice")
     assert float(raw.get_wave("v(n)")[0]) == pytest.approx(1.0)

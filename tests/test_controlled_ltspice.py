@@ -266,6 +266,7 @@ def test_launch_uses_documented_flags_and_child_environment(adapter_module, tmp_
     monkeypatch.setattr(subprocess, "run", run)
     adapter = adapter_module.controlled_ltspice(execution, path, lambda: checked.append(True))
     deck = tmp_path / "divider with spaces.cir"
+    # timing: a value the adapter must pass through unchanged
     assert adapter.run(deck, timeout=10, cwd=tmp_path, exe_log=True) == 0
     assert checked == [True]
     assert run.call_args.args[0] == ["LTspice.exe", "-Run", "-b", str(deck), "-ini", str(path)]

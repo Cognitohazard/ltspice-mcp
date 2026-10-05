@@ -92,6 +92,7 @@ async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
     ) -> ParsedArtifacts:
         artifacts = await original(source, state, require_raw=require_raw)
         captures.append(artifacts)
+        # timing: fake work that outlasts the 1.0 s analysis budget
         await asyncio.sleep(1.1)
         return artifacts
 

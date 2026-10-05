@@ -141,9 +141,8 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
         second = asyncio.create_task(registry.persist_strict(newer))
         tasks.append(second)
         # Let the later write finish if cancellation prematurely freed its lock.
-        await asyncio.wait(
-            {second}, timeout=0.1
-        )  # timing: a negative window: the later write must not finish early
+        # timing: a negative window; the later write must not finish inside it
+        await asyncio.wait({second}, timeout=0.1)
         completed_before_release = second.done()
         release.set()
         await second

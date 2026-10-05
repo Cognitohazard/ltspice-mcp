@@ -706,8 +706,9 @@ class TestCaseConcurrencyAndTimeouts:
             )
         )
         await await_until(lambda: len(submissions) == 1)
-        # The second job's case is queued on the runner's permit, not launched.
-        await asyncio.sleep(0.05)
+        # The second job's case is parked on the runner's one permit, not
+        # launched: it is waiting for the permit the first case holds.
+        await await_until(lambda: len(runner._launch_slots._waiters or ()) == 1)
         assert len(submissions) == 1
 
         callbacks[submissions[0]](_success(work_dir, submissions[0]))
@@ -744,10 +745,13 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
+        execution = runner._executions[receipt.job.job_id]
         await await_until(lambda: len(submissions) == 1)
-        await asyncio.sleep(0.05)
+        # The other two cases are parked on the job's share, which the runner's
+        # cap lowered to one, not launched.
+        await await_until(lambda: len(execution.semaphore._waiters or ()) == 2)
         assert len(submissions) == 1
-        assert runner._executions[receipt.job.job_id].capacity == 1
+        assert execution.capacity == 1
 
         for index in range(3):
             await await_until(lambda wanted=index + 1: len(submissions) == wanted)
@@ -846,8 +850,9 @@ class TestCaseConcurrencyAndTimeouts:
         raw = work_dir / f"{token}.raw"
         raw.write_bytes(b"partial")
         callbacks[token](RunOutcome(str(raw), str(work_dir / f"{token}.fail"), 0, "killed"))
-        await await_until(lambda: case.case_id not in execution.retained_slots)
-        await await_until(lambda: not raw.exists())
+        await runner.settled(receipt.job)
+        assert case.case_id not in execution.retained_slots
+        assert not raw.exists()
         assert execution.semaphore._value == 1
         assert any(item["code"] == "late_simulator_exit" for item in case.observations)
         assert receipt.job.completeness.failed == 1
@@ -1236,6 +1241,7 @@ class TestStoppedCaseRecord:
             runner.submit(_request(state_no_sim, work_dir, request_id="no-default-timeout"))
         )
         await await_until(lambda: bool(launches))
+        # timing: a negative window; a bound, had one been set, could fire here
         await asyncio.sleep(0.2)
         assert kills == []
         assert launches[0]["timeout_s"] is None
@@ -1614,12 +1620,10 @@ class TestCancellationAndAnalysis:
         assert not receipt.job.done_event.is_set()
         assert receipt.job.status == "analyzing"
         assert receipt.job.analysis.status == "running"
-        assert await runner.wait(
-            receipt.job, 0.01, wait_for="runs"
-        )  # timing: the runs event is already set; this returns at once
-        assert not await runner.wait(
-            receipt.job, 0.01, wait_for="all"
-        )  # timing: asserts this wait times out while analysis is held
+        # timing: the runs event is already set, so this returns at once
+        assert await runner.wait(receipt.job, 0.01, wait_for="runs")
+        # timing: asserts this wait times out while the analysis is held
+        assert not await runner.wait(receipt.job, 0.01, wait_for="all")
 
         release_analysis.set()
         assert await runner.wait(receipt.job, LIVENESS_S)

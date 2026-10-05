@@ -7,7 +7,6 @@ import importlib
 import os
 import signal
 import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -257,6 +256,7 @@ def test_call_preserves_durable_result_when_interrupt_precedes_completion(
     monkeypatch.setattr(session_module.Future, "result", interrupt_once)
 
     async def durable_receipt() -> dict[str, str]:
+        # timing: fake work; the patched result() interrupts the wait on it
         await asyncio.sleep(0.01)
         return {"job_id": "exp-preserved", "control_token": "token"}
 
@@ -319,19 +319,21 @@ def test_fork_child_replaces_stale_lease_while_parent_lock_is_held(
     release_lock.set()
     holder.join(LIVENESS_S)
     assert not holder.is_alive()
-    deadline = time.monotonic() + 5
-    status = 0
-    while time.monotonic() < deadline:
+
+    def reaped() -> tuple[int] | None:
         waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
-        if waited_pid == child_pid:
-            break
-        time.sleep(0.01)
-    else:
+        return (status,) if waited_pid == child_pid else None
+
+    try:
+        (status,) = wait_until(
+            reaped, what="the fork child to exit (it blocks on an inherited lease lock)"
+        )
+    except BaseException:
         os.kill(child_pid, signal.SIGKILL)
         os.waitpid(child_pid, 0)
         os.close(read_fd)
         parent_api.close()
-        pytest.fail("fork child blocked on the inherited lease lock")
+        raise
 
     try:
         message = os.read(read_fd, 4096)

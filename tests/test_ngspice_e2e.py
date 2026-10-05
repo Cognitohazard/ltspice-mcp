@@ -745,9 +745,10 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
                 "request_id": "ng-live-progress",
                 "circuits": [{"path": net, "id": "dut"}],
                 "execution": {
+                    # timing: the receipt must come back while the case still runs
                     "wait_s": 2,
                     "simulator": "ngspice",
-                },  # timing: asserts the receipt comes back while the case is still running
+                },
             }
         ),
         ngspice_state,
