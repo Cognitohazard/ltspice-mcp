@@ -146,6 +146,11 @@ tool-surface changes.
   counted six tools where there are eight, described the ngspice build it was
   checked on as the reader's, and said a process runs one executable per
   simulator family.
+- The `lib-section-ngspice` refusal of a sectioned `.lib` on ngspice said only
+  that the compatibility mode reads it as plain includes. Since the refused
+  deck never runs, nothing else told the caller how to fix it. The finding now
+  names `[simulator] ngbehavior = "hsa"` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and
+  the restart it needs.
 - A path containing `..` was refused before it was resolved, even when it
   landed inside the sandbox. A deck in a subfolder with
   `.include ../models/x.lib` got an error-severity `path_denied` finding from
