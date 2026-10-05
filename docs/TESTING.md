@@ -159,6 +159,30 @@ both orders deliberately; extending sleeps or accepting a successful rerun
 does not fix the race. A load test can reveal additional failures, but it is
 not a substitute for a deterministic regression of a known interleaving.
 
+That rule was written down and then broken, and each break lost only on the
+Windows runner, one per run. Three mechanisms now carry it:
+
+- **Work the server starts has an owner that can say when it is done.**
+  `BackgroundTasks` (`lib/background.py`) holds every task the server starts
+  without awaiting it, and `ExperimentRunner.settled(job)` and
+  `SessionState.settled()` wait until none is left, counting work started
+  while they wait. A test asserting on what that work produced awaits
+  `settled`, not the disappearance of a file the work also touches. Nothing
+  outside the process is waited on: a simulator's exit, a fake's callback or
+  another process still needs its own event or handshake.
+- **The rules are checked.** `tests/test_test_hygiene.py` fails on a direct
+  task spawn in the source with no recorded owner, and on the test-side
+  patterns every past race used. A line that must break a rule carries a
+  `# timing: <reason>` comment saying why. A wait's timeout is
+  `LIVENESS_S` (`tests/conftest.py`), a cap on a hang, never a claim about
+  how fast the runner is.
+- **Races lose on Linux first.** `--jitter-seed=N` (`tests/schedule_jitter.py`)
+  delays thread-to-loop hand-offs and process starts and fires timers up to
+  15.6 ms early, as Windows does, with delays drawn from the seed and the
+  test's id. The CI jitter leg and the release gate run seeds 1 and 2. A
+  failure prints the seed; it usually reproduces under it, though the seed
+  cannot fix the operating system's own scheduling.
+
 ### Existing coverage
 
 The following practices were already sound. They are kept, and everything
@@ -298,6 +322,7 @@ the push, and `scripts/release_gate.sh` runs it:
 |-|-|
 | Linux, serially | CI runs the suite on one xdist worker per core; the serial run keeps the one-process order covered, where state a test leaves behind reaches every later test |
 | Linux with WSL detection forced off (`scripts/nonwsl_plugin.py`) | Linux CI is not WSL; this box is, so the non-WSL branch is otherwise never executed here |
+| Linux under schedule jitter, seeds 1 and 2 (`tests/schedule_jitter.py`) | races in the suite used to lose only on the Windows runner, one per run; delaying thread hand-offs and process starts, and firing timers early as Windows does, makes them lose here first. CI runs the same two seeds |
 | Ubuntu container, non-root, `--init` | a fresh machine with ngspice and libcairo2; `--init` because a container whose PID 1 is `bash` never reaps a killed child, and a zombie still answers `os.kill(pid, 0)` |
 | Windows native, Python 3.12 and 3.13, checkout with conversion on | the primary platform, both supported interpreters (3.13 changed `Path.resolve` on a NUL byte), and the bytes a runner with `core.autocrlf=true` sees |
 | the publisher's own metadata check | the PyPI action's bundled `twine` rejected a metadata version the build backend had started emitting by default, after the build job's own newer `twine` had passed it |
