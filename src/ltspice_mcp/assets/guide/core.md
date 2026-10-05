@@ -100,7 +100,7 @@ The rest is guide section 'python'.
   `analyze_results` reads the first unless you name `step` or `all_steps`.
 - ngspice has no `.step`: sweep with `run_experiments` variations. Once a deck
   has a `.save` line, ngspice keeps only what `.save` names. As this server
-  runs it, ngspice does not evaluate a top-level `.meas`, so `run_experiments`
-  refuses such a deck; read the trace with a recipe instead.
+  runs it, ngspice skips a top-level `.meas`: the deck runs and the value
+  comes back absent. Read the trace with a recipe instead.
 - Inline comments are `;` in LTspice and `$` in ngspice.
 - Ground is `0`; `00` is a different node.

@@ -26,11 +26,49 @@ from ltspice_mcp.lib import proc_kill, wsl
         ([("ngspice", None), ("ngspice", ["ngspice", "exp_case_1.cir"])], "present"),
     ],
 )
-def test_local_simulator_presence(monkeypatch, processes, expected):
-    entries = [SimpleNamespace(info={"name": name, "cmdline": cmd}) for name, cmd in processes]
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_local_simulator_presence(monkeypatch, processes, expected, platform):
+    # Windows reads a nameless process's image name by pid, so that branch is
+    # exercised everywhere; these fake pids name no real process.
+    monkeypatch.setattr(proc_kill.sys, "platform", platform)
+    monkeypatch.setattr(proc_kill, "_windows_process_name", lambda pid: None)
+    entries = [
+        SimpleNamespace(pid=1000 + index, info={"name": name, "cmdline": cmd})
+        for index, (name, cmd) in enumerate(processes)
+    ]
     monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda *a, **kw: iter(entries))
     result = proc_kill.simulator_presence("exp_case_1", {"ngspice", "ltspice.exe"})
     assert result.value == expected
+
+
+@pytest.mark.parametrize(
+    ("platform", "image_name", "expected"),
+    [
+        # A nameless process stays unknown off Windows: nothing else names it.
+        ("linux", "notepad.exe", "unknown"),
+        # On Windows its image name settles it: another program is absence,
+        # a simulator with no readable command line is still unknown.
+        ("win32", "notepad.exe", "absent"),
+        ("win32", "LTspice.exe", "unknown"),
+        ("win32", None, "unknown"),
+    ],
+)
+def test_windows_names_a_nameless_process_by_pid(monkeypatch, platform, image_name, expected):
+    monkeypatch.setattr(proc_kill.sys, "platform", platform)
+    looked_up: list[int] = []
+
+    def image(pid):
+        looked_up.append(pid)
+        return image_name
+
+    monkeypatch.setattr(proc_kill, "_windows_process_name", image)
+    nameless = SimpleNamespace(pid=4242, info={"name": None, "cmdline": None})
+    monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda *a, **kw: iter([nameless]))
+
+    result = proc_kill.simulator_presence("exp_case_1", {"ngspice", "ltspice.exe"})
+
+    assert result.value == expected
+    assert looked_up == ([4242] if platform == "win32" else [])
 
 
 def test_presence_query_failure_is_not_absence(monkeypatch):

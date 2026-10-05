@@ -169,7 +169,7 @@ class TestSectionContent:
         ("section", "anchor"),
         [
             ("fundamentals", "## Value suffixes"),
-            ("fundamentals", "On ngspice, `run_experiments` refuses a top-level `.meas`"),
+            ("fundamentals", "On ngspice a top-level `.meas` is skipped"),
             ("ltspice", "## Other LTspice Quirks"),
             ("ngspice", "## .control / .endc Blocks"),
             ("ngspice", "## XSPICE"),

@@ -138,13 +138,19 @@ tool-surface changes.
   file is now written in the encoding it was read in, with UTF-8 used only for
   text that encoding cannot spell. A UTF-16 or UTF-32 deck is still rewritten
   as UTF-8, since the edits made to a deck at run time are ASCII bytes.
-- The guide described what ngspice prints for a top-level `.meas` and for a
-  sectioned `.lib` under the default compatibility mode, but `run_experiments`
-  refuses both decks before they run (lint `meas-ngspice-batch` and
-  `lib-section-ngspice`); it now says so, and its core no longer tells an
-  ngspice session to put scalars in `.meas`. It also counted six tools where
-  there are eight, and described the ngspice build it was checked on as the
-  reader's.
+- The guide described what ngspice prints for a sectioned `.lib` under the
+  default compatibility mode, but `run_experiments` refuses that deck before
+  it runs (lint `lib-section-ngspice`); it now says so. It also says that a
+  top-level `.meas` on ngspice is skipped and its value comes back absent, and
+  its core no longer tells an ngspice session to put scalars in `.meas`. It
+  counted six tools where there are eight, described the ngspice build it was
+  checked on as the reader's, and said a process runs one executable per
+  simulator family.
+- The `lib-section-ngspice` refusal of a sectioned `.lib` on ngspice said only
+  that the compatibility mode reads it as plain includes. Since the refused
+  deck never runs, nothing else told the caller how to fix it. The finding now
+  names `[simulator] ngbehavior = "hsa"` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and
+  the restart it needs.
 - A path containing `..` was refused before it was resolved, even when it
   landed inside the sandbox. A deck in a subfolder with
   `.include ../models/x.lib` got an error-severity `path_denied` finding from
@@ -291,7 +297,7 @@ tool-surface changes.
 - Under Wine, `inspect(kind="capabilities")` reported `wine` as the LTspice
   executable, because it read the first word of the launch command. It now
   reports the simulator itself, e.g. `.../LTspice.exe`.
-- `verify_circuit`'s default `managed` export is documented to leave the
+- `verify_circuit`'s `managed` export is documented to leave the
   caller's files untouched, but it created a `.ltspice-mcp/locks/` directory
   beside the schematic, as did every `edit_schematic` call, dry runs included.
   Circuit locks now live in the per-user home (see Changed).

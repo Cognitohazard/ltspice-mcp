@@ -38,8 +38,9 @@ ngspice shares guide section 'fundamentals', with these deltas:
   and reading the run relays ngspice's notice of the skip. Read the trace with
   a recipe instead (`waveform`, `value`, `operating_point`), or measure inside
   a `.control ... run ... .endc` block with the dot-less interactive `meas`
-  command (`meas tran vmax MAX V(out)`), whose result prints to the run's log. A dotted `.meas` inside `.control` is
-  not a command and computes nothing.
+  command (`meas tran vmax MAX V(out)`), whose result prints to the run's
+  log. A dotted `.meas` inside `.control` is not a command and computes
+  nothing.
 - `.backanno` is LTspice-only: ngspice rejects it ("unimplemented dot command
   '.backanno'") and aborts the run. Probe currents with
   `.options savecurrents` or `.probe` instead.

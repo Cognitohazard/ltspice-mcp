@@ -184,6 +184,23 @@ def test_explicit_launch_mode_overrides_session_lint_mode(tmp_path, monkeypatch,
     assert "lib-section-ngspice" in _ids(text, tmp_path, dialect="ngspice")
 
 
+def test_lib_section_ngspice_names_the_setting_that_fixes_it(tmp_path, monkeypatch):
+    """The refusal is the only place a caller meets this: the deck never runs,
+    so no simulator error follows it. A finding that says only what is wrong
+    leaves the caller rewriting a correct PDK deck, so it has to name the
+    setting that makes ngspice load the section."""
+    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
+    findings = lint_deck(
+        '.lib "models.lib" tt\n.op\n.end\n', tmp_path / "deck.cir", "ngspice", "NGspiceSimulator"
+    )
+    finding = next(item for item in findings if item["rule_id"] == "lib-section-ngspice")
+
+    reason = finding["evidence"]["reason"]
+    assert '[simulator] ngbehavior = "hsa"' in reason
+    assert "LTSPICE_MCP_NGBEHAVIOR=hsa" in reason
+    assert "restart" in reason
+
+
 def test_save_meas_coverage_distinguishes_voltage_and_current(tmp_path: Path):
     deck = "V1 out 0 1\n.save V(out)\n.meas tran peak MAX I(out)\n.tran 1u 1m\n.end\n"
 

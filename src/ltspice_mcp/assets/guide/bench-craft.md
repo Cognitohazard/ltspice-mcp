@@ -151,10 +151,10 @@ amplifier into overload.
 
 ## ngspice batch-output practice
 
-On ngspice, `run_experiments` refuses a top-level `.meas` (guide section
-'ngspice'). Prefer saved traces and `analyze_results` recipes; where a
-measurement has to run inside ngspice, use the dot-less interactive `meas`
-command in a `.control` block:
+On ngspice a top-level `.meas` is skipped and its value comes back absent
+(guide section 'ngspice'). Prefer saved traces and `analyze_results` recipes;
+where a measurement has to run inside ngspice, use the dot-less interactive
+`meas` command in a `.control` block:
 
 ```spice
 .control

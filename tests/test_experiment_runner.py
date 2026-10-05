@@ -1325,9 +1325,13 @@ class TestStoppedCaseRecord:
         _deliver_killed_run(
             callbacks[token], run_dir, token, raw=_partial_ngspice_raw([0.0, 5e-7, 1e-6])
         )
-        await await_until(lambda: not raw.exists())
-
-        progress = [item for item in case.observations if item["code"] == "partial_progress"]
+        # The raw is removed off the loop before the observation is recorded on
+        # it, so wait for the observation itself; by then the raw is gone.
+        progress = await await_until(
+            lambda: [item for item in case.observations if item["code"] == "partial_progress"],
+            what="the late exit's progress observation",
+        )
+        assert not raw.exists()
         assert len(progress) == 1
         assert progress[0]["evidence"]["points"] == 3
         assert progress[0]["evidence"]["last_axis_value"] == pytest.approx(1e-6)
