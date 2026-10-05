@@ -85,8 +85,15 @@ async def test_sync_readers_use_explicitly_captured_source(
 
 @pytest.mark.asyncio
 async def test_budget_pages_share_resident_capture_and_reverify_each_continuation(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settled_stamps: None,
 ):
+    """Fifteen references to one raw share one capture. Each continuation
+    re-stamps the source: unchanged, it is answered without a parser process;
+    rewritten, even at the same size and modification time, a worker recaptures
+    it and every page reports the drift."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     original = parser_service.run_parser_sync
     operations: list[str] = []
@@ -111,9 +118,8 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
     page = data["results"]["loop"]["per_run"]
     assert page["total"] == 45 and 0 < page["returned"] < 45
     assert page["items"][0]["value"]["cutoff_high_hz"] > 0
-    assert len(operations) <= 4
     assert operations.count("load_raw") == 1
-    assert operations.count("load_logs") >= 2
+    assert len(operations) <= 2
     assert data["next"] is not None
 
     operations.clear()
@@ -131,9 +137,7 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
         f"corner{offset // 3}",
         offset % 3,
     )
-    assert len(operations) <= 3
-    assert operations.count("load_raw") <= 1
-    assert operations.count("load_logs") >= 2
+    assert operations == []
     assert continued["next"] is not None
 
     before = raw.stat()

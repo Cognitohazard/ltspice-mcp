@@ -182,6 +182,12 @@ Windows runner, one per run. Three mechanisms now carry it:
   test's id. The CI jitter leg and the release gate run seeds 1 and 2. A
   failure prints the seed; it usually reproduces under it, though the seed
   cannot fix the operating system's own scheduling.
+- **Whether a repeated read starts a parser process depends on the clock.**
+  A source's stat stamp is trusted only once its times are older than a
+  timestamp tick, so with the real clock a test re-reading a file it just
+  wrote may or may not reach a worker. A test that counts parser requests, or
+  asserts on a worker's reply, pins the answer with the `settled_stamps` or
+  `unsettled_stamps` fixture (`tests/conftest.py`).
 
 ### Existing coverage
 

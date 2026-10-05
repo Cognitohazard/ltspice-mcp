@@ -683,6 +683,17 @@ tool-surface changes.
 
 ### Changed
 
+- Reading a result again no longer starts a parser process. Each read first
+  stats the source's RAW, log and console files. A source whose files still
+  carry the device, inode, size, modification time and change time recorded
+  when it was last parsed is answered from the resident cache. Any change,
+  including a same-size rewrite that puts the modification time back, sends
+  the read to a worker as before. A stamp is recorded only once both its times
+  are older than a filesystem timestamp tick. A parser process also starts
+  faster: the worker imports its decoders only when it has content to decode,
+  and the store no longer imports psutil until it checks a job owner's
+  liveness. On Linux a repeated read took about 300 ms and now takes under a
+  millisecond.
 - A run's simulator library roots, the install directories staging accepts as
   the simulator's own, are now those of the LTspice build the run launches:
   LTspice XVII's `Documents\LTspiceXVII\lib`, or LTspice 24's

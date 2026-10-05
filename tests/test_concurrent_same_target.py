@@ -510,9 +510,10 @@ async def test_simultaneous_analyses_of_one_job_agree_and_parse_once(
 ):
     """Both reads return the same numbers, and the shared raw is parsed once.
 
-    Every read captures the current bytes in a child. Parser admission seeds
-    later captures with retained decoded snapshots, so only the first cold
-    RAW capture may materialize data; subsequent captures must reuse its key.
+    Parser admission seeds later captures with retained decoded snapshots, so
+    only the first cold RAW capture may materialize data; a later read either
+    reuses its key in the child or, when the files still carry the stamps that
+    capture recorded, is answered without one.
     """
     recorded_fixture_simulator(monkeypatch)
     deck = _deck(work_dir / "analyzed.cir")
@@ -549,7 +550,6 @@ async def test_simultaneous_analyses_of_one_job_agree_and_parse_once(
     assert left["results"]["vout"]["values"], left["results"]["vout"]
     parses = [key for _, status, key in raw_captures if status == "ok"]
     assert len(parses) == 1, f"the shared raw was parsed {len(parses)} times: {raw_captures}"
-    assert len(raw_captures) >= 2, raw_captures
     for seeded_keys, status, key in raw_captures:
         assert key == parses[0]
         if status == "ok":

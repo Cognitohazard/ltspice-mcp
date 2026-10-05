@@ -337,7 +337,7 @@ class TestOwnerLivenessUnknown:
         def boom(pid: int) -> Any:
             raise OSError("process table unavailable")
 
-        monkeypatch.setattr(store_module.psutil, "Process", boom)
+        monkeypatch.setattr(psutil, "Process", boom)
 
     def test_probe_reports_unknown_rather_than_dead(self, monkeypatch: Any) -> None:
         self._break_the_probe(monkeypatch)
