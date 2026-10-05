@@ -33,7 +33,7 @@ from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experi
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-from tests.conftest import FakeSim
+from tests.conftest import LIVENESS_S, FakeSim
 
 _DECK = "* deck\nR1 in 0 1k\n.end\n"
 
@@ -282,7 +282,7 @@ async def test_run_experiments_case_refusal_carries_the_guidance(tmp_path: Path,
             {
                 "request_id": "outside-sandbox",
                 "circuits": [{"path": str(box.deck)}],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         ),
         state,

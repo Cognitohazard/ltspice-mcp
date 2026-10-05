@@ -17,7 +17,7 @@ from ltspice_mcp.lib.experiment_runner import ExperimentRunner, ExperimentRunReq
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ManifestEntry, SourceRecord
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools
-from tests.conftest import FIXTURES_DIR, staged_decks
+from tests.conftest import FIXTURES_DIR, LIVENESS_S, staged_decks
 
 
 async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
@@ -84,7 +84,7 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
     )
     fresh = None
     try:
-        receipt = await asyncio.wait_for(asyncio.shield(runner.submit(request)), 10)
+        receipt = await asyncio.wait_for(asyncio.shield(runner.submit(request)), LIVENESS_S)
         job = receipt.job
         assert await runner.wait(job, timeout_s=30)
         assert job.task is not None

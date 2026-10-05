@@ -28,6 +28,7 @@ from ltspice_mcp.lib.parser_process import (
 )
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.lib.windows_job import python_launch
+from tests.conftest import LIVENESS_S
 
 _FIXTURE = """
 import ctypes, json, os, struct, subprocess, sys
@@ -207,7 +208,7 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
         _assert_gone(started.values())
     finally:
         cancel.set()
-        canceller.join(timeout=6)
+        canceller.join(timeout=LIVENESS_S)
 
 
 def test_owner_death_kills_and_reaps_decoder_tree(call_dir, limits):
@@ -238,7 +239,7 @@ run_parser_sync({"mode": "runaway"}, work_dir=Path.cwd(),
         assert started_path.exists()
         owned = list(json.loads(started_path.read_text()).values())
         owner.kill()
-        owner.wait(timeout=5)
+        owner.wait(timeout=LIVENESS_S)
         deadline = time.monotonic() + 5
         while any(psutil.pid_exists(pid) for pid in owned) and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -250,12 +251,12 @@ run_parser_sync({"mode": "runaway"}, work_dir=Path.cwd(),
     finally:
         if owner.poll() is None:
             owner.kill()
-        owner.wait(timeout=5)
+        owner.wait(timeout=LIVENESS_S)
         for pid in owned:
             try:
                 process = psutil.Process(pid)
                 process.kill()
-                process.wait(timeout=3)
+                process.wait(timeout=LIVENESS_S)
             except psutil.NoSuchProcess:
                 pass
 
@@ -382,7 +383,7 @@ def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limit
         for process in spawned:
             if process.poll() is None:
                 process.kill()
-            process.wait(timeout=3)
+            process.wait(timeout=LIVENESS_S)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Requires native Windows Job enforcement")
@@ -519,14 +520,16 @@ raise SystemExit(parser_bootstrap.main())
         env=env,
     )
     try:
-        _, stderr = process.communicate(b'{"version":1,"op":"go","request":{}}\n', timeout=10)
+        _, stderr = process.communicate(
+            b'{"version":1,"op":"go","request":{}}\n', timeout=LIVENESS_S
+        )
         assert process.returncode != 0
         assert b"containment" in stderr
         assert {path.name for path in directory.iterdir()} == {"parser_fixture.py"}
     finally:
         if process.poll() is None:
             process.kill()
-        process.wait(timeout=5)
+        process.wait(timeout=LIVENESS_S)
 
 
 @pytest.mark.parametrize("platform", ["darwin", "freebsd14"])
@@ -691,7 +694,7 @@ def test_error_after_child_creation_remains_unconfirmed(call_dir, limits, monkey
     finally:
         for process in started:
             process.kill()
-            process.wait(timeout=3)
+            process.wait(timeout=LIVENESS_S)
 
 
 def test_existing_control_files_do_not_claim_empty_tree(call_dir, limits):
@@ -732,12 +735,12 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
         assert not (directory / "imported.txt").exists()
         assert process.stdin is not None
         process.stdin.close()
-        process.wait(timeout=5)
+        process.wait(timeout=LIVENESS_S)
         assert not (directory / "imported.txt").exists()
     finally:
         if process.poll() is None:
             process.kill()
-        process.wait(timeout=5)
+        process.wait(timeout=LIVENESS_S)
 
 
 def test_windows_job_default_and_parser_limits(monkeypatch):

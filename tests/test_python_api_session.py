@@ -28,7 +28,7 @@ from ltspice_mcp.api import (
 from ltspice_mcp.config import ServerConfig, default_allowed_paths
 from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.state import SessionState
-from tests.conftest import wait_until
+from tests.conftest import LIVENESS_S, wait_until
 
 
 class _StubState:
@@ -195,13 +195,13 @@ def test_concurrent_constructors_allow_exactly_one_session(
 
     first = threading.Thread(target=construct)
     first.start()
-    assert entered_bootstrap.wait(2)
+    assert entered_bootstrap.wait(LIVENESS_S)
     second = threading.Thread(target=construct)
     second.start()
-    second.join(2)
+    second.join(LIVENESS_S)
     assert not second.is_alive()
     release_bootstrap.set()
-    first.join(2)
+    first.join(LIVENESS_S)
     assert not first.is_alive()
 
     winners = [result for result in results if isinstance(result, Api)]
@@ -288,7 +288,7 @@ def test_fork_child_replaces_stale_lease_while_parent_lock_is_held(
 
     holder = threading.Thread(target=hold_in_parent)
     holder.start()
-    assert lock_held.wait(2)
+    assert lock_held.wait(LIVENESS_S)
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
@@ -317,7 +317,7 @@ def test_fork_child_replaces_stale_lease_while_parent_lock_is_held(
 
     os.close(write_fd)
     release_lock.set()
-    holder.join(2)
+    holder.join(LIVENESS_S)
     assert not holder.is_alive()
     deadline = time.monotonic() + 5
     status = 0
@@ -480,8 +480,8 @@ def test_concurrent_calls_and_close_cancel_only_cancelable_invocations(
     ]
     for caller in callers:
         caller.start()
-    assert effectful_started.wait(2)
-    assert cancelable_started.wait(2)
+    assert effectful_started.wait(LIVENESS_S)
+    assert cancelable_started.wait(LIVENESS_S)
 
     closers = [threading.Thread(target=close), threading.Thread(target=close)]
     for closer in closers:
@@ -497,7 +497,7 @@ def test_concurrent_calls_and_close_cancel_only_cancelable_invocations(
 
     release_effectful.set()
     for thread in [*callers, *closers]:
-        thread.join(3)
+        thread.join(LIVENESS_S)
         assert not thread.is_alive()
 
     assert call_results["effectful"] == "effect-complete"

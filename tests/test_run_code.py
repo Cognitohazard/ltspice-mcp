@@ -25,7 +25,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
 from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
-from tests.conftest import await_until, wait_until
+from tests.conftest import LIVENESS_S, await_until, wait_until
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -456,13 +456,13 @@ class TestWorkerProcess:
             wait_until(pid_file.is_file, timeout_s=30, what="the worker and child to start")
             owned = [psutil.Process(pid) for pid in json.loads(pid_file.read_text())]
             parent.kill()
-            parent.wait(timeout=10)
+            parent.wait(timeout=LIVENESS_S)
             for process in owned:
-                process.wait(timeout=10)
+                process.wait(timeout=LIVENESS_S)
         finally:
             if parent.poll() is None:
                 parent.kill()
-            parent.wait(timeout=10)
+            parent.wait(timeout=LIVENESS_S)
             for process in owned:
                 if process.is_running():
                     process.kill()

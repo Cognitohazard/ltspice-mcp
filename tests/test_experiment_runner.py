@@ -27,7 +27,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
-from tests.conftest import await_until, ngspice_binary_raw, staged_decks
+from tests.conftest import LIVENESS_S, await_until, ngspice_binary_raw, staged_decks
 from tests.test_completion_logs import captured_completion_facts
 
 
@@ -192,7 +192,7 @@ async def _cancel_during_launch(
     def submit(_netlist: Path, run_filename: str, callback, **_kwargs):
         token = Path(run_filename).stem
         launching.set()
-        release.wait(5)
+        release.wait(LIVENESS_S)
         submissions.append(token)
         callbacks[token] = callback
         return object()
@@ -223,8 +223,8 @@ async def _cancel_during_launch(
     # The launched process reports exit either way; a coordinator that disowned
     # it simply has nowhere to put the news.
     callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
-    await asyncio.wait_for(cancel_task, 2)
-    assert await runner.wait(receipt.job, 2)
+    await asyncio.wait_for(cancel_task, LIVENESS_S)
+    assert await runner.wait(receipt.job, LIVENESS_S)
     return receipt.job, killed, token
 
 
@@ -258,7 +258,7 @@ class TestSubmitPrimitive:
             "case-token.cir",
             received.set_result,
         )
-        outcome = await asyncio.wait_for(received, 1)
+        outcome = await asyncio.wait_for(received, LIVENESS_S)
         assert isinstance(handle, FakeHandle)
         assert outcome.raw_file == str(raw)
         assert calls[0]["run_filename"] == "case-token.cir"
@@ -301,7 +301,7 @@ class TestSubmitPrimitive:
                 # would keep itself alive and pass on its own.
                 def simulate() -> None:
                     simulating.set()
-                    finish.wait(5)
+                    finish.wait(LIVENESS_S)
                     callback(raw, log)
 
                 task = threading.Thread(target=simulate)
@@ -395,7 +395,7 @@ class TestLogopinfoInjection:
 
         token = next(iter(callbacks))
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.completeness.produced == 1
 
     async def test_non_ltspice_case_is_submitted_unmodified(
@@ -424,7 +424,7 @@ class TestLogopinfoInjection:
         assert b"logopinfo" not in run_bytes.lower()
         token = next(iter(callbacks))
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
 
 
 class TestArtifactCleanup:
@@ -487,7 +487,7 @@ class TestExperimentSubmission:
         await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.status == "completed"
         assert receipt.job.completeness.produced == 1
 
@@ -519,7 +519,7 @@ class TestExperimentSubmission:
 
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(first.job, 1)
+        assert await runner.wait(first.job, LIVENESS_S)
 
     async def test_same_request_id_different_fingerprint_conflicts(
         self,
@@ -551,7 +551,7 @@ class TestExperimentSubmission:
             )
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(first.job, 1)
+        assert await runner.wait(first.job, LIVENESS_S)
 
     async def test_transport_cancel_during_barrier_does_not_cancel_durable_job(
         self,
@@ -606,7 +606,7 @@ class TestExperimentSubmission:
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
         local_job = state_no_sim.all_jobs[str(index["job_id"])]
-        assert await runner.wait(local_job, 1)
+        assert await runner.wait(local_job, LIVENESS_S)
 
 
 @pytest.mark.asyncio
@@ -662,7 +662,7 @@ class TestCaseConcurrencyAndTimeouts:
         for token in submissions:
             callbacks[token](_success(work_dir, token))
 
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         # Every case starts and finishes, and progress is written once per
         # total // 20 case events (every second event for 40 cases).
         assert case_events >= 2 * 40
@@ -714,8 +714,8 @@ class TestCaseConcurrencyAndTimeouts:
         await await_until(lambda: len(submissions) == 2)
         callbacks[submissions[1]](_success(work_dir, submissions[1]))
 
-        assert await runner.wait(first.job, 1)
-        assert await runner.wait(second.job, 1)
+        assert await runner.wait(first.job, LIVENESS_S)
+        assert await runner.wait(second.job, LIVENESS_S)
         assert first.job.completeness.produced == 1
         assert second.job.completeness.produced == 1
 
@@ -753,7 +753,7 @@ class TestCaseConcurrencyAndTimeouts:
             await await_until(lambda wanted=index + 1: len(submissions) == wanted)
             token = submissions[index]
             callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.completeness.produced == 3
 
     async def test_semaphore_is_held_from_submission_until_callback(
@@ -793,7 +793,7 @@ class TestCaseConcurrencyAndTimeouts:
         await await_until(lambda: receipt.job.completeness.submitted == 2)
         second = submissions[1]
         callbacks[second](_success(work_dir, second))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.completeness.produced == 2
 
     # asyncio fires a timer up to one clock resolution early, 15.6 ms on Windows,
@@ -831,7 +831,7 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         execution = runner._executions[receipt.job.job_id]
         case = receipt.job.cases[0]
         assert case.failure_code == "kill_unconfirmed"
@@ -882,7 +882,7 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        await asyncio.wait_for(kill_started.wait(), 1)
+        await asyncio.wait_for(kill_started.wait(), LIVENESS_S)
         token = submissions[0]
         raw = work_dir / f"{token}.raw"
         raw.write_bytes(b"partial")
@@ -895,7 +895,7 @@ class TestCaseConcurrencyAndTimeouts:
             )
         )
 
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.cases[0].failure_code == "run_timeout"
         assert receipt.job.cases[0].raw_file is None
         # Execution cleanup runs after done_event, past the watcher-task
@@ -934,7 +934,7 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert len(submissions) == 1
         assert receipt.job.completeness.submitted == 1
         assert receipt.job.completeness.failed == 3
@@ -983,7 +983,7 @@ class TestCaseConcurrencyAndTimeouts:
                 )
             )
         )
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert len(submissions) == 1
         assert receipt.job.status == "completed_with_failures"
         assert receipt.job.completeness.failed == 2
@@ -1064,13 +1064,13 @@ class TestStoppedCaseRecord:
                 )
             )
         )
-        await asyncio.wait_for(kill_started.wait(), 2)
+        await asyncio.wait_for(kill_started.wait(), LIVENESS_S)
         token = submissions[0]
         assert receipt.job.output_folder is not None
         _deliver_killed_run(
             callbacks[token], receipt.job.output_folder, token, log_text=log_text, raw=raw
         )
-        assert await runner.wait(receipt.job, 2)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         return receipt.job
 
     async def test_run_timeout_keeps_the_killed_runs_diagnostics(
@@ -1207,7 +1207,7 @@ class TestStoppedCaseRecord:
         await await_until(lambda: bool(launches))
         token = next(iter(callbacks))
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
 
         assert launches[0]["timeout_s"] == 30.0 + 2.0 + SPICELIB_TIMEOUT_MARGIN_S
 
@@ -1241,7 +1241,7 @@ class TestStoppedCaseRecord:
         assert launches[0]["timeout_s"] is None
         token = next(iter(callbacks))
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.cases[0].status == "produced"
 
     async def test_a_simulator_the_first_kill_missed_is_killed_by_the_next(
@@ -1277,7 +1277,7 @@ class TestStoppedCaseRecord:
         assert receipt.job.output_folder is not None
         run_dirs.append(receipt.job.output_folder)
 
-        assert await runner.wait(receipt.job, 5)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         case = receipt.job.cases[0]
         assert kills == [submissions[0], submissions[0]]
         assert case.failure_code == "run_timeout"
@@ -1308,7 +1308,7 @@ class TestStoppedCaseRecord:
                 )
             )
         )
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         case = receipt.job.cases[0]
         assert case.failure_code == "kill_unconfirmed"
         assert case.failure_evidence == {
@@ -1373,7 +1373,7 @@ class TestStoppedCaseRecord:
                 )
             )
         )
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         token = submissions[0]
         run_dir = receipt.job.output_folder
         assert run_dir is not None
@@ -1425,8 +1425,8 @@ class TestCancellationAndAnalysis:
         await await_until(lambda: bool(killed))
         token = submissions[0]
         callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
-        cancel_receipts = await asyncio.wait_for(cancel_task, 1)
-        assert await runner.wait(receipt.job, 1)
+        cancel_receipts = await asyncio.wait_for(cancel_task, LIVENESS_S)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.status == "cancelled"
         assert len(submissions) == 1
         assert receipt.job.completeness.cancelled == 2
@@ -1475,7 +1475,10 @@ class TestCancellationAndAnalysis:
         )
         # The case is launched, so it is provably non-terminal when both
         # cancels arrive — the state in which each call has work to claim.
-        await await_until(lambda: len(submissions) == 1)
+        # Launch happens in a worker thread and the case is marked running
+        # once the loop resumes, so wait for that mark, not for the launch.
+        await await_until(lambda: receipt.job.cases[0].status == "running")
+        assert len(submissions) == 1
         assert receipt.job.cases[0].submitted_at is not None
 
         cancels = [
@@ -1485,7 +1488,7 @@ class TestCancellationAndAnalysis:
         await await_until(lambda: bool(killed))
         token = submissions[0]
         callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
-        reports = await asyncio.wait_for(asyncio.gather(*cancels), 2)
+        reports = await asyncio.wait_for(asyncio.gather(*cancels), LIVENESS_S)
 
         reporting = [rows for rows in reports if rows]
         assert len(reporting) == 1, reports
@@ -1537,7 +1540,7 @@ class TestCancellationAndAnalysis:
             await runner.cancel(receipt.job, control_token="wrong-token")
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
 
     async def test_matching_control_token_can_cancel_foreign_owned_job(
         self,
@@ -1566,10 +1569,10 @@ class TestCancellationAndAnalysis:
         cancel_task = asyncio.create_task(
             runner.cancel(receipt.job, control_token=receipt.control_token)
         )
-        await asyncio.wait_for(kill_started.wait(), 1)
+        await asyncio.wait_for(kill_started.wait(), LIVENESS_S)
         token = submissions[0]
         callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
-        await asyncio.wait_for(cancel_task, 1)
+        await asyncio.wait_for(cancel_task, LIVENESS_S)
         assert receipt.job.status == "cancelled"
 
     async def test_runs_done_event_precedes_attached_analysis_terminality(
@@ -1606,16 +1609,20 @@ class TestCancellationAndAnalysis:
         await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        await asyncio.wait_for(analysis_started.wait(), 1)
+        await asyncio.wait_for(analysis_started.wait(), LIVENESS_S)
         assert receipt.job.runs_done_event.is_set()
         assert not receipt.job.done_event.is_set()
         assert receipt.job.status == "analyzing"
         assert receipt.job.analysis.status == "running"
-        assert await runner.wait(receipt.job, 0.01, wait_for="runs")
-        assert not await runner.wait(receipt.job, 0.01, wait_for="all")
+        assert await runner.wait(
+            receipt.job, 0.01, wait_for="runs"
+        )  # timing: the runs event is already set; this returns at once
+        assert not await runner.wait(
+            receipt.job, 0.01, wait_for="all"
+        )  # timing: asserts this wait times out while analysis is held
 
         release_analysis.set()
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.status == "completed"
         assert receipt.job.analysis.result == {"summary": "done"}
 
@@ -1648,7 +1655,7 @@ class TestCancellationAndAnalysis:
         await await_until(lambda: len(submissions) == 1)
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
-        assert await runner.wait(receipt.job, 1)
+        assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.status == "completed_with_failures"
         assert receipt.job.analysis.status == "failed"
         assert receipt.job.completeness.produced == 1
@@ -1691,11 +1698,11 @@ class TestCancellationAndAnalysis:
         token = submissions[0]
         outcome = _success(work_dir, token)
         callbacks[token](outcome)
-        await asyncio.wait_for(analysis_started.wait(), 1)
+        await asyncio.wait_for(analysis_started.wait(), LIVENESS_S)
 
         await asyncio.wait_for(
             runner.cancel(receipt.job, control_token=receipt.control_token),
-            1,
+            LIVENESS_S,
         )
         assert analysis_stopped.is_set()
         assert receipt.job.status == "cancelled"

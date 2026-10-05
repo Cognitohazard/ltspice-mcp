@@ -452,7 +452,7 @@ async def submit_through_spicelib(
     await asyncio.to_thread(
         runner.submit_netlist, deck, "run.cir", received.set_result, timeout_s=timeout_s
     )
-    return await asyncio.wait_for(received, 10)
+    return await asyncio.wait_for(received, LIVENESS_S)
 
 
 def fake_simulator(

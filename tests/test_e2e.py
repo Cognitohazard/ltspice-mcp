@@ -31,7 +31,7 @@ from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
 from pydantic import BaseModel, ConfigDict
 
-from tests.conftest import FIXTURES_DIR, REGISTERED_TOOLS, SERVED_WITHOUT_RUN_CODE
+from tests.conftest import FIXTURES_DIR, LIVENESS_S, REGISTERED_TOOLS, SERVED_WITHOUT_RUN_CODE
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -651,7 +651,7 @@ class TestSimulationDegraded:
                 {
                     "request_id": "e2e-no-sim",
                     "circuits": [{"path": "sim.cir", "id": "dut"}],
-                    "execution": {"wait_s": 1},
+                    "execution": {"wait_s": LIVENESS_S},
                 },
             )
             _assert_tool_error(result, "No SPICE simulator detected")

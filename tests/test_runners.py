@@ -27,7 +27,7 @@ from ltspice_mcp.lib.runner_base import (
     discard_generated_netlist,
 )
 from ltspice_mcp.lib.spice_lex import lex
-from tests.conftest import submit_through_spicelib
+from tests.conftest import LIVENESS_S, submit_through_spicelib
 from tests.test_completion_logs import captured_completion_facts
 
 
@@ -803,7 +803,7 @@ class TestSimRunnerRelease:
 
         dropper = threading.Thread(target=build_and_drop, daemon=True)
         dropper.start()
-        dropper.join(timeout=10)
+        dropper.join(timeout=LIVENESS_S)
 
         assert released.is_set(), "the destructor is still waiting on a task that never started"
 

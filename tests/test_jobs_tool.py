@@ -50,7 +50,13 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import await_until, fake_simulator, ngspice_binary_raw, staged_decks
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    fake_simulator,
+    ngspice_binary_raw,
+    staged_decks,
+)
 from tests.test_native_records import _record
 
 
@@ -1581,7 +1587,7 @@ class TestListAndRunsPagination:
                 {
                     "request_id": "recent-submission",
                     "circuits": [{"path": str(circuit), "id": "submitted"}],
-                    "execution": {"wait_s": 1},
+                    "execution": {"wait_s": LIVENESS_S},
                 }
             ),
             state_with_sim,

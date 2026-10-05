@@ -49,6 +49,7 @@ from ltspice_mcp.tools.jobs import (
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests._fake_netlister import install_fixed_exporter
 from tests.conftest import (
+    LIVENESS_S,
     FakeSim,
     await_until,
     fake_artifact_paths,
@@ -249,7 +250,7 @@ def _args(
     path: Path,
     request_id: str,
     *,
-    wait_s: float = 1.0,
+    wait_s: float = LIVENESS_S,
     lint: str = "block",
     **overrides,
 ) -> RunExperimentsInput:
@@ -425,7 +426,7 @@ class TestReceiptThenDwell:
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         job = state_with_sim.all_jobs[data["job_id"]]
-        await asyncio.wait_for(job.done_event.wait(), 1)
+        await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
 
     async def test_failure_after_submit_reports_committed_with_handles(
         self,
@@ -454,7 +455,7 @@ class TestReceiptThenDwell:
         deck = _deck(work_dir / "post-submit.cir")
 
         result = await handle_run_experiments(
-            _args(deck, "post-submit-failure", wait_s=1.0),
+            _args(deck, "post-submit-failure", wait_s=LIVENESS_S),
             state_with_sim,
         )
         data = _assert_schema(result)
@@ -475,7 +476,7 @@ class TestReceiptThenDwell:
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         job = state_with_sim.all_jobs[data["job_id"]]
-        await asyncio.wait_for(job.done_event.wait(), 1)
+        await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
 
     async def test_receipt_builder_failure_still_returns_handles(
         self,
@@ -618,19 +619,19 @@ class TestRequestGateContention:
         def hold_the_gate() -> None:
             with file_lock(gate, timeout=5.0):
                 holding.set()
-                release.wait(20.0)
+                release.wait(LIVENESS_S)
 
         holder = threading.Thread(target=hold_the_gate, daemon=True)
         holder.start()
         try:
-            assert holding.wait(5.0), "the gate holder never acquired the lock"
+            assert holding.wait(LIVENESS_S), "the gate holder never acquired the lock"
             result = await handle_run_experiments(
                 _args(deck, "held-by-a-peer"),
                 state_with_sim,
             )
         finally:
             release.set()
-            holder.join(timeout=5.0)
+            holder.join(timeout=LIVENESS_S)
 
         data = _assert_schema(result)
         assert result.is_error
@@ -678,7 +679,7 @@ class TestPostClaimFailures:
         deck = _deck(work_dir / "unwritable-index.cir")
 
         result = await handle_run_experiments(
-            _args(deck, "unwritable-index", wait_s=1.0),
+            _args(deck, "unwritable-index", wait_s=LIVENESS_S),
             state_with_sim,
         )
         data = _assert_schema(result)
@@ -711,7 +712,7 @@ class TestPostClaimFailures:
         deck = _deck(work_dir / "post-claim.cir")
 
         result = await handle_run_experiments(
-            _args(deck, "post-claim-failure", wait_s=1.0),
+            _args(deck, "post-claim-failure", wait_s=LIVENESS_S),
             state_with_sim,
         )
         data = _assert_schema(result)
@@ -1225,7 +1226,7 @@ class TestOptionalRequestId:
         args = RunExperimentsInput.model_validate(
             {
                 "circuits": [{"path": str(deck), "id": "dut"}],
-                "execution": {"wait_s": 1.0},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -1826,7 +1827,7 @@ class TestLintModes:
             _args(
                 deck,
                 "ngspice-step",
-                execution={"wait_s": 1.0, "simulator": "ngspice"},
+                execution={"wait_s": LIVENESS_S, "simulator": "ngspice"},
             ),
             state_with_sim,
         )
@@ -1925,7 +1926,7 @@ class TestPerCircuitFailuresAndAccounting:
                     {"path": str(valid), "id": "valid"},
                     {"path": str(missing), "id": "missing"},
                 ],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -1962,7 +1963,7 @@ class TestPerCircuitFailuresAndAccounting:
             {
                 "request_id": "stem-ids",
                 "circuits": [{"path": str(p)} for p in (first, second, dotted)],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -2088,7 +2089,7 @@ class TestPerCircuitFailuresAndAccounting:
                     {"path": str(work_dir / "missing.cir"), "id": "missing"},
                 ],
                 "variations": [{"kind": "assign", "assign": {"R1": values}}],
-                "execution": {"wait_s": 1},
+                "execution": {"wait_s": LIVENESS_S},
             }
         )
 
@@ -2884,11 +2885,13 @@ class TestAttachedAnalysis:
         )
         job_id = receipt["job_id"]
 
-        runs_done = await _jobs_wait(state_with_sim, job_id, "runs", 2.0)
+        runs_done = await _jobs_wait(state_with_sim, job_id, "runs", LIVENESS_S)
         assert runs_done["timed_out"] is False
         assert runs_done["status"] == "analyzing"
 
-        still_analyzing = await _jobs_wait(state_with_sim, job_id, "all", 0.05)
+        still_analyzing = await _jobs_wait(
+            state_with_sim, job_id, "all", 0.05
+        )  # timing: asserts this wait times out while analysis is held
         assert still_analyzing["timed_out"] is True
 
         released.set()

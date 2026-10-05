@@ -27,7 +27,7 @@ from ltspice_mcp.lib.store import Store, StoreError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from tests.conftest import fake_simulator
+from tests.conftest import LIVENESS_S, fake_simulator
 
 # Every directory the working-directory store may hold, and what it is for.
 # A new entry here is a new place the server writes; a missing one means
@@ -79,7 +79,7 @@ async def _submit(state: SessionState, deck: Path, request_id: str) -> dict[str,
             {
                 "request_id": request_id,
                 "circuits": [{"path": str(deck), "id": "dut"}],
-                "execution": {"wait_s": 5.0},
+                "execution": {"wait_s": LIVENESS_S},
             }
         ),
         state,

@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 from ltspice_mcp.lib.cache import FileCache
+from tests.conftest import LIVENESS_S
 
 
 class _CountingLock:
@@ -210,7 +211,7 @@ class TestFileCache:
         finally:
             stop.set()
             for t in threads:
-                t.join(timeout=5)
+                t.join(timeout=LIVENESS_S)
         assert not any(t.is_alive() for t in threads)
         assert not errors
 
@@ -234,7 +235,7 @@ class TestFileCache:
             nonlocal call_count
             call_count += 1
             in_factory.set()
-            assert release.wait(timeout=5)  # hold the leader mid-parse
+            assert release.wait(timeout=LIVENESS_S)  # hold the leader mid-parse
             return path.read_text()
 
         results: list[str] = []
@@ -245,14 +246,14 @@ class TestFileCache:
         leader = threading.Thread(target=reader)
         follower = threading.Thread(target=reader)
         leader.start()
-        assert in_factory.wait(timeout=5)  # leader is inside the factory
+        assert in_factory.wait(timeout=LIVENESS_S)  # leader is inside the factory
         follower.start()
         # Deterministic precondition: the follower has reached (and is blocking
         # on) the per-path lock the leader still holds — no timing guess.
-        assert follower_at_lock.wait(timeout=5)
+        assert follower_at_lock.wait(timeout=LIVENESS_S)
         release.set()
-        leader.join(timeout=5)
-        follower.join(timeout=5)
+        leader.join(timeout=LIVENESS_S)
+        follower.join(timeout=LIVENESS_S)
 
         assert results == ["payload", "payload"]
         assert call_count == 1
