@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import psutil
 import pytest
 from pydantic import BaseModel
 
@@ -1295,7 +1296,7 @@ class TestOwnerLivenessUnknownOnLoad:
         def boom(pid: int) -> object:
             raise OSError("process table unavailable")
 
-        monkeypatch.setattr(store.psutil, "Process", boom)
+        monkeypatch.setattr(psutil, "Process", boom)
         loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         assert loaded.status == "running"

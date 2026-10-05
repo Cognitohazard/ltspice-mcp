@@ -1,6 +1,7 @@
 """Recorded artifacts through the real contained decoder and plain manifest."""
 
 import shutil
+import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from ltspice_mcp.lib.parser_process import ParserProcessLimits, run_parser_sync
 from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
 from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.windows_job import python_launch
 from tests.conftest import LIVENESS_S
 from tests.test_raw_header import LIMITS
 
@@ -168,3 +170,26 @@ def test_raw_and_log_operations_share_captured_identity(tmp_path):
         "status": "cached",
         "cache_key": first.metadata["cache_key"],
     }
+
+
+def test_the_worker_module_imports_no_decoder():
+    """Most parser calls find their content already parsed and only capture
+    and hash it, in a process started for that call. The decoders' imports
+    (spicelib, NumPy with it), pydantic and psutil were most of what such a
+    process cost to start, so the worker leaves the decoders to the branch
+    that decodes, and the paths it writes import nothing heavier."""
+    executable, env = python_launch()
+    heavy = ("numpy", "spicelib", "pydantic", "psutil")
+    probe = (
+        "import sys, ltspice_mcp.lib.parser_worker\n"
+        f"print(sorted(m for m in {heavy!r} if m in sys.modules))"
+    )
+    result = subprocess.run(
+        [executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=LIVENESS_S,
+        check=True,
+    )
+    assert result.stdout.strip() == "[]", result.stdout

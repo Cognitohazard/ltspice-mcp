@@ -79,8 +79,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import psutil
-
 from ltspice_mcp.lib import atomic_write_json as _atomic_write_json
 from ltspice_mcp.lib import now
 
@@ -397,6 +395,10 @@ def owner_liveness(pid: int | None, *, own_is_alive: bool = False) -> OwnerLiven
         return OwnerLiveness.DEAD
     if pid == os.getpid():
         return OwnerLiveness.ALIVE if own_is_alive else OwnerLiveness.DEAD
+    # Imported here: every parser process imports this module for its paths,
+    # and psutil is most of what that import would otherwise cost.
+    import psutil
+
     try:
         # One lookup answers both questions: constructing the Process raises
         # for a pid that is not in the table at all, and its status tells a
