@@ -16,6 +16,7 @@ import pytest
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, PathSecurityError, ResultError
 from ltspice_mcp.lib import parser_process, parser_service, services
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
+from ltspice_mcp.lib.file_stamp import file_stamp
 from ltspice_mcp.lib.result_cache import ResultCache
 from tests.conftest import FIXTURES_DIR, stage_recorded_fixture
 
@@ -36,6 +37,19 @@ def source(path, state, **kwargs):
     return services.source_for_raw_path(path, state, **kwargs)
 
 
+def parser_requests(monkeypatch):
+    """Every request the service sends a parser process, in order."""
+    requests = []
+    run = parser_service.run_parser_sync
+
+    def record(request, **kwargs):
+        requests.append(request)
+        return run(request, **kwargs)
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", record)
+    return requests
+
+
 def test_state_results_uses_resident_content_cache(state_no_sim):
     assert isinstance(state_no_sim.results, ResultCache)
 
@@ -52,12 +66,18 @@ def test_sync_capture_reap_and_cache_survive_source_deletion(state_no_sim, work_
     assert raw.get_wave(0)[0] == 1
 
 
-def test_same_stamp_rewrite_and_companion_presence_bind_content(state_no_sim, work_dir):
+@pytest.mark.parametrize("stamps", ["settled_stamps", "unsettled_stamps"])
+def test_same_stamp_rewrite_and_companion_presence_bind_content(
+    state_no_sim, work_dir, monkeypatch, request, stamps
+):
+    request.getfixturevalue(stamps)
+    requests = parser_requests(monkeypatch)
     path = write_raw(work_dir / "changed.raw")
     selected = source(path, state_no_sim)
     first = services.load_raw_sync(selected, state_no_sim)
     repeated = services.load_raw_sync(selected, state_no_sim)
     assert repeated is first
+    assert len(requests) == (1 if stamps == "settled_stamps" else 2)
     stamp = path.stat()
     write_raw(path, 2.0)
     os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
@@ -305,17 +325,12 @@ def test_raw_and_logs_share_captured_entry_and_plot_selection(state_no_sim, work
     assert not list((state_no_sim.store.root / "parsing").glob("*"))
 
 
-def test_logs_only_cache_cannot_claim_resident_raw(state_no_sim, work_dir, monkeypatch):
+def test_logs_only_cache_cannot_claim_resident_raw(
+    state_no_sim, work_dir, monkeypatch, settled_stamps
+):
     path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     selected = source(path, state_no_sim)
-    requests = []
-    run = parser_service.run_parser_sync
-
-    def record_request(request, **kwargs):
-        requests.append(request)
-        return run(request, **kwargs)
-
-    monkeypatch.setattr(parser_service, "run_parser_sync", record_request)
+    requests = parser_requests(monkeypatch)
     logs = services.load_logs_sync(selected, state_no_sim)
     before = next(iter(state_no_sim.results.snapshot().values()))
     assert before.raw is None
@@ -327,8 +342,118 @@ def test_logs_only_cache_cannot_claim_resident_raw(state_no_sim, work_dir, monke
     assert raw.logs is not None
     assert raw.logs.as_dict() == logs.as_dict()
     assert services.load_logs_sync(selected, state_no_sim) is raw.logs
+    assert len(requests) == 2
+    # The same bytes under a new stamp reach a worker, which finds them retained.
+    stamp = path.stat()
+    path.write_bytes(path.read_bytes())
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 10**9))
+    assert services.load_logs_sync(selected, state_no_sim) is raw.logs
+    assert len(requests) == 3
     assert requests[-1]["existing_cache_keys"] == [before.snapshot_id]
     assert state_no_sim.results.entry_count == 1
+
+
+def test_unchanged_source_is_answered_from_its_stamp_without_a_worker(
+    state_no_sim, work_dir, monkeypatch, settled_stamps
+):
+    path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    selected = source(path, state_no_sim)
+    requests = parser_requests(monkeypatch)
+    raw = services.load_raw_sync(selected, state_no_sim)
+    assert services.load_raw_sync(selected, state_no_sim) is raw
+    assert services.load_logs_sync(selected, state_no_sim) is raw.logs
+    bound = replace(selected, identity={"snapshot_id": "0" * 64})
+    with pytest.raises(ResultError, match=r"snapshot.*changed"):
+        services.load_raw_sync(bound, state_no_sim)
+    assert [request["op"] for request in requests] == ["load_raw"]
+    assert not list((state_no_sim.store.root / "parsing").glob("*"))
+
+
+def test_stamp_answers_only_paths_the_sandbox_still_admits(
+    state_no_sim, work_dir, monkeypatch, settled_stamps
+):
+    path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    selected = source(path, state_no_sim)
+    requests = parser_requests(monkeypatch)
+    services.load_raw_sync(selected, state_no_sim)
+    state_no_sim.sandbox_pinned = True
+    monkeypatch.setattr(state_no_sim.config, "allowed_paths", [work_dir / "elsewhere"])
+    with pytest.raises(PathSecurityError):
+        services.load_raw_sync(selected, state_no_sim)
+    assert len(requests) == 1
+
+
+def test_retained_parser_failure_refuses_a_read_its_stamp_could_answer(
+    state_no_sim, work_dir, monkeypatch, settled_stamps
+):
+    path = write_raw(work_dir / "answered.raw")
+    selected = source(path, state_no_sim)
+    services.load_raw_sync(selected, state_no_sim)
+    cleanup = parser_process._cleanup
+
+    def unconfirmed(process, *args):
+        assert cleanup(process, *args)
+        return False
+
+    monkeypatch.setattr(parser_process, "_cleanup", unconfirmed)
+    other = write_raw(work_dir / "unconfirmed.raw", 2.0)
+    with pytest.raises(parser_service.ParserCleanupError) as failure:
+        services.load_raw_sync(source(other, state_no_sim), state_no_sim)
+    with pytest.raises(parser_service.ParserCleanupError) as refused:
+        services.load_raw_sync(selected, state_no_sim)
+    assert refused.value.directory == failure.value.directory
+
+
+_DAY_NS = 86_400 * 10**9
+
+
+@pytest.mark.parametrize(
+    ("mtime", "after_change_ns", "served"),
+    [
+        ("as_written", parser_service._SETTLE_NS // 2, False),
+        ("restored", parser_service._SETTLE_NS // 2, False),
+        ("restored", parser_service._SETTLE_NS * 5, True),
+        ("as_written", parser_service._SETTLE_NS * 5, True),
+    ],
+)
+def test_a_stamp_is_recorded_only_once_its_times_are_settled(
+    state_no_sim, work_dir, monkeypatch, mtime, after_change_ns, served
+):
+    """A write in the same timestamp tick as the read could keep every stamp
+    field, so a stamp whose modification or change time is that recent is not
+    recorded. A restored modification time does not settle a recent change."""
+    path = write_raw(work_dir / "settling.raw")
+    if mtime == "restored":
+        written_at = path.stat().st_mtime_ns
+        restored = (written_at // 10**9) * 10**9 - _DAY_NS + 123_400
+        os.utime(path, ns=(restored, restored))
+    stamp = file_stamp(str(path))
+    assert isinstance(stamp, tuple)
+    monkeypatch.setattr(parser_service, "_now_ns", lambda: stamp[4] + after_change_ns)
+    requests = parser_requests(monkeypatch)
+    selected = source(path, state_no_sim)
+    first = services.load_raw_sync(selected, state_no_sim)
+    assert services.load_raw_sync(selected, state_no_sim) is first
+    assert len(requests) == (1 if served else 2)
+
+
+@pytest.mark.parametrize("field", [3, 4])
+@pytest.mark.parametrize(
+    ("moment", "age", "settled"),
+    [
+        (10**18 + 1, parser_service._SETTLE_NS, True),
+        (10**18 + 1, parser_service._SETTLE_NS - 1, False),
+        (10**18, parser_service._SETTLE_NS * 5, False),
+        (10**18, parser_service._COARSE_SETTLE_NS, True),
+    ],
+)
+def test_whole_second_times_wait_out_a_coarse_filesystem_tick(field, moment, age, settled):
+    """A whole-second time marks a filesystem that stamps writes coarsely (FAT
+    keeps two seconds), so it settles only after the coarse margin."""
+    stamp: list[int] = [1, 2, 3, 10**17 + 1, 10**17 + 1]
+    stamp[field] = moment
+    stamps = (tuple(stamp), None, "absent")
+    assert parser_service._settled(stamps, moment + age) is settled
 
 
 @pytest.mark.parametrize("raw_present", [False, True])

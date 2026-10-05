@@ -21,7 +21,7 @@ from ltspice_mcp.api import _session as _api_session
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
-from ltspice_mcp.lib import now, raster
+from ltspice_mcp.lib import now, parser_service, raster
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, StagedDecks
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -930,6 +930,26 @@ def tool_text(result) -> str:
 def work_dir(tmp_path: Path) -> Path:
     """Temporary working directory for tests."""
     return tmp_path
+
+
+@pytest.fixture
+def settled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every source's stat stamp counts as settled when it is read.
+
+    The first parse of a file then records its stamp, and later reads of the
+    unchanged file are answered without a parser process, however soon after
+    the test wrote it. A change the test makes afterwards still moves the
+    stamp: it follows at least one parser run, which outlasts a filesystem
+    timestamp tick, and a slower machine only widens that gap.
+    """
+    monkeypatch.setattr(parser_service, "_now_ns", lambda: time.time_ns() + 3600 * 10**9)
+
+
+@pytest.fixture
+def unsettled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No source's stat stamp ever settles, so every read reaches a parser
+    process and the worker's own content-cache reply is what serves a repeat."""
+    monkeypatch.setattr(parser_service, "_now_ns", lambda: 0)
 
 
 @pytest.fixture
