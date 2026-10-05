@@ -99,8 +99,8 @@ Using one for the other gives wrong initial states or convergence failures.
 Prefer `.meas` for a scalar it can express: the simulator computes it, it stays
 in the deck, and the `measurements` recipe reads it back. Use the other recipes
 for what `.meas` cannot express, such as FFT and THD, Bode structure or
-windowed statistics. On ngspice, `run_experiments` refuses a top-level `.meas`
-(guide section 'ngspice').
+windowed statistics. On ngspice a top-level `.meas` is skipped and its value
+comes back absent (guide section 'ngspice').
 
 A single `.meas` cannot return where a peak is:
 `.meas AC fpeak MAX mag(V(out))` gives the peak's value, not its frequency.
