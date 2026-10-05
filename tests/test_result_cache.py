@@ -116,7 +116,7 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
     release = threading.Event()
 
     def active():
-        with cache.parse_slot(deadline=time.monotonic() + 5):
+        with cache.parse_slot(deadline=time.monotonic() + LIVENESS_S):
             entered.set()
             release.wait(LIVENESS_S)
 
@@ -128,6 +128,7 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
         try:
             with (
                 pytest.raises(InterruptedError, match="cancelled"),
+                # timing: cancelled before it waits, so its deadline is never reached
                 cache.parse_slot(deadline=time.monotonic() + 1, cancel=cancel),
             ):
                 pytest.fail("Cancelled queued calls must not enter")
@@ -135,7 +136,7 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
         finally:
             release.set()
         future.result(timeout=LIVENESS_S)
-    with cache.parse_slot(deadline=time.monotonic() + 1):
+    with cache.parse_slot(deadline=time.monotonic() + LIVENESS_S):
         pass
 
 

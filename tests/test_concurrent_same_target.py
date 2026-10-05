@@ -420,6 +420,7 @@ def _slow_exporter(state: SessionState, handoffs: _ExportHandoffs) -> None:
                 for line in _EXPORT_LINES:
                     handle.write(line)
                     handle.flush()
+                    # timing: a fake exporter writing its netlist in pieces
                     time.sleep(0.02)
             return str(netlist)
 

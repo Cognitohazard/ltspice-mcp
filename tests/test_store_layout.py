@@ -14,7 +14,6 @@ import inspect
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +26,7 @@ from ltspice_mcp.lib.store import Store, StoreError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from tests.conftest import LIVENESS_S, fake_simulator
+from tests.conftest import LIVENESS_S, fake_simulator, wait_until
 
 # Every directory the working-directory store may hold, and what it is for.
 # A new entry here is a new place the server writes; a missing one means
@@ -375,13 +374,12 @@ class TestOwnerLivenessExitedProcess:
     def test_probe_reports_an_exited_uncollected_process_as_dead(self) -> None:
         child = subprocess.Popen([sys.executable, "-c", ""])
         try:
-            deadline = time.monotonic() + 30
             # Deliberately never poll() or wait() here: either would collect
             # the child and remove the state under test.
-            while psutil.Process(child.pid).status() != psutil.STATUS_ZOMBIE:
-                if time.monotonic() >= deadline:
-                    pytest.fail("the child process never exited")
-                time.sleep(0.02)
+            wait_until(
+                lambda: psutil.Process(child.pid).status() == psutil.STATUS_ZOMBIE,
+                what="the child process to exit",
+            )
             assert psutil.pid_exists(child.pid)
             assert store_module.owner_liveness(child.pid) is store_module.OwnerLiveness.DEAD
         finally:

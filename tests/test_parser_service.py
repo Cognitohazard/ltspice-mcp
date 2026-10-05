@@ -166,6 +166,7 @@ async def test_async_loader_keeps_event_loop_responsive(state_no_sim, work_dir):
     async def tick():
         nonlocal beats
         while True:
+            # timing: a heartbeat counting loop turns while the parse runs
             await asyncio.sleep(0.002)
             beats += 1
 

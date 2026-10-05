@@ -460,6 +460,7 @@ def fake_simulator(
     submissions: list[str] | None = None,
     *,
     delay_s: float | None = 0.0,
+    held: list[Callable[[], None]] | None = None,
 ) -> list[str]:
     """Stand in for the simulator behind ``ExperimentRunner.submit_netlist``.
 
@@ -470,7 +471,9 @@ def fake_simulator(
     * a positive delay finishes it that many seconds later on the loop, which
       is what makes a caller that failed to block print a receipt for a job
       still in flight;
-    * ``None`` never calls back at all.
+    * ``None`` never calls back on its own. With ``held``, each such case
+      appends a function that finishes it when the test chooses, callable
+      from any thread.
 
     Returns the list run filenames are appended to, so a caller that passed
     none can still read what was submitted.
@@ -479,8 +482,6 @@ def fake_simulator(
 
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         recorded.append(run_filename)
-        if delay_s is None:
-            return object()
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
 
         def finish() -> None:
@@ -488,6 +489,11 @@ def fake_simulator(
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
 
+        if delay_s is None:
+            if held is not None:
+                loop = self.loop
+                held.append(lambda: loop.call_soon_threadsafe(finish))
+            return object()
         if delay_s > 0:
             self.loop.call_later(delay_s, finish)
         else:
@@ -743,6 +749,27 @@ def wait_until(
         if time.monotonic() >= deadline:
             pytest.fail(f"timed out after {timeout_s:g}s waiting for {what}")
         time.sleep(interval_s)
+
+
+def written(path: Path, parse: Callable[[str], _T]) -> Callable[[], _T | None]:
+    """A poll predicate for a file another process writes: its parsed content
+    once it parses, else None.
+
+    ``path.exists`` is the wrong thing to wait on: a writer that opens the file
+    and then writes makes it exist, empty, before its content lands, so a test
+    that waits for existence and then reads can read nothing. Waiting until the
+    content parses waits for what the test is about to read.
+    """
+
+    def probe() -> _T | None:
+        try:
+            return parse(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Not there yet, not readable yet (Windows refuses a file another
+            # process holds), or only part of it written.
+            return None
+
+    return probe
 
 
 async def await_until(

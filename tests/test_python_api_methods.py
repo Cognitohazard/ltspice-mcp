@@ -60,8 +60,9 @@ def test_raw_page_returns_each_handler_payload_verbatim(
             api.run_experiments,
             {
                 "circuits": [{"path": "deck.cir"}],
+                # timing: a distinctive value the handler must receive verbatim
                 "execution": {"wait_s": 17},
-            },  # timing: a distinctive value the handler must receive verbatim
+            },
         ),
         (jobs_mod, "handle_jobs", api.jobs, {"action": "list"}),
         (

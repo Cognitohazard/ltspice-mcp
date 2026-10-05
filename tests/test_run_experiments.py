@@ -10,7 +10,6 @@ import itertools
 import json
 import re
 import threading
-import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -56,6 +55,7 @@ from tests.conftest import (
     fake_simulator,
     recorded_fixture_simulator,
     resolve_local_ref,
+    wait_until,
 )
 from tests.test_completion_logs import captured_completion_facts
 
@@ -617,7 +617,7 @@ class TestRequestGateContention:
         release = threading.Event()
 
         def hold_the_gate() -> None:
-            with file_lock(gate, timeout=5.0):
+            with file_lock(gate, timeout=LIVENESS_S):
                 holding.set()
                 release.wait(LIVENESS_S)
 
@@ -791,16 +791,21 @@ class TestIdempotency:
         back put a stale "running" over the owner's "completed", and the next
         reader, finding the owner gone, recovered the job as interrupted.
         """
-        # Built before the owner's clock starts, so the replay reads the record
-        # while the job is still running even on a slow runner.
         replayer = SessionState.create(
             state_with_sim.config, available=dict(state_with_sim.available_simulators)
         )
-        submissions = fake_simulator(monkeypatch, delay_s=2.0)
+        # The owner's case finishes only when the replay is in flight, so the
+        # replay always reads the record while the job is running.
+        finish_owner: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=finish_owner)
         deck = _deck(work_dir / "foreign-replay.cir")
         args = _args(deck, "foreign-replay", wait_s=0)
         job_id = _assert_schema(await handle_run_experiments(args, state_with_sim))["job_id"]
-        await await_until(lambda: len(submissions) == 1)
+        # The owner marks the case running once its launch thread hands back,
+        # and writes the record then; drain that write, not the job, which is
+        # held open until the replay.
+        owner_job = state_with_sim.all_jobs[job_id]
+        await await_until(lambda: owner_job.cases[0].status == "running")
         await state_with_sim.job_registry.drain_pending()
         record = Store(work_dir).job_record(job_id)
 
@@ -819,10 +824,11 @@ class TestIdempotency:
         experiment_store.save_job(running)
 
         def owner_finishes_meanwhile(job, request_id: str, executable) -> None:
-            deadline = time.monotonic() + 10
-            while on_disk_status() != "completed":
-                assert time.monotonic() < deadline, "the owner never completed"
-                time.sleep(0.02)
+            finish_owner[0]()
+            wait_until(
+                lambda: on_disk_status() == "completed",
+                what="the owner to record its completion",
+            )
             experiment_runner_mod.verify_replay(job, request_id, executable)
 
         monkeypatch.setattr(experiments_mod, "verify_replay", owner_finishes_meanwhile)
@@ -2889,9 +2895,8 @@ class TestAttachedAnalysis:
         assert runs_done["timed_out"] is False
         assert runs_done["status"] == "analyzing"
 
-        still_analyzing = await _jobs_wait(
-            state_with_sim, job_id, "all", 0.05
-        )  # timing: asserts this wait times out while analysis is held
+        # timing: asserts this wait times out while the analysis is held
+        still_analyzing = await _jobs_wait(state_with_sim, job_id, "all", 0.05)
         assert still_analyzing["timed_out"] is True
 
         released.set()

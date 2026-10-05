@@ -35,6 +35,7 @@ from tests.conftest import (
     check_in,
     release_into_held_request_gate,
     wait_until,
+    written,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -336,8 +337,7 @@ def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
     )
     owner = subprocess.Popen([sys.executable, "-c", program], start_new_session=True)
     try:
-        wait_until(child_pid_file.is_file, timeout_s=30.0, what="the owner to start a child")
-        child_pid = int(child_pid_file.read_text())
+        child_pid = wait_until(written(child_pid_file, int), what="the owner to start a child")
 
         with pytest.raises(ApiCallError, match="did not report a submission"):
             _detach._await_report(
