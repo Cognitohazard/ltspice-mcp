@@ -1325,16 +1325,64 @@ class TestStoppedCaseRecord:
         _deliver_killed_run(
             callbacks[token], run_dir, token, raw=_partial_ngspice_raw([0.0, 5e-7, 1e-6])
         )
-        # The raw is removed off the loop before the observation is recorded on
-        # it, so wait for the observation itself; by then the raw is gone.
-        progress = await await_until(
-            lambda: [item for item in case.observations if item["code"] == "partial_progress"],
-            what="the late exit's progress observation",
-        )
+        await runner.settled(receipt.job)
+
         assert not raw.exists()
+        progress = [item for item in case.observations if item["code"] == "partial_progress"]
         assert len(progress) == 1
         assert progress[0]["evidence"]["points"] == 3
         assert progress[0]["evidence"]["last_axis_value"] == pytest.approx(1e-6)
+
+    async def test_late_exit_progress_is_recorded_before_the_raw_is_removed(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Anything that sees a stopped case's artifacts gone sees its progress.
+
+        The raw is read and removed off the loop, and the observation is
+        recorded on it. Recording it only after the removal left a window in
+        which a reader found neither the raw nor the progress read from it.
+        """
+        runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+
+        async def no_kill(_token: str) -> None:
+            return None
+
+        monkeypatch.setattr(runner, "_kill_case", no_kill)
+        recorded_at_removal: list[bool] = []
+        remove = runner._remove_case_artifacts
+
+        def observe_then_remove(job: Any, case: Any) -> None:
+            recorded_at_removal.append(
+                any(item["code"] == "partial_progress" for item in case.observations)
+            )
+            remove(job, case)
+
+        monkeypatch.setattr(runner, "_remove_case_artifacts", observe_then_remove)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(
+                    state_no_sim,
+                    work_dir,
+                    request_id="late-exit-order",
+                    run_timeout_s=0.01,
+                    kill_grace_s=0.01,
+                )
+            )
+        )
+        assert await runner.wait(receipt.job, 1)
+        token = submissions[0]
+        run_dir = receipt.job.output_folder
+        assert run_dir is not None
+        _deliver_killed_run(
+            callbacks[token], run_dir, token, raw=_partial_ngspice_raw([0.0, 5e-7, 1e-6])
+        )
+        await runner.settled(receipt.job)
+
+        assert recorded_at_removal == [True]
 
 
 @pytest.mark.asyncio

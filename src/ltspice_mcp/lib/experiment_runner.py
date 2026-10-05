@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib import experiment_store, now
+from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.controlled_ngspice import (
     controlled_ngspice,
     verify_execution_policy,
@@ -493,11 +494,33 @@ class ExperimentRunner(RunnerBase):
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         self._executions: dict[str, _Execution] = {}
-        self._pipeline_tasks: set[asyncio.Task[None]] = set()
+        # Submission pipelines, and the follow-ups a job leaves behind once its
+        # coordinator has finished (keyed by job id).
+        self._background = BackgroundTasks()
 
     def has_active_work(self) -> bool:
         """Whether a submission pipeline or execution still owns live work."""
-        return bool(self._pipeline_tasks or self._executions)
+        return bool(self._background or self._executions)
+
+    def background_pending(self) -> list[asyncio.Task[Any]]:
+        """The tasks this runner started and has not finished."""
+        return self._background.pending()
+
+    async def settled(self, job: ExperimentJob) -> None:
+        """Wait until the work this runner started for ``job`` has finished.
+
+        That is the job's coordinator and the follow-ups it leaves behind,
+        such as recording a simulator that exited after its kill grace. Nothing
+        outside the process is waited on: a simulator that has not exited is
+        not this runner's work until its exit is reported.
+        """
+        while True:
+            pending = self._background.pending(job.job_id)
+            if job.task is not None and not job.task.done():
+                pending.append(job.task)
+            if not pending:
+                return
+            await asyncio.wait(pending)
 
     def owns_experiment_job(self, job_id: str) -> bool:
         """Whether this runner launched ``job_id`` in the current process."""
@@ -513,9 +536,7 @@ class ExperimentRunner(RunnerBase):
         that dwell cannot cancel this detached pipeline or the durable job.
         """
         receipt_ready: asyncio.Future[ExperimentReceipt] = self.loop.create_future()
-        task = self.loop.create_task(self._submission_pipeline(request, receipt_ready))
-        self._pipeline_tasks.add(task)
-        task.add_done_callback(self._pipeline_tasks.discard)
+        self._background.spawn(self._submission_pipeline(request, receipt_ready), loop=self.loop)
         return receipt_ready
 
     def _validate_request(self, request: ExperimentRunRequest) -> None:
@@ -1560,9 +1581,7 @@ class ExperimentRunner(RunnerBase):
             self._apply_outcome(case, outcome)
         else:
             self._apply_stopped_outcome(case, outcome)
-        progress = await asyncio.to_thread(self._read_progress_and_remove, execution.job, case)
-        if progress is not None:
-            case.observations.append(progress)
+        await self._record_progress_then_remove(execution.job, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
             execution,
@@ -1662,9 +1681,7 @@ class ExperimentRunner(RunnerBase):
         )
         # The permit is free once the process is gone. Read progress off-loop,
         # preserve recovery artifacts, and save the final facts.
-        task = self.loop.create_task(self._retire_late_exit(execution, case))
-        self._pipeline_tasks.add(task)
-        task.add_done_callback(self._pipeline_tasks.discard)
+        self._background.spawn(self._retire_late_exit(execution, case), key=job_id, loop=self.loop)
         self._release_slot(execution, case_id)
         if execution.job.done_event.is_set() and not execution.retained_slots:
             self._executions.pop(job_id, None)
@@ -1672,19 +1689,28 @@ class ExperimentRunner(RunnerBase):
     async def _retire_late_exit(self, execution: _Execution, case: ExperimentCase) -> None:
         """Record late-exit progress and persist final artifact facts."""
         try:
-            progress = await asyncio.to_thread(self._read_progress_and_remove, execution.job, case)
-            if progress is not None:
-                case.observations.append(progress)
+            await self._record_progress_then_remove(execution.job, case)
         finally:
             await self._persist_job(execution)
 
-    def _read_progress_and_remove(
-        self, job: ExperimentJob, case: ExperimentCase
-    ) -> dict[str, Any] | None:
-        """How far a stopped case's simulator got, then removal of its heavy artifacts.
+    async def _record_progress_then_remove(self, job: ExperimentJob, case: ExperimentCase) -> None:
+        """Record how far a stopped case's simulator got, then remove its heavy artifacts.
 
-        One call, in that order, because the partial raw is among what is
-        removed: this is the last moment anything can say how far the run got.
+        In that order, because the partial raw is among what is removed:
+        reading it is the last moment anything can say how far the run got.
+        The observation is recorded on the loop before the removal starts, so
+        nothing that sees the artifacts gone can see the case without it.
+        """
+        try:
+            progress = await asyncio.to_thread(self._read_progress, job, case)
+            if progress is not None:
+                case.observations.append(progress)
+        finally:
+            await asyncio.to_thread(self._remove_case_artifacts, job, case)
+
+    def _read_progress(self, job: ExperimentJob, case: ExperimentCase) -> dict[str, Any] | None:
+        """How far a stopped case's simulator got, read off its partial raw.
+
         Neither simulator writes progress anywhere else a stopped run keeps:
         LTspice's log carries only its preamble until the run ends, and ngspice
         prints its ``Reference value`` progress to stdout only when it has no
@@ -1693,16 +1719,13 @@ class ExperimentRunner(RunnerBase):
         ngspice 42 killed with SIGKILL, and on LTspice 26.1 killed the same way
         under Wine).
         """
-        try:
-            return _progress_observation(
-                case.case_id,
-                case.run_index,
-                experiment_store.case_raw_path(job, case),
-                dialect_for_simulator_name(job.simulator),
-                code="partial_progress",
-            )
-        finally:
-            self._remove_case_artifacts(job, case)
+        return _progress_observation(
+            case.case_id,
+            case.run_index,
+            experiment_store.case_raw_path(job, case),
+            dialect_for_simulator_name(job.simulator),
+            code="partial_progress",
+        )
 
     @staticmethod
     def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:

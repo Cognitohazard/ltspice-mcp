@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ltspice_mcp.config import SANDBOX_ENV, SANDBOX_KEY, SANDBOX_SECTION, ServerConfig
+from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
@@ -109,6 +110,9 @@ class SessionState:
     code_worker: "CodeWorker | None" = field(default=None, repr=False)
     """The ``run_code`` worker supervisor, created on the first call and
     closed at shutdown."""
+    background: BackgroundTasks = field(default_factory=BackgroundTasks, repr=False)
+    """Tasks this session started without awaiting them, such as recording a
+    circuit in the recent index. ``settled`` waits for them."""
 
     @property
     def store(self) -> Store:
@@ -335,6 +339,30 @@ class SessionState:
             await asyncio.to_thread(recent.touch, resolved_path)
         except Exception as e:
             logger.debug("recent.touch(%s) failed: %s", resolved_path, e)
+
+    async def settled(self) -> None:
+        """Wait until the work this session started has finished.
+
+        That is every job coordinator it owns, the follow-ups those leave
+        behind, the record writes queued for them, and its own background
+        tasks, until none is left, counting the ones started while this
+        waits. Nothing outside the process is waited on: a simulator that has
+        not exited is not this session's work until its exit is reported.
+        """
+        while True:
+            pending = [
+                *self.background.pending(),
+                *self.job_registry.pending_writes(),
+                *self.runners.background_pending(),
+                *(
+                    job.task
+                    for job in self.all_jobs.values()
+                    if job.task is not None and not job.task.done()
+                ),
+            ]
+            if not pending:
+                return
+            await asyncio.wait(pending)
 
     # ------------------------------------------------------------------
     # Shutdown
