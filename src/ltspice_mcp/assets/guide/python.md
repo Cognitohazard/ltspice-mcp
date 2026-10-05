@@ -4,7 +4,7 @@ description: >
   Working in Python, through run_code or your own script: where `api` comes
   from, the six operations as methods, running and waiting on jobs, raw
   traces and log facts, the analysis primitives, errors, detached and resumed
-  jobs, and a second LTspice build.
+  jobs, and more than one build of a simulator.
 ---
 
 # Working in Python
@@ -169,10 +169,12 @@ Importable from `ltspice_mcp.api`; arrays in, dicts out.
 A cursor or continuation is rejected. `raw_page=True` on a call accepts them
 and returns exactly one page as the tool would.
 
-## A second LTspice build
+## More than one build of a simulator
 
-A process runs one executable per simulator family. To run a second build
-beside the server, open a second process on the same working directory:
-`Api(working_dir=".", simulator_exe="C:/path/to/XVIIx64.exe")`. Each job
-records the executable that ran it, so the two builds' results stay apart in
-the shared records.
+Name each further executable, in `[simulator.executables]` of the config
+(`xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"`) or as
+`Api(working_dir=".", simulator_executables={"xvii": "C:/.../XVIIx64.exe"})`,
+and select it per run with `execution={"simulator": "ltspice:xvii"}`. The plain
+family name still runs the default build. `inspect(kind="capabilities")` lists
+the named builds under `named_executables`. Each job records the executable
+that ran it.
