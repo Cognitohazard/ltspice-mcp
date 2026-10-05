@@ -23,6 +23,7 @@ from ltspice_mcp.lib.recovery_journal import new_root_journal, save_journal
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+from tests.conftest import LIVENESS_S
 from tests.test_recovery_launch import _process, _start
 from tests.test_recovery_launch import committed as committed
 from tests.test_recovery_records import recovery_job
@@ -174,7 +175,7 @@ async def _submit_seeded(state, request_id, seed, *, variations=None):
             "execution": {
                 "recoverable": True,
                 "simulator_seed": seed,
-                "wait_s": 5,
+                "wait_s": LIVENESS_S,
                 "run_timeout_s": 10,
                 "max_parallel": 1,
             },
@@ -182,10 +183,10 @@ async def _submit_seeded(state, request_id, seed, *, variations=None):
             "lint": "off",
         }
     )
-    result = await asyncio.wait_for(handle_run_experiments(args, state), 15)
+    result = await asyncio.wait_for(handle_run_experiments(args, state), LIVENESS_S)
     assert not result.is_error, result.structured_content
     job = state.all_jobs[result.structured_content["job_id"]]
-    await asyncio.wait_for(job.task, 15)
+    await asyncio.wait_for(job.task, LIVENESS_S)
     await state.job_registry.drain_pending()
     return job
 
@@ -336,7 +337,7 @@ async def test_multiple_plot_inputs_refuse_before_claim(work_dir, monkeypatch, a
     monkeypatch.setattr("subprocess.run", refuse_spawn)
     args = _request(17, wait_s=0)
     args.circuits[0].path = str(work_dir / "draw.cir")
-    result = await asyncio.wait_for(handle_run_experiments(args, state), 15)
+    result = await asyncio.wait_for(handle_run_experiments(args, state), LIVENESS_S)
     assert result.is_error
     assert not state.all_jobs
     from ltspice_mcp.lib.recovery_journal import load_journal
@@ -386,7 +387,7 @@ async def test_seeded_retry_keeps_successes_and_reuses_recorded_seed(work_dir, m
     child = receipt.job
     task = child.task
     assert task is not None
-    await asyncio.wait_for(task, 15)
+    await asyncio.wait_for(task, LIVENESS_S)
     await state.job_registry.drain_pending()
     assert child.status == "completed", child.failures
     recovery = child.recovery

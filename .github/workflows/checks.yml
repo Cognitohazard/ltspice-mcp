@@ -100,6 +100,38 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v
 
+  check-jitter:
+    # Races in the suite have lost only on the Windows runner, one per run,
+    # though every one was present on Linux too. This leg reruns the suite with
+    # thread hand-offs, timer precision and process starts perturbed the way
+    # Windows perturbs them (tests/schedule_jitter.py), so a test that waits on
+    # the wrong thing fails here. The seeds are fixed so a red leg is not luck
+    # of the draw; a failure prints the seed that reproduces it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Pin Python 3.13
+        run: uv python pin "3.13"
+
+      - name: Install ngspice (real simulator processes are among the perturbed paths)
+        run: sudo apt-get update && sudo apt-get install -y ngspice
+
+      - name: Test under schedule jitter
+        run: uv run pytest tests/ -v -n auto --jitter-seed=${{ matrix.seed }}
+
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10

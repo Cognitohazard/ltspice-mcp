@@ -744,7 +744,11 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
             {
                 "request_id": "ng-live-progress",
                 "circuits": [{"path": net, "id": "dut"}],
-                "execution": {"wait_s": 2, "simulator": "ngspice"},
+                "execution": {
+                    # timing: the receipt must come back while the case still runs
+                    "wait_s": 2,
+                    "simulator": "ngspice",
+                },
             }
         ),
         ngspice_state,
@@ -754,7 +758,6 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
     assert first["outcome"] == "in_progress", first
     assert [item for item in first["observations"] if item["code"] == "run_progress"]
 
-    await asyncio.sleep(1)
     status = await handle_jobs(
         JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
         ngspice_state,
@@ -766,7 +769,7 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
     assert (reached["plot"], reached["axis"]) == ("Transient Analysis", "time")
     assert reached["points"] > 0
     assert 0 < reached["last_axis_value"] < 1
-    assert reached["running_s"] >= 1
+    assert reached["running_s"] > 0
 
     await handle_jobs(
         JobsInput.model_validate(

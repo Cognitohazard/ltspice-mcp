@@ -4,14 +4,17 @@ The MCP SDK dispatches every incoming request as its own asyncio task on one
 shared event loop, so a handler that blocks the loop (e.g. a multi-second
 RawRead parse of a large ``.raw``) freezes every other in-flight request —
 including ``cancel_job`` — and even the transport's receive loop, until it
-returns. These tests drive a deliberately slow parse and a light tool
-concurrently through their real handler entry points and assert the light
-request is served while the heavy one is still in flight.
+returns. These tests drive a held parse and a light tool concurrently through
+their real handler entry points and assert the light request is served while
+the heavy one is still in flight.
+
+The heavy work is held, not slowed: it signals when it starts and waits until
+the test releases it, so "still in flight" is a fact the test arranged rather
+than a race against a fixed duration.
 """
 
 import asyncio
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -24,56 +27,59 @@ from ltspice_mcp.lib.recipes import SignalStatsRecipe
 from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import await_until, fake_request_context, stage_recorded_fixture
+from tests.conftest import LIVENESS_S, await_until, fake_request_context, stage_recorded_fixture
 
-# Stands in for a multi-hundred-MB parse over /mnt/c. The only deliberate
-# slow-op in this module; every timing assertion keeps >=4x margin to it.
-SLOW_OP_SECONDS = 1.0
+
+class _Held:
+    """Stands in for a multi-hundred-MB parse over /mnt/c: blocking work that
+    says when it has started and runs until the test releases it."""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def hold(self) -> None:
+        self.entered.set()
+        # Bounded, so work that regressed onto the event loop (where the test
+        # can never get to release it) fails the test instead of hanging it.
+        self.release.wait(LIVENESS_S)
 
 
 async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) -> None:
     """Serve an ``inspect`` capabilities query (a registered consolidated
-    tool with no file I/O) while ``heavy`` is in flight; assert it returns
-    promptly and before the heavy task completes."""
-    t0 = time.monotonic()
+    tool with no file I/O) while ``heavy`` is held in flight.
+
+    Work run inline on the loop would block it until the hold timed out, and
+    the heavy task would then finish before the light request was served.
+    """
     light = await handle_inspect(
         InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
     )
-    light_elapsed = time.monotonic() - t0
-
     assert not heavy.done(), (
         "heavy operation finished before the light request was even served — "
         "it ran inline on the event loop and stalled all other requests"
     )
-    # If the parse ran inline on the loop, this light request would be queued
-    # behind the full SLOW_OP_SECONDS parse and take ~that long to return. Bound
-    # it well under the full blocking duration so an inline regression still
-    # fails, while leaving generous headroom above the ms-scale handler so a
-    # saturated CI runner's scheduling jitter does not false-fail.
-    assert light_elapsed < SLOW_OP_SECONDS * 0.8
     assert light.content
 
 
 async def test_light_tool_served_while_heavy_parse_in_flight(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A slow parser supervisor must not block a concurrent light request.
+    """A held parser supervisor must not block a concurrent light request.
 
     Drives ``signal_stats`` (heavy: parses a recorded LTspice AC raw through
-    services.load_raw, with supervision delayed by SLOW_OP_SECONDS) and
-    an ``inspect`` capabilities query (light: no file I/O) concurrently on
-    one event loop.
+    services.load_raw, with supervision held) and an ``inspect`` capabilities
+    query (light: no file I/O) concurrently on one event loop.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
     run = parser_service.run_parser_sync
-    entered = threading.Event()
+    held = _Held()
 
-    def slow_parser(*args, **kwargs):
-        entered.set()
-        time.sleep(SLOW_OP_SECONDS)
+    def held_parser(*args, **kwargs):
+        held.hold()
         return run(*args, **kwargs)
 
-    monkeypatch.setattr(parser_service, "run_parser_sync", slow_parser)
+    monkeypatch.setattr(parser_service, "run_parser_sync", held_parser)
 
     heavy = asyncio.create_task(
         signal_stats(
@@ -83,9 +89,11 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
             state_no_sim,
         )
     )
-    await await_until(entered.is_set)
-
-    await assert_light_request_served(heavy, state_no_sim)
+    try:
+        await await_until(held.entered.is_set)
+        await assert_light_request_served(heavy, state_no_sim)
+    finally:
+        held.release.set()
 
     # The offloaded parse must still produce the correct result afterward.
     sc = await heavy
@@ -99,9 +107,8 @@ async def test_recent_index_write_runs_off_loop(
     """The recent-circuits write (cross-process lock poll + durable fsync)
     must not stall the loop while it is held up.
 
-    If the write ran inline, the ``await asyncio.sleep`` below could not
-    complete until the slow touch returned — so reaching the ``not done``
-    assertion at all proves the loop stayed live during the write.
+    If the write ran inline, the loop could not run the test again until the
+    held touch timed out, by which point the write would have finished.
     """
     monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
     state_no_sim.config.persist_jobs = True
@@ -110,20 +117,20 @@ async def test_recent_index_write_runs_off_loop(
     resolved = circuit.resolve()
 
     real_touch = recent.touch
+    held = _Held()
 
-    def slow_touch(p, **kwargs):
-        time.sleep(SLOW_OP_SECONDS)  # stands in for a contended cross-process lock
+    def held_touch(p, **kwargs):
+        held.hold()  # stands in for a contended cross-process lock
         real_touch(p, **kwargs)
 
-    monkeypatch.setattr(recent, "touch", slow_touch)
+    monkeypatch.setattr(recent, "touch", held_touch)
 
     write = asyncio.create_task(state_no_sim.note_recent_circuit(resolved))
-    await asyncio.sleep(0)  # let the write task start and reach the touch
-
-    await asyncio.sleep(0.05)  # a loop tick, far shorter than the slow touch
-    assert not write.done(), (
-        "recent-index write finished before a 50 ms loop tick — it ran inline on the event loop"
-    )
+    try:
+        await await_until(held.entered.is_set)
+        assert not write.done(), "recent-index write finished while held — it ran inline"
+    finally:
+        held.release.set()
 
     await write
     entries = recent.load()
@@ -137,19 +144,20 @@ async def test_resource_read_served_off_loop(
     concurrent light request.
 
     Drives the real router seam — ``server.read_resource`` over the
-    ``spice://netlists/{filename}`` route, with the decode patched to take
-    SLOW_OP_SECONDS — concurrently with a light ``inspect`` query.
+    ``spice://netlists/{filename}`` route, with the decode held — concurrently
+    with a light ``inspect`` query.
     """
     deck = work_dir / "slow.cir"
     deck.write_text("* slow read\nR1 in 0 1k\n.end\n", encoding="utf-8")
 
     real_read = resources.read_spice_text
+    held = _Held()
 
-    def slow_read(path):
-        time.sleep(SLOW_OP_SECONDS)
+    def held_read(path):
+        held.hold()
         return real_read(path)
 
-    monkeypatch.setattr(resources, "read_spice_text", slow_read)
+    monkeypatch.setattr(resources, "read_spice_text", held_read)
 
     heavy = asyncio.create_task(
         read_resource(
@@ -157,10 +165,12 @@ async def test_resource_read_served_off_loop(
             types.ReadResourceRequestParams(uri="spice://netlists/slow.cir"),
         )
     )
-    # One loop tick: the read task starts and hands the router to a worker.
-    await asyncio.sleep(0)
-
-    await assert_light_request_served(heavy, state_no_sim)
+    try:
+        # The decode has started in its worker, so the read is in flight.
+        await await_until(held.entered.is_set)
+        await assert_light_request_served(heavy, state_no_sim)
+    finally:
+        held.release.set()
 
     # The offloaded read must still produce the correct result afterward.
     result = await heavy

@@ -23,7 +23,7 @@ from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, JobsResumeInput, handle_jobs
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
-from tests.conftest import SyncApi, recorded_fixture_simulator
+from tests.conftest import LIVENESS_S, SyncApi, recorded_fixture_simulator
 
 
 def test_recoverable_opt_in_is_strict_and_part_of_request_identity():
@@ -114,12 +114,12 @@ async def _submit(state: SessionState, *, variations=None, analyze=None) -> dict
             "request_id": "recoverable-public",
             "circuits": [{"path": str(state.working_dir / "divider.cir")}],
             "variations": variations or [],
-            "execution": {"recoverable": True, "wait_s": 5},
+            "execution": {"recoverable": True, "wait_s": LIVENESS_S},
             "lint": "off",
             "analyze": analyze,
         }
     )
-    result = await asyncio.wait_for(handle_run_experiments(args, state), 15)
+    result = await asyncio.wait_for(handle_run_experiments(args, state), LIVENESS_S)
     return _data(result, RUN_EXPERIMENTS_OUTPUT_SCHEMA)
 
 
@@ -161,6 +161,8 @@ async def test_terminal_root_token_noop_replay_and_read_only_views(
     noop = _data(
         await handle_jobs(JobsInput.model_validate(resume_args), state), JOBS_OUTPUT_SCHEMA
     )
+    # timing: this replay differs from the first call only in its dwell,
+    # which must not change what the replay returns
     replay = _data(
         await handle_jobs(JobsInput.model_validate({**resume_args, "wait_s": 1}), state),
         JOBS_OUTPUT_SCHEMA,
@@ -212,7 +214,7 @@ async def test_resume_child_reuses_success_and_replays_after_source_deletion(
         "job_id": root["job_id"],
         "resume_request_id": "retry-failed",
         "retry_failed": True,
-        "wait_s": 5,
+        "wait_s": LIVENESS_S,
         "control_token": root["control_token"],
         "case_ids": [failed_id, failed_id],
     }
@@ -320,7 +322,7 @@ def test_detached_resume_delegates_owning_parent_and_keeps_terminal_child_token(
             resume_request_id="detached-retry",
             retry_failed=True,
             control_token=root["control_token"],
-            wait_s=1,
+            wait_s=LIVENESS_S,
         )
         assert replay["replayed"] and replay["job_id"] == child["job_id"]
         assert replay["status"] == "completed"

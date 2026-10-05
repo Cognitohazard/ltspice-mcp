@@ -14,6 +14,7 @@ from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_capture import CapturedInputs
 from ltspice_mcp.lib.result_cache import ResultCache, resident_size
+from tests.conftest import LIVENESS_S
 from tests.test_decoded_raw import header
 
 
@@ -115,26 +116,27 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
     release = threading.Event()
 
     def active():
-        with cache.parse_slot(deadline=time.monotonic() + 5):
+        with cache.parse_slot(deadline=time.monotonic() + LIVENESS_S):
             entered.set()
-            release.wait(5)
+            release.wait(LIVENESS_S)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(active)
-        assert entered.wait(2)
+        assert entered.wait(LIVENESS_S)
         cancel = threading.Event()
         cancel.set()
         try:
             with (
                 pytest.raises(InterruptedError, match="cancelled"),
+                # timing: cancelled before it waits, so its deadline is never reached
                 cache.parse_slot(deadline=time.monotonic() + 1, cancel=cancel),
             ):
                 pytest.fail("Cancelled queued calls must not enter")
             assert not future.done()
         finally:
             release.set()
-        future.result(timeout=2)
-    with cache.parse_slot(deadline=time.monotonic() + 1):
+        future.result(timeout=LIVENESS_S)
+    with cache.parse_slot(deadline=time.monotonic() + LIVENESS_S):
         pass
 
 
