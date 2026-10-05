@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.abc
+import inspect
 import os
 import shutil
 import struct
@@ -773,19 +774,23 @@ def written(path: Path, parse: Callable[[str], _T]) -> Callable[[], _T | None]:
 
 
 async def await_until(
-    predicate: Callable[[], _T | None],
+    predicate: Callable[[], _T | None] | Callable[[], Awaitable[_T | None]],
     *,
     timeout_s: float = LIVENESS_S,
     what: str = "the condition",
     interval_s: float = _POLL_INTERVAL_S,
 ) -> _T:
-    """:func:`wait_until` for a coroutine — the same bound, without blocking the loop."""
+    """:func:`wait_until` for a coroutine — the same bound, without blocking the
+    loop. The predicate may itself be a coroutine function, for a condition
+    that takes a call to read, such as asking a tool whether it is busy."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s
     while True:
         value = predicate()
+        if inspect.isawaitable(value):
+            value = await value
         if value:
-            return value
+            return typing.cast(_T, value)
         if loop.time() >= deadline:
             pytest.fail(f"timed out after {timeout_s:g}s waiting for {what}")
         await asyncio.sleep(interval_s)

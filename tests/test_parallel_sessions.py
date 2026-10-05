@@ -24,7 +24,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import psutil
@@ -32,6 +31,7 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import experiment_store
+from ltspice_mcp.lib import filelock as filelock_module
 from ltspice_mcp.lib import proc_kill as proc_kill_mod
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -57,15 +57,28 @@ from tests.conftest import LIVENESS_S
 _PEER_MARKER = b"TEXT -48 320 Left 2 ;external marker\n"
 
 
-def _hold_lock_then_write(target: Path, content: bytes, hold_s: float) -> threading.Thread:
-    """Peer session stand-in: grab the file's cross-process lock, write the
-    file just before releasing. Returns the thread once the lock is held."""
+def _hold_lock_then_write(
+    target: Path, content: bytes, monkeypatch: pytest.MonkeyPatch
+) -> threading.Thread:
+    """Peer session stand-in: grab the file's cross-process lock, and write the
+    file just before releasing it once our edit has been refused the lock, so
+    the two always contend. Returns the thread once the lock is held."""
     held = threading.Event()
+    contended = threading.Event()
+    attempt = filelock_module._try_acquire
+
+    def watched_attempt(*args, **kwargs) -> bool:
+        won = attempt(*args, **kwargs)
+        if not won:
+            contended.set()
+        return won
+
+    monkeypatch.setattr(filelock_module, "_try_acquire", watched_attempt)
 
     def peer() -> None:
         with file_lock(Store.circuit_lock(target)):
             held.set()
-            time.sleep(hold_s)
+            contended.wait(LIVENESS_S)
             target.write_bytes(content)
 
     t = threading.Thread(target=peer, daemon=True)
@@ -96,7 +109,7 @@ def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading
 @pytest.mark.asyncio
 class TestCircuitFileLock:
     async def test_asc_edit_sees_a_peer_write_instead_of_overwriting_it(
-        self, asc_state: SessionState, asc_file: Path
+        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # The editor fetch and the revision check both run INSIDE the guard, so
         # a peer's completed write is seen. Without that ordering our edit would
@@ -104,7 +117,7 @@ class TestCircuitFileLock:
         # work; with it, the stale revision is refused and nothing is written.
         sha_before = sha_of(asc_file)
         peer_version = asc_file.read_bytes() + _PEER_MARKER  # noqa: ASYNC240
-        t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
+        t = _hold_lock_then_write(asc_file, peer_version, monkeypatch)
 
         data = await apply_ops(
             asc_state,
@@ -121,13 +134,13 @@ class TestCircuitFileLock:
         assert b"2k2" not in payload, "a refused edit must write nothing"
 
     async def test_asc_edit_on_the_peers_revision_keeps_both_edits(
-        self, asc_state: SessionState, asc_file: Path
+        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # Same race, but the caller submits the peer's revision: our edit blocks
         # on the lock, re-reads inside it, and lands on top of the peer's bytes.
         peer_version = asc_file.read_bytes() + _PEER_MARKER  # noqa: ASYNC240
         peer_sha = hashlib.sha256(peer_version).hexdigest()
-        t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
+        t = _hold_lock_then_write(asc_file, peer_version, monkeypatch)
 
         data = await apply_ops(
             asc_state,
@@ -162,7 +175,7 @@ class TestCircuitFileLock:
             t.join(LIVENESS_S)
 
     async def test_pin_geometry_resolved_under_the_lock(
-        self, asc_state: SessionState, asc_file: Path
+        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # A peer session moves R1 while holding the lock. Our add_net_label by
         # pin reference must resolve R1's position AFTER acquiring the lock
@@ -172,7 +185,7 @@ class TestCircuitFileLock:
         moved = original.replace(b"SYMBOL res 128 112 R90", b"SYMBOL res 128 240 R90")
         assert moved != original, "fixture layout changed — update the SYMBOL line above"
         moved_sha = hashlib.sha256(moved).hexdigest()
-        t = _hold_lock_then_write(asc_file, moved, hold_s=0.4)
+        t = _hold_lock_then_write(asc_file, moved, monkeypatch)
 
         data = await apply_ops(
             asc_state,
