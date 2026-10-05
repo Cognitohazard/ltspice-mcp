@@ -2892,7 +2892,9 @@ class TestAttachedAnalysis:
         assert still_analyzing["timed_out"] is True
 
         released.set()
-        finished = await _jobs_wait(state_with_sim, job_id, "all", 2.0)
+        # A bound on liveness, not speed: each read the analysis makes is a
+        # parser process, whose startup alone varies by interpreter and host.
+        finished = await _jobs_wait(state_with_sim, job_id, "all", 30.0)
         assert finished["timed_out"] is False
         assert finished["status"] == "completed"
         assert finished["analysis_status"] == "completed"
