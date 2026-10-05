@@ -2,6 +2,11 @@
 
 The bootstrap sets memory and lifetime bounds before importing this module.
 All untrusted source reads and third-party decoding stay in that process.
+
+The decoders are imported only on the branch that decodes. Most calls find
+their content already parsed and only capture and hash it, and the decoders'
+imports (spicelib, which brings NumPy) are most of what a parser process
+costs to start.
 """
 
 from __future__ import annotations
@@ -11,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
+from ltspice_mcp.lib.log_types import LogLimits
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs, parser_cache_key
 from ltspice_mcp.lib.raw_header import RawLimits, preflight_raw
 from ltspice_mcp.lib.store import parser_file_in
@@ -102,6 +107,8 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     )
     result: dict[str, Any] = {"version": 1, "status": "cached", "cache_key": key}
     if key not in keys:
+        from ltspice_mcp.lib.log_decode import decode_logs
+
         result["logs"] = decode_logs(captured, directory, limits=log_limits)
         result["raw"] = None
         if require_raw:
