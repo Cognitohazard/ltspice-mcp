@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded
-from ltspice_mcp.lib import result_store, services
+from ltspice_mcp.lib import parser_service, result_store, services
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -73,8 +73,17 @@ async def test_console_mutation_cannot_rebind_relay_to_new_manifest(
 
 @pytest.mark.asyncio
 async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settled_stamps: None,
 ):
+    """A capture that returns after the budget is spent creates no result set.
+
+    The log is loaded first, so the capture inside the call is answered from
+    its stamp rather than a parser process the budget would have to cover;
+    the fake work after it then runs until the call's own deadline has passed.
+    """
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     raw.unlink()
     request = analyze.AnalyzeResultsInput.model_validate(
@@ -92,18 +101,34 @@ async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
     ) -> ParsedArtifacts:
         artifacts = await original(source, state, require_raw=require_raw)
         captures.append(artifacts)
-        # timing: fake work that outlasts the 1.0 s analysis budget
-        await asyncio.sleep(1.1)
+        loop = asyncio.get_running_loop()
+        deadline = services._analysis_deadline.get()
+        assert deadline is not None
+        # The condition is the clock itself, and a timer may fire early.
+        while loop.time() < deadline:  # noqa: ASYNC110
+            # timing: fake work that runs until the call's own deadline has passed
+            await asyncio.sleep(deadline - loop.time())
         return artifacts
 
     state_no_sim.config.analysis_budget_s = 1.0
     existing = set(state_no_sim.store.results_dir.glob("*.json"))
+    log_source = services.resolve_analysis_source(
+        state_no_sim, log_file=str(raw.with_suffix(".log"))
+    )
+    await services.load_artifacts(log_source, state_no_sim, require_raw=False)
+    parser_requests: list[str] = []
+    run_parser = parser_service.run_parser_sync
+
+    def counted(request, **kwargs):
+        parser_requests.append(request["op"])
+        return run_parser(request, **kwargs)
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", counted)
     monkeypatch.setattr(services, "load_artifacts", consume_budget_after_capture)
-    started = time.monotonic()
     with pytest.raises(AnalysisDeadlineExceeded, match="initialization"):
         await analyze.handle_analyze_results(request, state_no_sim)
     assert captures and captures[0].logs.value("measurements") is not None
-    assert time.monotonic() - started < 3.0
+    assert parser_requests == []
     assert set(state_no_sim.store.results_dir.glob("*.json")) == existing
 
     monkeypatch.setattr(services, "load_artifacts", original)

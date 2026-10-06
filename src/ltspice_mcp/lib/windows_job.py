@@ -24,6 +24,8 @@ _JOB_MEMORY = 0x0200
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+_EMPTY_POLL_S = 0.01
+"""How often closing a job re-reads its process count until it reaches zero."""
 
 
 def python_launch() -> tuple[str, dict[str, str] | None]:
@@ -204,7 +206,7 @@ class WindowsJob:
                             break
                         if time.monotonic() >= deadline:
                             raise TimeoutError("Windows parser job did not become empty")
-                        time.sleep(0.01)
+                        time.sleep(_EMPTY_POLL_S)
             finally:
                 _check(kernel.CloseHandle(self._handle))
                 self._handle = None

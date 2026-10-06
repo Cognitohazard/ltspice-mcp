@@ -91,8 +91,6 @@ from ltspice_mcp.tools.receipts import (
     snapshot_receipt_live,
 )
 
-_FOREIGN_WAIT_POLL_S = 2.0
-
 
 class JobsInput(ToolInput):
     """The shared half of every jobs call, and the entry point for its actions.
@@ -743,7 +741,7 @@ async def _wait_for_jobs_target(
         remaining = deadline - loop.time()
         if remaining <= 0:
             return current, True
-        await asyncio.sleep(min(_FOREIGN_WAIT_POLL_S, remaining))
+        await asyncio.sleep(min(experiment_store.FOREIGN_RECORD_POLL_S, remaining))
 
 
 def _activity_timestamp(job: ExperimentJob) -> str:
@@ -889,7 +887,7 @@ async def _await_foreign_experiment_cancellation(
     while current.status not in TERMINAL_STATUSES:
         if asyncio.get_running_loop().time() >= deadline:
             break
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(experiment_store.FOREIGN_RECORD_POLL_S)
         current = await state.job_registry.refresh_foreign_job_async(current)
     return current
 

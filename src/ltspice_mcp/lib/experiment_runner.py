@@ -1063,7 +1063,7 @@ class ExperimentRunner(RunnerBase):
                 self._request_stop(execution, "cancelled")
                 await self._persist_job(execution)
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(experiment_store.FOREIGN_RECORD_POLL_S)
 
     async def _deadline_watch(self, execution: _Execution, deadline_s: float) -> None:
         if deadline_s <= 0:

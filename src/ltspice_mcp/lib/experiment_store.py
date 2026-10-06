@@ -108,6 +108,12 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+FOREIGN_RECORD_POLL_S = 0.5
+"""How often a server re-reads a record another server process writes: the
+owner looking for a cancellation request, and a waiter looking for the owner's
+progress. Processes share no event, so the record on disk is polled."""
+
+
 def cancellation_requested(job_id: str, working_dir: Path) -> bool:
     """Whether an authorized durable cancellation marker exists."""
     return Store(working_dir).cancellation(job_id).is_file()

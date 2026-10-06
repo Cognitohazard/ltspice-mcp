@@ -14,6 +14,7 @@ import asyncio
 import math
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,7 +28,7 @@ from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import terminal_experiment
+from tests.conftest import await_until, terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -758,14 +759,18 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
     assert first["outcome"] == "in_progress", first
     assert [item for item in first["observations"] if item["code"] == "run_progress"]
 
-    status = await handle_jobs(
-        JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
-        ngspice_state,
-    )
-    data = status.structured_content
-    assert data is not None
-    [live] = [item for item in data["observations"] if item["code"] == "run_progress"]
-    reached = live["evidence"]
+    async def live_progress() -> dict[str, Any] | None:
+        status = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
+            ngspice_state,
+        )
+        data = status.structured_content
+        assert data is not None
+        [live] = [item for item in data["observations"] if item["code"] == "run_progress"]
+        return live["evidence"] if live["evidence"]["points"] > 0 else None
+
+    # ngspice writes its first points on its own schedule: wait for them.
+    reached = await await_until(live_progress, what="ngspice to write its first points")
     assert (reached["plot"], reached["axis"]) == ("Transient Analysis", "time")
     assert reached["points"] > 0
     assert 0 < reached["last_axis_value"] < 1

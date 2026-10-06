@@ -163,6 +163,9 @@ _WAITS = frozenset(
     }
 )
 _POLLS = frozenset({"await_until", "wait_until"})
+_OFFLOADS = frozenset({"to_thread"})
+"""Calls that run a function handed to them, so ``to_thread(event.wait, 5)``
+caps a wait as surely as ``event.wait(5)`` does."""
 _TIMEOUT_KEYWORDS = frozenset({"timeout", "timeout_s"})
 _DWELL_KEYWORDS = frozenset({"wait_s"})
 _BOUND_KEYWORDS = _TIMEOUT_KEYWORDS | _DWELL_KEYWORDS
@@ -237,6 +240,15 @@ def _clock_offset(node: ast.AST) -> float | None:
         and _call_name(node.left) == "monotonic"
     ):
         return _number(node.right)
+    return None
+
+
+def _callable_name(node: ast.AST) -> str | None:
+    """The name of a function passed by reference: ``wait`` in ``event.wait``."""
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
     return None
 
 
@@ -330,6 +342,11 @@ class _TestScan(ast.NodeVisitor):
             for arg in node.args:
                 if _short(_number(arg)):
                     self._flag("short-wait", node, f"{name}(..., {_number(arg):g})")
+        if name in _OFFLOADS and node.args and _callable_name(node.args[0]) in _WAITS:
+            for arg in node.args[1:]:
+                if _short(_number(arg)):
+                    waited = _callable_name(node.args[0])
+                    self._flag("short-wait", node, f"{name}({waited}, {_number(arg):g})")
         for keyword in node.keywords:
             if keyword.arg in _BOUND_KEYWORDS and _short(_number(keyword.value)):
                 self._flag("short-wait", node, f"{keyword.arg}={_number(keyword.value):g}")
@@ -399,10 +416,11 @@ def test_the_rules_catch_what_they_name():
         "    payload = {'execution': {'wait_s': 5}}\n"
         "    proc.wait(timeout=10)\n"
         "    run(deadline=time.monotonic() + 5)\n"
+        "    await asyncio.to_thread(entered.wait, 5)\n"
     )
     assert len(flagged["sleep"]) == 1
     assert len(flagged["file-poll"]) == 2
-    assert len(flagged["short-wait"]) == 4
+    assert len(flagged["short-wait"]) == 5
 
     excused = _scan_source(
         "async def test_x(runner, job):\n"
@@ -414,6 +432,7 @@ def test_the_rules_catch_what_they_name():
         "    )\n"
         "    await runner.wait(job, LIVENESS_S)\n"
         "    proc.wait(timeout=60)\n"
+        "    await asyncio.to_thread(entered.wait, LIVENESS_S)\n"
     )
     assert excused == {"sleep": [], "file-poll": [], "short-wait": []}
 
