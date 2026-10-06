@@ -31,6 +31,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
@@ -645,6 +646,26 @@ _POLL_INTERVAL_S = 0.01
 #: slow runner (Windows, a loaded CI box, a jitter seed) cannot fail a correct
 #: test. ``tests/test_test_hygiene.py`` holds the suite's waits to it.
 LIVENESS_S = 30.0
+
+
+async def job_done(
+    state: SessionState,
+    job: ExperimentJob,
+    *,
+    wait_for: WaitFor = "all",
+    timeout_s: float = LIVENESS_S,
+) -> bool:
+    """Whether ``job``, or with ``wait_for="runs"`` its runs, finished within
+    ``timeout_s``: the registry's one wait, read as a yes or no."""
+    _, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=wait_for)
+    return not timed_out
+
+
+async def coordinator_returned(state: SessionState, job: ExperimentJob) -> None:
+    """Wait, up to ``LIVENESS_S``, for the coordinator running ``job`` to return."""
+    task = state.job_registry.live[job.job_id].task
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), LIVENESS_S)
 
 
 def make_raw_mock(

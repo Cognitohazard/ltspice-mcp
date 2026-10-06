@@ -36,7 +36,7 @@ from ltspice_mcp.lib.recovery_journal import (
 from ltspice_mcp.lib.recovery_records import CaseAttempt, ProcessIdentity, RecoveryError
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import OwnerLiveness, Store
-from tests.conftest import ngspice_binary_raw, staged_decks
+from tests.conftest import coordinator_returned, ngspice_binary_raw, staged_decks
 from tests.test_recovery_records import recovery_job
 
 
@@ -122,9 +122,7 @@ async def _start(committed):
     # Admission has already committed the real journal/job. This is exactly
     # the coordinator entry used by initial admission and resumed children.
     await runner.start_committed(request, AdmissionResult(job, False, True), receipt)
-    task = request.state.job_registry.live[job.job_id].task
-    assert task is not None
-    await asyncio.wait_for(task, 30)
+    await coordinator_returned(request.state, job)
     await request.state.job_registry.drain_pending()
     assert runner._slots_claimed == 0
     return job
@@ -163,7 +161,7 @@ async def test_start_failure_keeps_committed_receipt_after_real_adoption(committ
     assert receipt.job.recovery is not None
     assert receipt.job.recovery.owner.start_marker == process_start_marker(os.getpid())
     assert request.state.all_jobs[job.job_id] is receipt.job
-    live = request.state.job_registry.live_job(job.job_id)
+    live = request.state.job_registry.live.get(job.job_id)
     assert live is None or live.task is None
     journal = load_journal(store, job.request_id)
     assert journal is not None

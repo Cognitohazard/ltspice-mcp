@@ -52,8 +52,10 @@ from tests.conftest import (
     LIVENESS_S,
     FakeSim,
     await_until,
+    coordinator_returned,
     fake_artifact_paths,
     fake_simulator,
+    job_done,
     recorded_fixture_simulator,
     resolve_local_ref,
     wait_until,
@@ -426,7 +428,7 @@ class TestReceiptThenDwell:
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-        await asyncio.wait_for(state_with_sim.job_registry.live[data["job_id"]].wait(), LIVENESS_S)
+        assert await job_done(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
 
     async def test_failure_after_submit_reports_committed_with_handles(
         self,
@@ -475,7 +477,8 @@ class TestReceiptThenDwell:
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-        await asyncio.wait_for(state_with_sim.job_registry.live[data["job_id"]].wait(), LIVENESS_S)
+        # The dwell is what this test broke, so wait on the coordinator itself.
+        await coordinator_returned(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
 
     async def test_receipt_builder_failure_still_returns_handles(
         self,

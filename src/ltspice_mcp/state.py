@@ -357,7 +357,6 @@ class SessionState:
                 *self.background.pending(),
                 *self.job_registry.pending_writes(),
                 *self.runners.background_pending(),
-                *self.job_registry.coordinators(),
             ]
             if not pending:
                 return

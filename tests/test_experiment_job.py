@@ -443,7 +443,7 @@ class TestLiveJobs:
         current, timed_out = await asyncio.wait_for(registry.wait(job, 120), LIVENESS_S)
 
         assert current is job and timed_out
-        assert registry.live_job(job.job_id) is None
+        assert job.job_id not in registry.live
 
     @pytest.mark.asyncio
     async def test_a_live_job_is_released_by_its_terminal_transition(self, work_dir: Path):

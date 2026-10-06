@@ -26,6 +26,7 @@ from ltspice_mcp.lib.job_lifecycle import (
     InvalidTransitionError,
     transition,
 )
+from tests.test_test_hygiene import SRC, _calls
 
 
 def _events(caplog: pytest.LogCaptureFixture) -> list[dict]:
@@ -138,7 +139,7 @@ class TestTransitionEvents:
         assert _events(events_caplog) == []
 
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
+_PACKAGE = SRC / "ltspice_mcp"
 
 # Where a status may change without going through a live job: the live job's
 # own transition, and shutdown settling a job this process holds no live job for.
@@ -146,30 +147,6 @@ _BARE_TRANSITIONS = {
     ("lib/job_lifecycle.py", "LiveJob.transition"),
     ("lib/job_registry.py", "JobRegistry.cancel_running"),
 }
-
-
-class _ScopedCalls(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.scope: list[str] = []
-        self.calls: list[tuple[str, ast.Call]] = []
-
-    def _scoped(self, node: ast.AST, name: str) -> None:
-        self.scope.append(name)
-        self.generic_visit(node)
-        self.scope.pop()
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._scoped(node, node.name)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._scoped(node, node.name)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._scoped(node, node.name)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        self.calls.append((".".join(self.scope), node))
-        self.generic_visit(node)
 
 
 def _is_bare_transition(call: ast.Call) -> bool:
@@ -188,13 +165,10 @@ def test_a_running_jobs_status_changes_through_its_live_job() -> None:
     """A bare ``transition()`` on a job this process runs would change the
     record and leave everyone waiting on its live job waiting, so the status
     of a job with a live job changes only through ``LiveJob.transition``."""
-    found = set()
-    for path in sorted(_SRC.rglob("*.py")):
-        visitor = _ScopedCalls()
-        visitor.visit(ast.parse(path.read_text(encoding="utf-8")))
-        found |= {
-            (path.relative_to(_SRC).as_posix(), scope)
-            for scope, call in visitor.calls
-            if _is_bare_transition(call)
-        }
+    found = {
+        (path.relative_to(_PACKAGE).as_posix(), scope)
+        for path in sorted(_PACKAGE.rglob("*.py"))
+        for scope, call in _calls(path)
+        if _is_bare_transition(call)
+    }
     assert found == _BARE_TRANSITIONS
