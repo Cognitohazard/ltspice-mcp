@@ -28,6 +28,7 @@ from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -51,8 +52,10 @@ from tests.conftest import (
     LIVENESS_S,
     FakeSim,
     await_until,
+    coordinator_returned,
     fake_artifact_paths,
     fake_simulator,
+    job_done,
     recorded_fixture_simulator,
     resolve_local_ref,
     wait_until,
@@ -425,8 +428,7 @@ class TestReceiptThenDwell:
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-        job = state_with_sim.all_jobs[data["job_id"]]
-        await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
+        assert await job_done(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
 
     async def test_failure_after_submit_reports_committed_with_handles(
         self,
@@ -451,7 +453,7 @@ class TestReceiptThenDwell:
             raise OSError("dwell exploded")
 
         monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
-        monkeypatch.setattr(ExperimentRunner, "wait", failing_wait)
+        monkeypatch.setattr(JobRegistry, "wait", failing_wait)
         deck = _deck(work_dir / "post-submit.cir")
 
         result = await handle_run_experiments(
@@ -475,8 +477,8 @@ class TestReceiptThenDwell:
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-        job = state_with_sim.all_jobs[data["job_id"]]
-        await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
+        # The dwell is what this test broke, so wait on the coordinator itself.
+        await coordinator_returned(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
 
     async def test_receipt_builder_failure_still_returns_handles(
         self,
@@ -796,6 +798,43 @@ class TestIdempotency:
         assert replayed["job_id"] == first["job_id"]
         assert replayed["status"] == "completed", replayed
         await state_with_sim.settled()
+
+    async def test_a_replay_of_a_job_nothing_here_runs_answers_from_its_record(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A record naming this process as its owner, with no live job behind it
+        in the session asked (a reused pid, or a coordinator lost to a crash),
+        will not change while the replay waits. Its dwell answers from the record
+        rather than waiting out ``wait_s`` on a copy nothing will finish.
+
+        The job runs in the first session; the replay comes from a second one on
+        the same working directory, which runs nothing.
+        """
+        held: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=held)
+        deck = _deck(work_dir / "orphan-replay.cir")
+        first = _assert_schema(
+            await handle_run_experiments(_args(deck, "orphan-replay", wait_s=0), state_with_sim)
+        )
+        await await_until(lambda: len(held) == 1, what="the case to reach the simulator")
+        other = SessionState.create(state_with_sim.config, available={"fake": FakeSim})
+        try:
+            # A dwell longer than the cap: only an answer from the record is in time.
+            replayed = _assert_schema(
+                await asyncio.wait_for(
+                    handle_run_experiments(_args(deck, "orphan-replay", wait_s=120), other),
+                    LIVENESS_S,
+                )
+            )
+            assert replayed["replayed"] is True
+            assert replayed["job_id"] == first["job_id"]
+            assert replayed["status"] in {"queued", "running"}, replayed
+        finally:
+            held[0]()
+            await state_with_sim.settled()
 
     async def test_a_replay_leaves_the_record_as_it_was(
         self,

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import copy
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1380,17 +1378,7 @@ async def _dwell_and_respond(
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
-        runner = state.runners.get_experiment_runner_for(job)
-        if runner is not None:
-            await runner.wait(job, wait_s, wait_for="all")
-        elif job.owner_pid not in (0, os.getpid()):
-            # Another process runs it: only its record says when it is done.
-            job, _ = await state.job_registry.wait_for_foreign(
-                job, wait_s, lambda current: current.status in TERMINAL_EXPERIMENT_STATUSES
-            )
-        else:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(job.done_event.wait(), wait_s)
+        job, _ = await state.job_registry.wait(job, wait_s)
     snapshot = await snapshot_receipt_live(
         job,
         state,

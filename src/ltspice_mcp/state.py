@@ -357,11 +357,6 @@ class SessionState:
                 *self.background.pending(),
                 *self.job_registry.pending_writes(),
                 *self.runners.background_pending(),
-                *(
-                    job.task
-                    for job in self.all_jobs.values()
-                    if job.task is not None and not job.task.done()
-                ),
             ]
             if not pending:
                 return

@@ -23,6 +23,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
+from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
@@ -54,6 +55,7 @@ from tests.conftest import (
     LIVENESS_S,
     await_until,
     fake_simulator,
+    job_done,
     ngspice_binary_raw,
     staged_decks,
 )
@@ -142,11 +144,8 @@ def _experiment(
         completeness=completeness,
         status=status,  # type: ignore[arg-type]
     )
-    if all(case.status in {"produced", "failed", "cancelled", "skipped"} for case in cases):
-        job.runs_done_event.set()
     if status in {"completed", "completed_with_failures", "failed", "cancelled", "interrupted"}:
         job.completed_at = now()
-        job.done_event.set()
     return job
 
 
@@ -1228,14 +1227,14 @@ class TestWait:
         circuit = _circuit(work_dir)
         running = _experiment(work_dir, circuit, status="running")
         state_no_sim.all_jobs[running.job_id] = running
-        real_wait = jobs_module._wait_for_jobs_target
+        real_wait = state_no_sim.job_registry.wait
         waited: list[float] = []
 
-        async def spy(job, state, *, timeout_s, wait_for):
+        async def spy(job, timeout_s, *, wait_for: WaitFor = "all"):
             waited.append(timeout_s)
-            return await real_wait(job, state, timeout_s=0, wait_for=wait_for)
+            return await real_wait(job, 0, wait_for=wait_for)
 
-        monkeypatch.setattr(jobs_module, "_wait_for_jobs_target", spy)
+        monkeypatch.setattr(state_no_sim.job_registry, "wait", spy)
         data = _assert_jobs_schema(
             await handle_jobs(_args("wait", job_id=running.job_id, timeout_s=900), state_no_sim)
         )
@@ -1487,7 +1486,7 @@ class TestCancellationAuthority:
         assert data["job_id"] == receipt.job.job_id
         assert experiment_store.cancellation_requested(receipt.job.job_id, work_dir)
 
-        await asyncio.wait_for(receipt.job.done_event.wait(), 30)
+        assert await job_done(state_no_sim, receipt.job)
         await state_no_sim.job_registry.drain_pending()
         assert receipt.job.status == "cancelled"
         assert receipt.job.completeness.submitted == 1
