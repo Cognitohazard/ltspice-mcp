@@ -749,6 +749,54 @@ class TestIdempotency:
         await await_until(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
+    async def test_a_replay_of_another_processs_job_answers_when_its_record_does(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Nothing in this process is told when another process's job finishes,
+        so a replay's dwell re-reads the record and answers once it says the job
+        is done, not when the dwell runs out.
+
+        The coordinator runs here, but every record it writes names a live
+        foreign owner, and the replay comes from a second session on the same
+        working directory: to that session the job is another process's.
+        """
+        foreign_pid = 999_999_999
+        save_job = experiment_store.save_job
+        monkeypatch.setattr(
+            experiment_store,
+            "save_job",
+            lambda job: save_job(dataclasses.replace(job, owner_pid=foreign_pid)),
+        )
+        monkeypatch.setattr(
+            experiment_store,
+            "owner_liveness",
+            lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
+        )
+        held: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=held)
+        deck = _deck(work_dir / "foreign-replay.cir")
+        first = _assert_schema(
+            await handle_run_experiments(_args(deck, "foreign-replay", wait_s=0), state_with_sim)
+        )
+        await await_until(lambda: len(held) == 1, what="the case to reach the simulator")
+        other = SessionState.create(state_with_sim.config, available={"fake": FakeSim})
+        # A dwell longer than the wait below, so only the record can end it.
+        replay = asyncio.create_task(
+            handle_run_experiments(_args(deck, "foreign-replay", wait_s=120), other)
+        )
+        await await_until(
+            lambda: first["job_id"] in other.all_jobs, what="the replay to load the record"
+        )
+        held[0]()
+        replayed = _assert_schema(await asyncio.wait_for(replay, LIVENESS_S))
+        assert replayed["replayed"] is True
+        assert replayed["job_id"] == first["job_id"]
+        assert replayed["status"] == "completed", replayed
+        await state_with_sim.settled()
+
     async def test_a_replay_leaves_the_record_as_it_was(
         self,
         state_with_sim: SessionState,

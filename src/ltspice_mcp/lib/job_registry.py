@@ -142,6 +142,22 @@ class JobRegistry:
             self.persist_job(job)
         emit_job_event("submitted", job, total_cases=job.completeness.expanded)
 
+    def reserve(self, job: ExperimentJob) -> None:
+        """Make a job being admitted the one this process resolves its id to.
+
+        Called before the job's record or request index is written. Any reader
+        that finds the id on disk from then on, a replay above all, gets this
+        object rather than loading a second copy: a copy's events are never set,
+        so a replay waiting on one would wait out its whole dwell after the job
+        had finished. ``add_experiment_job`` completes the registration.
+        """
+        self.jobs[job.job_id] = job
+
+    def release(self, job: ExperimentJob) -> None:
+        """Withdraw a reservation whose record was never written."""
+        if self.jobs.get(job.job_id) is job:
+            del self.jobs[job.job_id]
+
     def _evict_finished(self) -> None:
         """Evict the oldest terminal jobs once the registry is over the limit.
 
@@ -285,6 +301,32 @@ class JobRegistry:
             return job
         # On the loop here (awaited from a handler), so ``_adopt`` swaps it in.
         return self._adopt(fresh)
+
+    async def wait_for_foreign(
+        self,
+        job: ExperimentJob,
+        timeout_s: float,
+        finished: Callable[[ExperimentJob], bool],
+    ) -> tuple[ExperimentJob, bool]:
+        """Re-read another process's job until ``finished`` holds or time runs out.
+
+        Nothing in this process is told when another process's job moves, so
+        the record is re-read every ``FOREIGN_RECORD_POLL_S``. Returns the
+        latest view and whether the wait ran out first.
+        """
+        from ltspice_mcp.lib import experiment_store
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        current = job
+        while True:
+            current = await self.refresh_foreign_job_async(current)
+            if finished(current):
+                return current, False
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return current, True
+            await asyncio.sleep(min(experiment_store.FOREIGN_RECORD_POLL_S, remaining))
 
     def refreshed_jobs(self) -> list[ExperimentJob]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.

@@ -681,9 +681,12 @@ class ExperimentRunner(RunnerBase):
                 )
             job = barrier.job
             request.state.add_experiment_job(job, already_persisted=True)
-        elif registered is not None:
+        elif registered is not None and registered is not barrier.job:
+            # The live job, reserved by the admission that is starting it: a
+            # replay answers from that, never from the copy it read.
             job = registered
         else:
+            # Unregistered, or reserved by this admission: register it now.
             job = barrier.job
             request.state.add_experiment_job(job, already_persisted=True)
         execution = None
@@ -750,7 +753,14 @@ class ExperimentRunner(RunnerBase):
                             ),
                         }
                     )
-                await asyncio.to_thread(self._claim_request_id, request, candidate)
+                # Reserved before the claim makes the id findable on disk, so a
+                # replay that finds it gets this job rather than a copy of it.
+                request.state.job_registry.reserve(candidate)
+                try:
+                    await asyncio.to_thread(self._claim_request_id, request, candidate)
+                except BaseException:
+                    request.state.job_registry.release(candidate)
+                    raise
             except Exception:
                 # Staged, then refused. The decks are already copied and the
                 # claim never landed, so this is the one window in which a run
@@ -940,7 +950,14 @@ class ExperimentRunner(RunnerBase):
         *,
         wait_for: Literal["all", "runs"] = "all",
     ) -> bool:
-        """Wait for full terminality or run terminality without mutating the job."""
+        """Wait for full terminality or run terminality without mutating the job.
+
+        Waits on the job this runner is executing under that id, which is the
+        one whose events are set, even when handed a copy read from its record.
+        """
+        execution = self._executions.get(job.job_id)
+        if execution is not None:
+            job = execution.job
         event = job.done_event if wait_for == "all" else job.runs_done_event
         if timeout_s is None:
             await event.wait()

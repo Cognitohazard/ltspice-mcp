@@ -153,7 +153,9 @@ def _barrier_process(
     """
     working = Path(working_dir)
     circuit = Path(circuit_path)
-    state = SimpleNamespace(working_dir=working)
+    state = SimpleNamespace(
+        working_dir=working, job_registry=JobRegistry(persist_enabled=False, working_dir=working)
+    )
     request = ExperimentRunRequest(
         state=cast("SessionState", state),
         request_id=request_id,
