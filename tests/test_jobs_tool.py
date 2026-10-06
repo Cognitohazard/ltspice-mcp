@@ -55,6 +55,7 @@ from tests.conftest import (
     LIVENESS_S,
     await_until,
     fake_simulator,
+    job_done,
     ngspice_binary_raw,
     staged_decks,
 )
@@ -1485,7 +1486,7 @@ class TestCancellationAuthority:
         assert data["job_id"] == receipt.job.job_id
         assert experiment_store.cancellation_requested(receipt.job.job_id, work_dir)
 
-        await asyncio.wait_for(state_no_sim.job_registry.live[receipt.job.job_id].wait(), 30)
+        assert await job_done(state_no_sim, receipt.job)
         await state_no_sim.job_registry.drain_pending()
         assert receipt.job.status == "cancelled"
         assert receipt.job.completeness.submitted == 1

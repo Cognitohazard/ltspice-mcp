@@ -220,6 +220,11 @@ class LiveJob:
         return self._done.is_set()
 
     @property
+    def coordinator(self) -> asyncio.Task[None] | None:
+        """The coordinator running the job now, if one is."""
+        return self.task if self.task is not None and not self.task.done() else None
+
+    @property
     def runs_done(self) -> bool:
         """Whether every run has finished; an attached analysis may still be running."""
         return self._runs_done.is_set()

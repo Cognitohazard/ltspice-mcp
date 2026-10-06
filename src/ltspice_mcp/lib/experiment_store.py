@@ -28,7 +28,7 @@ from ltspice_mcp.lib.experiment_types import (
     failure_row,
 )
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
+from ltspice_mcp.lib.job_lifecycle import finished, reconcile_experiment_restart
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
@@ -97,15 +97,6 @@ CANONICALIZER_VERSION = 6
 #      result data and participate even when normalized to their defaults.
 
 _LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
-_TERMINAL_STATUSES = frozenset(
-    {
-        "completed",
-        "completed_with_failures",
-        "failed",
-        "cancelled",
-        "interrupted",
-    }
-)
 
 
 FOREIGN_RECORD_POLL_S = 0.5
@@ -497,7 +488,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
     # reconciliation back, and that decision is this function's answer to give
     # rather than something each caller re-derives from the report channel.
     job.restart_reconciled = True
-    runs_were_terminal = all(case.status in TERMINAL_CASE_STATUSES for case in job.cases)
+    runs_were_finished = finished(job, "runs")
     analysis_interrupted = job.analysis.status in {"pending", "running"}
     if analysis_interrupted:
         job.analysis = replace(
@@ -563,7 +554,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
             }
         )
     job.completeness.recount(job.cases, execution_job_id=job.job_id)
-    if runs_terminal(job.status) or runs_were_terminal:
+    if runs_were_finished:
         has_failure = job.completeness.fell_short or job.analysis.status in {
             "failed",
             "cancelled",

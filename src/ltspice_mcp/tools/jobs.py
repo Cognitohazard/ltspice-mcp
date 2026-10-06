@@ -45,6 +45,7 @@ from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentJob,
 )
+from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
@@ -195,7 +196,7 @@ class JobsWaitInput(_AddressedJobsInput):
             "response says timed_out and the job keeps running, so wait again."
         ),
     )
-    wait_for: Literal["all", "runs"] = Field(
+    wait_for: WaitFor = Field(
         default="all",
         description=(
             "'all' waits for the runs and any attached analysis; 'runs' returns "

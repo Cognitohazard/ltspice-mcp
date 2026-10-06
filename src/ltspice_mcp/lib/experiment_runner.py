@@ -670,8 +670,8 @@ class ExperimentRunner(RunnerBase):
         # either registered or recognized as already registered.
         registry = request.state.job_registry
         registered = request.state.all_jobs.get(barrier.job.job_id)
-        running = registry.live_job(barrier.job.job_id)
-        coordinating = running is not None and running.task is not None and not running.task.done()
+        running = registry.live.get(barrier.job.job_id)
+        coordinating = running is not None and running.coordinator is not None
         should_start = not barrier.replayed if barrier.start is None else barrier.start
         if should_start and registered is not barrier.job:
             if self.owns_experiment_job(barrier.job.job_id) or coordinating:
@@ -940,25 +940,6 @@ class ExperimentRunner(RunnerBase):
             run_timeout_s=run_timeout_s,
             run_timeout_source=run_timeout_source,
         )
-
-    async def wait(
-        self,
-        job: ExperimentJob,
-        timeout_s: float | None = None,
-        *,
-        wait_for: Literal["all", "runs"] = "all",
-    ) -> bool:
-        """Wait for full terminality or run terminality without mutating the job.
-
-        Waits on the live job this runner executes under that id, whichever
-        record of it the caller holds. A job it does not execute (finished and
-        released, or never its own) has nothing here to wait on, so its record
-        answers at once.
-        """
-        execution = self._executions.get(job.job_id)
-        if execution is None:
-            return finished(job, wait_for)
-        return await execution.live.wait(timeout_s, wait_for=wait_for)
 
     async def _run_job(self, execution: _Execution) -> None:
         job = execution.job

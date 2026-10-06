@@ -90,9 +90,8 @@ def _cancel_tasks(jobs: list[LiveJob]) -> list[Awaitable[Any]]:
     behind it.
     """
     pending: list[Awaitable[Any]] = []
-    for job in jobs:
-        task = job.task
-        if task is not None and not task.done():
+    for live in jobs:
+        if (task := live.coordinator) is not None:
             task.cancel()
             pending.append(task)
     return pending
@@ -170,18 +169,6 @@ class JobRegistry:
         if self.jobs.get(job.job_id) is job:
             del self.jobs[job.job_id]
 
-    def live_job(self, job_id: str) -> LiveJob | None:
-        """The live job behind ``job_id``, if this process admitted it."""
-        return self.live.get(job_id)
-
-    def coordinators(self) -> list[asyncio.Task[None]]:
-        """The coordinators of this process's jobs that have not finished."""
-        return [
-            live.task
-            for live in self.live.values()
-            if live.task is not None and not live.task.done()
-        ]
-
     def _evict_finished(self) -> None:
         """Evict the oldest terminal jobs once the registry is over the limit.
 
@@ -228,10 +215,6 @@ class JobRegistry:
         """
         if not self._on_event_loop():
             return job
-        live = self.live.get(job.job_id)
-        if live is not None:
-            # This process runs it: the live record is the job, never a copy.
-            return live.job
         self.jobs[job.job_id] = job
         if job.restart_reconciled:
             self.persist_job(job)
@@ -331,13 +314,10 @@ class JobRegistry:
         # On the loop here (awaited from a handler), so ``_adopt`` swaps it in.
         return self._adopt(fresh)
 
-    async def wait_for_foreign(
-        self,
-        job: ExperimentJob,
-        timeout_s: float,
-        until: Callable[[ExperimentJob], bool],
+    async def _wait_for_foreign(
+        self, job: ExperimentJob, timeout_s: float, wait_for: WaitFor
     ) -> tuple[ExperimentJob, bool]:
-        """Re-read another process's job until ``until`` holds or time runs out.
+        """Re-read another process's job until it is finished or time runs out.
 
         Nothing in this process is told when another process's job moves, so
         the record is re-read every ``FOREIGN_RECORD_POLL_S``. Returns the
@@ -350,7 +330,7 @@ class JobRegistry:
         current = job
         while True:
             current = await self.refresh_foreign_job_async(current)
-            if until(current):
+            if finished(current, wait_for):
                 return current, False
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -374,9 +354,7 @@ class JobRegistry:
         if finished(job, wait_for):
             return job, False
         if job.owner_pid not in (0, os.getpid()):
-            return await self.wait_for_foreign(
-                job, timeout_s, lambda current: finished(current, wait_for)
-            )
+            return await self._wait_for_foreign(job, timeout_s, wait_for)
         return job, True
 
     def refreshed_jobs(self) -> list[ExperimentJob]:

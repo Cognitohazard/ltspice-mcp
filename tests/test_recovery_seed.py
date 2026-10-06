@@ -23,7 +23,7 @@ from ltspice_mcp.lib.recovery_journal import new_root_journal, save_journal
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from tests.conftest import LIVENESS_S
+from tests.conftest import LIVENESS_S, coordinator_returned
 from tests.test_recovery_launch import _process, _start
 from tests.test_recovery_launch import committed as committed
 from tests.test_recovery_records import recovery_job
@@ -186,9 +186,7 @@ async def _submit_seeded(state, request_id, seed, *, variations=None):
     result = await asyncio.wait_for(handle_run_experiments(args, state), LIVENESS_S)
     assert not result.is_error, result.structured_content
     job = state.all_jobs[result.structured_content["job_id"]]
-    task = state.job_registry.live[job.job_id].task
-    assert task is not None
-    await asyncio.wait_for(task, LIVENESS_S)
+    await coordinator_returned(state, job)
     await state.job_registry.drain_pending()
     return job
 
@@ -387,9 +385,7 @@ async def test_seeded_retry_keeps_successes_and_reuses_recorded_seed(work_dir, m
         state, job_id=parent.job_id, resume_request_id="seeded-retry", retry_failed=True
     )
     child = receipt.job
-    task = state.job_registry.live[child.job_id].task
-    assert task is not None
-    await asyncio.wait_for(task, LIVENESS_S)
+    await coordinator_returned(state, child)
     await state.job_registry.drain_pending()
     assert child.status == "completed", child.failures
     recovery = child.recovery
