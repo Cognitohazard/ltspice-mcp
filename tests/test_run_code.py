@@ -25,7 +25,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
 from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
-from tests.conftest import LIVENESS_S, await_until, wait_until, written
+from tests.conftest import LIVENESS_S, await_until, process_running, wait_until, written
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -246,7 +246,7 @@ class TestLifetime:
         after = await run(state, "'ready'")
         assert after["status"] == "ok"
         assert after["worker_pid"] != before
-        assert not psutil.pid_exists(before)
+        assert not process_running(before)
 
     @pytest.mark.skipif(POSIX, reason="Windows kills and replaces a cancelled worker")
     async def test_windows_cancellation_restarts_worker(self, state: SessionState):
@@ -260,7 +260,7 @@ class TestLifetime:
         after = await run(state, "'ready'")
         assert after["status"] == "ok"
         assert after["worker_pid"] != before
-        assert not psutil.pid_exists(before)
+        assert not process_running(before)
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
     async def test_timeout_interrupts_and_keeps_the_worker(self, state: SessionState):
@@ -299,7 +299,7 @@ class TestLifetime:
             "previous_pid": before,
             "reason": "killed after a timeout",
         }
-        assert not psutil.pid_exists(before)
+        assert not process_running(before)
 
     @pytest.mark.parametrize("stop", ["reset", "exit"])
     async def test_killing_the_worker_takes_its_children_with_it(
@@ -437,7 +437,7 @@ class TestLifetime:
         await own.shutdown()
         assert worker.process is None
         # The process itself is gone, not just forgotten.
-        assert not psutil.pid_exists(reply["worker_pid"])
+        assert not process_running(reply["worker_pid"])
 
     async def test_a_worker_that_cannot_start_is_a_structured_error(self, tmp_path: Path):
         worker = CodeWorker(tmp_path / "missing", None)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import errno
 import json
@@ -29,10 +30,18 @@ from ltspice_mcp.lib.parser_process import (
 )
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.lib.windows_job import python_launch
-from tests.conftest import LIVENESS_S, await_until, wait_until, written
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    identify,
+    process_running,
+    wait_until,
+    written,
+)
 
 _FIXTURE = """
 import ctypes, json, os, struct, subprocess, sys
+import psutil
 from pathlib import Path
 from ltspice_mcp.lib.store import parser_file_in
 
@@ -63,6 +72,7 @@ def parse_request(request, work_dir):
         )
         parser_file_in(work_dir, "result.json").write_text(json.dumps({
             "value": 2 / 3, "pid": os.getpid(), "child_pid": child.pid,
+            "child_created": psutil.Process(child.pid).create_time(),
         }), encoding="utf-8")
         return
     if mode == "memory":
@@ -87,7 +97,8 @@ def parse_request(request, work_dir):
         except OSError:
             result = {"escaped": False}
         else:
-            result = {"escaped": True, "child_pid": child.pid}
+            result = {"escaped": True, "child_pid": child.pid,
+                      "child_created": psutil.Process(child.pid).create_time()}
         parser_file_in(work_dir, "result.json").write_text(json.dumps(result), encoding="utf-8")
         return
     parser_file_in(work_dir, "array_0000.bin").write_bytes(struct.pack("<d", 2 / 3))
@@ -119,16 +130,18 @@ def call_dir(tmp_path):
     return create
 
 
-async def _started(directory: Path) -> dict[str, int]:
-    return await await_until(
+async def _started(directory: Path) -> list[psutil.Process | None]:
+    """The runaway decoder's processes, identified while they run."""
+    started = await await_until(
         written(parser_file_in(directory, "started.json"), json.loads),
         what="the real decoder to reach its runaway seam",
     )
+    return [identify(pid) for pid in started.values()]
 
 
-def _assert_gone(pids):
-    for pid in pids:
-        assert not psutil.pid_exists(pid), f"Owned process {pid} was not reaped"
+def _assert_gone(processes):
+    for process in processes:
+        assert not process_running(process), f"Owned process {process} was not reaped"
 
 
 async def _success(directory, limits):
@@ -164,7 +177,7 @@ async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(call_di
     with pytest.raises(ParserProcessError) as caught:
         await task
     assert caught.value.code == "deadline" and caught.value.reaped
-    _assert_gone(started.values())
+    _assert_gone(started)
     await _success(call_dir("fresh"), limits)
 
 
@@ -185,20 +198,22 @@ async def test_repeated_cancellation_waits_for_tree_reaping(call_dir, limits):
         await asyncio.sleep(0)
     with pytest.raises(asyncio.CancelledError):
         await task
-    _assert_gone(started.values())
+    _assert_gone(started)
     await _success(call_dir("fresh"), limits)
 
 
 def test_sync_cancellation_event_reaps_worker(call_dir, limits):
     directory = call_dir()
     cancel = threading.Event()
+    owned: list[psutil.Process | None] = []
 
     def request_cancel():
         try:
-            wait_until(
+            started = wait_until(
                 written(parser_file_in(directory, "started.json"), json.loads),
                 what="the real decoder to reach its runaway seam",
             )
+            owned.extend(identify(pid) for pid in started.values())
         finally:
             cancel.set()
 
@@ -215,8 +230,9 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
                 _worker_module="parser_fixture",
             )
         assert caught.value.code == "cancelled" and caught.value.reaped
-        started = json.loads(parser_file_in(directory, "started.json").read_text())
-        _assert_gone(started.values())
+        canceller.join(timeout=LIVENESS_S)
+        assert len(owned) == 2
+        _assert_gone(owned)
     finally:
         cancel.set()
         canceller.join(timeout=LIVENESS_S)
@@ -247,11 +263,11 @@ run_parser_sync({"mode": "runaway"}, work_dir=Path.cwd(),
             written(parser_file_in(directory, "started.json"), json.loads),
             what="the real decoder to reach its runaway seam",
         )
-        owned = list(started.values())
+        owned = [identify(pid) for pid in started.values()]
         owner.kill()
         owner.wait(timeout=LIVENESS_S)
         wait_until(
-            lambda: not any(psutil.pid_exists(pid) for pid in owned),
+            lambda: not any(process_running(process) for process in owned),
             what="the guardian to reap the decoder tree",
         )
         _assert_gone(owned)
@@ -267,13 +283,13 @@ run_parser_sync({"mode": "runaway"}, work_dir=Path.cwd(),
         if owner.poll() is None:
             owner.kill()
         owner.wait(timeout=LIVENESS_S)
-        for pid in owned:
-            try:
-                process = psutil.Process(pid)
+        for process in owned:
+            if process is None:
+                continue
+            # An identified process refuses a kill once its pid names another.
+            with contextlib.suppress(psutil.NoSuchProcess):
                 process.kill()
                 process.wait(timeout=LIVENESS_S)
-            except psutil.NoSuchProcess:
-                pass
 
 
 @pytest.mark.parametrize(
@@ -414,7 +430,8 @@ async def test_native_windows_parser_cannot_break_away(call_dir, limits):
         assert reply.metadata["escaped"] is False
     finally:
         pid = reply.metadata.get("child_pid")
-        if type(pid) is int and psutil.pid_exists(pid):
+        created = reply.metadata.get("child_created")
+        if type(pid) is int and type(created) is float and process_running(pid, created):
             psutil.Process(pid).kill()
 
 
@@ -841,7 +858,7 @@ def test_a_warm_parser_serves_calls_from_one_worker(warm):
     assert struct.unpack("<d", parser_file_in(directory, "array_0000.bin").read_bytes())[
         0
     ] == pytest.approx(2 / 3)
-    assert psutil.pid_exists(first.worker_pid)
+    assert process_running(first.worker_pid)
     assert parser.close()
     _assert_gone([first.worker_pid])
 
@@ -850,16 +867,15 @@ def test_a_cancelled_warm_call_reaps_the_tree_and_the_next_starts_fresh(warm, tm
     _, call = warm
     before, _ = call({})
     cancel = threading.Event()
-    started: dict[str, int] = {}
+    started: list[psutil.Process | None] = []
 
     def cancel_once_started():
         try:
-            started.update(
-                wait_until(
-                    written(parser_file_in(tmp_path / "call-1", "started.json"), json.loads),
-                    what="the warm decoder to reach its runaway seam",
-                )
+            pids = wait_until(
+                written(parser_file_in(tmp_path / "call-1", "started.json"), json.loads),
+                what="the warm decoder to reach its runaway seam",
             )
+            started.extend(identify(pid) for pid in pids.values())
         finally:
             cancel.set()
 
@@ -872,7 +888,7 @@ def test_a_cancelled_warm_call_reaps_the_tree_and_the_next_starts_fresh(warm, tm
         cancel.set()
         canceller.join(timeout=LIVENESS_S)
     assert caught.value.code == "cancelled" and caught.value.reaped
-    _assert_gone([*started.values(), before.worker_pid])
+    _assert_gone([*started, before.worker_pid])
     after, _ = call({})
     assert after.worker_pid != before.worker_pid
 
@@ -883,7 +899,8 @@ def test_a_stray_process_ends_the_tree_before_its_call_is_read(warm):
     assert reply.metadata["value"] == pytest.approx(2 / 3)
     # The tree held more than its worker after the reply, so it was closed and
     # reaped before the result was read: neither process outlives the call.
-    _assert_gone([reply.worker_pid, reply.metadata["child_pid"]])
+    _assert_gone([reply.worker_pid])
+    assert not process_running(reply.metadata["child_pid"], reply.metadata["child_created"])
     assert call({})[0].worker_pid != reply.worker_pid
 
 
@@ -907,7 +924,7 @@ def test_an_idle_warm_tree_is_closed(warm, monkeypatch):
     monkeypatch.setattr(parser_process, "WARM_IDLE_S", 0.0)
     _, call = warm
     reply, _ = call({})
-    wait_until(lambda: not psutil.pid_exists(reply.worker_pid), what="the idle tree to be closed")
+    wait_until(lambda: not process_running(reply.worker_pid), what="the idle tree to be closed")
 
 
 def test_a_closed_warm_parser_still_closes_its_next_tree_when_idle(warm, monkeypatch):
@@ -918,7 +935,7 @@ def test_a_closed_warm_parser_still_closes_its_next_tree_when_idle(warm, monkeyp
     second, _ = call({})
     assert second.worker_pid != first.worker_pid
     wait_until(
-        lambda: not psutil.pid_exists(second.worker_pid), what="the reopened tree's idle close"
+        lambda: not process_running(second.worker_pid), what="the reopened tree's idle close"
     )
 
 

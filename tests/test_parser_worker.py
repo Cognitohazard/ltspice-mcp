@@ -7,14 +7,13 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
-import psutil
 import pytest
 
 from ltspice_mcp.lib.parser_process import ParserProcessLimits, run_parser_sync
 from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.windows_job import python_launch
-from tests.conftest import LIVENESS_S
+from tests.conftest import LIVENESS_S, process_running
 from tests.test_raw_header import LIMITS
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -66,7 +65,7 @@ def test_real_worker_returns_complete_resident_plots_after_reaping(tmp_path, nam
         deadline=time.monotonic() + LIVENESS_S,
         limits=PROCESS_LIMITS,
     )
-    assert not psutil.pid_exists(reply.worker_pid)
+    assert not process_running(reply.worker_pid)
     parsed = read_parsed_artifacts(
         reply.metadata, directory, limits=LIMITS, require_raw=True, request=request
     )
@@ -95,7 +94,7 @@ def test_cache_hit_recaptures_bytes_and_companion_presence(tmp_path):
             deadline=time.monotonic() + LIVENESS_S,
             limits=PROCESS_LIMITS,
         )
-        assert not psutil.pid_exists(reply.worker_pid)
+        assert not process_running(reply.worker_pid)
         return reply.metadata
 
     first = call("first")
@@ -129,7 +128,7 @@ def test_log_operation_captures_facts_without_requiring_raw_decode(tmp_path, raw
         deadline=time.monotonic() + LIVENESS_S,
         limits=PROCESS_LIMITS,
     )
-    assert not psutil.pid_exists(reply.worker_pid)
+    assert not process_running(reply.worker_pid)
     parsed = read_parsed_artifacts(
         reply.metadata,
         directory,
