@@ -375,6 +375,7 @@ class SessionState:
         """Clean up session resources at server shutdown."""
         self.editors.clear()
         self.results.clear()
+        await asyncio.to_thread(self.results.close_parser)
         if self.code_worker is not None:
             await self.code_worker.close()
         await self.job_registry.cancel_running(self.runners, self)

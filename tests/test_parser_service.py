@@ -38,6 +38,24 @@ def source(path, state, **kwargs):
     return services.source_for_raw_path(path, state, **kwargs)
 
 
+def lose_cleanup_receipts(monkeypatch):
+    """Every parser tree finds a stray process after its reply, so it is closed;
+    the close really reaps the tree but reports itself unconfirmed, as when the
+    cleanup receipt is lost. Returns the trees closed, by supervisor pid."""
+    closed = []
+    close = parser_process.ParserTree.close
+
+    def unconfirmed(tree):
+        assert close(tree)
+        if tree.process.pid not in closed:
+            closed.append(tree.process.pid)
+        return False
+
+    monkeypatch.setattr(parser_process.ParserTree, "contained", lambda tree: False)
+    monkeypatch.setattr(parser_process.ParserTree, "close", unconfirmed)
+    return closed
+
+
 def parser_requests(monkeypatch):
     """Every request the service sends a parser process, in order."""
     requests = []
@@ -96,6 +114,26 @@ def test_same_stamp_rewrite_and_companion_presence_bind_content(
         services.load_raw_sync(selected, state_no_sim).descriptor.snapshot_id
         != fourth.descriptor.snapshot_id
     )
+
+
+def test_reads_reuse_the_sessions_parser_process(state_no_sim, work_dir, monkeypatch):
+    """Two reads of different content: one parser process serves both."""
+    spawned = []
+    popen = parser_process.subprocess.Popen
+
+    def counted(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(parser_process.subprocess, "Popen", counted)
+    one = write_raw(work_dir / "one.raw", 1.0)
+    two = write_raw(work_dir / "two.raw", 2.0)
+    first = services.load_raw_sync(source(one, state_no_sim), state_no_sim)
+    second = services.load_raw_sync(source(two, state_no_sim), state_no_sim)
+    assert (first.get_wave(0)[0], second.get_wave(0)[0]) == (1, 2)
+    assert len(spawned) == 1
+    assert not list((state_no_sim.store.root / "parsing").glob("*"))
 
 
 def test_all_plots_are_cached_before_selection_and_wrong_dialect_refuses(state_no_sim, work_dir):
@@ -222,16 +260,7 @@ async def test_public_artifacts_loader_returns_shared_snapshot_and_captures(
 
 def test_unconfirmed_tree_exit_retains_session_admission(state_no_sim, work_dir, monkeypatch):
     path = write_raw(work_dir / "unconfirmed.raw")
-    cleanup = parser_process._cleanup
-    cleaned_pids = []
-
-    def unconfirmed(process, *args):
-        assert cleanup(process, *args)
-        cleaned_pids.append(process.pid)
-        # Simulate loss of the cleanup receipt after real owned-tree cleanup.
-        return False
-
-    monkeypatch.setattr(parser_process, "_cleanup", unconfirmed)
+    cleaned_pids = lose_cleanup_receipts(monkeypatch)
     selected = source(path, state_no_sim)
     with pytest.raises(parser_service.ParserCleanupError) as first:
         services.load_raw_sync(selected, state_no_sim)
@@ -249,14 +278,7 @@ def test_retained_admission_errors_release_sources_and_have_fresh_tracebacks(
     state_no_sim, work_dir, monkeypatch
 ):
     path = write_raw(work_dir / "retained_failure.raw")
-    cleanup = parser_process._cleanup
-    cleaned_pids = []
     source_refs = []
-
-    def unconfirmed(process, *args):
-        assert cleanup(process, *args)
-        cleaned_pids.append(process.pid)
-        return False
 
     def failed_call():
         selected = source(path, state_no_sim)
@@ -267,7 +289,7 @@ def test_retained_admission_errors_release_sources_and_have_fresh_tracebacks(
             return failure
         pytest.fail("Unconfirmed cleanup must keep parser admission closed")
 
-    monkeypatch.setattr(parser_process, "_cleanup", unconfirmed)
+    cleaned_pids = lose_cleanup_receipts(monkeypatch)
     initial = failed_call()
     directory, worker_pid = initial.directory, initial.worker_pid
     assert directory.is_dir()
@@ -392,13 +414,7 @@ def test_retained_parser_failure_refuses_a_read_its_stamp_could_answer(
     path = write_raw(work_dir / "answered.raw")
     selected = source(path, state_no_sim)
     services.load_raw_sync(selected, state_no_sim)
-    cleanup = parser_process._cleanup
-
-    def unconfirmed(process, *args):
-        assert cleanup(process, *args)
-        return False
-
-    monkeypatch.setattr(parser_process, "_cleanup", unconfirmed)
+    lose_cleanup_receipts(monkeypatch)
     other = write_raw(work_dir / "unconfirmed.raw", 2.0)
     with pytest.raises(parser_service.ParserCleanupError) as failure:
         services.load_raw_sync(source(other, state_no_sim), state_no_sim)

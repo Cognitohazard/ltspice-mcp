@@ -1418,9 +1418,13 @@ runs in a contained parser process under a deadline, on top of the whole-call
 budgets. The shared loader validates captured bytes and snapshot identity before
 returning fully resident facts. A read of a source whose stat stamps are
 unchanged parses nothing: it is answered from the resident cache (the source
-check rules are under 3.3). Unconfirmed worker cleanup retains parser
-admission and scratch, and closes that cache path too; moving a parse to a
-thread alone does not contain it.
+check rules are under 3.3). A session keeps one parser process tree between
+parses rather than starting one per parse: a parse's results are read only
+once its worker has replied and is again the tree's only process, and the tree
+is replaced after a bounded number of parses, a bounded age and two idle
+minutes, and at once after any failure or any process it did not expect.
+Unconfirmed worker cleanup retains parser admission and scratch, and closes
+that cache path too; moving a parse to a thread alone does not contain it.
 
 **Schema residency.** Every authorable field lives in the tool's
 `inputSchema`: `oneOf`, literal discriminants, `additionalProperties: false`,

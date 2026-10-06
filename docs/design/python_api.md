@@ -126,9 +126,10 @@ stop. So:
    `drain_pending`, in that existing order. Step 3 guarantees no bridge task is
    still using the caches it clears.
 5. Bounded-drain the residual loop tasks shutdown left behind. Shared artifact
-   loaders settle their contained parser processes before releasing ownership;
-   unconfirmed cleanup retains parser admission and scratch rather than claiming
-   the worker exited. Then `shutdown_asyncgens`, stop the loop, close it on its
+   loaders settle their contained parser processes before releasing ownership,
+   and `state.shutdown()` closes the session's kept parser tree; unconfirmed
+   cleanup retains parser admission and scratch rather than claiming the
+   worker exited. Then `shutdown_asyncgens`, stop the loop, close it on its
    own thread, join.
 6. `close()` is idempotent. Concurrent callers get a deterministic
    `ApiClosedError` (or a `CancelledError` mapped to one). The session lease is

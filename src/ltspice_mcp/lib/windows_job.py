@@ -16,6 +16,8 @@ import time
 from ctypes import wintypes
 from functools import cache
 
+_BASIC_ACCOUNTING_INFORMATION = 1
+_ASSOCIATE_COMPLETION_PORT_INFORMATION = 7
 _EXTENDED_LIMIT_INFORMATION = 9
 _BREAKAWAY_OK = 0x0800
 _KILL_ON_JOB_CLOSE = 0x2000
@@ -24,8 +26,7 @@ _JOB_MEMORY = 0x0200
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-_EMPTY_POLL_S = 0.01
-"""How often closing a job re-reads its process count until it reaches zero."""
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
 def python_launch() -> tuple[str, dict[str, str] | None]:
@@ -81,6 +82,10 @@ class _ExtendedLimits(ctypes.Structure):
     ]
 
 
+class _AssociateCompletionPort(ctypes.Structure):
+    _fields_ = [("CompletionKey", ctypes.c_void_p), ("CompletionPort", wintypes.HANDLE)]
+
+
 class _BasicAccounting(ctypes.Structure):
     _fields_ = [
         ("TotalUserTime", ctypes.c_longlong),
@@ -118,6 +123,20 @@ def _kernel():
             [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)],
             wintypes.BOOL,
         ),
+        "CreateIoCompletionPort": (
+            [wintypes.HANDLE, wintypes.HANDLE, ctypes.c_size_t, wintypes.DWORD],
+            wintypes.HANDLE,
+        ),
+        "GetQueuedCompletionStatus": (
+            [
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.DWORD),
+                ctypes.POINTER(ctypes.c_size_t),
+                ctypes.POINTER(ctypes.c_void_p),
+                wintypes.DWORD,
+            ],
+            wintypes.BOOL,
+        ),
     }
     for name, (arguments, result) in signatures.items():
         function = getattr(kernel, name)
@@ -135,7 +154,13 @@ def _check(result):
 
 
 class WindowsJob:
-    """Own a process tree until close, independently of its root's lifetime."""
+    """Own a process tree until close, independently of its root's lifetime.
+
+    A job closed with a cleanup bound terminates its processes and waits for
+    the count to reach zero. Windows posts a message to the job's completion
+    port when that happens, so the wait ends with it; delivery of those
+    messages is not guaranteed, so the count itself is what decides.
+    """
 
     def __init__(
         self,
@@ -154,9 +179,23 @@ class WindowsJob:
         ):
             raise ValueError("Job cleanup timeout must be finite and positive")
         self._cleanup_timeout_s = cleanup_timeout_s
+        self._port = None
         kernel = _kernel()
         self._handle = _check(kernel.CreateJobObjectW(None, None))
         try:
+            if cleanup_timeout_s is not None:
+                self._port = _check(
+                    kernel.CreateIoCompletionPort(_INVALID_HANDLE_VALUE, None, 0, 1)
+                )
+                association = _AssociateCompletionPort(None, self._port)
+                _check(
+                    kernel.SetInformationJobObject(
+                        self._handle,
+                        _ASSOCIATE_COMPLETION_PORT_INFORMATION,
+                        ctypes.byref(association),
+                        ctypes.sizeof(association),
+                    )
+                )
             limits = _ExtendedLimits()
             limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE
             if allow_breakaway:
@@ -184,32 +223,52 @@ class WindowsJob:
             self.close()
             raise
 
+    def active_processes(self) -> int:
+        """How many processes the job holds now."""
+        kernel = _kernel()
+        accounting = _BasicAccounting()
+        _check(
+            kernel.QueryInformationJobObject(
+                self._handle,
+                _BASIC_ACCOUNTING_INFORMATION,
+                ctypes.byref(accounting),
+                ctypes.sizeof(accounting),
+                None,
+            )
+        )
+        return int(accounting.ActiveProcesses)
+
+    def _await_empty(self, deadline: float) -> None:
+        kernel = _kernel()
+        message = wintypes.DWORD()
+        key = ctypes.c_size_t()
+        overlapped = ctypes.c_void_p()
+        while self.active_processes():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Windows parser job did not become empty")
+            # A timeout or an unrelated message both lead back to the count.
+            kernel.GetQueuedCompletionStatus(
+                self._port,
+                ctypes.byref(message),
+                ctypes.byref(key),
+                ctypes.byref(overlapped),
+                max(1, int(remaining * 1000)),
+            )
+
     def close(self) -> None:
         if self._handle is not None:
             kernel = _kernel()
             try:
                 if self._cleanup_timeout_s is not None:
                     _check(kernel.TerminateJobObject(self._handle, 1))
-                    deadline = time.monotonic() + self._cleanup_timeout_s
-                    while True:
-                        accounting = _BasicAccounting()
-                        _check(
-                            kernel.QueryInformationJobObject(
-                                self._handle,
-                                1,
-                                ctypes.byref(accounting),
-                                ctypes.sizeof(accounting),
-                                None,
-                            )
-                        )
-                        if accounting.ActiveProcesses == 0:
-                            break
-                        if time.monotonic() >= deadline:
-                            raise TimeoutError("Windows parser job did not become empty")
-                        time.sleep(_EMPTY_POLL_S)
+                    self._await_empty(time.monotonic() + self._cleanup_timeout_s)
             finally:
                 _check(kernel.CloseHandle(self._handle))
                 self._handle = None
+                if self._port is not None:
+                    kernel.CloseHandle(self._port)
+                    self._port = None
 
 
 def detached_creation_flags() -> int:
