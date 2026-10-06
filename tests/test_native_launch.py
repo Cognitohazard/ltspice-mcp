@@ -12,6 +12,7 @@ from spicelib.sim.sim_runner import SimRunner
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, _Execution
+from ltspice_mcp.lib.job_lifecycle import LiveJob
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pdk_native import PROFILE, NativePaths, NativeRequest, PreparedLaunch
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
@@ -123,7 +124,7 @@ async def test_copied_native_setup_rejection_has_no_submission_stamp(
     monkeypatch.setattr("spicelib.sim.sim_runner.RunTask", forbid_task)
     runner = ExperimentRunner(asyncio.get_running_loop(), NGspiceSimulator, store.runs_root())
     request = _request(state_no_sim, work_dir, request_id="refused-native")
-    execution = _Execution(request, job, asyncio.Semaphore(1), 1)
+    execution = _Execution(request, LiveJob(job), asyncio.Semaphore(1), 1)
 
     await runner._run_case(execution, case)
 

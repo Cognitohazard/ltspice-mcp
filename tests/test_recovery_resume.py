@@ -11,6 +11,7 @@ import pytest
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_resume import resume_experiment
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.recovery_journal import load_journal
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.runner_base import RunOutcome
@@ -33,12 +34,13 @@ async def failed_campaign(work_dir, monkeypatch):
     result = await _submit(state, variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}])
     assert result["status"] == "completed_with_failures"
     parent = state.all_jobs[result["job_id"]]
-    if parent.task is not None:
-        await parent.task
+    parent_task = state.job_registry.live[parent.job_id].task
+    if parent_task is not None:
+        await parent_task
     yield state, parent, submissions
-    for job in list(state.all_jobs.values()):
-        if job.task is not None:
-            await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
+    for live in list(state.job_registry.live.values()):
+        if live.task is not None:
+            await asyncio.wait_for(asyncio.shield(live.task), LIVENESS_S)
     await state.job_registry.drain_pending()
 
 
@@ -96,7 +98,7 @@ async def test_competing_resume_ids_admit_exactly_one_child(failed_campaign):
     assert len(successes) == len(failures) == 1
     assert failures[0].code == "recovery_stale_parent"
     child = successes[0].job
-    await asyncio.wait_for(child.done_event.wait(), LIVENESS_S)
+    await asyncio.wait_for(state.job_registry.live[child.job_id].wait(), LIVENESS_S)
     assert len(submitted) == 3 and len(set(submitted)) == 3
     journal = load_journal(Store(state.working_dir), parent.request_id)
     assert journal is not None and journal.head_job_id == child.job_id
@@ -117,7 +119,7 @@ async def test_resume_id_does_not_overwrite_global_submission_index(failed_campa
     reply = await resume_experiment(
         state, job_id=parent.job_id, resume_request_id="shared-name", retry_failed=True
     )
-    await asyncio.wait_for(reply.job.done_event.wait(), LIVENESS_S)
+    await asyncio.wait_for(state.job_registry.live[reply.job.job_id].wait(), LIVENESS_S)
     assert path.read_bytes() == before
     replay = await resume_experiment(
         state, job_id=parent.job_id, resume_request_id="shared-name", retry_failed=True
@@ -205,8 +207,9 @@ async def test_stopped_attempt_selection_uses_recorded_reason(work_dir, monkeypa
             runner = state.runners.get_experiment_runner_for(parent)
             assert runner is not None
             await runner.cancel(parent, control_token=parent.control_token)
-        assert parent.task is not None
-        await asyncio.wait_for(asyncio.shield(parent.task), LIVENESS_S)
+        parent_task = state.job_registry.live[parent.job_id].task
+        assert parent_task is not None
+        await asyncio.wait_for(asyncio.shield(parent_task), LIVENESS_S)
         assert parent.cases[0].failure_code == stop
         assert not callbacks
         recorded_fixture_simulator(monkeypatch)
@@ -227,8 +230,9 @@ async def test_stopped_attempt_selection_uses_recorded_reason(work_dir, monkeypa
             )
             assert explicit.resumed
             child = explicit.job
-        assert child.job_id != parent.job_id and child.task is not None
-        await asyncio.wait_for(asyncio.shield(child.task), LIVENESS_S)
+        child_task = state.job_registry.live[child.job_id].task
+        assert child.job_id != parent.job_id and child_task is not None
+        await asyncio.wait_for(asyncio.shield(child_task), LIVENESS_S)
         assert child.cases[0].status == "produced", child.cases[0].error
     finally:
         await state.job_registry.cancel_running(state.runners, state)
@@ -272,7 +276,7 @@ async def test_resume_selects_recorded_named_executable(
     assert not reply.is_error, data
     assert data is not None
     child = state.all_jobs[data["job_id"]]
-    await asyncio.wait_for(child.done_event.wait(), LIVENESS_S)
+    await asyncio.wait_for(state.job_registry.live[child.job_id].wait(), LIVENESS_S)
     assert child.status == "completed"
     assert child.recovery.execution == parent.recovery.execution
     assert len(submitted) == 3
@@ -282,14 +286,14 @@ async def test_resume_caps_dwell_and_reports_it(failed_campaign, monkeypatch):
     from ltspice_mcp.tools import jobs
 
     state, parent, submitted = failed_campaign
-    wait = jobs._wait_for_jobs_target
+    wait = state.job_registry.wait
     timeouts = []
 
-    async def observed_wait(job, state, *, timeout_s, wait_for):
+    async def observed_wait(job, timeout_s, *, wait_for: WaitFor = "all"):
         timeouts.append(timeout_s)
-        return await wait(job, state, timeout_s=timeout_s, wait_for=wait_for)
+        return await wait(job, timeout_s, wait_for=wait_for)
 
-    monkeypatch.setattr(jobs, "_wait_for_jobs_target", observed_wait)
+    monkeypatch.setattr(state.job_registry, "wait", observed_wait)
     response = await jobs.handle_jobs(
         jobs.JobsInput.model_validate(
             {

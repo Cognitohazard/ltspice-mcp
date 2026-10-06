@@ -31,10 +31,6 @@ _SOURCE_SPAWNS: dict[str, tuple[int, str]] = {
         1,
         "the owner primitive itself",
     ),
-    "ltspice_mcp/lib/experiment_runner.py:ExperimentRunner.start_committed": (
-        1,
-        "the job's coordinator, kept on job.task; wait() and settled() await it",
-    ),
     "ltspice_mcp/lib/experiment_runner.py:ExperimentRunner._run_job": (
         3,
         "case tasks are gathered; the deadline and external-cancel watchers are "

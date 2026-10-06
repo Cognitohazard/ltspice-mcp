@@ -15,15 +15,21 @@ Registration events (``submitted``) and discovery events
 (``interrupted_recovered`` when the status doesn't change on load) are
 emitted directly by ``JobRegistry`` — they aren't transitions. The
 state machine only covers actual status changes.
+
+A job record is data. What a waiter waits on belongs to :class:`LiveJob`,
+which exists only for a job this process admitted and runs: a record read
+back from the store, this process's or another's, has nothing to wait on.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.experiment_types import ExperimentJob
+from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import JobEvent, emit_job_event
 
@@ -69,7 +75,7 @@ def runs_terminal(status: str) -> bool:
     """Have an experiment's runs all reached terminality at this status?
 
     True for every terminal status, and also for ``analyzing``: the coordinator
-    validates completeness and sets ``runs_done_event`` BEFORE transitioning
+    validates completeness and marks the runs done BEFORE transitioning
     there, and the table above lets nothing but a terminal status follow it — so
     ``analyzing`` means every run is done and only the attached analysis is
     still in flight. That is what lets an experiment's own attached analysis
@@ -80,6 +86,23 @@ def runs_terminal(status: str) -> bool:
     equivalence is stated once rather than re-derived per module.
     """
     return status in TERMINAL_STATUSES or status == "analyzing"
+
+
+WaitFor = Literal["all", "runs"]
+
+
+def finished(job: ExperimentJob, wait_for: WaitFor = "all") -> bool:
+    """Whether a job's record says it is done, or with ``"runs"``, its runs are.
+
+    What a record can answer with nothing live behind it: a job another process
+    runs, or one no process runs any more. Runs are done at a status that
+    guarantees it (``runs_terminal``), or once every case has a terminal status.
+    """
+    if wait_for == "runs":
+        return runs_terminal(job.status) or all(
+            case.status in TERMINAL_CASE_STATUSES for case in job.cases
+        )
+    return job.status in TERMINAL_STATUSES
 
 
 # Which event name fires when a job enters a given status. Every entry must be
@@ -105,8 +128,8 @@ def _apply(
     new_status: str,
     valid: dict[str, frozenset[str]],
 ) -> None:
-    """Validate and apply a status change; set completed_at + done_event
-    on terminal transitions.
+    """Validate and apply a status change; set completed_at on terminal
+    transitions.
 
     Same-status calls are rejected to surface double-emit bugs; callers
     that want idempotency should guard on ``job.status`` themselves.
@@ -126,7 +149,6 @@ def _apply(
     job.status = new_status  # type: ignore[assignment]
     if new_status in TERMINAL_STATUSES:
         job.completed_at = now()
-        job.done_event.set()
 
 
 def transition(
@@ -173,3 +195,58 @@ def reconcile_experiment_restart(
     if new_status not in {"interrupted", "completed", "completed_with_failures"}:
         raise InvalidTransitionError(f"invalid experiment restart outcome {new_status!r}")
     _apply(job, new_status, VALID_EXPERIMENT_TRANSITIONS)
+
+
+@dataclass(eq=False)
+class LiveJob:
+    """A job this process admitted and runs: its record, and what waiters wait on.
+
+    Only the registry makes one (``JobRegistry.reserve``), for a job this
+    process admitted, and the coordinator running the job signals it. A record
+    the store reads back has none, so nothing can wait on a copy that nothing
+    will ever signal. Every status change of a live job goes through
+    :meth:`transition`, which keeps the signals in step with the record.
+    """
+
+    job: ExperimentJob
+    #: The coordinator running the job, once one has started.
+    task: asyncio.Task[None] | None = None
+    _runs_done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    _done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+
+    @property
+    def done(self) -> bool:
+        """Whether the job has reached a terminal status."""
+        return self._done.is_set()
+
+    @property
+    def runs_done(self) -> bool:
+        """Whether every run has finished; an attached analysis may still be running."""
+        return self._runs_done.is_set()
+
+    def mark_runs_done(self) -> None:
+        """Record that every case is terminal and completeness is reconciled."""
+        self._runs_done.set()
+
+    def transition(
+        self, new_status: str, *, state: SessionState | None = None, **event_extra: Any
+    ) -> None:
+        """``transition()`` the record, then release whoever a terminal status frees."""
+        transition(self.job, new_status, state=state, **event_extra)
+        if new_status in TERMINAL_STATUSES:
+            self._runs_done.set()
+            self._done.set()
+
+    async def wait(self, timeout_s: float | None = None, *, wait_for: WaitFor = "all") -> bool:
+        """Wait until the job is done, or its runs are; False if ``timeout_s`` ran out."""
+        event = self._done if wait_for == "all" else self._runs_done
+        if event.is_set():
+            return True
+        if timeout_s is None:
+            await event.wait()
+            return True
+        try:
+            await asyncio.wait_for(event.wait(), timeout_s)
+        except TimeoutError:
+            return False
+        return True

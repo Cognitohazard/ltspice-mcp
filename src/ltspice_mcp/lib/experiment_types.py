@@ -6,7 +6,6 @@ coordination, lifecycle, and MCP presentation live in separate layers.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -237,6 +236,10 @@ class ExperimentJob:
 
     An experiment deliberately has no ``netlist`` attribute. Each case names
     the staged deck it ran, and each source record names the authoring input.
+
+    Data only. The store reads records back as this same class, so a record
+    carries nothing to wait on: a job this process runs is waited on through
+    its ``job_lifecycle.LiveJob``.
     """
 
     job_id: str
@@ -276,6 +279,3 @@ class ExperimentJob:
     #: about this load, not about the job, so it is never serialized: a record
     #: read again later reconciles nothing and reports False.
     restart_reconciled: bool = field(default=False, repr=False)
-    runs_done_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    done_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    task: asyncio.Task[None] | None = field(default=None, repr=False)

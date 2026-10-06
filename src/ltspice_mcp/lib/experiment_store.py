@@ -630,10 +630,6 @@ def deserialize_job(
     )
     _validate_recovery_job(job)
     _reconcile_restart(job, liveness=liveness)
-    if all(case.status in TERMINAL_CASE_STATUSES for case in job.cases):
-        job.runs_done_event.set()
-    if job.status in _TERMINAL_STATUSES:
-        job.done_event.set()
     return job
 
 
