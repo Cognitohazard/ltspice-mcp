@@ -21,7 +21,7 @@ from ltspice_mcp.api import _session as _api_session
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
-from ltspice_mcp.lib import now, parser_service, raster
+from ltspice_mcp.lib import now, parser_process, parser_service, raster
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, StagedDecks
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -930,6 +930,18 @@ def tool_text(result) -> str:
 def work_dir(tmp_path: Path) -> Path:
     """Temporary working directory for tests."""
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _close_parser_trees() -> Iterator[None]:
+    """Close the parser tree each session keeps, once its test is done.
+
+    A session keeps one between reads and closes it when it shuts down, which
+    a test's session usually never does; without this every test that parsed
+    would leave a worker running until the suite ends.
+    """
+    yield
+    parser_process.close_all()
 
 
 @pytest.fixture

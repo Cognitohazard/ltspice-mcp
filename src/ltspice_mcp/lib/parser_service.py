@@ -296,6 +296,7 @@ def _load(
             deadline=deadline,
             limits=PROCESS_LIMITS,
             cancel=cancel,
+            warm=state.results.warm_parser(PROCESS_LIMITS, directory.parent),
         )
         reaped = True
         _check_active(deadline, cancel)

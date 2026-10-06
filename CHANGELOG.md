@@ -453,6 +453,15 @@ tool-surface changes.
   angle. `edit_schematic` lists in `stages` only the stages that did not
   complete (the no-op `stage_assets` is gone), and its commit hint no longer
   restates the `wiring` counts.
+- A `run_experiments` call repeating the `request_id` of one still being
+  admitted (a client retry, or two calls racing) could find the job's record
+  before the job was registered, then wait on a copy read from disk that
+  nothing updated: it answered only when its whole `wait_s` ran out, however
+  early the job finished. A repeat of a job another server process runs read
+  its record once and waited the same way. The job is now registered before
+  its record is written, so a repeat waits on the live job, and a repeat of
+  another process's job re-reads its record until it finishes, as
+  `jobs(action="wait")` does.
 
 ### Added
 
@@ -699,6 +708,17 @@ tool-surface changes.
   and the store no longer imports psutil until it checks a job owner's
   liveness. On Linux a repeated read took about 300 ms and now takes under a
   millisecond.
+- A session keeps its parser process between reads of new results instead of
+  starting one per read. A read's results are taken only once the worker has
+  replied and is again the only process in its tree. The tree is replaced
+  after 64 reads, after half an hour, and after two idle minutes, and at once
+  after a failed, cancelled or timed-out read or a process it did not start;
+  a tree whose exit cannot be confirmed still closes parser admission. Waits
+  on a parser process are woken by the operating system (a pidfd and
+  `SIGCHLD` on Linux, the Job Object's completion port on Windows) rather than
+  by polling every 5 or 10 ms. On Linux each read of new results took about
+  400 ms; a session's first read still does, and the reads after it take
+  about 15 ms.
 - A run's simulator library roots, the install directories staging accepts as
   the simulator's own, are now those of the LTspice build the run launches:
   LTspice XVII's `Documents\LTspiceXVII\lib`, or LTspice 24's

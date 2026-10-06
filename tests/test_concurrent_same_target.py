@@ -232,6 +232,56 @@ async def test_identical_request_id_submits_one_job(
     assert [p.parent.name for p in _staged_deck_dirs(work_dir)] == [first["job_id"]]
 
 
+async def test_a_replay_admitted_before_the_job_registers_sees_it_finish(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A duplicate that answers while the first is mid-admission waits on the live job.
+
+    The first submission is held just after it leaves the request gate, so its
+    record exists while nothing later in its pipeline has run. The duplicate
+    finds that record and starts waiting on its receipt in exactly that window;
+    only then is the first let go. The duplicate's wait must end when the job
+    does. A receipt built on a copy read from the record waits on an event
+    nothing ever sets, and answers only when its own dwell runs out.
+    """
+    from ltspice_mcp.tools import experiments as experiments_module
+
+    fake_simulator(monkeypatch)
+    after_gate = threading.Event()
+    release = threading.Event()
+    replay_waiting = asyncio.Event()
+    index = ExperimentRunner._register_circuits
+    dwell = experiments_module._dwell_and_respond
+
+    def held_after_gate(candidate, working_dir):
+        after_gate.set()
+        assert release.wait(LIVENESS_S)
+        index(candidate, working_dir)
+
+    async def observed_dwell(receipt, *args, **kwargs):
+        if receipt.replayed:
+            replay_waiting.set()
+        return await dwell(receipt, *args, **kwargs)
+
+    monkeypatch.setattr(ExperimentRunner, "_register_circuits", staticmethod(held_after_gate))
+    monkeypatch.setattr(experiments_module, "_dwell_and_respond", observed_dwell)
+    deck = _deck(work_dir / "replay-window.cir")
+    # A dwell longer than the wait below, so only the job finishing can end it.
+    payload = _run_payload(deck, "replay-window", execution={"wait_s": 120})
+    first = asyncio.create_task(_call(state_with_sim, "run_experiments", dict(payload)))
+    try:
+        await await_until(after_gate.is_set, what="the first submission to leave the gate")
+        duplicate = asyncio.create_task(_call(state_with_sim, "run_experiments", dict(payload)))
+        await asyncio.wait_for(replay_waiting.wait(), LIVENESS_S)
+    finally:
+        release.set()
+    replayed = await asyncio.wait_for(duplicate, LIVENESS_S)
+    original = await asyncio.wait_for(first, LIVENESS_S)
+    assert replayed["replayed"] is True
+    assert replayed["job_id"] == original["job_id"]
+    assert replayed["status"] == "completed", replayed
+
+
 def _hold_request_lock(
     work_dir: str, request_id: str, held: Any, release: Any, released: Any
 ) -> None:
