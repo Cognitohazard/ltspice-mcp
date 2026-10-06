@@ -23,6 +23,7 @@ from ltspice_mcp.lib.parser_process import (
     JsonValue,
     ParserProcessError,
     ParserProcessLimits,
+    WarmParser,
     run_parser,
     run_parser_sync,
 )
@@ -54,6 +55,16 @@ def parse_request(request, work_dir):
             ctypes.PyDLL("kernel32").Sleep(60000)
     if mode == "crash":
         os._exit(17)
+    if mode == "stray":
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=os.name != "nt",
+        )
+        parser_file_in(work_dir, "result.json").write_text(json.dumps({
+            "value": 2 / 3, "pid": os.getpid(), "child_pid": child.pid,
+        }), encoding="utf-8")
+        return
     if mode == "memory":
         bytearray(1024 * 1024 * 1024)
     if mode == "error":
@@ -566,8 +577,13 @@ def test_stdio_setup_failure_confirms_no_child_and_allows_fresh_worker(
     call_dir, limits, monkeypatch
 ):
     directory = call_dir()
+
+    def no_pipes(*args, **kwargs):
+        raise FileNotFoundError("standard stream setup failed")
+
     with monkeypatch.context() as setup:
-        setup.setattr(os, "devnull", str(directory / "missing" / "null"))
+        # Before any child exists: the pipes are made inside Popen, ahead of exec.
+        setup.setattr(subprocess.Popen, "_get_handles", no_pipes)
         with pytest.raises(ParserProcessError) as caught:
             run_parser_sync(
                 {},
@@ -787,3 +803,139 @@ def test_windows_job_default_and_parser_limits(monkeypatch):
     strict = windows_job.WindowsJob(1, allow_breakaway=False, memory_limit_bytes=134217728)
     strict.close()
     assert captured == [(0x2000 | 0x0800, 0, 0), (0x2000 | 0x0100 | 0x0200, 134217728, 134217728)]
+
+
+# ---------------------------------------------------------------------------
+# A tree kept between calls
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def warm(tmp_path, limits):
+    """A warm parser running the fixture worker, and a maker of call directories."""
+    home = tmp_path / "warm"
+    home.mkdir()
+    parser_file_in(home, "parser_fixture.py").write_text(_FIXTURE, encoding="utf-8")
+    parser = WarmParser(limits, home, _worker_module="parser_fixture")
+    calls = iter(range(1000))
+
+    def call(request: dict[str, JsonValue], **kwargs) -> tuple:
+        directory = tmp_path / f"call-{next(calls)}"
+        directory.mkdir()
+        kwargs.setdefault("deadline", time.monotonic() + LIVENESS_S)
+        reply = parser.call(
+            request, work_dir=directory, cancel=kwargs.pop("cancel", None), **kwargs
+        )
+        return reply, directory
+
+    yield parser, call
+    parser.close()
+
+
+def test_a_warm_parser_serves_calls_from_one_worker(warm):
+    parser, call = warm
+    first, directory = call({})
+    second, _ = call({})
+    assert first.metadata["value"] == second.metadata["value"] == pytest.approx(2 / 3)
+    assert first.worker_pid == second.worker_pid == first.metadata["pid"]
+    assert struct.unpack("<d", parser_file_in(directory, "array_0000.bin").read_bytes())[
+        0
+    ] == pytest.approx(2 / 3)
+    assert psutil.pid_exists(first.worker_pid)
+    assert parser.close()
+    _assert_gone([first.worker_pid])
+
+
+def test_a_cancelled_warm_call_reaps_the_tree_and_the_next_starts_fresh(warm, tmp_path):
+    _, call = warm
+    before, _ = call({})
+    cancel = threading.Event()
+    started: dict[str, int] = {}
+
+    def cancel_once_started():
+        try:
+            started.update(
+                wait_until(
+                    written(parser_file_in(tmp_path / "call-1", "started.json"), json.loads),
+                    what="the warm decoder to reach its runaway seam",
+                )
+            )
+        finally:
+            cancel.set()
+
+    canceller = threading.Thread(target=cancel_once_started)
+    canceller.start()
+    try:
+        with pytest.raises(ParserProcessError) as caught:
+            call({"mode": "runaway"}, cancel=cancel)
+    finally:
+        cancel.set()
+        canceller.join(timeout=LIVENESS_S)
+    assert caught.value.code == "cancelled" and caught.value.reaped
+    _assert_gone([*started.values(), before.worker_pid])
+    after, _ = call({})
+    assert after.worker_pid != before.worker_pid
+
+
+def test_a_stray_process_ends_the_tree_before_its_call_is_read(warm):
+    _, call = warm
+    reply, _ = call({"mode": "stray"})
+    assert reply.metadata["value"] == pytest.approx(2 / 3)
+    # The tree held more than its worker after the reply, so it was closed and
+    # reaped before the result was read: neither process outlives the call.
+    _assert_gone([reply.worker_pid, reply.metadata["child_pid"]])
+    assert call({})[0].worker_pid != reply.worker_pid
+
+
+def test_a_crashed_warm_worker_reports_it_and_the_next_call_starts_fresh(warm):
+    _, call = warm
+    with pytest.raises(ParserProcessError) as caught:
+        call({"mode": "crash"})
+    assert caught.value.code == "worker_crashed" and caught.value.reaped
+    assert call({})[0].metadata["value"] == pytest.approx(2 / 3)
+
+
+def test_a_warm_tree_is_replaced_after_its_call_budget(warm, monkeypatch):
+    monkeypatch.setattr(parser_process, "WARM_CALLS", 2)
+    _, call = warm
+    pids = [call({})[0].worker_pid for _ in range(3)]
+    assert pids[0] == pids[1] != pids[2]
+    _assert_gone([pids[0]])
+
+
+def test_an_idle_warm_tree_is_closed(warm, monkeypatch):
+    monkeypatch.setattr(parser_process, "WARM_IDLE_S", 0.0)
+    _, call = warm
+    reply, _ = call({})
+    wait_until(lambda: not psutil.pid_exists(reply.worker_pid), what="the idle tree to be closed")
+
+
+def test_a_closed_warm_parser_still_closes_its_next_tree_when_idle(warm, monkeypatch):
+    parser, call = warm
+    first, _ = call({})
+    assert parser.close()
+    monkeypatch.setattr(parser_process, "WARM_IDLE_S", 0.0)
+    second, _ = call({})
+    assert second.worker_pid != first.worker_pid
+    wait_until(
+        lambda: not psutil.pid_exists(second.worker_pid), what="the reopened tree's idle close"
+    )
+
+
+def test_an_unconfirmed_idle_close_refuses_the_next_call(warm, monkeypatch):
+    close = parser_process.ParserTree.close
+    closed = threading.Event()
+
+    def unconfirmed(tree):
+        assert close(tree)
+        closed.set()
+        return False
+
+    monkeypatch.setattr(parser_process.ParserTree, "close", unconfirmed)
+    monkeypatch.setattr(parser_process, "WARM_IDLE_S", 0.0)
+    _, call = warm
+    call({})
+    assert closed.wait(LIVENESS_S)
+    with pytest.raises(ParserProcessError) as caught:
+        call({})
+    assert caught.value.code == "cleanup_failed" and not caught.value.reaped

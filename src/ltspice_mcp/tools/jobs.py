@@ -731,17 +731,9 @@ async def _wait_for_jobs_target(
         current = state.all_jobs.get(job.job_id, job)
         return current, not _runs_finished(current, wait_for)
 
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    current = job
-    while True:
-        current = await state.job_registry.refresh_foreign_job_async(current)
-        if _runs_finished(current, wait_for):
-            return current, False
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            return current, True
-        await asyncio.sleep(min(experiment_store.FOREIGN_RECORD_POLL_S, remaining))
+    return await state.job_registry.wait_for_foreign(
+        job, timeout_s, lambda current: _runs_finished(current, wait_for)
+    )
 
 
 def _activity_timestamp(job: ExperimentJob) -> str:
