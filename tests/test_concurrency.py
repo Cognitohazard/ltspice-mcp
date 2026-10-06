@@ -167,12 +167,14 @@ class TestAsyncFileLock:
                 pass
 
         task = asyncio.create_task(waiter())
-        assert await asyncio.to_thread(mid_attempt.wait, 10), "the attempt never took the lock"
+        assert await asyncio.to_thread(mid_attempt.wait, LIVENESS_S), (
+            "the attempt never took the lock"
+        )
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         cancelled.set()
-        assert await asyncio.to_thread(attempt_done.wait, 10), "the attempt never finished"
+        assert await asyncio.to_thread(attempt_done.wait, LIVENESS_S), "the attempt never finished"
 
         monkeypatch.undo()
         with file_lock(target, timeout=0):

@@ -245,19 +245,21 @@ def test_call_preserves_durable_result_when_interrupt_precedes_completion(
     api = Api()
     original_result = session_module.Future.result
     calls = 0
+    interrupt_landed = threading.Event()
 
     def interrupt_once(future, timeout=None):
         nonlocal calls
         calls += 1
         if calls == 1:
+            interrupt_landed.set()
             raise KeyboardInterrupt
         return original_result(future, timeout=timeout)
 
     monkeypatch.setattr(session_module.Future, "result", interrupt_once)
 
     async def durable_receipt() -> dict[str, str]:
-        # timing: fake work; the patched result() interrupts the wait on it
-        await asyncio.sleep(0.01)
+        # The receipt exists only once the wait on it has been interrupted.
+        assert await asyncio.to_thread(interrupt_landed.wait, LIVENESS_S)
         return {"job_id": "exp-preserved", "control_token": "token"}
 
     try:

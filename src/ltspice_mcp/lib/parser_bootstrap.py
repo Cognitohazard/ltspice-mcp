@@ -19,6 +19,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+_REAP_POLL_S = 0.005
+"""How often the guardian rescans its adopted descendants while it reaps them."""
+
 
 def require_containment_platform() -> None:
     """Refuse hosts without an established memory and process ownership contract."""
@@ -166,7 +169,7 @@ def _reap_tree(child: subprocess.Popen[bytes], grace: float) -> bool:
                 pass
         except ChildProcessError:
             return True
-        time.sleep(0.005)
+        time.sleep(_REAP_POLL_S)
     return False
 
 

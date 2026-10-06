@@ -1267,10 +1267,7 @@ class TestWait:
         stale = experiment_store.load_job(owner_job.job_id, work_dir, own_is_alive=True)
         assert stale is not None
         foreign_state.all_jobs[stale.job_id] = stale
-        monkeypatch.setattr(
-            "ltspice_mcp.tools.jobs._FOREIGN_WAIT_POLL_S",
-            0.01,
-        )
+        monkeypatch.setattr(experiment_store, "FOREIGN_RECORD_POLL_S", 0.01)
 
         # The owner finishes only once the waiter has read the record as
         # running, so the wait has to refresh it from the sidecar to return.

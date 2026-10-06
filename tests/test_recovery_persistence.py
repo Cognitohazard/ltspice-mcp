@@ -47,7 +47,7 @@ async def test_strict_checkpoint_orders_after_pending_write(
     monkeypatch.setattr(experiment_store, "save_job", delayed)
     registry.persist_job(job)
     try:
-        assert await asyncio.to_thread(entered.wait, 5)
+        assert await asyncio.to_thread(entered.wait, LIVENESS_S)
         strict = asyncio.create_task(registry.persist_strict(job))
         await asyncio.sleep(0)
         assert not strict.done()
@@ -129,7 +129,7 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
     first = asyncio.create_task(registry.persist_strict(older))
     tasks = [first]
     try:
-        assert await asyncio.to_thread(entered.wait, 5)
+        assert await asyncio.to_thread(entered.wait, LIVENESS_S)
         target = first
         if cancel_target == "drain":
             target = asyncio.create_task(registry.drain_pending())
@@ -146,7 +146,7 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
         completed_before_release = second.done()
         release.set()
         await second
-        assert await asyncio.to_thread(finished.wait, 5)
+        assert await asyncio.to_thread(finished.wait, LIVENESS_S)
         with pytest.raises(asyncio.CancelledError):
             await first
         saved = experiment_store.load_job(older.job_id, work_dir, own_is_alive=True)
@@ -183,7 +183,7 @@ async def test_strict_atomic_replace_failure_survives_repeated_cancellation(
     monkeypatch.setattr(lib, "replace_file", unavailable)
     strict = asyncio.create_task(registry.persist_strict(newer))
     try:
-        assert await asyncio.to_thread(entered.wait, 5)
+        assert await asyncio.to_thread(entered.wait, LIVENESS_S)
         for _ in range(2):
             strict.cancel()
             await asyncio.sleep(0)

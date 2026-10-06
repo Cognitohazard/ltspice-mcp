@@ -26,6 +26,9 @@ from ltspice_mcp.lib.windows_job import WindowsJob, python_launch
 
 JsonValue: TypeAlias = bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"] | None
 _WORKER_MODULE = "ltspice_mcp.lib.parser_worker"
+_KILLED_REAP_WAIT_S = 0.2
+"""After a guardian outlives its grace and is killed, how long cleanup waits to
+reap it. The call reports the tree unconfirmed either way."""
 
 
 @dataclass(frozen=True)
@@ -192,7 +195,7 @@ def _cleanup(
         with contextlib.suppress(OSError):
             process.kill()
         with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=0.2)
+            process.wait(timeout=_KILLED_REAP_WAIT_S)
         return False
     if sys.platform == "win32":
         return job_empty
