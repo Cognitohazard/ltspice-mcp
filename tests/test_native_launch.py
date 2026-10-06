@@ -69,7 +69,7 @@ async def test_setup_sources_and_writes_in_its_own_directory(tmp_path):
     assert handle.output_folder == output
     assert handle.cwd == folder
     for task in handle.active_tasks:
-        await asyncio.to_thread(task.join, 5)
+        await asyncio.to_thread(task.join, LIVENESS_S)
     assert all(not task.is_alive() for task in handle.active_tasks)
 
 

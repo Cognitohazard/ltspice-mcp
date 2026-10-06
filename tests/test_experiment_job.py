@@ -670,28 +670,27 @@ class TestExperimentLifecycle:
         """
         released = asyncio.Event()
         entered: list[str] = []
+        in_progress_at_return: list[int] = []
 
         class BlockingRunner:
             async def cancel(self, job: Any) -> list[dict[str, Any]]:
                 entered.append(job.job_id)
-                # Only the last job to start releases the first, so this
-                # returns at all only if the cancels overlap.
+                # Only the last job to start releases the first, so a cancel
+                # returns on its own only if all three overlap. Run one at a
+                # time, each but the last is cut off by its bound instead.
                 if len(entered) == 3:
                     released.set()
                 await released.wait()
+                in_progress_at_return.append(len(entered))
                 return []
 
         registry, runners, _live, following = self._shutdown_pair(
             work_dir, BlockingRunner(), live_count=3
         )
 
-        # No monkeypatched timeout: under a per-job bound the first cancel waits
-        # out the real one and this outer wait expires first.
-        # timing: shorter than one real per-job cancel bound, which is the point
-        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=3)
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
 
-        assert len(entered) == 3
-        assert released.is_set()
+        assert in_progress_at_return == [3, 3, 3]
         assert following.status == "cancelled"
 
     @pytest.mark.asyncio

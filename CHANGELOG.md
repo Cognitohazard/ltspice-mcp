@@ -683,6 +683,11 @@ tool-surface changes.
 
 ### Changed
 
+- `jobs(action="wait")` on a job another server process owns notices the
+  owner finishing within half a second; it re-read the record every two
+  seconds before. The owner's watch for a cancellation requested by another
+  process, and the requester's wait for that cancel to land, use the same
+  interval.
 - Reading a result again no longer starts a parser process. Each read first
   stats the source's RAW, log and console files. A source whose files still
   carry the device, inode, size, modification time and change time recorded

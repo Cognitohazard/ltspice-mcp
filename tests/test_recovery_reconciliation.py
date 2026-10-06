@@ -55,7 +55,7 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
     try:
         stale = await observer.get_or_load_async(root.job_id)
         assert stale is not None and stale.restart_reconciled
-        assert await asyncio.to_thread(reader_entered.wait, 5)
+        assert await asyncio.to_thread(reader_entered.wait, LIVENESS_S)
         admitted = await admit_initial(runner, request)
         assert admitted.start
         job = admitted.job
@@ -63,7 +63,7 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
         if checkpoint != "prepared":
             ready = asyncio.get_running_loop().create_future()
             await runner.start_committed(request, admitted, ready)
-            assert await asyncio.to_thread(launch_entered.wait, 5)
+            assert await asyncio.to_thread(launch_entered.wait, LIVENESS_S)
             if checkpoint == "completed":
                 assert job.task is not None
                 await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
