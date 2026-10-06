@@ -397,7 +397,6 @@ class TestOwnerPidLiveness:
             async def cancel(self, job, **kwargs):
                 cancelled.append(job.job_id)
                 job.status = "cancelled"
-                job.done_event.set()
                 return []
 
         await registry.cancel_running(_StubRunners(), None)

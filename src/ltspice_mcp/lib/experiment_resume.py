@@ -32,6 +32,7 @@ from ltspice_mcp.lib.experiment_types import (
     failure_row,
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
+from ltspice_mcp.lib.job_lifecycle import finished
 from ltspice_mcp.lib.native_execution import prepare_native_cases, prepare_native_retry
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY
 from ltspice_mcp.lib.proc_kill import (
@@ -505,8 +506,6 @@ def _make_child(
     )
     child.status, child.started_at, child.completed_at = "queued", now(), None
     child.error, child.restart_reconciled = None, False
-    child.runs_done_event.clear()
-    child.done_event.clear()
     child.observations, child.artifacts = [], []
     child.analysis = AnalysisStage(
         status="pending" if parent.analysis.request is not None else "not_requested",
@@ -658,10 +657,7 @@ async def resume_experiment(
                 raise RecoveryError(
                     "recovery_stale_parent", "Resume must address the current lineage head"
                 )
-            if (
-                not parent.done_event.is_set()
-                or state.runners.get_experiment_runner_for(parent) is not None
-            ):
+            if not finished(parent) or state.runners.get_experiment_runner_for(parent) is not None:
                 raise RecoveryError("recovery_owner_active", "The prior attempt is still active")
             await asyncio.to_thread(_verify_absence, parent, simulator)
             await asyncio.to_thread(_verify_execution, parent, store, simulator)

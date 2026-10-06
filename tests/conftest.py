@@ -1,6 +1,7 @@
 """Shared fixtures and helpers for ltspice-mcp tests."""
 
 import asyncio
+import contextlib
 import importlib.abc
 import inspect
 import os
@@ -13,6 +14,7 @@ import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from pathlib import Path
 
+import psutil
 import pytest
 from spicelib import AscEditor
 
@@ -29,6 +31,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
@@ -645,6 +648,26 @@ _POLL_INTERVAL_S = 0.01
 LIVENESS_S = 30.0
 
 
+async def job_done(
+    state: SessionState,
+    job: ExperimentJob,
+    *,
+    wait_for: WaitFor = "all",
+    timeout_s: float = LIVENESS_S,
+) -> bool:
+    """Whether ``job``, or with ``wait_for="runs"`` its runs, finished within
+    ``timeout_s``: the registry's one wait, read as a yes or no."""
+    _, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=wait_for)
+    return not timed_out
+
+
+async def coordinator_returned(state: SessionState, job: ExperimentJob) -> None:
+    """Wait, up to ``LIVENESS_S``, for the coordinator running ``job`` to return."""
+    task = state.job_registry.live[job.job_id].task
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), LIVENESS_S)
+
+
 def make_raw_mock(
     trace_names: list[str] | None = None,
     axis: typing.Any = None,
@@ -930,6 +953,67 @@ def tool_text(result) -> str:
 def work_dir(tmp_path: Path) -> Path:
     """Temporary working directory for tests."""
     return tmp_path
+
+
+_spawned: dict[int, psutil.Process] = {}
+"""Each process the running test started, by pid, identified as it started."""
+
+
+@pytest.fixture(autouse=True)
+def _identify_spawned_processes(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Record every process a test starts, by pid and start time, as it starts.
+
+    ``process_running`` reads this record: a pid alone does not name a process
+    on Windows, which hands a freed pid to the next process quickly, and with
+    parallel test workers starting processes all the time a reaped worker's pid
+    can name a stranger a moment later.
+    """
+    spawn = subprocess.Popen.__init__
+
+    def identified(self: subprocess.Popen[typing.Any], *args: typing.Any, **kwargs: typing.Any):
+        spawn(self, *args, **kwargs)
+        with contextlib.suppress(psutil.Error):
+            _spawned[self.pid] = psutil.Process(self.pid)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", identified)
+    yield
+    _spawned.clear()
+
+
+def identify(pid: int) -> psutil.Process | None:
+    """The process ``pid`` names now, by pid and start time; None if it has exited.
+
+    Call it while the process is known to run: once it exits, the pid may
+    name another.
+    """
+    try:
+        return psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return None
+
+
+def process_running(process: psutil.Process | int | None, created: float | None = None) -> bool:
+    """Whether a process a test means still runs.
+
+    Pass what ``identify`` returned, or a pid with the start time
+    (``psutil.Process.create_time``) taken while it ran. A bare pid is matched
+    against the start time recorded when this test started it, and only a pid
+    this test did not start falls back to the pid alone, which names a process
+    only where pids are not soon reused.
+    """
+    if process is None:
+        return False
+    if isinstance(process, psutil.Process):
+        return process.is_running()
+    if created is not None:
+        try:
+            return psutil.Process(process).create_time() == created
+        except psutil.NoSuchProcess:
+            return False
+    started = _spawned.get(process)
+    if started is not None:
+        return started.is_running()
+    return psutil.pid_exists(process)
 
 
 @pytest.fixture(autouse=True)

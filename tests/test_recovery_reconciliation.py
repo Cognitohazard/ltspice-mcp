@@ -14,7 +14,7 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.recovery_journal import new_root_journal, save_journal
 from ltspice_mcp.lib.recovery_records import ProcessIdentity
 from ltspice_mcp.state import SessionState
-from tests.conftest import LIVENESS_S
+from tests.conftest import LIVENESS_S, coordinator_returned
 from tests.test_recovery_launch import RecordedNGspice, _process
 from tests.test_recovery_launch import committed as committed
 
@@ -65,8 +65,7 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
             await runner.start_committed(request, admitted, ready)
             assert await asyncio.to_thread(launch_entered.wait, LIVENESS_S)
             if checkpoint == "completed":
-                assert job.task is not None
-                await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
+                await coordinator_returned(state, job)
         before = job.store_path.read_bytes()
         reader_release.set()
         await observer.drain_pending()
@@ -94,15 +93,15 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
             assert saved.cases[0].status == "produced"
             assert case_recovery.attempt.outputs is not None
         launch_release.set()
-        assert job.task is not None
-        await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
+        await coordinator_returned(state, job)
         assert len(calls) == 1
     finally:
         reader_release.set()
         launch_release.set()
         await observer.drain_pending()
-        if job is not None and job.task is not None:
-            await asyncio.wait_for(asyncio.shield(job.task), LIVENESS_S)
+        live = state.job_registry.live.get(job.job_id) if job is not None else None
+        if live is not None and live.task is not None:
+            await asyncio.wait_for(asyncio.shield(live.task), LIVENESS_S)
 
 
 async def test_dead_owner_reconciliation_is_saved(committed, caplog):

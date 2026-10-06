@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import errno
 import json
 import logging
@@ -44,7 +45,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
+from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, LiveJob, finished, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -400,6 +401,66 @@ class TestExperimentTypesAndStore:
         assert canonical_fingerprint(first) != canonical_fingerprint(without_default)
 
 
+class TestLiveJobs:
+    def test_a_job_record_carries_nothing_to_wait_on(self, work_dir: Path):
+        """The store reads records back as this same class, so anything waitable
+        on a record is something a copy carries and nothing will ever set.
+
+        What a waiter waits on lives on the ``LiveJob`` the registry holds for
+        a job this process runs, and only there.
+        """
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="running")
+        experiment_store.save_job(job)
+        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        assert loaded is not None
+
+        waitable = (asyncio.Event, asyncio.Future, asyncio.Condition, asyncio.Semaphore)
+        for record in (job, loaded):
+            held = {
+                name: type(value).__name__
+                for name, value in vars(record).items()
+                if isinstance(value, waitable)
+            }
+            assert held == {}
+        assert [
+            f.name for f in dataclasses.fields(ExperimentJob) if "asyncio" in str(f.type)
+        ] == []
+
+    @pytest.mark.asyncio
+    async def test_waiting_on_a_record_nothing_here_runs_answers_from_it(self, work_dir: Path):
+        """A record naming this process as owner, with no live job behind it
+        here, will not change: the registry's wait answers from the record."""
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="running")
+        registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
+        registry.add_experiment_job(job)
+
+        # A cap on a hang: the wait asked for is longer, so only an answer from
+        # the record returns in time.
+        current, timed_out = await asyncio.wait_for(registry.wait(job, 120), LIVENESS_S)
+
+        assert current is job and timed_out
+        assert job.job_id not in registry.live
+
+    @pytest.mark.asyncio
+    async def test_a_live_job_is_released_by_its_terminal_transition(self, work_dir: Path):
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="running")
+        registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
+        live = registry.reserve(job)
+        registry.add_experiment_job(job)
+        waiting = asyncio.create_task(registry.wait(job, LIVENESS_S, wait_for="runs"))
+
+        live.transition("cancelled")
+
+        assert await waiting == (job, False)
+        assert live.done and live.runs_done
+
+
 class TestExperimentLifecycle:
     def test_runtime_transition_cannot_enter_restart_only_interrupted(
         self,
@@ -408,21 +469,24 @@ class TestExperimentLifecycle:
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
+        live = LiveJob(job)
 
         with pytest.raises(InvalidTransitionError, match="no event mapping"):
-            transition(job, "interrupted")
+            live.transition("interrupted")
 
         assert job.status == "queued"
-        assert not job.done_event.is_set()
+        assert not live.done
 
     def test_analysis_stage_transitions_and_terminal_event(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
-        transition(job, "running")
-        transition(job, "analyzing")
-        transition(job, "completed_with_failures")
-        assert job.done_event.is_set()
+        live = LiveJob(job)
+        live.transition("running")
+        live.transition("analyzing")
+        assert not live.done
+        live.transition("completed_with_failures")
+        assert live.done and live.runs_done
         assert job.completed_at is not None
         with pytest.raises(InvalidTransitionError):
             transition(job, "running")
@@ -449,8 +513,8 @@ class TestExperimentLifecycle:
         assert loaded.cases[0].raw_file == raw
         assert loaded.completeness.submitted == 1
         assert loaded.completeness.produced == 1
-        assert loaded.runs_done_event.is_set()
-        assert loaded.done_event.is_set()
+        assert finished(loaded, "runs")
+        assert finished(loaded)
 
     @pytest.mark.parametrize("recorded", [False, True])
     def test_restart_promotes_a_case_whose_results_outlived_its_checkpoint(
@@ -538,7 +602,7 @@ class TestExperimentLifecycle:
         assert loaded.status == "completed"
         assert loaded.analysis.status == "completed"
         assert loaded.analysis.result == {"summary": "done"}
-        assert loaded.done_event.is_set()
+        assert finished(loaded)
 
     @pytest.mark.asyncio
     async def test_shutdown_without_live_runner_reconciles_all_cases(
@@ -552,6 +616,7 @@ class TestExperimentLifecycle:
         job.completeness.expanded = 2
         job.analysis = AnalysisStage(status="pending", request={"recipes": []})
         registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
+        live = registry.reserve(job)
         registry.add_experiment_job(job)
         runners = SimpleNamespace(get_experiment_runner_for=lambda _job: None)
 
@@ -561,8 +626,8 @@ class TestExperimentLifecycle:
         assert job.completeness.cancelled == 2
         assert job.completeness.terminal == job.completeness.expanded
         assert job.analysis.status == "cancelled"
-        assert job.runs_done_event.is_set()
-        assert job.done_event.is_set()
+        assert live.runs_done
+        assert live.done
 
     def _shutdown_pair(
         self, work_dir: Path, runner: Any, *, live_count: int = 1
@@ -583,9 +648,9 @@ class TestExperimentLifecycle:
         ]
         following = _job(work_dir, circuit, job_id="exp_next_0001", status="running")
         registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
-        for job in live:
+        for job in [*live, following]:
+            registry.reserve(job)
             registry.add_experiment_job(job)
-        registry.add_experiment_job(following)
         live_ids = {job.job_id for job in live}
         runners = SimpleNamespace(
             get_experiment_runner_for=lambda job: runner if job.job_id in live_ids else None
@@ -602,7 +667,7 @@ class TestExperimentLifecycle:
 
         class HungRunner:
             async def cancel(self, job: Any) -> list[dict[str, Any]]:
-                # A wedged simulator: the coordinator's done_event never fires.
+                # A wedged simulator: the coordinator never finishes the job.
                 entered.append(job.job_id)
                 await asyncio.Event().wait()
                 return []
@@ -616,14 +681,14 @@ class TestExperimentLifecycle:
 
         assert len(entered) == 3
         assert following.status == "cancelled"
-        assert following.done_event.is_set()
+        assert registry.live[following.job_id].done
         # The DELEGATED jobs — the wedged ones. A cancel that never returned
         # reconciled nothing, so shutdown's own bookkeeping owes them a terminal
         # status; without it they persist as "running" under a dying pid.
         for job in live:
             assert job.status == "cancelled", f"{job.job_id} left non-terminal by a hung cancel"
-            assert job.runs_done_event.is_set()
-            assert job.done_event.is_set()
+            assert registry.live[job.job_id].runs_done
+            assert registry.live[job.job_id].done
             assert [case.failure_code for case in job.cases] == ["server_shutdown"]
 
     @pytest.mark.asyncio
@@ -723,13 +788,15 @@ class TestExperimentLifecycle:
 
         first = _job(work_dir, circuit, job_id="exp_stubborn", status="running")
         second = _job(work_dir, circuit, job_id="exp_stubborn_2", status="running")
-        first.task = asyncio.create_task(_refuses_to_stop("first"))
-        second.task = asyncio.create_task(_refuses_to_stop("second"))
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        tasks = []
+        for job, name in ((first, "first"), (second, "second")):
+            live = registry.reserve(job)
+            registry.add_experiment_job(job)
+            live.task = asyncio.create_task(_refuses_to_stop(name))
+            tasks.append(live.task)
         await asyncio.sleep(0)  # let both reach their first await
 
-        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
-        registry.add_experiment_job(first)
-        registry.add_experiment_job(second)
         runners = SimpleNamespace(get_experiment_runner_for=lambda _job: None)
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
@@ -744,7 +811,7 @@ class TestExperimentLifecycle:
             assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
 
         release.set()
-        await asyncio.gather(first.task, second.task)
+        await asyncio.gather(*tasks)
 
     @pytest.mark.asyncio
     async def test_shutdown_survives_a_runner_cancel_that_raises(self, work_dir: Path):
@@ -759,13 +826,13 @@ class TestExperimentLifecycle:
         await registry.cancel_running(runners, None)
 
         assert following.status == "cancelled"
-        assert following.done_event.is_set()
+        assert registry.live[following.job_id].done
         # A refused cancel is a cancel that did not happen: the DELEGATED job it
         # refused still needs shutdown's bookkeeping, not an exemption for having
         # been asked.
         for job in live:
             assert job.status == "cancelled", f"{job.job_id} left non-terminal by a refused cancel"
-            assert job.done_event.is_set()
+            assert registry.live[job.job_id].done
 
 
 class TestExperimentDiscovery:
@@ -1198,8 +1265,6 @@ class TestCancelledExperimentReads:
         job.cases[0].raw_file = raw
         job.cases[0].log_file = log
         job.completeness.produced = 1
-        job.done_event.set()
-        job.runs_done_event.set()
         state_no_sim.add_experiment_job(job)
 
         context = services.resolve_experiment_run(job.job_id, state_no_sim)

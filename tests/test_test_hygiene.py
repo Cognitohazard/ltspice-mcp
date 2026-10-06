@@ -31,10 +31,6 @@ _SOURCE_SPAWNS: dict[str, tuple[int, str]] = {
         1,
         "the owner primitive itself",
     ),
-    "ltspice_mcp/lib/experiment_runner.py:ExperimentRunner.start_committed": (
-        1,
-        "the job's coordinator, kept on job.task; wait() and settled() await it",
-    ),
     "ltspice_mcp/lib/experiment_runner.py:ExperimentRunner._run_job": (
         3,
         "case tasks are gathered; the deadline and external-cancel watchers are "
@@ -402,6 +398,47 @@ def test_every_wait_is_capped_at_the_liveness_bound():
     assert not found, (
         "waits capped below LIVENESS_S without a '# timing: <reason>':\n" + "\n".join(found)
     )
+
+
+def test_no_test_names_a_process_by_its_pid_alone():
+    """Windows hands a freed pid to the next process quickly, and parallel test
+    workers start processes all the time, so ``psutil.pid_exists`` on a reaped
+    worker's pid can find a stranger. Ask ``process_running``
+    (``tests/conftest.py``), which also matches a process by its start time."""
+    found = [
+        f"{path.relative_to(ROOT)}:{call.lineno}"
+        for path in _test_files()
+        if path.name != "conftest.py"
+        for _scope, call in _calls(path)
+        if _call_name(call) == "pid_exists"
+    ]
+    assert not found, "pid checks that ignore reuse:\n" + "\n".join(found)
+
+
+def test_a_process_is_told_from_a_later_one_on_its_pid():
+    """``process_running`` matches by start time: the same pid started at
+    another moment is another process, and a process this test started is
+    checked against the start recorded when it was spawned."""
+    import subprocess
+    import sys
+
+    import psutil
+
+    from tests.conftest import LIVENESS_S, identify, process_running
+
+    me = psutil.Process()
+    assert process_running(identify(me.pid))
+    assert process_running(me.pid, me.create_time())
+    assert not process_running(me.pid, me.create_time() - 1)
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE
+    )
+    try:
+        assert process_running(child.pid)
+    finally:
+        child.communicate(timeout=LIVENESS_S)
+    assert not process_running(child.pid)
 
 
 def test_the_rules_catch_what_they_name():

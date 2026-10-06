@@ -12,6 +12,7 @@ Two layers of guarantee:
 
 from __future__ import annotations
 
+import ast
 import logging
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from ltspice_mcp.lib.job_lifecycle import (
     InvalidTransitionError,
     transition,
 )
+from tests.test_test_hygiene import SRC, _calls
 
 
 def _events(caplog: pytest.LogCaptureFixture) -> list[dict]:
@@ -135,3 +137,38 @@ class TestTransitionEvents:
 
         assert job.status == source
         assert _events(events_caplog) == []
+
+
+_PACKAGE = SRC / "ltspice_mcp"
+
+# Where a status may change without going through a live job: the live job's
+# own transition, and shutdown settling a job this process holds no live job for.
+_BARE_TRANSITIONS = {
+    ("lib/job_lifecycle.py", "LiveJob.transition"),
+    ("lib/job_registry.py", "JobRegistry.cancel_running"),
+}
+
+
+def _is_bare_transition(call: ast.Call) -> bool:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id == "transition"
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "transition"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "job_lifecycle"
+    )
+
+
+def test_a_running_jobs_status_changes_through_its_live_job() -> None:
+    """A bare ``transition()`` on a job this process runs would change the
+    record and leave everyone waiting on its live job waiting, so the status
+    of a job with a live job changes only through ``LiveJob.transition``."""
+    found = {
+        (path.relative_to(_PACKAGE).as_posix(), scope)
+        for path in sorted(_PACKAGE.rglob("*.py"))
+        for scope, call in _calls(path)
+        if _is_bare_transition(call)
+    }
+    assert found == _BARE_TRANSITIONS

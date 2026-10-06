@@ -462,6 +462,13 @@ tool-surface changes.
   its record is written, so a repeat waits on the live job, and a repeat of
   another process's job re-reads its record until it finishes, as
   `jobs(action="wait")` does.
+- A `run_experiments` repeat of a job whose record names this process as its
+  owner, with nothing in the process running it (a reused process id, or a
+  coordinator lost to a crash), still waited out its whole `wait_s` on a copy
+  of the record that nothing would finish. It now answers from the record at
+  once, as `jobs(action="wait")` already did. A job's record no longer carries
+  anything to wait on: what a wait waits on belongs to the job this process
+  runs, so a copy read from disk cannot be waited on by mistake.
 
 ### Added
 

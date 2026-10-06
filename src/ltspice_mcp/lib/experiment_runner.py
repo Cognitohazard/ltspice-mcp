@@ -43,7 +43,8 @@ from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import (
     VALID_EXPERIMENT_TRANSITIONS,
     InvalidTransitionError,
-    transition,
+    LiveJob,
+    finished,
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.native_execution import prepare_native_cases
@@ -455,7 +456,7 @@ class _IndexLookup:
 @dataclass
 class _Execution:
     request: ExperimentRunRequest
-    job: ExperimentJob
+    live: LiveJob
     semaphore: asyncio.Semaphore
     capacity: int
     # ``effective_run_timeout``, resolved once so the timer, the message and the
@@ -480,6 +481,11 @@ class _Execution:
     # own snapshot and each report the same transition.
     claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
     persistence_error: Exception | None = None
+
+    @property
+    def job(self) -> ExperimentJob:
+        """The record of the job this execution runs."""
+        return self.live.job
 
 
 class ExperimentRunner(RunnerBase):
@@ -514,13 +520,7 @@ class ExperimentRunner(RunnerBase):
         outside the process is waited on: a simulator that has not exited is
         not this runner's work until its exit is reported.
         """
-        while True:
-            pending = self._background.pending(job.job_id)
-            if job.task is not None and not job.task.done():
-                pending.append(job.task)
-            if not pending:
-                return
-            await asyncio.wait(pending)
+        await self._background.settled(job.job_id)
 
     def owns_experiment_job(self, job_id: str) -> bool:
         """Whether this runner launched ``job_id`` in the current process."""
@@ -668,14 +668,13 @@ class ExperimentRunner(RunnerBase):
         # await between them. A replay racing the original barrier can
         # therefore never observe a durable job that this process has not
         # either registered or recognized as already registered.
+        registry = request.state.job_registry
         registered = request.state.all_jobs.get(barrier.job.job_id)
+        running = registry.live.get(barrier.job.job_id)
+        coordinating = running is not None and running.coordinator is not None
         should_start = not barrier.replayed if barrier.start is None else barrier.start
         if should_start and registered is not barrier.job:
-            if self.owns_experiment_job(barrier.job.job_id) or (
-                registered is not None
-                and registered.task is not None
-                and not registered.task.done()
-            ):
+            if self.owns_experiment_job(barrier.job.job_id) or coordinating:
                 raise RecoveryError(
                     "recovery_owner_active", "A live coordinator owns this attempt"
                 )
@@ -690,12 +689,8 @@ class ExperimentRunner(RunnerBase):
             job = barrier.job
             request.state.add_experiment_job(job, already_persisted=True)
         execution = None
-        if (
-            should_start
-            and not self.owns_experiment_job(job.job_id)
-            and (job.task is None or job.task.done())
-        ):
-            execution = self._new_execution(request, job)
+        if should_start and not self.owns_experiment_job(job.job_id) and not coordinating:
+            execution = self._new_execution(request, registry.reserve(job))
             self._executions[job.job_id] = execution
         # A replay leaves the record as it is: the receipt's ``replayed`` says
         # this call was answered from it, and only the owner writes a record.
@@ -707,7 +702,9 @@ class ExperimentRunner(RunnerBase):
         if not receipt_ready.done():
             receipt_ready.set_result(receipt)
         if execution is not None:
-            job.task = self.loop.create_task(self._run_job(execution))
+            execution.live.task = self._background.spawn(
+                self._run_job(execution), key=job.job_id, loop=self.loop
+            )
 
     async def _durable_barrier(self, request: ExperimentRunRequest) -> AdmissionResult:
         """Claim the request id first, then stage under it.
@@ -910,8 +907,9 @@ class ExperimentRunner(RunnerBase):
     def _new_execution(
         self,
         request: ExperimentRunRequest,
-        job: ExperimentJob,
+        live: LiveJob,
     ) -> _Execution:
+        job = live.job
         capacity = self.case_capacity(request)
         run_timeout_s, run_timeout_source = effective_run_timeout(request)
         if job.recovery is not None:
@@ -936,37 +934,12 @@ class ExperimentRunner(RunnerBase):
             # Without the staging closure: this execution outlives the
             # submission call, and the closure holds that whole scope.
             request=replace(request, stage=already_staged),
-            job=job,
+            live=live,
             semaphore=asyncio.Semaphore(capacity),
             capacity=capacity,
             run_timeout_s=run_timeout_s,
             run_timeout_source=run_timeout_source,
         )
-
-    async def wait(
-        self,
-        job: ExperimentJob,
-        timeout_s: float | None = None,
-        *,
-        wait_for: Literal["all", "runs"] = "all",
-    ) -> bool:
-        """Wait for full terminality or run terminality without mutating the job.
-
-        Waits on the job this runner is executing under that id, which is the
-        one whose events are set, even when handed a copy read from its record.
-        """
-        execution = self._executions.get(job.job_id)
-        if execution is not None:
-            job = execution.job
-        event = job.done_event if wait_for == "all" else job.runs_done_event
-        if timeout_s is None:
-            await event.wait()
-            return True
-        try:
-            await asyncio.wait_for(event.wait(), timeout_s)
-        except TimeoutError:
-            return False
-        return True
 
     async def _run_job(self, execution: _Execution) -> None:
         job = execution.job
@@ -990,7 +963,7 @@ class ExperimentRunner(RunnerBase):
             self._reconcile_unfinished_cases(execution)
             job.completeness.validate_terminal()
             await self._persist_job(execution)
-            job.runs_done_event.set()
+            execution.live.mark_runs_done()
 
             if execution.stop_reason == "cancelled":
                 self._finish_unstarted_analysis(
@@ -1026,7 +999,7 @@ class ExperimentRunner(RunnerBase):
             job.error = str(exc)
             self._reconcile_unfinished_cases(execution)
             self._recount_completeness(job)
-            job.runs_done_event.set()
+            execution.live.mark_runs_done()
             self._finish_unstarted_analysis(
                 job,
                 status="failed",
@@ -1045,7 +1018,7 @@ class ExperimentRunner(RunnerBase):
                     # The committed identity remains replayable even when the
                     # storage device will not accept its failure checkpoint.
                     job.error += f"; failure checkpoint: {checkpoint_error}"
-                    transition(job, "failed", error=job.error)
+                    execution.live.transition("failed", error=job.error)
         finally:
             if execution.deadline_task is not None:
                 execution.deadline_task.cancel()
@@ -1060,7 +1033,7 @@ class ExperimentRunner(RunnerBase):
 
     async def _external_cancel_watch(self, execution: _Execution) -> None:
         """Observe durable cancellation requests made by another server process."""
-        while not execution.job.done_event.is_set():
+        while not execution.live.done:
             requested = await asyncio.to_thread(
                 experiment_store.cancellation_requested,
                 execution.job.job_id,
@@ -1087,7 +1060,7 @@ class ExperimentRunner(RunnerBase):
             await asyncio.sleep(0)
         else:
             await asyncio.sleep(deadline_s)
-        if execution.job.done_event.is_set():
+        if execution.live.done:
             return
         execution.job.observations.append(
             {
@@ -1113,7 +1086,7 @@ class ExperimentRunner(RunnerBase):
         """Publish terminal recovery state only after its durable checkpoint."""
         job = execution.job
         if job.recovery is None:
-            transition(job, status, state=execution.request.state, **extra)
+            execution.live.transition(status, state=execution.request.state, **extra)
             return
         if status in TERMINAL_STATUSES:
             if status not in VALID_EXPERIMENT_TRANSITIONS.get(job.status, frozenset()):
@@ -1122,10 +1095,10 @@ class ExperimentRunner(RunnerBase):
                 )
             snapshot = replace(job, status=status, completed_at=now())
             await self._persist_job(execution, snapshot)
-            transition(job, status, **extra)
+            execution.live.transition(status, **extra)
             job.completed_at = snapshot.completed_at
         else:
-            transition(job, status, **extra)
+            execution.live.transition(status, **extra)
             await self._persist_job(execution)
 
     def _verify_recovery_case(self, execution: _Execution, case: ExperimentCase) -> Path:
@@ -1700,7 +1673,7 @@ class ExperimentRunner(RunnerBase):
         # preserve recovery artifacts, and save the final facts.
         self._background.spawn(self._retire_late_exit(execution, case), key=job_id, loop=self.loop)
         self._release_slot(execution, case_id)
-        if execution.job.done_event.is_set() and not execution.retained_slots:
+        if execution.live.done and not execution.retained_slots:
             self._executions.pop(job_id, None)
 
     async def _retire_late_exit(self, execution: _Execution, case: ExperimentCase) -> None:
@@ -1989,12 +1962,14 @@ class ExperimentRunner(RunnerBase):
             )
         execution = self._executions.get(job.job_id)
         if execution is None:
-            if job.done_event.is_set():
+            if finished(job):
                 return []
             raise ExperimentCancellationError(
                 f"Experiment job {job.job_id} is not owned by a live coordinator in this process"
             )
-        if job.done_event.is_set():
+        # The record this execution runs, whichever copy the caller resolved.
+        job = execution.job
+        if execution.live.done:
             retained = [
                 case.run_token for case in job.cases if case.case_id in execution.retained_slots
             ]
@@ -2017,7 +1992,7 @@ class ExperimentRunner(RunnerBase):
         }
         execution.claimed_cancel_priors.update(before)
         self._request_stop(execution, "cancelled")
-        await job.done_event.wait()
+        await execution.live.wait()
         return [
             cancel_receipt_row(case, before[case.case_id], case.status)
             for case in job.cases

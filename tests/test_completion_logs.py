@@ -12,7 +12,7 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs
 from ltspice_mcp.lib.store import Store
-from tests.conftest import FIXTURES_DIR, LIVENESS_S
+from tests.conftest import FIXTURES_DIR, LIVENESS_S, job_done
 
 
 def captured_completion_facts(root, log=None, *, text=None, console=None):
@@ -302,5 +302,5 @@ async def test_coordinator_injects_explicit_fail_and_console_sources(
     callbacks[submissions[0]](
         runner_base.collect_run_outcome("", str(log), exit_code=-9, logs=facts)
     )
-    assert await runner.wait(receipt.job, LIVENESS_S)
+    assert await job_done(state_no_sim, receipt.job)
     assert not list((state_no_sim.store.root / "parsing").glob("*"))
