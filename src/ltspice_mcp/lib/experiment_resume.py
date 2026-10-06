@@ -441,7 +441,14 @@ async def admit_initial(
             candidate = runner.materialize_job(request, await request.stage())
             await asyncio.to_thread(_capture_execution, runner, request, candidate)
             journal = await asyncio.to_thread(new_root_journal, candidate)
-            await asyncio.to_thread(save_journal, store, journal)
+            # Reserved before the journal makes the id findable, so a replay of
+            # it gets this job rather than a copy whose events are never set.
+            request.state.job_registry.reserve(candidate)
+            try:
+                await asyncio.to_thread(save_journal, store, journal)
+            except BaseException:
+                request.state.job_registry.release(candidate)
+                raise
         except Exception:
             await asyncio.to_thread(runner.discard_staged_run_dir, request, store.working_dir)
             raise

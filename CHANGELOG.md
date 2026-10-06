@@ -453,6 +453,15 @@ tool-surface changes.
   angle. `edit_schematic` lists in `stages` only the stages that did not
   complete (the no-op `stage_assets` is gone), and its commit hint no longer
   restates the `wiring` counts.
+- A `run_experiments` call repeating the `request_id` of one still being
+  admitted (a client retry, or two calls racing) could find the job's record
+  before the job was registered, then wait on a copy read from disk that
+  nothing updated: it answered only when its whole `wait_s` ran out, however
+  early the job finished. A repeat of a job another server process runs read
+  its record once and waited the same way. The job is now registered before
+  its record is written, so a repeat waits on the live job, and a repeat of
+  another process's job re-reads its record until it finishes, as
+  `jobs(action="wait")` does.
 
 ### Added
 
