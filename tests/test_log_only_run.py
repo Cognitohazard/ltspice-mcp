@@ -87,8 +87,9 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
         receipt = await asyncio.wait_for(asyncio.shield(runner.submit(request)), LIVENESS_S)
         job = receipt.job
         assert await runner.wait(job, timeout_s=30)
-        assert job.task is not None
-        await job.task
+        task = state_no_sim.job_registry.live[job.job_id].task
+        assert task is not None
+        await task
         await state_no_sim.job_registry.drain_pending()
         assert job.status == "completed", job.failures
         assert case.status == "produced"

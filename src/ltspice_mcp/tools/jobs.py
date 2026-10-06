@@ -45,7 +45,6 @@ from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentJob,
 )
-from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
@@ -700,42 +699,6 @@ async def _resolve_jobs_target(args: _AddressedJobsInput, state: SessionState) -
     return await services.resolve_job_async(job_id, state)
 
 
-def _runs_finished(job: ExperimentJob, wait_for: Literal["all", "runs"]) -> bool:
-    if wait_for == "runs":
-        # Three ways to know, in cost order: the event this session set, the
-        # status the lifecycle guarantees it for, then the cases themselves —
-        # a job loaded from a peer's sidecar has no event of ours to read.
-        return (
-            job.runs_done_event.is_set()
-            or runs_terminal(job.status)
-            or all(case.status in TERMINAL_CASE_STATUSES for case in job.cases)
-        )
-    return job.done_event.is_set() or job.status in TERMINAL_STATUSES
-
-
-async def _wait_for_jobs_target(
-    job: ExperimentJob,
-    state: SessionState,
-    *,
-    timeout_s: float,
-    wait_for: Literal["all", "runs"],
-) -> tuple[ExperimentJob, bool]:
-    if _runs_finished(job, wait_for):
-        return job, False
-
-    if job.owner_pid == os.getpid():
-        runner = state.runners.get_experiment_runner_for(job)
-        if runner is None:
-            return job, True
-        await runner.wait(job, timeout_s, wait_for=wait_for)
-        current = state.all_jobs.get(job.job_id, job)
-        return current, not _runs_finished(current, wait_for)
-
-    return await state.job_registry.wait_for_foreign(
-        job, timeout_s, lambda current: _runs_finished(current, wait_for)
-    )
-
-
 def _activity_timestamp(job: ExperimentJob) -> str:
     activity = job.completed_at or job.started_at
     return activity.isoformat()
@@ -1145,9 +1108,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 head_job_id = job.job_id if receipt.resumed else await _recovery_head(job, state)
                 evaluation = replace(evaluation, head_job_id=head_job_id)
                 if wait_s > 0:
-                    job, _ = await _wait_for_jobs_target(
-                        job, state, timeout_s=wait_s, wait_for="all"
-                    )
+                    job, _ = await state.job_registry.wait(job, wait_s)
                 snapshot = await snapshot_receipt_live(job, state)
             except Exception as exc:
                 return failed_jobs_evaluation(
@@ -1201,12 +1162,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
         if isinstance(args, JobsWaitInput):
             timeout_s, note = held_to_cap("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
             held = () if note is None else (f"{note} Wait again to keep waiting.",)
-            job, timed_out = await _wait_for_jobs_target(
-                job,
-                state,
-                timeout_s=timeout_s,
-                wait_for=args.wait_for,
-            )
+            job, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=args.wait_for)
         # A runs page carries no observations, so it skips the progress reads.
         snapshot = (
             snapshot_receipt(job, state)

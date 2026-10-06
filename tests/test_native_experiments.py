@@ -345,7 +345,7 @@ async def test_cancelled_native_case_keeps_preparation_without_claiming_submissi
         assert not cancelled.is_error, cancelled
     finally:
         release.set()
-    await asyncio.wait_for(job.done_event.wait(), LIVENESS_S)
+    await asyncio.wait_for(state.job_registry.live[job.job_id].wait(), LIVENESS_S)
     case = job.cases[0]
     assert job.status == "cancelled"
     assert case.status == "cancelled"

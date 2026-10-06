@@ -24,7 +24,7 @@ from typing import Any
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
-from ltspice_mcp.lib.job_lifecycle import transition
+from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished, transition
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
@@ -80,8 +80,8 @@ async def _issue_cancels(cancels: list[Awaitable[Any]]) -> None:
         task.cancel()
 
 
-def _cancel_tasks(jobs: list[ExperimentJob]) -> list[Awaitable[Any]]:
-    """Cancel each job's still-live task; return the awaits for the bound above.
+def _cancel_tasks(jobs: list[LiveJob]) -> list[Awaitable[Any]]:
+    """Cancel each job's still-live coordinator; return the awaits for the bound above.
 
     Requesting cancellation is not the same as being stopped: a task that
     swallows ``CancelledError``, or is blocked inside a shielded section, keeps
@@ -107,11 +107,14 @@ class JobRegistry:
             circuits and evictions delete them. When False, the registry
             behaves as a pure in-memory store.
         jobs: The single source of truth for every job this session knows.
+        live: The jobs this process admitted, with what their waiters wait on.
+            A live job's id always resolves to its live record in ``jobs``.
     """
 
     persist_enabled: bool
     working_dir: Path = field(default_factory=Path.cwd)
     jobs: dict[str, ExperimentJob] = field(default_factory=dict)
+    live: dict[str, LiveJob] = field(default_factory=dict)
     observations: list[dict] = field(default_factory=list)
     _loaded_circuits: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
@@ -142,21 +145,42 @@ class JobRegistry:
             self.persist_job(job)
         emit_job_event("submitted", job, total_cases=job.completeness.expanded)
 
-    def reserve(self, job: ExperimentJob) -> None:
-        """Make a job being admitted the one this process resolves its id to.
+    def reserve(self, job: ExperimentJob) -> LiveJob:
+        """Make ``job`` one this process runs, and the one its id resolves to.
 
-        Called before the job's record or request index is written. Any reader
-        that finds the id on disk from then on, a replay above all, gets this
-        object rather than loading a second copy: a copy's events are never set,
-        so a replay waiting on one would wait out its whole dwell after the job
-        had finished. ``add_experiment_job`` completes the registration.
+        Called before the job's record or request index is written, so any
+        reader that finds the id on disk from then on, a replay above all, gets
+        this record and can wait on its live job rather than on a copy nothing
+        signals. ``add_experiment_job`` completes the registration. Reserving a
+        job already reserved returns its live job; reserving another record
+        under the same id (a recovery attempt taking over) replaces it.
         """
+        live = self.live.get(job.job_id)
+        if live is None or live.job is not job:
+            live = LiveJob(job)
+            self.live[job.job_id] = live
         self.jobs[job.job_id] = job
+        return live
 
     def release(self, job: ExperimentJob) -> None:
         """Withdraw a reservation whose record was never written."""
+        live = self.live.get(job.job_id)
+        if live is not None and live.job is job:
+            del self.live[job.job_id]
         if self.jobs.get(job.job_id) is job:
             del self.jobs[job.job_id]
+
+    def live_job(self, job_id: str) -> LiveJob | None:
+        """The live job behind ``job_id``, if this process admitted it."""
+        return self.live.get(job_id)
+
+    def coordinators(self) -> list[asyncio.Task[None]]:
+        """The coordinators of this process's jobs that have not finished."""
+        return [
+            live.task
+            for live in self.live.values()
+            if live.task is not None and not live.task.done()
+        ]
 
     def _evict_finished(self) -> None:
         """Evict the oldest terminal jobs once the registry is over the limit.
@@ -165,13 +189,14 @@ class JobRegistry:
         the in-memory entry so the two never drift. Async deletion drains
         earlier writes before it drops the per-job lock.
         """
-        finished = [(jid, j) for jid, j in self.jobs.items() if j.status in TERMINAL_STATUSES]
-        overflow = len(finished) - _MAX_FINISHED_JOBS
+        done = [(jid, j) for jid, j in self.jobs.items() if j.status in TERMINAL_STATUSES]
+        overflow = len(done) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
-        finished.sort(key=lambda pair: getattr(pair[1], "started_at", None) or 0)
-        for jid, j in finished[:overflow]:
+        done.sort(key=lambda pair: getattr(pair[1], "started_at", None) or 0)
+        for jid, j in done[:overflow]:
             del self.jobs[jid]
+            self.live.pop(jid, None)
             self._delete_persisted(j)
 
     # ------------------------------------------------------------------
@@ -203,6 +228,10 @@ class JobRegistry:
         """
         if not self._on_event_loop():
             return job
+        live = self.live.get(job.job_id)
+        if live is not None:
+            # This process runs it: the live record is the job, never a copy.
+            return live.job
         self.jobs[job.job_id] = job
         if job.restart_reconciled:
             self.persist_job(job)
@@ -306,9 +335,9 @@ class JobRegistry:
         self,
         job: ExperimentJob,
         timeout_s: float,
-        finished: Callable[[ExperimentJob], bool],
+        until: Callable[[ExperimentJob], bool],
     ) -> tuple[ExperimentJob, bool]:
-        """Re-read another process's job until ``finished`` holds or time runs out.
+        """Re-read another process's job until ``until`` holds or time runs out.
 
         Nothing in this process is told when another process's job moves, so
         the record is re-read every ``FOREIGN_RECORD_POLL_S``. Returns the
@@ -321,12 +350,34 @@ class JobRegistry:
         current = job
         while True:
             current = await self.refresh_foreign_job_async(current)
-            if finished(current):
+            if until(current):
                 return current, False
             remaining = deadline - loop.time()
             if remaining <= 0:
                 return current, True
             await asyncio.sleep(min(experiment_store.FOREIGN_RECORD_POLL_S, remaining))
+
+    async def wait(
+        self, job: ExperimentJob, timeout_s: float, *, wait_for: WaitFor = "all"
+    ) -> tuple[ExperimentJob, bool]:
+        """Wait for a job to finish, or its runs to; the latest view, and whether time ran out.
+
+        One answer for every caller, chosen by who can change the job: this
+        process's live job is waited on; another process's job is re-read from
+        its record; anything else has nothing that will change it here, so its
+        record answers at once.
+        """
+        live = self.live.get(job.job_id)
+        if live is not None:
+            done = await live.wait(timeout_s, wait_for=wait_for)
+            return live.job, not done
+        if finished(job, wait_for):
+            return job, False
+        if job.owner_pid not in (0, os.getpid()):
+            return await self.wait_for_foreign(
+                job, timeout_s, lambda current: finished(current, wait_for)
+            )
+        return job, True
 
     def refreshed_jobs(self) -> list[ExperimentJob]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.
@@ -701,8 +752,15 @@ class JobRegistry:
                         error="Server shut down before attached analysis completed",
                         completed_at=cancelled_at,
                     )
-                experiment.runs_done_event.set()
-                transition(experiment, "cancelled")
+                live = self.live.get(experiment.job_id)
+                if live is not None:
+                    live.transition("cancelled")
+                else:
+                    transition(experiment, "cancelled")
                 self.persist_job(experiment)
 
-        await _issue_cancels(_cancel_tasks(experiments))
+        await _issue_cancels(
+            _cancel_tasks(
+                [self.live[job.job_id] for job in experiments if job.job_id in self.live]
+            )
+        )

@@ -26,6 +26,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
+from ltspice_mcp.lib.store import OwnerLiveness
 from ltspice_mcp.state import SessionState
 from tests.conftest import LIVENESS_S, await_until, ngspice_binary_raw, staged_decks
 from tests.test_completion_logs import captured_completion_facts
@@ -903,7 +904,7 @@ class TestCaseConcurrencyAndTimeouts:
         assert await runner.wait(receipt.job, LIVENESS_S)
         assert receipt.job.cases[0].failure_code == "run_timeout"
         assert receipt.job.cases[0].raw_file is None
-        # Execution cleanup runs after done_event, past the watcher-task
+        # Execution cleanup runs after the job is done, past the watcher-task
         # cancellation awaits — poll instead of asserting synchronously.
         await await_until(lambda: runner._executions.get(receipt.job.job_id) is None)
         assert not await asyncio.to_thread(raw.exists)
@@ -1503,6 +1504,49 @@ class TestCancellationAndAnalysis:
         assert reporting[0][0]["prior_status"] == "running"
         assert reporting[0][0]["status"] == "cancelled"
 
+    async def test_cancel_handed_a_copy_of_the_record_follows_the_live_job(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A cancel given a record read back from disk still waits on, and
+        reports from, the job this runner is running: the copy is never
+        finished by anything."""
+        runner = ExperimentRunner(
+            asyncio.get_running_loop(),
+            MockSimulator,
+            work_dir,
+            max_parallel=1,
+        )
+        callbacks, submissions = _controlled_submit(monkeypatch, runner)
+        killed: list[str] = []
+
+        async def record_kill(token: str) -> None:
+            killed.append(token)
+
+        monkeypatch.setattr(runner, "_kill_case", record_kill)
+        receipt = await asyncio.shield(
+            runner.submit(
+                _request(state_no_sim, work_dir, request_id="cancel-a-copy", kill_grace_s=0.2)
+            )
+        )
+        await await_until(lambda: len(submissions) == 1)
+        copy = experiment_store.deserialize_job(
+            experiment_store.serialize_job(receipt.job),
+            receipt.job.store_path,
+            liveness=OwnerLiveness.ALIVE,
+        )
+        cancel_task = asyncio.create_task(runner.cancel(copy, control_token=receipt.control_token))
+        await await_until(lambda: bool(killed))
+        token = submissions[0]
+        callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
+
+        rows = await asyncio.wait_for(cancel_task, LIVENESS_S)
+
+        assert receipt.job.status == "cancelled"
+        assert [row["case_id"] for row in rows] == ["case_0000"]
+
     async def test_cancel_mid_launch_counts_the_case_as_submitted(
         self,
         state_no_sim: SessionState,
@@ -1581,7 +1625,7 @@ class TestCancellationAndAnalysis:
         await asyncio.wait_for(cancel_task, LIVENESS_S)
         assert receipt.job.status == "cancelled"
 
-    async def test_runs_done_event_precedes_attached_analysis_terminality(
+    async def test_runs_done_precedes_attached_analysis_terminality(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
@@ -1616,8 +1660,9 @@ class TestCancellationAndAnalysis:
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
         await asyncio.wait_for(analysis_started.wait(), LIVENESS_S)
-        assert receipt.job.runs_done_event.is_set()
-        assert not receipt.job.done_event.is_set()
+        live = state_no_sim.job_registry.live[receipt.job.job_id]
+        assert live.runs_done
+        assert not live.done
         assert receipt.job.status == "analyzing"
         assert receipt.job.analysis.status == "running"
         # timing: the runs event is already set, so this returns at once
