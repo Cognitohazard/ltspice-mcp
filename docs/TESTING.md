@@ -175,7 +175,14 @@ Windows runner, one per run. Three mechanisms now carry it:
   patterns every past race used. A line that must break a rule carries a
   `# timing: <reason>` comment saying why. A wait's timeout is
   `LIVENESS_S` (`tests/conftest.py`), a cap on a hang, never a claim about
-  how fast the runner is.
+  how fast the runner is, including a wait handed to `asyncio.to_thread`.
+- **Fake work that must outlast a budget is held, not slept.** A stand-in
+  for slow work blocks on an event the test sets once the call has returned,
+  or runs until the call's own deadline has passed; a sleep sized past the
+  budget guesses at it. Everything else inside the budget is made instant
+  first (a source loaded beforehand under `settled_stamps`, say), because
+  the half of such a test that has to fit inside the budget is the half that
+  fails on a slow runner.
 - **Races lose on Linux first.** `--jitter-seed=N` (`tests/schedule_jitter.py`)
   delays thread-to-loop hand-offs and process starts and fires timers up to
   15.6 ms early, as Windows does, with delays drawn from the seed and the

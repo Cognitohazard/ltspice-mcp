@@ -4,6 +4,7 @@ import asyncio
 import gc
 import os
 import struct
+import threading
 import time
 import traceback
 import weakref
@@ -18,7 +19,7 @@ from ltspice_mcp.lib import parser_process, parser_service, services
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.file_stamp import file_stamp
 from ltspice_mcp.lib.result_cache import ResultCache
-from tests.conftest import FIXTURES_DIR, stage_recorded_fixture
+from tests.conftest import FIXTURES_DIR, LIVENESS_S, await_until, stage_recorded_fixture
 
 
 def write_raw(path: Path, value=1.0):
@@ -178,27 +179,29 @@ def test_capture_key_binds_explicit_dialect_and_input_budget(state_no_sim, work_
     assert len({raw.descriptor.snapshot_id for raw in (first, explicit, changed)}) == 3
 
 
-async def test_async_loader_keeps_event_loop_responsive(state_no_sim, work_dir):
+async def test_async_loader_keeps_event_loop_responsive(state_no_sim, work_dir, monkeypatch):
+    """The parse runs off the loop: held mid-call, the loop still turns."""
     path = work_dir / "recorded.raw"
     path.write_bytes((FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes())
-    beats = 0
+    entered = threading.Event()
+    release = threading.Event()
+    run = parser_service.run_parser_sync
 
-    async def tick():
-        nonlocal beats
-        while True:
-            # timing: a heartbeat counting loop turns while the parse runs
-            await asyncio.sleep(0.002)
-            beats += 1
+    def held(request, **kwargs):
+        entered.set()
+        assert release.wait(LIVENESS_S)
+        return run(request, **kwargs)
 
-    ticker = asyncio.create_task(tick())
+    monkeypatch.setattr(parser_service, "run_parser_sync", held)
+    load = asyncio.create_task(services.load_raw(source(path, state_no_sim), state_no_sim))
     try:
-        raw = await services.load_raw(source(path, state_no_sim), state_no_sim)
+        # Polled from the loop, so it returns only if the loop keeps turning.
+        await await_until(entered.is_set, what="the parse to start")
+        assert not load.done()
     finally:
-        ticker.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await ticker
+        release.set()
+    raw = await load
     assert raw.descriptor.analysis == "transient"
-    assert beats >= 3
     np.testing.assert_array_equal(raw.get_wave("V(out)"), raw.plots[0].get_wave("V(out)"))
 
 

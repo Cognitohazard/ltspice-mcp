@@ -575,7 +575,7 @@ class TestExperimentSubmission:
             entered.set()
             # Wait off the loop: the barrier now runs as part of the pipeline
             # coroutine, so blocking here would stall the whole test.
-            if not await asyncio.to_thread(release.wait, 5):
+            if not await asyncio.to_thread(release.wait, LIVENESS_S):
                 raise TimeoutError("test barrier was not released")
             return await original(run_request)
 
@@ -585,7 +585,7 @@ class TestExperimentSubmission:
             return await asyncio.shield(runner.submit(request))
 
         handler = asyncio.create_task(handler_dwell())
-        assert await asyncio.to_thread(entered.wait, 2)
+        assert await asyncio.to_thread(entered.wait, LIVENESS_S)
         handler.cancel()
         release.set()
         with pytest.raises(asyncio.CancelledError):

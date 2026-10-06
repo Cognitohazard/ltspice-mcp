@@ -105,7 +105,7 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
         assert copied.parent == job.output_folder
         assert copied != deck
         assert not copied.with_suffix(".raw").exists()
-        await asyncio.to_thread(task.join, 5)
+        await asyncio.to_thread(task.join, LIVENESS_S)
         assert not task.is_alive()
         assert task.retcode == 0
         observation = next(

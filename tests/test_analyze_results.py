@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+import threading
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -25,6 +26,7 @@ from ltspice_mcp.lib import (
     experiment_store,
     metrics,
     now,
+    parser_service,
     result_store,
     services,
 )
@@ -45,7 +47,12 @@ from ltspice_mcp.tools.analyze import (
     evaluate_analysis_results,
     handle_analyze_results,
 )
-from tests.conftest import FIXTURES_DIR, make_experiment_job, stage_recorded_fixture
+from tests.conftest import (
+    FIXTURES_DIR,
+    LIVENESS_S,
+    make_experiment_job,
+    stage_recorded_fixture,
+)
 
 
 def _source(raw: Path, label: str = "dut") -> dict[str, Any]:
@@ -967,13 +974,11 @@ async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
     hashed: list[Path] = []
     original = result_store.sha256_file
 
-    def slow_digest(path):
+    def recorded_digest(path):
         hashed.append(Path(path))
-        # timing: a trap; the call under test must never reach it
-        time.sleep(0.2)
         return original(path)
 
-    monkeypatch.setattr(result_store, "sha256_file", slow_digest)
+    monkeypatch.setattr(result_store, "sha256_file", recorded_digest)
     data = await _analyze(
         state_no_sim,
         raw,
@@ -1437,55 +1442,83 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    settled_stamps: None,
 ):
-    from ltspice_mcp.lib import metrics
+    """The item deadline bounds processing of resident results, not only parsing.
 
+    Each source is loaded before its budgeted call, so every read inside the
+    call is answered from its stamp and the budget goes to the processing step
+    alone. That step is held until the call has returned, so it is still
+    running when the deadline fires however fast or slow the runner is. Left
+    to the call, the raw's first parse ran inside the budget, and a slow
+    process start used it up before processing began.
+    """
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 1.0
     processing_calls: list[str] = []
+    summary_release = threading.Event()
+    measurements_release = threading.Event()
+    parser_requests: list[str] = []
+    run_parser = parser_service.run_parser_sync
 
-    def slow_summary(*args, **kwargs):
+    def counted(request, **kwargs):
+        parser_requests.append(request["op"])
+        return run_parser(request, **kwargs)
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", counted)
+
+    def held_summary(*args, **kwargs):
         del args, kwargs
         processing_calls.append("summary")
-        # timing: fake work past the 1.0 s analysis budget
-        time.sleep(1.2)
+        assert summary_release.wait(LIVENESS_S)
         return {}
 
-    monkeypatch.setattr(metrics, "build_simulation_summary", slow_summary)
-    summary = await _analyze_initialized(
-        state_no_sim,
-        raw,
-        [{"key": "summary", "metric": "summary"}],
-    )
+    monkeypatch.setattr(metrics, "build_simulation_summary", held_summary)
+    await services.load_raw(services.source_for_raw_path(raw, state_no_sim), state_no_sim)
+    parser_requests.clear()
+    try:
+        summary = await _analyze_initialized(
+            state_no_sim,
+            raw,
+            [{"key": "summary", "metric": "summary"}],
+        )
+    finally:
+        summary_release.set()
     assert any(
         failure["code"] == "analysis_deadline" and failure["stage"] == "analyze"
         for failure in summary["failures"]
     )
     assert processing_calls == ["summary"]
+    assert parser_requests == []
 
     # A fresh path avoids the shared cooldown from the deliberately wedged raw.
     second = work_dir / "second.raw"
     shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.raw", second)
     shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.log", second.with_suffix(".log"))
 
-    def slow_measurements(*args, **kwargs):
+    def held_measurements(*args, **kwargs):
         del args, kwargs
         processing_calls.append("measurements")
-        # timing: fake work past the 1.0 s analysis budget
-        time.sleep(1.2)
+        assert measurements_release.wait(LIVENESS_S)
         return {}, {}, "0 step(s)", {}
 
-    monkeypatch.setattr(metrics, "aggregate_log_measurements", slow_measurements)
-    measurements = await _analyze_initialized(
-        state_no_sim,
-        second,
-        [{"key": "measurements", "metric": "measurements"}],
-    )
+    monkeypatch.setattr(metrics, "aggregate_log_measurements", held_measurements)
+    await services.load_raw(services.source_for_raw_path(second, state_no_sim), state_no_sim)
+    parser_requests.clear()
+    try:
+        measurements = await _analyze_initialized(
+            state_no_sim,
+            second,
+            [{"key": "measurements", "metric": "measurements"}],
+        )
+    finally:
+        measurements_release.set()
     assert any(
         failure["code"] == "analysis_deadline" and failure["stage"] == "analyze"
         for failure in measurements["failures"]
     )
     assert processing_calls == ["summary", "measurements"]
+    assert parser_requests == []
 
 
 # ---------------------------------------------------------------------------
