@@ -33,6 +33,7 @@ from tests.conftest import (
     LIVENESS_S,
     SyncApi,
     check_in,
+    process_running,
     release_into_held_request_gate,
     wait_until,
     written,
@@ -96,9 +97,9 @@ def _gone(pid: int) -> bool:
     """Whether a process has stopped running, counting an uncollected one.
 
     A process this interpreter spawned stays in the process table until it is
-    collected, so ``pid_exists`` alone would call a dead owner alive.
+    collected, so a running check alone would call a dead owner alive.
     """
-    if not psutil.pid_exists(pid):
+    if not process_running(pid):
         return True
     try:
         return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
