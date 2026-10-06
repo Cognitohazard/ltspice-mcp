@@ -29,6 +29,7 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
+from ltspice_mcp.lib.parser_process import ParserProcessLimits, WarmParser
 
 RESULT_CACHE_BYTES = 512 * 1024 * 1024
 RESULT_CACHE_ENTRIES = 32
@@ -102,6 +103,7 @@ class ResultCache:
         self._lock = threading.Lock()
         self._parser_slot = threading.Lock()
         self._parser_failure: _ParserFailure | None = None
+        self._warm: WarmParser | None = None
 
     @property
     def byte_count(self) -> int:
@@ -190,6 +192,19 @@ class ResultCache:
             self._stamps.move_to_end(stamp)
             while len(self._stamps) > STAMP_ENTRIES:
                 self._stamps.popitem(last=False)
+
+    def warm_parser(self, limits: ParserProcessLimits, cwd: Path) -> WarmParser:
+        """The parser tree this session keeps between calls, made on first use."""
+        with self._lock:
+            if self._warm is None:
+                self._warm = WarmParser(limits, cwd)
+            return self._warm
+
+    def close_parser(self) -> bool:
+        """Close the kept parser tree; True once it is confirmed gone."""
+        with self._lock:
+            warm, self._warm = self._warm, None
+        return warm.close() if warm is not None else True
 
     def retain_parser_slot(self, directory: Path, *, worker_pid: int | None = None) -> None:
         """Keep admission closed when the active call cannot confirm tree exit."""

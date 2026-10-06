@@ -708,6 +708,17 @@ tool-surface changes.
   and the store no longer imports psutil until it checks a job owner's
   liveness. On Linux a repeated read took about 300 ms and now takes under a
   millisecond.
+- A session keeps its parser process between reads of new results instead of
+  starting one per read. A read's results are taken only once the worker has
+  replied and is again the only process in its tree. The tree is replaced
+  after 64 reads, after half an hour, and after two idle minutes, and at once
+  after a failed, cancelled or timed-out read or a process it did not start;
+  a tree whose exit cannot be confirmed still closes parser admission. Waits
+  on a parser process are woken by the operating system (a pidfd and
+  `SIGCHLD` on Linux, the Job Object's completion port on Windows) rather than
+  by polling every 5 or 10 ms. On Linux each read of new results took about
+  400 ms; a session's first read still does, and the reads after it take
+  about 15 ms.
 - A run's simulator library roots, the install directories staging accepts as
   the simulator's own, are now those of the LTspice build the run launches:
   LTspice XVII's `Documents\LTspiceXVII\lib`, or LTspice 24's

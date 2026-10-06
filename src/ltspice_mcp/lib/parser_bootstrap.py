@@ -2,6 +2,19 @@
 
 An unsupported host is refused here as well as by the supervisor, so direct
 bootstrap execution cannot bypass the containment requirement.
+
+A worker serves requests, one line each, until its input ends: after each it
+writes one reply line (``done`` or ``error``) to the supervisor and reads the
+next. The first request is the gate. Nothing a request decodes is imported
+before it arrives, and on Windows it arrives only once the Job Object holds the
+worker. On Linux the guardian reads that gate, starts the worker inside its
+limits, and relays every later request to it. The end of the guardian's input
+means the supervisor is done or gone: the guardian kills and reaps the whole
+tree, reports the reap on its output, and exits.
+
+``directory`` names a one-call tree's control directory (its process, cleanup
+and error records); a tree kept between calls has none and reports on its
+output alone.
 """
 
 from __future__ import annotations
@@ -19,8 +32,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-_REAP_POLL_S = 0.005
-"""How often the guardian rescans its adopted descendants while it reaps them."""
+_REPLY_BYTES = 4096
+"""The longest reply line a worker or guardian writes to the supervisor."""
 
 
 def require_containment_platform() -> None:
@@ -40,15 +53,26 @@ def _path(directory: Path, name: str) -> Path:
     return parser_file_in(directory, name)
 
 
-def _write(directory: Path, name: str, value: dict[str, Any]) -> None:
+def _write(directory: Path | None, name: str, value: dict[str, Any]) -> None:
+    if directory is None:
+        return
     _path(directory, name).write_text(
         json.dumps(value, allow_nan=False, separators=(",", ":")), encoding="utf-8"
     )
 
 
+def _reply(fd: int, value: dict[str, Any]) -> None:
+    """One line to the supervisor; it may already be gone, which ends nothing here."""
+    line = json.dumps({"version": 1, **value}, separators=(",", ":")).encode("ascii") + b"\n"
+    with contextlib.suppress(OSError):
+        os.write(fd, line)
+
+
 def _error(
-    directory: Path, error: BaseException, limit: int, *, code: str = "worker_error"
+    directory: Path | None, error: BaseException, limit: int, *, code: str = "worker_error"
 ) -> None:
+    if directory is None:
+        return
     # Serialize after truncating, then shrink further for JSON escaping overhead.
     message = f"{type(error).__name__}: {error}"[:limit]
     if isinstance(error, TimeoutError):
@@ -80,6 +104,8 @@ def _prctl(option: int, value: int) -> None:
 
 
 def _linux_limits(memory: int) -> None:
+    if sys.platform != "linux":
+        raise RuntimeError("Linux-only parser containment")
     import resource
 
     resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
@@ -91,7 +117,7 @@ def _read_gate(fd: int, size: int, deadline: float) -> bytes:
     with selectors.DefaultSelector() as selector:
         selector.register(fd, selectors.EVENT_READ)
         while time.monotonic() < deadline:
-            if not selector.select(min(0.05, max(0, deadline - time.monotonic()))):
+            if not selector.select(max(0, deadline - time.monotonic())):
                 continue
             chunk = os.read(fd, min(4096, size + 1 - len(data)))
             if not chunk:
@@ -106,8 +132,26 @@ def _read_gate(fd: int, size: int, deadline: float) -> bytes:
     raise TimeoutError("Parser deadline expired before admission")
 
 
+def _request(packet: bytes, size: int) -> tuple[dict[str, Any], Path]:
+    if len(packet) > size:
+        raise ValueError("Parser request exceeds its byte limit")
+    request = json.loads(packet)
+    if (
+        not isinstance(request, dict)
+        or request.get("version") != 1
+        or request.get("op") != "go"
+        or not isinstance(request.get("request"), dict)
+        or not isinstance(request.get("directory"), str)
+    ):
+        raise ValueError("Invalid parser gate")
+    directory = Path(request["directory"])
+    if not directory.is_absolute() or not directory.is_dir():
+        raise ValueError("Parser call directory must be an existing absolute directory")
+    return request, directory
+
+
 def _decoder(
-    directory: Path,
+    directory: Path | None,
     memory: int,
     size: int,
     errors: int,
@@ -120,42 +164,58 @@ def _decoder(
         if os.getppid() != guardian_pid:
             return 1
         _linux_limits(memory)
-    try:
-        # Windows pipe selectors are unavailable; the parent gates and supervises
-        # this bounded read only after assigning its strict Job Object.
-        if sys.platform == "win32":
-            packet = sys.stdin.buffer.readline(size + 1)
-        else:
-            packet = _read_gate(sys.stdin.fileno(), size, deadline)
-        if len(packet) > size:
-            raise ValueError("Parser request exceeds its byte limit")
-        request = json.loads(packet)
-        if (
-            not isinstance(request, dict)
-            or request.get("version") != 1
-            or request.get("op") != "go"
-            or not isinstance(request.get("request"), dict)
-        ):
-            raise ValueError("Invalid parser gate")
-        _write(directory, "process.json", {"worker_pid": os.getpid()})
-        worker = importlib.import_module(module)
-        worker.parse_request(request["request"], directory)
-        return 0
-    except BaseException as error:
-        _error(directory, error, errors)
-        return 1
+    # Replies keep their own descriptor; anything a decoder prints goes nowhere.
+    replies = os.dup(1)
+    silent = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(silent, 1)
+    os.close(silent)
+    worker = None
+    first = True
+    while True:
+        call_directory = directory
+        try:
+            # Windows pipe selectors are unavailable; the parent gates and supervises
+            # this bounded read only after assigning its strict Job Object.
+            if sys.platform == "win32":
+                packet = sys.stdin.buffer.readline(size + 1)
+                if not packet:
+                    raise EOFError("Parser owner closed the request gate")
+            else:
+                packet = _read_gate(sys.stdin.fileno(), size, deadline)
+            request, call_directory = _request(packet, size)
+            if first:
+                _write(directory, "process.json", {"worker_pid": os.getpid()})
+                first = False
+            if worker is None:
+                worker = importlib.import_module(module)
+            worker.parse_request(request["request"], call_directory)
+        except EOFError as error:
+            if first:
+                _error(directory, error, errors)
+                return 1
+            return 0
+        except BaseException as error:
+            _error(call_directory, error, errors)
+            _reply(replies, {"status": "error", "pid": os.getpid()})
+            return 1
+        _reply(replies, {"status": "done", "pid": os.getpid()})
 
 
 def _reap_tree(child: subprocess.Popen[bytes], grace: float) -> bool:
+    """Kill the worker's group and every descendant adopted here, then reap them.
+
+    SIGCHLD is blocked first, so a child that exits between a scan and the
+    wait leaves it pending and the wait returns at once: each pass waits for
+    the next exit rather than for a timer.
+    """
+    if sys.platform != "linux":
+        raise RuntimeError("Linux-only parser containment")
     deadline = time.monotonic() + grace
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
     with contextlib.suppress(ProcessLookupError):
         os.killpg(child.pid, signal.SIGKILL)
-    try:
-        child.wait(timeout=max(0.01, deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        return False
     children_file = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
-    while time.monotonic() < deadline:
+    while True:
         # Subreaper adoption includes descendants which started another session.
         with children_file.open("rb") as stream:
             children = stream.read(65537)
@@ -165,16 +225,29 @@ def _reap_tree(child: subprocess.Popen[bytes], grace: float) -> bool:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pid), signal.SIGKILL)
         try:
-            while os.waitpid(-1, os.WNOHANG)[0]:
-                pass
+            while pid := os.waitpid(-1, os.WNOHANG)[0]:
+                if pid == child.pid:
+                    child.returncode = -signal.SIGKILL  # Reaped here, not by Popen.
         except ChildProcessError:
             return True
-        time.sleep(_REAP_POLL_S)
-    return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        signal.sigtimedwait([signal.SIGCHLD], remaining)
+
+
+def _exit_watch(child: subprocess.Popen[bytes]) -> int | None:
+    """A descriptor that reads as ready once ``child`` exits, where the kernel has one."""
+    if sys.platform != "linux":
+        raise RuntimeError("Linux-only parser containment")
+    try:
+        return os.pidfd_open(child.pid)
+    except (AttributeError, OSError):
+        return None
 
 
 def _guardian(
-    directory: Path,
+    directory: Path | None,
     memory: int,
     size: int,
     errors: int,
@@ -182,6 +255,8 @@ def _guardian(
     grace: float,
     module: str,
 ) -> int:
+    if sys.platform != "linux":
+        raise RuntimeError("Linux-only parser containment")
     _linux_limits(memory)
     _prctl(36, 1)  # PR_SET_CHILD_SUBREAPER, before a decoder can create children.
     child = None
@@ -195,7 +270,7 @@ def _guardian(
                 "-m",
                 "ltspice_mcp.lib.parser_bootstrap",
                 "worker",
-                str(directory),
+                str(directory) if directory is not None else "",
                 str(memory),
                 str(size),
                 str(errors),
@@ -205,30 +280,41 @@ def _guardian(
                 str(os.getpid()),
             ],
             stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
             stderr=None,
             start_new_session=True,
             bufsize=0,
         )
         _write(directory, "process.json", {"worker_pid": child.pid})
         assert child.stdin is not None
-        with child.stdin:
-            remaining = memoryview(packet)
-            while remaining:
-                written = child.stdin.write(remaining)
-                if not written:
-                    raise BrokenPipeError("Parser gate closed before delivery")
-                remaining = remaining[written:]
-        with selectors.DefaultSelector() as selector:
-            selector.register(sys.stdin.fileno(), selectors.EVENT_READ)
-            while child.poll() is None:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("Parser deadline expired")
-                if selector.select(min(0.01, max(0, deadline - time.monotonic()))):
-                    if not os.read(sys.stdin.fileno(), 1):
-                        raise EOFError("Parser owner died or cancelled the call")
-                    raise ValueError("Unexpected bytes after parser admission")
-        if child.returncode != 0 and not _path(directory, "error.json").exists():
+        _relay(packet, child.stdin)
+        exited = _exit_watch(child)
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(sys.stdin.fileno(), selectors.EVENT_READ)
+                if exited is not None:
+                    selector.register(exited, selectors.EVENT_READ)
+                while child.poll() is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Parser deadline expired")
+                    # Without an exit descriptor (an old kernel), look again soon.
+                    events = selector.select(
+                        remaining if exited is not None else min(remaining, 0.05)
+                    )
+                    if any(key.fd == sys.stdin.fileno() for key, _ in events):
+                        data = os.read(sys.stdin.fileno(), 65536)
+                        if not data:
+                            break  # The supervisor is done or gone: end the tree.
+                        _relay(data, child.stdin)
+        finally:
+            if exited is not None:
+                os.close(exited)
+        # Exited on its own, not ended here: without its own record, it crashed.
+        if (
+            child.returncode not in (None, 0)
+            and directory is not None
+            and not _path(directory, "error.json").exists()
+        ):
             _error(
                 directory,
                 RuntimeError(f"Parser worker exited with code {child.returncode}"),
@@ -241,13 +327,24 @@ def _guardian(
         if child is not None:
             reaped = _reap_tree(child, grace)
         _write(directory, "cleanup.json", {"reaped": reaped})
+        _reply(1, {"cleanup": {"reaped": reaped}})
     return 0 if reaped else 1
+
+
+def _relay(data: bytes, target: Any) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = target.write(remaining)
+        if not written:
+            raise BrokenPipeError("Parser gate closed before delivery")
+        remaining = remaining[written:]
 
 
 def main() -> int:
     require_containment_platform()
     mode, directory, memory, size, errors, deadline, grace, module, guardian_pid = sys.argv[1:]
-    args = (Path(directory), int(memory), int(size), int(errors), float(deadline))
+    control = Path(directory) if directory else None
+    args = (control, int(memory), int(size), int(errors), float(deadline))
     if mode == "guardian" and sys.platform == "linux":
         return _guardian(*args, float(grace), module)
     if mode == "worker":
