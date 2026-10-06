@@ -97,8 +97,11 @@ jobs:
       # whole-package coverage would fall below the threshold for reasons
       # unrelated to Windows correctness. The 80% floor is enforced on the
       # Linux job; this job proves the win32 code paths and Windows-aware tests.
+      # One xdist worker per core, as on Linux: a serial run here spent most of
+      # the job's time waiting on processes starting one after another. The
+      # release gate's serial run keeps the one-process test order covered.
       - name: Test
-        run: uv run pytest tests/ -v
+        run: uv run pytest tests/ -v -n auto
 
   check-jitter:
     # Races in the suite have lost only on the Windows runner, one per run,
