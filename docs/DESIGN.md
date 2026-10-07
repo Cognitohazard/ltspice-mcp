@@ -86,7 +86,8 @@ Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,
 `set_component_value`, `set_component_attribute`, `wire_pins`,
 `add_net_label` with `pin="M3.S"`, `remove_net_label`, `remove_wire`,
-`add_directive`, `remove_directive`). The ops work against pin
+`add_directive`, `remove_directive`, and `set_plot_panes`, which writes the
+waveform panes LTspice opens for the sheet to the `.plt` beside it). The ops work against pin
 coordinates, bounding boxes, and named-net topology: the `wire_pins` op
 refuses diagonal wires,
 pin collisions, wire-junction overlaps, named-net shorts, and a waypoint

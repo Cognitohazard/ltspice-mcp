@@ -1,0 +1,28 @@
+* trig functions inside .meas, against the same functions in a B source
+V1 s 0 SIN(0 1 1k)
+B1 bcos 0 V=V(s)*cos(2*pi*1k*time)
+B2 bsin 0 V=V(s)*sin(2*pi*1k*time)
+B3 batan2 0 V=atan2(1,1)
+B4 bcospi 0 V=cos(pi)
+.param fo=1k
+.tran 0 2m 0 10u
+.meas tran m_cos INTEG V(s)*cos(2*pi*1k*time)
+.meas tran m_sin INTEG V(s)*sin(2*pi*1k*time)
+.meas tran m_sin_fo INTEG V(s)*sin(2*pi*fo*time)
+.meas tran m_sin_30 PARAM sin(30)
+.meas tran m_cos_pi PARAM cos(pi)
+.meas tran m_tan_45 PARAM tan(45)
+.meas tran m_asin PARAM asin(0.5)
+.meas tran m_acos PARAM acos(0.5)
+.meas tran m_atan PARAM atan(1)
+.meas tran m_atan2 PARAM atan2(1,1)
+.meas tran m_atan2_deg PARAM atan2(1,1)*180/pi
+.meas tran m_sinh PARAM sinh(1)
+.meas tran m_tanh PARAM tanh(1)
+.meas tran m_pi PARAM pi
+.meas tran m_time FIND time AT 1m
+.meas tran b_cos INTEG V(bcos)
+.meas tran b_sin INTEG V(bsin)
+.meas tran b_atan2 FIND V(batan2) AT 1m
+.meas tran b_cos_pi FIND V(bcospi) AT 1m
+.end

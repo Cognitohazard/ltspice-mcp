@@ -218,6 +218,36 @@ class TestCircuitFileLock:
             release.set()
             t.join(LIVENESS_S)
 
+    async def test_a_plot_panes_edit_locks_the_plot_settings_file(
+        self, asc_state: SessionState, asc_file: Path, monkeypatch
+    ):
+        # set_plot_panes rewrites the .plt beside the sheet, so a peer session
+        # writing the same .plt holds a lock this edit must contend on; an edit
+        # that leaves the .plt alone does not wait for it.
+        import ltspice_mcp.lib.filelock as lock_mod
+
+        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
+        t, release = _hold_lock_until_released(asc_file.with_suffix(".plt"))
+        try:
+            with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
+                await apply_ops(
+                    asc_state,
+                    asc_file.name,
+                    [
+                        {
+                            "op": "set_plot_panes",
+                            "analysis": "tran",
+                            "panes": [{"traces": ["V(n001)"]}],
+                        }
+                    ],
+                )
+            assert not asc_file.with_suffix(".plt").exists()
+            data = await apply_ops(asc_state, asc_file.name, _SET_R1)
+            assert data["outcome"] == "complete"
+        finally:
+            release.set()
+            t.join(LIVENESS_S)
+
 
 _SET_R1 = [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
 

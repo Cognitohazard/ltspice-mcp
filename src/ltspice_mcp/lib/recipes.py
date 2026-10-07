@@ -257,7 +257,13 @@ class SpecLimits(StrictModel):
 
     min: float | None = None
     max: float | None = None
-    allow_incomplete: bool = False
+    allow_incomplete: bool = Field(
+        default=False,
+        description=(
+            "Judge the runs that have a number when cases are missing or some "
+            "runs have none, instead of 'indeterminate'."
+        ),
+    )
 
     @model_validator(mode="after")
     def _has_limit(self) -> SpecLimits:

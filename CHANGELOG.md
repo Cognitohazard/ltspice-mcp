@@ -21,7 +21,9 @@ tool-surface changes.
   what the box said, where before it waited for the timeout or for someone to
   click it. `[simulator] hidden_desktop = false` (or
   `LTSPICE_MCP_HIDDEN_DESKTOP=0`) starts LTspice on your own desktop as
-  before. Named executables are launched the same way; WSL and Wine are
+  before. Named executables are launched the same way, and so is the audited
+  LTspice launch a recoverable experiment resumes with, which keeps its
+  command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
 
 The entries in this group were found by holding the server against files
@@ -29,6 +31,35 @@ LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
 recording that showed it.
 
+- The lint and `verify_circuit` passed a `.meas` whose trig LTspice computes
+  in degrees. On the default settings of LTspice 26 and XVII, `sin`, `cos`,
+  `tan`, `asin`, `acos`, `atan` and `atan2` inside a `.meas` take and give
+  degrees where a B source uses radians: `atan2(1,1)` is 45 and `cos(pi)` is
+  0.998497, and `INTEG V(s)*sin(2*pi*1k*time)` over two periods of a 1 kHz
+  sine is -3.5e-5 where 1e-3 was meant. `ph()` in a `.meas` gives degrees as
+  well, and the per-user setting "Use radian measure in waveform expressions"
+  turns both to radians. `run_experiments` now refuses such a `.meas` (lint
+  `meas-trig-degrees`, blocking; `linter_version` 8) and `verify_circuit`'s
+  `syntax` check reports it as `meas_trig_degrees`, both naming the B-source
+  form whose unit does not depend on the setting. The `vdb()`, `phase()` and
+  `group_delay()` refusals also see a call written after an operator
+  (`2*vdb(out)`) or an equals sign (`WHEN time=cos(1)`, `TD={atan(1)}`) now,
+  which they missed.
+- An AC `.meas` whose result is a negative real number came back positive.
+  LTspice prints every AC result as a magnitude and an angle, and a negative
+  `ph()`, `re()` or `im()` as its absolute value at 180°: the phase at the
+  corner of an RC low-pass, -45 degrees, was read as 45. A result printed at
+  0° or 180° is now read as the signed number; any other angle is still read
+  as the magnitude. That also makes `db(mag(V(out)))` read as the gain in dB;
+  `db(V(out))` in an AC `.meas` is LTspice's complex logarithm, read as its
+  magnitude, and the guide now says to write the former.
+- A `.meas` named `e`, `k`, `pi` or `q` was accepted. Those are constants of
+  LTspice's expression engine: LTspice 26 refuses the whole deck and XVII
+  skips the measurement. `run_experiments` now refuses such a deck before it
+  runs (lint `meas-name-ltspice`, blocking; `linter_version` 8), the
+  directive check behind `verify_circuit`'s `syntax` check and
+  `edit_schematic`'s directives refuses it (`meas_reserved_name`), and the
+  fix rides on the error relayed from a run LTspice 26 refused.
 - Results from LTspice 26 could not be read for a deck with two or more
   subcircuit instances. LTspice 24 and later write one `Backannotation:` line
   in the raw header for each instance, and the raw preflight refused a header
@@ -85,6 +116,60 @@ recording that showed it.
   held one of those bytes. XVII copies the title into its log, and the log was
   refused as undecodable; `.meas` results failed the same way inside the log
   reader the server uses. Both read the log now.
+- The value parser refused values LTspice reads: a unit written against the
+  number (`2Hz`, `3V`, `2ohm`) and the infix forms. LTspice reads digits after
+  a scale letter or `R` as the fraction
+  (`1k5` is 1500, `4R7` is 4.7, `2M2` is 2.2m, `1Meg5` is 1.5e6) and ignores
+  any other letters after the number (`9V1` is 9). Every spelling recorded now
+  reads to the number LTspice ran. `8%` stays refused: LTspice 26 refuses it.
+  Where a value has to be told from a name (comparing two netlists, Monte
+  Carlo, a variation's assignment), `2N2222` and `1N4148` are still names.
+- Three refusals LTspice 26 states on a line of their own (`No analysis
+  specified.`, `More than one analysis specified.`, `R1: Resistance must not
+  be zero.`) were not extracted, so the caller got a log excerpt and no
+  structured error. They are errors now, as XVII's `Fatal Error:` forms were.
+- `run_experiments` ran decks LTspice refuses and reported the refusal only
+  afterwards: two exclusive analyses in one deck, `vdb()`, `phase()` or
+  `group_delay()` in a `.meas` (XVII fails that measurement), and
+  `.lib file section`, which LTspice reads as one file name. Each is a
+  blocking lint now (`analysis-count-ltspice`, `meas-function-ltspice`,
+  `lib-section-ltspice`).
+- A stepped `.op` returned its first step only, though LTspice stores every
+  step in its raw. Every step is read now, with its parameter values, and the
+  warning that only one step is available is given only when that is so.
+- A run LTspice refused before it began (a missing include or library, a
+  `.lib` section) answered a request for its measurements with the log
+  reader's "Expected pattern" message. It answers with an empty measurement
+  table carrying LTspice's errors.
+- In a stepped measurement table LTspice XVII prints `0` for a step whose
+  measurement failed, where LTspice 24 and later print `failed`, so a failure
+  reached the caller as a value. The `measurements` recipe now names each step
+  that reads exactly 0 on a run XVII wrote (`measurement_zero_or_failed`).
+- `verify_circuit` did not recognise an LTspice XVII export, which names no
+  generator, so a UTF-8 micro sign in one was only an observation. XVII copies
+  a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
+  value runs as 1, not 1e-6. An export that opens with its schematic's path and
+  names no generator is now read as XVII's, and the micro sign is a warning.
+- `verify_circuit`'s comparison read a subcircuit instance LTspice exported
+  with an added `X` (`Xe` as `X§Xe` from LTspice 24 on, `XXe` from XVII) as a
+  different part from the `Xe` a netlist written by hand names, so every leaf
+  under it was listed as removed and added again and `equivalent` was false.
+  Names that pair only across that `X`, one to one and of the same element
+  type, now match; each instance paired that way is listed under `renamed`,
+  which is not a difference. The `structural_diff` mode, and an export's
+  `diff_vs_prior`, pair them the same way and list them under
+  `components_renamed`.
+- An arity error said only `reference_arity 3, candidate_arity 2`, and for an
+  instance whose node count disagrees with its own subcircuit's ports those
+  two numbers were not the two sides at all. Each arity error now carries a
+  `detail` naming the nodes and ports, and `side` for that case; when a node
+  is the subcircuit's own name, the detail says the card names it twice, as a
+  symbol that gives the name as both its value and its model does.
+- Two ways an 8-bit deck runs differently from how the server reads it are
+  warnings now. Byte 0x85 ends the line on LTspice 24 and later, so what
+  follows it is a card (`byte-85-ltspice`); and a node named with a byte from
+  0x80 to 0x9F is refused by LTspice 26 and saved under a control character
+  by XVII (`node-control-byte-ltspice`).
 - Under WSL, LTspice was not found, and its symbols not loaded, for a Windows
   user whose profile directory is not ASCII. `%LOCALAPPDATA%` was read from
   `cmd.exe` in the console's code page, where such a name is not UTF-8 and a
@@ -554,6 +639,22 @@ recording that showed it.
 
 ### Added
 
+- `edit_schematic` has a twelfth op, `set_plot_panes`, which writes the
+  waveform panes LTspice opens for a sheet into the `.plt` beside it: the
+  traces of each pane, top to bottom, for the `tran` or `ac` analysis, with
+  optional log or dB scales. It replaces that analysis's panes, keeps the
+  file's other analyses, and reports the panes it replaced so they can be put
+  back. The file is written in the same transaction as the sheet, under a
+  file lock of its own. What LTspice writes and reads was recorded on LTspice
+  26.1.1 and XVII 17.0.37 (new `plot-settings` cases in
+  `tests/fixtures/ltspice_recorded`) and the writer follows it: UTF-16 LE
+  without a byte order mark and LF line ends, the form XVII writes and both
+  builds read. LTspice 26 writes UTF-8, and XVII saving over a UTF-8 file
+  appends the old bytes after its own, so UTF-16 is the form neither build's
+  save damages. Panes are listed bottom first in the file, and a trace is
+  read only up to its first space, so a trace with whitespace is refused.
+  The recorder gained a `plot` case kind that runs a sheet in LTspice's
+  window, builds panes with the window's own menu commands and saves them.
 - An `analyze_results` recipe, `tone`, reads the amplitude and phase of a
   transient signal at one frequency you give. It cuts the window to the whole
   periods that fit from its start and weights the samples by time, sharing

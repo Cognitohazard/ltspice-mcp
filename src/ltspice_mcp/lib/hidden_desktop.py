@@ -34,7 +34,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from ctypes import wintypes
 from functools import cache
 from pathlib import Path
@@ -213,6 +213,7 @@ def _user() -> Any:
             wintypes.HANDLE,
         ),
         "CloseDesktop": ([wintypes.HANDLE], wintypes.BOOL),
+        "EnumWindows": ([window_callback, wintypes.LPARAM], wintypes.BOOL),
         "EnumDesktopWindows": ([wintypes.HANDLE, window_callback, wintypes.LPARAM], wintypes.BOOL),
         "EnumChildWindows": ([wintypes.HWND, window_callback, wintypes.LPARAM], wintypes.BOOL),
         "GetWindowTextW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
@@ -228,6 +229,41 @@ def _user() -> Any:
         function.argtypes = arguments
         function.restype = result
     return user
+
+
+def _listed(enumerate_with: Callable[[Any], object]) -> list[tuple[int, int]]:
+    """Each window an ``Enum...Windows`` call lists, with the process that owns it."""
+    user = _user()
+    windows: list[tuple[int, int]] = []
+
+    def note(window: int, _unused: int) -> bool:
+        owner = wintypes.DWORD(0)
+        user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        windows.append((window, int(owner.value)))
+        return True
+
+    enumerate_with(_window_callback()(note))
+    return windows
+
+
+def window_text(window: int) -> str:
+    """A window's text: a top-level window's title, a control's label or contents."""
+    buffer = ctypes.create_unicode_buffer(2048)
+    _user().GetWindowTextW(window, buffer, len(buffer))
+    return buffer.value
+
+
+def window_class(window: int) -> str:
+    buffer = ctypes.create_unicode_buffer(256)
+    _user().GetClassNameW(window, buffer, len(buffer))
+    return buffer.value
+
+
+def child_windows(window: int) -> list[int]:
+    """Every window inside ``window``, at any depth."""
+    return [
+        child for child, _owner in _listed(lambda note: _user().EnumChildWindows(window, note, 0))
+    ]
 
 
 def _last_error() -> OSError:
@@ -395,52 +431,48 @@ class HiddenDesktop:
         """Each top-level window here, with the process that owns it."""
         if self._handle is None:
             return []
-        user = _user()
-        windows: list[tuple[int, int]] = []
-
-        def note(window: int, _unused: int) -> bool:
-            owner = wintypes.DWORD(0)
-            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-            windows.append((window, int(owner.value)))
-            return True
-
-        user.EnumDesktopWindows(self._handle, _window_callback()(note), 0)
-        return windows
+        handle = self._handle
+        return _listed(lambda note: _user().EnumDesktopWindows(handle, note, 0))
 
     def window_owners(self) -> set[int]:
         """The process of every top-level window on this desktop."""
         return {owner for _window, owner in self._top_level_windows()}
 
-    def dialog(self, pid: int) -> str | None:
-        """What a message box ``pid`` has open here says, or None when it has none.
+    def windows(self, pid: int) -> list[int]:
+        """The top-level windows ``pid`` has where it was started.
+
+        That is this desktop while it is available. When it is not, a program
+        is started the ordinary way, and its windows are on the desktop this
+        process runs on.
+        """
+        if self._handle is not None:
+            listed = self._top_level_windows()
+        elif sys.platform == "win32":
+            listed = _listed(lambda note: _user().EnumWindows(note, 0))
+        else:
+            return []
+        return [window for window, owner in listed if owner == pid]
+
+    def dialog(self, pid: int, ignore: str | None = None) -> str | None:
+        """What a message box ``pid`` has open says, or None when it has none.
 
         The box's title, then each line of text in it. Its buttons are left
-        out: what was asked matters, not how it could be answered.
+        out: what was asked matters, not how it could be answered. A dialog
+        titled ``ignore`` is one the caller opened itself, not a box.
         """
-        if self._handle is None:
-            return None
-        user = _user()
         found: list[str] = []
-
-        def text_of(window: int) -> str:
-            buffer = ctypes.create_unicode_buffer(2048)
-            user.GetWindowTextW(window, buffer, len(buffer))
-            return buffer.value
-
-        def class_of(window: int) -> str:
-            buffer = ctypes.create_unicode_buffer(128)
-            user.GetClassNameW(window, buffer, len(buffer))
-            return buffer.value
-
-        def child(window: int, _unused: int) -> bool:
-            if class_of(window) == "Static" and text_of(window).strip():
-                found.append(text_of(window))
-            return True
-
-        for window, owner in self._top_level_windows():
-            if owner == pid and class_of(window) == _DIALOG_CLASS and user.IsWindowVisible(window):
-                found.append(text_of(window))
-                user.EnumChildWindows(window, _window_callback()(child), 0)
+        for window in self.windows(pid):
+            title = window_text(window)
+            if (
+                window_class(window) == _DIALOG_CLASS
+                and _user().IsWindowVisible(window)
+                and title != ignore
+            ):
+                found.append(title)
+                for child in child_windows(window):
+                    text = window_text(child)
+                    if window_class(child) == "Static" and text.strip():
+                        found.append(text)
         return "\n".join(found) if found else None
 
     def start(
@@ -560,16 +592,18 @@ class BoxWatch:
     """Tells a message box a program waits on from one that closes by itself.
 
     ``look`` gives what the box says once the same box has been there on two
-    looks running, and None until then.
+    looks running, and None until then. A dialog titled ``ignore`` is one the
+    caller opens itself and never counts.
     """
 
-    def __init__(self, desktop: HiddenDesktop, pid: int) -> None:
+    def __init__(self, desktop: HiddenDesktop, pid: int, ignore: str | None = None) -> None:
         self._desktop = desktop
         self._pid = pid
+        self._ignore = ignore
         self._last: str | None = None
 
     def look(self) -> str | None:
-        seen = self._desktop.dialog(self._pid)
+        seen = self._desktop.dialog(self._pid, self._ignore)
         waited_on = seen if seen is not None and seen == self._last else None
         self._last = seen
         return waited_on

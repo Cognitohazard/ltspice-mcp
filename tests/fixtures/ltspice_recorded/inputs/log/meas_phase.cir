@@ -1,0 +1,7 @@
+* the phase ph() gives inside .meas
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.ac dec 10 10 100k
+.meas ac g_ph FIND ph(V(out)) AT 1k
+.end

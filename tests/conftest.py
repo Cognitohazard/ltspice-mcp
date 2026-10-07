@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import ctypes
+import functools
 import importlib.abc
 import inspect
 import os
@@ -992,6 +994,54 @@ def identify(pid: int) -> psutil.Process | None:
         return None
 
 
+_SYNCHRONIZE = 0x00100000
+_WAIT_OBJECT_0 = 0
+_ERROR_INVALID_PARAMETER = 87
+
+
+@functools.cache
+def _kernel32() -> typing.Any:
+    if sys.platform != "win32":
+        raise OSError("process handles are asked on Windows only")
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    return kernel
+
+
+@contextlib.contextmanager
+def _held(pid: int) -> Iterator[bool]:
+    """Hold ``pid`` to one process for a check, yielding whether it has exited.
+
+    psutil reads a Windows process as running when its exit code is 259, the
+    value Windows reports for a live one, or when its pid is still listed,
+    which it can be after the process has exited. A handle asks the process
+    itself, and while it is open the pid cannot pass to another process, so a
+    check by start time made under it is about the same one. Elsewhere a
+    process is there until it is reaped, which is what a test there means.
+    """
+    if sys.platform != "win32":
+        yield False
+        return
+    kernel = _kernel32()
+    handle = kernel.OpenProcess(_SYNCHRONIZE, False, pid)
+    if not handle:
+        # No process has the pid. A refusal for any other reason leaves the
+        # answer to psutil.
+        yield ctypes.get_last_error() == _ERROR_INVALID_PARAMETER
+        return
+    try:
+        yield kernel.WaitForSingleObject(handle, 0) == _WAIT_OBJECT_0
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def process_running(process: psutil.Process | int | None, created: float | None = None) -> bool:
     """Whether a process a test means still runs.
 
@@ -999,21 +1049,26 @@ def process_running(process: psutil.Process | int | None, created: float | None 
     (``psutil.Process.create_time``) taken while it ran. A bare pid is matched
     against the start time recorded when this test started it, and only a pid
     this test did not start falls back to the pid alone, which names a process
-    only where pids are not soon reused.
+    only where pids are not soon reused. A process that has exited is not
+    running, though psutil may still find it on Windows (``_held``).
     """
     if process is None:
         return False
-    if isinstance(process, psutil.Process):
-        return process.is_running()
-    if created is not None:
-        try:
-            return psutil.Process(process).create_time() == created
-        except psutil.NoSuchProcess:
+    pid = process.pid if isinstance(process, psutil.Process) else process
+    with _held(pid) as exited:
+        if exited:
             return False
-    started = _spawned.get(process)
-    if started is not None:
-        return started.is_running()
-    return psutil.pid_exists(process)
+        if isinstance(process, psutil.Process):
+            return process.is_running()
+        if created is not None:
+            try:
+                return psutil.Process(process).create_time() == created
+            except psutil.NoSuchProcess:
+                return False
+        started = _spawned.get(process)
+        if started is not None:
+            return started.is_running()
+        return psutil.pid_exists(process)
 
 
 @pytest.fixture(autouse=True)
