@@ -5066,6 +5066,202 @@
         ".op.raw",
         ".raw"
       ]
+    },
+    "save/built": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/built.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/built.asc": "3f5565de5a705660316740f3dbefdb220a7978394845a3e3f4dd467f38ad7eea"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/built.asc": {
+          "bytes": 288,
+          "sha256": "c8b6a232e548a4e246bbf0eb5546608630eac5ea6b0520ac70f8e127877a7060"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/crlf": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/crlf.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/crlf.asc": "d328391673dcfe766aacba4e29587a66511a8e4c864834c234a4e7726cb60b19"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/crlf.asc": {
+          "bytes": 288,
+          "sha256": "c8b6a232e548a4e246bbf0eb5546608630eac5ea6b0520ac70f8e127877a7060"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_cp1252": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/micro_cp1252.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_cp1252.asc": "801b61919a33cb768d430f8ceca8f71cd685e7321ed1c4fccfded61ad14a44c7",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_cp1252.asc": {
+          "bytes": 113,
+          "sha256": "2d5aa3988306aa98e86cf8c658e7c65204e027b0a655f0ead1490ee2a7328c4a"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf16le": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/micro_utf16le.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf16le.asc": "ecb4925cd4f771058293d808942a79a72d789347367b588a1d85f62cb0eec4d1",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_utf16le.asc": {
+          "bytes": 113,
+          "sha256": "2d5aa3988306aa98e86cf8c658e7c65204e027b0a655f0ead1490ee2a7328c4a"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf16le_bom": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/micro_utf16le_bom.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice\nC:\\recording\\micro_utf16le_bom.asc: Aborting:  Unknown schematic syntax:  \ufeffVersion 4\n",
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf16le_bom.asc": "edb9eaff79dacb1d219a3ab1d4bfceb4ffa1d14ddbd3e5e939bae9cc107a1a1b",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "save/micro_utf8": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/micro_utf8.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf8.asc": "96483884b9075970e3e3621cf22f912453dc4f211316bff9eab4377705d929bd",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_utf8.asc": {
+          "bytes": 114,
+          "sha256": "e9b702f5dd25387d42ca36fd7ef3aa47f6f2dc114a7d2f94a4fd77f6add2950b"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf8_bom": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/micro_utf8_bom.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice\nC:\\recording\\micro_utf8_bom.asc: Aborting:  Unknown schematic syntax:  \u00ef\u00bb\u00bfVersion 4\n",
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf8_bom.asc": "f01dfc8fd0a3a7d3a79a8e54d6531b52b156fb1cc7dca272cc6e7b1caefbe35b",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "save/shuffled": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "LTspice.exe",
+        "<dir>/shuffled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/shuffled.asc": "2390b94250068a0737a453f2490137495b4bd7f3a0636cf65920c522211dd919"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/shuffled.asc": {
+          "bytes": 484,
+          "sha256": "8d7e1feacfa41dec9158c55df4df73fa5b7490704fa617d842a37b578a814962"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
     }
   },
   "executable": {

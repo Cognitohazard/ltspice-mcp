@@ -441,10 +441,10 @@ Everything is under `tests/fixtures/ltspice_recorded/`.
   `[behaviour.<key>]` table names a behaviour, the code that models it, and
   the inputs that record it. A sheet is exported with `-netlist`; anything
   else is run with `-Run -b`. A `plot` case runs a sheet in LTspice's window
-  instead, the way the person it is handed to does (*Plot settings* below). A
-  behaviour with no input says why:
-  `evidence` when the manifest records it some other way, `unrecordable` when
-  nothing can (LTspice saves a sheet only from its window, for one).
+  instead, the way the person it is handed to does (*Plot settings* below),
+  and a `save` case opens a sheet there and saves it (*Saved sheets* below).
+  A behaviour with no input says why: `evidence` when the manifest records
+  it some other way, `unrecordable` when nothing can.
 - `ltspice26/` and `ltspice17/` hold what each build wrote, one file per
   output, and a `manifest.json`: the executable's digest, size and version,
   the build as its own output names it, the build's defaults for the settings
@@ -464,6 +464,7 @@ These run everywhere, with no LTspice:
 |`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, and how an export is spelled and encoded|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_sheet_save.py`|the sheet each build writes when it saves one: its line endings, encoding and record order, and that the lossless document reads it, writes it back byte for byte, and spells a record as the build does|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
 |`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
 
@@ -566,6 +567,27 @@ so the recorder launches on Wine's display instead and looks for a box, or the
 waveform window, among the windows of the process it started there. That is
 how the box XVII stops on for the two sheets with a byte order mark is
 recorded under Wine as it is on Windows.
+
+### Saved sheets
+
+A build writes a sheet only from its window, so a `save` case drives it
+(`ltspice_recorder.drive_save`). The build is started on the sheet alone,
+the schematic window's own Save is sent to it by the id the build's menu
+gives it, and the case ends when the file has been written and holds still.
+Nothing on the sheet is changed first: the point is the bytes a build writes
+for a sheet it read. A sheet the build stops on a box for is recorded as
+that box, with no sheet kept.
+
+These are the only sheets in the suite that LTspice wrote, and both builds
+agree on all of it but the first line. The line endings are LF, whatever the
+sheet had. The text is 8-bit: a UTF-16 sheet is saved as 8-bit text, and
+bytes that are UTF-8 are kept as the bytes they are, never read as UTF-8.
+The kinds come in one order (wires, flags each with its port line, symbols,
+text, drawn lines, the other shapes); wires are put in an order of the
+build's own, and everything else keeps the order it had. LTspice 26 writes
+`Version 4.1` over a sheet that said 4. Neither build opens a sheet that
+starts with a byte order mark. They were recorded on Windows, so their
+manifest entries have no `host`.
 
 ### The opt-in tier
 
