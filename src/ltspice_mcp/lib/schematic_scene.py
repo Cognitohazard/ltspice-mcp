@@ -24,7 +24,6 @@ windows/text) while still reusing ``PinInfo`` and the rotation transform.
 
 from __future__ import annotations
 
-import codecs
 import contextlib
 import hashlib
 import math
@@ -34,7 +33,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ltspice_mcp.lib.cache import file_stamp
-from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
+from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text, refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     PinInfo,
@@ -517,10 +516,9 @@ class Scene:
     directives: list[Directive] = field(default_factory=list)
     sheet_graphics: list[Graphic] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
-    #: The byte order mark the file starts with, when it is one of the two that
-    #: neither LTspice build reads a sheet behind: "UTF-8" or "UTF-16 LE"
-    #: (``export/micro_utf8_bom`` and ``export/micro_utf16le_bom`` in the
-    #: recordings). The drawing decodes past it, so the scene keeps it here.
+    #: The byte order mark the file starts with, when it is one neither LTspice
+    #: build reads a sheet behind (``encoding.refused_sheet_mark``). The drawing
+    #: decodes past it, so the scene keeps it here.
     byte_order_mark: str | None = None
 
     def content_bbox(self) -> BBox | None:
@@ -853,9 +851,6 @@ class _AscDoc:
 # the header, a port's direction (its label is the FLAG before it) and a data
 # label's expression. Any other keyword it does not read is reported.
 _UNDRAWN_KEYWORDS = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
-_DRAWN_KEYWORDS = frozenset(
-    {"SYMBOL", "WINDOW", "SYMATTR", "WIRE", "FLAG", "TEXT", "LINE", "RECTANGLE", "CIRCLE", "ARC"}
-)
 
 _ROTATIONS = frozenset({"R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"})
 
@@ -870,10 +865,6 @@ def _parse_asc(text: str) -> _AscDoc:
             continue
         parts = line.split()
         kw = parts[0]
-        if kw not in _DRAWN_KEYWORDS:
-            if kw not in _UNDRAWN_KEYWORDS:
-                doc.unread.setdefault(kw, []).append(number)
-            continue
 
         if kw == "SYMBOL":
             # SYMBOL <name> <x> <y> <ROT>. The trailing token is the rotation
@@ -899,8 +890,8 @@ def _parse_asc(text: str) -> _AscDoc:
                 doc.symbols.append(current)
             else:
                 current = None
-        elif kw == "WINDOW" and current is not None:
-            if len(parts) >= 4:
+        elif kw == "WINDOW":
+            if current is not None and len(parts) >= 4:
                 try:
                     num = int(parts[1])
                     wx = int(parts[2])
@@ -913,8 +904,8 @@ def _parse_asc(text: str) -> _AscDoc:
                 except ValueError:
                     size = 2
                 current.windows.append(WindowDef(num, wx, wy, align, size))
-        elif kw == "SYMATTR" and current is not None:
-            if len(parts) >= 2:
+        elif kw == "SYMATTR":
+            if current is not None and len(parts) >= 2:
                 key = parts[1]
                 value = line.split(None, 2)[2] if len(line.split(None, 2)) > 2 else ""
                 current.attrs[key] = value
@@ -953,6 +944,8 @@ def _parse_asc(text: str) -> _AscDoc:
             c = _parse_shape_coords(parts, 8)
             if c is not None:
                 doc.sheet_arcs.append(AsyArc(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
+        elif kw not in _UNDRAWN_KEYWORDS:
+            doc.unread.setdefault(kw, []).append(number)
 
     return doc
 
@@ -1221,15 +1214,6 @@ def _svg_anchor(align: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _refused_byte_order_mark(data: bytes) -> str | None:
-    """The mark ``data`` starts with, if it is one LTspice is recorded refusing."""
-    if data.startswith(codecs.BOM_UTF8):
-        return "UTF-8"
-    if data.startswith(codecs.BOM_UTF16_LE) and not data.startswith(codecs.BOM_UTF32_LE):
-        return "UTF-16 LE"
-    return None
-
-
 def _unread_note(keyword: str, lines: list[int]) -> str:
     """What the drawing, and every check read from it, leaves out of a sheet."""
     if len(lines) == 1:
@@ -1261,7 +1245,7 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
     scene = Scene(
         source=asc_path,
         source_sha256=hashlib.sha256(data).hexdigest(),
-        byte_order_mark=_refused_byte_order_mark(data),
+        byte_order_mark=refused_sheet_mark(data),
     )
     for keyword, lines in doc.unread.items():
         scene.diagnostics.append(_unread_note(keyword, lines))

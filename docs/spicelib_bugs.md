@@ -2444,10 +2444,9 @@ source; reproduced 2026-10-07 with a hand-written sheet (see *Reproduction*
 for why it is not a recording).
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.reset_netlist` ~line 272 and `AscEditor.save_netlist` ~line 81).
-**Our workaround:** `lib/schematic_ops.py::make_editor` reads the sheet's
-DATAFLAG lines beside spicelib's own read (`data_flag_records`), and
-`tools/schematic_edit.py::_render_editor_text` writes them back
-(`_with_data_flags`).
+**Our workaround:** `tools/schematic_edit.py` reads the sheet's DATAFLAG
+lines from the bytes the edit already read (`_data_flag_lines`), and
+`_render_editor_text` writes them back (`_with_data_flags`).
 
 ### Summary
 
@@ -2538,8 +2537,7 @@ them out of a symbol's block of `WINDOW` and `SYMATTR` lines and from between a
 `FLAG` and its `IOPIN`; where LTspice itself puts them in a sheet it saves is
 not recorded. `TestPathsThatLeaveTheSheetAsItIs` pins that a read, a dry run
 and a batch of plot panes alone leave such a sheet's bytes as they were. Once
-upstream keeps the records, `data_flag_records`, `_read_data_flags` and
-`_with_data_flags` go.
+upstream keeps the records, `_data_flag_lines` and `_with_data_flags` go.
 
 ---
 
@@ -2675,9 +2673,11 @@ on the recorded inputs `export/micro_utf8_bom.asc` and
 `^VERSION `).
 **Our workaround:** `lib/schematic_ops.py::make_editor` turns the
 `EncodingDetectError` into a `NetlistError` (`_unrecognised_sheet`) that names
-the UTF-8 mark; `tools/schematic_edit.py::_commit_codec` writes a sheet
-spicelib read as `utf-16` back as UTF-16 LE without the mark; and
-`verify_circuit`'s quality check reports either mark (`byte_order_mark`).
+the UTF-8 mark; `tools/schematic_edit.py::_commit_codec` writes a sheet that
+started with a UTF-16 mark back as UTF-16 LE without it; and `verify_circuit`'s
+quality check reports either mark (`byte_order_mark`). Which marks LTspice
+refuses, and what is said of them, is `lib/encoding.py`'s `refused_sheet_mark`
+and `refused_sheet_mark_note`.
 
 ### Summary
 

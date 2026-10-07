@@ -28,7 +28,6 @@ from ltspice_mcp.lib.schematic_ops import (
     build_on_wire_predicate,
     collect_component_geometry,
     get_asc_editor,
-    make_editor,
     post_op_warnings,
     run_op_batch,
 )
@@ -42,7 +41,7 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
-from tests._asc_ops import apply_ops
+from tests._asc_ops import apply_ops, file_at
 from tests.test_api_reference import _op_kinds
 
 # Validates a raw op dict into the tool's own op union, so the control path
@@ -1920,11 +1919,14 @@ class TestHierarchicalPortPreservation:
 # <expression> and BUSTAP <x1> <y1> <x2> <y2>, are the ones KiCad's LTspice
 # importer reads.
 
+# An edit that touches none of the records under test.
+_MID_LABEL = {"op": "add_net_label", "net": "MID", "x": 40, "y": 0}
 
-def _file_at(path: Path) -> tuple[bytes, int, int]:
-    """The file at ``path``, bytes and identity: a rewrite renames a new one into place."""
-    st = path.stat()
-    return path.read_bytes(), st.st_ino, st.st_mtime_ns
+
+async def _commit(state: SessionState, path: Path, op: dict = _MID_LABEL, **kw) -> dict:
+    """Commit ``op`` to the sheet at ``path``, quoting its current digest."""
+    request = _edit_input(target=str(path), expected_sha256=_sha(path), ops=[op], **kw)
+    return _assert_schema(await handle_edit_schematic(request, state))
 
 
 class TestDataFlagPreservation:
@@ -1949,16 +1951,7 @@ class TestDataFlagPreservation:
 
     async def test_an_edit_keeps_the_data_flags_on_disk(self, state_no_sim, work_dir):
         path = self._sheet(work_dir)
-        data = _assert_schema(
-            await handle_edit_schematic(
-                _edit_input(
-                    target=str(path),
-                    expected_sha256=_sha(path),
-                    ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}],
-                ),
-                state_no_sim,
-            )
-        )
+        data = await _commit(state_no_sim, path)
         assert data["commit_state"] == "committed"
         assert data["sha256"] == _sha(path)
         # Both data labels, in their order, after the labels and their ports:
@@ -1985,16 +1978,7 @@ class TestDataFlagPreservation:
             b'DATAFLAG 160 0 "$*1\xb5"\nSYMBOL res 0 0 R0\nSYMATTR InstName R1\n'
             b"SYMATTR Value 1\xb5\n"
         )
-        data = _assert_schema(
-            await handle_edit_schematic(
-                _edit_input(
-                    target=str(path),
-                    expected_sha256=_sha(path),
-                    ops=[{"op": "add_net_label", "net": "OUT", "x": 160, "y": 0}],
-                ),
-                asc_state,
-            )
-        )
+        data = await _commit(asc_state, path, {**_MID_LABEL, "net": "OUT", "x": 160})
         assert data["commit_state"] == "committed"
         written = path.read_bytes()
         assert b'\nDATAFLAG 160 0 "$*1\xb5"\nSYMBOL res 0 0 R0\n' in written
@@ -2004,15 +1988,7 @@ class TestDataFlagPreservation:
         self, state_no_sim, work_dir
     ):
         path = self._sheet(work_dir)
-        await handle_edit_schematic(
-            _edit_input(
-                target=str(path),
-                base="blank",
-                expected_sha256=_sha(path),
-                ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}],
-            ),
-            state_no_sim,
-        )
+        await _commit(state_no_sim, path, base="blank")
         assert b"DATAFLAG" not in path.read_bytes()
 
 
@@ -2022,8 +1998,8 @@ class TestRecordTheEditorCannotRead:
     with the record and its line named, not reported as an internal error."""
 
     @staticmethod
-    def _sheet(work_dir: Path, record: str, name: str = "bus.asc") -> Path:
-        path = work_dir / name
+    def _sheet(work_dir: Path, record: str) -> Path:
+        path = work_dir / "bus.asc"
         path.write_text(
             "Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 D[0:3]\n"
             f"{record}\nFLAG 160 0 OUT\n",
@@ -2031,6 +2007,23 @@ class TestRecordTheEditorCannotRead:
             newline="\n",
         )
         return path
+
+    @staticmethod
+    def _parent_loading(work_dir: Path) -> Path:
+        """``top.asc``, whose one block instance loads the ``bus.asc`` beside it."""
+        (work_dir / "bus.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -32 -32 32 32\n"
+            "PIN -32 0 LEFT 8\nPINATTR PinName IN\nPINATTR SpiceOrder 1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        parent = work_dir / "top.asc"
+        parent.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL bus 0 0 R0\nSYMATTR InstName X1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return parent
 
     @pytest.mark.parametrize(
         ("record", "named"),
@@ -2042,14 +2035,7 @@ class TestRecordTheEditorCannotRead:
         path = self._sheet(work_dir, record)
         original = path.read_bytes()
         with pytest.raises(NetlistError) as caught:
-            await handle_edit_schematic(
-                _edit_input(
-                    target=str(path),
-                    expected_sha256=_sha(path),
-                    ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}],
-                ),
-                state_no_sim,
-            )
+            await _commit(state_no_sim, path)
         message = str(caught.value)
         assert "bus.asc" in message
         assert "line 5" in message
@@ -2080,29 +2066,11 @@ class TestRecordTheEditorCannotRead:
     async def test_a_record_in_a_sheet_the_target_loads_names_that_sheet(
         self, asc_state, work_dir
     ):
-        child = self._sheet(work_dir, "BUSTAP 80 0 80 16", name="bus.asc")
-        (work_dir / "bus.asy").write_text(
-            "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -32 -32 32 32\n"
-            "PIN -32 0 LEFT 8\nPINATTR PinName IN\nPINATTR SpiceOrder 1\n",
-            encoding="utf-8",
-            newline="\n",
-        )
-        parent = work_dir / "top.asc"
-        parent.write_text(
-            "Version 4\nSHEET 1 880 680\nSYMBOL bus 0 0 R0\nSYMATTR InstName X1\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        child = self._sheet(work_dir, "BUSTAP 80 0 80 16")
+        parent = self._parent_loading(work_dir)
         before = (parent.read_bytes(), child.read_bytes())
         with pytest.raises(NetlistError) as caught:
-            await handle_edit_schematic(
-                _edit_input(
-                    target=str(parent),
-                    expected_sha256=_sha(parent),
-                    ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}],
-                ),
-                asc_state,
-            )
+            await _commit(asc_state, parent)
         message = str(caught.value)
         assert "top.asc" in message
         assert "bus.asc, a sheet it loads: line 5" in message
@@ -2115,29 +2083,12 @@ class TestRecordTheEditorCannotRead:
         """Neither LTspice build reads a sheet behind a UTF-8 byte order mark
         (recorded as export/micro_utf8_bom); the refusal names the sheet that
         has one, not the parent being opened."""
-        child = work_dir / "bus.asc"
-        child.write_bytes(b"\xef\xbb\xbfVersion 4\nSHEET 1 880 680\nWIRE 0 0 160 0\n")
-        (work_dir / "bus.asy").write_text(
-            "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -32 -32 32 32\n"
-            "PIN -32 0 LEFT 8\nPINATTR PinName IN\nPINATTR SpiceOrder 1\n",
-            encoding="utf-8",
-            newline="\n",
+        (work_dir / "bus.asc").write_bytes(
+            b"\xef\xbb\xbfVersion 4\nSHEET 1 880 680\nWIRE 0 0 160 0\n"
         )
-        parent = work_dir / "top.asc"
-        parent.write_text(
-            "Version 4\nSHEET 1 880 680\nSYMBOL bus 0 0 R0\nSYMATTR InstName X1\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        parent = self._parent_loading(work_dir)
         with pytest.raises(NetlistError) as caught:
-            await handle_edit_schematic(
-                _edit_input(
-                    target=str(parent),
-                    expected_sha256=_sha(parent),
-                    ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}],
-                ),
-                asc_state,
-            )
+            await _commit(asc_state, parent)
         message = str(caught.value)
         assert "top.asc" in message
         assert "bus.asc, a sheet it loads, starts with a UTF-8 byte order mark" in message
@@ -2159,32 +2110,38 @@ class TestPathsThatLeaveTheSheetAsItIs:
         b'DATAFLAG 80 0 ""\r\n'
     )
 
-    @pytest.mark.parametrize("route", ["read", "dry_run", "plot_panes_only"])
-    async def test_the_sheet_keeps_its_bytes(self, asc_state, work_dir, route):
+    @pytest.mark.parametrize(
+        ("request_fields", "commit_state"),
+        [
+            ({"ops": [], "return_views": ["pin_legend"]}, "not_committed"),
+            ({"dry_run": True, "ops": [_MID_LABEL]}, "not_committed"),
+            (
+                {
+                    "expected_sha256": hashlib.sha256(SHEET).hexdigest(),
+                    "ops": [
+                        {
+                            "op": "set_plot_panes",
+                            "analysis": "tran",
+                            "panes": [{"traces": ["V(in)"]}],
+                        }
+                    ],
+                },
+                "committed",
+            ),
+        ],
+        ids=["read", "dry_run", "plot_panes_only"],
+    )
+    async def test_the_sheet_keeps_its_bytes(
+        self, asc_state, work_dir, request_fields, commit_state
+    ):
         path = work_dir / "kept.asc"
         path.write_bytes(self.SHEET)
-        editor = make_editor(path)
-        assert isinstance(editor, AscEditor)
-        assert se._render_editor_text(editor).encode("utf-8") != self.SHEET
-        before = _file_at(path)
-        request: dict[str, Any] = {"target": str(path)}
-        if route == "read":
-            request.update(ops=[], return_views=["pin_legend"])
-        elif route == "dry_run":
-            request.update(
-                dry_run=True, ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}]
-            )
-        else:
-            request.update(
-                expected_sha256=_sha(path),
-                ops=[
-                    {"op": "set_plot_panes", "analysis": "tran", "panes": [{"traces": ["V(in)"]}]}
-                ],
-            )
-        data = _assert_schema(await handle_edit_schematic(_edit_input(**request), asc_state))
-        assert data["outcome"] == "complete"
-        assert data["commit_state"] == (
-            "committed" if route == "plot_panes_only" else "not_committed"
+        assert se._render_editor_text(AscEditor(path)).encode("utf-8") != self.SHEET
+        before = file_at(path)
+        data = _assert_schema(
+            await handle_edit_schematic(_edit_input(target=str(path), **request_fields), asc_state)
         )
-        assert _file_at(path) == before
+        assert data["outcome"] == "complete"
+        assert data["commit_state"] == commit_state
+        assert file_at(path) == before
         assert data["sha256"] == _sha(path)

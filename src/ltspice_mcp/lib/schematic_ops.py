@@ -28,7 +28,6 @@ validate the extension and raise NetlistError for a non-.asc file.
 """
 
 import asyncio
-import codecs
 import importlib
 import itertools
 import math
@@ -40,7 +39,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import CodeType
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
 from pydantic import Field
@@ -74,6 +73,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
+from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
@@ -1129,41 +1129,19 @@ class GridPoint(StrictModel):
 # ---------------------------------------------------------------------------
 
 
-# The DATAFLAG records (data labels: an expression LTspice shows at a point on
-# the sheet) each sheet held when it was read, in file order. spicelib skips
-# them on read and has nothing to write them from (docs/spicelib_bugs.md,
-# Bug 25), so an edit's render puts them back from here.
-_data_flags_by_editor: WeakKeyDictionary[AscEditor, tuple[str, ...]] = WeakKeyDictionary()
-
-
-def data_flag_records(editor: AscEditor) -> tuple[str, ...]:
-    """The DATAFLAG lines ``editor``'s sheet held when it was read, without line ends."""
-    return _data_flags_by_editor.get(editor, ())
-
-
-def _read_data_flags(path: Path, encoding: str) -> tuple[str, ...]:
-    # Read the way spicelib read it: its codec, universal newlines, its test.
-    with open(path, encoding=encoding) as sheet:
-        return tuple(line.removesuffix("\n") for line in sheet if line.startswith("DATAFLAG"))
-
-
-def _refusing_read(
-    exc: BaseException, code: CodeType
-) -> tuple[AscEditor, dict[str, object]] | None:
-    """The editor, and the locals, of the innermost ``code`` frame ``exc`` passed through.
+def _refusing_read(exc: BaseException, code: CodeType) -> dict[str, Any]:
+    """The locals of the innermost ``code`` frame ``exc`` passed through, or none.
 
     A block symbol's sheet is read while its parent loads, so the sheet
     spicelib refused may not be the one being opened, and its errors do not
-    say which it was. The innermost frame of the method that raised does.
+    say which it was. The innermost frame of the method that raised does: its
+    ``self`` is the editor reading that sheet.
     """
-    found = None
+    names: dict[str, Any] = {}
     for frame, _ in traceback.walk_tb(exc.__traceback__):
         if frame.f_code is code and isinstance(frame.f_locals.get("self"), AscEditor):
-            found = frame
-    if found is None:
-        return None
-    names = dict(found.f_locals)
-    return names["self"], names
+            names = dict(frame.f_locals)
+    return names
 
 
 def _unreadable_record(path: Path, exc: NotImplementedError) -> NetlistError:
@@ -1173,13 +1151,13 @@ def _unreadable_record(path: Path, exc: NotImplementedError) -> NetlistError:
     file nor its number (docs/spicelib_bugs.md, Bug 26). The read that refused
     names the sheet and its codec, and its ``line`` the record.
     """
-    read = _refusing_read(exc, AscEditor.reset_netlist.__code__)
-    record = read[1].get("line") if read is not None else None
-    if read is None or not isinstance(record, str):
+    names = _refusing_read(exc, AscEditor.reset_netlist.__code__)
+    record = names.get("line")
+    if not isinstance(record, str):
         return NetlistError(
             f"Cannot open {path}: the schematic editor cannot read it: {exc}", show_hint=False
         )
-    sheet, encoding = Path(read[0].asc_file_path), read[0].encoding
+    sheet, encoding = Path(names["self"].asc_file_path), names["self"].encoding
     number = None
     try:
         with open(sheet, encoding=encoding) as text:
@@ -1213,21 +1191,17 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
     it had no ``Version`` line (docs/spicelib_bugs.md, Bug 27). Both LTspice
     builds refuse it too, recorded as ``export/micro_utf8_bom``.
     """
-    read = _refusing_read(exc, AscEditor.__init__.__code__)
-    sheet = Path(read[0].asc_file_path) if read is not None else path
+    names = _refusing_read(exc, AscEditor.__init__.__code__)
+    sheet = Path(names["self"].asc_file_path) if names else path
     try:
         with open(sheet, "rb") as stream:
-            head = stream.read(len(codecs.BOM_UTF8))
+            mark = refused_sheet_mark(stream.read(4))
     except OSError:
-        head = b""
+        mark = None
     where = "it" if sheet == path else f"{sheet}, a sheet it loads,"
-    if head == codecs.BOM_UTF8:
+    if mark is not None:
         return NetlistError(
-            f"Cannot open {path}: {where} starts with a UTF-8 byte order mark. Neither "
-            "LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing "
-            'from it, XVII stops on "Unknown schematic syntax"), and the schematic '
-            "editor does not either. Save the sheet without the mark.",
-            show_hint=False,
+            f"Cannot open {path}: {where} {refused_sheet_mark_note(mark)}", show_hint=False
         )
     return NetlistError(
         f"Cannot open {path}: {where} does not start with a Version line in any "
@@ -1253,7 +1227,6 @@ def make_editor(path: Path) -> Editor:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
-        _data_flags_by_editor[editor] = _read_data_flags(path, editor.encoding)
         return editor
     except FileNotFoundError as e:
         if not path.is_file():

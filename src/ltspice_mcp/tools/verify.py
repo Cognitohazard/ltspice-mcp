@@ -79,7 +79,7 @@ from pydantic import BeforeValidator, Field
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
-from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
+from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
@@ -1390,9 +1390,6 @@ def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
     """A byte order mark at the start of the sheet, which LTspice does not read past.
 
     The drawing decodes past it, so every other check passes such a sheet.
-    Neither build exports one: LTspice 26 exits having written nothing, and
-    XVII stops on "Unknown schematic syntax" (``export/micro_utf8_bom`` and
-    ``export/micro_utf16le_bom`` in the recordings).
     """
     mark = scene.byte_order_mark
     if mark is None:
@@ -1403,14 +1400,7 @@ def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
             severity="error",
             at={"file": str(path), "line": 1},
             subject=path.name,
-            evidence={
-                "mark": mark,
-                "detail": (
-                    f"the sheet starts with a {mark} byte order mark; neither LTspice 26 nor "
-                    "LTspice XVII reads a sheet that does (26 exports nothing from it, XVII "
-                    'stops on "Unknown schematic syntax"). Save it without the mark.'
-                ),
-            },
+            evidence={"mark": mark, "detail": f"the sheet {refused_sheet_mark_note(mark)}"},
         )
     ]
 
