@@ -237,6 +237,29 @@ class TestSettingsCopy:
             b"[Options]\r\nLastRunVersion=26.1.1\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
         )
 
+    def test_a_waveform_grid_someone_left_on_is_not_carried_into_a_recording(self):
+        # With grid=on a build's waveform window saves a GridStyle line in
+        # every pane (recorded as plot/ac_grid_on), so the plot cases came out
+        # differently on a machine where it was on. The colour of the same
+        # name is no setting of that kind and stays.
+        source = b"[Options]\r\nLastRunVersion=17.0.37\r\ngrid=on\r\n[Colors]\r\nGrid=1\r\n"
+        assert neutral_settings(source, {}) == (
+            b"[Options]\r\nLastRunVersion=17.0.37\r\n[Colors]\r\nGrid=1\r\n"
+        )
+        assert b"\r\ngrid=on\r\n[Colors]" in neutral_settings(source, {"grid": "on"})
+
+    def test_a_default_newly_read_from_a_build_is_added_to_the_ones_on_record(self):
+        # A recording of some cases keeps the defaults the whole one was made
+        # with; a key the recorder has since begun to remove has none there.
+        on_record = {"Solver": "0", "RadianMeasure": "false"}
+        written_back = {"Solver": "1", "grid": "off", "RawTempDir": "C:\\Users\\dev\\raw"}
+        assert recorder.with_new_defaults(on_record, written_back) == {
+            "Solver": "0",
+            "RadianMeasure": "false",
+            "grid": "off",
+        }
+        assert recorder.with_new_defaults({}, written_back) == {"Solver": "1", "grid": "off"}
+
     def test_the_copy_is_never_empty_of_what_marks_a_used_install(self):
         # A build that starts on an empty settings file runs its first-launch
         # steps; what says the build has run before must survive the copy.

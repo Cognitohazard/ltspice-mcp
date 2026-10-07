@@ -3873,8 +3873,8 @@
       "kind": "run",
       "outputs": {
         "log/meas_trig.log": {
-          "bytes": 1416,
-          "sha256": "4fec55f1624c33ffe68306088f3c5e79d2619d35c6f3b0687664d1d4e5f309c4"
+          "bytes": 1417,
+          "sha256": "8d7033d797f5200027964178d42f0ff607cce4b1568ad27d8c049b1c12694417"
         },
         "log/meas_trig.raw": {
           "bytes": 10818,
@@ -3906,8 +3906,8 @@
       "kind": "run",
       "outputs": {
         "log/meas_trig_radian.log": {
-          "bytes": 1435,
-          "sha256": "b0359bbbf96cb1fbc5ebd121e0715c91d0833ef50af5f96f8b2453a7ad2768b8"
+          "bytes": 1436,
+          "sha256": "4261ad5055bfa2e493c94aadc4deaf1f382fb6c83d7ddcc76eaac8ee476e1847"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",
@@ -4109,7 +4109,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
       },
@@ -4129,6 +4128,38 @@
         ".raw"
       ]
     },
+    "plot/ac_grid_on": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/ac_grid_on.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/ac_grid_on.plt": {
+          "bytes": 496,
+          "sha256": "07ae66c923f58a5a94a52f0ad24908a90b9eb57ad44921c43f7e8bb076493943"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "grid": "on"
+      },
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/math": {
       "behaviour": "plot-settings",
       "command": [
@@ -4139,7 +4170,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
       },
@@ -4170,7 +4200,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
       },
@@ -4201,7 +4230,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
       },
@@ -4232,7 +4260,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/ac.plt": "a611b01e577ef40d452b4e91adbaa86b7bcce2a0cec1d12012db4412cd460cc0",
         "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
@@ -4263,7 +4290,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/log_y.plt": "6275d2c72a07f58e3da55f8222be774a4407e246014f163587ad644e55353629",
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
@@ -4295,7 +4321,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/math.plt": "fc41be66f8678103b4d58a2ca829c63de2c01574a7acc20a4b87fff68acfaa9e",
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
@@ -4327,7 +4352,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/spaced.plt": "199d77b25251ceee9722ac02e532ab2af715361d24c4e9fb18ad463e1e315f6c"
@@ -4359,7 +4383,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/two_panes.plt": "1eedf7eee6766613d99eb2bd9595ff96814cdd2e7da95b0f3ad978b6915586eb"
@@ -4391,7 +4414,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/two_sections.plt": "d090016c80a3118099c39024fa25c8a7091dc8acc890a854a153882f879f97a5"
@@ -4423,7 +4445,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/two_panes_utf8.plt": "12ab44e43c23cb11b3757175f6ce3e48ef6191580c9723e4d745dc9b95b00e6b"
@@ -5580,6 +5601,7 @@
       "TSKbypass": "false",
       "UseClocktoReseedMC": "false",
       "UseRawTempDir": "false",
+      "grid": "off",
       "saveOneCurrentPerDevice": "false"
     },
     "source": "a copy of the build's per-user settings file, without the keys listed under defaults"

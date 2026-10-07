@@ -503,7 +503,10 @@ What makes that true, and what a recording must never carry:
 - **No settings of the person recording.** Each case runs against a copy of
   the build's settings file with the keys that change a result removed, so
   the build is on its own defaults; a case sets one back when it is the
-  point (`ini = { NoGreekMus = "true" }`). The build must have been started
+  point (`ini = { NoGreekMus = "true" }`). The keys are `BEHAVIOUR_KEYS` in
+  `tests/ltspice_recorder.py`; a file that comes out differently for another
+  person on the same build is a key missing from that list (the waveform
+  grid was one, *Plot settings* below). The build must have been started
   once, so that it has a settings file to copy.
 - **No path, name, date or duration.** The run directory, the home directory,
   dates, elapsed times and the thread count are rewritten to fixed values, in
@@ -550,25 +553,42 @@ and its Save saves the sheet. A dialog the case did not open is a box the
 build stopped on and is recorded as one, with no `.plt` kept. A window that
 does none of this in the timeout fails the recording.
 
-The committed plot cases were recorded under Wine 11, on the same executables
-as the rest of the recording (the digests match the manifest's), and each
-entry says so in `host`. A recording made on Windows has no `host`, so
-recording them again there with
-`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`
-replaces them. A partial recording like that keeps the library facts the rest
-of the recording was made with, and says so when the machine's own differ: a
-Wine prefix has the library the installer unpacked, not the one the committed
-manifest describes. Every other committed case was recorded again under Wine
-(`--check`) to see what the host changes. On LTspice 26 every file came out
-as committed but those of the two cases that run on the recording user's own
-settings, which differ by design. On XVII each log ended without the blank
-line that follows the matrix compiler report. Neither touches a plot case,
-whose recording is the build's own serialisation of the file. Under Wine a
-desktop of the recorder's own is made but the windows on it cannot be listed,
-so the recorder launches on Wine's display instead and looks for a box, or the
-waveform window, among the windows of the process it started there. That is
-how the box XVII stops on for the two sheets with a byte order mark is
-recorded under Wine as it is on Windows.
+The plot cases were first recorded under Wine 11, on the same executables as
+the rest of the recording (the digests match the manifest's), and then again
+on Windows with
+`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`.
+Every file came out on Windows byte for byte as it had under Wine, on both
+builds; the committed entries are the ones from Windows. An entry recorded
+under Wine says so in `host`, and one recorded on Windows has no `host`. A
+partial recording like that keeps the library facts the rest of the recording
+was made with, and says so when the machine's own differ: a Wine prefix has
+the library the installer unpacked, not the one the committed manifest
+describes. It keeps the settings defaults on record too, and adds only the
+default of a key the recorder has come to remove since.
+
+One setting of the person at the window reaches a plot settings file: the
+waveform window's grid, the `grid` key of the settings file, which a key
+press turns on and the build then remembers. With it on, each build writes a
+`GridStyle` line in every pane and another last number on the phase axis of
+an AC pane (`plot/ac_grid_on`). Four of XVII's plot files came out that way
+on a machine where XVII's grid had been left on, which looked like a
+difference between Wine and Windows and was not one. The recorder now removes
+the key, so each build is on its default, which is off; XVII writes that
+default back, and the manifest holds it.
+
+Every other committed case was recorded again under Wine (`--check`) to see
+what the host changes. On LTspice 26 every file came out as committed but
+those of the two cases that run on the recording user's own settings, which
+differ by design. On XVII each log ended without the blank line that follows
+the matrix compiler report. Two of XVII's logs, `log/meas_trig` and
+`log/meas_trig_radian`, had been committed in that form, recorded before an
+entry named its host; they are now as Windows writes them, with the line.
+Neither touches a plot case, whose recording is the build's own serialisation
+of the file. Under Wine a desktop of the recorder's own is made but the
+windows on it cannot be listed, so the recorder launches on Wine's display
+instead and looks for a box, or the waveform window, among the windows of the
+process it started there. That is how the box XVII stops on for the two
+sheets with a byte order mark is recorded under Wine as it is on Windows.
 
 ### The opt-in tier
 
