@@ -160,24 +160,27 @@ async def _success(directory, limits):
     _assert_gone([reply.worker_pid])
 
 
-async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(call_dir, limits):
+async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(
+    call_dir, limits, parser_deadline
+):
     directory = call_dir()
     task = asyncio.create_task(
         run_parser(
             {"mode": "runaway"},
             work_dir=directory,
-            # timing: the deadline under test; the decoder reaches its runaway
-            # seam well inside it, and the test lasts as long as it does
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
     )
     started = await _started(directory)
+    # The deadline passes now that there is a decoder and a descendant to reap.
+    parser_deadline.expire()
     with pytest.raises(ParserProcessError) as caught:
         await task
     assert caught.value.code == "deadline" and caught.value.reaped
     _assert_gone(started)
+    parser_deadline.restore()
     await _success(call_dir("fresh"), limits)
 
 
