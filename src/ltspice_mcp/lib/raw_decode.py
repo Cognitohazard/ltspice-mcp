@@ -23,7 +23,7 @@ from typing import Any, BinaryIO
 import numpy as np
 from spicelib.raw.plot_data import PlotData
 
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding
+from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
 from ltspice_mcp.lib.parser_capture import CapturedFile, CapturedInputs
 from ltspice_mcp.lib.raw_header import (
     RawHeader,
@@ -189,11 +189,10 @@ def _step_log(
         data = handle.read(byte_limit + 1)
     if len(data) != record.size_bytes:
         raise RawDecodeError("Captured step log size changed")
-    _, encoding = decode_spice_bytes_with_encoding(data)
     try:
-        # The shared sniffer's last fallback is lossy; do not silently use a
-        # replacement character to decide whether a step marker exists.
-        text = data.decode(encoding, errors="strict").removeprefix("\ufeff")
+        # Never with a replacement character: one must not decide whether a
+        # step marker exists.
+        text, encoding = decode_spice_bytes_strictly(data)
     except UnicodeError as exc:
         raise RawDecodeError("Invalid captured step log encoding") from exc
     result["encoding"] = encoding
@@ -206,7 +205,7 @@ def _step_log(
         match = _STEP_LINE.fullmatch(original.strip())
         if match is None:
             continue
-        if len(original.encode(encoding)) > limits.line_bytes:
+        if len(encode_spice_text(original, encoding)) > limits.line_bytes:
             raise RawLimitError("line_bytes limit exceeded in step log row")
         if len(rows) == row_limit:
             raise RawLimitError("step_rows limit exceeded in companion log")

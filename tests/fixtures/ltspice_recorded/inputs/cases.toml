@@ -130,7 +130,7 @@ unrecordable = "LTspice saves a sheet only from its window: the -FixUpSchematicF
 # ---------------------------------------------------------------- decks
 
 [behaviour.deck-encoding]
-summary = "How each build decodes a deck's bytes: a micro sign stored as cp1252, UTF-8 (with and without a byte order mark) and UTF-16, a Greek mu, and a section sign in an instance name."
+summary = "How each build decodes a deck's bytes: a micro sign stored as cp1252, UTF-8 (with and without a byte order mark) and UTF-16, a Greek mu, a section sign in an instance name, the bytes cp1252 leaves undefined in a title and in node names, and byte 85 in a comment."
 model = ["lib/encoding.py", "lib/spice_lex_ops.py", "lib/deck_staging.py", "lib/variations.py", "lib/simulator_build.py", "lib/services.py", "lib/lint_rules.py"]
 inputs = [
     "deck/micro_utf8.cir",
@@ -141,6 +141,9 @@ inputs = [
     "deck/greek_mu_utf8.cir",
     "deck/section_sign_utf8.cir",
     "deck/section_sign_cp1252.cir",
+    "deck/bytes_outside_cp1252.cir",
+    "deck/byte_85_in_comment.cir",
+    "deck/bytes_in_node_names.cir",
 ]
 
 [behaviour.value-suffixes]
