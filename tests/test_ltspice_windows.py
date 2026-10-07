@@ -14,7 +14,6 @@ import os
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -34,38 +33,29 @@ from ltspice_mcp.lib.simulator import (
     simulator_family,
 )
 from ltspice_mcp.lib.windows_job import python_launch
-from tests.test_hidden_desktop import own_desktop, windows_only
+from tests.conftest import LIVENESS_S
+from tests.test_hidden_desktop import OWN_DESKTOP_SOURCE, own_desktop, windows_only
 
 # LTspice as far as its files go: ``-Run -b <deck>`` leaves a log and a raw,
 # ``-netlist <sheet>`` a netlist. A deck or sheet whose name says so makes it
 # exit 1 without them, put up a message box, or never finish.
-STAND_IN = textwrap.dedent(
+STAND_IN = OWN_DESKTOP_SOURCE + textwrap.dedent(
     """
-    import ctypes, json, os, sys, threading
-    from ctypes import wintypes
+    import ctypes, json, os, threading
     from pathlib import Path
-
-    user = ctypes.WinDLL("user32")
-    kernel = ctypes.WinDLL("kernel32")
-    user.GetThreadDesktop.restype = wintypes.HANDLE
-    user.GetThreadDesktop.argtypes = [wintypes.DWORD]
-    user.GetUserObjectInformationW.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
-    ]
-    name = ctypes.create_unicode_buffer(256)
-    desktop = user.GetThreadDesktop(kernel.GetCurrentThreadId())
-    user.GetUserObjectInformationW(desktop, 2, name, ctypes.sizeof(name), None)
 
     arguments = sys.argv[1:]
     export = arguments[0] == "-netlist"
     subject = Path(arguments[1] if export else arguments[2])
-    facts = {"desktop": name.value, "arguments": arguments, "cwd": os.getcwd()}
+    facts = {"desktop": own_desktop(), "arguments": arguments, "cwd": os.getcwd()}
     subject.with_suffix(".ran.json").write_text(json.dumps(facts), encoding="utf-8")
     print("console line")
     if "refused" in subject.stem:
         sys.exit(1)
     if "asks" in subject.stem:
-        user.MessageBoxW(None, "Aborting: Unknown schematic syntax", "LTspice", 0)
+        ctypes.WinDLL("user32").MessageBoxW(
+            None, "Aborting: Unknown schematic syntax", "LTspice", 0
+        )
     if "hangs" in subject.stem:
         threading.Event().wait()
     if export:
@@ -82,14 +72,6 @@ def stand_in(tmp_path: Path) -> Path:
     script = tmp_path / "stand_in_ltspice.py"
     script.write_text(STAND_IN, encoding="utf-8")
     return script
-
-
-@pytest.fixture(autouse=True)
-def _own_shared_desktop() -> Iterator[None]:
-    hidden_desktop.close_shared()
-    yield
-    hidden_desktop.configure(enabled=True)
-    hidden_desktop.close_shared()
 
 
 @pytest.fixture(autouse=True)
@@ -183,7 +165,7 @@ class TestRun:
     def test_a_batch_run_is_off_the_callers_desktop(self, tmp_path: Path, stand_in: Path):
         deck = tmp_path / "deck.cir"
         deck.write_text("* t\n.end\n")
-        code = bound(LTspice, stand_in).run(deck, timeout=60)
+        code = bound(LTspice, stand_in).run(deck, timeout=LIVENESS_S)
         assert code == 0
         assert deck.with_suffix(".raw").is_file()
         assert ran(deck)["desktop"] == f"ltspice-mcp-{os.getpid()}"
@@ -195,16 +177,16 @@ class TestRun:
     ):
         deck = tmp_path / "deck.cir"
         deck.write_text("* t\n.end\n")
-        bound(LTspice, stand_in).run(deck, switches, timeout=60)
+        bound(LTspice, stand_in).run(deck, switches, timeout=LIVENESS_S)
         assert ran(deck)["arguments"] == spicelib_command(tmp_path, "run", deck, switches)
 
     def test_the_console_log_is_kept_when_asked_for(self, tmp_path: Path, stand_in: Path):
         deck = tmp_path / "deck.cir"
         deck.write_text("* t\n.end\n")
         cls = bound(LTspice, stand_in)
-        cls.run(deck, timeout=60)
+        cls.run(deck, timeout=LIVENESS_S)
         assert not deck.with_suffix(".exe.log").exists()
-        cls.run(deck, timeout=60, exe_log=True)
+        cls.run(deck, timeout=LIVENESS_S, exe_log=True)
         assert deck.with_suffix(".exe.log").read_bytes().strip() == b"console line"
 
     def test_the_working_directory_is_the_one_given(self, tmp_path: Path, stand_in: Path):
@@ -212,28 +194,29 @@ class TestRun:
         deck.write_text("* t\n.end\n")
         folder = tmp_path / "elsewhere"
         folder.mkdir()
-        bound(LTspice, stand_in).run(deck, timeout=60, cwd=folder)
+        bound(LTspice, stand_in).run(deck, timeout=LIVENESS_S, cwd=folder)
         assert Path(ran(deck)["cwd"]) == folder
 
     def test_the_exit_code_is_ltspices(self, tmp_path: Path, stand_in: Path):
         deck = tmp_path / "refused.cir"
         deck.write_text("* t\n.end\n")
-        assert bound(LTspice, stand_in).run(deck, timeout=60) == 1
+        assert bound(LTspice, stand_in).run(deck, timeout=LIVENESS_S) == 1
 
     def test_past_its_timeout_it_raises_as_subprocess_does(self, tmp_path: Path, stand_in: Path):
         deck = tmp_path / "hangs.cir"
         deck.write_text("* t\n.end\n")
         with pytest.raises(subprocess.TimeoutExpired):
             # timing: the bound is the behaviour under test; the stand-in never exits
-            bound(LTspice, stand_in).run(deck, timeout=1.0)
+            bound(LTspice, stand_in).run(deck, timeout=0.2)
 
+    @pytest.mark.usefixtures("quick_looks")
     def test_a_message_box_ends_the_run_with_what_it_said(self, tmp_path: Path, stand_in: Path):
         """On a desktop nobody sees, a box LTspice waits on would hold the run
         to its timeout and say nothing. It is ended and reported instead."""
         deck = tmp_path / "asks.cir"
         deck.write_text("* t\n.end\n")
         with pytest.raises(DialogError) as stopped:
-            bound(LTspice, stand_in).run(deck, timeout=60)
+            bound(LTspice, stand_in).run(deck, timeout=LIVENESS_S)
         assert "LTspice; Aborting: Unknown schematic syntax" in str(stopped.value)
         # It says how to get to see the box.
         assert "hidden_desktop = false" in str(stopped.value)
@@ -242,7 +225,7 @@ class TestRun:
         hidden_desktop.configure(enabled=False)
         deck = tmp_path / "deck.cir"
         deck.write_text("* t\n.end\n")
-        assert bound(LTspice, stand_in).run(deck, timeout=60) == 0
+        assert bound(LTspice, stand_in).run(deck, timeout=LIVENESS_S) == 0
         assert ran(deck)["desktop"] == own_desktop()
 
     def test_a_caller_with_its_own_streams_gets_spicelibs_launch(
@@ -251,7 +234,7 @@ class TestRun:
         deck = tmp_path / "deck.cir"
         deck.write_text("* t\n.end\n")
         with open(tmp_path / "mine.log", "wb") as mine:
-            bound(LTspice, stand_in).run(deck, timeout=60, stdout=mine)
+            bound(LTspice, stand_in).run(deck, timeout=LIVENESS_S, stdout=mine)
         assert (tmp_path / "mine.log").read_bytes().strip() == b"console line"
         assert ran(deck)["desktop"] == own_desktop()
 
@@ -261,7 +244,7 @@ class TestCreateNetlist:
     def test_an_export_is_off_the_callers_desktop(self, tmp_path: Path, stand_in: Path):
         sheet = tmp_path / "sheet.asc"
         sheet.write_text("Version 4\n")
-        net = bound(LTspice, stand_in).create_netlist(sheet, timeout=60)
+        net = bound(LTspice, stand_in).create_netlist(sheet, timeout=LIVENESS_S)
         assert net == sheet.with_suffix(".net")
         assert net.is_file()
         assert ran(sheet)["desktop"] == f"ltspice-mcp-{os.getpid()}"
@@ -272,7 +255,7 @@ class TestCreateNetlist:
     ):
         sheet = tmp_path / "sheet.asc"
         sheet.write_text("Version 4\n")
-        bound(LTspice, stand_in).create_netlist(sheet, switches, timeout=60)
+        bound(LTspice, stand_in).create_netlist(sheet, switches, timeout=LIVENESS_S)
         expected = spicelib_command(tmp_path, "create_netlist", sheet, switches)
         assert ran(sheet)["arguments"] == expected
 
@@ -280,13 +263,14 @@ class TestCreateNetlist:
         sheet = tmp_path / "refused.asc"
         sheet.write_text("Version 4\n")
         with pytest.raises(RuntimeError, match="Failed to create netlist"):
-            bound(LTspice, stand_in).create_netlist(sheet, timeout=60)
+            bound(LTspice, stand_in).create_netlist(sheet, timeout=LIVENESS_S)
 
+    @pytest.mark.usefixtures("quick_looks")
     def test_a_message_box_ends_the_export_with_what_it_said(self, tmp_path: Path, stand_in: Path):
         """What LTspice XVII does with a sheet that starts with a byte order
         mark: it says so in a box and waits."""
         sheet = tmp_path / "asks.asc"
         sheet.write_text("Version 4\n")
         with pytest.raises(DialogError) as stopped:
-            bound(LTspice, stand_in).create_netlist(sheet, timeout=60)
+            bound(LTspice, stand_in).create_netlist(sheet, timeout=LIVENESS_S)
         assert stopped.value.text == "LTspice\nAborting: Unknown schematic syntax"

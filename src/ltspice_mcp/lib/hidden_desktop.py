@@ -15,10 +15,10 @@ that, because ``STARTUPINFO.lpDesktop`` is not among the fields it passes on,
 so this module calls ``CreateProcessW`` itself.
 
 Nobody can answer a message box there either. LTspice puts one up for some
-inputs and waits for OK; ``run`` looks for one while it waits, and ends a
-program found waiting on the same box twice, with what the box said. Every
-process started here is held in a job that ends with its handle, so a program
-no one can see cannot outlive the process that started it.
+inputs and waits for OK; ``HiddenDesktop.run`` looks for one while it waits,
+and ends a program found waiting on the same box twice, with what the box
+said. Every process started here is held in a job that ends with its handle,
+so a program no one can see cannot outlive the process that started it.
 
 Off Windows nothing here does anything: ``shared`` returns None and a caller
 launches the ordinary way.
@@ -34,7 +34,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from ctypes import wintypes
 from functools import cache
 from pathlib import Path
@@ -59,9 +59,9 @@ _DUPLICATE_SAME_ACCESS = 0x00000002
 _DIALOG_CLASS = "#32770"
 
 DIALOG_LOOK_S = 0.5
-"""How often ``run`` looks for a message box while the program runs. A box has
-to be there on two looks running to count, so one that closes by itself within
-this long is never taken for a question."""
+"""How often ``HiddenDesktop.run`` looks for a message box while the program
+runs. A box has to be there on two looks running to count (``BoxWatch``), so
+one that closes by itself within this long is never taken for a question."""
 
 
 class DialogError(RuntimeError):
@@ -304,6 +304,61 @@ def _environment_block(env: Mapping[str, str]) -> Any:
     return ctypes.create_unicode_buffer("".join(f"{key}={value}\0" for key, value in env.items()))
 
 
+@contextlib.contextmanager
+def _inheritable(stream: IO[Any] | int) -> Iterator[int]:
+    """A copy of ``stream``'s handle that a new process can inherit, closed on exit."""
+    if sys.platform != "win32":
+        raise OSError(_NEEDS_WINDOWS)
+    import msvcrt
+
+    kernel = _kernel()
+    current = kernel.GetCurrentProcess()
+    descriptor = stream if isinstance(stream, int) else stream.fileno()
+    duplicate = wintypes.HANDLE()
+    if not kernel.DuplicateHandle(
+        current,
+        msvcrt.get_osfhandle(descriptor),
+        current,
+        ctypes.byref(duplicate),
+        0,
+        True,
+        _DUPLICATE_SAME_ACCESS,
+    ):
+        raise _last_error()
+    assert duplicate.value is not None
+    try:
+        yield duplicate.value
+    finally:
+        kernel.CloseHandle(duplicate.value)
+
+
+@contextlib.contextmanager
+def _handle_list(handles: Sequence[int]) -> Iterator[int]:
+    """The address of an attribute list naming the only handles a new process inherits."""
+    kernel = _kernel()
+    size = ctypes.c_size_t(0)
+    kernel.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    attributes = ctypes.create_string_buffer(size.value)
+    if not kernel.InitializeProcThreadAttributeList(attributes, 1, 0, ctypes.byref(size)):
+        raise _last_error()
+    # Windows keeps a pointer to this array until the list is deleted.
+    named = (wintypes.HANDLE * len(handles))(*handles)
+    try:
+        if not kernel.UpdateProcThreadAttribute(
+            attributes,
+            0,
+            _PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            named,
+            ctypes.sizeof(named),
+            None,
+            None,
+        ):
+            raise _last_error()
+        yield ctypes.addressof(attributes)
+    finally:
+        kernel.DeleteProcThreadAttributeList(attributes)
+
+
 class HiddenDesktop:
     """A desktop of its own, for programs whose windows nobody should see.
 
@@ -313,14 +368,12 @@ class HiddenDesktop:
     """
 
     def __init__(self, name: str) -> None:
-        self.name: str | None = None
+        self.name = name
         self._handle: int | None = None
         if sys.platform != "win32":
             return
-        handle = _user().CreateDesktopW(name, None, None, 0, _GENERIC_ALL, None)
-        if handle:
-            self.name, self._handle = name, handle
-        else:
+        self._handle = _user().CreateDesktopW(name, None, None, 0, _GENERIC_ALL, None) or None
+        if self._handle is None:
             logger.warning("Windows refused a desktop named %s: %s", name, _last_error())
 
     @property
@@ -336,7 +389,27 @@ class HiddenDesktop:
     def close(self) -> None:
         if self._handle is not None:
             _user().CloseDesktop(self._handle)
-        self.name = self._handle = None
+        self._handle = None
+
+    def _top_level_windows(self) -> list[tuple[int, int]]:
+        """Each top-level window here, with the process that owns it."""
+        if self._handle is None:
+            return []
+        user = _user()
+        windows: list[tuple[int, int]] = []
+
+        def note(window: int, _unused: int) -> bool:
+            owner = wintypes.DWORD(0)
+            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+            windows.append((window, int(owner.value)))
+            return True
+
+        user.EnumDesktopWindows(self._handle, _window_callback()(note), 0)
+        return windows
+
+    def window_owners(self) -> set[int]:
+        """The process of every top-level window on this desktop."""
+        return {owner for _window, owner in self._top_level_windows()}
 
     def dialog(self, pid: int) -> str | None:
         """What a message box ``pid`` has open here says, or None when it has none.
@@ -364,36 +437,11 @@ class HiddenDesktop:
                 found.append(text_of(window))
             return True
 
-        def top(window: int, _unused: int) -> bool:
-            owner = wintypes.DWORD(0)
-            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-            if (
-                owner.value == pid
-                and class_of(window) == _DIALOG_CLASS
-                and user.IsWindowVisible(window)
-            ):
+        for window, owner in self._top_level_windows():
+            if owner == pid and class_of(window) == _DIALOG_CLASS and user.IsWindowVisible(window):
                 found.append(text_of(window))
                 user.EnumChildWindows(window, _window_callback()(child), 0)
-            return True
-
-        user.EnumDesktopWindows(self._handle, _window_callback()(top), 0)
         return "\n".join(found) if found else None
-
-    def window_owners(self) -> set[int]:
-        """The process of every top-level window on this desktop."""
-        if self._handle is None:
-            return set()
-        user = _user()
-        owners: set[int] = set()
-
-        def top(window: int, _unused: int) -> bool:
-            owner = wintypes.DWORD(0)
-            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-            owners.add(int(owner.value))
-            return True
-
-        user.EnumDesktopWindows(self._handle, _window_callback()(top), 0)
-        return owners
 
     def start(
         self,
@@ -412,77 +460,35 @@ class HiddenDesktop:
         are inherited, never another this process happens to hold open. The
         program is in its job before it runs its first instruction.
         """
-        if self._handle is None or self.name is None:
+        if self._handle is None:
             raise OSError("No desktop to start a program on")
-        if sys.platform != "win32":
-            raise OSError(_NEEDS_WINDOWS)
-        import msvcrt
-
         kernel = _kernel()
-        current = kernel.GetCurrentProcess()
-        inherited: list[int] = []
-
-        def inheritable(stream: IO[Any] | int) -> int:
-            descriptor = stream if isinstance(stream, int) else stream.fileno()
-            duplicate = wintypes.HANDLE()
-            if not kernel.DuplicateHandle(
-                current,
-                msvcrt.get_osfhandle(descriptor),
-                current,
-                ctypes.byref(duplicate),
-                0,
-                True,
-                _DUPLICATE_SAME_ACCESS,
-            ):
-                raise _last_error()
-            assert duplicate.value is not None
-            inherited.append(duplicate.value)
-            return duplicate.value
-
-        attributes = None
-        try:
-            # The extended form only when there is a handle list to carry.
-            startup = _StartupInfoEx()
-            startup.StartupInfo.cb = ctypes.sizeof(_StartupInfo)
-            startup.StartupInfo.lpDesktop = self.name
-            flags = _CREATE_SUSPENDED
-            out = None if stdout is None else inheritable(stdout)
+        startup = _StartupInfoEx()
+        startup.StartupInfo.lpDesktop = self.name
+        startup.StartupInfo.cb = ctypes.sizeof(_StartupInfo)
+        flags = _CREATE_SUSPENDED
+        block = None
+        if env is not None:
+            block = _environment_block(env)
+            flags |= _CREATE_UNICODE_ENVIRONMENT
+        created = _ProcessInformation()
+        line = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(command)))
+        with contextlib.ExitStack() as held:
+            out = None if stdout is None else held.enter_context(_inheritable(stdout))
             if stderr == subprocess.STDOUT:
                 error = out
             else:
-                error = None if stderr is None else inheritable(stderr)
+                error = None if stderr is None else held.enter_context(_inheritable(stderr))
+            inherited = [handle for handle in dict.fromkeys((out, error)) if handle is not None]
             if inherited:
+                # The extended form of the startup information, which is what
+                # carries the list of the handles to inherit.
                 startup.StartupInfo.cb = ctypes.sizeof(startup)
-                flags |= _EXTENDED_STARTUPINFO_PRESENT
                 startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
                 startup.StartupInfo.hStdOutput = out
                 startup.StartupInfo.hStdError = error
-                size = ctypes.c_size_t(0)
-                kernel.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
-                attributes = ctypes.create_string_buffer(size.value)
-                if not kernel.InitializeProcThreadAttributeList(
-                    attributes, 1, 0, ctypes.byref(size)
-                ):
-                    attributes = None
-                    raise _last_error()
-                handles = (wintypes.HANDLE * len(inherited))(*inherited)
-                if not kernel.UpdateProcThreadAttribute(
-                    attributes,
-                    0,
-                    _PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                    handles,
-                    ctypes.sizeof(handles),
-                    None,
-                    None,
-                ):
-                    raise _last_error()
-                startup.lpAttributeList = ctypes.addressof(attributes)
-            block = None
-            if env is not None:
-                block = _environment_block(env)
-                flags |= _CREATE_UNICODE_ENVIRONMENT
-            created = _ProcessInformation()
-            line = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(command)))
+                startup.lpAttributeList = held.enter_context(_handle_list(inherited))
+                flags |= _EXTENDED_STARTUPINFO_PRESENT
             if not kernel.CreateProcessW(
                 None,
                 line,
@@ -496,11 +502,6 @@ class HiddenDesktop:
                 ctypes.byref(created),
             ):
                 raise _last_error()
-        finally:
-            if attributes is not None:
-                kernel.DeleteProcThreadAttributeList(attributes)
-            for handle in inherited:
-                kernel.CloseHandle(handle)
         try:
             process = StartedProcess(created.hProcess, created.dwProcessId, command)
         except BaseException:
@@ -513,16 +514,76 @@ class HiddenDesktop:
             kernel.CloseHandle(created.hThread)
         return process
 
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        timeout: float | None = None,
+        cwd: str | Path | None = None,
+        env: Mapping[str, str] | None = None,
+        stdout: IO[Any] | int | None = None,
+        stderr: IO[Any] | int | None = None,
+        remedy: str = "",
+    ) -> int:
+        """Run ``command`` here to its end and return its exit code.
+
+        The contract of ``subprocess.run(...).returncode``: past ``timeout``
+        the program is ended and ``subprocess.TimeoutExpired`` raised. A
+        program found waiting on a message box is ended and ``DialogError``
+        raised with what the box said, since no one could have answered it;
+        ``remedy`` ends that error's message.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self.start(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr) as process:
+            boxes = BoxWatch(self, process.pid)
+            while True:
+                look = DIALOG_LOOK_S
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        process.kill()
+                        process.wait()
+                        raise subprocess.TimeoutExpired(list(command), timeout or 0.0)
+                    look = min(look, remaining)
+                try:
+                    return process.wait(look)
+                except subprocess.TimeoutExpired:
+                    pass
+                waiting_on = boxes.look()
+                if waiting_on is not None:
+                    process.kill()
+                    process.wait()
+                    raise DialogError(Path(command[0]).name, waiting_on, remedy)
+
+
+class BoxWatch:
+    """Tells a message box a program waits on from one that closes by itself.
+
+    ``look`` gives what the box says once the same box has been there on two
+    looks running, and None until then.
+    """
+
+    def __init__(self, desktop: HiddenDesktop, pid: int) -> None:
+        self._desktop = desktop
+        self._pid = pid
+        self._last: str | None = None
+
+    def look(self) -> str | None:
+        seen = self._desktop.dialog(self._pid)
+        waited_on = seen if seen is not None and seen == self._last else None
+        self._last = seen
+        return waited_on
+
 
 # --------------------------------------------------------------------------
 # The one desktop a process starts its programs on
 # --------------------------------------------------------------------------
 
 _lock = threading.Lock()
+# Kept even when Windows refused it: asking again on every launch would be
+# refused, and logged, every time.
 _shared: HiddenDesktop | None = None
 _enabled = True
-# Windows said no once; asking again on every launch would say it every time.
-_refused = False
 
 
 def configure(*, enabled: bool) -> None:
@@ -538,73 +599,21 @@ def shared() -> HiddenDesktop | None:
     None off Windows, when the setting turns it off, and when Windows refuses
     one; a caller then launches the ordinary way.
     """
-    global _shared, _refused
+    global _shared
     if sys.platform != "win32":
         return None
     with _lock:
-        if not _enabled or _refused:
+        if not _enabled:
             return None
         if _shared is None:
-            desktop = HiddenDesktop(f"ltspice-mcp-{os.getpid()}")
-            if not desktop.available:
-                _refused = True
-                return None
-            _shared = desktop
-        return _shared
+            _shared = HiddenDesktop(f"ltspice-mcp-{os.getpid()}")
+        return _shared if _shared.available else None
 
 
 def close_shared() -> None:
     """Close this process's hidden desktop; the next ``shared`` makes another."""
-    global _shared, _refused
+    global _shared
     with _lock:
-        desktop, _shared, _refused = _shared, None, False
+        desktop, _shared = _shared, None
     if desktop is not None:
         desktop.close()
-
-
-def run(
-    command: Sequence[str],
-    *,
-    timeout: float | None = None,
-    cwd: str | Path | None = None,
-    env: Mapping[str, str] | None = None,
-    stdout: IO[Any] | int | None = None,
-    stderr: IO[Any] | int | None = None,
-    desktop: HiddenDesktop | None = None,
-    program: str | None = None,
-    remedy: str = "",
-) -> int:
-    """Run ``command`` on a hidden desktop to its end and return its exit code.
-
-    The contract of ``subprocess.run(...).returncode``: past ``timeout`` the
-    program is ended and ``subprocess.TimeoutExpired`` raised. A program found
-    waiting on a message box is ended and ``DialogError`` raised with what the
-    box said, since no one could have answered it; ``program`` and ``remedy``
-    word that error. ``desktop`` defaults to the shared one, which must exist
-    (ask ``shared`` first).
-    """
-    where = desktop or shared()
-    if where is None:
-        raise OSError("No hidden desktop to run a program on")
-    deadline = None if timeout is None else time.monotonic() + timeout
-    asked: str | None = None
-    with where.start(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr) as process:
-        while True:
-            look = DIALOG_LOOK_S
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    process.kill()
-                    process.wait()
-                    raise subprocess.TimeoutExpired(list(command), timeout or 0.0)
-                look = min(look, remaining)
-            try:
-                return process.wait(look)
-            except subprocess.TimeoutExpired:
-                pass
-            dialog = where.dialog(process.pid)
-            if dialog is not None and dialog == asked:
-                process.kill()
-                process.wait()
-                raise DialogError(program or Path(command[0]).name, dialog, remedy)
-            asked = dialog

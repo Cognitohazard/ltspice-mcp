@@ -1043,6 +1043,14 @@ def _close_hidden_desktop() -> Iterator[None]:
 
 
 @pytest.fixture
+def quick_looks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Look for a message box often, so a test of one does not wait out two
+    looks at the pace a server keeps. The rule that it be seen twice is the
+    same."""
+    monkeypatch.setattr(hidden_desktop, "DIALOG_LOOK_S", 0.05)
+
+
+@pytest.fixture
 def settled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every source's stat stamp counts as settled when it is read.
 
