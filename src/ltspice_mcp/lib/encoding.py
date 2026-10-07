@@ -156,6 +156,28 @@ def rewrite_codec(encoding: str) -> str:
     return encoding if encoding in _KEPT_CODECS else "utf-8"
 
 
+def bom_of(raw: bytes) -> bytes:
+    """The byte order mark ``raw`` starts with, or ``b""``.
+
+    The decoders here drop the mark, so a caller that writes a file back as it
+    was read keeps it from this.
+    """
+    return next((bom for bom, _ in _BOM_ENCODINGS if raw.startswith(bom)), b"")
+
+
+def encode_spice_text_strictly(text: str, codec: str) -> bytes:
+    """``text`` in ``codec``, a name a decoder here gave, without a byte order mark.
+
+    Raises ``UnicodeEncodeError`` for a character the codec cannot spell.
+    ``cp1252`` is the whole-byte table the decoder reads 8-bit files with, so
+    text it decoded comes back as its bytes; ``utf-8-sig`` is written as UTF-8,
+    the mark being the caller's to keep (``bom_of``).
+    """
+    if codec == "cp1252":
+        return codecs.charmap_encode(text, "strict", _WINDOWS_1252_BYTES)[0]
+    return text.encode("utf-8" if codec == "utf-8-sig" else codec)
+
+
 def encode_spice_text(text: str, codec: str) -> bytes:
     """``text`` in ``codec`` (a ``rewrite_codec`` name), else as UTF-8.
 
