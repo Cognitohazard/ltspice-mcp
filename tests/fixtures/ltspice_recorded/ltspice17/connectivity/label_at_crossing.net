@@ -1,0 +1,6 @@
+* C:\recording\label_at_crossing.asc
+R1 c 0 1k
+R2 c 0 2k
+R3 c 0 3k
+.backanno
+.end

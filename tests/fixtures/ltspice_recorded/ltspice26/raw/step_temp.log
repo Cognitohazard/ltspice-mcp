@@ -1,0 +1,23 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\step_temp.cir
+Start Time: Thu Jan 15 00:00:00 2026
+
+.step temp=-40°
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = -40
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+
+.step temp=27°
+Direct Newton iteration succeeded in finding operating point.
+
+.step temp=125°
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 57
+
+Files loaded:
+C:\recording\step_temp.cir
+

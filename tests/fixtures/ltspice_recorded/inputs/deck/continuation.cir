@@ -1,0 +1,11 @@
+* continuation lines
+I1 0 a 1
+R1 a 0
+* a comment between a card and its continuation
++ 1k
+I2 0 b
+
++ 1
+R2 b 0 2k
+.op
+.end

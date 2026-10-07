@@ -1,0 +1,62 @@
+Circuit: * measurement tables over a stepped parameter
+
+.OP point found by inspection.
+.step r=1000
+.step r=2000
+.step r=20000
+
+
+Measurement: s_max
+  step	MAX(v(out))	FROM	TO
+     1	0.999956	0	0.001
+     2	0.993273	0	0.001
+     3	0.39332	0	0.001
+
+Measurement: s_avg
+  step	AVG(v(out))	FROM	TO
+     1	0.798737	0	0.0005
+     2	0.631039	0	0.0005
+     3	0.114777	0	0.0005
+
+Measurement: s_find
+  step	v(out)	at
+     1	0.993253	0.0005
+     2	0.917638	0.0005
+     3	0.220522	0.0005
+
+Measurement: s_when
+  step	v(out)=0.5
+     1	7.11305e-005
+     2	0.000139585
+     3	0
+
+Measurement: s_rise
+  step	s_rise	FROM	TO
+     1	2.61874e-005	1.11815e-005	3.73689e-005
+     2	5.06029e-005	2.18995e-005	7.25024e-005
+     3	0.000502476	0.000211565	0.00071404
+
+Measurement: s_param
+  step	s_max*2
+     1	1.99991
+     2	1.98655
+     3	0.78664
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 170
+traniter = 170
+tranpoints = 86
+accept = 81
+rejected = 5
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

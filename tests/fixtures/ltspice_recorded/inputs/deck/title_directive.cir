@@ -1,0 +1,5 @@
+.param r=2k
+I1 0 a 1
+R1 a 0 {r}
+.op
+.end

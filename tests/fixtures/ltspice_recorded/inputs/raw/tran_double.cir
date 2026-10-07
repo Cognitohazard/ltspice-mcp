@@ -1,0 +1,7 @@
+* rc step response in double precision
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out 1k
+C1 out 0 100n
+.options numdgt=7
+.tran 0 1m 0 20u
+.end

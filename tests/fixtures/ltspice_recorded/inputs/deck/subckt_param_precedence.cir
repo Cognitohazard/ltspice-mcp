@@ -1,0 +1,16 @@
+* a subcircuit's header default against a .param in its body
+.subckt cell top params: r=2k
+.param r=3k
+R1 top 0 {r}
+.ends
+.subckt wrap top params: r=5k
+X1 top cell
+.ends
+I1 0 a 1
+X1 a cell
+I2 0 b 1
+X2 b cell r=7k
+I3 0 c 1
+X3 c wrap r=6k
+.op
+.end

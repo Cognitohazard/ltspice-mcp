@@ -1,0 +1,6 @@
+C:\recording\disto.cir(2): Unknown parameter
+V1 in 0 AC 1 distof1 1
+             ^^^^^^^^^
+C:\recording\disto.cir(6): Expected device instantiation or directive here.
+.disto dec 5 10 100k
+^^^^^^^^^^^^^^^^^^^^

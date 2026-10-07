@@ -1,0 +1,5 @@
+* C:\recording\unconnected_pins.asc
+R1 NC_01 0 1k
+R2 NC_02 NC_03 2k
+.backanno
+.end

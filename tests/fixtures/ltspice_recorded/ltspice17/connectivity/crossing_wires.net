@@ -1,0 +1,6 @@
+* C:\recording\crossing_wires.asc
+R1 a 0 1k
+R2 a 0 2k
+R3 b 0 3k
+.backanno
+.end

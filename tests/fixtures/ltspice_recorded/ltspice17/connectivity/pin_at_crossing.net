@@ -1,0 +1,6 @@
+* C:\recording\pin_at_crossing.asc
+R1 top 0 1k
+R2 top 0 2k
+R3 top 0 3k
+.backanno
+.end

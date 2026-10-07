@@ -1,0 +1,6 @@
+* divider transfer function
+V1 in 0 5
+R1 in out 1k
+R2 out 0 4k
+.tf V(out) V1
+.end

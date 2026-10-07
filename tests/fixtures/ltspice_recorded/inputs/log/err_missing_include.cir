@@ -1,0 +1,6 @@
+* an include file that is not there
+.include nosuchfile.lib
+V1 a 0 1
+R1 a 0 1k
+.op
+.end

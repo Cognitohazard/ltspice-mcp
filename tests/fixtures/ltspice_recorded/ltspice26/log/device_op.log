@@ -1,0 +1,70 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\device_op.cir
+Start Time: Thu Jan 15 00:00:00 2026
+Options:logopinfo
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Instance "M1": Length shorter than recommended for a level 1 MOSFET.
+Instance "M1": Width narrower than recommended for a level 1 MOSFET.
+Instance "x1:M1": Length shorter than recommended for a level 1 MOSFET.
+Direct Newton iteration succeeded in finding operating point.
+Semiconductor Device Operating Points:
+                        --- Diodes ---
+Name:       D1
+Model:      dn
+Id:      2.32e-03
+Vd:      6.77e-01
+Req:     1.11e+01
+CAP:     0.00e+00
+
+                        --- Bipolar Transistors ---
+Name:        Q1
+Model:       qn
+Ib:       1.03e-05
+Ic:       2.90e-04
+Vbe:      7.43e-01
+Vbc:      6.47e-01
+Vce:      9.68e-02
+BetaDC:   2.83e+01
+Gm:       1.15e-02
+Rpi:      8.49e+03
+Rx:       0.00e+00
+Ro:       3.59e+03
+Cbe:      0.00e+00
+Cbc:      0.00e+00
+Cjs:      0.00e+00
+BetaAC:   9.76e+01
+Cbx:      0.00e+00
+Ft:       0.00e+00
+
+                        --- MOSFET Transistors ---
+Name:           M1        x1:M1
+Model:          nm          nm
+Id:          1.71e-04    1.87e-04
+Vgs:         1.29e+00    1.13e+00
+Vds:         1.29e+00    1.13e+00
+Vbs:         0.00e+00    0.00e+00
+Vth:         7.00e-01    7.00e-01
+Vdsat:       5.86e-01    4.32e-01
+Gm:          5.86e-04    8.64e-04
+Gds:         0.00e+00    0.00e+00
+Gmb:         0.00e+00    0.00e+00
+Cbd:         0.00e+00    0.00e+00
+Cbs:         0.00e+00    0.00e+00
+Cgsov:       0.00e+00    0.00e+00
+Cgdov:       0.00e+00    0.00e+00
+Cgbov:       0.00e+00    0.00e+00
+Cgs:         0.00e+00    0.00e+00
+Cgd:         0.00e+00    0.00e+00
+Cgb:         0.00e+00    0.00e+00
+
+
+Total elapsed time: 0.000 seconds.
+Total iterations: 12
+
+Files loaded:
+C:\recording\device_op.cir
+

@@ -1,0 +1,3 @@
+C:\recording\meas_bad_syntax.cir(7): Expected ")" here.
+.meas tran broken FIND V(out AT 0.5m
+                            ^^^^^^^^

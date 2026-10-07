@@ -1,0 +1,460 @@
+# What the LTspice recorder runs, grouped by the behaviour each input pins.
+#
+# This file is the inventory: every LTspice behaviour the server models has a
+# [behaviour.<key>] table here naming the code that models it and the inputs
+# that record it. `tests/ltspice_recorder.py` runs them on an installed build
+# and writes what the build produced to ../<build>/. How to re-record, and the
+# rule that a modelled behaviour needs a recording, are in docs/TESTING.md
+# ("Recorded LTspice behaviour").
+#
+# A behaviour's `inputs` are each one case: a sheet (.asc) is exported with
+# -netlist, anything else is run with -Run -b. The case is named for the input
+# without its suffix. `extra` files are copied beside every input of the
+# behaviour. A [[case]] table at the end describes a case an input path alone
+# cannot: another switch, a setting, a run stopped part way.
+#
+# A behaviour with no input says why: `evidence` when the build's manifest
+# records it some other way, `unrecordable` when nothing can.
+
+# ---------------------------------------------------------------- schematics
+
+[behaviour.symbol-orientation]
+summary = "Where each of the eight placements (R0-R270, M0-M270) puts a symbol's pins, and that a netlist lists a component's nodes in SpiceOrder."
+model = ["lib/symbol_geometry.py", "lib/schematic_scene.py", "lib/schematic_ops.py"]
+# Each sheet holds one instance per placement. A net label named for its own
+# coordinates (x368y352) sits at every point any placement could put a pin, so
+# the exported netlist states where LTspice found each pin.
+inputs = ["export/orientation_cell4.asc"]
+extra = ["export/cell4.asy"]
+
+[behaviour.stock-symbol-orientation]
+summary = "The same eight placements for symbols from the build's own library."
+model = ["lib/symbol_geometry.py", "tests/fixtures/symbols"]
+inputs = ["export/orientation_nmos4.asc", "export/orientation_res.asc", "export/orientation_npn.asc"]
+
+[behaviour.stock-symbol-pins]
+summary = "The pin names, order and offsets of the stock symbols the suite's stand-in symbols are written to match."
+model = ["tests/fixtures/symbols", "lib/library_manager.py"]
+evidence = "manifest: library.symbols"
+
+[behaviour.wire-connectivity]
+summary = "Which pins, labels and wires are one node: T-junctions, points on a wire's interior, crossings, overlaps, diagonal wires, pins that only touch."
+model = ["lib/schematic_ops.py", "lib/schematic_scene.py"]
+inputs = [
+    "connectivity/crossing_wires.asc",
+    "connectivity/label_at_crossing.asc",
+    "connectivity/label_on_wire_interior.asc",
+    "connectivity/label_on_vertical_wire_interior.asc",
+    "connectivity/pin_on_wire_interior.asc",
+    "connectivity/wire_end_on_wire_interior.asc",
+    "connectivity/wire_end_on_wire_interior_reversed.asc",
+    "connectivity/wire_end_on_vertical_wire_interior.asc",
+    "connectivity/pin_at_crossing.asc",
+    "connectivity/pin_on_pin.asc",
+    "connectivity/collinear_overlap.asc",
+    "connectivity/diagonal_wire_interior.asc",
+    "connectivity/diagonal_wire_end.asc",
+    "connectivity/two_instance_wire.asc",
+]
+extra = ["connectivity/res.asy"]
+
+[behaviour.same-instance-wire]
+summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line."
+model = ["lib/schematic_ops.py"]
+inputs = [
+    "connectivity/same_instance_wire.asc",
+    "connectivity/same_instance_detour.asc",
+    "connectivity/same_instance_inline_vertex.asc",
+]
+extra = ["connectivity/res.asy"]
+
+[behaviour.net-naming]
+summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
+model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
+inputs = [
+    "connectivity/two_labels_zeta_first.asc",
+    "connectivity/two_labels_alpha_first.asc",
+    "connectivity/two_labels_later_on_left.asc",
+    "connectivity/two_labels_corner.asc",
+    "connectivity/label_and_ground.asc",
+    "connectivity/floating_label.asc",
+    "connectivity/same_name_labels.asc",
+    "connectivity/unconnected_pins.asc",
+    "connectivity/unlabelled_nets.asc",
+]
+extra = ["connectivity/res.asy"]
+
+[behaviour.export-boilerplate]
+summary = "The lines the netlister adds to every export: the header comments, .backanno, a parameterless default model per device class, and the .lib of the build's own standard.* files."
+model = ["lib/netlist_diff.py", "lib/lint_rules.py", "lib/simulator.py", "lib/deck_prep.py"]
+inputs = ["export/boilerplate.asc"]
+
+[behaviour.export-encoding]
+summary = "The bytes of an exported netlist: its encoding, its line endings, and how the micro sign is spelled, for a sheet stored in each encoding and with each Version header."
+model = ["lib/encoding.py", "lib/deck_prep.py", "lib/format.py", "tools/verify.py", "lib/spice_lex_ops.py"]
+inputs = [
+    "export/micro_cp1252.asc",
+    "export/micro_utf8.asc",
+    "export/micro_cp1252_v41.asc",
+    "export/micro_utf8_v41.asc",
+    "export/micro_utf8_bom.asc",
+    "export/micro_utf16le_bom.asc",
+    "export/micro_utf16le.asc",
+    "export/greek_mu_utf8.asc",
+]
+extra = ["export/res.asy"]
+
+[behaviour.export-instance-names]
+summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own."
+model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py"]
+inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
+extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
+
+[behaviour.export-attributes]
+summary = "Where Value2, SpiceLine, SpiceLine2 and SpiceModel land on an exported card: subcircuit parameters, a params: marker, and a transistor's or diode's area factor."
+model = ["lib/spice_lex_views.py", "lib/netlist_diff.py", "lib/schematic_ops.py"]
+inputs = ["export/attributes.asc"]
+extra = ["export/cell4.asy"]
+
+[behaviour.export-directives]
+summary = "How directive text on a sheet reaches the netlist: .include and .lib lines, a two-line directive, a sheet comment."
+model = ["lib/netlist_diff.py", "lib/deck_staging.py", "lib/schematic_scene.py"]
+inputs = ["export/directives.asc"]
+extra = ["export/res.asy"]
+
+[behaviour.schematic-save-encoding]
+summary = "The encoding a build writes when it saves a sheet."
+model = ["lib/encoding.py", "lib/schematic_scene.py"]
+unrecordable = "LTspice saves a sheet only from its window: the -FixUpSchematicFonts switch rewrites sheets, but only through a save prompt there. What is recorded instead is how each build reads a sheet stored in each encoding (export-encoding), which is what decides the bytes the server may write."
+
+# ---------------------------------------------------------------- decks
+
+[behaviour.deck-encoding]
+summary = "How each build decodes a deck's bytes: a micro sign stored as cp1252, UTF-8 (with and without a byte order mark) and UTF-16, a Greek mu, and a section sign in an instance name."
+model = ["lib/encoding.py", "lib/spice_lex_ops.py", "lib/deck_staging.py", "lib/variations.py", "lib/simulator_build.py", "lib/services.py", "lib/lint_rules.py"]
+inputs = [
+    "deck/micro_utf8.cir",
+    "deck/micro_cp1252.cir",
+    "deck/micro_utf8_bom.cir",
+    "deck/micro_utf16le_bom.cir",
+    "deck/micro_utf16le.cir",
+    "deck/greek_mu_utf8.cir",
+    "deck/section_sign_utf8.cir",
+    "deck/section_sign_cp1252.cir",
+]
+
+[behaviour.value-suffixes]
+summary = "The number LTspice reads from a value: scale suffixes in either case, M against Meg, unit tails, letters that are no suffix, 3k4-style shorthand, and words that begin with a suffix."
+model = ["lib/format.py", "lib/lint_rules.py", "lib/hierarchy_expr.py", "lib/montecarlo.py"]
+# Each resistor carries 1 A, so the node voltage in the raw is the resistance read.
+inputs = [
+    "deck/suffixes.cir",
+    "deck/suffix_unknown.cir",
+    "deck/suffix_shorthand.cir",
+    "deck/suffix_prefix_match.cir",
+    "deck/suffix_percent.cir",
+]
+
+[behaviour.deck-structure]
+summary = "How a deck's lines are read: the title line, ; and $ comments, + continuations, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
+model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py"]
+inputs = [
+    "deck/comment_semicolon.cir",
+    "deck/comment_dollar.cir",
+    "deck/after_end.cir",
+    "deck/title_card.cir",
+    "deck/title_directive.cir",
+    "deck/continuation.cir",
+    "deck/gnd_alias.cir",
+    "deck/crlf.cir",
+    "deck/no_end.cir",
+    "deck/case_insensitive.cir",
+]
+
+[behaviour.deck-forms]
+summary = "Card forms the lint and arity rules accept or refuse: B-source R= and P=, a spaced B expression, comma-separated IC= values, Q= and Flux=, a value keyed as R=, C= or L=, params: on a subcircuit, trailing area factors, device type names as models, .tran shorthands, two analyses in one deck."
+model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py"]
+inputs = [
+    "deck/bsource_r.cir",
+    "deck/bsource_p.cir",
+    "deck/bsource_spaced.cir",
+    "deck/keyed_r.cir",
+    "deck/keyed_c.cir",
+    "deck/keyed_l.cir",
+    "deck/params_keyword.cir",
+    "deck/device_area.cir",
+    "deck/default_models.cir",
+    "deck/op_and_tran.cir",
+    "deck/ac_and_tran.cir",
+    "deck/save_omits_meas.cir",
+]
+
+[behaviour.deck-semantics]
+summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
+model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py"]
+inputs = [
+    "deck/param_temp.cir",
+    "deck/options_temp.cir",
+    "deck/caret_power.cir",
+    "deck/subckt_param_precedence.cir",
+]
+
+[behaviour.deck-includes]
+summary = "How .include and .lib are resolved: a file beside the deck, and a .lib that names a section."
+model = ["lib/deck_staging.py", "lib/lint_rules.py", "lib/runner_base.py"]
+inputs = ["deck/lib_section.cir", "deck/include_relative.cir"]
+extra = ["deck/corners.lib", "deck/models.inc"]
+
+# ---------------------------------------------------------------- raw files
+
+[behaviour.raw-transient]
+summary = "A transient raw: UTF-16LE header, 8-byte time axis, 4-byte traces; the same run uncompressed and in double precision."
+model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
+inputs = ["raw/tran.cir", "raw/tran_uncompressed.cir", "raw/tran_double.cir"]
+
+[behaviour.raw-window-offset]
+summary = "A transient saved from a later start time: the Offset field and the stored time axis."
+model = ["lib/raw_parser.py", "lib/decoded_raw.py"]
+inputs = ["raw/tran_window.cir"]
+
+[behaviour.raw-ac]
+summary = "An AC raw: complex samples, a frequency axis stored complex."
+model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_parser.py", "lib/ac_analysis.py"]
+inputs = ["raw/ac.cir"]
+
+[behaviour.raw-dc]
+summary = "A DC sweep raw: the swept source as the axis."
+model = ["lib/raw_header.py", "lib/raw_parser.py"]
+inputs = ["raw/dc.cir"]
+
+[behaviour.raw-noise]
+summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
+inputs = ["raw/noise.cir"]
+
+[behaviour.raw-op]
+summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
+inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
+
+[behaviour.raw-stepped]
+summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), and what a stepped .op and a stepped .dc store."
+model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
+inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir"]
+
+[behaviour.raw-transfer-function]
+summary = "A .tf run: the Transfer Function plot and what the log says."
+model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
+inputs = ["raw/tf.cir"]
+
+[behaviour.raw-ascii]
+summary = "A raw written as text (Values:): 8-bit with CRLF line ends, header included, where every other raw has a UTF-16 header."
+model = ["lib/raw_header.py", "lib/raw_decode.py"]
+
+[behaviour.raw-fastaccess]
+summary = "A raw converted to Fast Access layout: the fastaccess flag and samples stored trace by trace."
+model = ["lib/raw_header.py", "lib/raw_parser.py"]
+
+[behaviour.raw-partial]
+summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it."
+model = ["lib/raw_parser.py", "lib/experiment_runner.py"]
+
+# ---------------------------------------------------------------- logs
+
+[behaviour.log-banner]
+summary = "How a run names the build that made it: the log's first line from LTspice 24 on, the raw header's Command field for LTspice XVII."
+model = ["lib/simulator_build.py", "lib/raw_parser.py"]
+evidence = "manifest: cases.*.reported_build, read from every recorded log and raw"
+
+[behaviour.log-encoding]
+summary = "The encoding and line endings of a log."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/encoding.py", "resources.py"]
+evidence = "every recorded log; a stepped temperature writes the one non-ASCII character (log/step_temp)"
+
+[behaviour.log-meas]
+summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, and the tables of a stepped run."
+model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py"]
+inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-failed]
+summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
+model = ["lib/log_parser.py", "lib/result_observations.py"]
+inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
+keep = ["log"]
+
+[behaviour.log-step]
+summary = "The .step lines of a log: one parameter, two parameters, and a temperature with its degree sign."
+model = ["lib/log_parser.py", "lib/raw_decode.py"]
+inputs = ["log/step_temp.cir", "log/step_two_params.cir"]
+keep = ["log"]
+
+[behaviour.log-fourier]
+summary = "The Fourier block a .four directive prints, with its harmonic table and distortion totals."
+model = ["lib/log_parser.py", "lib/log_decode.py"]
+inputs = ["log/fourier.cir"]
+keep = ["log"]
+
+[behaviour.log-device-op]
+summary = "The semiconductor operating-point block of the log: printed under .options logopinfo for an .op run, with a device inside a subcircuit."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/runner_base.py", "lib/metrics.py"]
+inputs = ["log/device_op.cir", "log/device_op_off.cir", "log/device_op_tran.cir"]
+keep = ["log"]
+
+[behaviour.log-diagnostics]
+summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage."
+model = ["lib/log_parser.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
+inputs = [
+    "log/err_unknown_directive.cir",
+    "log/err_bad_card.cir",
+    "log/err_missing_include.cir",
+    "log/err_missing_lib.cir",
+    "log/err_unknown_model.cir",
+    "log/err_unknown_subckt.cir",
+    "log/err_unknown_param.cir",
+    "log/err_floating_node.cir",
+    "log/err_source_loop.cir",
+    "log/err_inductor_loop.cir",
+    "log/err_duplicate_name.cir",
+    "log/err_zero_resistance.cir",
+    "log/err_no_analysis.cir",
+    "log/warn_curly.cir",
+]
+
+[behaviour.log-convergence]
+summary = "What the log says when a solve struggles: a transient whose time step collapses, and an operating point found only by stepping."
+model = ["lib/log_parser.py", "lib/services.py"]
+inputs = ["log/err_timestep.cir", "log/op_stepping.cir"]
+
+[behaviour.log-native-tables]
+summary = "The .sens, .pz and .disto analyses, whose printed tables the server reads from ngspice logs."
+model = ["lib/native_log_tables.py", "lib/runner_base.py"]
+# LTspice implements none of the three; the recordings are what it says instead.
+inputs = ["log/sens.cir", "log/pz.cir", "log/disto.cir"]
+
+# ---------------------------------------------------------------- the install
+
+[behaviour.library-roots]
+summary = "Where each build keeps its library below the home directory, and the encoding of each cmp/standard.* model file there."
+model = ["lib/simulator.py", "lib/wsl.py", "lib/library_manager.py", "lib/encoding.py", "lib/library_parser.py"]
+evidence = "manifest: library.root and library.models; the .lib line of export/boilerplate"
+
+# ---------------------------------------------------------------- cases an input path cannot describe
+
+[[case]]
+id = "raw/tran_op_raw"
+behaviour = "raw-op"
+source = "raw/tran.cir"
+keep = ["op.raw"]
+note = "The operating-point raw LTspice writes beside a transient's raw."
+
+# A build ignores -ascii when it is also given a settings file, so these two
+# run on the recording user's own settings. What they pin is the file's form,
+# so a fresh recording is compared with them on the header alone. Both builds
+# also ignore the switch when the deck's own file name contains "ascii", which
+# is why these cases are not named for it.
+[[case]]
+id = "raw/tran_as_text"
+behaviour = "raw-ascii"
+source = "raw/tran.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/ac_as_text"
+behaviour = "raw-ascii"
+source = "raw/ac.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+# LTspice 24 and later also have a setting for it, which a settings file can
+# carry, so this one runs on the same settings as raw/tran and holds the same
+# samples. LTspice XVII has no such setting.
+[[case]]
+id = "raw/tran_as_text_setting"
+behaviour = "raw-ascii"
+source = "raw/tran.cir"
+ini = { AsciiRawFile = "true" }
+builds = ["current"]
+
+# Card forms whose point is that the deck runs; the log shows it did, and the
+# waveform would only add bulk.
+[[case]]
+id = "deck/ic_comma"
+behaviour = "deck-forms"
+source = "deck/ic_comma.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/keyword_values"
+behaviour = "deck-forms"
+source = "deck/keyword_values.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/meas_functions"
+behaviour = "deck-forms"
+source = "deck/meas_functions.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/meas_function_vdb"
+behaviour = "deck-forms"
+source = "deck/meas_function_vdb.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/meas_function_phase"
+behaviour = "deck-forms"
+source = "deck/meas_function_phase.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/meas_function_group_delay"
+behaviour = "deck-forms"
+source = "deck/meas_function_group_delay.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/tran_zero_step"
+behaviour = "deck-forms"
+source = "deck/tran_zero_step.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/tran_lone_stop"
+behaviour = "deck-forms"
+source = "deck/tran_lone_stop.cir"
+keep = ["log"]
+
+[[case]]
+id = "deck/tran_modifiers"
+behaviour = "deck-forms"
+source = "deck/tran_modifiers.cir"
+keep = ["log"]
+
+[[case]]
+id = "raw/tran_fastaccess"
+behaviour = "raw-fastaccess"
+kind = "fastaccess"
+source = "raw/tran.cir"
+
+[[case]]
+id = "raw/tran_killed"
+behaviour = "raw-partial"
+kind = "kill"
+source = "raw/tran_killed.cir"
+kill_after_bytes = 20000
+kill_after_s = 20
+volatile = true
+note = "Stopped once the raw holds 20 kB; how far the run got differs every time."
+
+[[case]]
+id = "export/micro_cp1252_as_u"
+behaviour = "export-encoding"
+source = "export/micro_cp1252.asc"
+extra = ["export/res.asy"]
+ini = { NoGreekMus = "true" }
+note = "The same sheet with the setting that asks LTspice to write u for the micro sign."

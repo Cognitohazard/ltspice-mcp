@@ -1,0 +1,13 @@
+* 3k4-style values: each resistor carries 1 A, so V(n<i>) is the resistance LTspice read
+I1 0 n01 1
+R1 n01 0 1k5
+I2 0 n02 1
+R2 n02 0 4R7
+I3 0 n03 1
+R3 n03 0 2M2
+I4 0 n04 1
+R4 n04 0 3u3
+I5 0 n05 1
+R5 n05 0 1Meg5
+.op
+.end

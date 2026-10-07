@@ -1,0 +1,20 @@
+* every .meas result form
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out 1k
+C1 out 0 100n
+.tran 0 1m 0 20u
+.meas tran m_max MAX V(out)
+.meas tran m_min MIN V(out)
+.meas tran m_pp PP V(out)
+.meas tran m_avg AVG V(out) FROM 0 TO 0.5m
+.meas tran m_rms RMS V(out)
+.meas tran m_integ INTEG V(out)
+.meas tran m_find FIND V(out) AT 0.5m
+.meas tran m_when WHEN V(out)=0.5
+.meas tran m_findwhen FIND V(in) WHEN V(out)=0.5
+.meas tran m_trigtarg TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL=0.9 RISE=1
+.meas tran m_param PARAM m_max*2
+.meas tran m_deriv DERIV V(out) AT 0.1m
+.meas m_nokind MAX V(in)
+.meas tran m_expr FIND V(out)*2+1 AT 0.5m
+.end

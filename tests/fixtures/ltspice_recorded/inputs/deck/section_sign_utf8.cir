@@ -1,0 +1,5 @@
+* section sign in an instance name
+I1 0 a 1
+R§Load a 0 1k
+.op
+.end

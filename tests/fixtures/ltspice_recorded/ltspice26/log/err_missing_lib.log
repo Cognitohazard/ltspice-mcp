@@ -1,0 +1,3 @@
+C:\recording\err_missing_lib.cir(2): File not found.
+.lib nosuchfile.lib
+     ^^^^^^^^^^^^^^

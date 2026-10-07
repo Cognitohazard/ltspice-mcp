@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\title_directive.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\title_directive.cir(3): No such parameter defined.
+R1 a 0 {r}
+        ^

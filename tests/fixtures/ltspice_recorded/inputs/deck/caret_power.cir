@@ -1,0 +1,11 @@
+* the caret and double-star operators in a parameter expression
+I1 0 a 1
+R1 a 0 {2^3^2}
+I2 0 b 1
+R2 b 0 {2**3}
+I3 0 c 1
+R3 c 0 {2**3**2}
+I4 0 d 1
+R4 d 0 {(2^3)+5}
+.op
+.end

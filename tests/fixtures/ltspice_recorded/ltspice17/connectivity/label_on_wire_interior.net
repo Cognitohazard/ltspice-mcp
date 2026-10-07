@@ -1,0 +1,5 @@
+* C:\recording\label_on_wire_interior.asc
+R1 mid 0 1k
+R2 mid 0 2k
+.backanno
+.end

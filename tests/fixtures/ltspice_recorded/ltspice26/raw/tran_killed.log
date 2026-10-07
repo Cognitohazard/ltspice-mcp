@@ -1,0 +1,10 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\tran_killed.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.

@@ -1,0 +1,11 @@
+* comma-separated initial conditions
+V1 vcc 0 5
+R1 vcc c 1k
+R2 vcc b 100k
+Q1 c b 0 0 QN IC=0.6,2.5
+R3 vcc d 1k
+M1 d d 0 0 NM IC=1,2,0
+.model QN NPN
+.model NM NMOS
+.tran 0 1u 0 10n uic
+.end

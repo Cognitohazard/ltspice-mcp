@@ -1,0 +1,7 @@
+* a stepped temperature
+V1 a 0 1
+R1 a 0 1k tc1=0.01
+.step temp list -40 27 125
+.tran 0 1m 0 100u
+.meas tran ir AVG I(R1)
+.end

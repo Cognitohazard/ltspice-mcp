@@ -1,0 +1,24 @@
+Circuit: * complex measurement results
+
+
+g1k: v(out)=(-3.0103dB,-45°) at 1000
+gmax: MAX(mag(v(out)))=(-0.000434273dB,0°) FROM 10 TO 100000
+fc: mag(v(out))=0.70710678 AT 1000
+bw=9476.26 FROM 483.563 TO 9959.82
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 0
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+

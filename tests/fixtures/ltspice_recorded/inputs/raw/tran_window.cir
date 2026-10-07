@@ -1,0 +1,6 @@
+* rc step response saved from 1 ms on
+V1 in 0 PULSE(0 1 1.2m 1u 1u 1 2)
+R1 in out 1k
+C1 out 0 100n
+.tran 0 2m 1m 20u
+.end
