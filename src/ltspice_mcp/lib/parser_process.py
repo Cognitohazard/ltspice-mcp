@@ -46,6 +46,8 @@ _REPLY_BYTES = 4096
 _CANCEL_CHECK_S = 0.05
 """How often a call in flight looks at its cancel event. A reply, an early
 exit or excess diagnostics wake it at once; only cancellation waits this long."""
+_monotonic = time.monotonic
+"""The clock a call's deadline is read against."""
 WARM_CALLS = 64
 """Calls one warm tree serves before it is replaced, which bounds what a
 long-lived worker can accumulate."""
@@ -231,7 +233,7 @@ def _admit_call(deadline: float, cancel: threading.Event | None) -> threading.Ev
     if not math.isfinite(deadline):
         raise ValueError("Parser deadline must be finite")
     cancel = cancel if cancel is not None else threading.Event()
-    if cancel.is_set() or time.monotonic() >= deadline:
+    if cancel.is_set() or _monotonic() >= deadline:
         code = "cancelled" if cancel.is_set() else "deadline"
         raise ParserProcessError(code, "Parser call ended before spawn", reaped=True)
     return cancel
@@ -427,7 +429,7 @@ class ParserTree:
                     raise _CallFailed("cancelled", "Parser call was cancelled")
                 if self._stderr_overflow.is_set():
                     raise _CallFailed("error_limit", "Parser diagnostics exceed their byte limit")
-                remaining = deadline - time.monotonic()
+                remaining = deadline - _monotonic()
                 if remaining <= 0:
                     raise _CallFailed("deadline", "Parser call exceeded its deadline")
                 try:

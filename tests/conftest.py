@@ -1118,6 +1118,39 @@ def settled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(parser_service, "_now_ns", lambda: time.time_ns() + 3600 * 10**9)
 
 
+class ParserDeadline:
+    """Whether the deadlines of parser calls have passed, as a test decides it."""
+
+    def __init__(self) -> None:
+        self._passed = False
+
+    def now(self) -> float:
+        return float("inf") if self._passed else time.monotonic()
+
+    def expire(self) -> None:
+        """Every parser call's deadline has passed, whatever it was."""
+        self._passed = True
+
+    def restore(self) -> None:
+        """Deadlines are read against the real clock again."""
+        self._passed = False
+
+
+@pytest.fixture
+def parser_deadline(monkeypatch: pytest.MonkeyPatch) -> ParserDeadline:
+    """A parser call's deadline, which passes when the test says so.
+
+    A test of what a passed deadline does gives its call ``LIVENESS_S``, waits
+    for the decoder to be where the test needs it, and then calls ``expire``.
+    A deadline short enough to pass by itself must still outlast a process
+    start, and on a slow runner it does not: the call ends before there is
+    anything for the test to find.
+    """
+    deadline = ParserDeadline()
+    monkeypatch.setattr(parser_process, "_monotonic", deadline.now)
+    return deadline
+
+
 @pytest.fixture
 def unsettled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     """No source's stat stamp ever settles, so every read reaches a parser

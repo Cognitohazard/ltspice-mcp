@@ -183,6 +183,15 @@ Windows runner, one per run. Three mechanisms now carry it:
   first (a source loaded beforehand under `settled_stamps`, say), because
   the half of such a test that has to fit inside the budget is the half that
   fails on a slow runner.
+- **A deadline under test passes when the test says so.** Where what has to
+  fit inside the budget cannot be made instant (a process that must start and
+  start another before there is a tree to reap), the call is given
+  `LIVENESS_S`, the test waits for that state by its own handshake, and then
+  moves the clock the deadline is read against past it (`parser_deadline`,
+  `tests/conftest.py`). A one-second parse deadline that a decoder had to
+  start inside lost on the Windows runner exactly this way: the call ended
+  before the decoder had written its marker, and the test found no process to
+  check.
 - **Races lose on Linux first.** `--jitter-seed=N` (`tests/schedule_jitter.py`)
   delays thread-to-loop hand-offs and process starts and fires timers up to
   15.6 ms early, as Windows does, with delays drawn from the seed and the
