@@ -62,13 +62,11 @@ SUFFIX_DECKS = [
     "deck/suffix_prefix_match",
 ]
 
-#: Values LTspice reads and the server's parser refuses, with what LTspice
-#: makes of each (the same on both recorded builds). Two families: a letter
-#: that is no scale suffix, which LTspice skips, and the "3k4" shorthand that
-#: puts the suffix where the decimal point goes, which both builds accept as
-#: installed. ``parse_spice_value`` raises on all of them; a caller that
-#: validates a value with it turns away a deck LTspice would run.
-READ_BY_LTSPICE_ONLY = {
+#: Spellings the server's parser refused until it read values as LTspice
+#: does, with what LTspice makes of each (the same on both recorded builds):
+#: a letter that is no scale suffix, which LTspice skips with what follows it,
+#: and the "3k4" shorthand that puts the suffix where the decimal point goes.
+ONCE_REFUSED = {
     "2Hz": 2.0,
     "3V": 3.0,
     "2ohm": 2.0,
@@ -92,35 +90,30 @@ def test_a_value_the_server_parses_is_the_value_ltspice_read(
     build: str, case_id: str, tmp_path: Path
 ):
     """Scale suffixes in either case, ``M`` against ``Meg``, ``mil``, unit
-    tails, and words that merely begin with a suffix (``1MHz`` is a millihertz
-    to LTspice, ``1milli`` a mil)."""
+    tails, the ``1k5`` shorthand, and words that merely begin with a suffix
+    (``1MHz`` is a millihertz to LTspice, ``1milli`` a mil)."""
     voltages = rec.operating_point(build, case_id, tmp_path)
     written = resistances(case_id)
     assert len(written) >= 5
-    refused: dict[str, float] = {}
     for node, spelling in written.items():
-        read = voltages[f"v({node})"]
-        try:
-            parsed = parse_spice_value(spelling)
-        except ValueError:
-            refused[spelling] = read
-            continue
         # A raw stores a node voltage in four bytes.
-        assert parsed == pytest.approx(read, rel=1e-6), spelling
-    assert refused == pytest.approx(
-        {spelling: READ_BY_LTSPICE_ONLY[spelling] for spelling in refused}, rel=1e-6
-    )
+        assert parse_spice_value(spelling) == pytest.approx(voltages[f"v({node})"], rel=1e-6), (
+            spelling
+        )
 
 
-def test_every_value_only_ltspice_reads_is_recorded():
-    """The table above is what the recordings hold, no more and no less."""
+def test_the_spellings_once_refused_are_all_recorded():
+    """Each spelling above is in a recorded deck, so the test before this one
+    holds the server to LTspice's reading of it."""
     spellings = {
         spelling
         for case_id in SUFFIX_DECKS
         for spelling in resistances(case_id).values()
-        if spelling in READ_BY_LTSPICE_ONLY
+        if spelling in ONCE_REFUSED
     }
-    assert spellings == set(READ_BY_LTSPICE_ONLY)
+    assert spellings == set(ONCE_REFUSED)
+    for spelling, value in ONCE_REFUSED.items():
+        assert parse_spice_value(spelling) == pytest.approx(value), spelling
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
