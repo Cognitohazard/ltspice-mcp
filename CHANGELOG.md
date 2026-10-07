@@ -709,6 +709,47 @@ recording that showed it.
 - The warning for an ngspice run that skipped `.four` names the `tone` and
   `thd` recipes, which read harmonics from the raw it still wrote, instead of
   saying Fourier and THD are unavailable.
+- A schematic that is open in LTspice now follows `edit_schematic` (Windows,
+  LTspice 26.1 or later). LTspice reads a sheet once: an edit to the file was
+  invisible in the window, and the window's next save wrote the old sheet back
+  over it. The committed sheet now appears in the window at once, as one step
+  of its undo history, and the reply lists the window under `open_in_ltspice`.
+  An edit is refused as `open_window_differs`, with nothing written, while the
+  window holds a different sheet from the file (unsaved changes, or a file
+  that changed after it was opened); the comparison reads content, since
+  LTspice rewrites a sheet's text on opening it. This goes through the MCP
+  bridge LTspice ships, started where an LTspice it launched could not be seen
+  or left behind. LTspice is never started for it, and text holding a NUL
+  character, which makes LTspice stop answering, is never sent to a window.
+  `[schematic] sync_open_window = false` turns it off, and
+  `inspect(kind="capabilities")` reports it under `open_window_sync`.
+- `inspect(kind="open_in_ltspice")` lists the sheets and netlists open in
+  LTspice and marks the one in front, so a request about "this circuit" has
+  somewhere to start. A sheet inside the sandbox comes with its `sha256` and
+  with whether its window differs from the file.
+- `inspect(kind="simulator_docs")` lists and reads the reference documents
+  LTspice 26.1 installs (keyboard shortcuts, menus, the schematic format,
+  `.MEAS`, the waveform viewer), in sections paged at their headings. They are
+  read from the install and not packaged.
+- `plot_waveform(in_ltspice=true)` opens the run in the LTspice window that is
+  already running. For a transient or AC run the plotted traces are drawn: it
+  writes the plot settings file LTspice loads beside the results, in the form
+  `set_plot_panes` writes one, and keeps the file's other analyses. Settings a
+  person saved from LTspice are left alone.
+- `verify_circuit(in_ltspice=true)` opens the checked sheet or netlist in the
+  LTspice window that is already running and puts it in front. A sheet the
+  window already had open is shown as the window holds it, and the reply says
+  when that is not the file that was checked.
+- The guide says what to do when a person wants to plot nets by clicking the
+  sheet in LTspice. LTspice offers that only after a run made in its own
+  window, and a job's results opened there are drawn but not tied to the
+  sheet. So that one run is started through LTspice's own MCP server where it
+  is connected, or by the person, and measured by path with
+  `analyze_results(raw_path)`. Such a run simulates the window's copy of the
+  sheet, not the file.
+- The server is also published as `osic-mcp` (open-source IC), a third alias
+  beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
+
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains
   verified completed cases and retries eligible unfinished cases under the
@@ -935,6 +976,16 @@ recording that showed it.
   `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
+
+- The server's name in a client is `spice`, where the README and the Claude
+  Code plugin used `ltspice`. LTspice 26.1 ships an MCP server of its own and
+  registers it as `ltspice`, so the two would have shared a name. **For plugin
+  users the tool names change once**, from `…_ltspice__<tool>` to
+  `…_spice__<tool>`: a saved permission rule or an instruction that names the
+  old ones needs the new. A server registered by hand keeps whatever name its
+  entry has; rename an entry called `ltspice`.
+  The package, the command (`ltspice-mcp`), the repository and the Claude
+  Desktop extension keep their names.
 
 - `jobs(action="wait")` on a job another server process owns notices the
   owner finishing within half a second; it re-read the record every two
