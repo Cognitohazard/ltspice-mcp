@@ -748,7 +748,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Cairo and that inspect capabilities reports whether it works here: the
     # extra was the only requirement it named, and a host with the extra but
     # no libcairo had no way to find out before a render fell back to SVG.
-    "verify_circuit": 4880,
+    # Raised by about 160 characters for in_ltspice, which opens the checked
+    # file in the LTspice window the user already has: the argument, and a
+    # clause in the description so a host asked to "open it in LTspice" finds
+    # it here. Measured 5,037.
+    "verify_circuit": 5040,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

@@ -33,6 +33,7 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(kind="simulator_docs")`, then `name=` one of them |
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
+| open a sheet in the user's own LTspice, when they ask to see it there | `verify_circuit(path=…, in_ltspice=true)` |
 
 A case has no time limit unless `execution.run_timeout_s` (or the server's
 `[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or

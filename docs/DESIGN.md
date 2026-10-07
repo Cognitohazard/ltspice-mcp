@@ -113,8 +113,13 @@ appears at once and is one step of the window's undo history
 (`lib/ltspice_window.py`; the contract is in
 [mcp_surface.md](design/mcp_surface.md), "A sheet open in LTspice"). The same
 route answers "what do I have open" (`inspect(kind="open_in_ltspice")`), and
-opens a finished run's results in the window when a person asks to see it
-there (`plot_waveform(in_ltspice=true)`, under *Export & plot surface* below).
+puts things in the window when a person asks to see them there: a sheet
+(`verify_circuit(in_ltspice=true)`) or a finished run's results
+(`plot_waveform(in_ltspice=true)`, under *Export & plot surface* below). Each
+is an argument on the tool that already shows that thing, a sheet or a run,
+and not a tool of its own: there are two such actions, each has an object the
+surface already names, and a tool for the window alone would be the remote
+control LTspice's own server is.
 
 The file stays the record, and the window is a view of it. LTspice's server
 takes the other side: the window is the document and saving is the user's. Had

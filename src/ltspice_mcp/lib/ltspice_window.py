@@ -9,8 +9,8 @@ have a file open (``holding``), and replaces what one shows with the committed
 sheet (``show``), which LTspice records as one step of that window's undo
 history. It reaches the windows through the bridge LTspice ships
 (``BridgeSession``), attaching to instances that are already running and never
-starting one. ``show_results`` opens a finished run's results file in a
-window, for a caller who was asked to show it there; with the plot settings
+starting one. ``open_sheet`` opens a sheet in a window and ``show_results``
+a finished run's results file, each for a caller who was asked to show it there; with the plot settings
 file ``lib/plot_settings.py`` writes beside it, it opens with its traces drawn.
 
 The file stays the record. Before an edit is committed, the window's copy is
@@ -278,6 +278,42 @@ class OpenWindows:
                         )
                     )
         return windows, found
+
+    def open_sheet(self, path: Path) -> OpenSheet | tuple[int, str]:
+        """Open a sheet or netlist in an LTspice window and put it in front.
+
+        A window that already has it open is the one used, and what comes
+        back is that window's copy (an ``OpenSheet``), because LTspice does
+        not read the file again: the caller can then say whether what the
+        person is shown is the file. Otherwise the first window opens it from
+        the file, and its process and version come back. For a caller who was
+        asked to show it. Blocks; raises ``BridgeError`` when there is no
+        bridge, when no window is running (none is started), or when LTspice
+        refuses the file.
+        """
+        if self._command is None:
+            raise BridgeError(self.unavailable or "no bridge")
+        with BridgeSession(self._command, timeout=self._timeout) as session:
+            running = [instance for instance in session.instances() if instance.mode == _WINDOW]
+            if not running:
+                raise BridgeError("no LTspice window is open, and none is started for this")
+            for window in running:
+                session.attach(window.pid)
+                for spelled in session.open_designs():
+                    if _same_file(path, spelled):
+                        held = OpenSheet(
+                            pid=window.pid,
+                            version=window.version,
+                            path=spelled,
+                            text=session.design_text(spelled),
+                        )
+                        session.bring_to_front(spelled)
+                        return held
+            window = running[0]
+            session.attach(window.pid)
+            session.open_design(str(path))
+            session.bring_to_front(str(path))
+        return window.pid, window.version
 
     def show_results(self, results: Path) -> tuple[int, str]:
         """Open a results file in an LTspice window and put it in front.

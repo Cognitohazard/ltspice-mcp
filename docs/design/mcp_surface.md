@@ -1215,6 +1215,8 @@ render        {format: "png"|"svg", scale?, max_pixels?,
                delivery: "artifact"|"inline"|"both"}
               `true` selects the default policy; `false` or omitted renders
               nothing
+in_ltspice    also open the file in the LTspice window the user has running,
+              in front; default false
 export_to     "sidecar" (default) | "managed"
 ```
 
@@ -1227,6 +1229,22 @@ into. A tool never advertises a field it cannot honour, which is also why
 the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
 said nothing the object did not, and a call carrying both was refused rather
 than resolved.
+
+**In LTspice, on request.** After an assistant builds or changes a sheet, the
+person has to go and find it to look. `in_ltspice` opens the checked file in
+the LTspice window that is already running and puts it in front, through the
+bridge LTspice ships (`OpenWindows.open_sheet`); a netlist opens the same way.
+It is here and not on `edit_schematic` for the reason `render` is: this is the
+tool for looking at a sheet, and LTspice's window is one more place to look. The
+reply's `ltspice` block says what happened: `{shown, path, pid, version,
+already_open, differs_from_file?, difference?, reason?}`. A sheet the window
+already had open is put in front as the window holds it, because LTspice does
+not read a file again, so its copy is compared with the file and
+`differs_from_file` says when the person is looking at something else than was
+checked. LTspice is not started for this: with no window open the block says so
+and the checks stand. It never fails the call. Like `plot_waveform`'s argument
+of the same name, it opens something in a window and so is an argument a caller
+passes when asked, never a default.
 
 `sidecar`, the default, overwrites the schematic's `<name>.net` under lock and
 returns `{path, sha256, diff_vs_prior?}`. That is the file LTspice itself

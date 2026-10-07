@@ -26,6 +26,11 @@ sheet with `differs_from_file: true` has changes in the window that are not in
 the file, so a run would simulate something else than they see: say so, and
 ask them to save.
 
+When they ask to see a sheet you built or changed, `verify_circuit(path=...,
+in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
+`ltspice` block says `differs_from_file: true`, the window already had the
+sheet open and is showing an older copy, not the one you checked: tell them.
+
 A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
 in step: a commit's reply lists the window under `open_in_ltspice`, and with
 `shown: true` the user is already looking at the edit. `shown: false` means

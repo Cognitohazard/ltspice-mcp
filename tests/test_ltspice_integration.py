@@ -898,6 +898,47 @@ class TestSheetOpenInAWindow:
         # Nothing was opened in a browser beside it.
         assert result.structured_content["opened"] is False
 
+    async def test_a_checked_sheet_is_opened_in_the_window_and_put_in_front(
+        self, ltspice_state: SessionState, open_sheet, work_dir: Path
+    ):
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession, bridge_command
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        already_open, pid = open_sheet
+        another = work_dir / "another.asc"
+        await asyncio.to_thread(shutil.copyfile, already_open, another)
+        exe = executable_path(ltspice_state.default_simulator)
+        assert exe is not None
+        command = bridge_command(exe)
+        assert command is not None
+
+        def in_front() -> tuple[str, list[str]]:
+            with BridgeSession(command) as session:
+                session.attach(pid)
+                front = session.active_design()
+                return str(front), session.open_designs()
+
+        async def show(sheet: Path) -> dict:
+            result = await handle_verify_circuit(
+                VerifyCircuitInput(path=str(sheet), checks=["layout"], in_ltspice=True),
+                ltspice_state,
+            )
+            assert result.structured_content is not None
+            return result.structured_content["ltspice"]
+
+        shown = await show(another)
+        assert (shown["shown"], shown["pid"], shown["already_open"]) == (True, pid, False), shown
+        front, designs = await asyncio.to_thread(in_front)
+        assert Path(front) == another
+        assert {Path(design) for design in designs} == {already_open, another}
+
+        shown = await show(already_open)
+        assert (shown["shown"], shown["already_open"]) == (True, True), shown
+        assert shown["differs_from_file"] is False
+        front, _designs = await asyncio.to_thread(in_front)
+        assert Path(front) == already_open
+
     def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
         self, ltspice_state: SessionState
     ):
