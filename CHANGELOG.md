@@ -633,6 +633,22 @@ recording that showed it.
 
 ### Added
 
+- `edit_schematic` has a twelfth op, `set_plot_panes`, which writes the
+  waveform panes LTspice opens for a sheet into the `.plt` beside it: the
+  traces of each pane, top to bottom, for the `tran` or `ac` analysis, with
+  optional log or dB scales. It replaces that analysis's panes, keeps the
+  file's other analyses, and reports the panes it replaced so they can be put
+  back. The file is written in the same transaction as the sheet, under a
+  file lock of its own. What LTspice writes and reads was recorded on LTspice
+  26.1.1 and XVII 17.0.37 (new `plot-settings` cases in
+  `tests/fixtures/ltspice_recorded`) and the writer follows it: UTF-16 LE
+  without a byte order mark and LF line ends, the form XVII writes and both
+  builds read. LTspice 26 writes UTF-8, and XVII saving over a UTF-8 file
+  appends the old bytes after its own, so UTF-16 is the form neither build's
+  save damages. Panes are listed bottom first in the file, and a trace is
+  read only up to its first space, so a trace with whitespace is refused.
+  The recorder gained a `plot` case kind that runs a sheet in LTspice's
+  window, builds panes with the window's own menu commands and saves them.
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains
   verified completed cases and retries eligible unfinished cases under the

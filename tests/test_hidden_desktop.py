@@ -228,7 +228,7 @@ class TestBoxWatch:
         def __init__(self, *looks: str | None) -> None:
             self._looks = iter(looks)
 
-        def dialog(self, _pid: int) -> str | None:
+        def dialog(self, _pid: int, _ignore: str | None = None) -> str | None:
             return next(self._looks)
 
     def watch(self, *looks: str | None) -> list[str | None]:

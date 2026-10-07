@@ -173,3 +173,19 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   `.model D D(...)` collides with that built-in — give the model a unique name
   (`.model MYDIODE D(...)`) and set the symbol's Value to `MYDIODE`, rather
   than reusing `D`.
+
+### Waveform panes for the person the sheet is for
+
+The `set_plot_panes` op writes the `.plt` beside the sheet, which LTspice's
+waveform window reads when the sheet is run there:
+`{"op": "set_plot_panes", "analysis": "tran", "panes": [{"traces": ["V(out)"]},
+{"traces": ["V(in)", "I(R1)"]}]}` opens `V(out)` in a pane above `V(in)` and
+`I(R1)`. Panes are listed top to bottom. A trace is an expression as typed into
+LTspice's Add Traces dialog, written without spaces (`V(in)-V(out)`): LTspice
+reads a trace in the file only up to its first space, so the op refuses one.
+The run ranges every axis to its data; `x_scale` and `y_scale` set a pane's log
+or dB scales and default to LTspice's own (linear for `tran`, log frequency and
+dB magnitude for `ac`). The op replaces that analysis's panes, leaves the
+file's other analyses alone and does not change the sheet. Its `results` entry
+names the file and the `replaced_panes`, which passed back as `panes` restore
+them; `panes: []` removes them.
