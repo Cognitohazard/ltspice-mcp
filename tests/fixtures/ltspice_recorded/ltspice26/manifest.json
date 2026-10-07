@@ -1,6 +1,33 @@
 {
   "build": "ltspice26",
   "cases": {
+    "connectivity/bus_label": {
+      "behaviour": "bus-labels",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/bus_label.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/bus_label.asc": "98df098ccae55170654f2de9db81435c7784403bef46b5f5f5ff51a59bfd8919",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/bus_label.net": {
+          "bytes": 126,
+          "sha256": "bfeebeb9fbba5d9d0ddea10bf19230cec3367cf0bba4cfc2cdf83808342bec68"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/collinear_overlap": {
       "behaviour": "wire-connectivity",
       "command": [
@@ -2364,6 +2391,33 @@
         ".net"
       ]
     },
+    "export/blank_line": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/blank_line.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/blank_line.asc": "5e92393c561d1ad1b67bde252f6510e05c0a65a7bfc72efb191be696d230e5cb",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/blank_line.net": {
+          "bytes": 98,
+          "sha256": "de6e69f93cdb74699677eab2a3bfac178b7237ba84a3a774e8368b619355f133"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/block_symbol": {
       "behaviour": "export-instance-names",
       "command": [
@@ -2411,6 +2465,60 @@
         "export/boilerplate.net": {
           "bytes": 712,
           "sha256": "ad260f438d0680b3357e6c0ef7b085b442b6e64ed07170ed8627b2ff4b050dcc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/bus_tap": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/bus_tap.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/bus_tap.asc": "ed53a2933a60d5de8f02acfa7962f056b0535a5993f63ad712fe6f644a5f2e8d",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/bus_tap.net": {
+          "bytes": 122,
+          "sha256": "d3a98e76c3d2b7a064d178103114f8527e205df212f762c17c1efae6ba546ecc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/data_flags": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/data_flags.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/data_flags.asc": "4033863e5ca5968a27cfa2dd11b4ad0b964f55f6b2ef0713cc434106f509e00d",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/data_flags.net": {
+          "bytes": 100,
+          "sha256": "3632b86042e35f9490d3b7955f45ab5ab6afe24efcef92061bfde042c692547a"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -2811,6 +2919,26 @@
       "written": [
         ".net"
       ]
+    },
+    "export/unknown_record": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/unknown_record.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "export/unknown_record.asc": "33e658355d85c639a4980af5d21542bdf2d30b619cec3801cdd8085dba07663e"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": false,
+      "written": []
     },
     "log/device_op": {
       "behaviour": "log-device-op",

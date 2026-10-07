@@ -1,6 +1,33 @@
 {
   "build": "ltspice17",
   "cases": {
+    "connectivity/bus_label": {
+      "behaviour": "bus-labels",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/bus_label.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/bus_label.asc": "98df098ccae55170654f2de9db81435c7784403bef46b5f5f5ff51a59bfd8919",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/bus_label.net": {
+          "bytes": 89,
+          "sha256": "76afcdb5c3cf5e4051340a225cc4b4a9629b612827d5fce758fa77ffa8539f89"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/collinear_overlap": {
       "behaviour": "wire-connectivity",
       "command": [
@@ -2369,6 +2396,33 @@
         ".net"
       ]
     },
+    "export/blank_line": {
+      "behaviour": "sheet-records",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/blank_line.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/blank_line.asc": "5e92393c561d1ad1b67bde252f6510e05c0a65a7bfc72efb191be696d230e5cb",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/blank_line.net": {
+          "bytes": 59,
+          "sha256": "2904a5bce117fc3c636e9fc665e7287d6ac4a86b84aabcbcc9f2c0178f2b7402"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/block_symbol": {
       "behaviour": "export-instance-names",
       "command": [
@@ -2416,6 +2470,60 @@
         "export/boilerplate.net": {
           "bytes": 695,
           "sha256": "f2da2b99a79edefc2e8b469c9da2109540f6e1c3d0d4c4a3eec6ecdc030a67dd"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/bus_tap": {
+      "behaviour": "sheet-records",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/bus_tap.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/bus_tap.asc": "ed53a2933a60d5de8f02acfa7962f056b0535a5993f63ad712fe6f644a5f2e8d",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/bus_tap.net": {
+          "bytes": 85,
+          "sha256": "e18473bdf611e90cc64070b5cc0d46de2fd6ca64d536740a734469da37c1411a"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/data_flags": {
+      "behaviour": "sheet-records",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/data_flags.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/data_flags.asc": "4033863e5ca5968a27cfa2dd11b4ad0b964f55f6b2ef0713cc434106f509e00d",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/data_flags.net": {
+          "bytes": 61,
+          "sha256": "20f75430032c2157e9d64c45e550eedb4ae5bfc1e1cae223c7c78484a7061897"
         }
       },
       "reported_build": null,
@@ -2818,6 +2926,27 @@
       "written": [
         ".net"
       ]
+    },
+    "export/unknown_record": {
+      "behaviour": "sheet-records",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/unknown_record.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nAborting:\n\n  Unknown schematic syntax:\n\n  NOSUCHRECORD 96 96",
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "export/unknown_record.asc": "33e658355d85c639a4980af5d21542bdf2d30b619cec3801cdd8085dba07663e"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
     },
     "log/device_op": {
       "behaviour": "log-device-op",

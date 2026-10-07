@@ -2440,8 +2440,8 @@ such a log, the last candidate in `make_log_reader` goes.
 ## Bug 25 — `AscEditor` drops a sheet's `DATAFLAG` records on save
 
 **Status:** draft for an upstream spicelib pull request. Found by reading the
-source; reproduced 2026-10-07 with a hand-written sheet (see *Reproduction*
-for why it is not a recording).
+source; reproduced 2026-10-07, and on a sheet LTspice 26 and LTspice XVII are
+both recorded reading (`export/data_flags`; see *Reproduction*).
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.reset_netlist` ~line 272 and `AscEditor.save_netlist` ~line 81).
 **Our workaround:** `tools/schematic_edit.py` reads the sheet's DATAFLAG
@@ -2453,7 +2453,9 @@ lines from the bytes the edit already read (`_data_flag_lines`), and
 A `DATAFLAG` record is a data label: an expression LTspice shows at a point on
 the sheet. spicelib's own comment calls it "the placeholder to show simulation
 information", and KiCad's LTspice importer reads it as
-`DATAFLAG <x> <y> <expression>`. `reset_netlist` skips the line and keeps
+`DATAFLAG <x> <y> <expression>`. The example sheets both LTspice builds
+install hold it in that form with an empty expression (`DATAFLAG 2128 1360 ""`
+in `examples/Educational/DCopPnt.asc`). `reset_netlist` skips the line and keeps
 nothing of it, and `save_netlist` therefore has no `DATAFLAG` to write, so
 loading a sheet and saving it, with or without a change, removes every data
 label on it. The 1.3.2 changelog lists "AscEditor: Adding support to
@@ -2494,11 +2496,27 @@ Through our server before the workaround, an `edit_schematic` commit that
 added one net label to such a sheet reported a complete, committed edit, and
 the file it wrote held no `DATAFLAG` line.
 
-The sheet is hand-written. The recorder cannot record what LTspice writes for a
-data label, because LTspice saves a sheet only from its window
-(`schematic-save-encoding` in `tests/fixtures/ltspice_recorded/inputs/cases.toml`).
-What it can record, exporting such a sheet with `-netlist` to show LTspice
-reads it, needs an LTspice build, and none was available.
+The sheet above is the smallest that shows the loss. The same loss is
+reproduced on a recorded one,
+`tests/fixtures/ltspice_recorded/inputs/export/data_flags.asc`: a resistor, a
+wire, a port and two data labels. LTspice 26 and LTspice XVII each export it
+(`export/data_flags` in the recordings), and neither exports a sheet holding a
+keyword it does not know (`export/unknown_record`), so both read the record.
+The netlist is the resistor and nothing else.
+
+What a recording cannot show is where LTspice puts the record when it saves a
+sheet, because it saves one only from its window (`schematic-save-encoding` in
+`tests/fixtures/ltspice_recorded/inputs/cases.toml`). The written evidence for
+that is the example sheets each build installs, which LTspice saved:
+`examples/Educational/DCopPnt.asc` and `Linkwitz.asc` in both builds, and
+`examples/Applications/AD8397.asc` and `ADA4691.asc` in LTspice 26. Each lists
+its `DATAFLAG` records together, after the last `FLAG` and ahead of the first
+`SYMBOL`, every one as `DATAFLAG <x> <y> ""`. None of them holds a port
+(`IOPIN`) or an expression that is not empty, so where a data label goes
+beside a port's record, and how an expression is spelled, are not on record.
+An export tells neither: both builds exported a sheet with the record after a
+symbol, between a `FLAG` and its `IOPIN`, and with no expression at all, each
+to the netlist of the sheet without it (looked at 2026-10-07, not recorded).
 
 ### Impact
 
@@ -2531,11 +2549,15 @@ def test_data_flags_survive_a_save(tmp_path):
 `tests/test_edit_schematic.py::TestDataFlagPreservation` edits a sheet holding
 two data labels and a hierarchical port and reads the file back: both labels,
 in their order, after the labels and their ports. A second sheet is cp1252
-with a micro sign in its label, which comes back in the sheet's own codec. The
-workaround places the records together ahead of the first symbol, which keeps
-them out of a symbol's block of `WINDOW` and `SYMATTR` lines and from between a
-`FLAG` and its `IOPIN`; where LTspice itself puts them in a sheet it saves is
-not recorded. `TestPathsThatLeaveTheSheetAsItIs` pins that a read, a dry run
+with a micro sign in its label, which comes back in the sheet's own codec.
+`tests/test_recorded_ltspice_schematics.py::TestSheetRecords` holds the same
+to the recorded sheet: both builds export it with nothing of the labels in the
+netlist, and an edit that sets the resistor's value commits the sheet as it
+was but for that value. The workaround places the records together after the
+labels and ahead of the first symbol, which is where the example sheets both
+builds install have them (*Reproduction*), and which keeps them out of a
+symbol's block of `WINDOW` and `SYMATTR` lines and from between a `FLAG` and
+its `IOPIN`. `TestPathsThatLeaveTheSheetAsItIs` pins that a read, a dry run
 and a batch of plot panes alone leave such a sheet's bytes as they were. Once
 upstream keeps the records, `_data_flag_lines` and `_with_data_flags` go.
 
@@ -2544,7 +2566,9 @@ upstream keeps the records, `_data_flag_lines` and `_with_data_flags` go.
 ## Bug 26 — a line `AscEditor` does not model makes the whole sheet unreadable (limitation)
 
 **Status:** known limitation; draft for an upstream enhancement. Found by
-reading the source; reproduced 2026-10-07 with hand-written sheets.
+reading the source; reproduced 2026-10-07. LTspice 26 and LTspice XVII are
+both recorded reading the two kinds of sheet it refuses (`export/bus_tap`,
+`export/blank_line`).
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.reset_netlist` ~line 274).
 **Our workaround:** `lib/schematic_ops.py::make_editor` turns the
@@ -2566,9 +2590,31 @@ different file from the one being opened.
 
 The record most likely to reach this in a sheet LTspice wrote is a bus tap.
 KiCad's LTspice importer reads every keyword spicelib reads and one more,
-`BUSTAP <x1> <y1> <x2> <y2>`. That is another reader's view, not a recording:
-which records LTspice writes, and whether it reads the sheets below, is not
-recorded here, because no LTspice build was available.
+`BUSTAP <x1> <y1> <x2> <y2>`. Both LTspice builds know the keyword: each
+exports a sheet holding two taps (`export/bus_tap` in
+`tests/fixtures/ltspice_recorded`), and neither exports a sheet holding a
+keyword it does not know (`export/unknown_record`: LTspice 26 exits 0 having
+written nothing, XVII stops on a message box, "Unknown schematic syntax").
+Both also export a sheet holding an empty line (`export/blank_line`). So
+spicelib refuses sheets that LTspice reads.
+
+In the netlist a tap connects nothing. Of the recorded sheet's three
+resistors, the one on the bus `D[0:3]` is on node `D[0]`, the one on a tapped
+wire labelled `D0` is on `D0`, and the one on a tapped wire with no label is
+on a node of its own, `N001`. A reader that keeps the record and takes no
+connection from it therefore has the connections LTspice has at the tap. What
+node a bus's own label names is a separate matter and not spicelib's: both
+builds put a wire labelled `D[0:3]` on the node of a wire labelled `D[0]`
+(`connectivity/bus_label`), and our net partition does not, which
+`tests/test_recorded_ltspice_schematics.py` pins as
+`JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY`.
+
+The field layout is still KiCad's reading and not a recording. No example
+sheet either build installs holds a bus tap, the reference documents LTspice
+26 installs name it only as a menu command (Place Bus Tap), and an export does
+not check the fields: both builds exported a sheet whose `BUSTAP` had two of
+the four (looked at 2026-10-07, not recorded). Where LTspice puts the record
+in a sheet it saves is not on record either.
 
 ### Affected code
 
@@ -2605,11 +2651,18 @@ Through our server before the workaround, `edit_schematic` on the first sheet
 failed as `Internal error in edit_schematic: NotImplementedError: ...`, and
 `inspect`'s `components` and `net` queries on it answered `internal_error`.
 
+The two sheets above are the smallest that show the error. The recorded ones,
+`export/bus_tap.asc` and `export/blank_line.asc` under
+`tests/fixtures/ltspice_recorded/inputs`, raise it the same way, and those are
+the sheets both builds are recorded exporting.
+
 ### Impact
 
 - One record spicelib does not model makes a sheet impossible to open, read or
   edit through `AscEditor`, and with it every sheet that uses that sheet as a
   block.
+- LTspice reads these sheets (*Summary*), so a sheet a person drew, and that
+  LTspice opens, exports and runs, cannot be opened at all.
 - The exception type says "not implemented" and the message gives no file or
   line, so a caller cannot tell an unreadable sheet from a defect, or find the
   line in a hierarchy.
@@ -2653,13 +2706,16 @@ naming the file, line 5 and the line, and the sheet is left as it was;
 instead of `internal_error`; and a bus tap in a block's sheet is named in that
 sheet, not in the parent being opened.
 `tests/test_verify_circuit.py::test_a_record_the_drawing_does_not_read_is_reported`
-pins the observation `verify_circuit` makes of the same record. The sheets are
-hand-written. The
-recording this needs is an input sheet holding a bus tap, exported with
-`-netlist` on each build, which would show whether LTspice reads it. Once
-upstream opens such a sheet, `_unreadable_record` goes, and an edit of a sheet
-holding a bus tap then needs the check Bug 25 needed: a commit must write the
-record back, not drop it.
+pins the observation `verify_circuit` makes of the same record.
+`tests/test_recorded_ltspice_schematics.py::TestSheetRecords` holds all of it
+to the recorded sheets: what each build does with a bus tap, an empty line and
+an unknown keyword, the refusal the editor gives the two sheets LTspice reads
+(listed there as `EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR`, with the
+line each refusal names), the observation `verify_circuit` makes, and that its
+drawing, which reads past a tap, has each tapped wire ending on nothing, as
+the netlist does. Once upstream opens such a sheet, `_unreadable_record` goes,
+and an edit of a sheet holding a bus tap then needs the check Bug 25 needed: a
+commit must write the record back, not drop it.
 
 ---
 

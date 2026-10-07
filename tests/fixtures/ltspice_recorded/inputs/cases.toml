@@ -122,6 +122,32 @@ model = ["lib/netlist_diff.py", "lib/deck_staging.py", "lib/schematic_scene.py"]
 inputs = ["export/directives.asc"]
 extra = ["export/res.asy"]
 
+[behaviour.sheet-records]
+summary = "The lines a sheet holds besides its symbols, wires, labels and text: a data label (DATAFLAG) and a bus tap (BUSTAP) are read by both builds and put nothing in the netlist, an empty line is read past, and a keyword a build does not know stops the export."
+model = ["lib/schematic_ops.py", "tools/schematic_edit.py", "lib/schematic_scene.py"]
+# unknown_record is what makes an export a statement that a build reads a
+# record: neither build exports a sheet holding a keyword it does not know.
+# data_flags lists its records in the order of the example sheets both builds
+# install, where the data labels follow the net labels and come ahead of the
+# first symbol. bus_tap has R1 on the bus itself, R2 on a tapped wire labelled
+# D0 and R3 on a tapped wire with no label, so the export names the node on
+# each side of a tap.
+inputs = [
+    "export/data_flags.asc",
+    "export/bus_tap.asc",
+    "export/blank_line.asc",
+    "export/unknown_record.asc",
+]
+extra = ["export/res.asy"]
+
+[behaviour.bus-labels]
+summary = "The node of a pin on a wire labelled as a bus (D[0:3]): the bus's first member, D[0], which is the node of a wire labelled D[0] and not that of one labelled D[1]."
+model = ["lib/schematic_ops.py"]
+# No bus tap, so the schematic editor opens the sheet and its net partition
+# can be set beside the export.
+inputs = ["connectivity/bus_label.asc"]
+extra = ["connectivity/res.asy"]
+
 [behaviour.schematic-save-encoding]
 summary = "The encoding a build writes when it saves a sheet."
 model = ["lib/encoding.py", "lib/schematic_scene.py"]

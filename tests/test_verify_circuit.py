@@ -1316,9 +1316,10 @@ async def test_quality_fires_on_text_overlap(state_no_sim, work_dir, asc_symbols
         assert f["subject"]
 
 
-# Hand-written: no LTspice was available to record a sheet holding a bus tap
-# (docs/spicelib_bugs.md, Bug 26). The layout is the one KiCad's LTspice
-# importer reads.
+# Two bus taps on a labelled bus, as on the recorded export/bus_tap, which
+# both LTspice builds export; tests/test_recorded_ltspice_schematics.py makes
+# the same check of that sheet. The tap's field layout is the one KiCad's
+# LTspice importer reads (docs/spicelib_bugs.md, Bug 26).
 _BUS_TAP_ASC = (
     "Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 D[0:3]\n"
     "BUSTAP 80 0 80 16\nBUSTAP 120 0 120 16\nWIRE 100 100 300 100\n"
