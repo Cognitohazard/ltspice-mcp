@@ -678,11 +678,29 @@ Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
 Under a `budget`, receipts keep the common envelope and negotiate the shared
-trim -> answer -> shrink ladder. The runs page and attached-analysis row pages
-may be shrunk to fewer rows; fact channels, completeness, progress, verdicts,
-coverage and recovery handles are protected. If the irreducible floor exceeds
-the budget, the floor is returned with `budget_not_met` rather than facts being
-dropped.
+trim -> answer -> shrink ladder. The trim rung empties the attached analysis's
+`source_hashes`, one identity row per run, by `analyze_results`' own rung-0
+allowlist; `source` stays, because it carries staging disclosures. The runs
+page and attached-analysis row surfaces may be shrunk to fewer rows; fact
+channels, completeness, progress, verdicts, coverage and recovery handles are
+protected. If the irreducible floor exceeds the budget, the floor is returned
+with `budget_not_met` rather than facts being dropped.
+
+One page limit caps every row surface of a receipt — the run page and each
+attached recipe's values, groups, failing cases and missing cases — so the
+shared estimate, which counts the rows all surfaces show, can price a page as
+fitting that cut nothing. The receipt's shrink rung therefore measures: when
+the estimated page is still over, it bisects below it for the largest limit
+that fits. The search may reach zero. A receipt's rows are previews of
+surfaces other calls page (`jobs(runs)`, `analyze_results` over the `job_id`),
+so the floor carries no per-case row: `completeness` and `runs.total` count the
+runs, `runs.next_cursor` starts `jobs(runs)` at the first, each recipe's
+warning counts its omitted rows, and reductions and spec verdicts stay. That
+keeps the floor the same size however many cases the job ran — a floor that
+carried a row per case grew with exactly the number that made a caller set a
+budget. `jobs(runs)` and `jobs(list)` keep at least one row at their floor,
+since their cursor continues the same page and an empty one would hand back
+the cursor it was given.
 
 An `artifact` handle survives the lean row. The lean row flattens `value` to
 its scalar leaves, and a handle is a dict; dropped with them, the `plot` recipe

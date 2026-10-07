@@ -16,7 +16,11 @@ the tool re-renders one rung further down a fixed ladder:
 2. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
    is minted against what was actually returned. Never post-hoc truncation of
    an assembled page: a per_run cursor commits during evaluation, and trimming
-   rows afterwards would point it past rows the caller never saw.
+   rows afterwards would point it past rows the caller never saw. A page whose
+   cursor continues itself keeps at least one row. An experiment receipt's
+   rows are previews of surfaces other calls page, so its floor carries none
+   of them — counts and cursors stand in for them, and the floor costs the
+   same however many cases the job ran.
 
 Four rules hold at every rung:
 
