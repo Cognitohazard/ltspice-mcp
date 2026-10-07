@@ -722,7 +722,13 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # to start without a path, and LTspice can now be asked what is in front.
     # The kind takes no arguments, so this is its name, its one-line
     # description and its branch. Measured 10,739.
-    "inspect": 10750,
+    # Raised by about 500 characters for the 'simulator_docs' kind, the door to
+    # the reference documents LTspice installs: the keyboard shortcuts, menus
+    # and waveform viewer are questions about the program that the guide does
+    # not answer, and a client that cannot read files had no way to the
+    # vendor's own account of them. Its name and cursor arguments are most of
+    # the cost. Measured 11,246.
+    "inspect": 11250,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

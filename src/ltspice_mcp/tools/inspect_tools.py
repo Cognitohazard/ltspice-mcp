@@ -57,6 +57,13 @@ than a hunt.
   core a session reads first and the index of topic sections and task
   playbooks; with one, that section. It records on the session that the guide
   was read, which retires the one read-the-guide reminder.
+* ``simulator_docs`` — the reference documents the simulator's vendor installs
+  with it (``lib/simulator_docs.py``): for LTspice 26.1 and later, its own
+  account of the keyboard shortcuts, menus, schematic file format, ``.MEAS``
+  and waveform viewer. With no ``name`` it lists them; with one it returns
+  that document in sections, paged at its headings. They are read from the
+  install, never packaged, and are the authority on the program itself where
+  the guide is about this server.
 * ``open_in_ltspice`` — the documents open in the LTspice windows on this
   machine, and which is in front in its window: where a request about "this
   circuit" starts when no path was given. A sheet inside the sandbox comes
@@ -111,7 +118,14 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, guide, response_budget, services
+from ltspice_mcp.lib import (
+    NETLIST_SUFFIX_TEXT,
+    NETLIST_SUFFIXES,
+    guide,
+    response_budget,
+    services,
+    simulator_docs,
+)
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -722,6 +736,18 @@ class GuideQuery(StrictModel):
     )
 
 
+class SimulatorDocsQuery(StrictModel):
+    """The simulator vendor's own reference documents (LTspice 26.1 and later):
+    keyboard shortcuts, menus, the .asc format, .MEAS, the waveform viewer."""
+
+    kind: Literal["simulator_docs"]
+    name: str | None = Field(
+        default=None,
+        description="A listed document, e.g. 'MEAS-REFERENCE.md'; omit it for the list.",
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+
+
 class OpenInLtspiceQuery(StrictModel):
     """List the sheets and netlists open in LTspice windows, and which one is in front."""
 
@@ -739,6 +765,7 @@ Query: TypeAlias = Annotated[
     | ResultsQuery
     | ReferenceQuery
     | GuideQuery
+    | SimulatorDocsQuery
     | OpenInLtspiceQuery,
     Field(discriminator="kind"),
 ]
@@ -907,6 +934,8 @@ COLLECTION_COUNTERS: dict[str, tuple[str, str, str | None]] = {
     "components": ("total", "returned", None),
     "instances": ("total", "returned", None),
     "results": ("total", "returned", None),
+    "docs": ("total", "returned", None),
+    "sections": ("total", "returned", None),
 }
 
 
@@ -1805,6 +1834,84 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 # ---------------------------------------------------------------------------
+# simulator_docs
+# ---------------------------------------------------------------------------
+
+
+def _reference_directory(state: SessionState) -> Path:
+    """Where the detected LTspice keeps its reference documents, the default
+    simulator's first. Reads the filesystem: call off the loop."""
+    candidates = [
+        state.default_simulator,
+        *state.available_simulators.values(),
+        *state.named_simulators.values(),
+    ]
+    for simulator in candidates:
+        directory = simulator_docs.reference_directory(simulator_library_roots(simulator))
+        if directory is not None:
+            return directory
+    raise _QueryError(
+        "simulator_docs_unavailable",
+        "No reference documents are installed here: LTspice 26.1 and later installs "
+        "them in a 'reference' directory beside its library, and no detected simulator "
+        "has one. The guide (inspect kind 'guide') is this server's own.",
+    )
+
+
+def _simulator_docs_page(
+    q: SimulatorDocsQuery, state: SessionState, view: _View
+) -> dict[str, Any]:
+    """The list of reference documents, or one of them in sections. Blocking."""
+    directory = _reference_directory(state)
+    listed = simulator_docs.documents(directory)
+    if q.name is None:
+        rows = [
+            {"name": doc.name, "title": doc.title, "description": doc.description}
+            for doc in listed
+        ]
+        page = _paginate(rows, "simulator_docs", {"name": None}, q.cursor, (), view)
+        return {
+            "data": {
+                "source": str(directory),
+                "docs": page["items"],
+                "total": page["total"],
+                "returned": page["returned"],
+                "hint": (
+                    "Read one with name. These are the vendor's own reference, the "
+                    "authority on the program itself; the guide is about this server."
+                ),
+            },
+            "next_cursor": page["next_cursor"],
+            "page": _page_meta(page, "docs"),
+        }
+    document = simulator_docs.find(listed, q.name)
+    if document is None:
+        raise _QueryError(
+            "unknown_document",
+            f"No reference document is called {q.name!r}.",
+            supported=[doc.name for doc in listed],
+        )
+    rows = [
+        {"heading": section.heading, "text": section.text}
+        for section in simulator_docs.sections(document)
+    ]
+    page = _paginate(
+        rows, "simulator_docs", {"name": document.name}, q.cursor, (document.path,), view
+    )
+    return {
+        "data": {
+            "name": document.name,
+            "title": document.title,
+            "sections": page["items"],
+            "total": page["total"],
+            "returned": page["returned"],
+        },
+        "next_cursor": page["next_cursor"],
+        "page": _page_meta(page, "sections"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # open_in_ltspice
 # ---------------------------------------------------------------------------
 
@@ -2224,6 +2331,8 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return _do_reference(query, view, frozenset(state.tool_dispatch))
     if isinstance(query, GuideQuery):
         return _do_guide(query, state)
+    if isinstance(query, SimulatorDocsQuery):
+        return await asyncio.to_thread(_simulator_docs_page, query, state, view)
     if isinstance(query, OpenInLtspiceQuery):
         return await _do_open_in_ltspice(state)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
@@ -2330,6 +2439,35 @@ _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "text": {"type": "string", "description": "Markdown."},
 }
 
+#: The ``simulator_docs`` kind's payload: the list, or one document's sections.
+_SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
+    "source": {"type": "string", "description": "The directory the documents are read from."},
+    "docs": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "What to pass as name."},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+            },
+            "required": ["name", "title", "description"],
+        },
+    },
+    "sections": {
+        "type": "array",
+        "description": "The document in order, cut at its second-level headings.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "heading": {"type": "string"},
+                "text": {"type": "string", "description": "Markdown, heading line included."},
+            },
+            "required": ["heading", "text"],
+        },
+    },
+}
+
 #: The ``open_in_ltspice`` kind's payload.
 _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
     "windows": {"type": "integer", "description": "How many LTspice windows are running."},
@@ -2396,6 +2534,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         "properties": {
                             **_REFERENCE_DATA_PROPERTIES,
                             **_GUIDE_DATA_PROPERTIES,
+                            **_SIMULATOR_DOCS_DATA_PROPERTIES,
                             **_OPEN_DESIGNS_DATA_PROPERTIES,
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
@@ -2493,7 +2632,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide', 'open_in_ltspice' "
+    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide', 'simulator_docs', "
+    "'open_in_ltspice' "
     "— each with its own arguments, "
     "described on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "

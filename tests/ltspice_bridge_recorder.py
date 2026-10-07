@@ -38,6 +38,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib.guide import split_front_matter
 from ltspice_mcp.lib.hidden_desktop import HiddenDesktop
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
 from tests.ltspice_recorder import (
@@ -289,6 +290,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
             "sha256": sha256_bytes(Path(command[0]).read_bytes()),
         },
         "inputs": {name: sha256_bytes((INPUTS / f"{name}.asc").read_bytes()) for name in names},
+        "reference": reference_record(build),
         "files": {name: sha256_bytes(data) for name, data in sorted(files.items())},
     }
     if out.exists():
@@ -298,6 +300,23 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     (out / MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+
+
+def reference_record(build: Build) -> dict[str, Any] | None:
+    """The reference documents ``build`` installs: their names and the keys of
+    their front matter. The documents are the vendor's and are not recorded."""
+    library = build.library_root
+    directory = library.parent / "reference" if library is not None else None
+    if directory is None or not directory.is_dir():
+        return None
+    keys: set[str] = set()
+    names: list[str] = []
+    for path in sorted(directory.iterdir(), key=lambda entry: entry.name.casefold()):
+        if path.is_file():
+            names.append(path.name)
+            head = path.read_bytes().decode("utf-8-sig", errors="replace").replace("\r\n", "\n")
+            keys |= set(split_front_matter(head)[0])
+    return {"directory": directory.name, "files": names, "front_matter": sorted(keys)}
 
 
 def bridge_builds() -> list[Build]:

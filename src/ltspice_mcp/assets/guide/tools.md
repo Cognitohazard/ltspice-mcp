@@ -28,6 +28,8 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
 | nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
+| what the user has open in LTspice, and which sheet is in front | `inspect(kind="open_in_ltspice")` |
+| LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(kind="simulator_docs")`, then `name=` one of them |
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 
