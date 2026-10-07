@@ -752,15 +752,20 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
 def _row_renderer(
     fields: list[str] | None,
     *,
-    whole: bool,
+    metric: str,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Build one reusable renderer for every row on a result surface."""
+    """Build one reusable renderer for every row of ``metric`` on a result surface."""
     plan = keep_plan(fields) if fields else None
+    whole = metric in _WHOLE_VALUE_METRICS
+    shed = _LEAN_VALUES.get(metric)
 
     def render(row: dict[str, Any]) -> dict[str, Any]:
         if plan is not None:
             return project_row(row, plan)
-        return _lean_row(row, keep_value_whole=whole)
+        lean = _lean_row(row, keep_value_whole=whole)
+        if shed is not None and isinstance(lean.get("value"), dict):
+            lean["value"] = shed(lean["value"])
+        return lean
 
     return render
 
@@ -1818,7 +1823,8 @@ _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
 # bode_crossing is a variable-length recipe whose category rejects ``reduce``
 # at validation, so its rule lives only here. stability shipped its worst-case
 # margins flat but left the crossover frequency in a list; this is that rule
-# applied uniformly.
+# applied uniformly. measurements is the keyed form of it: a run holding one
+# sample per .meas gets those samples by name (_measurements_compact).
 _HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "bode_point": lambda value: dict([_bode_point_sample(value)]),
     # No crossing COUNT here: the adapter caps its list (max_results, default
@@ -1827,6 +1833,7 @@ _HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     # crossed"; ambiguity is visible in the list itself.
     "bode_crossing": lambda value: dict([_crossing_sample(value)]),
     "stability": lambda value: dict([_unity_gain_sample(value)]),
+    "measurements": lambda value: _measurements_compact(value),
 }
 
 
@@ -1848,6 +1855,47 @@ def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
+    """A run's ``.meas`` numbers by name, when the run reported one of each.
+
+    One case of a sweep with no ``.step`` holds a single sample per name, so its
+    stats block restates that sample as min, max, mean, median, p10 and p90
+    beside a zero spread and an empty histogram: about fifteen fields to carry
+    one number. Here the number is keyed by name under ``measured``, read by the
+    reducer's own extractor so a row and a reduction over it cannot disagree;
+    the point a crossing or ``AT`` reported with it goes under ``at``. A name
+    the log holds no number for (FAIL'ed, or a value the log decoder nulled as
+    not finite) keeps its key with null and is listed in
+    ``failed_measurements``, so a failure reads as a failure rather than as a
+    missing name. A stepped run's per-name spread is its answer, so it gets
+    none of this, and neither does an empty selection.
+    """
+    stats = value.get("stats")
+    if not isinstance(stats, dict) or not stats:
+        return {}
+    if not all(
+        isinstance(entry, dict) and entry.get("total_count") == 1 for entry in stats.values()
+    ):
+        return {}
+    compact: dict[str, Any] = {"measured": _measurements_flat(value)}
+    at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
+    if at:
+        compact["at"] = at
+    failed = [name for name, entry in stats.items() if entry.get("failure_count")]
+    if failed:
+        compact["failed_measurements"] = failed
+    return compact
+
+
+def _measurements_lean(value: dict[str, Any]) -> dict[str, Any]:
+    """The answer channel's measurements value: without its stats block when
+    ``measured`` carries every number in it. ``include.fields=["value"]``
+    returns the block."""
+    if "measured" not in value:
+        return value
+    return {key: item for key, item in value.items() if key != "stats"}
+
+
 # How each keyed metric flattens its value dict into a {name: number} map.
 _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "measurements": _measurements_flat,
@@ -1863,6 +1911,12 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 # and carries nothing. Derived from _KEYED_EXTRACTORS rather than listed, so a
 # new keyed metric cannot be added without this rule following it.
 _WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
+
+# A whole-value metric whose answer channel still sheds a block the rest of its
+# value restates. Applied to the lean row only, never to a projected one.
+_LEAN_VALUES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "measurements": _measurements_lean,
+}
 
 
 def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Record, float]]]:
@@ -2336,7 +2390,7 @@ def _result_entry(
     # Everything outside _WHOLE_VALUE_METRICS defaults to the scalar leaves.
     # One plan serves both row surfaces, so projection never depends on an
     # unrelated pagination choice.
-    render = _row_renderer(fields, whole=recipe.metric in _WHOLE_VALUE_METRICS)
+    render = _row_renderer(fields, metric=recipe.metric)
 
     per_run_next = per_run_offset
     if per_run_limit is not None:
@@ -2429,7 +2483,28 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
         "assignments": {"type": "object"},
         "circuit": {"type": ["string", "null"]},
         "deck_sha256": {"type": ["string", "null"]},
-        "value": {"type": "object"},
+        "value": {
+            "type": "object",
+            "description": (
+                "The recipe's value. A measurements row whose run holds one value "
+                "per .meas carries 'measured' {name: value}, 'at' {name: reported "
+                "crossing/AT point} and 'failed_measurements', the names whose "
+                "'measured' is null because the log holds no number for them; its "
+                "'stats' block is left off the default row and returned by "
+                "include.fields=['value']. A stepped run's row is 'stats' alone."
+            ),
+            "properties": {
+                "measured": {
+                    "type": "object",
+                    "additionalProperties": {"type": ["number", "null"]},
+                },
+                "at": {
+                    "type": "object",
+                    "additionalProperties": {"type": ["number", "null"]},
+                },
+                "failed_measurements": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     },
     "additionalProperties": False,
 }
@@ -3099,7 +3174,7 @@ def render_attached_analysis(
     for key, block in stored["results"].items():
         entry = copy.deepcopy(block["facts"])
         metric = entry.get("metric")
-        render_row = _row_renderer(fields, whole=metric in _WHOLE_VALUE_METRICS)
+        render_row = _row_renderer(fields, metric=metric)
         rows_emitted = False
         value_rows: list[dict[str, Any]] | None = None
         if (answer_channel and block["answer_rows"]) or (

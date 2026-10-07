@@ -95,7 +95,9 @@ attach the recipe that reads it back:
 ```
 
 The simulator computes the scalar and the `measurements` recipe reads it back
-from the log, parsed and with SI units. On ngspice, measure the trace with a
+from the log, parsed and with SI units. Each case's row carries it as
+`value.measured.vout_dc`, null and listed in `value.failed_measurements` if
+that case's `.meas` failed. On ngspice, measure the trace with a
 recipe instead (guide section 'ngspice'). An `assign` target must exist in the
 deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in
