@@ -504,10 +504,8 @@ What makes that true, and what a recording must never carry:
   the build's settings file with the keys that change a result removed, so
   the build is on its own defaults; a case sets one back when it is the
   point (`ini = { NoGreekMus = "true" }`). The keys are `BEHAVIOUR_KEYS` in
-  `tests/ltspice_recorder.py`; a file that comes out differently for another
-  person on the same build is a key missing from that list (the waveform
-  grid was one, *Plot settings* below). The build must have been started
-  once, so that it has a settings file to copy.
+  `tests/ltspice_recorder.py`. The build must have been started once, so
+  that it has a settings file to copy.
 - **No path, name, date or duration.** The run directory, the home directory,
   dates, elapsed times and the thread count are rewritten to fixed values, in
   the file's own encoding, a raw's samples untouched. The recorder then
@@ -563,8 +561,8 @@ under Wine says so in `host`, and one recorded on Windows has no `host`. A
 partial recording like that keeps the library facts the rest of the recording
 was made with, and says so when the machine's own differ: a Wine prefix has
 the library the installer unpacked, not the one the committed manifest
-describes. It keeps the settings defaults on record too, and adds only the
-default of a key the recorder has come to remove since.
+describes. It keeps the settings defaults on record too, and adds any a run
+writes back that it has none for.
 
 One setting of the person at the window reaches a plot settings file: the
 waveform window's grid, the `grid` key of the settings file, which a key
@@ -605,7 +603,10 @@ header.
 
 When it fails, look at the difference before recording over it: either
 LTspice changed, in which case the model may need to follow, or the recorder
-missed something that varies, in which case it belongs in the scrubber.
+missed something that varies. A path, a date or a duration belongs in the
+scrubber. A file that comes out differently for another person on the same
+build is a setting of theirs, and its key belongs in `BEHAVIOUR_KEYS` (the
+waveform grid was one, *Plot settings* above).
 
 ## Conventions
 

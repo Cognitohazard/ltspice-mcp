@@ -226,9 +226,12 @@ class TestPrivacyGuard:
 class TestSettingsCopy:
     """The copy of a build's settings file a case runs against."""
 
+    # grid in [Options] is the waveform window's grid, which changes what a
+    # build saves; Grid in [Colors] is a colour.
     ANSI = (
         b"[Options]\r\nLastRunVersion=26.1.1\r\nDefaultTrtol=2\r\nNoGreekMus=true\r\n"
-        b"SchFontSize=28\r\n[Colors]\r\nGrid=1\r\n[Recent File List]\r\nFile1=C:\\x\\y.asc\r\n"
+        b"grid=on\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
+        b"[Recent File List]\r\nFile1=C:\\x\\y.asc\r\n"
     )
 
     def test_keys_that_change_results_are_removed_and_the_rest_kept(self):
@@ -237,28 +240,15 @@ class TestSettingsCopy:
             b"[Options]\r\nLastRunVersion=26.1.1\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
         )
 
-    def test_a_waveform_grid_someone_left_on_is_not_carried_into_a_recording(self):
-        # With grid=on a build's waveform window saves a GridStyle line in
-        # every pane (recorded as plot/ac_grid_on), so the plot cases came out
-        # differently on a machine where it was on. The colour of the same
-        # name is no setting of that kind and stays.
-        source = b"[Options]\r\nLastRunVersion=17.0.37\r\ngrid=on\r\n[Colors]\r\nGrid=1\r\n"
-        assert neutral_settings(source, {}) == (
-            b"[Options]\r\nLastRunVersion=17.0.37\r\n[Colors]\r\nGrid=1\r\n"
-        )
-        assert b"\r\ngrid=on\r\n[Colors]" in neutral_settings(source, {"grid": "on"})
-
-    def test_a_default_newly_read_from_a_build_is_added_to_the_ones_on_record(self):
-        # A recording of some cases keeps the defaults the whole one was made
-        # with; a key the recorder has since begun to remove has none there.
+    def test_a_default_on_record_stands_and_one_it_lacks_is_added(self):
         on_record = {"Solver": "0", "RadianMeasure": "false"}
         written_back = {"Solver": "1", "grid": "off", "RawTempDir": "C:\\Users\\dev\\raw"}
-        assert recorder.with_new_defaults(on_record, written_back) == {
+        assert recorder.merged_defaults(on_record, written_back) == {
             "Solver": "0",
             "RadianMeasure": "false",
             "grid": "off",
         }
-        assert recorder.with_new_defaults({}, written_back) == {"Solver": "1", "grid": "off"}
+        assert recorder.merged_defaults({}, written_back) == {"Solver": "1", "grid": "off"}
 
     def test_the_copy_is_never_empty_of_what_marks_a_used_install(self):
         # A build that starts on an empty settings file runs its first-launch
@@ -341,6 +331,15 @@ class TestCommittedRecordings:
         assert executable["name"].lower().endswith(".exe")
         assert build == f"ltspice{executable['file_version'].split('.')[0]}"
         assert manifest["reported_build"]
+
+    def test_every_default_on_record_is_for_a_key_the_recorder_removes(self, build: str):
+        """The defaults are what a build wrote back for the keys removed from
+        its settings copy. LTspice XVII writes back the ones it knows; LTspice
+        26 writes none, so what it does on a default is in its recorded files."""
+        manifest = load_manifest(FIXTURES / build)
+        defaults = manifest["settings"]["defaults"]
+        assert {key.casefold() for key in defaults} <= BEHAVIOUR_KEYS
+        assert bool(defaults) == (manifest["generation"] == "xvii")
 
     def test_every_applicable_case_is_recorded_and_no_other(self, build: str):
         manifest = load_manifest(FIXTURES / build)
@@ -447,9 +446,12 @@ GROUPS = sorted({case.case_id.split("/", 1)[0] for case in CASES.cases})
 def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tmp_path: Path):
     """Record the group again on the installed build and compare.
 
-    A difference is a change in what LTspice does: look at it, fix the model
-    if the server depended on the old behaviour, then record again with
-    ``scripts/record_ltspice_fixtures.py``.
+    A difference is a change in what LTspice does, or something of the
+    machine or person recording that the recorder let through. Look at it
+    first. For the one, fix the model if the server depended on the old
+    behaviour, then record again with ``scripts/record_ltspice_fixtures.py``.
+    For the other, teach the recorder: the scrubber for a path, date or
+    duration, ``BEHAVIOUR_KEYS`` for a setting.
     """
     build = installed_counterpart(label)
     if isinstance(build, str):

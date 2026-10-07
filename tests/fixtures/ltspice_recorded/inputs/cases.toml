@@ -615,10 +615,8 @@ kind = "plot"
 source = "plot/rc_ac.asc"
 steps = [{ trace = "V(out)" }]
 
-# The settings key behind the waveform window's grid, which a key press turns
-# on and the build then remembers. Both builds default it to off, and the
-# recorder removes it, since a recording made where someone had left it on
-# differed in every pane.
+# The waveform window's grid, a settings key the recorder removes from every
+# other case (BEHAVIOUR_KEYS in tests/ltspice_recorder.py says why).
 [[case]]
 id = "plot/ac_grid_on"
 behaviour = "plot-settings"

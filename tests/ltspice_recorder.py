@@ -1166,7 +1166,9 @@ class CaseResult:
     """What one case produced: its manifest entry and its scrubbed files.
 
     ``defaults`` is what the build wrote back into the settings copy for the
-    keys the recorder had removed: its own default for each.
+    keys the recorder had removed: its own default for each one it wrote.
+    LTspice XVII writes back the ones it knows when a batch run ends; LTspice
+    26 writes none.
     """
 
     entry: dict[str, Any]
@@ -1511,13 +1513,14 @@ def record_build(
     """Record every applicable case on ``build`` into ``out / build.label``.
 
     With ``only`` (glob patterns over case ids) the named cases are re-recorded
-    and the rest of an existing recording is kept, with the settings defaults
-    and the library facts it was made with; ``progress`` is told when this
-    machine's library differs from those. A key the recorder has come to
-    remove since that recording was made has no default there, so its default
-    is added from this one (``with_new_defaults``). Without ``only`` the
-    directory is rebuilt, so a case removed from the list leaves no file
-    behind.
+    and the rest of an existing recording is kept, with the library facts it
+    was made with; ``progress`` is told when this machine's library differs
+    from those. Without ``only`` the directory is rebuilt, so a case removed
+    from the list leaves no file behind.
+
+    The settings defaults of a recording are every default its cases' runs
+    wrote back, the first value for a key standing (``merged_defaults``), on
+    top of the ones an existing recording holds.
     """
     reason = unavailable_reason(build)
     if reason is not None:
@@ -1559,7 +1562,7 @@ def record_build(
             result = run_case(build, case, inputs, root, timeout=timeout, desktop=desktop)
             assert_private(result.files, forbidden)
             if case.settings and not case.ini:
-                defaults = with_new_defaults(defaults, result.defaults)
+                defaults = merged_defaults(defaults, result.defaults)
             for stale in cases.get(case.case_id, {}).get("outputs", {}):
                 (directory / stale).unlink(missing_ok=True)
             for name, data in result.files.items():
@@ -1610,23 +1613,16 @@ def _portable_defaults(defaults: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in defaults.items() if key.casefold() not in local}
 
 
-def with_new_defaults(
+def merged_defaults(
     on_record: Mapping[str, str], written_back: Mapping[str, str]
 ) -> dict[str, str]:
-    """``on_record`` with the build's default for each key it has none for.
+    """``on_record`` with each default in ``written_back`` that it has none for.
 
     ``written_back`` is what a build wrote into its settings copy for the keys
-    the recorder had removed. A default already on record stays as it is: a
-    recording of some cases keeps the defaults the whole one was made with,
-    and gains only the ones of keys the recorder has come to remove since.
+    the recorder had removed, less the ones that are local directories. The
+    value on record for a key stands.
     """
-    known = {key.casefold() for key in on_record}
-    new = {
-        key: value
-        for key, value in _portable_defaults(written_back).items()
-        if key.casefold() not in known
-    }
-    return {**on_record, **new}
+    return {**_portable_defaults(written_back), **on_record}
 
 
 def _build_banner(cases: Mapping[str, Any]) -> str | None:

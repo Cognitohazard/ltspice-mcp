@@ -1917,10 +1917,8 @@ class TestHierarchicalPortPreservation:
 # lines: a data label (export/data_flags), a bus tap (export/bus_tap) and an
 # empty line (export/blank_line), where neither exports a sheet holding a
 # keyword it does not know (export/unknown_record). TestSheetRecords in
-# tests/test_recorded_ltspice_schematics.py holds the editor to those sheets.
-# The sheets below hold the same lines, each in the smallest sheet that shows
-# its case: a port between two data labels, a second codec, a blank base, a
-# sheet loaded as a block.
+# tests/test_recorded_ltspice_schematics.py holds the editor to those sheets;
+# the ones below hold the same lines in smaller sheets of their own.
 #
 # DATAFLAG <x> <y> "<expression>" is the form in the example sheets both
 # builds install, which have an empty expression. BUSTAP <x1> <y1> <x2> <y2>
