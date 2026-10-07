@@ -116,6 +116,12 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
 
 **Behavior that gives a wrong number without an error:**
 - RISE/FALL/CROSS numbering starts at 1, not 0.
+- On LTspice, trig functions inside a `.meas` take and give degrees, where a
+  B source uses radians (guide section 'ltspice').
+- On LTspice, `db(V(out))` in an AC `.meas` is the complex logarithm of the
+  complex voltage, and it reads back as that number's magnitude: 7.46 where
+  the gain is -3.01 dB. Write `db(mag(V(out)))`. A `WHEN db(V(out))=-3`
+  crossing is found either way.
 - `MAX` returns the largest signed value. On a trace that stays negative, such
   as a PMOS drain current from −3 mA to −1 mA, `.meas TRAN imax MAX I(V1)`
   returns −1 mA. For the peak magnitude, measure `MAX abs(I(V1))`.

@@ -31,6 +31,34 @@ LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
 recording that showed it.
 
+- The lint and `verify_circuit` passed a `.meas` whose trig LTspice computes
+  in degrees. On the default settings of LTspice 26 and XVII, `sin`, `cos`,
+  `tan`, `asin`, `acos`, `atan` and `atan2` inside a `.meas` take and give
+  degrees where a B source uses radians: `atan2(1,1)` is 45 and `cos(pi)` is
+  0.998497, and `INTEG V(s)*sin(2*pi*1k*time)` over two periods of a 1 kHz
+  sine is -3.5e-5 where 1e-3 was meant. `ph()` in a `.meas` gives degrees as
+  well, and the per-user setting "Use radian measure in waveform expressions"
+  turns both to radians. `run_experiments` now refuses such a `.meas` (lint
+  `meas-trig-degrees`, blocking; `linter_version` 7) and `verify_circuit`'s
+  `syntax` check reports it as `meas_trig_degrees`, both naming the B-source
+  form whose unit does not depend on the setting. The `vdb()`, `phase()` and
+  `group_delay()` refusals also see a call written after an operator
+  (`2*vdb(out)`) or an equals sign (`WHEN time=cos(1)`, `TD={atan(1)}`) now,
+  which they missed.
+- An AC `.meas` whose result is a negative real number came back positive.
+  LTspice prints every AC result as a magnitude and an angle, and a negative
+  `ph()`, `re()` or `im()` as its absolute value at 180°: the phase at the
+  corner of an RC low-pass, -45 degrees, was read as 45. A result printed at
+  0° or 180° is now read as the signed number; any other angle is still read
+  as the magnitude. That also makes `db(mag(V(out)))` read as the gain in dB;
+  `db(V(out))` in an AC `.meas` is LTspice's complex logarithm, read as its
+  magnitude, and the guide now says to write the former.
+- A `.meas` named `e`, `k`, `pi` or `q` was accepted. Those are constants of
+  LTspice's expression engine: LTspice 26 refuses the whole deck and XVII
+  skips the measurement. The directive check behind `verify_circuit`'s
+  `syntax` check and `edit_schematic`'s directives now refuses them
+  (`meas_reserved_name`), and the fix rides on the error relayed from a run
+  LTspice 26 refused.
 - Results from LTspice 26 could not be read for a deck with two or more
   subcircuit instances. LTspice 24 and later write one `Backannotation:` line
   in the raw header for each instance, and the raw preflight refused a header
