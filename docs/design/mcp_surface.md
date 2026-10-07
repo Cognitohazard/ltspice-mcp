@@ -244,7 +244,7 @@ they let a session pay for depth only where it needs it. The compact listing
 drops the prose for every argument — every branch's and every tool's own — on
 the bet that a session uses a handful of them; the reference lookup is what
 buys that prose back, one entry at a time, for the handful actually used. It
-covers both halves: the branch vocabulary (twenty-one recipes, eleven ops, six
+covers both halves: the branch vocabulary (twenty-one recipes, twelve ops, six
 actions, and the rest) and each tool's own top-level arguments, indexed as one
 entry per tool under the family `argument`, so `all_steps` or `expected_sha256`
 is found the same way `stability` is. Neither half of the pair stands alone.
@@ -1125,6 +1125,43 @@ accepts: relabel one side with the other's name.
 and names the wire under `snapped_to_wire`; a point where two nets' wires
 cross is refused as ambiguous rather than resolved to either.
 
+**Waveform panes.** `set_plot_panes{analysis, panes}` writes the plot
+settings file LTspice's waveform window reads when the sheet runs: the `.plt`
+beside the sheet, under the sheet's name. A sheet handed to a person should
+open with the traces that show what it does, and the file is a simulator
+format with an encoding of its own, so it is written by tested shared code
+(`lib/plot_settings.py`) rather than by each agent. `panes` is top to bottom,
+each `{traces, x_scale?, y_scale?}`; `analysis` is `tran` or `ac`, the
+sections recorded. The op replaces that analysis's section and keeps the
+file's others as they were, as LTspice itself does when it saves one; `[]`
+removes the section, and the file with its last one. Its `results` entry names
+the file (`plot_settings`) and the panes the section held (`replaced_panes`),
+in the op's own form, so passing them back as `panes` restores them: the op is
+its own inverse. The sheet's bytes are not changed and the reply's `sha256`
+stays the sheet's.
+
+Every rule the writer follows is recorded on LTspice 26 and XVII
+(`plot-settings` and `plot-settings-read` in the recorded fixtures): panes are
+listed bottom first; each build works a trace's id and axis out for itself, so
+both are written 0; a trace is read only up to its first space, so whitespace
+is refused; a pane's `Log` line is kept, so it is always written, with the
+build's own default for the analysis; a run of the sheet ranges every axis, so
+no range is written. LTspice 26 writes UTF-8 and XVII UTF-16 LE, each without
+a byte order mark and with LF line ends, and each reads the other's; but XVII
+saving over a UTF-8 file appends the old bytes after its own UTF-16 section,
+so the file is written as UTF-16 LE, the one form neither build's save
+damages. A file in two encodings, which that leaves, is refused rather than
+guessed at.
+
+The file is written in the sheet's transaction. Its cross-process lock is
+taken after the sheet's, the fixed order an export takes the sheet's and its
+netlist's in, and it is read under both. The commit stages the sheet, then
+replaces the `.plt` (staged and renamed the same way), then renames the sheet
+last; a sheet rename that fails puts the `.plt`'s old bytes back, so a batch
+that set panes commits both files or neither. A `.plt` that cannot be read or
+written fails the batch at `apply_ops` or `stage_plot_settings`, with nothing
+written.
+
 **Domain rule: the AUTHOR plane edits schematics and not netlists.** Both
 `.asc` and `.cir` are text files, so the split is not about file format. The
 criterion is where the tool adds something beyond text editing. For schematics
@@ -1692,10 +1729,10 @@ session serves it and the library otherwise.
 
 ### A.3 Edit ops
 
-Eleven op kinds, discriminated on `op`: `add_component`, `move_component`,
+Twelve op kinds, discriminated on `op`: `add_component`, `move_component`,
 `remove_component`, `set_component_value`, `set_component_attribute`,
 `add_net_label`, `remove_net_label`, `wire_pins`, `remove_wire`,
-`add_directive`, `remove_directive`. The batch commits atomically or not at
+`add_directive`, `remove_directive`, `set_plot_panes`. The batch commits atomically or not at
 all: the first op that fails aborts the transaction and nothing is written.
 
 Carried over from the pre-consolidation op models: exact-segment `remove_wire`,
