@@ -15,13 +15,14 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 from spicelib.editor.asc_editor import AscEditor
+from spicelib.utils.file_search import search_file_in_containers
 
-from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib import schematic_ops, symbol_geometry
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
-from ltspice_mcp.lib.lint_rules import deck_generator
+from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
 from ltspice_mcp.lib.netlist_diff import parse_directive, read_deck, structural_delta
-from ltspice_mcp.lib.netlist_graph import canon_ref, parse_netlist_graph
+from ltspice_mcp.lib.netlist_graph import canon_ref, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     element_class,
@@ -33,9 +34,11 @@ from ltspice_mcp.lib.schematic_ops import (
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene
 from ltspice_mcp.lib.simulator import _in_generation
+from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import apply_ops
 from tests.conftest import FIXTURES_DIR
 from tests.ltspice_recorder import INPUTS
 
@@ -320,6 +323,21 @@ class TestExportBoilerplate:
         else:
             assert generator == rec.manifest(build)["reported_build"]
 
+    def test_every_export_shows_which_generation_wrote_it(self, build: str):
+        """XVII names no generator, so its exports are told by their first line,
+        the sheet's path, standing alone."""
+        exports = sorted(rec.recorded(build, "export/boilerplate.net").parent.glob("*.net"))
+        assert len(exports) > 10
+        expected = (
+            UNNAMED_EXPORT_WRITER
+            if rec.generation(build) == "xvii"
+            else rec.manifest(build)["reported_build"]
+        )
+        for path in exports:
+            assert export_writer(read_spice_text_with_encoding(path)[0]) == expected, path.name
+        # verify_circuit takes the export's writer for the reader of its micro signs.
+        assert is_cp1252_ltspice_build(expected) == (rec.generation(build) == "xvii")
+
     def test_a_bipolar_transistor_is_exported_with_a_grounded_substrate(self, build: str):
         cards = rec.export_instances(build, "export/boilerplate")
         for reference in ("q1", "q2"):
@@ -389,6 +407,38 @@ class TestExportEncoding:
         data = rec.recorded(build, "export/micro_utf8.net").read_bytes()
         assert b"R1 a 0 1\xc2\xb5\r\n" in data
 
+    @pytest.mark.parametrize("sheet", ["micro_cp1252", "micro_utf8"])
+    async def test_verify_warns_of_a_micro_sign_the_exporting_build_misreads(
+        self, build: str, sheet: str, state_no_sim, work_dir: Path
+    ):
+        """XVII copies a UTF-8 sheet's bytes into its export and decodes the
+        export as cp1252, so the micro sign there runs as 1. verify_circuit
+        warns of it from the export alone, with no XVII in the session; the
+        cp1252 export, and anything LTspice 26 wrote, stay an observation."""
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        deck = work_dir / f"{sheet}.net"
+        deck.write_bytes(rec.recorded(build, f"export/{sheet}.net").read_bytes())
+        result = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(deck), "checks": ["syntax"]}),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None
+        findings = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+        if rec.generation(build) != "xvii":
+            # LTspice 26 re-encodes what it read as cp1252: one micro sign
+            # stays one, and a UTF-8 one becomes the two mis-decoded characters.
+            assert [f["severity"] for f in findings] == (
+                ["observation"] if sheet == "micro_cp1252" else []
+            )
+        elif sheet == "micro_utf8":
+            (finding,) = findings
+            assert finding["severity"] == "warning"
+            assert finding["evidence"]["reader"] == UNNAMED_EXPORT_WRITER
+        else:
+            assert [f["severity"] for f in findings] == ["observation"]
+
     def test_the_setting_that_asks_for_u_writes_u(self, build: str):
         assert self.value(build, "micro_cp1252_as_u") == "1u"
 
@@ -437,6 +487,16 @@ class TestExportEncoding:
 class TestExportedNames:
     """How an instance is named on its card."""
 
+    #: ``export/instance_names``'s instances as the sheet names them, the way
+    #: a netlist written by hand would.
+    WRITTEN = (
+        "* the sheet's instances as named\n"
+        "R1 NC_01 NC_02 1k\nRLoad NC_03 NC_04 2k\nr3 NC_05 NC_06 3k\n"
+        "XU1 NC_07 NC_08 NC_09 NC_10 cell4\n"
+        "X2 NC_11 NC_12 NC_13 NC_14 cell4\n"
+        "x3 NC_15 NC_16 NC_17 NC_18 cell4\n.end\n"
+    )
+
     @pytest.mark.parametrize("sheet", ["instance_names", "block_symbol"])
     def test_every_spelling_of_a_name_is_one_reference_to_the_comparison(
         self, build: str, sheet: str
@@ -469,18 +529,82 @@ class TestExportedNames:
         else:
             assert references == ["X§U1", "X§X2", "X§x3"]
 
-    def test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened(
-        self, build: str, tmp_path: Path
+    def test_an_instance_named_as_written_matches_its_export(self, build: str):
+        """A netlist naming the sheet's instances as the sheet does (``X2``,
+        ``x3``, ``RLoad``) is the export's circuit: the ``X`` LTspice puts in
+        front of a subcircuit instance pairs as a rename, not as one removed
+        part and one added."""
+        export = rec.export_text(build, "export/instance_names")
+        result = compare_graphs(self.WRITTEN, export)
+        assert (result.added, result.removed) == ([], [])
+        # References are compared without the marker, as LTspice 26 names them.
+        assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [
+            ("X2", "XX2"),
+            ("x3", "Xx3"),
+        ]
+        assert result.equivalent
+
+    def test_an_instance_named_as_written_is_a_rename_to_the_structural_diff(self, build: str):
+        """The structural diff pairs the same names the equivalence mode does,
+        lists them as renamed, and counts no difference for them."""
+        from ltspice_mcp.tools.verify import compare_structural
+
+        comparison, _, failure, warnings = compare_structural(
+            self.WRITTEN, rec.export_text(build, "export/instance_names")
+        )
+        assert (failure, warnings) == (None, [])
+        assert comparison is not None
+        assert (comparison["components_added"], comparison["components_removed"]) == ([], [])
+        marker = "X" if rec.generation(build) == "xvii" else "X§"
+        assert comparison["components_renamed"] == [
+            {"before": "X2", "after": f"{marker}X2"},
+            {"before": "x3", "after": f"{marker}x3"},
+        ]
+        assert comparison["components_changed"] == []
+        assert comparison["equivalent"] is True
+
+    def test_a_block_symbol_with_no_sheet_of_its_own_opens_as_ltspice_reads_it(
+        self, build: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """LTspice netlists the block as a call to a subcircuit of the symbol's
-        name. The editor's loader wants the block's own sheet and stops when
-        there is none (``docs/spicelib_bugs.md``); the message names the file."""
-        from ltspice_mcp.errors import SymbolResolutionError
-
+        name, whatever defines it. spicelib's loader wants the block's own sheet
+        and stops when there is none (``docs/spicelib_bugs.md``, Bug 22); the
+        server's opens the sheet with each instance's subcircuit unresolved."""
         assert rec.entry(build, "export/block_symbol")["exit_code"] == 0
         sheet = rec.stage_sheet(build, "export/block_symbol", tmp_path)
-        with pytest.raises(SymbolResolutionError, match=r"probe4\.asc not found"):
-            make_editor(sheet)
+        # spicelib's own editor still refuses it: drop the workaround once it opens.
+        with pytest.raises(FileNotFoundError, match=r"probe4\.asc not found"):
+            AscEditor(str(sheet))
+        searched: list[str] = []
+
+        def search(filename: str, *containers: str) -> str | None:
+            searched.append(filename)
+            return search_file_in_containers(filename, *containers)
+
+        monkeypatch.setattr(schematic_ops, "search_file_in_containers", search)
+        editor = make_editor(sheet)
+        assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
+        # A search walks every folder it is given, so the block the sheet
+        # places three times is searched for once.
+        assert searched == ["probe4.asc"]
+
+    async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
+        self, build: str, state_no_sim, work_dir: Path
+    ):
+        sheet = rec.stage_sheet(build, "export/block_symbol", work_dir)
+        data = await apply_ops(
+            state_no_sim,
+            sheet,
+            [
+                {"op": "move_component", "reference": "U1", "x": 96, "y": 640},
+                {"op": "add_directive", "instruction": ".op", "x": 96, "y": 800},
+            ],
+        )
+        assert data["outcome"] == "complete", data
+        written = sheet.read_text(encoding="utf-8")
+        assert "SYMBOL probe4 96 640 R0" in written
+        assert written.count("SYMBOL probe4 ") == 3
+        assert "!.op" in written
 
     def test_the_editor_names_each_parts_element_class(self, build: str, tmp_path: Path):
         sheet = rec.stage_sheet(build, "export/instance_names", tmp_path)

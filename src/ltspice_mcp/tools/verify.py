@@ -80,7 +80,14 @@ from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
-from ltspice_mcp.lib.lint_rules import deck_generator, rule_severity, value_suffix_evidence
+from ltspice_mcp.lib.lint_rules import (
+    MEAS_ANGLE_REASON,
+    deck_generator,
+    export_writer,
+    meas_angle_sites,
+    rule_severity,
+    value_suffix_evidence,
+)
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
@@ -167,6 +174,21 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
         "type": "array",
         "items": {"type": "string"},
         "description": "References present in the baseline but absent from the compared deck.",
+    },
+    "components_renamed": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "before": {"type": "string", "description": "Its reference in the baseline."},
+                "after": {"type": "string", "description": "Its reference in the compared deck."},
+            },
+            "required": ["before", "after"],
+        },
+        "description": (
+            "Subcircuit instances matched across the X LTspice puts before an instance "
+            "name on export (Xd as X§Xd or XXd). Not a difference."
+        ),
     },
     "components_changed": {
         "type": "array",
@@ -359,6 +381,11 @@ _REF: dict[str, Any] = {
     "description": "Component reference, hierarchical for a subcircuit leaf ('X1.M2').",
 }
 
+# The delta's lists that are differences; ``components_renamed`` is a fact.
+STRUCTURAL_DIFFERENCE_KEYS: tuple[str, ...] = tuple(
+    key for key in STRUCTURAL_DELTA_PROPS if key != "components_renamed"
+)
+
 _COMPONENT_DELTA_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -367,6 +394,15 @@ _COMPONENT_DELTA_SCHEMA: dict[str, Any] = {
         "detail": {"type": "string", "description": "What the component is, in words."},
     },
     "required": ["ref", "type_letter", "detail"],
+}
+
+_RENAMED_INSTANCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reference_ref": _REF,
+        "candidate_ref": _REF,
+    },
+    "required": ["reference_ref", "candidate_ref"],
 }
 
 _RETYPE_DIFF_SCHEMA: dict[str, Any] = {
@@ -460,14 +496,30 @@ _ARITY_ERROR_SCHEMA: dict[str, Any] = {
         "ref": _REF,
         "reference_arity": {
             "type": "integer",
-            "description": "Terminal count on the reference side.",
+            "description": (
+                "Terminal count on the reference side; with 'side' set, the instance's node count."
+            ),
         },
         "candidate_arity": {
             "type": "integer",
-            "description": "Terminal count on this circuit's side.",
+            "description": (
+                "Terminal count on this circuit's side; with 'side' set, the "
+                "subcircuit's port count."
+            ),
+        },
+        "detail": {
+            "type": "string",
+            "description": "What disagrees, naming the nodes and ports.",
+        },
+        "side": {
+            "type": ["string", "null"],
+            "description": (
+                "Set when one netlist's subcircuit instance does not match its own "
+                "subcircuit's ports; the arities are then its node and port counts."
+            ),
         },
     },
-    "required": ["ref", "reference_arity", "candidate_arity"],
+    "required": ["ref", "reference_arity", "candidate_arity", "detail"],
 }
 
 _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
@@ -556,6 +608,15 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": _COMPONENT_DELTA_SCHEMA,
             "description": "equivalence: components present only in the reference.",
+        },
+        "renamed": {
+            "type": "array",
+            "items": _RENAMED_INSTANCE_SCHEMA,
+            "description": (
+                "equivalence: subcircuit instances matched across the X LTspice puts "
+                "before an instance name on export (Xe as X§Xe, read XXe). Not a "
+                "difference."
+            ),
         },
         "retyped": {
             "type": "array",
@@ -1078,8 +1139,8 @@ def _value_suffix_findings(
     A micro sign is micro to a reader that decodes the file in the encoding it
     was written in. It is a warning per value only when a reader this server
     knows of decodes it otherwise: an LTspice XVII the session drives
-    (``cp1252_reader``, from ``services.cp1252_ltspice``) or one the deck's own
-    header names as its writer, reading a file that is not cp1252. Otherwise
+    (``cp1252_reader``, from ``services.cp1252_ltspice``) or the one the deck
+    shows exported it (``export_writer``), reading a file that is not cp1252. Otherwise
     the file's micro signs are one observation, with their count and lines,
     which leaves the outcome alone. ``encoding`` is the codec the file decoded
     as. ``cards`` has its title card dropped already.
@@ -1088,8 +1149,9 @@ def _value_suffix_findings(
     if not sites:
         return []
     generated_by = deck_generator(text)
-    if cp1252_reader is None and generated_by and is_cp1252_ltspice_build(generated_by):
-        cp1252_reader = generated_by
+    writer = export_writer(text)
+    if cp1252_reader is None and writer and is_cp1252_ltspice_build(writer):
+        cp1252_reader = writer
     misread = cp1252_reader is not None and encoding != "cp1252"
     findings: list[dict[str, Any]] = []
     micro: list[ValueSuffixSite] = []
@@ -1130,12 +1192,14 @@ def _syntax_findings(
     cp1252_reader: str | None,
     simulator: str,
 ) -> list[dict[str, Any]]:
-    """Directive, lex, element-arity and value-suffix findings in a netlist.
+    """Directive, lex, element-arity, value-suffix and .meas angle findings in a netlist.
 
-    Everything here changes what the simulator reads. A finding is an error
-    unless its rule says the deck still runs as meant: an element-arity issue
-    carries the severity its validator check declares, and a suffix finding
-    is an error only for a mis-decoded file (see ``_value_suffix_findings``).
+    Everything here changes what the simulator reads, or what it computes from
+    it: LTspice takes a trig function's angle in a .meas in degrees. A finding
+    is an error unless its rule says the deck still runs as meant: an
+    element-arity issue carries the severity its validator check declares, and
+    a suffix finding is an error only for a mis-decoded file (see
+    ``_value_suffix_findings``).
     ``simulator`` is the one the session runs decks on, ``"LTspice"`` or
     ``"ngspice"``: some directive and element forms are a fault for one and
     valid for the other. The facts that are legal-but-notable live in the
@@ -1177,7 +1241,27 @@ def _syntax_findings(
     findings.extend(
         _value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader=cp1252_reader)
     )
+    if simulator == "LTspice":
+        findings.extend(_meas_angle_findings(deck.cards, path))
     return findings
+
+
+def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, Any]]:
+    """``.meas`` cards that call a trig function, which LTspice reads in degrees there.
+
+    The ``run_experiments`` linter's ``meas-trig-degrees`` rule: the same
+    cards, severity and reason, so both surfaces say the same thing.
+    """
+    return [
+        _finding(
+            rule_id="meas_trig_degrees",
+            severity=rule_severity("meas-trig-degrees"),
+            at={"file": str(path), "line": card.line_start},
+            subject=card.name or ".meas",
+            evidence={"functions": functions, "card": card.body, "reason": MEAS_ANGLE_REASON},
+        )
+        for card, functions in meas_angle_sites(cards)
+    ]
 
 
 # The connectivity rules the netlist quality check runs, with the severity this
@@ -1819,8 +1903,8 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
     # fabricated side in either direction, so it is null and the warning says why.
     #
     # Keyed on the delta's own difference lists rather than ``any(diff.values())``:
-    # a metadata key added to the delta later must not read as a difference.
-    equivalent = not any(diff[key] for key in STRUCTURAL_DELTA_PROPS) if both_parsed else None
+    # a fact the delta carries, such as a rename, must not read as a difference.
+    equivalent = not any(diff[key] for key in STRUCTURAL_DIFFERENCE_KEYS) if both_parsed else None
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 
 

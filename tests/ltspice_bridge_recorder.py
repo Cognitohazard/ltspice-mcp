@@ -202,31 +202,6 @@ def _resistor_value(netlist: Path) -> str | None:
     return None
 
 
-def plot_settings_record(build: Build) -> dict[str, Any] | None:
-    """The shape of the plot settings files ``build`` ships with its examples:
-    the names of their sections and the words their lines begin with. They are
-    what LTspice itself writes; their content is not recorded."""
-    library = build.library_root
-    examples = library.parent / "examples" if library is not None else None
-    if examples is None or not examples.is_dir():
-        return None
-    sections: set[str] = set()
-    keys: set[str] = set()
-    files = 0
-    for path in examples.rglob("*.plt"):
-        data = path.read_bytes()
-        if b"\x00" in data:
-            continue  # the few stored as UTF-16 say nothing the others do not
-        files += 1
-        for line in data.decode("cp1252").splitlines():
-            line = line.strip()
-            if line.startswith("["):
-                sections.add(line.strip("[]"))
-            elif ":" in line:
-                keys.add(line.split(":", 1)[0].split("[", 1)[0])
-    return {"files": files, "sections": sorted(sections), "keys": sorted(keys)}
-
-
 def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
     """The recording itself, with LTspice's window on ``desktop``."""
     command = bridge_command(build.exe)
@@ -389,7 +364,6 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         },
         "inputs": {name: sha256_bytes((INPUTS / f"{name}.asc").read_bytes()) for name in names},
         "reference": reference_record(build),
-        "plot_settings": plot_settings_record(build),
         "files": {name: sha256_bytes(data) for name, data in sorted(files.items())},
     }
     if out.exists():

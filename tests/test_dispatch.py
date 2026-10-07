@@ -134,6 +134,9 @@ _DECLARED_INVERSES: dict[str, str] = {
     "set_component_value": _SELF_INVERSE,
     "set_component_attribute": _SELF_INVERSE,
     "move_component": _SELF_INVERSE,
+    # Re-applied with the replaced_panes its result reports, it puts the panes
+    # back; with no panes it removes the ones it set.
+    "set_plot_panes": _SELF_INVERSE,
 }
 
 

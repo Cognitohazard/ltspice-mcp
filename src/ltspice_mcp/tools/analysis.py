@@ -38,7 +38,7 @@ from typing import Annotated, Any, Literal, NotRequired
 import numpy as np
 from pydantic import Field
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, NetlistError, ResultError
 from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, plot_settings, services
 from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
@@ -1072,16 +1072,48 @@ _ALREADY_OPEN_NOTE = (
 )
 
 
+def _write_plot_settings(results: Path, plot_name: str, panes: list[list[str]]) -> str | None:
+    """Write the plot settings that draw ``panes`` beside ``results``. Blocking.
+
+    None once written, and otherwise why they were not. A file a person saved
+    from LTspice is theirs and is left alone; one written here before is
+    replaced.
+    """
+    analysis = plot_settings.analysis_of(plot_name)
+    if analysis is None:
+        return (
+            f"no traces are drawn, because how LTspice reads the plot settings of a "
+            f"{plot_name} plot is not recorded"
+        )
+    target = plot_settings.plot_settings_path(results)
+    scales = plot_settings.DEFAULT_SCALES[analysis]
+    try:
+        if target.is_file() and not plot_settings.holds_only_panes(target.read_bytes()):
+            return (
+                f"{target.name} was saved from LTspice and is left as it is, so the "
+                "window shows the traces saved in it"
+            )
+        drawn = plot_settings.with_panes(
+            plot_settings.PlotSettings(),
+            analysis,
+            [plot_settings.PlotPane(tuple(names), scales) for names in panes],
+        )
+        atomic_write_bytes(target, plot_settings.write_plot_settings(drawn), durable=False)
+    except (NetlistError, OSError) as error:
+        return f"the plot settings could not be written ({error})"
+    return None
+
+
 def _show_in_ltspice(
-    state: SessionState, results: Path, analysis: str, panes: list[list[str]]
+    state: SessionState, results: Path, plot_name: str, panes: list[list[str]]
 ) -> dict[str, Any]:
     """Open ``results`` in an LTspice window with ``panes`` drawn. Blocking.
 
     The traces are written first, as the plot settings file LTspice loads when
-    it opens the results (``lib/plot_settings.py``), so they are there for a
-    person who opens the file by hand when no window could be reached. Nothing
-    here fails the plot: the chart and its numbers are already made, and what
-    happened in LTspice is a fact beside them.
+    it opens the results, so they are there for a person who opens the file by
+    hand when no window could be reached. Nothing here fails the plot: the
+    chart and its numbers are already made, and what happened in LTspice is a
+    fact beside them.
     """
     report: dict[str, Any] = {
         "shown": False,
@@ -1093,12 +1125,9 @@ def _show_in_ltspice(
     if not windows.available:
         report["reason"] = f"LTspice windows cannot be reached here: {windows.unavailable}"
         return report
-    try:
-        left_alone = plot_settings.write_beside(results, analysis, panes)
-    except (plot_settings.PlotSettingsError, OSError) as error:
-        left_alone = f"the plot settings could not be written ({error})"
+    left_alone = _write_plot_settings(results, plot_name, panes)
     if left_alone is None:
-        report["plot_settings"] = str(plot_settings.settings_path(results))
+        report["plot_settings"] = str(plot_settings.plot_settings_path(results))
     try:
         report["pid"], report["version"] = windows.show_results(results)
     except BridgeError as error:

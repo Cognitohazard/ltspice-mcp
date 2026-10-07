@@ -286,6 +286,33 @@ model = ["lib/log_parser.py", "lib/result_observations.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
+[behaviour.log-meas-angle-unit]
+summary = "The angle unit inside a .meas expression: on each build's defaults sin, cos, tan, asin, acos, atan and atan2 take and give degrees and ph() gives degrees, where a B source works in radians; the RadianMeasure setting turns .meas to radians."
+model = ["lib/lint_rules.py", "assets/guide/ltspice.md"]
+# A 1 kHz sine of amplitude 1 over two whole periods: the INTEG of V(s)*cos is
+# 0 and of V(s)*sin is 1 ms when the argument is read in radians. The B
+# sources compute the same expressions, and their nodes are in the raw.
+inputs = ["log/meas_trig.cir"]
+
+[behaviour.log-meas-db]
+summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
+model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
+inputs = ["log/meas_db.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-reserved-name]
+summary = "A .meas named for a constant of the expression engine (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
+model = ["lib/spice_validator.py", "lib/log_parser.py"]
+# One deck per name: LTspice 26 stops at the first refusal.
+inputs = [
+    "log/meas_name_e.cir",
+    "log/meas_name_k.cir",
+    "log/meas_name_pi.cir",
+    "log/meas_name_q.cir",
+    "log/meas_name_other.cir",
+]
+keep = ["log"]
+
 [behaviour.log-step]
 summary = "The .step lines of a log: one parameter, two parameters, and a temperature with its degree sign."
 model = ["lib/log_parser.py", "lib/raw_decode.py"]
@@ -293,8 +320,8 @@ inputs = ["log/step_temp.cir", "log/step_two_params.cir"]
 keep = ["log"]
 
 [behaviour.log-fourier]
-summary = "The Fourier block a .four directive prints, with its harmonic table and distortion totals."
-model = ["lib/log_parser.py", "lib/log_decode.py"]
+summary = "The Fourier block a .four directive prints, with its harmonic table, phases and distortion totals; the number after the frequency is the harmonic count."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/result_observations.py"]
 inputs = ["log/fourier.cir"]
 keep = ["log"]
 
@@ -366,10 +393,10 @@ summary = "What ltspice-mcp-bridge.exe answers to each call the server makes, th
 model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json, which test_ltspice_bridge.py also replays against the stand-in bridge the suite uses"
 
-[behaviour.plot-settings]
-summary = "That LTspice loads the plot settings file beside a results file as it opens it, that one holding only the traces is enough for them to be drawn, and that a results file already open keeps the traces it had."
-model = ["lib/plot_settings.py", "lib/ltspice_window.py", "tools/analysis.py"]
-unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded instead is around it, in tests/fixtures/ltspice_bridge_recorded: the shape of the plot settings files LTspice ships with its examples (manifest: plot_settings), and that reading a results file's description opens it and leaves it the one in front (conversation.json). LTspice XVII has no bridge to open a file through."
+[behaviour.plot-settings-on-open]
+summary = "That LTspice loads the plot settings file beside a results file when that file is opened on its own, as it does when a sheet runs, and that a results file already open keeps the traces it had."
+model = ["lib/ltspice_window.py", "tools/analysis.py"]
+unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded is around it: how each build reads a file the server wrote when a sheet runs with it beside it (plot-settings-read), and that reading a results file's description opens it and leaves it the one in front (tests/fixtures/ltspice_bridge_recorded, conversation.json). LTspice XVII has no bridge to open a file through."
 
 [behaviour.window-run]
 summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it; and that only such a run's waveform pane is tied to the sheet, so that clicking a net plots it."
@@ -381,6 +408,22 @@ unrecordable = "The tie between a pane and a sheet is seen and not reported: not
 summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."
 model = ["lib/simulator_docs.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/manifest.json: reference, the file names and front matter keys of the install (the documents are the vendor's and are not recorded); LTspice XVII installs none"
+
+# ---------------------------------------------------------------- plot settings
+
+[behaviour.plot-settings]
+summary = "The plot settings file (.plt) a build's waveform window saves: its encoding and line ends, the section an analysis's panes are under, the order the panes are listed in, the trace entries and the Log line of a pane it made itself."
+model = ["lib/plot_settings.py"]
+# Each [[case]] of kind "plot" runs an RC sheet in the window (-Run), as a
+# person opening it would, makes the panes with the window's own menu
+# commands, and saves; see drive_plot. The sheets use the build's own symbols.
+
+[behaviour.plot-settings-read]
+summary = "What a build makes of a plot settings file the server wrote: the panes and traces it shows, the scales it keeps, the sections it leaves alone, and a file in the other build's encoding."
+model = ["lib/plot_settings.py", "lib/schematic_ops.py", "tools/schematic_edit.py"]
+# The file is beside the sheet under the sheet's name when the sheet runs,
+# which is where edit_schematic writes it; the build saves straight away, so
+# what it writes is what it read.
 
 # ---------------------------------------------------------------- cases an input path cannot describe
 
@@ -478,6 +521,32 @@ behaviour = "deck-forms"
 source = "deck/tran_modifiers.cir"
 keep = ["log"]
 
+# ph() at the corner of an RC low-pass is -45 degrees; the log shows the unit,
+# and the AC waveform would only add bulk.
+[[case]]
+id = "log/meas_phase"
+behaviour = "log-meas-angle-unit"
+source = "log/meas_phase.cir"
+keep = ["log"]
+
+# The settings key behind "Use radian measure in waveform expressions" (the
+# Waveforms page of the settings). Both builds default it to off.
+[[case]]
+id = "log/meas_trig_radian"
+behaviour = "log-meas-angle-unit"
+source = "log/meas_trig.cir"
+ini = { RadianMeasure = "true" }
+keep = ["log"]
+note = "The trig deck with the setting that makes waveform expressions, .meas among them, work in radians."
+
+[[case]]
+id = "log/meas_phase_radian"
+behaviour = "log-meas-angle-unit"
+source = "log/meas_phase.cir"
+ini = { RadianMeasure = "true" }
+keep = ["log"]
+note = "ph() with the same setting."
+
 [[case]]
 id = "raw/tran_fastaccess"
 behaviour = "raw-fastaccess"
@@ -501,3 +570,109 @@ source = "export/micro_cp1252.asc"
 extra = ["export/res.asy"]
 ini = { NoGreekMus = "true" }
 note = "The same sheet with the setting that asks LTspice to write u for the micro sign."
+
+# What a build writes when it makes the panes itself. LTspice 26 adds a pane
+# above or below the active one; LTspice XVII has one command, Add Plot Pane.
+[[case]]
+id = "plot/one_trace"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [{ trace = "V(out)" }]
+
+[[case]]
+id = "plot/pane_below"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [
+    { trace = "V(out)" },
+    { command = "Add Plot Pane Below Active Pane" },
+    { trace = "V(in)" },
+    { trace = "I(R1)" },
+]
+builds = ["current"]
+note = "The second pane is added below the first, so the file shows which end of the list is the bottom of the window."
+
+[[case]]
+id = "plot/pane_added"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [
+    { trace = "V(out)" },
+    { command = "Add Plot Pane" },
+    { trace = "V(in)" },
+    { trace = "I(R1)" },
+]
+builds = ["xvii"]
+
+[[case]]
+id = "plot/math"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [{ trace = "V(in)-V(out)" }, { trace = "V(out)*I(R1)" }]
+note = "A power on the right axis, which the build labels with a micro sign."
+
+[[case]]
+id = "plot/ac"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_ac.asc"
+steps = [{ trace = "V(out)" }]
+
+# What a build makes of a file the server wrote. lib/plot_settings.py writes
+# every one of these but spaced.plt, which is its form for a trace with the
+# spaces it refuses since this case was recorded; tests/test_plot_settings.py
+# holds each to the writer.
+[[case]]
+id = "plot/read_two_panes"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/two_panes.plt"
+
+[[case]]
+id = "plot/read_math"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/math.plt"
+
+[[case]]
+id = "plot/read_spaced"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/spaced.plt"
+
+[[case]]
+id = "plot/read_log_y"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/log_y.plt"
+
+[[case]]
+id = "plot/read_ac"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_ac.asc"
+plot = "plot/ac.plt"
+
+[[case]]
+id = "plot/read_two_sections"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/two_sections.plt"
+note = "A transient run saves its own section; the AC section is the one it was not asked about."
+
+[[case]]
+id = "plot/read_utf8"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/two_panes_utf8.plt"
+note = "The two panes of read_two_panes in UTF-8, the encoding LTspice 26 writes."

@@ -1,0 +1,7 @@
+* a .meas named q, a constant of the expression engine
+V1 s 0 SIN(0 1 1k)
+R1 s 0 1k
+.tran 0 1m 0 10u
+.meas tran q MAX V(s)
+.meas tran after MIN V(s)
+.end
