@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes,
+    decode_spice_bytes_strictly,
     decode_spice_bytes_with_encoding,
     detect_utf16_endianness,
     encode_spice_text,
@@ -73,13 +76,76 @@ class TestDecodeSpiceBytes:
         raw = text.encode("cp1252")
         assert decode_spice_bytes(raw) == text
 
-    def test_invalid_utf8_replaces_rather_than_raises(self) -> None:
-        # Mixed-encoding garbage must not raise — fall through to
-        # utf-8 with errors="replace".
+    def test_bytes_no_codec_defines_still_decode(self) -> None:
+        # 81 has no character in cp1252 and the file is not UTF-8. It must
+        # not raise, and nothing in it is replaced.
         raw = b".MODEL Q NPN\n\x80\x81\xfe\n"  # \xfe alone is not a UTF-16 BOM
-        # Should decode without raising; the bad bytes become U+FFFD.
         out = decode_spice_bytes(raw)
         assert ".MODEL Q NPN" in out
+        assert "\ufffd" not in out
+
+
+#: Text as a Windows of that language saves it, each holding at least one of
+#: the five bytes cp1252 gives no character: the Japanese ideographic comma is
+#: 81 41, and the kanji around it lead with 8D, 8F and 90.
+LEGACY_TEXT = [
+    ("cp932", "\u30d5\u30a3\u30eb\u30bf\u3001\u62b5\u6297\u6570\u5024"),
+    ("cp932", "\u9ad8\u5c0f\u65b0"),
+    ("cp936", "\u6ee4\u6ce2\u5668\u4e02"),
+    ("cp949", "\u3131\u314f\uac02"),
+]
+CP1252_UNDEFINED = {0x81, 0x8D, 0x8F, 0x90, 0x9D}
+
+
+class TestEightBitTextKeepsItsBytes:
+    """A deck in a code page this module cannot name is still 8-bit text to
+    LTspice, which reads it a byte at a time. Decoding it loses nothing, so a
+    rewritten copy holds every byte the rewrite did not touch."""
+
+    @pytest.mark.parametrize(("code_page", "words"), LEGACY_TEXT)
+    def test_text_in_a_double_byte_code_page_comes_back_as_written(
+        self, code_page: str, words: str
+    ) -> None:
+        raw = f'* {words}\n.include "C:\\{words}\\m.lib"\nR1 a 0 1k\n.end\n'.encode(code_page)
+        assert set(raw) & CP1252_UNDEFINED, "the sample must hold a byte cp1252 lacks"
+        text, encoding = decode_spice_bytes_with_encoding(raw)
+        assert "\ufffd" not in text
+        assert encode_spice_text(text, rewrite_codec(encoding)) == raw
+        # The cards the deck holds are read as they were.
+        assert "R1 a 0 1k\n" in text
+
+    def test_every_byte_has_a_character_and_comes_back(self) -> None:
+        # 0xC0 first: a UTF-8 lead byte with nothing after it, so no part of
+        # this can be taken for UTF-8.
+        raw = b"* \xc0 " + bytes(range(0x80, 0x100)) + b"\n"
+        text, encoding = decode_spice_bytes_with_encoding(raw)
+        assert encoding == "cp1252"
+        assert len(text) == len(raw)
+        assert encode_spice_text(text, rewrite_codec(encoding)) == raw
+
+    def test_the_bytes_cp1252_defines_read_as_cp1252(self) -> None:
+        raw = b"* \x96 \xb5 \xa7 \xb0\n"
+        assert decode_spice_bytes(raw) == "* \u2013 \u00b5 \u00a7 \u00b0\n"
+
+    def test_no_byte_becomes_a_line_break(self) -> None:
+        # Read as Latin-1, 85 is the next-line control, which splits a line
+        # for str.splitlines and so for the lexer. Here it is an ellipsis.
+        text = decode_spice_bytes(b"* \x81 a\x85b\nR1 a 0 1k\n")
+        assert text.splitlines() == ["* \x81 a\u2026b", "R1 a 0 1k"]
+
+    def test_a_strict_read_takes_any_eight_bit_file(self) -> None:
+        raw = "* \u62b5\u6297\nR1 a 0 1k\n".encode("cp932")
+        assert decode_spice_bytes_strictly(raw) == decode_spice_bytes_with_encoding(raw)
+
+    def test_a_strict_read_refuses_malformed_utf16(self) -> None:
+        raw = "R1 a 0 1k\n".encode("utf-16") + b"\x00\xd8"  # a lone high surrogate
+        assert "\ufffd" in decode_spice_bytes(raw)
+        with pytest.raises(UnicodeError):
+            decode_spice_bytes_strictly(raw)
+
+    def test_a_strict_read_strips_a_byte_order_mark(self) -> None:
+        for codec in ("utf-16", "utf-8-sig"):
+            assert decode_spice_bytes_strictly("R1 a 0 1k\n".encode(codec))[0] == "R1 a 0 1k\n"
 
 
 class TestDetectUtf16Endianness:

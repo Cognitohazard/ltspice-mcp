@@ -237,6 +237,70 @@ def test_a_section_sign_marks_where_an_instance_name_starts(
     assert set(traces) == {"v(a)", "i(i1)", "i(load)"}
 
 
+#: The bytes cp1252 gives no character, each with the letter that follows it
+#: in a node name of ``deck/bytes_in_node_names``.
+UNDEFINED_IN_CP1252 = {0x81: "a", 0x8D: "b", 0x8F: "c", 0x90: "d", 0x9D: "e"}
+
+#: Bytes cp1252 does define, which both builds read as the control character
+#: of the same number all the same: an 8-bit deck is Latin-1 to LTspice. The
+#: server reads the cp1252 character, so a name holding one is not the name
+#: the build saved.
+READ_AS_CP1252_BY_THE_SERVER_ONLY = {0x80: ("f", "€"), 0x93: ("g", "“")}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_byte_cp1252_leaves_undefined_is_read_as_each_build_reads_it(build: str, tmp_path: Path):
+    """A deck that is not UTF-8 is read a byte at a time by both builds, each
+    byte the character of the same number. XVII saves a node named with one;
+    LTspice 26 takes no control character in a name and echoes the card it
+    refuses, in UTF-8. Either way the name is on record, and for the five
+    bytes cp1252 lacks the server reads the same one."""
+    case_id = "deck/bytes_in_node_names"
+    nodes: set[str] = set()
+    for card in drop_title_card(lex(deck_text(case_id)).cards):
+        line = read_instance(card) if card.kind == "instance" else None
+        if line is not None:
+            nodes.update(line.nodes)
+    assert "�" not in "".join(nodes)
+    if rec.generation(build) == "xvii":
+        saved = set(rec.operating_point(build, case_id, tmp_path))
+
+        def read_by_the_build(name: str) -> bool:
+            return f"v({name})" in saved
+    else:
+        assert not ran(build, case_id)
+        log = rec.recorded(build, f"{case_id}.log").read_bytes()
+        assert b"Expected node name here." in log
+
+        def read_by_the_build(name: str) -> bool:
+            return f" {name} ".encode() in log
+
+    for byte, letter in UNDEFINED_IN_CP1252.items():
+        name = f"n{chr(byte)}{letter}"
+        assert read_by_the_build(name)
+        assert name in nodes
+    for byte, (letter, as_cp1252) in READ_AS_CP1252_BY_THE_SERVER_ONLY.items():
+        assert read_by_the_build(f"n{chr(byte)}{letter}")
+        assert f"n{as_cp1252}{letter}" in nodes
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_byte_85_in_a_comment_ends_the_line_for_ltspice_26_alone(build: str, tmp_path: Path):
+    """85 is an ellipsis in cp1252 and the next-line control in Latin-1, and
+    it is half of many double-byte characters. LTspice 26 ends the comment
+    there, and what follows is a card: the deck has a third resistor. XVII
+    reads one comment. The server reads it as XVII does, so on LTspice 26 the
+    circuit it describes is not the one that ran, and no check says so."""
+    case_id = "deck/byte_85_in_comment"
+    traces = set(rec.operating_point(build, case_id, tmp_path))
+    assert ("i(r3)" in traces) == (rec.generation(build) != "xvii")
+    cards = drop_title_card(lex(deck_text(case_id)).cards)
+    assert {card.name for card in cards if card.kind == "instance"} == {"V1", "R1", "R2"}
+    path = INPUTS / rec.CASES.case(case_id).source
+    findings = lint_deck(deck_text(case_id), path, "ltspice", "LTspice")
+    assert [finding["rule_id"] for finding in findings] == []
+
+
 # --------------------------------------------------------------------------
 # Deck structure
 # --------------------------------------------------------------------------

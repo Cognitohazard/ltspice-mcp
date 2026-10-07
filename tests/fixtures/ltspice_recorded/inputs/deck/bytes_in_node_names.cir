@@ -1,0 +1,12 @@
+* t
+V1 in 0 8
+R1 in na 1k
+R2 na nb 1k
+R3 nb nc 1k
+R4 nc nd 1k
+R5 nd ne 1k
+R6 ne n€f 1k
+R7 n€f n“g 1k
+R8 n“g 0 1k
+.op
+.end

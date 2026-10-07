@@ -2338,3 +2338,94 @@ ask is recorded as having done so. The recordings of
 `export/micro_utf8_bom` and `export/micro_utf16le_bom` on LTspice XVII carry
 that text. Giving the server the same launch is tracked separately; once
 upstream offers a hook, both use it in place of their own `CreateProcessW`.
+
+---
+
+## Bug 24 — `detect_encoding` gives up on an 8-bit log holding a byte none of its codecs defines
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-06
+against a log written by LTspice XVII 17.0.37.
+**Affected version:** spicelib 1.5.1 (`spicelib/utils/detect_encoding.py`,
+`detect_encoding`; reached from `spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`).
+**Our workaround:** `lib/log_parser.py::make_log_reader` decodes the log
+itself (`lib/encoding.py`, which has a character for every byte) and, when
+spicelib has refused the file, hands it a UTF-8 copy.
+
+### Summary
+
+LTspice XVII copies a deck's title line into the first line of its log as the
+bytes the deck holds (`Circuit: * <title>`). A title saved in a double-byte
+code page, Japanese or Chinese, holds bytes that are no character in cp1252
+(0x81, 0x8D, 0x8F, 0x90, 0x9D). `detect_encoding` opens the file in each of a
+fixed list of codecs and returns the first that decodes it and matches the
+expected pattern. For such a log none does, so it raises
+`EncodingDetectError: Expected pattern ... not found`, and
+`LTSpiceLogReader` cannot be built for a run that finished without error.
+The message blames the pattern; the `Circuit:` line is there.
+
+### Affected code
+
+`spicelib/utils/detect_encoding.py`, `detect_encoding` (~line 49):
+
+```python
+for encoding in ('utf-8', 'utf-16', 'utf_16_le', 'windows-1252', 'cp1252', 'cp1250', 'shift_jis'):
+    try:
+        with open(file_path, encoding=encoding) as f:
+            lines = f.read()
+    except UnicodeDecodeError:
+        continue
+    ...
+else:
+    if expected_pattern:
+        raise EncodingDetectError(f"Expected pattern \"{expected_pattern}\" not found in file:{file_path}")
+```
+
+Every codec in the list leaves some byte undefined, so no entry accepts every
+8-bit file. `shift_jis` takes most Japanese text but not the NEC and IBM
+extensions cp932 adds, and nothing in the list takes GBK or the Korean
+extended range.
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib.log.ltsteps import LTSpiceLogReader
+
+log = Path("title.log")
+log.write_bytes(b"Circuit: * \x81a \x80f\n\nDate: Thu Jan 15 00:00:00 2026\n")
+LTSpiceLogReader(str(log))     # EncodingDetectError: Expected pattern ... not found
+```
+
+A log XVII wrote for such a deck is recorded under
+`tests/fixtures/ltspice_recorded/ltspice17/` as `deck/bytes_outside_cp1252.log`.
+
+### Impact
+
+- `.MEAS` results, step values and Fourier blocks of a run that succeeded
+  cannot be read through `LTSpiceLogReader` when the deck's title is in a
+  double-byte code page and the build is LTspice XVII.
+- The error names a missing pattern, which sends the reader looking for a
+  malformed log.
+
+### Proposed fix
+
+End the list with a codec that has a character for every byte (`latin-1`), so
+an 8-bit log is always read: everything the reader parses is ASCII, and the
+title is only carried along. Report an encoding failure as one, separately
+from a missing pattern.
+
+### Suggested upstream test
+
+```python
+def test_log_with_a_byte_no_listed_codec_defines(tmp_path):
+    log = tmp_path / "title.log"
+    log.write_bytes(b"Circuit: * \x81a \x80f\n\nm1: MAX(v(out))=1 FROM 0 TO 1\n")
+    assert LTSpiceLogReader(str(log)).get_measure_names() == ["m1", "m1_from", "m1_to"]
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_results.py::test_a_run_whose_title_holds_a_byte_cp1252_lacks_is_read`
+reads the recorded log through `parse_measurements`. Once upstream reads
+such a log, the last candidate in `make_log_reader` goes.
