@@ -74,7 +74,8 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
 # suffix table is read.
 _MANTISSA = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
 _NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ].*)$")
-_DIGITS_RE = re.compile(r"\d*")
+# A number followed by letters only, for the plain reading.
+_LETTER_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ]+)$")
 # A number with at most a scale suffix and nothing after it.
 _SCALED_NUMBER_RE = re.compile(
     rf"{_MANTISSA}(?:{'|'.join(suffix for suffix, _ in _SCALE_FACTORS)})?", re.IGNORECASE
@@ -88,7 +89,7 @@ def is_scaled_number(text: str) -> bool:
     """``text`` is a SPICE number with at most a scale suffix (``8``, ``2.5k``,
     ``1meg``) and nothing after it.
 
-    Stricter than ``parse_spice_value``, which also reads a unit after the
+    Stricter than ``parse_plain_value``, which also reads a unit after the
     suffix (``1uF``) and so would take a name such as ``2NPN`` for a number.
     """
     return _SCALED_NUMBER_RE.fullmatch(text) is not None
@@ -134,19 +135,47 @@ def parse_spice_value(s: str) -> float:
         )
     # group(1) is always a valid float literal by construction of the regex.
     mantissa = m.group(1)
-    tail = fold_micro_sign(m.group(2))
-    folded = tail.lower()
+    tail = fold_micro_sign(m.group(2)).lower()
+    # No scale suffix starts with 'r', so where it stands in the list is moot.
     suffix, multiplier = next(
-        ((suffix, scale) for suffix, scale in _SCALE_FACTORS if folded.startswith(suffix)),
-        ("r", 1.0) if folded.startswith("r") else ("", None),
+        (
+            (suffix, scale)
+            for suffix, scale in (*_SCALE_FACTORS, ("r", 1.0))
+            if tail.startswith(suffix)
+        ),
+        ("", 1.0),
     )
-    if multiplier is None:
-        return float(mantissa)
-    fraction = _DIGITS_RE.match(tail, len(suffix))
-    digits = fraction.group() if fraction is not None else ""
+    rest = tail[len(suffix) :]
+    digits = rest[: len(rest) - len(rest.lstrip("0123456789"))]
     if digits and mantissa.isdigit():
         return float(f"{mantissa}.{digits}") * multiplier
     return float(mantissa) * multiplier
+
+
+def parse_plain_value(s: str) -> float:
+    """A value written the way every SPICE reads it, as a float.
+
+    A number, a scale suffix if any, and letters after the suffix (``1k``,
+    ``4.7uF``, ``10MegHz``). Not LTspice's further readings: digits after a
+    suffix and a bare unit are refused, so a name such as ``2N2222`` or
+    ``1N4148`` is not a number here. For a caller that tells a value from a
+    name; ``parse_spice_value`` is the reading of a value LTspice will run.
+
+    Raises:
+        ValueError: If ``s`` is not written that way.
+    """
+    s = s.strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    m = _LETTER_TAIL_RE.match(s)
+    if m is not None:
+        tail = fold_micro_sign(m.group(2)).lower()
+        for suffix, scale in _SCALE_FACTORS:
+            if tail.startswith(suffix):
+                return float(m.group(1)) * scale
+    raise ValueError(f"Cannot read '{s}' as a number with a scale suffix")
 
 
 def unique_name(

@@ -76,7 +76,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ltspice_mcp.lib.deck_staging import resolve_reference
-from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
+from ltspice_mcp.lib.format import fold_micro_sign, parse_plain_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
     SpiceCard,
@@ -514,7 +514,7 @@ def values_equal(a: str | None, b: str | None, rtol: float) -> bool:
         return a == b
     na, nb = _normalize_value_text(a), _normalize_value_text(b)
     try:
-        va, vb = parse_spice_value(na), parse_spice_value(nb)
+        va, vb = parse_plain_value(na), parse_plain_value(nb)
     except ValueError:
         return " ".join(na.lower().split()) == " ".join(nb.lower().split())
     if va == vb:
