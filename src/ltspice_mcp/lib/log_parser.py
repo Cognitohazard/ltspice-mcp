@@ -1179,8 +1179,12 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
             candidates.append(_sanitize_log_for_reader(preprocessed))
         if sanitized != content:
             candidates.append(sanitized)
-        if not candidates:
-            raise ResultError(f"Could not parse log file: {first_err}") from first_err
+        # Last, the log as it is, re-encoded: spicelib tries a fixed list of
+        # codecs and gives up on an 8-bit log holding a byte none of them
+        # defines. LTspice XVII writes one when the deck's title holds text
+        # in a double-byte code page.
+        if content.startswith("Circuit:") or "\nCircuit:" in content:
+            candidates.append(content)
 
         for candidate in candidates:
             with normalized_log(candidate, scratch_dir) as tmp_path:

@@ -858,6 +858,97 @@
         ".raw"
       ]
     },
+    "deck/byte_85_in_comment": {
+      "behaviour": "deck-encoding",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/byte_85_in_comment.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/byte_85_in_comment.cir": "ed9b3dc0a843cb1e7fb49d5e749b96ace4c7a4f8b22347251c516c6d54dcc1dc"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/byte_85_in_comment.log": {
+          "bytes": 352,
+          "sha256": "5e0d9323f60048e2e97d302a0fa9cffee4f883af45c5cbfecf066abc4a7432e2"
+        },
+        "deck/byte_85_in_comment.raw": {
+          "bytes": 792,
+          "sha256": "3f8eaa3d5771dba40886adbc7fe6e789d46adfd747d4fd46bdee74bc9d82b64b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/bytes_in_node_names": {
+      "behaviour": "deck-encoding",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/bytes_in_node_names.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/bytes_in_node_names.cir": "b5d5f986ad71ac03a4092f5e15596a4153c114745f7a13f98df2dba610b50a1b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/bytes_in_node_names.log": {
+          "bytes": 1609,
+          "sha256": "d7175d3b9fb5a811fb3a527328ffa8148ab3ac2da59baf2bdb3e97f83cdf7980"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/bytes_outside_cp1252": {
+      "behaviour": "deck-encoding",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/bytes_outside_cp1252.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/bytes_outside_cp1252.cir": "0d866b8292d1aa3327520ddcbf742ea61b8de3b36455c02319a3d198d93b569f"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/bytes_outside_cp1252.log": {
+          "bytes": 356,
+          "sha256": "18d2fe36d847e95b561aafa776af2d66e56289773f673cb65ec92d46636e52b7"
+        },
+        "deck/bytes_outside_cp1252.raw": {
+          "bytes": 744,
+          "sha256": "f84c6d4427b0373ce05d43aa1f8ae929b7bd1dfbaefc953bda2525e20f62e402"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/caret_power": {
       "behaviour": "deck-semantics",
       "command": [

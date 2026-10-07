@@ -53,6 +53,25 @@ recording that showed it.
   node 0 there too, except in a subcircuit that names a port `gnd`.
 - The `suffix-mega-milli` lint missed a capital `M` followed by a unit: LTspice
   reads `1MHz` as a millihertz. It is flagged now; `1Meg` and `1mil` are not.
+- A deck or library saved in a double-byte Windows code page (Japanese cp932,
+  Chinese GBK, Korean) lost bytes when the server rewrote it for a run. Five
+  bytes have no character in cp1252 (0x81, 0x8D, 0x8F, 0x90, 0x9D) and are
+  routine in those code pages; a file holding one was decoded with every
+  non-ASCII byte replaced, so the staged copy no longer held the comment, or
+  the `.include` path, the original did. Every byte of an 8-bit file now has a
+  character and is written back as it was read. LTspice reads such a file a
+  byte at a time, so the copy is again what the simulator would have been
+  given.
+- On LTspice XVII no result of a run could be read when the deck's title line
+  held one of those bytes. XVII copies the title into its log, and the log was
+  refused as undecodable; `.meas` results failed the same way inside the log
+  reader the server uses. Both read the log now.
+- Under WSL, LTspice was not found, and its symbols not loaded, for a Windows
+  user whose profile directory is not ASCII. `%LOCALAPPDATA%` was read from
+  `cmd.exe` in the console's code page, where such a name is not UTF-8 and a
+  letter the code page lacks is a question mark; it is read as UTF-16 now. On
+  a Windows whose display language is not English, cancelling a run could
+  raise after the simulator had been stopped, on `taskkill`'s own message.
 
 - `run_experiments` refused valid decks under its default `lint: "block"`, and
   an `.asc` is linted through its exported netlist, so schematics were refused

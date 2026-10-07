@@ -1,0 +1,45 @@
+C:\recording\bytes_in_node_names.cir(3): Expected resistor parameter(s) here.
+R1 in na 1k
+       ^^^^^
+C:\recording\bytes_in_node_names.cir(4): Expected node name here.
+R2 na nb 1k
+    ^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(4): Expected device instantiation or directive here.
+R2 na nb 1k
+^^^^^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(5): Expected node name here.
+R3 nb nc 1k
+    ^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(5): Expected device instantiation or directive here.
+R3 nb nc 1k
+^^^^^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(6): Expected node name here.
+R4 nc nd 1k
+    ^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(6): Expected device instantiation or directive here.
+R4 nc nd 1k
+^^^^^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(7): Expected node name here.
+R5 nd ne 1k
+    ^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(7): Expected device instantiation or directive here.
+R5 nd ne 1k
+^^^^^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(8): Expected node name here.
+R6 ne nf 1k
+    ^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(8): Expected device instantiation or directive here.
+R6 ne nf 1k
+^^^^^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(9): Expected node name here.
+R7 nf ng 1k
+    ^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(9): Expected device instantiation or directive here.
+R7 nf ng 1k
+^^^^^^^^^^^^^
+C:\recording\bytes_in_node_names.cir(10): Expected node name here.
+R8 ng 0 1k
+    ^^^^^^^
+C:\recording\bytes_in_node_names.cir(10): Expected device instantiation or directive here.
+R8 ng 0 1k
+^^^^^^^^^^^

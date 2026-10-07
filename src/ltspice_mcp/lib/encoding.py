@@ -14,11 +14,17 @@ Resolution order:
 3. UTF-8 strict — if the bytes are clean UTF-8 (including pure ASCII),
    decode as-is. This branch is the common case for hand-edited
    netlists.
-4. CP1252 strict — Windows-edited LTspice files often carry a single
-   non-ASCII character (degree sign, mu, en-dash) in a comment without
-   any BOM. Trying CP1252 strictly before the lossy UTF-8 fallback
-   preserves those characters instead of replacing them with U+FFFD.
-5. UTF-8 with ``errors="replace"`` as the last-resort catch-all.
+4. Windows-1252 for anything else. Windows-edited LTspice files often
+   carry a single non-ASCII character (degree sign, mu, en-dash) in a
+   comment without any BOM, and a deck saved in a double-byte code page
+   (Japanese, Chinese) is 8-bit text too. Every byte has a character
+   here, so this step never fails and the text encodes back to the bytes
+   it came from.
+
+Nothing in an 8-bit file is replaced. A rewritten copy of a deck must keep
+every byte the rewrite did not touch: LTspice reads those bytes one at a
+time, so a comment or an include path in a code page this module cannot
+name is still exactly what the simulator was given.
 """
 
 from __future__ import annotations
@@ -59,32 +65,62 @@ def detect_utf16_endianness(probe: bytes) -> str | None:
     return None
 
 
-def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]:
-    """Decode a SPICE-text byte string and name the codec that decoded it.
+#: The five bytes cp1252 gives no character. Windows reads each as the control
+#: character of the same number, and so do LTspice 26 and LTspice XVII
+#: (``deck/bytes_in_node_names`` in the recordings).
+_CP1252_UNDEFINED = (0x81, 0x8D, 0x8F, 0x90, 0x9D)
 
-    The name matters where a character's meaning depends on the reader: a
-    micro sign stored as UTF-8 is two characters to a cp1252 reader.
-    """
+#: cp1252 with those five filled in: a character for every byte, and a byte
+#: for each of those characters, so text decoded with it encodes back exactly.
+_WINDOWS_1252 = "".join(
+    chr(byte) if byte in _CP1252_UNDEFINED else bytes([byte]).decode("cp1252")
+    for byte in range(256)
+)
+_WINDOWS_1252_BYTES = codecs.charmap_build(_WINDOWS_1252)
+#: The same table as the characters that differ from Latin-1, which is how a
+#: byte string is turned into text without a codec of its own.
+_WINDOWS_1252_OVER_LATIN_1 = {
+    byte: char for byte, char in enumerate(_WINDOWS_1252) if char != chr(byte)
+}
+
+
+def _decode(raw: bytes, errors: str) -> tuple[str, str]:
     for bom, encoding in _BOM_ENCODINGS:
         if raw.startswith(bom):
-            return raw[len(bom) :].decode(encoding, errors="replace"), encoding
+            return raw[len(bom) :].decode(encoding, errors=errors), encoding
     encoding = detect_utf16_endianness(raw[:256])
     if encoding is not None:
-        return raw.decode(encoding, errors="replace"), encoding
+        return raw.decode(encoding, errors=errors), encoding
     # UTF-8 strict for clean ASCII and well-formed UTF-8 (no replacement).
     try:
         return raw.decode("utf-8"), "utf-8"
     except UnicodeDecodeError:
         pass
-    # CP1252 strict — preserves degree signs / mu / en-dashes that
-    # Windows-edited LTspice files put in comments without a BOM.
-    # cp1252 is a strict superset of Latin-1 for the printable range,
-    # so this also handles ISO-8859-1 inputs.
-    try:
-        return raw.decode("cp1252"), "cp1252"
-    except UnicodeDecodeError:
-        pass
-    return raw.decode("utf-8", errors="replace"), "utf-8"
+    # Anything else is 8-bit text. The degree signs, mus and en-dashes that
+    # Windows-edited LTspice files put in comments read as themselves, and
+    # text in a code page this cannot name (cp932, cp936) keeps its bytes.
+    return raw.decode("latin-1").translate(_WINDOWS_1252_OVER_LATIN_1), "cp1252"
+
+
+def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]:
+    """Decode a SPICE-text byte string and name the codec that decoded it.
+
+    The name matters where a character's meaning depends on the reader: a
+    micro sign stored as UTF-8 is two characters to a cp1252 reader. An 8-bit
+    file is named ``cp1252`` whatever code page it was written in, and
+    ``encode_spice_text`` gives its bytes back. Only a UTF-16 or UTF-32 file
+    can lose anything, where it is malformed.
+    """
+    return _decode(raw, "replace")
+
+
+def decode_spice_bytes_strictly(raw: bytes) -> tuple[str, str]:
+    """``decode_spice_bytes_with_encoding`` that refuses instead of replacing.
+
+    Raises ``UnicodeError`` for a UTF-16 or UTF-32 file that is malformed. No
+    8-bit file is refused: every byte of one has a character.
+    """
+    return _decode(raw, "strict")
 
 
 #: The codecs a rewritten deck keeps. Each is ASCII-compatible, so every
@@ -111,9 +147,12 @@ def encode_spice_text(text: str, codec: str) -> bytes:
 
     UTF-8 is the fallback for text the codec cannot spell, such as a rewritten
     include path naming a character outside cp1252: it is the encoding LTspice
-    24 and later write and read.
+    24 and later write and read. ``cp1252`` here is the whole-byte table the
+    decoder reads 8-bit files with, so text it decoded comes back as its bytes.
     """
     try:
+        if codec == "cp1252":
+            return codecs.charmap_encode(text, "strict", _WINDOWS_1252_BYTES)[0]
         return text.encode(codec)
     except UnicodeEncodeError:
         return text.encode("utf-8")
