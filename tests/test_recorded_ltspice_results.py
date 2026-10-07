@@ -695,17 +695,26 @@ def test_db_of_a_complex_voltage_is_its_complex_logarithm(build: str):
         assert data["measurements"][name].get("at") == pytest.approx(1000.0, rel=1e-5)
 
 
+def _lint_refusals(case_id: str) -> list[tuple[str, str]]:
+    """The (rule, subject) of each blocking lint finding on a recorded input deck."""
+    deck = INPUTS / f"{case_id}.cir"
+    findings = lint_deck(read_spice_text(deck), deck, "ltspice", "LTspice")
+    return [(f["rule_id"], f["subject"]) for f in findings if f["severity"] == "error"]
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 @pytest.mark.parametrize("name", ["e", "k", "pi", "q"])
 def test_a_measurement_named_for_a_constant(build: str, name: str):
     """The constants of the expression engine cannot name a .meas. LTspice 26
     refuses the deck and runs nothing; XVII names the constant and takes the
-    other measurement. The directive check refuses the name before either."""
+    other measurement. The directive check and the lint refuse the name
+    before either."""
     case_id = f"log/meas_name_{name}"
     card = next(card for card in rec.deck_cards(f"{case_id}.cir") if card.name == name)
     error = validate_directive(card.body, "LTspice")
     assert error is not None
     assert error.rule_name == "meas_reserved_name"
+    assert _lint_refusals(case_id) == [("meas-name-ltspice", name)]
     log = rec.recorded(build, f"{case_id}.log")
     diagnostics = extract_log_diagnostics(log)
     if rec.generation(build) == "xvii":
@@ -724,6 +733,7 @@ def test_names_that_look_reserved_and_are_not(build: str):
     cards = [card for card in rec.deck_cards("log/meas_name_other.cir") if card.kind == "meas"]
     for card in cards:
         assert validate_directive(card.body, "LTspice") is None, card.body
+    assert _lint_refusals("log/meas_name_other") == []
     assert set(first_values(build, "log/meas_name_other")) == {card.name for card in cards}
 
 

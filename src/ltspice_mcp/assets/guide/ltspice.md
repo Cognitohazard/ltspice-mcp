@@ -210,9 +210,10 @@ C1 out 0 {C}
   `.asc`'s exported netlist.
 - **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
   engine and cannot name a measurement. LTspice 26 refuses the whole deck and
-  XVII skips that measurement; the directive check behind `verify_circuit`'s
-  `syntax` check and `edit_schematic`'s directives refuses them
-  (`meas_reserved_name`). `time`, `temp` and `boltz` are accepted.
+  XVII skips that measurement. `run_experiments` refuses them before the run
+  (`meas-name-ltspice`), as do `verify_circuit`'s `syntax` check and
+  `edit_schematic`'s directives (`meas_reserved_name`). `time`, `temp` and
+  `boltz` are accepted.
 - **Values**: digits after a scale letter or `R` are the fraction (`1k5` is
   1500, `4R7` is 4.7, `2M2` is 2.2m), and any other letters after the number
   are ignored (`2Hz` is 2, `9V1` is 9). `M` is milli wherever it stands, so
