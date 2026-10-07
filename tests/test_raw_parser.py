@@ -501,63 +501,14 @@ class TestAcBandwidthMetricsSurfaceFaults:
         assert metrics["bandwidth_3db"] is not None
 
 
-def _headerless_ngspice_raw(directory: Path) -> Path:
-    """An ngspice raw as versions before 44 wrote them: no ``Command:`` field.
+@pytest.mark.parametrize("bom", [b"", b"\xff\xfe"])
+def test_recovery_accepts_a_utf16_header_with_or_without_its_byte_order_mark(
+    tmp_path: Path, bom: bytes
+) -> None:
+    path = tmp_path / "recorded.raw"
+    path.write_bytes(bom + (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes())
 
-    That is the whole defect in one file. spicelib names the writer from
-    ``Command:`` and refuses the file outright without it, and a raw handed
-    over as a bare path has no job to ask instead.
-    """
-    raw = directory / "headerless.raw"
-    raw.write_text(
-        "Title: * divider\n"
-        "Date: Tue Sep  8 01:02:20 2026\n"
-        "Plotname: Operating Point\n"
-        "Flags: real\n"
-        "No. Variables: 2\n"
-        "No. Points: 1\n"
-        "Variables:\n"
-        "\t0\tv(in)\tvoltage\n"
-        "\t1\tv(out)\tvoltage\n"
-        "Values:\n"
-        "0\t1.0000000000000000e+00\n"
-        "\t5.0000000000000000e-01\n"
-    )
-    return raw
-
-
-class TestSniffRawDialect:
-    """Naming a raw's writer from its own bytes, when no job can say."""
-
-    def test_an_ltspice_raw_is_named_from_its_utf16_header(self) -> None:
-        assert raw_parser.sniff_raw_dialect(FIXTURES_DIR / "ltspice_tran_rc.raw") == "ltspice"
-
-    @pytest.mark.parametrize("bom", [b"", b"\xff\xfe"])
-    def test_recovery_and_sniffing_accept_the_same_utf16_headers(
-        self, tmp_path: Path, bom: bytes
-    ) -> None:
-        path = tmp_path / "recorded.raw"
-        path.write_bytes(bom + (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes())
-
-        assert raw_parser.has_valid_raw_header(path)
-        assert raw_parser.sniff_raw_dialect(path) == "ltspice"
-
-    def test_a_raw_that_names_its_own_writer_is_left_to_spicelib(self) -> None:
-        """ngspice 44 and later, qspice and xyce all write ``Command:``.
-
-        spicelib reads the field and names the writer exactly; a guess here
-        could only be worse, so the sniff declines.
-        """
-        assert raw_parser.sniff_raw_dialect(FIXTURES_DIR / "ngspice_noise_2plot.raw") is None
-
-    def test_an_ascii_raw_with_no_writer_field_is_ngspice(self, tmp_path: Path) -> None:
-        assert raw_parser.sniff_raw_dialect(_headerless_ngspice_raw(tmp_path)) == "ngspice"
-
-    def test_a_file_that_is_not_a_raw_is_not_guessed_at(self, tmp_path: Path) -> None:
-        other = tmp_path / "notes.txt"
-        other.write_text("Command: ngspice-46\nnot a raw at all\n")
-        assert raw_parser.sniff_raw_dialect(other) is None
-        assert raw_parser.sniff_raw_dialect(tmp_path / "absent.raw") is None
+    assert raw_parser.has_valid_raw_header(path)
 
 
 def _ltspice_transfer_function_raw(directory: Path) -> Path:

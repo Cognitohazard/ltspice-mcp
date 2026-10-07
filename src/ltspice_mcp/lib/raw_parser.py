@@ -909,11 +909,11 @@ def build_simulation_summary(
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails).
-        # A stepped ``.op`` stores one point per step in the .raw, with the
-        # stepped parameter as its first variable, and names no step value in
-        # the log; only the first point is read from it here. The count both
-        # warns the user (operating-point runs) and gates the OP-error demote
-        # below (the first point can't vouch for a later step).
+        # A stepped LTspice ``.op`` stores one point per step in the .raw, with
+        # the stepped parameter as its first variable, and the decoder reads it
+        # as that many steps. The count warns the user when a raw holds fewer
+        # steps than the log solved (operating-point runs), and gates the
+        # OP-error demote below (one step's point can't vouch for another's).
         op_log_steps = section_value("steps", "step rows")
         op_iterations = section_value("op_iterations", "OP iterations")
         op_coverage_known = op_log_steps is not None and op_iterations is not None
@@ -932,8 +932,8 @@ def build_simulation_summary(
         # always-terminal failures (iteration limit) aren't candidates. Demote
         # only when the raw covers the WHOLE run: a single solve block
         # (op_solve_count <= 1) written to a single-step raw (step_count <= 1). A
-        # stepped .op (only its first point read, log shows >1 solve) or a
-        # multi-step raw (later steps not checked here) keeps the error — the
+        # stepped .op (the log shows >1 solve) or a multi-step raw (later steps
+        # not checked here) keeps the error — the
         # first step's finite data can't clear a failure that belongs to another.
         errs = summary.get("errors")
         if errs:
@@ -956,7 +956,7 @@ def build_simulation_summary(
                     for d in demoted
                 )
 
-        if op_solve_count > 1 and "operating" in sim_type.lower():
+        if op_solve_count > 1 and step_count <= 1 and "operating" in sim_type.lower():
             if op_log_steps:
                 param_name = next(iter(op_log_steps[0].keys()), "param")
                 suggestion = (
@@ -970,8 +970,8 @@ def build_simulation_summary(
                 )
             warnings.append(
                 f"Stepped .op detected: log shows {op_solve_count} bias-"
-                "point iterations; the .raw holds one point per step and only the "
-                "first is read here. " + suggestion
+                "point iterations, and the .raw exposes one; only that one is read "
+                "here. " + suggestion
             )
 
         fourier_data = section_value("fourier", "fourier")
@@ -1030,41 +1030,9 @@ def build_simulation_summary(
     return summary
 
 
-#: How much of a raw header to read when naming its writer. Every header field
-#: that matters (``Command`` last among them) precedes the variables block.
+#: How much of a raw header to read for its ``Command:`` field. Every header
+#: field that matters (``Command`` last among them) precedes the variables block.
 _SNIFF_BYTES = 8192
-
-
-def sniff_raw_dialect(path: Path) -> str | None:
-    """Name the simulator that wrote a raw, from the file's own bytes.
-
-    spicelib auto-detects from the ``Command:`` header, which ngspice only
-    began writing in version 44. Before that the header has no writer field at
-    all, so a raw handed over as a bare path — the one route with no job to
-    ask — cannot be read at all.
-
-    Two structural facts settle it without that field. LTspice writes the
-    header in UTF-16LE (except in a text raw, which is 8-bit and carries
-    ``Command:``) and every other supported simulator writes ASCII; and
-    the dialect's one load-bearing effect inside spicelib is
-    ``always_double = dialect != 'ltspice'``, so separating LTspice from the
-    rest *is* the decision. qspice and xyce always write ``Command:``, which
-    leaves ngspice as the only writer of a headerless ASCII raw.
-
-    Returns ``None`` when the file is not a raw, or when it carries a
-    ``Command:`` field — there spicelib names the writer itself, and its
-    answer is better than a guess.
-    """
-    head = _read_head(path)
-    if head is None:
-        return None
-    if head.startswith(_RAW_HEADER_UTF16):
-        return "ltspice"
-    if not head.startswith(_RAW_HEADER_ASCII):
-        return None
-    if b"Command:" in head:
-        return None
-    return "ngspice"
 
 
 def _read_head(path: Path) -> bytes | None:

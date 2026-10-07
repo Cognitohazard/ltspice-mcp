@@ -645,3 +645,50 @@ def test_a_schematic_is_refused_rather_than_lexed_as_spice(tmp_path: Path) -> No
         parse_netlist_graph(sheet)
     with pytest.raises(NetlistGraphError, match=r"amp\.asc is an \.asc schematic"):
         compare_graphs(str(sheet), DIVIDER)
+
+
+_HALVES = """\
+.subckt HALF p q
+R1 p m 1k
+R2 m q 1k
+.ends HALF
+"""
+
+
+def test_an_instance_ltspice_exported_with_an_added_x_is_a_rename() -> None:
+    """``Xe`` written by hand and ``X§Xe`` as LTspice 24 and later export it
+    are one instance: its leaves pair, and the rename is named once, without
+    the marker, as every comparison reference is."""
+    written = f"Vin in 0 5\nXe in 0 HALF\n{_HALVES}.end\n"
+    exported = f"Vin in 0 5\nX§Xe in 0 HALF\n{_HALVES}.end\n"
+    result = compare_graphs(written, exported)
+    assert (result.added, result.removed) == ([], [])
+    assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [("Xe", "XXe")]
+    assert result.equivalent
+    assert result.as_dict()["renamed"] == [{"reference_ref": "Xe", "candidate_ref": "XXe"}]
+
+
+def test_a_netlist_holding_both_spellings_is_compared_by_name() -> None:
+    """With ``Xe`` and ``XXe`` both present on one side, nothing pairs across
+    the added X: the names are taken as written."""
+    reference = f"Xe in 0 HALF\nXXe 0 in HALF\n{_HALVES}.end\n"
+    candidate = f"XXe in 0 HALF\nXXXe 0 in HALF\n{_HALVES}.end\n"
+    result = compare_graphs(reference, candidate)
+    assert result.renamed == []
+    assert result.added and result.removed
+
+
+def test_a_card_naming_its_subcircuit_twice_says_so() -> None:
+    """A symbol giving the subcircuit's name as both its value and its model
+    writes ``LP6 LP6``: the first is read as a node, one too many for the
+    subcircuit's ports. The arity error names the side, the nodes, the ports
+    and the repeated name."""
+    body = ".subckt LP6 in out\nR1 in out 1k\n.ends LP6\n.end\n"
+    result = compare_graphs(f"XU1 a b LP6\n{body}", f"XU1 a b LP6 LP6\n{body}")
+    (error,) = result.arity_errors
+    assert (error.side, error.reference_arity, error.candidate_arity) == ("candidate", 3, 2)
+    assert error.detail.startswith(
+        "XU1 connects 3 node(s) (a, b, lp6) but subcircuit LP6 declares 2 port(s) (in, out)."
+    )
+    assert "Node 'lp6' is the subcircuit's own name" in error.detail
+    assert not result.equivalent

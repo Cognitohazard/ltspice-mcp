@@ -103,6 +103,17 @@ class RawPlotHeader:
     numeric_bytes: int
 
 
+def leading_parameters(plot: RawPlotHeader) -> list[int]:
+    """The variables a stepped plot opens with that hold the stepped parameters
+    (LTspice declares them ``param``)."""
+    leading: list[int] = []
+    for variable in plot.variables:
+        if variable.declared_type.casefold() != "param":
+            break
+        leading.append(variable.index)
+    return leading
+
+
 @dataclass(frozen=True)
 class RawHeader:
     size_bytes: int

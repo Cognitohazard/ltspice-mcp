@@ -143,22 +143,6 @@ def parse_requested_outputs(netlist_text: str) -> dict[str, list[str]]:
     return {"meas": meas, "four": four}
 
 
-def _parse_source_number(tok: str) -> float:
-    """``parse_spice_value`` plus the bare voltage-unit form LTspice accepts.
-
-    ``5V`` has no scale suffix, only a unit tail, so ``parse_spice_value``
-    raises on it — but it is a valid V-card level. In this voltage-source
-    context a single trailing ``v``/``V`` is safely a unit, so retry without it
-    (``1mV`` etc. already parse via the scale-suffix path).
-    """
-    try:
-        return parse_spice_value(tok)
-    except ValueError:
-        if len(tok) > 1 and tok[-1] in "vV":
-            return parse_spice_value(tok[:-1])
-        raise
-
-
 def _v_card_amplitude(spec: list[str]) -> float | None:
     """Peak |V| a voltage-source card can drive, from its value tokens.
 
@@ -191,7 +175,7 @@ def _v_card_amplitude(spec: list[str]) -> float | None:
             rest = spec[i + 1 :]
             for arg in rest:
                 try:
-                    fn_args.append(_parse_source_number(arg))
+                    fn_args.append(parse_spice_value(arg))
                 except ValueError:
                     break
             spec_cut_short = any("=" not in t for t in rest[len(fn_args) :])
@@ -207,13 +191,13 @@ def _v_card_amplitude(spec: list[str]) -> float | None:
             i += 1
             while i < len(spec):
                 try:
-                    _parse_source_number(spec[i])
+                    parse_spice_value(spec[i])
                 except ValueError:
                     break
                 i += 1
             continue
         try:
-            v = _parse_source_number(tok)
+            v = parse_spice_value(tok)
         except ValueError:
             return None  # a token we can't read might BE the drive level
         if dc_val is None:

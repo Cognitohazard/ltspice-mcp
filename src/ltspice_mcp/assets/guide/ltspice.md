@@ -189,7 +189,9 @@ C1 out 0 {C}
 ```
 
 - `.include <path>` — include file contents verbatim.
-- `.lib <path>` — same as .include in LTspice (no section argument needed).
+- `.lib <path>` — same as .include in LTspice. LTspice has no library
+  sections: `.lib file section` makes it look for a file named `file section`,
+  and `run_experiments` refuses that deck (lint `lib-section-ltspice`).
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 
 
@@ -211,6 +213,22 @@ C1 out 0 {C}
   XVII skips that measurement; the directive check behind `verify_circuit`'s
   `syntax` check and `edit_schematic`'s directives refuses them
   (`meas_reserved_name`). `time`, `temp` and `boltz` are accepted.
+- **Values**: digits after a scale letter or `R` are the fraction (`1k5` is
+  1500, `4R7` is 4.7, `2M2` is 2.2m), and any other letters after the number
+  are ignored (`2Hz` is 2, `9V1` is 9). `M` is milli wherever it stands, so
+  `1MHz` is a millihertz. `8%` is an error on LTspice 24 and later.
+- **One analysis per deck**: two of `.tran`, `.ac`, `.dc` and `.noise` stop
+  LTspice before it runs (`.op` may sit beside one), and `vdb()`, `phase()`
+  and `group_delay()` are not `.meas` functions. `run_experiments` refuses
+  both decks (`analysis-count-ltspice`, `meas-function-ltspice`).
+- **8-bit decks**: LTspice reads a deck that is not UTF-8 as Latin-1. Byte
+  0x85 (an ellipsis in a Western editor) ends the line on LTspice 24 and
+  later, and a node named with a byte from 0x80 to 0x9F is refused by LTspice
+  26 and saved under a control character by XVII. The linter warns of both
+  (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
+- **A failed step on XVII**: in a stepped measurement table XVII prints `0`
+  where LTspice 24 and later print `failed`. The `measurements` recipe names
+  every such zero on a run XVII wrote (`measurement_zero_or_failed`).
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)
