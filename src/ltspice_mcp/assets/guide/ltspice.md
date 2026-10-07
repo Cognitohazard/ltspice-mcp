@@ -206,6 +206,11 @@ C1 out 0 {C}
   an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`) is a
   warning, read as the bare number. These checks run on a netlist and on an
   `.asc`'s exported netlist.
+- **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
+  engine and cannot name a measurement. LTspice 26 refuses the whole deck and
+  XVII skips that measurement; the directive check behind `verify_circuit`'s
+  `syntax` check and `edit_schematic`'s directives refuses them
+  (`meas_reserved_name`). `time`, `temp` and `boltz` are accepted.
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)

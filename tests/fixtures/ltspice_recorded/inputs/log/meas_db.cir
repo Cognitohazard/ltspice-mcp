@@ -1,0 +1,12 @@
+* db() inside an AC .meas
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.ac dec 10 10 100k
+.meas ac g_db FIND db(V(out)) AT 1k
+.meas ac g_db_mag FIND db(mag(V(out))) AT 1k
+.meas ac g_re_db FIND re(db(V(out))) AT 1k
+.meas ac g_mag FIND mag(V(out)) AT 1k
+.meas ac f_db_mag WHEN db(mag(V(out)))=-3.0103
+.meas ac f_db WHEN db(V(out))=-3.0103
+.end

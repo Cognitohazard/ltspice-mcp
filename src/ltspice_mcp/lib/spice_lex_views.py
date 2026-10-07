@@ -1165,24 +1165,32 @@ def _collect_function_calls(
 
     The tokenizer keeps an expression's operators in its BARE tokens, so the
     call in ``V(s)*cos(x)`` sits behind ``*cos``; the name is the identifier
-    the token ends with.
+    the token ends with. A ``key=value`` token holds an expression in its
+    value (``time=cos(1)``, ``TD={atan(1)}``), which is walked the same way.
     """
     n = len(tokens)
     for i, t in enumerate(tokens):
         nxt = tokens[i + 1] if i + 1 < n else None
-        if t.kind == TokenKind.BARE and nxt is not None and nxt.kind == TokenKind.PARENED:
-            called = _CALL_NAME_RE.search(t.text)
-            if called is not None:
-                name = called.group(0)
-                args = nxt.text[1:-1]
-                out_calls.append(FunctionCall(name=name, args_text=args))
-                if name.lower() in ("v", "i"):
-                    out_signal_refs.append(args.strip())
-        # Recurse into PARENED / BRACED contents.
+        if (
+            t.kind == TokenKind.BARE
+            and nxt is not None
+            and nxt.kind == TokenKind.PARENED
+            and (called := _CALL_NAME_RE.search(t.text))
+        ):
+            name = called.group(0)
+            args = nxt.text[1:-1]
+            out_calls.append(FunctionCall(name=name, args_text=args))
+            if name.lower() in ("v", "i"):
+                out_signal_refs.append(args.strip())
+        # Recurse into PARENED / BRACED contents and into a key=value's value.
         if t.kind in (TokenKind.PARENED, TokenKind.BRACED):
             inner_text = t.text[1:-1]
-            try:
-                inner_tokens = tokenize_body(inner_text)
-            except SpiceLexError:
-                continue
-            _collect_function_calls(inner_tokens, out_calls, out_signal_refs)
+        elif t.kind == TokenKind.KEY_VALUE and t.value:
+            inner_text = t.value
+        else:
+            continue
+        try:
+            inner_tokens = tokenize_body(inner_text)
+        except SpiceLexError:
+            continue
+        _collect_function_calls(inner_tokens, out_calls, out_signal_refs)

@@ -213,18 +213,26 @@ MEAS_ANGLE_REASON = (
 )
 
 
-def meas_angle_functions(card: SpiceCard) -> list[str]:
-    """The angle functions a ``.meas`` card calls, each once, in the order written."""
-    try:
-        meas = MeasCard.from_card(card)
-    except SpiceLexError:
-        return []
-    names: list[str] = []
-    for call in meas.function_calls:
-        name = call.name.casefold()
-        if name in MEAS_ANGLE_FUNCTIONS and name not in names:
-            names.append(name)
-    return names
+def meas_angle_sites(cards: list[SpiceCard]) -> list[tuple[SpiceCard, list[str]]]:
+    """Each top-level ``.meas`` card that calls an angle function, with the
+    functions it calls, each once, in the order written.
+
+    One scan for the linter's ``meas-trig-degrees`` rule and verify_circuit's
+    syntax check, so both report the same cards.
+    """
+    sites = []
+    for card in cards:
+        if card.kind != "meas" or card.scope != ():
+            continue
+        try:
+            calls = MeasCard.from_card(card).function_calls
+        except SpiceLexError:
+            continue
+        names = (call.name.casefold() for call in calls)
+        functions = list(dict.fromkeys(name for name in names if name in MEAS_ANGLE_FUNCTIONS))
+        if functions:
+            sites.append((card, functions))
+    return sites
 
 
 def _meas_trig_degrees(
@@ -233,27 +241,20 @@ def _meas_trig_degrees(
 ) -> list[LintFinding]:
     if context.family != "ltspice":
         return []
-    findings = []
-    for card in context.cards:
-        if card.kind != "meas" or card.scope != ():
-            continue
-        functions = meas_angle_functions(card)
-        if not functions:
-            continue
-        findings.append(
-            _finding(
-                context,
-                rule,
-                line=card.line_start,
-                subject=card.name or ".meas",
-                evidence={
-                    "functions": functions,
-                    "directive": card.body,
-                    "reason": MEAS_ANGLE_REASON,
-                },
-            )
+    return [
+        _finding(
+            context,
+            rule,
+            line=card.line_start,
+            subject=card.name or ".meas",
+            evidence={
+                "functions": functions,
+                "directive": card.body,
+                "reason": MEAS_ANGLE_REASON,
+            },
         )
-    return findings
+        for card, functions in meas_angle_sites(context.cards)
+    ]
 
 
 def _step_ngspice(

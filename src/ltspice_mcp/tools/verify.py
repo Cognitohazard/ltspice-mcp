@@ -83,7 +83,7 @@ from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
-    meas_angle_functions,
+    meas_angle_sites,
     rule_severity,
     value_suffix_evidence,
 )
@@ -1161,8 +1161,8 @@ def _syntax_findings(
 def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, Any]]:
     """``.meas`` cards that call a trig function, which LTspice reads in degrees there.
 
-    The ``run_experiments`` linter's ``meas-trig-degrees`` rule, with its
-    severity and reason, so both surfaces say the same thing.
+    The ``run_experiments`` linter's ``meas-trig-degrees`` rule: the same
+    cards, severity and reason, so both surfaces say the same thing.
     """
     return [
         _finding(
@@ -1172,8 +1172,7 @@ def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, A
             subject=card.name or ".meas",
             evidence={"functions": functions, "card": card.body, "reason": MEAS_ANGLE_REASON},
         )
-        for card in cards
-        if card.kind == "meas" and card.scope == () and (functions := meas_angle_functions(card))
+        for card, functions in meas_angle_sites(cards)
     ]
 
 
