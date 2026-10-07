@@ -90,9 +90,10 @@ NEUTRAL_HOME = "C:\\Users\\user"
 #: day, so the builds' different padding of a one-digit day does not arise.
 NEUTRAL_DATE = "Thu Jan 15 00:00:00 2026"
 
-#: Settings that change what a run or an export produces. They are removed from
-#: the copy of the settings file a case runs against, so the build falls back
-#: to its own default for each; a case sets one back with ``ini = {...}``.
+#: Settings that change what a run, an export or the waveform window produces.
+#: They are removed from the copy of the settings file a case runs against, so
+#: the build falls back to its own default for each; a case sets one back with
+#: ``ini = {...}``.
 BEHAVIOUR_KEYS = frozenset(
     key.casefold()
     for key in (
@@ -134,6 +135,11 @@ BEHAVIOUR_KEYS = frozenset(
         "WarnOnNoIndRser",
         "AutoDeleteRawFiles",
         "FastAccessRAM",
+        # The waveform window's grid, which a key press turns on and the build
+        # then remembers. With it on, the plot settings a build saves gain a
+        # GridStyle line in every pane, and the phase axis of an AC pane
+        # another last number (plot/ac_grid_on). Both builds default it to off.
+        "grid",
     )
 )
 
@@ -1507,8 +1513,11 @@ def record_build(
     With ``only`` (glob patterns over case ids) the named cases are re-recorded
     and the rest of an existing recording is kept, with the settings defaults
     and the library facts it was made with; ``progress`` is told when this
-    machine's library differs from those. Without ``only`` the directory is
-    rebuilt, so a case removed from the list leaves no file behind.
+    machine's library differs from those. A key the recorder has come to
+    remove since that recording was made has no default there, so its default
+    is added from this one (``with_new_defaults``). Without ``only`` the
+    directory is rebuilt, so a case removed from the list leaves no file
+    behind.
     """
     reason = unavailable_reason(build)
     if reason is not None:
@@ -1549,8 +1558,8 @@ def record_build(
                 progress(f"{build.label}: {case.case_id}")
             result = run_case(build, case, inputs, root, timeout=timeout, desktop=desktop)
             assert_private(result.files, forbidden)
-            if case.settings and not case.ini and not defaults:
-                defaults = _portable_defaults(result.defaults)
+            if case.settings and not case.ini:
+                defaults = with_new_defaults(defaults, result.defaults)
             for stale in cases.get(case.case_id, {}).get("outputs", {}):
                 (directory / stale).unlink(missing_ok=True)
             for name, data in result.files.items():
@@ -1599,6 +1608,25 @@ def _portable_defaults(defaults: Mapping[str, str]) -> dict[str, str]:
     """The build's defaults without the ones that are local directories."""
     local = {"symbolsearchpath", "librarysearchpath", "rawtempdir"}
     return {key: value for key, value in defaults.items() if key.casefold() not in local}
+
+
+def with_new_defaults(
+    on_record: Mapping[str, str], written_back: Mapping[str, str]
+) -> dict[str, str]:
+    """``on_record`` with the build's default for each key it has none for.
+
+    ``written_back`` is what a build wrote into its settings copy for the keys
+    the recorder had removed. A default already on record stays as it is: a
+    recording of some cases keeps the defaults the whole one was made with,
+    and gains only the ones of keys the recorder has come to remove since.
+    """
+    known = {key.casefold() for key in on_record}
+    new = {
+        key: value
+        for key, value in _portable_defaults(written_back).items()
+        if key.casefold() not in known
+    }
+    return {**on_record, **new}
 
 
 def _build_banner(cases: Mapping[str, Any]) -> str | None:

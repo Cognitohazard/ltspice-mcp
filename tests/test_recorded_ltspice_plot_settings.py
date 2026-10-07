@@ -103,6 +103,48 @@ class TestWhatABuildWritesForPanesItMade:
         assert micro in data
 
 
+#: The one case recorded with the waveform window's grid on.
+GRID_ON = "plot/ac_grid_on"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_grid_left_on_adds_a_line_and_changes_no_pane_the_server_reads(build: str):
+    """The grid is a setting of the person at the window: a key press turns it
+    on and the build remembers. With it on, each build writes a ``GridStyle``
+    line in the pane and another last number on the phase axis, and nothing
+    else differs from ``plot/ac``. The traces and scales read are the same."""
+    assert rec.entry(build, GRID_ON)["settings"] == {"grid": "on"}
+    assert "settings" not in rec.entry(build, "plot/ac")
+    codec = "utf-16-le" if rec.generation(build) == "xvii" else "utf-8"
+    plain = saved(build, "plot/ac").decode(codec).splitlines()
+    gridded = saved(build, GRID_ON).decode(codec).splitlines()
+    assert [line.strip() for line in gridded if line not in plain] == [
+        "Y[1]: (' ',0,-90,9,9)",
+        "GridStyle: 1",
+    ]
+    assert [line.strip() for line in plain if line not in gridded] == ["Y[1]: (' ',0,-90,9,-0)"]
+    assert panes(saved(build, GRID_ON), AC) == panes(saved(build, "plot/ac"), AC)
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(WRITTEN + READ)))
+def test_no_other_recording_holds_a_grid_someone_had_left_on(build: str, case_id: str):
+    """Every other case runs with the key removed, so on the build's own
+    default, which is off. Four of XVII's files once came out with the line,
+    recorded where its grid had been left on."""
+    data = saved(build, case_id)
+    # XVII's read_utf8 is its own UTF-16 followed by the UTF-8 it was handed.
+    held = b"GridStyle" in data or "GridStyle".encode("utf-16-le") in data
+    assert held == (case_id == GRID_ON)
+
+
+def test_ltspice_xvii_writes_its_own_default_for_the_grid_back_as_off():
+    """XVII writes its default for a key the recorder removed into the settings
+    copy, which is how the manifest comes to hold it. LTspice 26 writes none
+    back; its files without the line are its record."""
+    assert rec.manifest(XVII)["settings"]["defaults"]["grid"] == "off"
+    assert rec.manifest(CURRENT)["settings"]["defaults"] == {}
+
+
 def test_the_pane_ltspice_26_adds_below_is_listed_first():
     """The first pane listed is the bottom one.
 
