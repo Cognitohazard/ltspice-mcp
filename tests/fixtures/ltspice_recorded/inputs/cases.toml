@@ -349,6 +349,22 @@ summary = "That a build started on a desktop of its own, where its window cannot
 model = ["lib/hidden_desktop.py", "lib/ltspice_windows.py"]
 evidence = "every case here was recorded with the build on a desktop of its own; manifest: cases.*.dialog holds the two message boxes LTspice XVII stopped on there"
 
+# ---------------------------------------------------------------- plot settings
+
+[behaviour.plot-settings]
+summary = "The plot settings file (.plt) a build's waveform window saves: its encoding and line ends, the section an analysis's panes are under, the order the panes are listed in, the trace entries and the Log line of a pane it made itself."
+model = ["lib/plot_settings.py"]
+# Each [[case]] of kind "plot" runs an RC sheet in the window (-Run), as a
+# person opening it would, makes the panes with the window's own menu
+# commands, and saves; see drive_plot. The sheets use the build's own symbols.
+
+[behaviour.plot-settings-read]
+summary = "What a build makes of a plot settings file the server wrote: the panes and traces it shows, the scales it keeps, the sections it leaves alone, and a file in the other build's encoding."
+model = ["lib/plot_settings.py", "lib/schematic_ops.py", "tools/schematic_edit.py"]
+# The file is beside the sheet under the sheet's name when the sheet runs,
+# which is where edit_schematic writes it; the build saves straight away, so
+# what it writes is what it read.
+
 # ---------------------------------------------------------------- cases an input path cannot describe
 
 [[case]]
@@ -468,3 +484,109 @@ source = "export/micro_cp1252.asc"
 extra = ["export/res.asy"]
 ini = { NoGreekMus = "true" }
 note = "The same sheet with the setting that asks LTspice to write u for the micro sign."
+
+# What a build writes when it makes the panes itself. LTspice 26 adds a pane
+# above or below the active one; LTspice XVII has one command, Add Plot Pane.
+[[case]]
+id = "plot/one_trace"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [{ trace = "V(out)" }]
+
+[[case]]
+id = "plot/pane_below"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [
+    { trace = "V(out)" },
+    { command = "Add Plot Pane Below Active Pane" },
+    { trace = "V(in)" },
+    { trace = "I(R1)" },
+]
+builds = ["current"]
+note = "The second pane is added below the first, so the file shows which end of the list is the bottom of the window."
+
+[[case]]
+id = "plot/pane_added"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [
+    { trace = "V(out)" },
+    { command = "Add Plot Pane" },
+    { trace = "V(in)" },
+    { trace = "I(R1)" },
+]
+builds = ["xvii"]
+
+[[case]]
+id = "plot/math"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_tran.asc"
+steps = [{ trace = "V(in)-V(out)" }, { trace = "V(out)*I(R1)" }]
+note = "A power on the right axis, which the build labels with a micro sign."
+
+[[case]]
+id = "plot/ac"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_ac.asc"
+steps = [{ trace = "V(out)" }]
+
+# What a build makes of a file the server wrote. lib/plot_settings.py writes
+# every one of these but spaced.plt, which is its form for a trace with the
+# spaces it refuses since this case was recorded; tests/test_plot_settings.py
+# holds each to the writer.
+[[case]]
+id = "plot/read_two_panes"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/two_panes.plt"
+
+[[case]]
+id = "plot/read_math"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/math.plt"
+
+[[case]]
+id = "plot/read_spaced"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/spaced.plt"
+
+[[case]]
+id = "plot/read_log_y"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/log_y.plt"
+
+[[case]]
+id = "plot/read_ac"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_ac.asc"
+plot = "plot/ac.plt"
+
+[[case]]
+id = "plot/read_two_sections"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/two_sections.plt"
+note = "A transient run saves its own section; the AC section is the one it was not asked about."
+
+[[case]]
+id = "plot/read_utf8"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_tran.asc"
+plot = "plot/two_panes_utf8.plt"
+note = "The two panes of read_two_panes in UTF-8, the encoding LTspice 26 writes."
