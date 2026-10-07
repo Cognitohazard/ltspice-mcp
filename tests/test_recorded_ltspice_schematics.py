@@ -561,18 +561,49 @@ class TestExportedNames:
         assert comparison["components_changed"] == []
         assert comparison["equivalent"] is True
 
-    def test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened(
+    def test_a_block_symbol_with_no_sheet_of_its_own_opens_as_ltspice_reads_it(
         self, build: str, tmp_path: Path
     ):
         """LTspice netlists the block as a call to a subcircuit of the symbol's
-        name. The editor's loader wants the block's own sheet and stops when
-        there is none (``docs/spicelib_bugs.md``); the message names the file."""
-        from ltspice_mcp.errors import SymbolResolutionError
-
+        name, whatever defines it. spicelib's loader wants the block's own sheet
+        and stops when there is none (``docs/spicelib_bugs.md``, Bug 22); the
+        server's opens the sheet with each instance's subcircuit unresolved."""
         assert rec.entry(build, "export/block_symbol")["exit_code"] == 0
         sheet = rec.stage_sheet(build, "export/block_symbol", tmp_path)
-        with pytest.raises(SymbolResolutionError, match=r"probe4\.asc not found"):
-            make_editor(sheet)
+        # spicelib's own editor still refuses it: drop the workaround once it opens.
+        with pytest.raises(FileNotFoundError, match=r"probe4\.asc not found"):
+            AscEditor(str(sheet))
+        editor = make_editor(sheet)
+        assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
+
+    async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
+        self, build: str, state_no_sim, work_dir: Path
+    ):
+        import hashlib
+
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+
+        sheet = rec.stage_sheet(build, "export/block_symbol", work_dir)
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "target": str(sheet),
+                    "expected_sha256": hashlib.sha256(sheet.read_bytes()).hexdigest(),
+                    "ops": [
+                        {"op": "move_component", "reference": "U1", "x": 96, "y": 640},
+                        {"op": "add_directive", "instruction": ".op", "x": 96, "y": 800},
+                    ],
+                }
+            ),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None
+        assert data["outcome"] == "complete", data
+        written = sheet.read_text(encoding="utf-8")
+        assert "SYMBOL probe4 96 640 R0" in written
+        assert written.count("SYMBOL probe4 ") == 3
+        assert "!.op" in written
 
     def test_the_editor_names_each_parts_element_class(self, build: str, tmp_path: Path):
         sheet = rec.stage_sheet(build, "export/instance_names", tmp_path)

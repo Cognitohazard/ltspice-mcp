@@ -2171,9 +2171,12 @@ does not establish reproducibility for every stochastic function or analysis.
 2026-10-06 against the exports of LTspice 26.1.1 and LTspice XVII 17.0.37.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.reset_netlist` and `AscEditor._get_subcircuit`).
-**Our workaround:** none. `lib/schematic_ops.py::make_editor` turns the
-`FileNotFoundError` into a `SymbolResolutionError` whose message names the
-missing file, so the caller learns which sheet is wanted.
+**Our workaround:** `lib/schematic_ops.py::_AscEditor`, the editor
+`make_editor` opens every sheet with, overrides `_get_subcircuit` for a block
+symbol with no library: it looks for the sheet where spicelib does and, when
+there is none, leaves the instance without a resolved subcircuit, as spicelib
+already does for a cell symbol with no library. A sheet that is there opens as
+an `_AscEditor` too, so a block further down is read the same way.
 
 ### Summary
 
@@ -2247,10 +2250,12 @@ def test_block_symbol_without_its_sheet_still_loads(tmp_path):
 
 ### Cross-reference
 
-`tests/test_recorded_ltspice_schematics.py::TestExportedNames::test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened`
-pins both halves: LTspice exports the sheet, and the editor refuses it with a
-message naming `probe4.asc`. Once upstream loads such a sheet, that test's
-second half goes and the sheet joins the ones the editor is held to.
+`tests/test_recorded_ltspice_schematics.py::TestExportedNames::test_a_block_symbol_with_no_sheet_of_its_own_opens_as_ltspice_reads_it`
+pins both halves: LTspice exports the sheet, spicelib's own `AscEditor` still
+refuses it with a message naming `probe4.asc`, and the server's editor opens
+it; `test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited` edits it
+through `edit_schematic`. Once upstream loads such a sheet, the refusal
+assertion fails, and `_AscEditor` can go.
 
 ---
 

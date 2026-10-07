@@ -28,12 +28,13 @@ import asyncio
 import importlib
 import itertools
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
 from pydantic import Field
@@ -47,6 +48,7 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
+from spicelib.utils.file_search import search_file_in_containers
 
 # The concrete class to instantiate for a from-scratch .asc component.
 # spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
@@ -1100,6 +1102,32 @@ class GridPoint(StrictModel):
 # ---------------------------------------------------------------------------
 
 
+class _AscEditor(AscEditor):
+    """spicelib's editor, opening a sheet whose block symbol has no sheet.
+
+    LTspice netlists an instance of a block symbol as a call to a subcircuit
+    of the symbol's name, defined by its own sheet, by a library on the sheet,
+    or not yet at all. spicelib's loader requires the sheet and refuses to open
+    the parent without it (``docs/spicelib_bugs.md``, Bug 22). Here such an
+    instance loads with no resolved subcircuit, as spicelib already loads a
+    cell symbol with no library, and a sheet that is there opens as one of
+    these, so a block nested further down is read the same way.
+    """
+
+    def _get_subcircuit(self, symbol: Any) -> Any:
+        if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
+            return super()._get_subcircuit(symbol)
+        sheet = symbol.get_schematic_file()
+        if not sheet.exists():
+            sheet = search_file_in_containers(
+                sheet.stem + os.path.extsep + "asc",
+                os.path.split(self.asc_file_path)[0],
+                os.path.curdir,
+                *self.custom_lib_paths,
+            )
+        return None if sheet is None else type(self)(sheet)
+
+
 def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
@@ -1107,7 +1135,7 @@ def make_editor(path: Path) -> Editor:
     """
     try:
         if path.suffix.lower() == ".asc":
-            return AscEditor(str(path))
+            return _AscEditor(str(path))
         return SpiceEditor(str(path))
     except FileNotFoundError as e:
         if not path.is_file():
