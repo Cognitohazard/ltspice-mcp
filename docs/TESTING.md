@@ -473,8 +473,8 @@ A difference between the server and a recording is a finding. Fix the server
 if the fix is small, with the recording as the regression test, which must
 fail before the fix. Otherwise pin what LTspice does and what the server does
 side by side in the test, under a name that says so
-(`READ_BY_LTSPICE_ONLY`, `NOT_REFUSED_YET`), so the gap is written down where
-the next person will find it.
+(`READ_AS_CP1252_BY_THE_SERVER_ONLY` in `test_recorded_ltspice_decks.py`), so
+the gap is written down where the next person will find it.
 
 ### Recording again
 

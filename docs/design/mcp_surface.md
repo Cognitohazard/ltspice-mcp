@@ -1500,7 +1500,17 @@ Only deterministic harvested failures block. Suppression is per call, and
 Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (warning,
 ngspice: the deck runs and only the top-level `.meas` is skipped, which the run
 relays when it is read), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
-mode), `model-missing` (blocking at staging; the model is read past a
+mode), three LTspice refusals recorded on LTspice 26 and XVII, each blocking —
+`analysis-count-ltspice` (two of `.tran`/`.ac`/`.dc`/`.noise`; `.op` may sit
+beside one), `meas-function-ltspice` (`vdb()`, `phase()` or `group_delay()` in a
+`.meas`) and `lib-section-ltspice` (`.lib file section`, which LTspice reads as
+one file name) — `byte-85-ltspice` (warning, LTspice: a byte 0x85 in an 8-bit
+deck or include with a card after it on the line, which LTspice 24 and later
+read as a line break and XVII does not; silent when the session's LTspice is
+known to be XVII), `node-control-byte-ltspice` (warning, LTspice: a node name
+in an 8-bit file holding a byte from 0x80 to 0x9F, a control character to
+LTspice, which LTspice 26 refuses and XVII saves under a name the server spells
+otherwise), `model-missing` (blocking at staging; the model is read past a
 BJT/JFET/MOSFET area factor or `off` and before a subckt call's `params:`), the
 four checks of
 the netlist arity validator, each its own rule so suppressing one never

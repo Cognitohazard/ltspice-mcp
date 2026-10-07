@@ -141,6 +141,8 @@ class RunContext:
     dialect: str | None
     identity: dict[str, Any]
     console: Path | None = None
+    #: The build the case's run named in its own output, as recorded.
+    simulator_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,9 @@ class AnalysisSource:
     explicit_dialect: str | None = None
     plot_index: int = 0
     console: Path | None = None
+    #: The build a job's run named in its own output, as its case recorded it;
+    #: None for a bare path, whose build is read from the artifacts instead.
+    simulator_version: str | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -224,6 +229,7 @@ def source_for_run(
         explicit_dialect=dialect,
         plot_index=plot_index,
         console=run.console,
+        simulator_version=run.simulator_version,
     )
 
 
@@ -330,6 +336,7 @@ def experiment_run_context(
         dialect=dialect,
         identity=identity,
         console=console,
+        simulator_version=case.simulator_version,
     )
 
 
