@@ -54,6 +54,7 @@ from spicelib.editor.base_schematic import (
     TextTypeEnum,
 )
 from spicelib.utils.detect_encoding import EncodingDetectError
+from spicelib.utils.file_search import search_file_in_containers
 
 # The concrete class to instantiate for a from-scratch .asc component.
 # spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
@@ -1214,6 +1215,45 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
     )
 
 
+class _AscEditor(AscEditor):
+    """spicelib's editor, opening a sheet whose block symbol has no sheet.
+
+    LTspice netlists an instance of a block symbol as a call to a subcircuit
+    of the symbol's name, defined by its own sheet, by a library on the sheet,
+    or not yet at all. spicelib's loader requires the sheet and refuses to open
+    the parent without it (``docs/spicelib_bugs.md``, Bug 22). Here such an
+    instance loads with no resolved subcircuit, as spicelib already loads a
+    cell symbol with no library, and a sheet that is there opens as one of
+    these, so a block nested further down is read the same way.
+    """
+
+    def __init__(
+        self,
+        asc_file: str | Path,
+        encoding: str = "autodetect",
+        *,
+        searched: dict[tuple[str, str], str | None] | None = None,
+    ) -> None:
+        # Where each sheet not beside its symbol was found, shared with the
+        # sheets this one opens: a search walks every folder it is given, and
+        # a sheet may place the same block many times.
+        self._searched = {} if searched is None else searched
+        super().__init__(asc_file, encoding)
+
+    def _get_subcircuit(self, symbol: Any) -> Any:
+        if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
+            return super()._get_subcircuit(symbol)
+        sheet = symbol.get_schematic_file()
+        if not sheet.exists():
+            folder = str(self.asc_file_path.parent)
+            if (sheet.name, folder) not in self._searched:
+                self._searched[sheet.name, folder] = search_file_in_containers(
+                    sheet.name, folder, ".", *self.custom_lib_paths
+                )
+            sheet = self._searched[sheet.name, folder]
+        return None if sheet is None else type(self)(sheet, searched=self._searched)
+
+
 def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
@@ -1226,17 +1266,16 @@ def make_editor(path: Path) -> Editor:
         if path.suffix.lower() != ".asc":
             return SpiceEditor(str(path))
         try:
-            editor = AscEditor(str(path))
+            return _AscEditor(str(path))
         except NotImplementedError as e:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
-        return editor
     except FileNotFoundError as e:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
         # The schematic itself opened, so what is missing is something it
-        # refers to: a symbol, a hierarchical sub-sheet, or a model library.
+        # refers to: a symbol or a model library.
         # Which one it is comes from the file that is there, not from whether
         # the editor's message happened to spell ".asy".
         raise SymbolResolutionError(
