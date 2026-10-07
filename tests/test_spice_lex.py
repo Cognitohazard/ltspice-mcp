@@ -1433,6 +1433,11 @@ class TestMeasCard:
         view = MeasCard.from_card(card)
         assert any(fc.name.lower() == "vdb" for fc in view.function_calls)
 
+    def test_a_call_after_an_operator_is_named_without_it(self) -> None:
+        card = lex(".MEAS TRAN x INTEG V(s)*cos(2*pi*fo*time)+0.5*SIN(1)\n").cards[0]
+        view = MeasCard.from_card(card)
+        assert [fc.name for fc in view.function_calls] == ["V", "cos", "SIN"]
+
     def test_set_label_rerenders(self) -> None:
         cards = lex(".MEAS TRAN vmax MAX V(out)\n").cards
         view = MeasCard.from_card(cards[0])

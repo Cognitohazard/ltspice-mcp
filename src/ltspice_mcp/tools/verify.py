@@ -80,7 +80,13 @@ from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
-from ltspice_mcp.lib.lint_rules import deck_generator, rule_severity, value_suffix_evidence
+from ltspice_mcp.lib.lint_rules import (
+    MEAS_ANGLE_REASON,
+    deck_generator,
+    meas_angle_functions,
+    rule_severity,
+    value_suffix_evidence,
+)
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -1098,12 +1104,14 @@ def _syntax_findings(
     cp1252_reader: str | None,
     simulator: str,
 ) -> list[dict[str, Any]]:
-    """Directive, lex, element-arity and value-suffix findings in a netlist.
+    """Directive, lex, element-arity, value-suffix and .meas angle findings in a netlist.
 
-    Everything here changes what the simulator reads. A finding is an error
-    unless its rule says the deck still runs as meant: an element-arity issue
-    carries the severity its validator check declares, and a suffix finding
-    is an error only for a mis-decoded file (see ``_value_suffix_findings``).
+    Everything here changes what the simulator reads, or what it computes from
+    it: LTspice takes a trig function's angle in a .meas in degrees. A finding
+    is an error unless its rule says the deck still runs as meant: an
+    element-arity issue carries the severity its validator check declares, and
+    a suffix finding is an error only for a mis-decoded file (see
+    ``_value_suffix_findings``).
     ``simulator`` is the one the session runs decks on, ``"LTspice"`` or
     ``"ngspice"``: some directive and element forms are a fault for one and
     valid for the other. The facts that are legal-but-notable live in the
@@ -1145,7 +1153,28 @@ def _syntax_findings(
     findings.extend(
         _value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader=cp1252_reader)
     )
+    if simulator == "LTspice":
+        findings.extend(_meas_angle_findings(deck.cards, path))
     return findings
+
+
+def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, Any]]:
+    """``.meas`` cards that call a trig function, which LTspice reads in degrees there.
+
+    The ``run_experiments`` linter's ``meas-trig-degrees`` rule, with its
+    severity and reason, so both surfaces say the same thing.
+    """
+    return [
+        _finding(
+            rule_id="meas_trig_degrees",
+            severity=rule_severity("meas-trig-degrees"),
+            at={"file": str(path), "line": card.line_start},
+            subject=card.name or ".meas",
+            evidence={"functions": functions, "card": card.body, "reason": MEAS_ANGLE_REASON},
+        )
+        for card in cards
+        if card.kind == "meas" and card.scope == () and (functions := meas_angle_functions(card))
+    ]
 
 
 # The connectivity rules the netlist quality check runs, with the severity this

@@ -1,0 +1,34 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\meas_trig.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 830
+
+Files loaded:
+C:\recording\meas_trig.cir
+
+m_cos: INTEG(V(s)*cos(2*pi*1k*time))=3.81253878775e-06 FROM 0 TO 0.002
+m_sin: INTEG(V(s)*sin(2*pi*1k*time))=-3.46275856263e-05 FROM 0 TO 0.002
+m_sin_fo: INTEG(V(s)*sin(2*pi*fo*time))=-3.46275856263e-05 FROM 0 TO 0.002
+m_sin_30: sin(30)=0.5
+m_cos_pi: cos(pi)=0.998497149864
+m_tan_45: tan(45)=1
+m_asin: asin(0.5)=30
+m_acos: acos(0.5)=60
+m_atan: atan(1)=45
+m_atan2: atan2(1,1)=45
+m_atan2_deg: atan2(1,1)*180/pi=2578.31007809
+m_sinh: sinh(1)=1.17520119364
+m_tanh: tanh(1)=0.761594155956
+m_pi: pi=3.14159265359
+m_time: time=0.001 at 0.001
+b_cos: INTEG(V(bcos))=-3.70343587163e-10 FROM 0 TO 0.002
+b_sin: INTEG(V(bsin))=0.00099999634534 FROM 0 TO 0.002
+b_atan2: V(batan2)=0.785398185253 at 0.001
+b_cos_pi: V(bcospi)=-1 at 0.001

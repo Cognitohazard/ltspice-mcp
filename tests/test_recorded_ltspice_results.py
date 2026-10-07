@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
     count_op_iterations,
@@ -499,6 +500,129 @@ class TestMeasurements:
             assert block.splitlines()[0].endswith('(7): Expected ")" here.')
             (failed,) = diagnostics["meas_errors"]
             assert failed["directive"] == ".meas tran broken FIND V(out AT 0.5m"
+
+
+#: How long log/meas_trig runs: two whole periods of its 1 kHz sine of amplitude 1.
+_TWO_PERIODS = 2e-3
+_W = 2 * math.pi * 1e3
+#: 2*pi*1k*time read as an angle in degrees, in radians.
+_W_AS_DEGREES = _W * math.pi / 180
+
+
+def _integral_of_sin_times_sin(a: float, b: float, end: float) -> float:
+    """The integral of sin(a*t)*sin(b*t) from 0 to ``end``, for a != b."""
+    return (math.sin((a - b) * end) / (a - b) - math.sin((a + b) * end) / (a + b)) / 2
+
+
+def _integral_of_sin_times_cos(a: float, b: float, end: float) -> float:
+    """The integral of sin(a*t)*cos(b*t) from 0 to ``end``, for a != b."""
+    return ((1 - math.cos((a + b) * end)) / (a + b) + (1 - math.cos((a - b) * end)) / (a - b)) / 2
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+class TestMeasurementAngleUnit:
+    """The unit of a trig function's angle inside a .meas.
+
+    Read in radians, as a B source reads it, INTEG V(s)*sin(2*pi*1k*time) over
+    the deck's two periods is 1 ms and INTEG V(s)*cos(2*pi*1k*time) is 0. On
+    both builds' own defaults a .meas reads the angle in degrees; the
+    RadianMeasure setting ("Use radian measure in waveform expressions")
+    turns it to radians. A B source is in radians either way.
+    """
+
+    def values(self, build: str, case_id: str) -> dict[str, float]:
+        data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+        assert data["failed_measurements"] == []
+        return {name: entry["values"][0] for name, entry in data["measurements"].items()}
+
+    def test_on_the_defaults_a_measurement_reads_angles_in_degrees(self, build: str):
+        value = self.values(build, "log/meas_trig")
+        assert value["m_sin_30"] == pytest.approx(0.5)
+        assert value["m_cos_pi"] == pytest.approx(math.cos(math.radians(math.pi)), rel=1e-5)
+        assert value["m_tan_45"] == pytest.approx(1.0)
+        assert value["m_asin"] == pytest.approx(30.0)
+        assert value["m_acos"] == pytest.approx(60.0)
+        assert value["m_atan"] == pytest.approx(45.0)
+        assert value["m_atan2"] == pytest.approx(45.0)
+        assert value["m_atan2_deg"] == pytest.approx(45 * 180 / math.pi, rel=1e-5)
+        # The integrals the deck asked for are 1 ms and 0. Read in degrees,
+        # 2*pi*1k*time is a 17.45 Hz sine, and the results are these instead.
+        assert value["m_sin"] == pytest.approx(
+            _integral_of_sin_times_sin(_W, _W_AS_DEGREES, _TWO_PERIODS), rel=2e-3
+        )
+        assert value["m_cos"] == pytest.approx(
+            _integral_of_sin_times_cos(_W, _W_AS_DEGREES, _TWO_PERIODS), rel=2e-3
+        )
+        assert value["m_sin_fo"] == value["m_sin"]
+
+    def test_with_the_setting_a_measurement_reads_angles_in_radians(self, build: str):
+        value = self.values(build, "log/meas_trig_radian")
+        assert value["m_sin"] == pytest.approx(_TWO_PERIODS / 2, rel=1e-3)
+        assert value["m_sin_fo"] == value["m_sin"]
+        assert value["m_cos"] == pytest.approx(0.0, abs=1e-8)
+        assert value["m_sin_30"] == pytest.approx(math.sin(30), rel=1e-5)
+        assert value["m_cos_pi"] == pytest.approx(-1.0)
+        assert value["m_tan_45"] == pytest.approx(math.tan(45), rel=1e-5)
+        assert value["m_asin"] == pytest.approx(math.asin(0.5), rel=1e-5)
+        assert value["m_acos"] == pytest.approx(math.acos(0.5), rel=1e-5)
+        assert value["m_atan"] == pytest.approx(math.pi / 4, rel=1e-5)
+        assert value["m_atan2"] == pytest.approx(math.pi / 4, rel=1e-5)
+        assert value["m_atan2_deg"] == pytest.approx(45.0, rel=1e-5)
+
+    def test_time_pi_and_the_hyperbolic_functions_do_not_depend_on_it(self, build: str):
+        for case_id in ("log/meas_trig", "log/meas_trig_radian"):
+            value = self.values(build, case_id)
+            assert value["m_time"] == pytest.approx(1e-3)
+            assert value["m_pi"] == pytest.approx(math.pi, rel=1e-5)
+            assert value["m_sinh"] == pytest.approx(math.sinh(1), rel=1e-5)
+            assert value["m_tanh"] == pytest.approx(math.tanh(1), rel=1e-5)
+
+    def test_a_b_source_works_in_radians_whatever_the_setting(self, build: str, tmp_path: Path):
+        raw = rec.decode(build, "log/meas_trig", tmp_path).raw
+        time = np.abs(raw.get_wave("time", 0))
+        assert np.allclose(raw.get_wave("V(batan2)", 0), math.pi / 4)
+        assert np.allclose(raw.get_wave("V(bcospi)", 0), -1.0)
+        product = raw.get_wave("V(bsin)", 0)
+        area = float(np.sum((product[1:] + product[:-1]) / 2 * np.diff(time)))
+        assert area == pytest.approx(_TWO_PERIODS / 2, rel=1e-3)
+        # The log's measurements of the B-source nodes take no angle, so the
+        # setting leaves them as they were.
+        default = self.values(build, "log/meas_trig")
+        radian = self.values(build, "log/meas_trig_radian")
+        names = {"b_cos", "b_sin", "b_atan2", "b_cos_pi"}
+        assert {name: default[name] for name in names} == {name: radian[name] for name in names}
+        assert default["b_sin"] == pytest.approx(_TWO_PERIODS / 2, rel=1e-3)
+        assert default["b_cos"] == pytest.approx(0.0, abs=1e-8)
+
+    def test_ph_gives_degrees_unless_the_setting_says_radians(self, build: str):
+        """At the corner of the RC low-pass the phase is -45 degrees. The log
+        prints the real result as a magnitude in dB at an angle of 180."""
+        printed = {}
+        for case_id in ("log/meas_phase", "log/meas_phase_radian"):
+            text = read_spice_text(rec.recorded(build, f"{case_id}.log"))
+            match = re.search(
+                r"(?im)^g_ph: ph\(v\(out\)\)=\(([-\d.e+]+)dB,180\N{DEGREE SIGN}\)", text
+            )
+            assert match, text
+            printed[case_id] = -(10 ** (float(match.group(1)) / 20))
+        assert printed["log/meas_phase"] == pytest.approx(-45.0, rel=1e-5)
+        assert printed["log/meas_phase_radian"] == pytest.approx(-math.pi / 4, rel=1e-5)
+
+    def test_the_lint_refuses_the_measurements_the_setting_changes_and_no_other(self, build: str):
+        default = self.values(build, "log/meas_trig")
+        radian = self.values(build, "log/meas_trig_radian")
+        changed = {
+            name
+            for name in default
+            if not math.isclose(default[name], radian[name], rel_tol=1e-6, abs_tol=1e-9)
+        }
+        deck = INPUTS / "log/meas_trig.cir"
+        findings = lint_deck(read_spice_text(deck), deck, "ltspice", "LTspice")
+        flagged = {f["subject"] for f in findings if f["rule_id"] == "meas-trig-degrees"}
+        assert flagged == changed
+        assert {f["severity"] for f in findings if f["rule_id"] == "meas-trig-degrees"} == {
+            "error"
+        }
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

@@ -13,6 +13,7 @@ after each mutation.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -1146,6 +1147,10 @@ def _shift_single_token(tok: Token | None, edit_old_end: int, delta: int) -> Tok
     )
 
 
+#: The function name at the end of a BARE token that a PARENED token follows.
+_CALL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _collect_function_calls(
     tokens: Sequence[Token],
     out_calls: list[FunctionCall],
@@ -1157,15 +1162,22 @@ def _collect_function_calls(
     are surfaced too (``mag(V(out))`` yields both ``mag`` and ``V``).
     Also recurses into BRACED contents — ``{vdb(out)}`` should still
     surface ``vdb`` for validator rules.
+
+    The tokenizer keeps an expression's operators in its BARE tokens, so the
+    call in ``V(s)*cos(x)`` sits behind ``*cos``; the name is the identifier
+    the token ends with.
     """
     n = len(tokens)
     for i, t in enumerate(tokens):
         nxt = tokens[i + 1] if i + 1 < n else None
         if t.kind == TokenKind.BARE and nxt is not None and nxt.kind == TokenKind.PARENED:
-            args = nxt.text[1:-1]
-            out_calls.append(FunctionCall(name=t.text, args_text=args))
-            if t.text.lower() in ("v", "i"):
-                out_signal_refs.append(args.strip())
+            called = _CALL_NAME_RE.search(t.text)
+            if called is not None:
+                name = called.group(0)
+                args = nxt.text[1:-1]
+                out_calls.append(FunctionCall(name=name, args_text=args))
+                if name.lower() in ("v", "i"):
+                    out_signal_refs.append(args.strip())
         # Recurse into PARENED / BRACED contents.
         if t.kind in (TokenKind.PARENED, TokenKind.BRACED):
             inner_text = t.text[1:-1]
