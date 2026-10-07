@@ -388,6 +388,91 @@ class TestExportEncoding:
         else:
             assert (entry["exit_code"], entry["stopped"]) == (0, False)
 
+    @pytest.mark.parametrize("sheet", ["micro_utf8_bom", "micro_utf16le_bom"])
+    async def test_verify_reports_the_byte_order_mark_neither_build_reads(
+        self, build: str, sheet: str, state_no_sim, work_dir: Path
+    ):
+        """The drawing reads past the mark; LTspice does not (the test above).
+        The quality check says so, with no LTspice in the session."""
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        assert rec.entry(build, f"export/{sheet}")["outputs"] == {}
+        staged = rec.stage_sheet(build, f"export/{sheet}", work_dir)
+        result = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(staged), "checks": ["quality"]}),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None
+        (finding,) = [f for f in data["findings"] if f["rule_id"] == "byte_order_mark"]
+        assert finding["severity"] == "error"
+        assert finding["at"] == {"file": data["path"], "line": 1}
+        assert data["outcome"] == "partial"
+
+    @pytest.mark.parametrize("sheet", ["micro_cp1252", "micro_utf8", "micro_utf16le"])
+    async def test_verify_is_silent_on_a_sheet_both_builds_export(
+        self, build: str, sheet: str, state_no_sim, work_dir: Path
+    ):
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        assert rec.entry(build, f"export/{sheet}")["outputs"] != {}
+        staged = rec.stage_sheet(build, f"export/{sheet}", work_dir)
+        result = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(staged), "checks": ["quality"]}),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None
+        assert [f for f in data["findings"] if f["rule_id"] == "byte_order_mark"] == []
+
+    def test_the_editor_names_the_utf8_byte_order_mark_it_cannot_read(
+        self, build: str, work_dir: Path
+    ):
+        """spicelib's own reader refuses this sheet too, but blames a missing
+        Version line, which the sheet has."""
+        from ltspice_mcp.errors import NetlistError
+
+        assert rec.entry(build, "export/micro_utf8_bom")["outputs"] == {}
+        staged = rec.stage_sheet(build, "export/micro_utf8_bom", work_dir)
+        with pytest.raises(NetlistError, match="UTF-8 byte order mark") as caught:
+            make_editor(staged)
+        assert "Neither LTspice 26 nor LTspice XVII" in str(caught.value)
+
+    async def test_an_edit_writes_a_utf16_sheet_without_the_mark_neither_build_reads(
+        self, build: str, state_no_sim, work_dir: Path
+    ):
+        """Both builds export a UTF-16 LE sheet with no byte order mark and
+        neither exports one with a mark, so an edit writes UTF-16 LE without it."""
+        import codecs
+        import hashlib
+
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+
+        assert self.value(build, "micro_utf16le") == f"1{MICRO}"
+        assert rec.entry(build, "export/micro_utf16le_bom")["outputs"] == {}
+        sheet = rec.stage_sheet(build, "export/micro_utf16le_bom", work_dir)
+        assert sheet.read_bytes().startswith(codecs.BOM_UTF16_LE)
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "target": str(sheet),
+                    "expected_sha256": hashlib.sha256(sheet.read_bytes()).hexdigest(),
+                    "ops": [
+                        {"op": "set_component_value", "reference": "R1", "value": f"2{MICRO}"}
+                    ],
+                }
+            ),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None and data["commit_state"] == "committed"
+        written = sheet.read_bytes()
+        assert not written.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE))
+        text = written.decode("utf-16-le")
+        assert text.startswith("Version 4\n")
+        assert f"SYMATTR Value 2{MICRO}\n" in text
+        assert data["sha256"] == hashlib.sha256(written).hexdigest()
+
     def test_ltspice_26_reads_a_utf8_sheet_as_cp1252(self, build: str):
         """Neither build reads a sheet as UTF-8. LTspice 26 decodes it as cp1252
         and writes what it saw in UTF-8, so a UTF-8 micro sign comes out as the

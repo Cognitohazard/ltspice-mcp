@@ -1618,18 +1618,27 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
 def _commit_codec(loaded_as: str, sheet_was_ascii: bool, text: str) -> str:
     """The codec an edited sheet is committed in.
 
-    A sheet is written back in the encoding it was read in, with one
-    exception. The loader names a sheet that holds only ASCII "utf-8", and
+    A sheet is written back in the encoding it was read in, with two
+    exceptions. The loader names a sheet that holds only ASCII "utf-8", and
     LTspice does not read a sheet as UTF-8: it decodes cp1252 (or UTF-16), so
     a micro sign stored as the two UTF-8 bytes comes out of its netlister as
     ``Âµ``. The first non-ASCII character an edit adds to such a sheet is
     therefore written in cp1252, where cp1252 has it. A sheet that already
     held non-ASCII text keeps the encoding it came in.
+
+    The loader names a UTF-16 sheet "utf-16" when it read a byte order mark
+    (one without is "utf_16_le"), and that codec writes the mark back. Neither
+    LTspice build reads a sheet that starts with one, and both read UTF-16 LE
+    without it (``export/micro_utf16le_bom`` and ``export/micro_utf16le``), so
+    such a sheet is written as UTF-16 LE.
     """
     try:
-        loaded_as_utf8 = codecs.lookup(loaded_as).name == "utf-8"
+        loaded_name = codecs.lookup(loaded_as).name
     except LookupError:
         return loaded_as
+    if loaded_name == "utf-16":
+        return "utf-16-le"
+    loaded_as_utf8 = loaded_name == "utf-8"
     if not (loaded_as_utf8 and sheet_was_ascii) or text.isascii():
         return loaded_as
     try:

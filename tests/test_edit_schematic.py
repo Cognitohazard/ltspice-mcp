@@ -2016,6 +2016,7 @@ class TestDataFlagPreservation:
         assert b"DATAFLAG" not in path.read_bytes()
 
 
+@pytest.mark.usefixtures("isolated_spicelib_symbol_cache")
 class TestRecordTheEditorCannotRead:
     """A sheet holding a record spicelib's reader has no branch for is refused
     with the record and its line named, not reported as an internal error."""
@@ -2107,6 +2108,39 @@ class TestRecordTheEditorCannotRead:
         assert "bus.asc, a sheet it loads: line 5" in message
         assert "BUSTAP 80 0 80 16" in message
         assert (parent.read_bytes(), child.read_bytes()) == before
+
+    async def test_a_byte_order_mark_on_a_sheet_the_target_loads_names_that_sheet(
+        self, asc_state, work_dir
+    ):
+        """Neither LTspice build reads a sheet behind a UTF-8 byte order mark
+        (recorded as export/micro_utf8_bom); the refusal names the sheet that
+        has one, not the parent being opened."""
+        child = work_dir / "bus.asc"
+        child.write_bytes(b"\xef\xbb\xbfVersion 4\nSHEET 1 880 680\nWIRE 0 0 160 0\n")
+        (work_dir / "bus.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -32 -32 32 32\n"
+            "PIN -32 0 LEFT 8\nPINATTR PinName IN\nPINATTR SpiceOrder 1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        parent = work_dir / "top.asc"
+        parent.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL bus 0 0 R0\nSYMATTR InstName X1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        with pytest.raises(NetlistError) as caught:
+            await handle_edit_schematic(
+                _edit_input(
+                    target=str(parent),
+                    expected_sha256=_sha(parent),
+                    ops=[{"op": "add_net_label", "net": "MID", "x": 40, "y": 0}],
+                ),
+                asc_state,
+            )
+        message = str(caught.value)
+        assert "top.asc" in message
+        assert "bus.asc, a sheet it loads, starts with a UTF-8 byte order mark" in message
 
 
 class TestPathsThatLeaveTheSheetAsItIs:

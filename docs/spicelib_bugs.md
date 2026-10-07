@@ -2618,7 +2618,8 @@ failed as `Internal error in edit_schematic: NotImplementedError: ...`, and
 - Downstream, `verify_circuit` reads a sheet with its own parser
   (`lib/schematic_scene.py::_parse_asc`), which skips a keyword it does not
   draw, so it draws and checks such a sheet without that record while the
-  editing tools refuse it.
+  editing tools refuse it. It used to do so silently; it now reports each
+  such keyword, how many lines hold it and the first, as an observation.
 
 ### Proposed fix
 
@@ -2652,9 +2653,112 @@ sheet holding a bus tap, or an empty line, is refused with a `NetlistError`
 naming the file, line 5 and the line, and the sheet is left as it was;
 `inspect`'s `components` and `net` queries answer with the same refusal
 instead of `internal_error`; and a bus tap in a block's sheet is named in that
-sheet, not in the parent being opened. The sheets are hand-written. The
+sheet, not in the parent being opened.
+`tests/test_verify_circuit.py::test_a_record_the_drawing_does_not_read_is_reported`
+pins the observation `verify_circuit` makes of the same record. The sheets are
+hand-written. The
 recording this needs is an input sheet holding a bus tap, exported with
 `-netlist` on each build, which would show whether LTspice reads it. Once
 upstream opens such a sheet, `_unreadable_record` goes, and an edit of a sheet
 holding a bus tap then needs the check Bug 25 needed: a commit must write the
 record back, not drop it.
+
+---
+
+## Bug 27 — `detect_encoding` refuses a sheet behind a UTF-8 byte order mark as having no `Version` line, and reads one behind a UTF-16 mark
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-07
+on the recorded inputs `export/micro_utf8_bom.asc` and
+`export/micro_utf16le_bom.asc`.
+**Affected version:** spicelib 1.5.1 (`spicelib/utils/detect_encoding.py`,
+`detect_encoding`; reached from `AscEditor.__init__` with the pattern
+`^VERSION `).
+**Our workaround:** `lib/schematic_ops.py::make_editor` turns the
+`EncodingDetectError` into a `NetlistError` (`_unrecognised_sheet`) that names
+the UTF-8 mark; `tools/schematic_edit.py::_commit_codec` writes a sheet
+spicelib read as `utf-16` back as UTF-16 LE without the mark; and
+`verify_circuit`'s quality check reports either mark (`byte_order_mark`).
+
+### Summary
+
+`detect_encoding` opens the file in each codec of a fixed list and keeps the
+first whose text matches the pattern. `utf-8` decodes a UTF-8 byte order mark
+to U+FEFF, which stays at the start of the text, so `^VERSION ` does not match
+there or in any later codec, and the error says the pattern was not found in a
+sheet whose first line, after the mark, is `Version 4`. A UTF-16 mark is the
+other way round: Python's `utf-16` stream decoder consumes it, so that sheet
+opens, and since `save_netlist` reopens the file in the codec it was read in,
+a save writes the mark back.
+
+Neither LTspice build reads either sheet (recorded): LTspice 26 exits 0
+having written no netlist, and XVII stops on "Aborting: Unknown schematic
+syntax: ... Version 4". Refusing them is therefore what LTspice does. What is
+wrong is the message, and that the two marks are treated differently.
+
+### Affected code
+
+`spicelib/utils/detect_encoding.py`, `detect_encoding` (~line 49):
+
+```python
+for encoding in ('utf-8', 'utf-16', 'utf_16_le', 'windows-1252', 'cp1252', 'cp1250', 'shift_jis'):
+    ...
+    if expected_pattern:
+        if not re.match(expected_pattern, lines, re_flags):
+            continue
+    ...
+else:
+    if expected_pattern:
+        raise EncodingDetectError(f"Expected pattern \"{expected_pattern}\" not found in file:{file_path}")
+```
+
+### Reproduction
+
+```python
+from spicelib.editor.asc_editor import AscEditor
+
+AscEditor("micro_utf8_bom.asc")
+# EncodingDetectError: Expected pattern "^VERSION " not found in file:micro_utf8_bom.asc
+
+editor = AscEditor("micro_utf16le_bom.asc")
+editor.encoding                    # 'utf-16'
+editor.save_netlist("saved.asc")   # saved.asc starts with b'\xff\xfe'
+```
+
+Both sheets are the recorded inputs named above. Through our server before the
+workaround, `inspect` and `edit_schematic` on the first failed as an internal
+error, and an edit of the second committed a sheet that still started with the
+mark, so neither build could export the edited sheet either.
+
+### Impact
+
+- A caller cannot tell a sheet with a byte order mark from a file that is not
+  a schematic: the message points at the `Version` line, which is there.
+- A sheet with a UTF-16 mark opens and saves with the mark, so a tool that
+  edits it hands back a sheet LTspice does not read, without saying so.
+
+### Proposed fix
+
+Match the pattern after a byte order mark, and return a codec that names the
+mark (`utf-8-sig` for UTF-8, as `utf-16` already does for UTF-16), so both
+marks are read and written back alike; a caller that wants to refuse or drop a
+mark can then see one. When nothing matches, say what the file starts with
+rather than only that the pattern was not found.
+
+### Suggested upstream test
+
+```python
+def test_a_utf8_byte_order_mark_is_read_past_and_named(tmp_path):
+    p = tmp_path / "bom.asc"
+    p.write_bytes(codecs.BOM_UTF8 + b"Version 4\nSHEET 1 880 680\n")
+    assert detect_encoding(p, r"^VERSION ", re.IGNORECASE) == "utf-8-sig"
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::TestExportEncoding` holds the
+server to the recordings: `test_the_editor_names_the_utf8_byte_order_mark_it_cannot_read`,
+`test_an_edit_writes_a_utf16_sheet_without_the_mark_neither_build_reads` and
+`test_verify_reports_the_byte_order_mark_neither_build_reads`. If upstream
+starts reading the UTF-8 sheet, it opens the way the UTF-16 one does:
+`_unrecognised_sheet` then no longer runs for it, and `_commit_codec` must drop
+that mark as it drops the UTF-16 one.
