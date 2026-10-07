@@ -39,7 +39,7 @@ evidence = "manifest: library.symbols"
 
 [behaviour.wire-connectivity]
 summary = "Which pins, labels and wires are one node: T-junctions, points on a wire's interior, crossings, overlaps, diagonal wires, pins that only touch."
-model = ["lib/schematic_ops.py", "lib/schematic_scene.py"]
+model = ["lib/connectivity.py", "lib/schematic_scene.py"]
 inputs = [
     "connectivity/crossing_wires.asc",
     "connectivity/label_at_crossing.asc",
@@ -58,9 +58,32 @@ inputs = [
 ]
 extra = ["connectivity/res.asy"]
 
+[behaviour.pins-of-one-part-on-one-point]
+summary = "Whether two pins of one component that sit on the same point are one node: with nothing else there, with a wire or a label there, and with the pins of one or two other components there."
+model = ["lib/connectivity.py", "lib/schematic_scene.py"]
+inputs = ["connectivity/pins_of_one_part_on_one_point.asc"]
+extra = ["connectivity/stacked.asy", "connectivity/stacked_reversed.asy", "connectivity/res.asy"]
+
+[behaviour.symbol-beside-sheet]
+summary = "Where a build finds a symbol kept in a folder beside the sheet: under its bare name, and under a name that says the folder."
+model = ["lib/symbol_library.py"]
+inputs = ["search/in_subfolder.asc", "search/named_subfolder.asc"]
+extra = ["search/lib/part.asy"]
+
+[behaviour.symbol-named-with-a-folder-it-is-not-in]
+summary = "Whether a build finds a symbol whose name says a folder when the symbol is right beside the sheet, in no folder."
+model = ["lib/symbol_library.py"]
+inputs = ["search_flat/named_folder_absent.asc"]
+extra = ["search/lib/part.asy"]
+
+[behaviour.symbol-in-library-folder]
+summary = "Where a build finds a symbol kept in a folder of its own library: under its bare name, under a name that says the folder, and under a name that says another."
+model = ["lib/symbol_library.py"]
+inputs = ["search/library_folder_bare.asc", "search/library_folder_named.asc", "search/library_folder_wrong.asc"]
+
 [behaviour.same-instance-wire]
 summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line."
-model = ["lib/schematic_ops.py"]
+model = ["lib/connectivity.py"]
 inputs = [
     "connectivity/same_instance_wire.asc",
     "connectivity/same_instance_detour.asc",

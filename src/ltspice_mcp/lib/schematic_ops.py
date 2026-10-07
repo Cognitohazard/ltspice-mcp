@@ -29,7 +29,6 @@ validate the extension and raise NetlistError for a non-.asc file.
 
 import asyncio
 import importlib
-import itertools
 import math
 import re
 from collections import Counter, defaultdict
@@ -70,6 +69,15 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
+from ltspice_mcp.lib.connectivity import (
+    NetPartition,
+    build_on_wire_predicate,
+    label_folded_nets,
+    net_members,
+    partition,
+    point_on_segment,
+    same_instance_dropped_segments,
+)
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
@@ -87,6 +95,13 @@ from ltspice_mcp.lib.plot_settings import (
     scales_of,
     with_panes,
     write_plot_settings,
+)
+from ltspice_mcp.lib.sheet_findings import (
+    RULES,
+    Finding,
+    Part,
+    SheetView,
+    editor_findings,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
@@ -645,200 +660,30 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
     return coords
 
 
-def point_on_segment(point: tuple[int, int], v1: tuple[int, int], v2: tuple[int, int]) -> bool:
-    """True iff ``point`` lies on the wire segment ``v1 → v2``, ends included.
-
-    A wire need not be horizontal or vertical: LTspice draws diagonal ones and
-    connects a pin or label that sits on one anywhere along its length, as it
-    does on any other wire.
-    """
-    px, py = point
-    x1, y1 = v1
-    x2, y2 = v2
-    if (x2 - x1) * (py - y1) != (y2 - y1) * (px - x1):
-        return False
-    return min(x1, x2) <= px <= max(x1, x2) and min(y1, y2) <= py <= max(y1, y2)
-
-
-def build_on_wire_predicate(
-    segments: list[tuple[tuple[int, int], tuple[int, int]]],
-) -> "Callable[[tuple[int, int]], bool]":
-    """Return an ``on_wire(coord)`` predicate with the same semantics as
-    ``point_on_segment`` but O(1)-amortised per query.
-
-    The naive ``any(point_on_segment(coord, *seg) for seg in segments)``
-    scan is O(segments) per coord; calling it once per pin makes
-    ``post_op_warnings`` O(pins × segments), which becomes the dominant
-    cost during a long ``add_component`` build. Bucketing
-    horizontal segments by row and vertical by column collapses each query
-    to the handful of segments sharing that row/column.
-    """
-    endpoints: set[tuple[int, int]] = set()
-    horiz: dict[int, list[tuple[int, int]]] = {}
-    vert: dict[int, list[tuple[int, int]]] = {}
-    for (x1, y1), (x2, y2) in segments:
-        endpoints.add((x1, y1))
-        endpoints.add((x2, y2))
-        if y1 == y2 and x1 != x2:
-            horiz.setdefault(y1, []).append((min(x1, x2), max(x1, x2)))
-        elif x1 == x2 and y1 != y2:
-            vert.setdefault(x1, []).append((min(y1, y2), max(y1, y2)))
-        # Diagonal / zero-length segments contribute via endpoints only,
-        # matching point_on_segment's diagonal fallback.
-
-    def on_wire(coord: tuple[int, int]) -> bool:
-        if coord in endpoints:
-            return True
-        px, py = coord
-        if any(xmin <= px <= xmax for xmin, xmax in horiz.get(py, ())):
-            return True
-        return any(ymin <= py <= ymax for ymin, ymax in vert.get(px, ()))
-
-    return on_wire
-
-
-class NetPartition(NamedTuple):
-    """Connected-component view of a schematic's nets.
-
-    ``root`` maps any interest coordinate to its net's canonical
-    representative; ``members`` maps a root to every coordinate on that net;
-    ``pin_owners`` maps a coordinate to the ``(ref, pin_name)`` pairs sitting
-    there; ``label_texts`` maps a coordinate to the FLAG texts placed there.
-    """
-
-    root: "Callable[[tuple[int, int]], tuple[int, int]]"
-    members: dict[tuple[int, int], set[tuple[int, int]]]
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]]
-    label_texts: dict[tuple[int, int], set[str]]
-
-
 def net_partition(
     editor: AscEditor,
     extra_segments: list[tuple[int, int, int, int]] | None = None,
 ) -> NetPartition:
-    """Union-find over pins, labels, and wires → a connected-net partition.
+    """The sheet's nets, as ``connectivity.partition`` groups its pins, labels and wires.
 
-    Segment-aware: a pin, a label or another wire's end lying anywhere ON a
-    wire, its interior included, is unioned with that wire. Two wires that
-    merely cross, neither ending at the crossing, stay separate. This is how
-    LTspice's own netlister connects a sheet: checked against LTspice 26.1.1
-    ``-netlist`` exports of a label, a pin and a wire end on a wire's interior
-    (connected, with the wire left whole — no split needed), a plain crossing
-    (not connected), and a label at a crossing (joins both wires).
-    The sheets and their exports are ``tests/fixtures/t_junctions/``. LTspice
-    26 and LTspice XVII agree on each of those, and on a pin at a crossing,
-    collinear wires that overlap, two pins that only touch, and a point on a
-    diagonal wire, in the connectivity sheets recorded from both
-    (``docs/TESTING.md``, "Recorded LTspice behaviour").
+    The joining rules, and the recordings each comes from, are in
+    ``lib/connectivity.py``; this collects what ``editor`` holds and hands it
+    over.
 
     ``extra_segments`` lets the caller include not-yet-committed wire
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
     on the post-route net layout. Shared by ``trace_nets`` (labels-per-net)
     and ``trace_net`` (full net membership).
     """
-    parent: dict[tuple[int, int], tuple[int, int]] = {}
-
-    def find(p: tuple[int, int]) -> tuple[int, int]:
-        if p not in parent:
-            parent[p] = p
-            return p
-        while parent[p] != p:
-            parent[p] = parent[parent[p]]
-            p = parent[p]
-        return p
-
-    def union(a: tuple[int, int], b: tuple[int, int]) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    # Collect every "interest point": pin coords + label coords + wire
-    # endpoints. A wire that touches one of these in its interior pulls
-    # it into the same connected component as its endpoints.
-    interest_points: set[tuple[int, int]] = set()
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]] = {}
-    for entry in collect_component_geometry(editor):
-        ref = entry["ref"]
-        for pin in entry["pins"]:
-            coord = (pin["x"], pin["y"])
-            interest_points.add(coord)
-            find(coord)
-            pin_owners.setdefault(coord, []).append((ref, pin["name"]))
-    label_texts: dict[tuple[int, int], set[str]] = {}
-    for lbl in editor.labels:
-        coord = (int(lbl.coord.X), int(lbl.coord.Y))
-        interest_points.add(coord)
-        find(coord)
-        label_texts.setdefault(coord, set()).add(lbl.text)
-
-    segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
-    for w in editor.wires:
-        segments.append(((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))))
-    if extra_segments:
-        for sx1, sy1, sx2, sy2 in extra_segments:
-            segments.append(((sx1, sy1), (sx2, sy2)))
-
-    # Wire endpoints are interest points themselves.
-    for v1, v2 in segments:
-        interest_points.add(v1)
-        interest_points.add(v2)
-        union(v1, v2)
-
-    # For each segment, union every interest point lying on it with the
-    # segment's endpoints. This is O(segments * interest_points) — fine
-    # for typical schematics (a few hundred of each).
-    for v1, v2 in segments:
-        for pt in interest_points:
-            if pt in (v1, v2):
-                continue
-            if point_on_segment(pt, v1, v2):
-                union(pt, v1)
-
-    members: dict[tuple[int, int], set[tuple[int, int]]] = {}
-    for p in parent:
-        members.setdefault(find(p), set()).add(p)
-
-    return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
-
-
-def label_folded_nets(part: NetPartition) -> "Callable[[tuple[int, int]], tuple[int, int]]":
-    """Map a coordinate to its electrical net's representative.
-
-    The partition connects by wire only; LTspice also makes every FLAG with the
-    same name one node, so wired nets that share a label name fold into one
-    here. Two coordinates are on the same netlist node iff this returns the same
-    representative for both.
-    """
-    parent: dict[tuple[int, int], tuple[int, int]] = {}
-
-    def find(r: tuple[int, int]) -> tuple[int, int]:
-        parent.setdefault(r, r)
-        while parent[r] != r:
-            parent[r] = parent[parent[r]]
-            r = parent[r]
-        return r
-
-    first_root: dict[str, tuple[int, int]] = {}
-    for root, coords in part.members.items():
-        for coord in coords:
-            for text in part.label_texts.get(coord, ()):
-                if text not in first_root:
-                    first_root[text] = root
-                    continue
-                ra, rb = find(first_root[text]), find(root)
-                if ra != rb:
-                    parent[ra] = rb
-
-    return lambda coord: find(part.root(coord))
-
-
-def net_members(
-    part: NetPartition,
-    net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
-    net: tuple[int, int],
-) -> set[tuple[int, int]]:
-    """Every pin, label and wire-end coordinate on ``net``, a ``net_of`` value."""
-    return {c for root, coords in part.members.items() if net_of(root) == net for c in coords}
+    pins = [
+        ((pin["x"], pin["y"]), (entry["ref"], pin["name"]))
+        for entry in collect_component_geometry(editor)
+        for pin in entry["pins"]
+    ]
+    labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
+    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
+    segments += [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in extra_segments or ()]
+    return partition(pins, labels, segments)
 
 
 def trace_nets(
@@ -917,155 +762,66 @@ def _append_wire_segments(
     return already
 
 
+def sheet_view(editor: AscEditor) -> SheetView:
+    """The sheet ``editor`` holds, as the checks in ``lib/sheet_findings.py`` read it.
+
+    Every part is in it. One whose symbol resolves has the box that includes
+    its pins, which is the box ``add_component`` and ``inspect`` report. One
+    whose symbol does not is there as ``missing``, with no box and no pins.
+    """
+    parts: list[Part] = []
+    for ref in editor.get_components():
+        position, _rotation = editor.get_component_position(ref)
+        at = (int(position.X), int(position.Y))
+        geometry = placed_geometry(editor, ref)
+        if geometry is None:
+            symbol = str(editor.components[ref].symbol or "")
+            parts.append(Part(ref=ref, symbol=symbol, at=at, missing=True))
+            continue
+        box = geometry["bounding_box"]
+        parts.append(
+            Part(
+                ref=ref,
+                at=at,
+                box=BBox.from_origin_size(box["x"], box["y"], box["width"], box["height"]),
+                pins=tuple((pin["name"], pin["x"], pin["y"]) for pin in geometry["pins"]),
+            )
+        )
+    return SheetView(
+        parts=tuple(parts),
+        wires=tuple(wire_segments_of(editor)),
+        labels=tuple((int(lbl.coord.X), int(lbl.coord.Y), lbl.text) for lbl in editor.labels),
+        texts=tuple((int(d.coord.X), int(d.coord.Y), d.text) for d in editor.directives),
+    )
+
+
+def _warning_row(finding: Finding) -> dict:
+    """A finding as ``edit_schematic`` has always carried it: a kind, a place, a message."""
+    row: dict = {"kind": finding.rule}
+    if RULES[finding.rule].scope == "wire":
+        (ax, ay), (bx, by) = finding.points
+        row["from"] = {"x": ax, "y": ay}
+        row["to"] = {"x": bx, "y": by}
+    else:
+        if finding.refs:
+            row["ref"] = finding.refs[0]
+        if finding.points:
+            row["x"], row["y"] = finding.points[0]
+    row.update(finding.facts)
+    row["message"] = finding.detail
+    return row
+
+
 def post_op_warnings(editor: AscEditor) -> list[dict]:
     """Schematic-state advisories surfaced after a mutating op succeeds.
 
-    Returns structured warnings the agent can act on without a follow-up
-    inspection turn:
-
-    - ``floating_pin`` — a component pin with no wire passing through,
-      no net label sitting on it, and no other component pin sharing
-      the coordinate.
-    - ``duplicate_wire`` — two wire segments sharing the same endpoints
-      (in either order). Pure noise, costs nothing to drop.
-    - ``dangling_label`` — a net label whose coordinate is neither on a
-      wire nor at any component pin.
-    - ``label_over_component`` — a net label whose coordinate falls strictly
-      inside a component's bounding box while sitting on no component's pin.
-      Surfaces the anchor-in-box fact only: the axis-aligned box also spans
-      leads and empty corners, so this is not a guarantee the rendered glyph
-      overlaps the drawn symbol. A label on a pin (any component's) — the normal
-      ground-flag pattern — is on a box boundary and is excluded.
-    - ``stacked_directive`` — two or more directive/comment text objects at
-      the exact same anchor, rendering on top of each other. Exact-coordinate
-      match only (no font-metric guessing), so this never fires on a
-      deliberately tight-but-offset directive block.
-
-    Read-only on the editor. Cheap to compute during an existing edit
-    session; intended for callers to surface in their response payload.
+    The findings of ``sheet_findings.editor_findings`` for the sheet ``editor``
+    holds (floating pins, duplicate wires, dangling labels, labels inside a
+    part's box, stacked directives, parts whose symbol was not found), each as
+    a row a caller can act on without a follow-up read. Read-only on the
+    editor, and cheap during an edit.
     """
-    pins: list[tuple[str, str, int, int]] = []
-    comp_boxes: list[tuple[str, BBox]] = []
-    for entry in collect_component_geometry(editor):
-        ref = entry["ref"]
-        comp_boxes.append(
-            (ref, BBox.from_origin_size(entry["x"], entry["y"], entry["width"], entry["height"]))
-        )
-        for p in entry["pins"]:
-            pins.append((ref, p["name"], p["x"], p["y"]))
-
-    pin_count_at: dict[tuple[int, int], int] = {}
-    for _, _, x, y in pins:
-        pin_count_at[(x, y)] = pin_count_at.get((x, y), 0) + 1
-
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
-
-    _on_any_wire = build_on_wire_predicate(segments)
-
-    warnings: list[dict] = []
-
-    for ref, name, x, y in pins:
-        coord = (x, y)
-        if pin_count_at[coord] > 1:
-            continue
-        if coord in label_coords:
-            continue
-        if _on_any_wire(coord):
-            continue
-        pin_label = f"{ref}.{name}" if name else ref
-        warnings.append(
-            {
-                "kind": "floating_pin",
-                "ref": ref,
-                "pin": name,
-                "x": x,
-                "y": y,
-                "message": f"Floating pin: {pin_label} at ({x},{y})",
-            }
-        )
-
-    seen_segments: dict[tuple[tuple[int, int], tuple[int, int]], int] = {}
-    for v1, v2 in segments:
-        if v1 == v2:
-            continue
-        key = (v1, v2) if v1 <= v2 else (v2, v1)
-        seen_segments[key] = seen_segments.get(key, 0) + 1
-    for (a, b), count in seen_segments.items():
-        if count > 1:
-            warnings.append(
-                {
-                    "kind": "duplicate_wire",
-                    "from": {"x": a[0], "y": a[1]},
-                    "to": {"x": b[0], "y": b[1]},
-                    "count": count,
-                    "message": (f"Duplicate wire ({count}×): ({a[0]},{a[1]})->({b[0]},{b[1]})"),
-                }
-            )
-
-    pin_coords = pin_count_at.keys()
-    for lbl in editor.labels:
-        coord = (int(lbl.coord.X), int(lbl.coord.Y))
-        if coord in pin_coords:
-            continue
-        if _on_any_wire(coord):
-            continue
-        warnings.append(
-            {
-                "kind": "dangling_label",
-                "label": lbl.text,
-                "x": coord[0],
-                "y": coord[1],
-                "message": f"Dangling label '{lbl.text}' at ({coord[0]},{coord[1]})",
-            }
-        )
-
-    for lbl in editor.labels:
-        coord = (int(lbl.coord.X), int(lbl.coord.Y))
-        # A label on ANY component's pin is the normal flag pattern (pins sit on
-        # symbol outlines) — never report it, even when it also lands inside a
-        # different, overlapping component's box.
-        if coord in pin_count_at:
-            continue
-        for ref, box in comp_boxes:
-            # Strict interior only: a coordinate on the box boundary — where pins
-            # and leads sit — is not "inside". No break: with overlapping boxes a
-            # label can be inside more than one, and each is a distinct fact.
-            if box.x1 < coord[0] < box.x2 and box.y1 < coord[1] < box.y2:
-                warnings.append(
-                    {
-                        "kind": "label_over_component",
-                        "label": lbl.text,
-                        "ref": ref,
-                        "x": coord[0],
-                        "y": coord[1],
-                        "message": (
-                            f"Label '{lbl.text}' at ({coord[0]},{coord[1]}) is inside "
-                            f"{ref}'s bounding box"
-                        ),
-                    }
-                )
-
-    directive_anchor_count: dict[tuple[int, int], int] = {}
-    for d in editor.directives:
-        anchor = (int(d.coord.X), int(d.coord.Y))
-        directive_anchor_count[anchor] = directive_anchor_count.get(anchor, 0) + 1
-    for (dx, dy), count in directive_anchor_count.items():
-        if count > 1:
-            warnings.append(
-                {
-                    "kind": "stacked_directive",
-                    "x": dx,
-                    "y": dy,
-                    "count": count,
-                    "message": (
-                        f"{count} directives/comments share anchor ({dx},{dy}) — "
-                        "they render on top of each other"
-                    ),
-                }
-            )
-
-    return warnings
+    return [_warning_row(finding) for finding in editor_findings(sheet_view(editor))]
 
 
 def wiring_profile(editor: AscEditor) -> dict[str, int]:
@@ -1530,8 +1286,8 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     warnings: list[str] = []
     part = net_partition(editor)
     # A FLAG anywhere along a wire, its interior included, joins that wire's
-    # net, and one at a crossing joins both (see net_partition for the export
-    # record).
+    # net, and one at a crossing joins both (see connectivity.partition for the
+    # export record).
     through = wires_through((x, y), wire_segments_of(editor))
     if net != "0":
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
@@ -1612,76 +1368,6 @@ class _ConnectPlan(NamedTuple):
     junctions: list[dict[str, object]]
 
 
-def _merge_collinear_runs(
-    segments: list[tuple[int, int, int, int]],
-    node_coords: set[tuple[int, int]],
-) -> list[tuple[int, int, int, int]]:
-    """Collapse straight runs of collinear wire segments into single segments,
-    mirroring LTspice's netlist-time wire merge.
-
-    A vertex breaks a run — stays its own node — when it is a pin coordinate
-    (``node_coords``) or a corner/junction (its incident segment ends are not
-    exactly two ends of one orientation). Only pure pass-through vertices
-    (degree-2, both ends collinear, not a pin) are merged across. This is what
-    makes a *collinear* waypoint disappear: an in-line bend leaves only bare
-    pass-through vertices, so the run collapses back to one segment; a bend that
-    turns a corner leaves the corner vertices as breaks, so its segments stay
-    split. Verticals (``x1==x2``) and horizontals (``y1==y2``) are merged
-    per-line by interval union split at breaks; any diagonal passes through
-    unchanged.
-    """
-    ends: dict[tuple[int, int], list[str]] = defaultdict(list)
-    verticals: dict[int, list[tuple[int, int]]] = defaultdict(list)
-    horizontals: dict[int, list[tuple[int, int]]] = defaultdict(list)
-    merged: list[tuple[int, int, int, int]] = []
-    for x1, y1, x2, y2 in segments:
-        if (x1, y1) == (x2, y2):
-            continue  # zero-length record (hand-corrupted WIRE) — nothing to merge
-        if x1 == x2:
-            verticals[x1].append((min(y1, y2), max(y1, y2)))
-            ends[(x1, y1)].append("V")
-            ends[(x2, y2)].append("V")
-        elif y1 == y2:
-            horizontals[y1].append((min(x1, x2), max(x1, x2)))
-            ends[(x1, y1)].append("H")
-            ends[(x2, y2)].append("H")
-        else:
-            merged.append((x1, y1, x2, y2))  # diagonal — passed through as-is
-
-    def _breaks(coord: tuple[int, int]) -> bool:
-        es = ends.get(coord, [])
-        return coord in node_coords or len(es) != 2 or len(set(es)) != 1
-
-    def _emit(intervals: list[tuple[int, int]], cuts: set[int], vertical: bool, line: int) -> None:
-        intervals.sort()
-        runs: list[list[int]] = []
-        for lo, hi in intervals:
-            if runs and lo <= runs[-1][1]:
-                runs[-1][1] = max(runs[-1][1], hi)
-            else:
-                runs.append([lo, hi])
-        for lo, hi in runs:
-            pts = sorted({lo, hi} | {c for c in cuts if lo < c < hi})
-            for a, b in itertools.pairwise(pts):
-                merged.append((line, a, line, b) if vertical else (a, line, b, line))
-
-    # A component pin on the interior of a run is a junction too — LTspice splits
-    # the wire there — but it is not a wire endpoint, so it never appears in
-    # ``ends`` and a break test over ``ends`` alone would miss it. Add every pin
-    # sitting on the line as a cut candidate; ``_emit`` keeps only those strictly
-    # inside a run's span, so a pin at a run end (already a natural node) or off
-    # any run adds nothing.
-    for x, iv in verticals.items():
-        cuts = {y for (cx, y) in ends if cx == x and _breaks((cx, y))}
-        cuts |= {py for (px, py) in node_coords if px == x}
-        _emit(iv, cuts, vertical=True, line=x)
-    for y, iv in horizontals.items():
-        cuts = {x for (x, cy) in ends if cy == y and _breaks((x, cy))}
-        cuts |= {px for (px, py) in node_coords if py == y}
-        _emit(iv, cuts, vertical=False, line=y)
-    return merged
-
-
 def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
     """Every wire as a flat ``(x1, y1, x2, y2)`` integer tuple."""
     return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
@@ -1693,7 +1379,7 @@ def wires_through(
     """The segments ``coord`` lies on, ends included, in the order given.
 
     A point on a wire's interior touches that wire the way its end would: LTspice
-    joins anything placed there (see :func:`net_partition`). More than one
+    joins anything placed there (see ``connectivity.partition``). More than one
     segment comes back where wires meet, overlap or cross.
     """
     return [s for s in segments if point_on_segment(coord, (s[0], s[1]), (s[2], s[3]))]
@@ -1730,51 +1416,6 @@ def segment_text(seg: tuple[int, int, int, int]) -> str:
 def segment_json(seg: tuple[int, int, int, int]) -> dict[str, dict[str, int]]:
     """A wire as a response carries it: ``{from: {x, y}, to: {x, y}}``."""
     return {"from": {"x": seg[0], "y": seg[1]}, "to": {"x": seg[2], "y": seg[3]}}
-
-
-def same_instance_dropped_segments(
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
-    segments: list[tuple[int, int, int, int]],
-) -> list[dict]:
-    """Wire segments LTspice discards from the exported netlist.
-
-    LTspice drops a wire run whose two ends both land exactly on pins of the
-    SAME single component instance (recorded from the ``-netlist`` export of
-    LTspice 26 and of LTspice XVII: such a run never reaches the netlist, so the
-    two pins stay on separate nodes and the drawn tie has no electrical
-    effect). Two routes still get kept, and both are in the same recordings: a
-    run spanning two *different* instances, and a same-instance tie that turns
-    a corner OUT OF LINE with the two pins. A waypoint that stays *collinear*
-    with the pins does NOT survive —
-    LTspice merges the in-line segments back into one and drops it — so the
-    segments are collinear-merged (:func:`_merge_collinear_runs`) before this
-    check, which is what catches an all-in-line waypoint route as well as the
-    bare direct wire. A net label on one pin does not rescue the run either.
-
-    Returns one dict per dropped run with ``segment`` (the merged ``(x1, y1, x2,
-    y2)`` tuple), ``ref`` (the shared instance), and ``pins`` (the two pin
-    names on that instance), ordered deterministically. ``pin_owners`` maps each
-    pin coordinate to its ``(ref, pin_name)`` owners, as :func:`net_partition`
-    builds it.
-    """
-    dropped: list[dict] = []
-    for seg in _merge_collinear_runs(list(segments), set(pin_owners)):
-        sx1, sy1, sx2, sy2 = seg
-        if (sx1, sy1) == (sx2, sy2):
-            continue  # defensive: a collapsed/zero-length run is not a tie
-        owners_a = pin_owners.get((sx1, sy1), [])
-        owners_b = pin_owners.get((sx2, sy2), [])
-        if not owners_a or not owners_b:
-            continue  # an end is a bare vertex/waypoint, not a pin — kept
-        refs_a = {r for r, _ in owners_a}
-        refs_b = {r for r, _ in owners_b}
-        if len(refs_a | refs_b) != 1:
-            continue  # the run bridges two distinct instances — kept
-        ref = next(iter(refs_a))
-        pin_a, pin_b = owners_a[0][1], owners_b[0][1]
-        dropped.append({"segment": seg, "ref": ref, "pins": (pin_a, pin_b)})
-    dropped.sort(key=lambda d: (d["ref"], d["segment"]))
-    return dropped
 
 
 def _endpoint_name(endpoint: "str | GridPoint") -> str:
@@ -2108,7 +1749,7 @@ def _plan_connect_route(
                 )
 
     # Contact check. LTspice joins a wire wherever another wire's end, a pin or
-    # a label touches it (see net_partition), so a waypoint on existing wiring,
+    # a label touches it (see connectivity.partition), so a waypoint on existing wiring,
     # or a route passing through an existing wire's end or a lone label, joins
     # the route there as an endpoint would. Onto a net the route already joins
     # that is a redundant junction, reported; onto any other net it would merge

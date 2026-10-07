@@ -1075,7 +1075,8 @@ and the grid arm was strictly less efficient, so the variant was removed from
 the enum rather than shipped.
 
 **Findings are scoped to the edit.** The validation pass (floating pins,
-duplicate wires, dangling labels, a label inside a body, stacked directives)
+duplicate wires, dangling labels, a label inside a body, stacked directives,
+a part whose symbol is not found)
 and the label-only-pin list are whole-sheet facts, and on an existing sheet
 most of them predate the call. One recorded edit came back with about eighteen of
 those findings and a 28-pin `label_only_pins` list, none of them about what it

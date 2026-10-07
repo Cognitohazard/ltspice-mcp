@@ -97,19 +97,18 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import RenderedImage
-from ltspice_mcp.lib.schematic_ops import (
-    is_asc,
-    same_instance_dropped_segments,
-)
-from ltspice_mcp.lib.schematic_scene import (
-    LayoutIssue,
-    NetFlag,
-    Scene,
-    build_scene,
-    layout_issues,
-)
-from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
+from ltspice_mcp.lib.schematic_ops import is_asc
+from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
 from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.sheet_findings import (
+    RULES,
+    Finding,
+    SheetView,
+    checker_findings,
+    dropped_wires,
+    label_islands,
+    unresolved_symbols,
+)
 from ltspice_mcp.lib.simulator import is_ngspice
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
@@ -263,16 +262,10 @@ STAGE_FILE_CAP = 200
 # in the accompanying observation when a rule is truncated.
 FINDING_RULE_CAP = 25
 
-# Scene-issue kinds routed to the layout check (geometric placement facts) and
-# to the quality check (the text-in-body hygiene fact). label-island is computed
-# separately, from the flags-vs-wires geometry.
-_LAYOUT_ISSUE_KINDS = (
-    "symbol_overlap",
-    "wire_through_symbol",
-    "floating_pin",
-    "dangling_wire_end",
-)
-_QUALITY_ISSUE_KINDS = ("text_in_symbol_body",)
+# The sheet rules each check reports, as the registry assigns them. A label
+# island and a dropped wire are quality rules too, each computed on its own.
+_LAYOUT_ISSUE_KINDS = tuple(rule.rule_id for rule in RULES.values() if rule.check == "layout")
+_QUALITY_ISSUE_KINDS = tuple(rule.rule_id for rule in RULES.values() if rule.check == "quality")
 
 # Stated inline so an empty findings list is not read as a clean drawing. Kept
 # to the one fact that changes what a caller concludes — the scan's blind spot,
@@ -857,16 +850,16 @@ VERIFY_DESCRIPTION = (
 
 def _analyze_scene(
     asc_path: Path, state: SessionState, *, compute_issues: bool
-) -> tuple[Scene, list[LayoutIssue]]:
-    """Build the scene and, only when needed, compute its layout issues.
+) -> tuple[Scene, SheetView, list[Finding]]:
+    """Build the scene, the view of it the checks read, and its layout findings.
 
-    ``layout_issues`` is an O(n²) geometric scan; skip it unless a check that
-    consumes it (layout or quality) is going to run, so a pure render does not
-    pay for it.
+    The layout findings are computed only when a check that reports them
+    (layout or quality) is going to run, so a pure render does not pay for
+    them.
     """
     scene = build_scene(asc_path, resolver=symbol_resolver_for(asc_path, state))
-    issues = layout_issues(scene) if compute_issues else []
-    return scene, issues
+    view = sheet_view(scene)
+    return scene, view, (checker_findings(view) if compute_issues else [])
 
 
 def _scratch_dir(state: SessionState, name: str) -> Path:
@@ -1268,155 +1261,104 @@ def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def _symbol_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
-    """Unresolved-symbol findings — each drawn as a placeholder box."""
-    grouped: dict[str, list[str]] = {}
-    for sym in scene.symbols:
-        if sym.missing:
-            grouped.setdefault(sym.symbol, []).append(sym.reference)
-    findings: list[dict[str, Any]] = []
-    for name, refs in sorted(grouped.items()):
-        findings.append(
-            _finding(
-                rule_id="unresolved_symbol",
-                severity="error",
-                at={"file": str(path)},
-                subject=name,
-                evidence={
-                    "symbol": name,
-                    "instances": refs,
-                    "detail": (
-                        "drawn as a placeholder box; searched the schematic directory, "
-                        "the configured symbol paths, and the stock library"
-                    ),
-                },
-            )
-        )
-    return findings
+def _sheet_finding(
+    found: Finding,
+    path: Path,
+    *,
+    subject: str | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A sheet finding in the shared shape, called what the registry calls its rule.
 
-
-def _issue_finding(issue: LayoutIssue, path: Path, severity: str) -> dict[str, Any]:
-    """Project a scene LayoutIssue into the shared finding shape."""
+    It is at its first point and, unless told otherwise, about its parts (else
+    that point, else the rule), with its detail, parts and points as evidence.
+    """
     at: dict[str, Any] = {"file": str(path)}
-    coord = issue.coords[0] if issue.coords else None
-    if coord is not None:
-        at["x"], at["y"] = int(coord[0]), int(coord[1])
-    if issue.refs:
-        subject = " & ".join(issue.refs)
-    elif coord is not None:
-        subject = f"({coord[0]},{coord[1]})"
-    else:
-        subject = issue.kind
+    if found.points:
+        at["x"], at["y"] = found.points[0]
+    if subject is None:
+        if found.refs:
+            subject = " & ".join(found.refs)
+        elif found.points:
+            subject = f"({found.points[0][0]},{found.points[0][1]})"
+        else:
+            subject = found.rule
+    if evidence is None:
+        evidence = {
+            "detail": found.detail,
+            "refs": list(found.refs),
+            "coords": [list(point) for point in found.points],
+        }
     return _finding(
-        rule_id=issue.kind,
-        severity=severity,
+        rule_id=found.rule,
+        severity=RULES[found.rule].severity,
         at=at,
         subject=subject,
-        evidence={
-            "detail": issue.detail,
-            "refs": list(issue.refs),
-            "coords": [list(c) for c in issue.coords],
-        },
+        evidence=evidence,
     )
 
 
+def _symbol_findings(view: SheetView, path: Path) -> list[dict[str, Any]]:
+    """Unresolved-symbol findings — each drawn as a placeholder box."""
+    return [
+        _sheet_finding(
+            found,
+            path,
+            subject=found.facts["symbol"],
+            evidence={
+                "symbol": found.facts["symbol"],
+                "instances": list(found.refs),
+                "detail": found.detail,
+            },
+        )
+        for found in unresolved_symbols(view)
+    ]
+
+
 def _issue_findings(
-    issues: list[LayoutIssue], path: Path, kinds: tuple[str, ...], severity: str
+    found: list[Finding], path: Path, kinds: tuple[str, ...]
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Return every finding for the requested issue kinds and counts by rule."""
+    """Return the findings of the rules in ``kinds`` and their counts by rule."""
     findings: list[dict[str, Any]] = []
     total: dict[str, int] = {}
-    for issue in issues:
-        if issue.kind not in kinds:
+    for one in found:
+        if one.rule not in kinds:
             continue
-        total[issue.kind] = total.get(issue.kind, 0) + 1
-        findings.append(_issue_finding(issue, path, severity))
+        total[one.rule] = total.get(one.rule, 0) + 1
+        findings.append(_sheet_finding(one, path))
     return findings, total
 
 
-def _label_island_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
+def _label_island_findings(view: SheetView, path: Path) -> list[dict[str, Any]]:
     """Nets connected only by label stubs with zero drawn wires.
 
-    A schematic's signal nets should be joined by drawn wires; a net whose only
-    connection is two or more identically-named net-label stubs, with no wire on
-    any of them, is a "label island" — electrically valid but a netlist wearing
-    symbols. Ground (and any flag LTspice treats as ground) is exempt: connecting
-    ground by flag is standard practice. Surfaced as observation-severity facts;
-    whether a given rail is acceptable that way is the model's call.
+    The findings of ``sheet_findings.label_islands``, as facts for the model to
+    weigh: whether a given rail is acceptable that way is its call.
     """
-    groups: dict[str, list[NetFlag]] = {}
-    for flag in scene.flags:
-        if flag.is_ground:
-            continue
-        name = flag.text.strip()
-        if not name:
-            continue
-        groups.setdefault(name, []).append(flag)
-
-    segments = [((w.x1, w.y1), (w.x2, w.y2)) for w in scene.wires if (w.x1, w.y1) != (w.x2, w.y2)]
-    findings: list[dict[str, Any]] = []
-    for name, flags in sorted(groups.items()):
-        if len(flags) < 2:
-            continue  # a lone label is not a by-name connection replacing a wire
-        wired = any(
-            point_on_segment((flag.x, flag.y), a, b) for flag in flags for a, b in segments
+    return [
+        _sheet_finding(
+            found,
+            path,
+            subject=found.facts["net"],
+            evidence={
+                "net": found.facts["net"],
+                "stub_count": len(found.points),
+                "coords": [[x, y] for x, y in found.points],
+                "detail": found.detail,
+            },
         )
-        if wired:
-            continue
-        coords = [[flag.x, flag.y] for flag in flags]
-        findings.append(
-            _finding(
-                rule_id="label_island",
-                severity="observation",
-                at={"file": str(path), "x": flags[0].x, "y": flags[0].y},
-                subject=name,
-                evidence={
-                    "net": name,
-                    "stub_count": len(flags),
-                    "coords": coords,
-                    "detail": (
-                        f"net '{name}' is connected by {len(flags)} net-label stubs and "
-                        "no drawn wire segment"
-                    ),
-                },
-            )
-        )
-    return findings
+        for found in label_islands(view)
+    ]
 
 
-def _dropped_wire_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
+def _dropped_wire_findings(view: SheetView, path: Path) -> list[dict[str, Any]]:
     """Wires present in the drawing but absent from the exported netlist.
 
-    LTspice drops a run whose two ends both land on pins of the SAME instance:
-    the pins stay on separate nodes, so the ``.asc`` shows a tie the netlist does
-    not have. The rule is the schematic editor's LTspice-verified one.
+    The findings of ``sheet_findings.dropped_wires``: LTspice drops a run whose
+    two ends both land on pins of the SAME instance, so the ``.asc`` shows a tie
+    the netlist does not have.
     """
-    owners: dict[tuple[int, int], list[tuple[str, str]]] = {}
-    for sym in scene.symbols:
-        for pin in sym.pins:
-            owners.setdefault((pin.x, pin.y), []).append((sym.reference, ""))
-    segments = [(w.x1, w.y1, w.x2, w.y2) for w in scene.wires]
-
-    findings: list[dict[str, Any]] = []
-    for drop in same_instance_dropped_segments(owners, segments):
-        x1, y1, x2, y2 = drop["segment"]
-        findings.append(
-            _finding(
-                rule_id="dropped_wire",
-                severity="warning",
-                at={"file": str(path), "x": int(x1), "y": int(y1)},
-                subject=drop["ref"],
-                evidence={
-                    "detail": (
-                        f"wire joins two pins of the same instance {drop['ref']} and is "
-                        "not exported"
-                    ),
-                    "refs": [drop["ref"]],
-                    "coords": [[int(x1), int(y1)], [int(x2), int(y2)]],
-                },
-            )
-        )
-    return findings
+    return [_sheet_finding(found, path) for found in dropped_wires(view)]
 
 
 # ---------------------------------------------------------------------------
@@ -2322,7 +2264,8 @@ async def evaluate_verify_circuit(
 
     # --- scene-derived checks (symbols, layout, quality, dropped wires) -----
     scene: Scene | None = None
-    scene_issues: list[LayoutIssue] = []
+    view = SheetView()
+    layout_found: list[Finding] = []
     needs_scene = kind == "asc" and (
         wanted.get("symbols")
         or wanted.get("layout")
@@ -2333,7 +2276,7 @@ async def evaluate_verify_circuit(
     want_issues = bool(wanted.get("layout") or wanted.get("quality"))
     if needs_scene:
         try:
-            scene, scene_issues = await asyncio.to_thread(
+            scene, view, layout_found = await asyncio.to_thread(
                 _analyze_scene, path, state, compute_issues=want_issues
             )
         except (OSError, ValueError) as exc:
@@ -2350,22 +2293,18 @@ async def evaluate_verify_circuit(
             "bbox": [bbox.x1, bbox.y1, bbox.x2, bbox.y2] if bbox is not None else None,
         }
         if wanted.get("symbols"):
-            findings.extend(_symbol_findings(scene, path))
+            findings.extend(_symbol_findings(view, path))
             checks_run.append("symbols")
         if wanted.get("layout"):
-            layout_findings, totals = _issue_findings(
-                scene_issues, path, _LAYOUT_ISSUE_KINDS, "observation"
-            )
+            layout_findings, totals = _issue_findings(layout_found, path, _LAYOUT_ISSUE_KINDS)
             findings.extend(layout_findings)
             capped_rules.update(totals)
             observation_events.append(_FindingCapSummary(totals))
             observation_events.append(LAYOUT_COVERAGE)
             checks_run.append("layout")
         if wanted.get("quality"):
-            quality_findings, totals = _issue_findings(
-                scene_issues, path, _QUALITY_ISSUE_KINDS, "observation"
-            )
-            quality_findings.extend(_label_island_findings(scene, path))
+            quality_findings, totals = _issue_findings(layout_found, path, _QUALITY_ISSUE_KINDS)
+            quality_findings.extend(_label_island_findings(view, path))
             findings.extend(quality_findings)
             capped_rules.update(totals)
             observation_events.append(_FindingCapSummary(totals))
@@ -2395,7 +2334,7 @@ async def evaluate_verify_circuit(
                 warnings.extend(export.warnings)
                 findings.extend(export.findings)
                 if scene is not None:
-                    dropped = _dropped_wire_findings(scene, path)
+                    dropped = _dropped_wire_findings(view, path)
                     findings.extend(dropped)
                     if dropped:
                         capped_rules.add("dropped_wire")

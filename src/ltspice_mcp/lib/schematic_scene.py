@@ -32,13 +32,24 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.cache import file_stamp
+from ltspice_mcp.lib.connectivity import point_on_segment
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
 from ltspice_mcp.lib.geometry import BBox
-from ltspice_mcp.lib.symbol_geometry import (
+from ltspice_mcp.lib.sheet_findings import Part, SheetView
+from ltspice_mcp.lib.symbol_file import (
     PinInfo,
+    SymbolArc,
+    leading_ints,
+    read_symbol,
+    read_window,
+    value_of,
+)
+from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
 )
+from ltspice_mcp.lib.symbol_library import find_symbol, spellings
 
 # Attribute-window numbers we render as text next to a symbol. LTspice assigns
 # window 0 to the instance name and window 3 to the value; the rest (SpiceLine,
@@ -401,31 +412,6 @@ Graphic = DrawLine | DrawRect | DrawEllipse | DrawPolyline
 
 
 @dataclass(frozen=True)
-class WindowDef:
-    """A symbol attribute-text anchor (``WINDOW n x y align size``)."""
-
-    number: int
-    x: int
-    y: int
-    align: str
-    size: int
-
-
-@dataclass(frozen=True)
-class AsyArc:
-    """LTspice ARC: ellipse bbox (x1,y1)-(x2,y2) plus start/end points."""
-
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-    sx: int
-    sy: int
-    ex: int
-    ey: int
-
-
-@dataclass(frozen=True)
 class SymbolProto:
     """Parsed ``.asy`` symbol body in symbol-local coordinates."""
 
@@ -434,12 +420,12 @@ class SymbolProto:
     lines: tuple[DrawLine, ...]
     rects: tuple[DrawRect, ...]
     circles: tuple[DrawEllipse, ...]
-    arcs: tuple[AsyArc, ...]
+    arcs: tuple[SymbolArc, ...]
     pins: tuple[PinInfo, ...]
-    windows: tuple[WindowDef, ...]
+    windows: tuple[Window, ...]
     bbox: BBox
 
-    def window(self, number: int) -> WindowDef | None:
+    def window(self, number: int) -> Window | None:
         for w in self.windows:
             if w.number == number:
                 return w
@@ -563,125 +549,25 @@ class Scene:
 # ---------------------------------------------------------------------------
 
 
-def _parse_shape_coords(parts: Sequence[str], count: int) -> list[int] | None:
-    """Parse ``count`` integer coordinates starting after the style token.
-
-    ``.asy`` shape lines are ``KEYWORD <style> c0 c1 ...``; coordinates begin
-    at index 2. Returns ``None`` if too few fields or any coordinate is not an
-    integer (a degenerate/garbage line is skipped, never fatal).
-    """
-    if len(parts) < 2 + count:
-        return None
-    try:
-        return [int(parts[2 + i]) for i in range(count)]
-    except ValueError:
-        return None
-
-
 def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
     """Parse a ``.asy`` file into a render-ready :class:`SymbolProto`.
 
     Reads via ``read_spice_text`` (BOM/UTF-16/cp1252 fallback) — vendor symbols
-    routinely carry cp1252 bytes in description fields. Unrecognized or
-    malformed lines are skipped, mirroring ``symbol_geometry.parse_asy_file``.
+    routinely carry cp1252 bytes in description fields. The reading is
+    ``symbol_file.read_symbol``, the one the schematic editor's pin geometry
+    comes from; a line that does not read is left out of the drawing.
     """
-    text = read_spice_text(asy_path)
-    lines_txt = text.splitlines()
-
-    lines: list[DrawLine] = []
-    rects: list[DrawRect] = []
-    circles: list[DrawEllipse] = []
-    arcs: list[AsyArc] = []
-    pins: list[PinInfo] = []
-    windows: list[WindowDef] = []
-
-    i = 0
-    n = len(lines_txt)
-    while i < n:
-        raw = lines_txt[i].strip()
-        parts = raw.split()
-        i += 1
-        if not parts:
-            continue
-        kw = parts[0]
-
-        if kw == "LINE":
-            c = _parse_shape_coords(parts, 4)
-            if c is not None:
-                lines.append(DrawLine(c[0], c[1], c[2], c[3]))
-        elif kw == "RECTANGLE":
-            c = _parse_shape_coords(parts, 4)
-            if c is not None:
-                rects.append(DrawRect(c[0], c[1], c[2], c[3]))
-        elif kw == "CIRCLE":
-            c = _parse_shape_coords(parts, 4)
-            if c is not None:
-                circles.append(DrawEllipse(c[0], c[1], c[2], c[3]))
-        elif kw == "ARC":
-            c = _parse_shape_coords(parts, 8)
-            if c is not None:
-                arcs.append(AsyArc(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
-        elif kw == "WINDOW":
-            # WINDOW n x y align size
-            if len(parts) >= 4:
-                try:
-                    num = int(parts[1])
-                    wx = int(parts[2])
-                    wy = int(parts[3])
-                except ValueError:
-                    continue
-                align = parts[4] if len(parts) > 4 else "Left"
-                try:
-                    size = int(parts[5]) if len(parts) > 5 else 2
-                except ValueError:
-                    size = 2
-                windows.append(WindowDef(num, wx, wy, align, size))
-        elif kw == "PIN":
-            # PIN x y <justification> <offset>, then PINATTR lines.
-            if len(parts) >= 3:
-                try:
-                    px, py = int(parts[1]), int(parts[2])
-                except ValueError:
-                    continue
-                pin_name = ""
-                pin_order = 0
-                while i < n and lines_txt[i].strip().startswith("PINATTR"):
-                    attr = lines_txt[i].strip()
-                    if attr.startswith("PINATTR PinName"):
-                        toks = attr.split(None, 2)
-                        pin_name = toks[2] if len(toks) > 2 else ""
-                    elif attr.startswith("PINATTR SpiceOrder"):
-                        try:
-                            pin_order = int(attr.split()[-1])
-                        except ValueError:
-                            pin_order = 0
-                    i += 1
-                pins.append(PinInfo(name=pin_name, order=pin_order, x=px, y=py))
-
-    pin_points = [(p.x, p.y) for p in pins]
-    element_points: list[tuple[int, int]] = []
-    for ln in lines:
-        element_points.extend(ln.points())
-    for rc in rects:
-        element_points.extend(rc.points())
-    for ci in circles:
-        element_points.extend(ci.points())
-    for ar in arcs:
-        element_points.append((ar.x1, ar.y1))
-        element_points.append((ar.x2, ar.y2))
-    bbox = BBox.from_points(element_points + pin_points) or BBox(0, 0, 0, 0)
-
-    pins.sort(key=lambda p: p.order)
+    symbol = read_symbol(read_spice_text(asy_path))
     return SymbolProto(
         name=name,
         path=asy_path,
-        lines=tuple(lines),
-        rects=tuple(rects),
-        circles=tuple(circles),
-        arcs=tuple(arcs),
-        pins=tuple(pins),
-        windows=tuple(windows),
-        bbox=bbox,
+        lines=tuple(DrawLine(*box) for box in symbol.lines),
+        rects=tuple(DrawRect(*box) for box in symbol.rects),
+        circles=tuple(DrawEllipse(*box) for box in symbol.circles),
+        arcs=symbol.arcs,
+        pins=symbol.pins,
+        windows=symbol.windows,
+        bbox=symbol.bbox,
     )
 
 
@@ -731,6 +617,7 @@ class SymbolResolver:
             if key not in seen:
                 seen.add(key)
                 self._roots.append(r)
+        self._local_dir = local_dir
         self._active_set: frozenset[str] = frozenset(str(r) for r in self._roots)
         self._resolve_cache: dict[str, Path | None] = {}
         self._parse_cache: dict[tuple[str, tuple[int, int], frozenset[str]], SymbolProto] = {}
@@ -739,36 +626,16 @@ class SymbolResolver:
     def active_set(self) -> frozenset[str]:
         return self._active_set
 
-    def _candidates(self, root: Path, symbol: str) -> list[Path]:
-        # LTspice writes symbol names with backslash subdir separators.
-        rel = symbol.replace("\\", "/")
-        stem = rel.rsplit("/", 1)[-1]
-        out = [root / f"{rel}.asy"]
-        if stem != rel:
-            out.append(root / f"{stem}.asy")
-        return out
-
     def resolve(self, symbol: str) -> Path | None:
-        """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved."""
+        """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.
+
+        ``symbol_library.find_symbol`` is the rule, with the sheet's own folder
+        first and every other root a library: the rule the schematic editor's
+        pin geometry follows too.
+        """
         if symbol in self._resolve_cache:
             return self._resolve_cache[symbol]
-        result: Path | None = None
-        stem = symbol.replace("\\", "/").rsplit("/", 1)[-1]
-        for root in self._roots:
-            if not root.is_dir():
-                continue
-            for cand in self._candidates(root, symbol):
-                if cand.is_file():
-                    result = cand
-                    break
-            if result is not None:
-                break
-            # LTspice organizes stock symbols into subfolders; fall back to a
-            # recursive search by bare stem within this root.
-            match = next(root.rglob(f"{stem}.asy"), None)
-            if match is not None:
-                result = match
-                break
+        result = find_symbol(symbol, self._local_dir, self._roots)
         self._resolve_cache[symbol] = result
         return result
 
@@ -786,7 +653,7 @@ class SymbolResolver:
         if cached is not None:
             return cached
         try:
-            proto = parse_symbol(path, symbol.replace("\\", "/").rsplit("/", 1)[-1])
+            proto = parse_symbol(path, spellings(symbol)[1])
         except Exception:
             return None
         self._parse_cache[key] = proto
@@ -826,7 +693,7 @@ class _RawSymbol:
     y: int
     rotation: str
     attrs: dict[str, str] = field(default_factory=dict)
-    windows: list[WindowDef] = field(default_factory=list)
+    windows: list[Window] = field(default_factory=list)
 
 
 @dataclass
@@ -838,10 +705,7 @@ class _AscDoc:
     sheet_lines: list[DrawLine] = field(default_factory=list)
     sheet_rects: list[DrawRect] = field(default_factory=list)
     sheet_circles: list[DrawEllipse] = field(default_factory=list)
-    sheet_arcs: list[AsyArc] = field(default_factory=list)
-
-
-_ROTATIONS = frozenset({"R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"})
+    sheet_arcs: list[SymbolArc] = field(default_factory=list)
 
 
 def _parse_asc(text: str) -> _AscDoc:
@@ -860,7 +724,7 @@ def _parse_asc(text: str) -> _AscDoc:
             # (R0/R90/…/M270); the two before it are x and y; everything
             # between "SYMBOL" and them is the symbol name (may embed a
             # backslash subdir, never a space in practice).
-            if len(parts) >= 5 and parts[-1] in _ROTATIONS:
+            if len(parts) >= 5 and parts[-1] in ROTATIONS:
                 try:
                     x, y = int(parts[-3]), int(parts[-2])
                 except ValueError:
@@ -880,24 +744,12 @@ def _parse_asc(text: str) -> _AscDoc:
             else:
                 current = None
         elif kw == "WINDOW" and current is not None:
-            if len(parts) >= 4:
-                try:
-                    num = int(parts[1])
-                    wx = int(parts[2])
-                    wy = int(parts[3])
-                except ValueError:
-                    continue
-                align = parts[4] if len(parts) > 4 else "Left"
-                try:
-                    size = int(parts[5]) if len(parts) > 5 else 2
-                except ValueError:
-                    size = 2
-                current.windows.append(WindowDef(num, wx, wy, align, size))
+            window = read_window(parts)
+            if window is not None:
+                current.windows.append(window)
         elif kw == "SYMATTR" and current is not None:
             if len(parts) >= 2:
-                key = parts[1]
-                value = line.split(None, 2)[2] if len(line.split(None, 2)) > 2 else ""
-                current.attrs[key] = value
+                current.attrs[parts[1]] = value_of(line)
         elif kw == "WIRE":
             if len(parts) >= 5:
                 with contextlib.suppress(ValueError):
@@ -918,21 +770,21 @@ def _parse_asc(text: str) -> _AscDoc:
             if d is not None:
                 doc.directives.append(d)
         elif kw == "LINE":
-            c = _parse_shape_coords(parts, 4)
+            c = leading_ints(parts[2:], 4)
             if c is not None:
                 doc.sheet_lines.append(DrawLine(c[0], c[1], c[2], c[3]))
         elif kw == "RECTANGLE":
-            c = _parse_shape_coords(parts, 4)
+            c = leading_ints(parts[2:], 4)
             if c is not None:
                 doc.sheet_rects.append(DrawRect(c[0], c[1], c[2], c[3]))
         elif kw == "CIRCLE":
-            c = _parse_shape_coords(parts, 4)
+            c = leading_ints(parts[2:], 4)
             if c is not None:
                 doc.sheet_circles.append(DrawEllipse(c[0], c[1], c[2], c[3]))
         elif kw == "ARC":
-            c = _parse_shape_coords(parts, 8)
+            c = leading_ints(parts[2:], 8)
             if c is not None:
-                doc.sheet_arcs.append(AsyArc(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
+                doc.sheet_arcs.append(SymbolArc(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
         # IOPIN / DATAFLAG / SHEET / Version: no geometry we render in V1.
 
     return doc
@@ -988,7 +840,7 @@ def _place_aabb(
     return (bb.x1, bb.y1, bb.x2, bb.y2)
 
 
-def _arc_polyline(arc: AsyArc, ox: int, oy: int, rot: str) -> DrawPolyline | None:
+def _arc_polyline(arc: SymbolArc, ox: int, oy: int, rot: str) -> DrawPolyline | None:
     """Sample an arc into an absolute-coordinate polyline.
 
     Sampling in symbol-local space and transforming each point means mirror and
@@ -1264,236 +1116,41 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
 
 
 # ---------------------------------------------------------------------------
-# Layout issues: geometric facts about a drawn schematic
+# The sheet as the shared checks read it
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class LayoutIssue:
-    """One geometric observation about a scene's layout.
-
-    Facts only — a kind names a measured geometric condition, never a severity
-    or a quality verdict. Whether an issue matters is the caller's judgement.
-
-    Callers should read ``symbol_overlap`` and ``text_in_symbol_body`` with the
-    same caveat the schematic editor's advisories carry: a symbol's box is the
-    axis-aligned extent of everything it draws, so it also spans leads and empty
-    corners. An overlap of two boxes is therefore not proof that ink overlaps.
-    """
-
-    kind: str
-    refs: tuple[str, ...]
-    coords: tuple[tuple[int, int], ...]
-    detail: str
-
-    def to_dict(self) -> dict:
-        return {
-            "kind": self.kind,
-            "refs": list(self.refs),
-            "coords": [list(c) for c in self.coords],
-            "detail": self.detail,
-        }
-
-
-def point_on_segment(p: tuple[int, int], a: tuple[int, int], b: tuple[int, int]) -> bool:
-    """True if ``p`` lies on the segment ``a``-``b`` (endpoints included)."""
-    (px, py), (ax, ay), (bx, by) = p, a, b
-    cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
-    if cross != 0:
-        return False
-    return min(ax, bx) <= px <= max(ax, bx) and min(ay, by) <= py <= max(ay, by)
-
-
-def _crosses_box_interior(a: tuple[int, int], b: tuple[int, int], box: BBox) -> bool:
-    """True if segment ``a``-``b`` passes through ``box``'s interior.
-
-    Parametric (Liang-Barsky) clip, then a strict containment test on the
-    midpoint of the clipped span. Both steps matter: a segment that only
-    terminates on the boundary clips to zero length, and one that runs *along*
-    an edge clips to a span whose midpoint is on the boundary, not inside. So
-    neither the normal way a wire meets a pin nor a wire tracking an edge counts
-    as crossing. A degenerate (zero-length) segment never crosses.
-    """
-    (x1, y1), (x2, y2) = a, b
-    dx, dy = x2 - x1, y2 - y1
-    if dx == 0 and dy == 0:
-        return False
-    t0, t1 = 0.0, 1.0
-    for p, q in ((-dx, x1 - box.x1), (dx, box.x2 - x1), (-dy, y1 - box.y1), (dy, box.y2 - y1)):
-        if p == 0:
-            if q < 0:
-                return False
-        else:
-            r = q / p
-            if p < 0:
-                if r > t1:
-                    return False
-                t0 = max(t0, r)
-            else:
-                if r < t0:
-                    return False
-                t1 = min(t1, r)
-    if t1 <= t0:
-        return False
-    tm = (t0 + t1) / 2
-    mx, my = x1 + tm * dx, y1 + tm * dy
-    return box.x1 < mx < box.x2 and box.y1 < my < box.y2
-
-
-def _body_bbox(sym: PlacedSymbol) -> BBox | None:
-    """Axis-aligned extent of everything a placed symbol draws."""
-    pts: list[tuple[int, int]] = []
-    for g in sym.graphics:
-        pts.extend(g.points())
+def _extent(sym: PlacedSymbol, *, with_pins: bool) -> BBox | None:
+    """The extent of everything a placed symbol draws, or of that and its pins:
+    the box the schematic editor reports."""
+    pts = [point for g in sym.graphics for point in g.points()]
+    if with_pins:
+        pts += [(pin.x, pin.y) for pin in sym.pins]
     return BBox.from_points(pts)
 
 
-def _label_of(sym: PlacedSymbol) -> str:
-    return sym.reference or sym.symbol or "<unnamed>"
+def sheet_view(scene: Scene) -> SheetView:
+    """``scene`` as the checks in ``lib/sheet_findings.py`` read it.
 
-
-def layout_issues(scene: Scene) -> list[LayoutIssue]:
-    """Geometric observations about ``scene``'s layout, in a stable order.
-
-    Detects overlapping symbol bodies, wires crossing through a symbol body,
-    pins connected to nothing, wire ends connected to nothing, and text anchored
-    inside another symbol's body. See :class:`LayoutIssue` for how to read them.
-
-    Issues are emitted grouped by kind in that order, and within a kind in the
-    scene's own (source) order, so the list is reproducible for a given input.
-
-    The text check tests a text object's *anchor point* only, so the later lines
-    of a multi-line directive that runs down into a symbol body are not
-    reported.
+    Every part is in it, one whose symbol was not found as the placeholder it is
+    drawn as. A part's box is what it draws together with its pins, and its
+    body what it draws alone.
     """
-    issues: list[LayoutIssue] = []
-    boxes: list[tuple[PlacedSymbol, BBox]] = []
-    for sym in scene.symbols:
-        bb = _body_bbox(sym)
-        if bb is not None:
-            boxes.append((sym, bb))
-
-    # --- symbol bodies overlapping each other -------------------------------
-    for i in range(len(boxes)):
-        sym_a, box_a = boxes[i]
-        for j in range(i + 1, len(boxes)):
-            sym_b, box_b = boxes[j]
-            if not box_a.overlaps(box_b):
-                continue
-            ox1, oy1 = max(box_a.x1, box_b.x1), max(box_a.y1, box_b.y1)
-            ox2, oy2 = min(box_a.x2, box_b.x2), min(box_a.y2, box_b.y2)
-            issues.append(
-                LayoutIssue(
-                    kind="symbol_overlap",
-                    refs=(_label_of(sym_a), _label_of(sym_b)),
-                    coords=((ox1, oy1), (ox2, oy2)),
-                    detail=(f"bounding boxes share a {ox2 - ox1}x{oy2 - oy1} region"),
-                )
+    return SheetView(
+        parts=tuple(
+            Part(
+                ref=sym.reference,
+                symbol=sym.symbol,
+                at=(sym.x, sym.y),
+                box=_extent(sym, with_pins=True),
+                body=_extent(sym, with_pins=False),
+                pins=tuple(("", pin.x, pin.y) for pin in sym.pins),
+                texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
+                missing=sym.missing,
             )
-
-    # Which symbols own a pin at each coordinate, keyed by scene index. Index
-    # rather than label so two symbols sharing a reference (or having none)
-    # still count as two owners, and two pins of the SAME symbol stacked on one
-    # coordinate count as one — that is a floating pin, not a connection.
-    pin_owners: dict[tuple[int, int], set[int]] = {}
-    for sym_index, sym in enumerate(scene.symbols):
-        for pin in sym.pins:
-            pin_owners.setdefault((pin.x, pin.y), set()).add(sym_index)
-    flag_coords = {(f.x, f.y) for f in scene.flags}
-    # Each span paired with its wire, zero-length ones dropped: a degenerate
-    # WIRE has no span to cross anything and no end to dangle from.
-    real_wires = [
-        (a, b, w)
-        for (a, b), w in zip(
-            [((w.x1, w.y1), (w.x2, w.y2)) for w in scene.wires], scene.wires, strict=True
-        )
-        if a != b
-    ]
-    real_segments = [(a, b) for a, b, _ in real_wires]
-
-    # --- wires crossing through a symbol body -------------------------------
-    # A wire attached to one of the symbol's own pins is NOT exempt: leaving a
-    # pin and running straight back across the body is the very error this
-    # looks for. Landing on a boundary pin and heading outward clips to zero
-    # length, so the normal connection still does not register.
-    for wa, wb, wire in real_wires:
-        for sym, box in boxes:
-            if _crosses_box_interior(wa, wb, box):
-                issues.append(
-                    LayoutIssue(
-                        kind="wire_through_symbol",
-                        refs=(_label_of(sym),),
-                        coords=((wire.x1, wire.y1), (wire.x2, wire.y2)),
-                        detail="wire segment passes through the symbol's body box",
-                    )
-                )
-
-    # --- pins connected to nothing ------------------------------------------
-    for sym in scene.symbols:
-        for pin in sym.pins:
-            coord = (pin.x, pin.y)
-            if coord in flag_coords:
-                continue
-            if len(pin_owners.get(coord, ())) > 1:
-                continue  # shares the coordinate with another symbol's pin
-            if any(point_on_segment(coord, a, b) for a, b in real_segments):
-                continue
-            issues.append(
-                LayoutIssue(
-                    kind="floating_pin",
-                    refs=(_label_of(sym),),
-                    coords=(coord,),
-                    detail="pin has no wire, net label, or mating pin on it",
-                )
-            )
-
-    # --- wire ends connected to nothing -------------------------------------
-    # Reported once per coordinate: two loose ends meeting nothing at the same
-    # point are one place to look, not two findings.
-    seen_ends: set[tuple[int, int]] = set()
-    for idx, (a, b) in enumerate(real_segments):
-        for end in (a, b):
-            if end in seen_ends or end in pin_owners or end in flag_coords:
-                continue
-            touches_other = any(
-                point_on_segment(end, oa, ob)
-                for k, (oa, ob) in enumerate(real_segments)
-                if k != idx
-            )
-            if touches_other:
-                continue
-            seen_ends.add(end)
-            issues.append(
-                LayoutIssue(
-                    kind="dangling_wire_end",
-                    refs=(),
-                    coords=(end,),
-                    detail="wire end meets no pin, net label, or other wire",
-                )
-            )
-
-    # --- text anchored inside another symbol's body -------------------------
-    anchors: list[tuple[str, tuple[int, int], PlacedSymbol | None]] = []
-    for sym in scene.symbols:
-        for t in sym.texts:
-            anchors.append((t.text, (t.x, t.y), sym))
-    for d in scene.directives:
-        anchors.append((d.text, (d.x, d.y), None))
-    for text, (tx, ty), owner in anchors:
-        for sym, box in boxes:
-            if owner is sym:
-                continue
-            if box.x1 < tx < box.x2 and box.y1 < ty < box.y2:
-                issues.append(
-                    LayoutIssue(
-                        kind="text_in_symbol_body",
-                        refs=(_label_of(sym),),
-                        coords=((tx, ty),),
-                        detail=(
-                            f"text {decode_text_lines(text)[0]!r} is anchored "
-                            "inside the symbol's body box"
-                        ),
-                    )
-                )
-
-    return issues
+            for sym in scene.symbols
+        ),
+        wires=tuple((w.x1, w.y1, w.x2, w.y2) for w in scene.wires),
+        labels=tuple((flag.x, flag.y, flag.text) for flag in scene.flags),
+        texts=tuple((d.x, d.y, decode_text_lines(d.text)[0]) for d in scene.directives),
+    )

@@ -461,7 +461,7 @@ These run everywhere, with no LTspice:
 
 |test module|holds the server to|
 |-|-|
-|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, and how an export is spelled and encoded|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, and how an export is spelled and encoded|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes when it saves one: its line endings, encoding and record order, and that the lossless document reads it, writes it back byte for byte, and spells a record as the build does|

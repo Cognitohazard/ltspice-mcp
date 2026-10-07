@@ -37,6 +37,7 @@ from ltspice_mcp.lib.runner_base import (
 )
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
+from ltspice_mcp.lib.sheet_findings import RULES as SHEET_RULES
 from ltspice_mcp.lib.simulator import (
     family_refusal,
     no_simulator_message,
@@ -293,14 +294,11 @@ BBOX_SCHEMA: dict[str, Any] = {
 
 # The rows ``schematic_ops.post_op_warnings`` returns, as edit_schematic's
 # preexisting view publishes them. ``message`` is always present and
-# human-readable; the other keys depend on ``kind``. A new kind there extends
-# ``VALIDATION_WARNING_KINDS`` here, so producer and schema stay in lockstep.
-VALIDATION_WARNING_KINDS: tuple[str, ...] = (
-    "floating_pin",
-    "duplicate_wire",
-    "dangling_label",
-    "label_over_component",
-    "stacked_directive",
+# human-readable; the other keys depend on ``kind``. The kinds are the rules
+# the registry in ``lib/sheet_findings.py`` marks as the editor's, so producer
+# and schema cannot fall out of step.
+VALIDATION_WARNING_KINDS: tuple[str, ...] = tuple(
+    rule.rule_id for rule in SHEET_RULES.values() if rule.editor
 )
 
 VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
@@ -313,6 +311,7 @@ VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
             "ref": {"type": "string"},
             "pin": {"type": "string"},
             "label": {"type": "string"},
+            "symbol": {"type": "string"},
             "x": {"type": "integer"},
             "y": {"type": "integer"},
             "from": {

@@ -325,6 +325,35 @@
         ".net"
       ]
     },
+    "connectivity/pins_of_one_part_on_one_point": {
+      "behaviour": "pins-of-one-part-on-one-point",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/pins_of_one_part_on_one_point.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/pins_of_one_part_on_one_point.asc": "bcd49f25b974f3524faa43ff6597c77dbe64bcfeb1b1e0e9068821a4eb5ab84f",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/stacked.asy": "20f085ba743158cd74845061d35729a5a266f59e3756fcda7bb21df142e5a386",
+        "connectivity/stacked_reversed.asy": "d18bb51d2b9a30219671127494917f45f03f2339b76edf3018c3a5e69a7bdd96"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/pins_of_one_part_on_one_point.net": {
+          "bytes": 247,
+          "sha256": "cc0555becf40b19bf81dd72c643d111bb5550670393a29d23f15f5c97cbe5291"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_detour": {
       "behaviour": "same-instance-wire",
       "command": [
@@ -5262,6 +5291,151 @@
       "written": [
         ".asc"
       ]
+    },
+    "search/in_subfolder": {
+      "behaviour": "symbol-beside-sheet",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/in_subfolder.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 4294967295,
+      "inputs": {
+        "search/in_subfolder.asc": "2e910ba0e41afb61dc70c52e2bf7f370464cb5c886012a29ad88a805b485a296",
+        "search/lib/part.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": false,
+      "written": []
+    },
+    "search/library_folder_bare": {
+      "behaviour": "symbol-in-library-folder",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/library_folder_bare.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/library_folder_bare.asc": "85aba682c2efde8b7ee9a3dc9fa26ccf90d167176591028bafd98a935941f938"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/library_folder_bare.net": {
+          "bytes": 106,
+          "sha256": "6a3b1b01603c1e5c51d069bcf6bc3a94837743c051bb8a83748b197baa138ef0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search/library_folder_named": {
+      "behaviour": "symbol-in-library-folder",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/library_folder_named.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/library_folder_named.asc": "6c3a451dc6a8f490a511e1f7f42df5178c91424a205b26065bc3183ee5c92139"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/library_folder_named.net": {
+          "bytes": 107,
+          "sha256": "67add307438094c892ab3dc0ccc1f7defff219858edab5b309235f537158110c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search/library_folder_wrong": {
+      "behaviour": "symbol-in-library-folder",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/library_folder_wrong.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/library_folder_wrong.asc": "49ff122b075ad71b4e4ae1d84e0055e5c48d153af09fccc80478c391841d2fd9"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/library_folder_wrong.net": {
+          "bytes": 107,
+          "sha256": "5c71e088019d284e662ec6a7025966db1fc5f09ad8136e876fe24220b340d4d4"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search/named_subfolder": {
+      "behaviour": "symbol-beside-sheet",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/named_subfolder.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/lib/part.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "search/named_subfolder.asc": "e1f2252d7e3a3785dead89dceb171bb012a46af07cf8f308398743f55ae6c9f0"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/named_subfolder.net": {
+          "bytes": 103,
+          "sha256": "120b3d0e20e1b19815fd822a163f08fad80e3a3be8eb9c8b7dc71d289e89b652"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search_flat/named_folder_absent": {
+      "behaviour": "symbol-named-with-a-folder-it-is-not-in",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/named_folder_absent.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 4294967295,
+      "inputs": {
+        "search/lib/part.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "search_flat/named_folder_absent.asc": "e1f2252d7e3a3785dead89dceb171bb012a46af07cf8f308398743f55ae6c9f0"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": false,
+      "written": []
     }
   },
   "executable": {
