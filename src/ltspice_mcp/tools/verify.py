@@ -377,6 +377,11 @@ _REF: dict[str, Any] = {
     "description": "Component reference, hierarchical for a subcircuit leaf ('X1.M2').",
 }
 
+# The delta's lists that are differences; ``components_renamed`` is a fact.
+STRUCTURAL_DIFFERENCE_KEYS: tuple[str, ...] = tuple(
+    key for key in STRUCTURAL_DELTA_PROPS if key != "components_renamed"
+)
+
 _COMPONENT_DELTA_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -487,11 +492,17 @@ _ARITY_ERROR_SCHEMA: dict[str, Any] = {
         "ref": _REF,
         "reference_arity": {
             "type": "integer",
-            "description": "Terminal count on the reference side.",
+            "description": (
+                "Terminal count on the reference side; with 'side' set, the instance's "
+                "node count."
+            ),
         },
         "candidate_arity": {
             "type": "integer",
-            "description": "Terminal count on this circuit's side.",
+            "description": (
+                "Terminal count on this circuit's side; with 'side' set, the "
+                "subcircuit's port count."
+            ),
         },
         "detail": {
             "type": "string",
@@ -1837,12 +1848,8 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
     # fabricated side in either direction, so it is null and the warning says why.
     #
     # Keyed on the delta's own difference lists rather than ``any(diff.values())``:
-    # a metadata key added to the delta later must not read as a difference.
-    equivalent = (
-        not any(diff[key] for key in STRUCTURAL_DELTA_PROPS if key != "components_renamed")
-        if both_parsed
-        else None
-    )
+    # a fact the delta carries, such as a rename, must not read as a difference.
+    equivalent = not any(diff[key] for key in STRUCTURAL_DIFFERENCE_KEYS) if both_parsed else None
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 
 
