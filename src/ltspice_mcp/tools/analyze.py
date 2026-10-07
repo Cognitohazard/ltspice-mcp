@@ -710,17 +710,12 @@ def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
 _LEAN_KEPT_BLOCKS: frozenset[str] = frozenset({"artifact"})
 
 
-def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[str, Any]:
-    """Default row rendering — the answer channel.
+def _scalar_leaves(value: dict[str, Any]) -> dict[str, Any]:
+    """``value`` flattened to its scalar leaves, the default lean value.
 
-    Drops attribution keys that carry nothing (null step_index, empty
-    step_values — the row schema declares no required keys, so absent and
-    empty mean the same thing), drops the per-row deck digest (provenance,
-    reachable via include.fields), and flattens ``value`` to its scalar
-    leaves — the promoted headlines and the simple facts. The nested
-    curve/list detail stays reachable by name: include.fields=["value"]
-    returns the full block. If flattening would empty the value (an
-    all-nested metric such as measurements), the full dict stays — lean
+    The promoted headlines and the simple facts stay; the nested curve/list
+    detail is reachable by name, since include.fields=["value"] returns the
+    full block. If flattening would empty the value, the full dict stays: lean
     never trades data for absence.
 
     An ``artifact`` handle survives the flattening. It is a dict, so the
@@ -728,6 +723,25 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
     recompute from the response, because it names a file this call has already
     written. A plot recipe rendered that way came back as a series count and
     nothing else, which is not a lean answer to "plot this", it is no answer.
+    """
+    flat = {
+        key: item
+        for key, item in value.items()
+        if key in _LEAN_KEPT_BLOCKS or not isinstance(item, (dict, list))
+    }
+    return flat if flat else value
+
+
+def _lean_row(
+    row: dict[str, Any], lean_value: Callable[[dict[str, Any]], dict[str, Any]]
+) -> dict[str, Any]:
+    """Default row rendering — the answer channel.
+
+    Drops attribution keys that carry nothing (null step_index, empty
+    step_values — the row schema declares no required keys, so absent and
+    empty mean the same thing), drops the per-row deck digest (provenance,
+    reachable via include.fields), and renders ``value`` by the metric's own
+    ``lean_value`` (see _LEAN_VALUES).
     """
     out: dict[str, Any] = {}
     for key, item in row.items():
@@ -737,15 +751,7 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
             continue
         out[key] = item
     value = row.get("value")
-    if isinstance(value, dict) and not keep_value_whole:
-        flat = {
-            key: item
-            for key, item in value.items()
-            if key in _LEAN_KEPT_BLOCKS or not isinstance(item, (dict, list))
-        }
-        out["value"] = flat if flat else value
-    else:
-        out["value"] = value
+    out["value"] = lean_value(value) if isinstance(value, dict) else value
     return out
 
 
@@ -754,18 +760,18 @@ def _row_renderer(
     *,
     metric: str,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Build one reusable renderer for every row of ``metric`` on a result surface."""
+    """Build one reusable renderer for every row of ``metric`` on a result surface.
+
+    One plan serves both row surfaces, so projection never depends on an
+    unrelated pagination choice.
+    """
     plan = keep_plan(fields) if fields else None
-    whole = metric in _WHOLE_VALUE_METRICS
-    shed = _LEAN_VALUES.get(metric)
+    lean_value = _LEAN_VALUES.get(metric, _scalar_leaves)
 
     def render(row: dict[str, Any]) -> dict[str, Any]:
         if plan is not None:
             return project_row(row, plan)
-        lean = _lean_row(row, keep_value_whole=whole)
-        if shed is not None and isinstance(lean.get("value"), dict):
-            lean["value"] = shed(lean["value"])
-        return lean
+        return _lean_row(row, lean_value)
 
     return render
 
@@ -1814,39 +1820,6 @@ _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
 }
 
 
-# Metrics whose headline number lives only inside a list (points[]/crossings[])
-# where dotted ``include.fields`` projection cannot reach — 13-22x the size of
-# the equivalent shell output for a 12-case sweep table, because the caller
-# could not name the one leaf it wanted. Promote that number to a flat ``value`` leaf
-# at row-build time. bode_point's extractor is the reducer's own, so the
-# projected leaf and a reduce over that recipe can never disagree;
-# bode_crossing is a variable-length recipe whose category rejects ``reduce``
-# at validation, so its rule lives only here. stability shipped its worst-case
-# margins flat but left the crossover frequency in a list; this is that rule
-# applied uniformly. measurements is the keyed form of it: a run holding one
-# sample per .meas gets those samples by name (_measurements_compact).
-_HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "bode_point": lambda value: dict([_bode_point_sample(value)]),
-    # No crossing COUNT here: the adapter caps its list (max_results, default
-    # 10) and reports no truncation, so a count would silently saturate — a
-    # wrong number dressed as a fact. Null first_crossing_hz carries "never
-    # crossed"; ambiguity is visible in the list itself.
-    "bode_crossing": lambda value: dict([_crossing_sample(value)]),
-    "stability": lambda value: dict([_unity_gain_sample(value)]),
-    "measurements": lambda value: _measurements_compact(value),
-}
-
-
-def _promote_headlines(metric: str, value: dict[str, Any]) -> dict[str, Any]:
-    """``value`` with the metric's headline leaves added; existing keys win."""
-    promote = _HEADLINE_LEAVES.get(metric)
-    if promote is None or not isinstance(value, dict):
-        return value
-    for name, leaf in promote(value).items():
-        value.setdefault(name, leaf)
-    return value
-
-
 def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
     return {
         name: entry.get("mean")
@@ -1877,14 +1850,48 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
         isinstance(entry, dict) and entry.get("total_count") == 1 for entry in stats.values()
     ):
         return {}
-    compact: dict[str, Any] = {"measured": _measurements_flat(value)}
+    measured = _measurements_flat(value)
+    compact: dict[str, Any] = {"measured": measured}
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    failed = [name for name, entry in stats.items() if entry.get("failure_count")]
+    failed = [name for name, number in measured.items() if number is None]
     if failed:
         compact["failed_measurements"] = failed
     return compact
+
+
+# Metrics whose headline number lives only inside a list (points[]/crossings[])
+# where dotted ``include.fields`` projection cannot reach — 13-22x the size of
+# the equivalent shell output for a 12-case sweep table, because the caller
+# could not name the one leaf it wanted. Promote that number to a flat ``value`` leaf
+# at row-build time. bode_point's extractor is the reducer's own, so the
+# projected leaf and a reduce over that recipe can never disagree;
+# bode_crossing is a variable-length recipe whose category rejects ``reduce``
+# at validation, so its rule lives only here. stability shipped its worst-case
+# margins flat but left the crossover frequency in a list; this is that rule
+# applied uniformly. measurements is the keyed form of it: a run holding one
+# sample per .meas gets those samples by name (_measurements_compact).
+_HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "bode_point": lambda value: dict([_bode_point_sample(value)]),
+    # No crossing COUNT here: the adapter caps its list (max_results, default
+    # 10) and reports no truncation, so a count would silently saturate — a
+    # wrong number dressed as a fact. Null first_crossing_hz carries "never
+    # crossed"; ambiguity is visible in the list itself.
+    "bode_crossing": lambda value: dict([_crossing_sample(value)]),
+    "stability": lambda value: dict([_unity_gain_sample(value)]),
+    "measurements": _measurements_compact,
+}
+
+
+def _promote_headlines(metric: str, value: dict[str, Any]) -> dict[str, Any]:
+    """``value`` with the metric's headline leaves added; existing keys win."""
+    promote = _HEADLINE_LEAVES.get(metric)
+    if promote is None or not isinstance(value, dict):
+        return value
+    for name, leaf in promote(value).items():
+        value.setdefault(name, leaf)
+    return value
 
 
 def _measurements_lean(value: dict[str, Any]) -> dict[str, Any]:
@@ -1903,18 +1910,23 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
-# Metrics whose row value IS its nested structure, so the answer channel must
-# keep it whole. A waveform's value is the curve the caller asked for. A keyed
-# metric's value is a map addressed by name — and operating_point's only FLAT
-# leaves are ``step``/``step_count``/``device``, so leaning it returns the row's
+def _whole(value: dict[str, Any]) -> dict[str, Any]:
+    return value
+
+
+# How the answer channel renders a metric's value; a metric not listed keeps
+# its scalar leaves (_scalar_leaves). Applied to the lean row only, never to a
+# projected one. A metric whose row value IS its nested structure keeps it
+# whole. A waveform's value is the curve the caller asked for. A keyed metric's
+# value is a map addressed by name — and operating_point's only FLAT leaves are
+# ``step``/``step_count``/``device``, so leaning it returns the row's
 # bookkeeping and drops every number: a bias-point read that answers "complete"
 # and carries nothing. Derived from _KEYED_EXTRACTORS rather than listed, so a
-# new keyed metric cannot be added without this rule following it.
-_WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
-
-# A whole-value metric whose answer channel still sheds a block the rest of its
-# value restates. Applied to the lean row only, never to a projected one.
+# new keyed metric cannot be added without this rule following it. A
+# measurements value sheds the stats block its 'measured' map restates.
 _LEAN_VALUES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "waveform": _whole,
+    **dict.fromkeys(_KEYED_EXTRACTORS, _whole),
     "measurements": _measurements_lean,
 }
 
@@ -1938,12 +1950,16 @@ def _tallies(recipe: Recipe, records: list[Record]) -> dict[str, _FieldTally]:
     nothing saying so, a spec pass over the two it could judge, and one that
     failed in every run a name absent from the result.
     """
+    if not (getattr(recipe, "reduce", None) or getattr(recipe, "spec", None)):
+        return {}
     # The reducer category is the base the recipe inherits (exactly one); a
     # variable-length recipe matches none and yields no tallies.
     out: dict[str, _FieldTally] = {}
 
     def tally(name: str, candidate: Any, record: Record) -> None:
-        entry = out.setdefault(name, _FieldTally())
+        entry = out.get(name)
+        if entry is None:
+            entry = out[name] = _FieldTally()
         number = _number(candidate)
         if number is None:
             entry.no_value += 1
@@ -1978,15 +1994,18 @@ def _tallies(recipe: Recipe, records: list[Record]) -> dict[str, _FieldTally]:
         # reduction and a spec read. Absent, a keyed recipe covers every key
         # any row carries; a key is a name the run itself asked for (a .meas,
         # a bias-point quantity), so a row without a number for it is counted.
-        flats = [_KEYED_EXTRACTORS[recipe.metric](record.value) for record in records]
-        wanted = (
-            [recipe.field]
-            if recipe.field is not None
-            else list(dict.fromkeys(name for flat in flats for name in flat))
-        )
-        for record, flat in zip(records, flats, strict=True):
-            for name in wanted:
-                tally(name, flat.get(name), record)
+        extract = _KEYED_EXTRACTORS[recipe.metric]
+        for record in records:
+            flat = extract(record.value)
+            if recipe.field is None:
+                for name, candidate in flat.items():
+                    tally(name, candidate, record)
+            else:
+                tally(recipe.field, flat.get(recipe.field), record)
+        # A key appears at most once in a row, so the rows with no number for
+        # it, null or absent, are every row its samples do not account for.
+        for entry in out.values():
+            entry.no_value = len(records) - len(entry.samples)
     return out
 
 
@@ -2021,12 +2040,10 @@ def _attribution(stat: str, samples: list[tuple[Record, float]]) -> dict[str, An
     return chosen.attribution()
 
 
-def _reduce(recipe: Recipe, records: list[Record]) -> list[dict[str, Any]]:
+def _reduce(recipe: Recipe, tallies: dict[str, _FieldTally]) -> list[dict[str, Any]]:
     stats = list(getattr(recipe, "reduce", []))
-    if not stats:
-        return []
     reduced: list[dict[str, Any]] = []
-    for field_name, tally in _tallies(recipe, records).items():
+    for field_name, tally in tallies.items():
         values = [value for _, value in tally.samples]
         # Present only when some row had no number, as failed_measurements is:
         # absent, every row the reduction covers carried one.
@@ -2046,7 +2063,8 @@ def _reduce(recipe: Recipe, records: list[Record]) -> list[dict[str, Any]]:
 
 def _spec(
     recipe: Recipe,
-    records: list[Record],
+    tallies: dict[str, _FieldTally],
+    rows: int,
     *,
     incomplete: bool,
     include_outliers: bool,
@@ -2055,18 +2073,17 @@ def _spec(
     limits = getattr(recipe, "spec", None)
     if limits is None:
         return None
-    tallies = _tallies(recipe, records)
     # One spelling: the recipe's own 'field' names the number both a reduction
     # and a spec read. A scalar recipe declares none because it produces one
     # number, so its spec falls through to that single field.
     field = getattr(recipe, "field", None)
     if field is None and len(tallies) == 1:
         field = next(iter(tallies))
-    tally = tallies.get(field or "", _FieldTally())
-    samples = tally.samples
     # A row with no number for the field is a run the spec did not judge, so
-    # it stands beside the passes and fails rather than outside them.
-    no_value = tally.no_value if field is not None else len(records)
+    # it stands beside the passes and fails rather than outside them; with no
+    # field to read, no row was judged.
+    tally = tallies.get(field, _FieldTally()) if field is not None else _FieldTally(no_value=rows)
+    samples, no_value = tally.samples, tally.no_value
     failed: list[dict[str, Any]] = []
     pass_count = 0
     for record, value in samples:
@@ -2117,7 +2134,7 @@ def _group_values(
     return [
         {
             "by": dict(group),
-            "reduced": _reduce(recipe, group_records),
+            "reduced": _reduce(recipe, _tallies(recipe, group_records)),
             "count": len(group_records),
         }
         for group, group_records in grouped.items()
@@ -2391,9 +2408,11 @@ def _result_entry(
     """The one result entry for ``recipe``, plus the offset its ``per_run``
     page ends at — the caller turns that into the resume cursor."""
     incomplete = bool(failures or missing)
+    # One tally serves the reduction and the spec.
+    tallies = _tallies(recipe, records)
     entry: dict[str, Any] = {
         "metric": recipe.metric,
-        "reduced": _reduce(recipe, records),
+        "reduced": _reduce(recipe, tallies),
         "warnings": _record_warnings(records),
     }
     groups = _group_values(recipe, records, group_by)
@@ -2413,7 +2432,8 @@ def _result_entry(
         entry["groups"] = groups
     spec = _spec(
         recipe,
-        records,
+        tallies,
+        len(records),
         incomplete=incomplete,
         include_outliers=include_outliers,
         fail_case_limit=fail_case_limit,
@@ -2430,9 +2450,6 @@ def _result_entry(
                     omitted=spec["fail_count"] - spec["fail_cases"]["returned"]
                 )
             )
-    # Everything outside _WHOLE_VALUE_METRICS defaults to the scalar leaves.
-    # One plan serves both row surfaces, so projection never depends on an
-    # unrelated pagination choice.
     render = _row_renderer(fields, metric=recipe.metric)
 
     per_run_next = per_run_offset
