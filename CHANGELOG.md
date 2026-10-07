@@ -88,6 +88,8 @@ recording that showed it.
   (`1k5` is 1500, `4R7` is 4.7, `2M2` is 2.2m, `1Meg5` is 1.5e6) and ignores
   any other letters after the number (`9V1` is 9). Every spelling recorded now
   reads to the number LTspice ran. `8%` stays refused: LTspice 26 refuses it.
+  Where a value has to be told from a name (comparing two netlists, Monte
+  Carlo, a variation's assignment), `2N2222` and `1N4148` are still names.
 - Three refusals LTspice 26 states on a line of their own (`No analysis
   specified.`, `More than one analysis specified.`, `R1: Resistance must not
   be zero.`) were not extracted, so the caller got a log excerpt and no
