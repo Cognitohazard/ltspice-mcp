@@ -76,6 +76,7 @@ from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
     JOBS_PAGE_LIMIT,
     OBSERVATION_SCHEMA,
+    RECEIPT_DEFAULT_ROUTE,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
     RUNS_PAGE_SCHEMA,
@@ -639,6 +640,7 @@ _BUDGET_NOTES = response_budget.Notes(
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on with next_cursor."
     ),
+    default_route=RECEIPT_DEFAULT_ROUTE,
 )
 
 
@@ -646,14 +648,21 @@ async def _negotiate_jobs(
     budget: ResponseBudget,
     build: _JobsBuild,
     page_limit: int,
+    *,
+    min_rows: int = 1,
 ) -> _JobsBuilt:
-    """Render this jobs response at the mildest ladder rung that fits ``budget``."""
+    """Render this jobs response at the mildest ladder rung that fits ``budget``.
+
+    ``min_rows`` is 0 only for a receipt, whose run page previews jobs(runs);
+    the runs and list pages continue themselves, so they keep at least a row.
+    """
     return await negotiate_receipt(
         budget,
         build,
         page_limit,
         rows=jobs_rows,
         notes=_BUDGET_NOTES,
+        min_rows=min_rows,
     )
 
 
@@ -1438,6 +1447,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                     budget,
                     lambda limit, rung: render_jobs_data(evaluation, limit=limit, rung=rung),
                     page_limit,
+                    min_rows=1 if isinstance(args, JobsListInput | JobsRunsInput) else 0,
                 )
         except Exception as exc:
             # Presentation failed over an action that already happened — a

@@ -3283,6 +3283,24 @@ _TRIM_REMOVE_ENVELOPE: tuple[str, ...] = ("signals_available",)
 _TRIM_EMPTY_ENVELOPE: tuple[str, ...] = ("source_hashes",)
 
 
+def trim_analysis(data: dict[str, Any], *, keep_provenance: bool = False) -> list[str]:
+    """Rung 0 over one analysis envelope; returns the keys it emptied of content.
+
+    Public because an analysis attached to an experiment is this envelope too,
+    and the receipt carrying it trims it by this tool's own allowlists rather
+    than a copy of them. ``keep_provenance`` leaves the identity echo standing.
+    Nothing below touches failures, observations, warnings, completeness or
+    spec verdicts.
+
+    Idempotent, so the ladder may re-apply it to an envelope it already
+    degraded on the way down.
+    """
+    for entry in data["results"].values():
+        response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
+    empty = () if keep_provenance else _TRIM_EMPTY_ENVELOPE
+    return response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+
+
 def _degrade_analysis(
     data: dict[str, Any],
     rung: response_budget.Rung,
@@ -3293,25 +3311,16 @@ def _degrade_analysis(
 
     The answer rung and the shrink rung are not here: revoking an opt-in changes
     what gets computed, and shrinking a page has to happen before its cursor is
-    minted, so both are inputs to :func:`_assemble` instead. Nothing below
-    touches failures, observations, warnings, completeness or spec verdicts.
-
-    Idempotent, so the ladder may re-apply it to an envelope it already degraded
-    on the way down.
+    minted, so both are inputs to :func:`_assemble` instead.
     """
     if rung.trim:
-        for entry in data["results"].values():
-            response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
         # An explicit include.provenance is a caller opt-in, and the trim rung's
         # charter is to revoke none — so below the answer rung (the rung whose
         # documented job IS revoking opt-ins) an enriched identity echo
         # survives. Once the answer rung has revoked the opt-in, emptying the
         # echo is the ladder working as specified, not a second revocation.
         keep = preserve_provenance and not rung.answer_channel
-        empty = () if keep else _TRIM_EMPTY_ENVELOPE
-        rung.cut.extend(
-            response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
-        )
+        rung.cut.extend(trim_analysis(data, keep_provenance=keep))
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
