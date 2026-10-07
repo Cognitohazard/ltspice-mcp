@@ -112,6 +112,19 @@ recording that showed it.
   a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
   value runs as 1, not 1e-6. An export that opens with its schematic's path and
   names no generator is now read as XVII's, and the micro sign is a warning.
+- `verify_circuit`'s comparison read a subcircuit instance LTspice exported
+  with an added `X` (`Xe` as `X§Xe` from LTspice 24 on, `XXe` from XVII) as a
+  different part from the `Xe` a netlist written by hand names, so every leaf
+  under it was listed as removed and added again and `equivalent` was false.
+  Names that pair only across that `X`, one to one and of the same element
+  type, now match; each instance paired that way is listed under `renamed`,
+  which is not a difference.
+- An arity error said only `reference_arity 3, candidate_arity 2`, and for an
+  instance whose node count disagrees with its own subcircuit's ports those
+  two numbers were not the two sides at all. Each arity error now carries a
+  `detail` naming the nodes and ports, and `side` for that case; when a node
+  is the subcircuit's own name, the detail says the card names it twice, as a
+  symbol that gives the name as both its value and its model does.
 - Two ways an 8-bit deck runs differently from how the server reads it are
   warnings now. Byte 0x85 ends the line on LTspice 24 and later, so what
   follows it is a card (`byte-85-ltspice`); and a node named with a byte from
