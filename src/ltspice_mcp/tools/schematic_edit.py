@@ -43,6 +43,9 @@ from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, r
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
+from ltspice_mcp.lib.ltspice_window import OpenSheet, content_difference
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -427,6 +430,28 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "deleted_wires": {"type": "integer"},
                 },
                 "required": ["index", "op"],
+            },
+        },
+        "open_in_ltspice": {
+            "type": "array",
+            "description": (
+                "Present when an LTspice window had this sheet open: one entry "
+                "per window, saying whether it now shows the committed sheet. "
+                "A window that was not updated still shows the sheet as it was, "
+                "and a save from it would overwrite this edit."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pid": {"type": "integer", "description": "The LTspice process."},
+                    "version": {"type": "string"},
+                    "shown": {"type": "boolean"},
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the window was not updated.",
+                    },
+                },
+                "required": ["pid", "version", "shown"],
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -994,6 +1019,7 @@ def _envelope(
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
+    open_in_ltspice: list[dict[str, object]] | None = None,
     hint: str | None = None,
 ) -> dict[str, Any]:
     """Build one response payload; the shared rule decides its outcome.
@@ -1033,9 +1059,57 @@ def _envelope(
         data["verification"] = verification
     if netlist is not None:
         data["netlist"] = netlist
+    if open_in_ltspice:
+        data["open_in_ltspice"] = open_in_ltspice
     if hint is not None:
         data["hint"] = hint
     return data
+
+
+def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> str | None:
+    """How an LTspice window's copy of the sheet differs from the file, or None.
+
+    The file is read both as this server reads it and as LTspice does, which
+    differ for a sheet stored as UTF-8: a window showing either reading of the
+    file holds nothing of its own. A window that differs has unsaved changes
+    or was opened before the file last changed, and nothing tells which.
+    """
+    readings = (decode_spice_bytes(on_disk), decode_windows_1252(on_disk))
+    for sheet in sheets:
+        differences = [content_difference(reading, sheet.text) for reading in readings]
+        if all(differences):
+            return (
+                f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
+                f"a different one from the file ({differences[0]}): either it has changes "
+                "nobody saved, or the file changed after it was opened."
+            )
+    return None
+
+
+_WINDOW_REMEDY = (
+    "Save the sheet in LTspice (Ctrl+S) to keep the window's version, or close it there "
+    "without saving to keep the file's; then read the sha256 again and resubmit, since a "
+    "save rewrites the file."
+)
+
+
+def _window_notes(shown: Sequence[Mapping[str, object]]) -> list[str]:
+    """One sentence per window on what it shows now, for the hint."""
+    notes: list[str] = []
+    for row in shown:
+        if row["shown"]:
+            notes.append(
+                "The LTspice window that has this sheet open now shows it; undo there "
+                "steps back to the sheet before this edit, which the file no longer holds."
+            )
+        else:
+            notes.append(
+                f"An LTspice window (process {row['pid']}) has this sheet open and could "
+                f"not be updated ({row.get('reason')}): it still shows the sheet as it "
+                "was, and saving from it would overwrite this edit. Close the sheet "
+                "there without saving and open it again."
+            )
+    return notes
 
 
 @dataclass(frozen=True)
@@ -1199,9 +1273,56 @@ async def _evaluate_edit_schematic(
                 f"({current}); a commit quoting it would return revision_conflict."
             )
 
+        on_disk = target.read_bytes() if exists else None
+
+        # --- the sheet as an LTspice window holds it. LTspice never reads the
+        # file again, so a window with it open has a copy of its own: one that
+        # differs from the file may hold unsaved work, and committing under it
+        # would leave two sheets each missing the other's changes. Inside the
+        # guard, so the window is read against the file this commit replaces.
+        open_sheets: list[OpenSheet] = []
+        window_notes: list[str] = []
+        if on_disk is not None and state.open_windows.available:
+            try:
+                open_sheets = await asyncio.to_thread(state.open_windows.holding, target)
+            except BridgeError as exc:
+                window_notes.append(
+                    f"LTspice could not be asked whether {target.name} is open in a window "
+                    f"({exc}); one that has it open still shows the sheet as it was."
+                )
+            differs = _window_differs(on_disk, open_sheets)
+            if differs is not None and dry_run:
+                window_notes.append(f"{differs} A commit is refused until it is saved or closed.")
+            elif differs is not None:
+                _failed("window_check", "the open LTspice window differs from the file")
+                return finish(
+                    EditSchematicEvaluation(
+                        data=_envelope(
+                            delivered=False,
+                            commit_state="not_committed",
+                            target=target,
+                            build_id=build_id,
+                            base=args.base,
+                            stages=stages,
+                            sha256=current,
+                            error={
+                                "code": "open_window_differs",
+                                "message": f"{differs} Nothing was written.",
+                                "stage": "window_check",
+                                "retryable": True,
+                            },
+                            hint=_WINDOW_REMEDY,
+                        ),
+                        text=(
+                            f"edit_schematic: {target.name} is open in an LTspice window that "
+                            f"holds a different sheet. Nothing was written. {_WINDOW_REMEDY}"
+                        ),
+                    )
+                )
+
         use_template = args.base == "blank" or not exists
         # Read before the ops run: what the commit's codec turns on.
-        sheet_was_ascii = use_template or target.read_bytes().isascii()
+        sheet_was_ascii = use_template or (on_disk is not None and on_disk.isascii())
         editor = _build_editor(target, use_template, state)
         # Set once the atomic rename lands. From that point every escape must be
         # reported on a committed envelope instead of re-raised (see the except
@@ -1308,7 +1429,7 @@ async def _evaluate_edit_schematic(
                             results=op_results,
                             warnings=warnings,
                             failures=failures,
-                            observations=revision_notes,
+                            observations=revision_notes + window_notes,
                             hint=" ".join(
                                 filter(
                                     None,
@@ -1363,6 +1484,15 @@ async def _evaluate_edit_schematic(
             # --- post-commit: everything below keeps commit_state='committed'
             # Each post-commit stage names itself while it runs and hands back
             # to "response" when it is over.
+            shown: list[dict[str, object]] = []
+            if open_sheets:
+                # First of the post-commit stages: a window left on the old
+                # sheet can save it back over this commit, whatever happens
+                # to the stages after this one.
+                post_commit_stage = "open_window"
+                shown = await asyncio.to_thread(
+                    state.open_windows.show_each, open_sheets, committed_text
+                )
             post_commit_stage = "views"
             neutral_views = _build_edit_views(
                 profile, legend, pins_reported, preexisting_rows, committed_sha
@@ -1398,7 +1528,7 @@ async def _evaluate_edit_schematic(
                 if mismatch:
                     netlist = exported
 
-            hint = _commit_hint(verification, left_out_hint)
+            hint = " ".join([_commit_hint(verification, left_out_hint), *_window_notes(shown)])
             return finish(
                 EditSchematicEvaluation(
                     data=_envelope(
@@ -1417,6 +1547,8 @@ async def _evaluate_edit_schematic(
                         netlist=netlist,
                         results=op_results,
                         warnings=warnings,
+                        observations=window_notes,
+                        open_in_ltspice=shown,
                         hint=hint,
                     ),
                     text=f"edit_schematic committed {target.name} (build {build_id}).",

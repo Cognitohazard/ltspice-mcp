@@ -97,6 +97,8 @@ Everything operates on ordinary LTspice and SPICE files. You and the assistant c
 - Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state, which the assistant reads on the next request.
 - Either of you can change the file mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
 
+**With the sheet open in LTspice** (Windows, LTspice 26.1 or later): LTspice never notices a file changing under it, so the server tells it. When the assistant edits a schematic you have open, the change appears in the window at once, and Ctrl+Z there takes it back off the screen. If your window holds changes you have not saved, the assistant is refused and asks you to save or close the sheet first, so neither side's work is overwritten. This goes through the MCP bridge that ships with LTspice; the server only ever attaches to an LTspice you already have running.
+
 ### When to shell out instead
 
 The rule in the quick start forbids the shell outright, which is the right
@@ -144,6 +146,9 @@ hidden_desktop = true    # Windows: LTspice runs on a desktop of its own, so its
 # max_parallel = 4       # default: number of CPU cores, capped at 8
 timeout = 300.0          # seconds, for LTspice netlist export
 # run_timeout = 3600     # seconds per case when a request sets no execution.run_timeout_s; default: no limit
+
+[schematic]
+sync_open_window = true  # Windows, LTspice 26.1+: an edit shows up in the LTspice window that has the sheet open; false leaves windows alone
 
 [tools]
 listing = "compact"      # "full" serves every per-argument description on the wire, about 45% more to load

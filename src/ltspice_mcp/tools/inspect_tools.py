@@ -447,6 +447,7 @@ CapabilityField: TypeAlias = Literal[
     "default_simulator",
     "exporter_available",
     "render",
+    "open_window_sync",
     "dialects",
     "diagnostics",
     "ngbehavior",
@@ -1061,6 +1062,12 @@ def _do_capabilities(
         # inline. Asked here so an agent that cannot read files knows before it
         # renders whether it will see the picture, and what to install if not.
         "render": asdict(raster),
+        # Whether edit_schematic can keep a sheet that is open in an LTspice
+        # window in step with the file, and if not, what is missing.
+        "open_window_sync": {
+            "available": state.open_windows.available,
+            "reason": state.open_windows.unavailable,
+        },
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()

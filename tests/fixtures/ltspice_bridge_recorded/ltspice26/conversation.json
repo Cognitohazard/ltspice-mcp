@@ -1,0 +1,249 @@
+[
+ {
+  "note": "no LTspice is running",
+  "call": "status",
+  "arguments": {},
+  "reply": {
+   "current": {
+    "backendPid": 0,
+    "committed": false,
+    "state": "background"
+   },
+   "instances": []
+  }
+ },
+ {
+  "note": "attach to a process that is not LTspice",
+  "call": "attach",
+  "arguments": {
+   "pid": 999999
+  },
+  "error": "no live LTspice instance with that pid"
+ },
+ {
+  "note": "a request that needs LTspice, with none running",
+  "call": "list_open_designs",
+  "arguments": {},
+  "error": "Could not start or attach an LTspice instance. Open an LTspice window, or use start_headless/attach."
+ },
+ {
+  "note": "one window is open",
+  "call": "status",
+  "arguments": {},
+  "reply": {
+   "current": {
+    "backendPid": 1000,
+    "committed": false,
+    "state": "gui-attached"
+   },
+   "instances": [
+    {
+     "mode": "gui",
+     "pid": 1000,
+     "port": 50000,
+     "version": "26.1.1"
+    }
+   ]
+  }
+ },
+ {
+  "note": "attach to the window",
+  "call": "attach",
+  "arguments": {
+   "pid": 1000
+  },
+  "reply": {
+   "attachedPid": 1000,
+   "ok": true,
+   "port": 50000
+  }
+ },
+ {
+  "note": "attached",
+  "call": "status",
+  "arguments": {},
+  "reply": {
+   "current": {
+    "backendPid": 1000,
+    "committed": false,
+    "state": "gui-attached"
+   },
+   "instances": [
+    {
+     "mode": "gui",
+     "pid": 1000,
+     "port": 50000,
+     "version": "26.1.1"
+    }
+   ]
+  }
+ },
+ {
+  "note": "open another sheet",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\older_version.asc"
+  },
+  "reply": {
+   "already_open": "false",
+   "path": "C:\\recording\\older_version.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "open another sheet",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\symbol_attributes.asc"
+  },
+  "reply": {
+   "already_open": "false",
+   "path": "C:\\recording\\symbol_attributes.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "open another sheet",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\text_off_grid.asc"
+  },
+  "reply": {
+   "already_open": "false",
+   "path": "C:\\recording\\text_off_grid.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "every sheet is open",
+  "call": "list_open_designs",
+  "arguments": {},
+  "reply": {
+   "paths": "C:\\recording\\micro_sign.asc\nC:\\recording\\older_version.asc\nC:\\recording\\symbol_attributes.asc\nC:\\recording\\text_off_grid.asc"
+  }
+ },
+ {
+  "note": "the window's copy",
+  "call": "get_design_content",
+  "arguments": {
+   "path": "C:\\recording\\micro_sign.asc"
+  },
+  "reply": {
+   "path": "C:\\recording\\micro_sign.asc",
+   "text": "<25 lines>"
+  }
+ },
+ {
+  "note": "the window's copy",
+  "call": "get_design_content",
+  "arguments": {
+   "path": "C:\\recording\\older_version.asc"
+  },
+  "reply": {
+   "path": "C:\\recording\\older_version.asc",
+   "text": "<24 lines>"
+  }
+ },
+ {
+  "note": "the window's copy",
+  "call": "get_design_content",
+  "arguments": {
+   "path": "C:\\recording\\symbol_attributes.asc"
+  },
+  "reply": {
+   "path": "C:\\recording\\symbol_attributes.asc",
+   "text": "<27 lines>"
+  }
+ },
+ {
+  "note": "the window's copy",
+  "call": "get_design_content",
+  "arguments": {
+   "path": "C:\\recording\\text_off_grid.asc"
+  },
+  "reply": {
+   "path": "C:\\recording\\text_off_grid.asc",
+   "text": "<26 lines>"
+  }
+ },
+ {
+  "note": "replace a sheet with the text it already holds",
+  "call": "set_design_content",
+  "arguments": {
+   "path": "C:\\recording\\older_version.asc",
+   "text": "Version 4.1\nSHEET 1 880 680\nWIRE 32 128 -48 128\nWIRE 208 128 112 128\nWIRE 240 128 208 128\nWIRE -48 144 -48 128\nWIRE 240 144 240 128\nWIRE 240 256 240 208\nWIRE -48 272 -48 224\nFLAG 240 256 0\nFLAG -48 272 0\nFLAG 208 128 out\nSYMBOL voltage -48 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nSYMBOL res 128 112 R90\nWINDOW 0 0 56 VBottom 2\nWINDOW 3 32 56 VTop 2\nSYMATTR InstName R1\nSYMATTR Value 1k\nSYMBOL cap 224 144 R0\nSYMATTR InstName C1\nSYMATTR Value 100n\nTEXT -64 320 Left 2 !.tran 1m\n"
+  },
+  "reply": {
+   "status": "ok",
+   "unchanged": "true"
+  }
+ },
+ {
+  "note": "replace a sheet with a changed one",
+  "call": "set_design_content",
+  "arguments": {
+   "path": "C:\\recording\\older_version.asc",
+   "text": "Version 4.1\nSHEET 1 880 680\nWIRE 32 128 -48 128\nWIRE 208 128 112 128\nWIRE 240 128 208 128\nWIRE -48 144 -48 128\nWIRE 240 144 240 128\nWIRE 240 256 240 208\nWIRE -48 272 -48 224\nFLAG 240 256 0\nFLAG -48 272 0\nFLAG 208 128 out\nSYMBOL voltage -48 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nSYMBOL res 128 112 R90\nWINDOW 0 0 56 VBottom 2\nWINDOW 3 32 56 VTop 2\nSYMATTR InstName R1\nSYMATTR Value 2k\nSYMBOL cap 224 144 R0\nSYMATTR InstName C1\nSYMATTR Value 100n\nTEXT -64 320 Left 2 !.tran 1m\n"
+  },
+  "reply": {
+   "message": "",
+   "status": "ok",
+   "unchanged": "false"
+  }
+ },
+ {
+  "note": "the window then reads back exactly what it was given",
+  "observed": true
+ },
+ {
+  "note": "the file is as it was",
+  "observed": true
+ },
+ {
+  "note": "after the file is rewritten the window still holds its own copy",
+  "observed": true
+ },
+ {
+  "note": "a file no window has open",
+  "call": "get_design_content",
+  "arguments": {
+   "path": "C:\\recording\\not_open.asc"
+  },
+  "error": "document not found"
+ },
+ {
+  "note": "replace a file no window has open",
+  "call": "set_design_content",
+  "arguments": {
+   "path": "C:\\recording\\not_open.asc",
+   "text": "Version 4.1\nSHEET 1 880 680\nWIRE 32 128 -48 128\nWIRE 208 128 112 128\nWIRE 240 128 208 128\nWIRE -48 144 -48 128\nWIRE 240 144 240 128\nWIRE 240 256 240 208\nWIRE -48 272 -48 224\nFLAG 240 256 0\nFLAG -48 272 0\nFLAG 208 128 out\nSYMBOL voltage -48 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nSYMBOL res 128 112 R90\nWINDOW 0 0 56 VBottom 2\nWINDOW 3 32 56 VTop 2\nSYMATTR InstName R1\nSYMATTR Value 1k\nSYMBOL cap 224 144 R0\nSYMATTR InstName C1\nSYMATTR Value 100n\nTEXT -64 320 Left 2 !.tran 1m\n"
+  },
+  "error": "document not found"
+ },
+ {
+  "note": "the window has closed",
+  "call": "list_open_designs",
+  "arguments": {},
+  "error": "Could not start or attach an LTspice instance. Open an LTspice window, or use start_headless/attach."
+ },
+ {
+  "note": "the window has closed",
+  "call": "status",
+  "arguments": {},
+  "reply": {
+   "current": {
+    "backendPid": 0,
+    "committed": true,
+    "state": "detached"
+   },
+   "instances": []
+  }
+ },
+ {
+  "note": "no LTspice was started in its place",
+  "observed": true
+ }
+]

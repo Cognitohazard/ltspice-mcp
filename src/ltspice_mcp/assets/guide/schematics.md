@@ -19,6 +19,15 @@ transaction, so batch a whole build into one call. Place components with the
 nets, `warnings` any overlap, and `inspect(kind="symbol")` previews the same
 geometry before you place anything.
 
+A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
+in step: a commit's reply lists the window under `open_in_ltspice`, and with
+`shown: true` the user is already looking at the edit. `shown: false` means
+the window still shows the old sheet and a save from it would overwrite yours,
+so tell the user to close it without saving and open it again. An edit that
+fails as `open_window_differs` wrote nothing: the window's copy is not the
+file's. Only the user can settle that, so ask them to save the sheet (Ctrl+S)
+or close it, then read its `sha256` again and resubmit.
+
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to
   individual nets).
