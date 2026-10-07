@@ -15,8 +15,9 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 from spicelib.editor.asc_editor import AscEditor
+from spicelib.utils.file_search import search_file_in_containers
 
-from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib import schematic_ops, symbol_geometry
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
@@ -850,18 +851,48 @@ class TestExportedNames:
         assert comparison["components_changed"] == []
         assert comparison["equivalent"] is True
 
-    def test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened(
-        self, build: str, tmp_path: Path
+    def test_a_block_symbol_with_no_sheet_of_its_own_opens_as_ltspice_reads_it(
+        self, build: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """LTspice netlists the block as a call to a subcircuit of the symbol's
-        name. The editor's loader wants the block's own sheet and stops when
-        there is none (``docs/spicelib_bugs.md``); the message names the file."""
-        from ltspice_mcp.errors import SymbolResolutionError
-
+        name, whatever defines it. spicelib's loader wants the block's own sheet
+        and stops when there is none (``docs/spicelib_bugs.md``, Bug 22); the
+        server's opens the sheet with each instance's subcircuit unresolved."""
         assert rec.entry(build, "export/block_symbol")["exit_code"] == 0
         sheet = rec.stage_sheet(build, "export/block_symbol", tmp_path)
-        with pytest.raises(SymbolResolutionError, match=r"probe4\.asc not found"):
-            make_editor(sheet)
+        # spicelib's own editor still refuses it: drop the workaround once it opens.
+        with pytest.raises(FileNotFoundError, match=r"probe4\.asc not found"):
+            AscEditor(str(sheet))
+        searched: list[str] = []
+
+        def search(filename: str, *containers: str) -> str | None:
+            searched.append(filename)
+            return search_file_in_containers(filename, *containers)
+
+        monkeypatch.setattr(schematic_ops, "search_file_in_containers", search)
+        editor = make_editor(sheet)
+        assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
+        # A search walks every folder it is given, so the block the sheet
+        # places three times is searched for once.
+        assert searched == ["probe4.asc"]
+
+    async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
+        self, build: str, state_no_sim, work_dir: Path
+    ):
+        sheet = rec.stage_sheet(build, "export/block_symbol", work_dir)
+        data = await apply_ops(
+            state_no_sim,
+            sheet,
+            [
+                {"op": "move_component", "reference": "U1", "x": 96, "y": 640},
+                {"op": "add_directive", "instruction": ".op", "x": 96, "y": 800},
+            ],
+        )
+        assert data["outcome"] == "complete", data
+        written = sheet.read_text(encoding="utf-8")
+        assert "SYMBOL probe4 96 640 R0" in written
+        assert written.count("SYMBOL probe4 ") == 3
+        assert "!.op" in written
 
     def test_the_editor_names_each_parts_element_class(self, build: str, tmp_path: Path):
         sheet = rec.stage_sheet(build, "export/instance_names", tmp_path)

@@ -148,6 +148,11 @@ recording that showed it.
   reads to the number LTspice ran. `8%` stays refused: LTspice 26 refuses it.
   Where a value has to be told from a name (comparing two netlists, Monte
   Carlo, a variation's assignment), `2N2222` and `1N4148` are still names.
+- `inspect(kind="hierarchy")` read the same infix values wrongly: it took
+  `4R7` for 4 followed by a stray 7 and gave 4.07, and `1k5` as 1000.05. A
+  bare element value is now read as LTspice reads it. Inside an expression
+  (`{1k5}`, or a `.param`) what LTspice makes of a digit after the letters is
+  not recorded, so the value is left unresolved with that reason.
 - Three refusals LTspice 26 states on a line of their own (`No analysis
   specified.`, `More than one analysis specified.`, `R1: Resistance must not
   be zero.`) were not extracted, so the caller got a log excerpt and no
@@ -174,6 +179,15 @@ recording that showed it.
   a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
   value runs as 1, not 1e-6. An export that opens with its schematic's path and
   names no generator is now read as XVII's, and the micro sign is a warning.
+- `inspect(kind="symbol")` gave a symbol's pins but not what an instance of it
+  is netlisted with, so a model name such as an A-device's had to be read from
+  the `.asy`. It now lists the symbol's `SymbolType` and every attribute it
+  carries (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`...).
+- A sheet using a block symbol with no sheet of its own (`SymbolType BLOCK`,
+  its subcircuit defined in a library, or not yet) could not be opened at all:
+  `edit_schematic`, `inspect` and `verify_circuit` failed with "File ….asc not
+  found", though LTspice exports it. Such an instance now opens with its
+  subcircuit unresolved, as LTspice reads it, and the sheet can be edited.
 - `verify_circuit`'s comparison read a subcircuit instance LTspice exported
   with an added `X` (`Xe` as `X§Xe` from LTspice 24 on, `XXe` from XVII) as a
   different part from the `Xe` a netlist written by hand names, so every leaf

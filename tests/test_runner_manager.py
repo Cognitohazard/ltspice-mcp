@@ -234,11 +234,12 @@ class TestCapEviction:
     """The LRU cap must never evict a runner with in-flight work — dropping it
     would split its concurrency semaphore and lose per-job cancel state."""
 
-    def _fill_to_cap(self, mgr, loop, sim_cls):
+    def _fill_to_cap(self, mgr, loop, sim_cls) -> list[_StubRunner]:
         from ltspice_mcp.lib.runner_manager import _RUNNER_CACHE_CAP
 
+        # The patched import hands out stubs, whatever the manager's type says.
         return [
-            mgr.get_experiment_runner(loop, sim_cls, Path(f"/tmp/out{i}"))
+            cast(_StubRunner, mgr.get_experiment_runner(loop, sim_cls, Path(f"/tmp/out{i}")))
             for i in range(_RUNNER_CACHE_CAP)
         ]
 
