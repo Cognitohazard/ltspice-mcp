@@ -1266,7 +1266,7 @@ async def test_reference_is_advertised_as_a_supported_kind(cap_state: SessionSta
 async def test_symbol_reports_what_an_instance_netlists_with(
     asc_file: Path, asc_state: SessionState
 ):
-    """The prefix, the symbol type and every SYMATTR, so the model name and
+    """The symbol type and every SYMATTR, so the prefix, model name and
     parameters an instance is netlisted with need no reading of the .asy."""
     (asc_file.parent / "schmitt_buf.asy").write_text(
         "Version 4\n"
@@ -1286,7 +1286,7 @@ async def test_symbol_reports_what_an_instance_netlists_with(
     )
     assert res["ok"] is True, res
     data = res["data"]
-    assert (data["symbol_type"], data["prefix"]) == ("CELL", "A")
+    assert data["symbol_type"] == "CELL"
     assert data["attributes"] == {
         "Prefix": "A",
         "SpiceModel": "SCHMITT",

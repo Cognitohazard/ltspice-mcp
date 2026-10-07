@@ -15,8 +15,9 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 from spicelib.editor.asc_editor import AscEditor
+from spicelib.utils.file_search import search_file_in_containers
 
-from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib import schematic_ops, symbol_geometry
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
@@ -37,6 +38,7 @@ from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import apply_ops
 from tests.conftest import FIXTURES_DIR
 from tests.ltspice_recorder import INPUTS
 
@@ -562,7 +564,7 @@ class TestExportedNames:
         assert comparison["equivalent"] is True
 
     def test_a_block_symbol_with_no_sheet_of_its_own_opens_as_ltspice_reads_it(
-        self, build: str, tmp_path: Path
+        self, build: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """LTspice netlists the block as a call to a subcircuit of the symbol's
         name, whatever defines it. spicelib's loader wants the block's own sheet
@@ -573,32 +575,31 @@ class TestExportedNames:
         # spicelib's own editor still refuses it: drop the workaround once it opens.
         with pytest.raises(FileNotFoundError, match=r"probe4\.asc not found"):
             AscEditor(str(sheet))
+        searched: list[str] = []
+
+        def search(filename: str, *containers: str) -> str | None:
+            searched.append(filename)
+            return search_file_in_containers(filename, *containers)
+
+        monkeypatch.setattr(schematic_ops, "search_file_in_containers", search)
         editor = make_editor(sheet)
         assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
+        # A search walks every folder it is given, so the block the sheet
+        # places three times is searched for once.
+        assert searched == ["probe4.asc"]
 
     async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
         self, build: str, state_no_sim, work_dir: Path
     ):
-        import hashlib
-
-        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
-
         sheet = rec.stage_sheet(build, "export/block_symbol", work_dir)
-        result = await handle_edit_schematic(
-            EditSchematicInput.model_validate(
-                {
-                    "target": str(sheet),
-                    "expected_sha256": hashlib.sha256(sheet.read_bytes()).hexdigest(),
-                    "ops": [
-                        {"op": "move_component", "reference": "U1", "x": 96, "y": 640},
-                        {"op": "add_directive", "instruction": ".op", "x": 96, "y": 800},
-                    ],
-                }
-            ),
+        data = await apply_ops(
             state_no_sim,
+            sheet,
+            [
+                {"op": "move_component", "reference": "U1", "x": 96, "y": 640},
+                {"op": "add_directive", "instruction": ".op", "x": 96, "y": 800},
+            ],
         )
-        data = result.structured_content
-        assert data is not None
         assert data["outcome"] == "complete", data
         written = sheet.read_text(encoding="utf-8")
         assert "SYMBOL probe4 96 640 R0" in written
