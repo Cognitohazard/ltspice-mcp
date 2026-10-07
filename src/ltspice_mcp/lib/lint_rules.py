@@ -31,13 +31,14 @@ from ltspice_mcp.lib.spice_validator import (
     PROBE_REF_RE,
     drop_title_card,
     meas_functions_refused,
+    meas_name_refused,
     validate_netlist_arity,
 )
 
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "7"
+linter_version = "8"
 
 _SIGNAL_RE = PROBE_REF_RE
 # A capital M straight after a number is milli unless the letters after it
@@ -423,6 +424,28 @@ def _meas_function_ltspice(
             )
         )
     return findings
+
+
+def _meas_name_ltspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    """A ``.meas`` named for a constant of the expression engine (``e``, ``k``,
+    ``pi``, ``q``): LTspice 26 refuses the deck, XVII skips that measurement
+    (recorded on both)."""
+    if context.family != "ltspice":
+        return []
+    return [
+        _finding(
+            context,
+            rule,
+            line=card.line_start,
+            subject=card.name or ".meas",
+            evidence={"directive": card.body, "reason": f"{error.message} {error.suggestion}"},
+        )
+        for card in context.cards
+        if card.kind == "meas" and (error := meas_name_refused(card, "LTspice")) is not None
+    ]
 
 
 def _lib_section_ltspice(
@@ -907,9 +930,10 @@ RULES: tuple[LintRule, ...] = (
     LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees),
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
     # Blocking: LTspice refuses each of these decks before it runs, or, on XVII
-    # for a .meas function, fails the measurement the caller asked for.
+    # for a .meas function or name, fails the measurement the caller asked for.
     LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice),
     LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice),
+    LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice),
     LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice),
     # A warning, not blocking: LTspice 24 and later run another circuit than
     # the one the server reads, XVII the same one, and which build will run

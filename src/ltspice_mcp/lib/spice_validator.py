@@ -123,7 +123,8 @@ _RULES: tuple[_Rule, ...] = (
 MEAS_RESERVED_NAMES = frozenset({"e", "k", "pi", "q"})
 
 
-def _validate_meas_name(card: SpiceCard, simulator: str) -> ValidationError | None:
+def meas_name_refused(card: SpiceCard, simulator: str = "LTspice") -> ValidationError | None:
+    """The error for a lexed ``.meas`` card whose name ``simulator`` refuses."""
     name = card.name or ""
     if simulator != "LTspice" or name.casefold() not in MEAS_RESERVED_NAMES:
         return None
@@ -353,7 +354,7 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     meas_cards = [c for c in cards if c.kind == "meas"]
     if not meas_cards:
         return None
-    if (error := _validate_meas_name(meas_cards[0], simulator)) is not None:
+    if (error := meas_name_refused(meas_cards[0], simulator)) is not None:
         return error
     refused = meas_functions_refused(meas_cards[0], simulator)
     return refused[0][1] if refused else None
