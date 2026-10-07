@@ -116,6 +116,11 @@ recording that showed it.
   a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
   value runs as 1, not 1e-6. An export that opens with its schematic's path and
   names no generator is now read as XVII's, and the micro sign is a warning.
+- A sheet using a block symbol with no sheet of its own (`SymbolType BLOCK`,
+  its subcircuit defined in a library, or not yet) could not be opened at all:
+  `edit_schematic`, `inspect` and `verify_circuit` failed with "File ….asc not
+  found", though LTspice exports it. Such an instance now opens with its
+  subcircuit unresolved, as LTspice reads it, and the sheet can be edited.
 - `verify_circuit`'s comparison read a subcircuit instance LTspice exported
   with an added `X` (`Xe` as `X§Xe` from LTspice 24 on, `XXe` from XVII) as a
   different part from the `Xe` a netlist written by hand names, so every leaf
