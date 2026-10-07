@@ -4,6 +4,7 @@ import logging
 import os
 import platform
 import re
+import sys
 from pathlib import Path, PureWindowsPath
 
 from spicelib.simulators.ltspice_simulator import LTspice
@@ -20,6 +21,7 @@ from ltspice_mcp.config import (
     SIM_SECTION,
     ServerConfig,
 )
+from ltspice_mcp.lib import hidden_desktop
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
@@ -40,12 +42,18 @@ def _get_ltspice_class() -> type:
     """Return the appropriate LTspice class for the current platform.
 
     On WSL, returns LTspiceWSL which overrides run() to convert paths
-    via wslpath instead of using Wine's Z: drive mapping.
+    via wslpath instead of using Wine's Z: drive mapping. On Windows itself,
+    the subclass that starts LTspice on a hidden desktop, so that its window
+    does not take the keyboard focus on every run.
     """
     if is_wsl():
         from ltspice_mcp.lib.ltspice_wsl import LTspiceWSL
 
         return LTspiceWSL
+    if sys.platform == "win32":
+        from ltspice_mcp.lib.ltspice_windows import LTspice as LTspiceOffDesktop
+
+        return LTspiceOffDesktop
     return LTspice
 
 
@@ -574,6 +582,7 @@ def detect_simulators(
 
     # Apply the ngspice compatibility-mode override (if configured) before any run.
     _apply_ngbehavior(config)
+    hidden_desktop.configure(enabled=config is None or config.hidden_desktop)
 
     # Resolve the candidate set: empty allowlist = every supported simulator.
     names = _resolve_enabled_names(config, diagnostics)

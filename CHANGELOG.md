@@ -10,6 +10,20 @@ tool-surface changes.
 
 ### Fixed
 
+- On Windows, every LTspice run and every schematic export took the keyboard
+  focus for as long as it lasted: LTspice opens a window even in batch mode,
+  and a sweep took the focus continuously. LTspice is now started on a desktop
+  of the server's own, where it has no window on yours. Starting it minimised
+  or hidden does not help; measured, it was still the foreground window for
+  about four samples in five of a run, and on its own desktop for none.
+  A message box LTspice stops on there (LTspice XVII raises one for a sheet
+  that starts with a byte order mark) ends the run or export at once with
+  what the box said, where before it waited for the timeout or for someone to
+  click it. `[simulator] hidden_desktop = false` (or
+  `LTSPICE_MCP_HIDDEN_DESKTOP=0`) starts LTspice on your own desktop as
+  before. Named executables are launched the same way; WSL and Wine are
+  unchanged.
+
 The entries in this group were found by holding the server against files
 LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the

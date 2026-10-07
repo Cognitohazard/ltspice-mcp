@@ -20,6 +20,11 @@
 # Unset uses APPDATA/LTspice.ini; the original file is never written.
 # ltspice_ini = "C:/SPICE/LTspice.ini"
 
+# On Windows, start LTspice on a desktop of its own, so its window does not
+# take the keyboard focus on every run. false shows the window, and any
+# message box LTspice stops on, on your own desktop.
+# hidden_desktop = true
+
 # ngspice compatibility mode (ngbehavior). Unset = spicelib's default
 # 'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned
 # '.lib <file> <section>' PDK corner selection. Set a mode with neither,

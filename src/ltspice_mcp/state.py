@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ltspice_mcp.config import SANDBOX_ENV, SANDBOX_KEY, SANDBOX_SECTION, ServerConfig
+from ltspice_mcp.lib import hidden_desktop
 from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.experiment_types import ExperimentJob
@@ -375,6 +376,9 @@ class SessionState:
             await self.code_worker.close()
         await self.job_registry.cancel_running(self.runners, self)
         await self.job_registry.drain_pending()
+        # After the runs it held have been stopped: the desktop LTspice was
+        # started on goes with the session that made it.
+        hidden_desktop.close_shared()
 
 
 def _file_stamp(path: Path) -> tuple[int, int] | None:

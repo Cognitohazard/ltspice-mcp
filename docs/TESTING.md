@@ -514,7 +514,11 @@ What makes that true, and what a recording must never carry:
   stray key press answers it and the run looks as if it had ended by itself.
   The recorder starts LTspice on a desktop of its own, where it cannot take
   focus and nobody can answer; a build that stops to ask is recorded as
-  having done so, with what it asked.
+  having done so, with what it asked. The launch is the server's own
+  (`lib/hidden_desktop.py`), which is why the LTspice integration tier no
+  longer takes the keyboard either: watching for an LTspice window on the
+  desktop the tests run on is one of its tests
+  (`test_ltspice_integration.py::TestWindowStaysOffTheDesktop`).
 
 Things about the command line that cost an afternoon each: `-ini <file>` goes
 after the input (given first, LTspice 26 exits 0 having run nothing and XVII

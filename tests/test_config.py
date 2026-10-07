@@ -644,6 +644,7 @@ ENV_OVERRIDES: dict[str, str] = {
     ),
     "LTSPICE_MCP_NGBEHAVIOR": "  hsa  ",
     "LTSPICE_MCP_LTSPICE_INI": "/opt/env/established.ini",
+    "LTSPICE_MCP_HIDDEN_DESKTOP": "on",
     "LTSPICE_MCP_WORKING_DIR": "/tmp/env-working-dir",
     "LTSPICE_MCP_ALLOWED_PATHS": f"/tmp/env-a{os.pathsep}/tmp/env-b",
     "LTSPICE_MCP_MAX_PARALLEL": "9",
@@ -675,6 +676,7 @@ FULL_TOML = """
 default = "ngspice"
 path = "/opt/toml/ngspice"
 ltspice_ini = "/opt/toml/established.ini"
+hidden_desktop = false
 enabled = ["NGspice", " LTspice "]
 ngbehavior = "  kipsa  "
 
@@ -754,6 +756,7 @@ class TestLoadCoversEveryKey:
                 "ltspice:lt24": Path("C:/Program Files/ADI/LTspice/LTspice.exe"),
             },
             "ltspice_ini": Path("/opt/toml/established.ini"),
+            "hidden_desktop": False,
             "ngbehavior": "kipsa",
             "working_dir": Path.cwd(),
             "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
@@ -795,6 +798,7 @@ class TestLoadCoversEveryKey:
                 "ngspice:nightly": Path("/opt/env/ngspice"),
             },
             "ltspice_ini": Path("/opt/env/established.ini"),
+            "hidden_desktop": True,
             "ngbehavior": "hsa",
             "working_dir": Path("/tmp/env-working-dir"),
             "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],
