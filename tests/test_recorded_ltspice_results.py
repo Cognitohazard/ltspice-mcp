@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -516,6 +517,24 @@ class TestMeasurements:
         else:
             assert "observations" not in result
             assert result["stats"]["s_when"]["failure_count"] == 1
+
+    async def test_a_jobs_recorded_build_names_the_zeros_without_a_raw(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A job's case records the build its run named, so the zeros are named
+        from that record when no artifact read here names XVII."""
+        if rec.generation(build) != "xvii":
+            pytest.skip("only XVII prints 0 for a failed step")
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        source = services.resolve_analysis_source(state_no_sim, log_file=str(log))
+        recipe = MeasurementsRecipe(key="meas", metric="measurements")
+        unnamed = await metrics.measurements(source, recipe, None, state_no_sim)
+        assert "observations" not in unnamed  # an XVII log names no build
+        recorded = replace(source, simulator_version=rec.manifest(build)["reported_build"])
+        result = await metrics.measurements(recorded, recipe, None, state_no_sim)
+        (observation,) = result["observations"]
+        assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
