@@ -885,11 +885,26 @@ in the result set, so a continuation replays them.
   only.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
-  assignments}`.
+  assignments, no_value_count?}`. `no_value_count` is the number of the
+  recipe's rows with no number for that field (a failed `.meas`, a null, a
+  missing key), which the statistic leaves out; it is absent when every row
+  had one.
 - Spec verdicts:
-  `{field, min?, max?, pass_count, fail_count, fail_cases: Page,
-  verdict: "pass"|"fail"|"indeterminate", allow_incomplete?}` — indeterminate on
-  incomplete coverage unless the caller opts out.
+  `{field, min?, max?, pass_count, fail_count, no_value_count, fail_cases: Page,
+  verdict: "pass"|"fail"|"indeterminate", allow_incomplete?}`. `pass_count +
+  fail_count + no_value_count` is every row of the recipe. The verdict is
+  indeterminate on incomplete coverage, or while any row has no number for the
+  field, unless the caller opts out with `allow_incomplete`, which judges the
+  rows that have one and keeps the count. A verdict an earlier build stored
+  with a job has no `no_value_count`: it was reached by the old rule, which
+  skipped rows with no number.
+- A row with no number for a field used to be skipped. A `.meas` that failed in
+  one run of three then reduced over two with nothing saying so, a spec passed
+  on the two it could judge with `outcome: "complete"`, and a `.meas` that
+  failed in every run was missing from `reduced`. The count now stands beside
+  the statistic, which says how many runs it covers without the caller
+  reconciling `count` against `coverage`, and an unjudged run keeps a spec from
+  reading as a pass.
 - A whole-call compute budget sits atop the per-parse deadlines. Exceeding it
   returns partial results plus a `result_set_id`, persisted in the working-dir
   store and expiring with jobs; an expired one has to be re-requested. Ask for
@@ -1673,6 +1688,16 @@ reduced every key; the two categories now agree. Two names for one number
 (`edges`' `rise_time` and `fall_time`, a disturbance's `deviation` and
 `undershoot`) reduce once: an edge under the direction its row measured, the
 others under the first name. A scalar recipe takes none, having one number.
+
+Which fields a `reduce` without `field` covers differs by category, because
+the two kinds of name mean different things. A keyed recipe's keys are what the
+run asked for, each `.meas` the deck holds or each quantity its bias point
+reports, so every key any row carries is reduced: a `.meas` that failed in every
+run reduces to null over all of them, with its `no_value_count` (§3.3). A
+multi-field recipe's fields are its fixed table, and a circuit can have none of
+some of them, as a lowpass has no low cutoff and a step response no
+disturbance figures. Such a field is left out when no row has a number for it,
+and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|

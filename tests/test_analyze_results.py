@@ -3035,6 +3035,167 @@ async def test_a_stepped_runs_row_keeps_its_spread(
     assert row["value"]["stats"]["vfinal"]["total_count"] == 3
 
 
+def _failed_vfinal_job(state: SessionState, work_dir: Path) -> str:
+    """A completed three-case experiment whose third case has no vfinal.
+
+    The first two cases left the recorded sweep's logs. The third left LTspice
+    XVII's log of the same FIND with V(out) missing from .save, which XVII
+    reports as FAIL'ed (LTspice 26 refuses that deck instead). That log holds
+    no tcross at all.
+    """
+    for index in range(2):
+        shutil.copy(
+            FIXTURES_DIR / f"ltspice_sweep_meas_run{index}.log", work_dir / f"case-{index}.log"
+        )
+    shutil.copy(
+        recorded_ltspice.recorded("ltspice17", "deck/save_omits_meas.log"),
+        work_dir / "case-2.log",
+    )
+    job = make_experiment_job(state, job_id="exp_failed_vfinal", count=3)
+    (work_dir / f"{job.job_id}.cir").write_text(_SWEEP_DECK, encoding="utf-8")
+    return job.job_id
+
+
+async def _analyze_sources(
+    state: SessionState, sources: list[dict[str, Any]], recipes: list[dict[str, Any]]
+) -> dict[str, Any]:
+    reply = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate({"sources": sources, "recipes": recipes}), state
+    )
+    assert reply.structured_content is not None
+    return reply.structured_content
+
+
+@pytest.mark.asyncio
+async def test_a_reduction_counts_the_runs_that_gave_no_value(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A reduction over three runs, one of which has no number for the field,
+    says so instead of reporting two runs as if they were all there were."""
+    job_id = _failed_vfinal_job(state_no_sim, work_dir)
+    data = await _analyze_sources(
+        state_no_sim,
+        [{"job_id": job_id, "label": "mixed"}],
+        [{"key": "m", "metric": "measurements", "reduce": ["min", "max", "count"]}],
+    )
+    assert data["coverage"]["runs_analyzed"] == 3
+    reduced = {(row["field"], row["stat"]): row for row in data["results"]["m"]["reduced"]}
+    assert set(reduced) == {
+        (field, stat) for field in ("vfinal", "tcross") for stat in ("min", "max", "count")
+    }
+    assert reduced["vfinal", "count"]["value"] == 2
+    assert reduced["vfinal", "min"]["value"] == _SWEEP_VFINAL[1]
+    assert reduced["vfinal", "min"]["case_id"] == "case-0001"
+    # The FAIL'ed run and the run whose log never had tcross are counted alike.
+    assert {row["no_value_count"] for row in reduced.values()} == {1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allow_incomplete", "verdict"), [(False, "indeterminate"), (True, "pass")]
+)
+async def test_a_spec_does_not_pass_over_a_run_it_could_not_judge(
+    allow_incomplete: bool,
+    verdict: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Two runs above the limit and one with no vfinal is not a pass: the third
+    run was never judged. allow_incomplete judges what there is, and the count
+    of the run it could not judge stays on the verdict."""
+    job_id = _failed_vfinal_job(state_no_sim, work_dir)
+    limits = {"min": 0.9, "allow_incomplete": allow_incomplete}
+    data = await _analyze_sources(
+        state_no_sim,
+        [{"job_id": job_id, "label": "mixed"}],
+        [{"key": "m", "metric": "measurements", "field": "vfinal", "spec": limits}],
+    )
+    spec = data["results"]["m"]["spec"]
+    assert (spec["pass_count"], spec["fail_count"], spec["no_value_count"]) == (2, 0, 1)
+    assert spec["verdict"] == verdict
+
+
+@pytest.mark.asyncio
+async def test_a_meas_that_failed_in_every_run_is_still_reduced(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A .meas no run measured comes back as a reduction of nothing over every
+    run, not as a name missing from the result."""
+    sources = []
+    for build in recorded_ltspice.BUILDS:
+        log = work_dir / f"meas_failed_{build}.log"
+        shutil.copy(recorded_ltspice.recorded(build, "log/meas_failed.log"), log)
+        sources.append({"log_path": str(log), "label": build})
+    data = await _analyze_sources(
+        state_no_sim,
+        sources,
+        [{"key": "m", "metric": "measurements", "reduce": ["count", "max"]}],
+    )
+    runs = len(recorded_ltspice.BUILDS)
+    reduced = {(row["field"], row["stat"]): row for row in data["results"]["m"]["reduced"]}
+    assert {field for field, _ in reduced} == {"before", "after", "never", "depends"}
+    for field in ("never", "depends"):
+        assert reduced[field, "count"]["value"] == 0
+        assert reduced[field, "max"]["value"] is None
+        assert reduced[field, "max"]["no_value_count"] == runs
+    assert "no_value_count" not in reduced["before", "max"]
+    assert reduced["before", "count"]["value"] == runs
+
+
+@pytest.mark.asyncio
+async def test_a_named_field_no_run_reached_is_reduced_to_null(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Asked for the crossover of a loop that never reaches unity, a reduction
+    answers null over one run without a value, not with no rows at all."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "ugbw",
+                "metric": "stability",
+                "signal": "V(out)",
+                "field": "unity_gain_hz",
+                "reduce": ["max"],
+                "spec": {"min": 1e3},
+            }
+        ],
+    )
+    (row,) = data["results"]["ugbw"]["reduced"]
+    assert (row["field"], row["value"], row["no_value_count"]) == ("unity_gain_hz", None, 1)
+    spec = data["results"]["ugbw"]["spec"]
+    assert (spec["field"], spec["no_value_count"], spec["verdict"]) == (
+        "unity_gain_hz",
+        1,
+        "indeterminate",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_bare_multi_field_reduction_leaves_out_what_the_circuit_has_none_of(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A multi-field recipe's fields are a fixed table, and a lowpass has no low
+    cutoff: a field no run has a number for is not a failed measurement, so a
+    reduction that did not name it does not list it."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "f", "metric": "bode_filter", "signal": "V(out)", "reduce": ["max"]}],
+    )
+    fields = {row["field"] for row in data["results"]["f"]["reduced"]}
+    assert "cutoff_high_hz" in fields
+    assert "cutoff_low_hz" not in fields
+    assert all("no_value_count" not in row for row in data["results"]["f"]["reduced"])
+
+
 @pytest.mark.asyncio
 async def test_field_narrows_a_keyed_recipes_reduction_to_that_key(
     state_no_sim: SessionState,

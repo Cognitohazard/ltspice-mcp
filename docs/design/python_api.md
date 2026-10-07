@@ -470,7 +470,10 @@ crossing or `AT` point the log printed is under `row["value"]["at"][name]`. Its
 per-name `stats` block is left off the default row; `include={"fields":
 ["value"]}` returns it. A stepped run's row carries `stats` alone. Reductions
 read `stats` either way, so `reduced` does not depend on which rendering a row
-was given.
+was given. A name the log holds no number for is counted, not skipped: its
+reduced rows carry `no_value_count`, a spec on it carries the same count beside
+`pass_count` and `fail_count` and is `"indeterminate"` unless
+`allow_incomplete`, and the dict the API returns is the MCP result's.
 
 Direct log imports capture no RAW sibling, even when one exists. Log views
 require `plot_index` omission. Analysis and attached analysis accept an omitted

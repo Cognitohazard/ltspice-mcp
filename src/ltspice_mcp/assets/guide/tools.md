@@ -121,7 +121,9 @@ lint blocks a mismatch. A case that produced nothing is counted in
   For a staircase signal (DAC steps, line reflections), read each level with a
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur
-  the levels.
+  the levels. Runs with no number for a reduced or spec'd field (a failed
+  `.meas`) are counted in `no_value_count`, and a spec stays `indeterminate`
+  while there are any, unless you set `allow_incomplete`.
 - `inspect` reads decks, schematics, libraries and result facts:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
 - `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`

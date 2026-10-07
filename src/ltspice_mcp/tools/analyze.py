@@ -1919,42 +1919,74 @@ _LEAN_VALUES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
-def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Record, float]]]:
+@dataclass
+class _FieldTally:
+    """One reducible number across a recipe's rows: the rows that carried it,
+    and how many rows carried none."""
+
+    samples: list[tuple[Record, float]] = field(default_factory=list)
+    no_value: int = 0
+
+
+def _tallies(recipe: Recipe, records: list[Record]) -> dict[str, _FieldTally]:
+    """Each number a reduction or a spec over ``recipe`` reads, tallied over
+    every row of it.
+
+    A row with no number for a field (a null, a missing key, a value that is
+    not finite) is counted rather than skipped. Leaving it out made a
+    measurement that failed in one run of three a statistic over two with
+    nothing saying so, a spec pass over the two it could judge, and one that
+    failed in every run a name absent from the result.
+    """
     # The reducer category is the base the recipe inherits (exactly one); a
-    # variable-length recipe matches none and yields no samples.
-    out: dict[str, list[tuple[Record, float]]] = {}
-    pairs = recipe.reduction_fields() if isinstance(recipe, MultiRecipe) else []
-    for record in records:
-        value = record.value
-        if isinstance(recipe, ScalarRecipe):
-            nested = _SCALAR_NESTED.get(recipe.metric)
+    # variable-length recipe matches none and yields no tallies.
+    out: dict[str, _FieldTally] = {}
+
+    def tally(name: str, candidate: Any, record: Record) -> None:
+        entry = out.setdefault(name, _FieldTally())
+        number = _number(candidate)
+        if number is None:
+            entry.no_value += 1
+        else:
+            entry.samples.append((record, number))
+
+    if isinstance(recipe, ScalarRecipe):
+        nested = _SCALAR_NESTED.get(recipe.metric)
+        names = _SCALAR_FIELDS.get(recipe.metric, ())
+        for record in records:
+            value = record.value
             if nested is not None:
-                field, candidate = nested(value)
+                name, candidate = nested(value)
             else:
-                names = _SCALAR_FIELDS.get(recipe.metric, ())
-                field = next(
-                    (name for name in names if name in value), names[0] if names else "value"
-                )
-                candidate = value.get(field)
-            number = _number(candidate)
-            if number is not None:
-                out.setdefault(field, []).append((record, number))
-        elif isinstance(recipe, MultiRecipe):
-            for field, actual in pairs:
-                number = _number(value.get(actual))
-                if number is not None:
-                    out.setdefault(recipe.field_for_row(field, value), []).append((record, number))
-        elif isinstance(recipe, KeyedRecipe):
-            # 'field' means one thing on every category: the single number both
-            # a reduction and a spec read. Absent, a keyed recipe covers every
-            # key.
-            wanted = recipe.field
-            for name, candidate in _KEYED_EXTRACTORS[recipe.metric](value).items():
-                if wanted is not None and name != wanted:
-                    continue
-                number = _number(candidate)
-                if number is not None:
-                    out.setdefault(name, []).append((record, number))
+                name = next((key for key in names if key in value), names[0] if names else "value")
+                candidate = value.get(name)
+            tally(name, candidate, record)
+    elif isinstance(recipe, MultiRecipe):
+        pairs = recipe.reduction_fields()
+        for record in records:
+            for name, actual in pairs:
+                tally(recipe.field_for_row(name, record.value), record.value.get(actual), record)
+        if recipe.field is None:
+            # A bare reduction covers the recipe's whole fixed table, which
+            # holds fields a given circuit has none of: a lowpass's low cutoff,
+            # a step response's disturbance figures. A field no row has a
+            # number for is that, not a measurement that failed, so only a
+            # field the caller named is reported with no samples.
+            out = {name: entry for name, entry in out.items() if entry.samples}
+    elif isinstance(recipe, KeyedRecipe):
+        # 'field' means one thing on every category: the single number both a
+        # reduction and a spec read. Absent, a keyed recipe covers every key
+        # any row carries; a key is a name the run itself asked for (a .meas,
+        # a bias-point quantity), so a row without a number for it is counted.
+        flats = [_KEYED_EXTRACTORS[recipe.metric](record.value) for record in records]
+        wanted = (
+            [recipe.field]
+            if recipe.field is not None
+            else list(dict.fromkeys(name for flat in flats for name in flat))
+        )
+        for record, flat in zip(records, flats, strict=True):
+            for name in wanted:
+                tally(name, flat.get(name), record)
     return out
 
 
@@ -1991,16 +2023,22 @@ def _attribution(stat: str, samples: list[tuple[Record, float]]) -> dict[str, An
 
 def _reduce(recipe: Recipe, records: list[Record]) -> list[dict[str, Any]]:
     stats = list(getattr(recipe, "reduce", []))
+    if not stats:
+        return []
     reduced: list[dict[str, Any]] = []
-    for field_name, field_samples in _samples(recipe, records).items():
-        values = [value for _, value in field_samples]
+    for field_name, tally in _tallies(recipe, records).items():
+        values = [value for _, value in tally.samples]
+        # Present only when some row had no number, as failed_measurements is:
+        # absent, every row the reduction covers carried one.
+        no_value = {"no_value_count": tally.no_value} if tally.no_value else {}
         for stat in stats:
             reduced.append(
                 {
                     "field": field_name,
                     "stat": stat,
                     "value": _stat(stat, values),
-                    **_attribution(stat, field_samples),
+                    **_attribution(stat, tally.samples),
+                    **no_value,
                 }
             )
     return reduced
@@ -2017,14 +2055,18 @@ def _spec(
     limits = getattr(recipe, "spec", None)
     if limits is None:
         return None
-    samples_by_field = _samples(recipe, records)
+    tallies = _tallies(recipe, records)
     # One spelling: the recipe's own 'field' names the number both a reduction
     # and a spec read. A scalar recipe declares none because it produces one
     # number, so its spec falls through to that single field.
     field = getattr(recipe, "field", None)
-    if field is None and len(samples_by_field) == 1:
-        field = next(iter(samples_by_field))
-    samples = samples_by_field.get(field or "", [])
+    if field is None and len(tallies) == 1:
+        field = next(iter(tallies))
+    tally = tallies.get(field or "", _FieldTally())
+    samples = tally.samples
+    # A row with no number for the field is a run the spec did not judge, so
+    # it stands beside the passes and fails rather than outside them.
+    no_value = tally.no_value if field is not None else len(records)
     failed: list[dict[str, Any]] = []
     pass_count = 0
     for record, value in samples:
@@ -2035,7 +2077,7 @@ def _spec(
             pass_count += 1
         else:
             failed.append({"value": value, **record.attribution()})
-    if not samples or (incomplete and not limits.allow_incomplete):
+    if not samples or ((incomplete or no_value) and not limits.allow_incomplete):
         verdict = "indeterminate"
     else:
         verdict = "fail" if failed else "pass"
@@ -2045,6 +2087,7 @@ def _spec(
         "max": limits.max,
         "pass_count": pass_count,
         "fail_count": len(failed),
+        "no_value_count": no_value,
         # fail_cases is not resumable, so its next offset has no consumer.
         "fail_cases": _page(failed, limit=fail_case_limit)[0],
         "verdict": verdict,
@@ -2523,6 +2566,15 @@ _REDUCED_SCHEMA: dict[str, Any] = {
         "step_index": {"type": ["integer", "null"]},
         "step_values": {"type": "object"},
         "assignments": {"type": "object"},
+        "no_value_count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": (
+                "Rows of this recipe with no number for this field (a failed "
+                ".meas, a null, a missing key), left out of the statistic. "
+                "Absent when every row had one."
+            ),
+        },
     },
     "required": [
         "field",
@@ -2545,6 +2597,16 @@ _SPEC_SCHEMA: dict[str, Any] = {
         "max": {"type": ["number", "null"]},
         "pass_count": {"type": "integer"},
         "fail_count": {"type": "integer"},
+        "no_value_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "Rows with no number for the field, so neither passed nor failed; "
+                "pass + fail + no_value is every row. Any makes the verdict "
+                "indeterminate unless allow_incomplete. Absent only on a verdict "
+                "an earlier build stored with a job."
+            ),
+        },
         "fail_cases": _PAGE_SCHEMA,
         "verdict": {
             "type": "string",
