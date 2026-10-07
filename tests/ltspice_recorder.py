@@ -12,10 +12,13 @@ Three rules shape it.
 
 **The command lines are the server's.** A run is ``<exe> -Run -b <deck>`` and
 an export is ``<exe> -netlist <sheet>``, as spicelib launches them. A plot
-case is the one exception, because what it records is what a person sees: a
+case is one exception, because what it records is what a person sees: a
 sheet is run in the window (``<exe> -Run <sheet>``), the waveform window is
 given its panes with its own menu commands, and its plot settings are saved
-(``drive_plot``). The one addition is a trailing ``-ini <file>``: a recording must not depend on the
+(``drive_plot``). A save case is the other: a sheet is opened in the window
+(``<exe> <sheet>``) and saved with the schematic window's own Save
+(``drive_save``), because a build writes a sheet no other way. The one
+addition is a trailing ``-ini <file>``: a recording must not depend on the
 settings of the person recording, so each case runs against a copy of the
 build's settings file with the keys that change a result removed
 (``BEHAVIOUR_KEYS``), which leaves the build on its own defaults. Two things
@@ -64,7 +67,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ltspice_mcp.lib.hidden_desktop import (
@@ -144,6 +147,7 @@ DEFAULT_KEEP: Mapping[str, tuple[str, ...]] = {
     "kill": ("log", "raw"),
     "fastaccess": ("raw",),
     "plot": ("plt",),
+    "save": ("asc",),
 }
 
 _RAW_SUFFIXES = (".raw", ".op.raw")
@@ -313,6 +317,9 @@ class Case:
     copy is named for the case, not for the source, so two cases can run one
     input differently.
 
+    A ``save`` case opens its sheet in the build's window and saves it; what
+    is kept is the sheet as the build wrote it.
+
     A ``plot`` case may name a plot settings file (``plot``), copied beside
     the deck under the deck's name so the waveform window reads it, and the
     ``steps`` the window is driven through before it saves: each
@@ -341,10 +348,16 @@ class Case:
         """Each input file the case copies, and its name in the case's directory.
 
         The source takes the case's name and a plot settings file the deck's,
-        which is the file the waveform window reads; an extra keeps its own.
+        which is the file the waveform window reads; an extra keeps its own. An
+        extra kept in a folder under the source's own keeps that folder too, so
+        a symbol can be put in a folder beside the sheet.
         """
         copies = {self.source: self.work_name}
-        copies.update((name, Path(name).name) for name in self.extra)
+        folder = PurePosixPath(self.source).parent
+        for name in self.extra:
+            extra = PurePosixPath(name)
+            below = extra.is_relative_to(folder) and folder != PurePosixPath(".")
+            copies[name] = extra.relative_to(folder).as_posix() if below else extra.name
         if self.plot:
             copies[self.plot] = f"{self.stem}.plt"
         return copies
@@ -773,6 +786,9 @@ _ADD_TRACES = "Add Traces to Plot"
 #: The menu labels a plot case uses besides its own steps.
 _ADD_TRACE = "Add trace"
 _SAVE_PLOT = "Save Plot Settings"
+#: An item only the schematic window's menu has, and the item that saves the sheet.
+_LABEL_NET = "Label Net"
+_SAVE = "Save"
 
 
 def _pe_resources(image: bytes, kind: int) -> list[bytes]:
@@ -874,26 +890,40 @@ def menu_label(text: str) -> str:
     return text.split("\t", 1)[0].replace("&", "").rstrip(".").strip()
 
 
-@functools.cache
-def waveform_commands(exe: Path) -> dict[str, int]:
-    """The command each waveform-window menu item sends, by ``menu_label``.
+def _menu_commands(exe: Path, marker: str, window: str) -> dict[str, int]:
+    """The command each item of one of a build's menus sends, by ``menu_label``.
 
-    Read from the build's own menu resource, the first menu holding Add
-    trace, rather than from the running window, so the ids are the build's
-    whatever window it shows them in. A label that appears twice keeps its
-    first id: the File menu's Save Plot Settings, which writes the default
-    file without asking where.
+    The menu is the first in the build's own menu resource that holds
+    ``marker``. It is read there rather than from the running window, so the
+    ids are the build's whatever window it shows them in. A label that appears
+    twice keeps its first id.
     """
     for template in _pe_resources(exe.read_bytes(), _RT_MENU):
         items = _menu_items(template)
-        if not any(menu_label(text) == _ADD_TRACE for _command, text in items):
+        if not any(menu_label(text) == marker for _command, text in items):
             continue
         commands: dict[str, int] = {}
         for command, text in items:
             if command is not None:
                 commands.setdefault(menu_label(text), command)
         return commands
-    raise RecorderError(f"{exe.name} has no waveform-window menu with an {_ADD_TRACE} item")
+    raise RecorderError(f"{exe.name} has no {window}-window menu with an item {marker!r}")
+
+
+@functools.cache
+def waveform_commands(exe: Path) -> dict[str, int]:
+    """The command each waveform-window menu item sends, by ``menu_label``.
+
+    The first of the two Save Plot Settings items is the File menu's, which
+    writes the default file without asking where.
+    """
+    return _menu_commands(exe, _ADD_TRACE, "waveform")
+
+
+@functools.cache
+def schematic_commands(exe: Path) -> dict[str, int]:
+    """The command each schematic-window menu item sends, by ``menu_label``."""
+    return _menu_commands(exe, _LABEL_NET, "schematic")
 
 
 @functools.cache
@@ -958,13 +988,14 @@ def _top(window: int) -> int:
     return int(rect.top)
 
 
-class _WaveformWindow:
-    """One LTspice process's windows, as a plot case drives them."""
+class _Windows:
+    """One LTspice process's windows, as a plot or save case drives them."""
 
     def __init__(self, desktop: HiddenDesktop, pid: int, stem: str) -> None:
         self.desktop = desktop
         self.pid = pid
         self.raw_title = f"{stem}.raw".casefold()
+        self.sheet_title = f"{stem}.asc".casefold()
 
     def top_level(self) -> list[int]:
         visible = _user32().IsWindowVisible
@@ -982,11 +1013,16 @@ class _WaveformWindow:
 
     def waveform(self, frame: int) -> tuple[int, int] | None:
         """The waveform window of the case's raw file, and the MDI client it is in."""
+        return self._document(frame, self.raw_title)
+
+    def sheet(self, frame: int) -> tuple[int, int] | None:
+        """The schematic window of the case's sheet, and the MDI client it is in."""
+        return self._document(frame, self.sheet_title)
+
+    def _document(self, frame: int, title: str) -> tuple[int, int] | None:
         children = child_windows(frame)
         for child in children:
-            if window_text(child).casefold() == self.raw_title and window_class(child).startswith(
-                "Afx:"
-            ):
+            if window_text(child).casefold() == title and window_class(child).startswith("Afx:"):
                 client = next((c for c in children if window_class(c) == "MDIClient"), frame)
                 return child, client
         return None
@@ -1002,20 +1038,82 @@ class _WaveformWindow:
         )
 
 
-class _PlotStop(Exception):
-    """A plot case ended before it saved: a box was waiting, the build exited, or time ran out."""
+class _CaseStop(Exception):
+    """A plot or save case ended before it saved: a box was waiting or the build exited."""
 
     def __init__(self, ended: _Ended) -> None:
         super().__init__(repr(ended))
         self.ended = ended
 
 
-def _plot_stamp(path: Path) -> tuple[int, int] | None:
+def _file_stamp(path: Path) -> tuple[int, int] | None:
     try:
         stat = path.stat()
     except OSError:
         return None
     return stat.st_mtime_ns, stat.st_size
+
+
+class _Waits:
+    """The waits of a case driven in the window.
+
+    Each ends when what it waits for is so. A build that exits, or stops on a
+    message box the case did not open, stops the case (``_CaseStop``); one that
+    does neither within the case's ``timeout`` fails the recording, naming what
+    it was waited on to do.
+    """
+
+    def __init__(
+        self,
+        process: StartedProcess | subprocess.Popen[bytes],
+        boxes: BoxWatch,
+        build: Build,
+        case: Case,
+        timeout: float,
+    ) -> None:
+        self.process = process
+        self.boxes = boxes
+        self.who = f"{case.case_id}: {build.exe.name}"
+        self.timeout = timeout
+        self.deadline = time.monotonic() + timeout
+
+    def until(self, condition: Callable[[], Any], doing: str) -> Any:
+        """What ``condition`` returns once it is true."""
+        while True:
+            found = condition()
+            if found:
+                return found
+            exit_code = self.process.poll()
+            if exit_code is not None:
+                raise _CaseStop(_Ended(stopped=False, exit_code=exit_code))
+            box = self.boxes.look()
+            if box is not None:
+                raise _CaseStop(_Ended(stopped=True, exit_code=None, dialog=box))
+            if time.monotonic() >= self.deadline:
+                raise RecorderError(f"{self.who} did not {doing} in {self.timeout:.0f}s")
+            # timing: looks at windows and files a GUI build is changing; neither signals
+            time.sleep(0.25)
+
+    def settle(self, doing: str) -> None:
+        # timing: a posted command is handled when the window's message loop gets
+        # to it, which nothing reports; a second keeps the next step behind it
+        settled = time.monotonic() + 1.0
+        self.until(lambda: time.monotonic() >= settled, doing)
+
+    def saved(self, path: Path, window: int, command: int, doing: str) -> None:
+        """Send ``window`` its save ``command`` and wait for ``path`` to be written:
+        changed from what it was, and then still for a settle."""
+        before = _file_stamp(path)
+        _user32().PostMessageW(window, _WM_COMMAND, command, 0)
+        written = self.until(
+            lambda: _file_stamp(path) not in (None, before) and _file_stamp(path), doing
+        )
+        while True:
+            self.settle(doing)
+            now = _file_stamp(path)
+            if now == written:
+                return
+            written = now
 
 
 def drive_plot(
@@ -1042,45 +1140,19 @@ def drive_plot(
     that does none of this in ``timeout`` fails the recording, naming the step
     it was waiting at.
     """
-    deadline = time.monotonic() + timeout
     commands = waveform_commands(build.exe)
-    windows = _WaveformWindow(desktop, process.pid, case.stem)
+    windows = _Windows(desktop, process.pid, case.stem)
     boxes = BoxWatch(desktop, process.pid, ignore=_ADD_TRACES)
+    waits = _Waits(process, boxes, build, case, timeout)
     user = _user32()
-
-    def until(condition: Callable[[], Any], doing: str) -> Any:
-        """What ``condition`` returns once it is true; stops the case if the build will not."""
-        while True:
-            found = condition()
-            if found:
-                return found
-            exit_code = process.poll()
-            if exit_code is not None:
-                raise _PlotStop(_Ended(stopped=False, exit_code=exit_code))
-            box = boxes.look()
-            if box is not None:
-                raise _PlotStop(_Ended(stopped=True, exit_code=None, dialog=box))
-            if time.monotonic() >= deadline:
-                raise RecorderError(
-                    f"{case.case_id}: {build.exe.name} did not {doing} in {timeout:.0f}s"
-                )
-            # timing: looks at windows and files a GUI build is changing; neither signals
-            time.sleep(0.25)
-
-    def settle(doing: str) -> None:
-        # timing: a posted command is handled when the window's message loop gets
-        # to it, which nothing reports; a second keeps the next step behind it
-        settled = time.monotonic() + 1.0
-        until(lambda: time.monotonic() >= settled, doing)
-
     log = work / f"{case.stem}.log"
     plt = work / f"{case.stem}.plt"
     doing = "open the waveform window of the sheet's run"
     try:
-        frame = until(windows.frame, doing)
-        child, client = until(lambda: log.is_file() and windows.waveform(frame), doing)
+        frame = waits.until(windows.frame, doing)
+        child, client = waits.until(lambda: log.is_file() and windows.waveform(frame), doing)
         _send(client, _WM_MDIACTIVATE, child, 0)
-        settle(doing)
+        waits.settle(doing)
         # Commands go to the waveform window's own frame, which hands them to
         # its view and document whichever window is active: after a run the
         # schematic can be, and its Save would save the sheet.
@@ -1088,27 +1160,59 @@ def drive_plot(
             doing = f"take the step {kind} {value!r}"
             if kind == "command":
                 user.PostMessageW(child, _WM_COMMAND, commands[value], 0)
-                settle(doing)
+                waits.settle(doing)
                 continue
             user.PostMessageW(child, _WM_COMMAND, commands[_ADD_TRACE], 0)
-            dialog = until(lambda: windows.dialog(_ADD_TRACES), doing)
+            dialog = waits.until(lambda: windows.dialog(_ADD_TRACES), doing)
             _type_expression(dialog, value)
             user.PostMessageW(dialog, _WM_COMMAND, _IDOK, 0)
-            until(functools.partial(_closed, dialog), doing)
-            settle(doing)
-        doing = "save its plot settings"
-        before = _plot_stamp(plt)
-        user.PostMessageW(child, _WM_COMMAND, commands[_SAVE_PLOT], 0)
-        # Saved once the file has changed and then holds still for a settle.
-        written = until(lambda: _plot_stamp(plt) not in (None, before) and _plot_stamp(plt), doing)
-        while True:
-            settle(doing)
-            now = _plot_stamp(plt)
-            if now == written:
-                break
-            written = now
-    except _PlotStop as stop:
+            waits.until(functools.partial(_closed, dialog), doing)
+            waits.settle(doing)
+        waits.saved(plt, child, commands[_SAVE_PLOT], "save its plot settings")
+    except _CaseStop as stop:
         plt.unlink(missing_ok=True)
+        return stop.ended
+    return _Ended(stopped=True, exit_code=None)
+
+
+def drive_save(
+    process: StartedProcess | subprocess.Popen[bytes],
+    desktop: HiddenDesktop,
+    build: Build,
+    case: Case,
+    work: Path,
+    timeout: float,
+) -> _Ended:
+    """Save a save case's sheet from the schematic window.
+
+    The build is started on the sheet alone, as a person opening it does. Once
+    its schematic window is open, the window's own Save is sent to it, by the
+    id the build's menu gives it (``schematic_commands``), and the case ends
+    when the file has been written and holds still. Nothing on the sheet is
+    changed first: the point is the bytes a build writes for a sheet it read.
+
+    A message box the build stops on ends the case with what it says, and no
+    sheet is kept: one the build did not save is the case's own input. A build
+    that does not save in ``timeout`` fails the recording.
+    """
+    save = schematic_commands(build.exe)[_SAVE]
+    windows = _Windows(desktop, process.pid, case.stem)
+    waits = _Waits(process, BoxWatch(desktop, process.pid), build, case, timeout)
+    sheet = work / case.work_name
+    doing = "open the sheet in its schematic window"
+    try:
+        frame = waits.until(windows.frame, doing)
+        child, client = waits.until(lambda: windows.sheet(frame), doing)
+        _send(client, _WM_MDIACTIVATE, child, 0)
+        waits.settle(doing)
+        waits.saved(sheet, child, save, "save the sheet")
+    except _CaseStop as stop:
+        # The build has the sheet open while it waits on its box, and Windows
+        # does not remove a file that is open.
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        sheet.unlink(missing_ok=True)
         return stop.ended
     return _Ended(stopped=True, exit_code=None)
 
@@ -1169,11 +1273,14 @@ class CaseResult:
 
 
 def _command(build: Build, case: Case, deck: Path, ini: Path) -> list[str]:
-    # A plot case runs in the window, which a batch run (-b) never opens.
+    # A plot case runs in the window, which a batch run (-b) never opens, and
+    # a save case only opens its sheet there.
     if case.kind == "netlist":
         mode = ["-netlist"]
     elif case.kind == "plot":
         mode = ["-Run"]
+    elif case.kind == "save":
+        mode = []
     else:
         mode = ["-Run", "-b"]
     settings = ["-ini", str(ini)] if case.settings else []
@@ -1284,6 +1391,8 @@ def _launch(
         try:
             if case.kind == "plot":
                 return drive_plot(process, desktop, build, case, work, timeout)
+            if case.kind == "save":
+                return drive_save(process, desktop, build, case, work, timeout)
             return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
         finally:
             if process.poll() is None:
@@ -1314,6 +1423,7 @@ def run_case(
     digests: dict[str, str] = {}
     for name, target in case.copies.items():
         data = (inputs / name).read_bytes()
+        (work / target).parent.mkdir(parents=True, exist_ok=True)
         (work / target).write_bytes(data)
         digests[name] = sha256_bytes(data)
     # Outside the case directory, so nothing the build writes can pick it up.
@@ -1338,10 +1448,14 @@ def run_case(
             files[f"{case.case_id}.{suffix}"] = scrubber.bytes(
                 produced.read_bytes(), produced.name
             )
+    # What the build wrote beside its input; a save case's output is the input's
+    # own file, so that one counts.
     written = sorted(
         path.name[len(case.stem) :]
         for path in work.iterdir()
-        if path.is_file() and path.name.startswith(case.stem + ".") and path != deck
+        if path.is_file()
+        and path.name.startswith(case.stem + ".")
+        and (path != deck or case.kind == "save")
     )
     entry: dict[str, Any] = {
         "behaviour": case.behaviour,

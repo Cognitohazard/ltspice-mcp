@@ -5001,6 +5001,202 @@
         ".op.raw",
         ".raw"
       ]
+    },
+    "save/built": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/built.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/built.asc": "3f5565de5a705660316740f3dbefdb220a7978394845a3e3f4dd467f38ad7eea"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/built.asc": {
+          "bytes": 286,
+          "sha256": "91fddabc4ed42e8258cf54d5f03f34f388dd6d9275d5bc87c2ba02d973cb53d6"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/crlf": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/crlf.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/crlf.asc": "d328391673dcfe766aacba4e29587a66511a8e4c864834c234a4e7726cb60b19"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/crlf.asc": {
+          "bytes": 286,
+          "sha256": "91fddabc4ed42e8258cf54d5f03f34f388dd6d9275d5bc87c2ba02d973cb53d6"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_cp1252": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_cp1252.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_cp1252.asc": "801b61919a33cb768d430f8ceca8f71cd685e7321ed1c4fccfded61ad14a44c7",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_cp1252.asc": {
+          "bytes": 111,
+          "sha256": "beee9bd23d4716954aea7dce56efa4ac122688f210ee8a9176f868bb01297e44"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf16le": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf16le.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf16le.asc": "ecb4925cd4f771058293d808942a79a72d789347367b588a1d85f62cb0eec4d1",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_utf16le.asc": {
+          "bytes": 111,
+          "sha256": "beee9bd23d4716954aea7dce56efa4ac122688f210ee8a9176f868bb01297e44"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf16le_bom": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf16le_bom.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nAborting:\n\n  Unknown schematic syntax:\n\n  \ufeffVersion 4",
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf16le_bom.asc": "edb9eaff79dacb1d219a3ab1d4bfceb4ffa1d14ddbd3e5e939bae9cc107a1a1b",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "save/micro_utf8": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf8.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf8.asc": "96483884b9075970e3e3621cf22f912453dc4f211316bff9eab4377705d929bd",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_utf8.asc": {
+          "bytes": 112,
+          "sha256": "38b6c7d50f6b5944d3ec916d390985ddf855c5f9403b4f4b7cfdb7590ad4699b"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf8_bom": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf8_bom.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nAborting:\n\n  Unknown schematic syntax:\n\n  \u00ef\u00bb\u00bfVersion 4",
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf8_bom.asc": "f01dfc8fd0a3a7d3a79a8e54d6531b52b156fb1cc7dca272cc6e7b1caefbe35b",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "save/shuffled": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/shuffled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/shuffled.asc": "2390b94250068a0737a453f2490137495b4bd7f3a0636cf65920c522211dd919"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/shuffled.asc": {
+          "bytes": 482,
+          "sha256": "77f4fbb585f3fe8763a8782518609491d861b8762a16d0c577075e9b0ee14980"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
     }
   },
   "executable": {
