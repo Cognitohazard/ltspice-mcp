@@ -243,10 +243,9 @@ class TestMeasExtraction:
             {"key": "meas", "metric": "measurements"},
             include={"per_run": {"limit": 1}},
         )
-        stats = data["results"]["meas"]["per_run"]["items"][0]["value"]["stats"]
-        fc = stats["fc"]
-        assert fc["valid_count"] == 1
-        assert fc.get("at", fc["mean"]) == pytest.approx(
+        value = data["results"]["meas"]["per_run"]["items"][0]["value"]
+        assert "failed_measurements" not in value
+        assert value.get("at", {}).get("fc", value["measured"]["fc"]) == pytest.approx(
             1 / (2 * math.pi * 1e3 * 100e-9), rel=0.005
         )
 
@@ -260,9 +259,9 @@ class TestMeasExtraction:
             {"key": "meas", "metric": "measurements"},
             include={"per_run": {"limit": 1}},
         )
-        stats = data["results"]["meas"]["per_run"]["items"][0]["value"]["stats"]
-        assert stats["vout_max"]["valid_count"] == 1
-        assert stats["vout_max"]["mean"] == pytest.approx(1 - math.exp(-5), abs=0.002)
+        value = data["results"]["meas"]["per_run"]["items"][0]["value"]
+        assert "failed_measurements" not in value
+        assert value["measured"]["vout_max"] == pytest.approx(1 - math.exp(-5), abs=0.002)
 
 
 @pytest.mark.asyncio

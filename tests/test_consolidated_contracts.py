@@ -695,7 +695,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Measured 19,659.
     # Explicit plot/dialect selection and imported log sources also
     # contribute to the schema bound.
-    "analyze_results": 20300,
+    # Raised by about 120 characters so spec.allow_incomplete says it also
+    # judges past runs with no number for the field, which a spec now counts
+    # and holds indeterminate for instead of passing over. Measured 20,360.
+    "analyze_results": 20400,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
