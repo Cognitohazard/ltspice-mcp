@@ -566,6 +566,18 @@ documents themselves are the vendor's and are not recorded. The opt-in tier
 checks that the documents read from the install are the ones LTspice's own
 server lists.
 
+One thing here is observed and not recorded: that LTspice draws the traces
+named in a plot settings file beside a results file it opens
+(`lib/plot_settings.py`, behind `plot_waveform(in_ltspice=true)`). A window
+does not report what it draws, so it was looked at, by capturing the window on
+its hidden desktop: a file holding only the traces is enough, a section named
+for another analysis draws nothing, and a results file that is already open
+keeps the traces it had. `cases.toml` lists it as unrecordable and says what is
+recorded around it: the shape of the settings files LTspice itself ships, and
+that the call the server uses opens a results file and leaves it in front. If
+that needs checking again, capture the window; `PrintWindow` works on a window
+of another desktop when the capturing process is started on that desktop.
+
 The bridge can start an LTspice of its own, and one thing about that is not
 in the recording because the recording is made with the launch disabled. The
 opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to

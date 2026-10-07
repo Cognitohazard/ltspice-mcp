@@ -14,6 +14,8 @@ changes what is running between two calls by rewriting it:
 
 ``active`` is the document in front in that window; left out, it is the last
 one listed, which is the one LTspice had in front after opening them in turn.
+A window opens a results file that exists on disk, or one the world lists
+under ``results``; each one opened is added to the window's ``shown``.
 
 ``silent_on`` names a tool this program stops answering at, for the tests of a
 bridge that hangs. A replaced design is written back to the world. One tool is
@@ -127,6 +129,17 @@ class Bridge:
             raise _Refused("document not found")
         return window, window["designs"][path]
 
+    def _show_results(self, path: str) -> str:
+        window = self._window()
+        world = json.loads(self._world.read_text(encoding="utf-8"))
+        if path not in world.get("results", []) and not Path(path).is_file():
+            raise _Refused("file not found")
+        for entry in world["windows"]:
+            if entry["pid"] == window["pid"]:
+                entry.setdefault("shown", []).append(path)
+        self._world.write_text(json.dumps(world), encoding="utf-8")
+        return path
+
     def _replace(self, path: str, text: str) -> dict[str, Any]:
         window, held = self._design(path)
         if held == text:
@@ -160,6 +173,11 @@ class Bridge:
             in_front = window.get("active") or list(window["designs"])[-1]
             kind = "schematic" if in_front.lower().endswith(".asc") else "netlist"
             return {"path": in_front, "type": kind}
+        if name == "get_raw_info":
+            return {"path": self._show_results(arguments["path"])}
+        if name == "bring_to_front":
+            self._window()
+            return {"status": "ok"}
         if name == "get_design_content":
             return {"path": arguments["path"], "text": self._design(arguments["path"])[1]}
         if name == "set_design_content":

@@ -9,7 +9,9 @@ have a file open (``holding``), and replaces what one shows with the committed
 sheet (``show``), which LTspice records as one step of that window's undo
 history. It reaches the windows through the bridge LTspice ships
 (``BridgeSession``), attaching to instances that are already running and never
-starting one.
+starting one. ``show_results`` opens a finished run's results file in a
+window, for a caller who was asked to show it there; with the plot settings
+file ``lib/plot_settings.py`` writes beside it, it opens with its traces drawn.
 
 The file stays the record. Before an edit is committed, the window's copy is
 compared with the file, and one that differs holds work nobody saved: the
@@ -276,6 +278,26 @@ class OpenWindows:
                         )
                     )
         return windows, found
+
+    def show_results(self, results: Path) -> tuple[int, str]:
+        """Open a results file in an LTspice window and put it in front.
+
+        Returns the process and version of the window it went to. This is
+        the one thing here that opens something in a window, so it is for a
+        caller who was asked to. Blocks; raises ``BridgeError`` when there is
+        no bridge, when no window is running (none is started), or when
+        LTspice refuses the file.
+        """
+        if self._command is None:
+            raise BridgeError(self.unavailable or "no bridge")
+        with BridgeSession(self._command, timeout=self._timeout) as session:
+            running = [instance for instance in session.instances() if instance.mode == _WINDOW]
+            if not running:
+                raise BridgeError("no LTspice window is open, and none is started for this")
+            window = running[0]
+            session.attach(window.pid)
+            session.show_results(str(results))
+        return window.pid, window.version
 
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""

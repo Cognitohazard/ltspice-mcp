@@ -361,6 +361,11 @@ summary = "What ltspice-mcp-bridge.exe answers to each call the server makes, th
 model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json, which test_ltspice_bridge.py also replays against the stand-in bridge the suite uses"
 
+[behaviour.plot-settings]
+summary = "That LTspice loads the plot settings file beside a results file as it opens it, that one holding only the traces is enough for them to be drawn, and that a results file already open keeps the traces it had."
+model = ["lib/plot_settings.py", "lib/ltspice_window.py", "tools/analysis.py"]
+unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded instead is around it, in tests/fixtures/ltspice_bridge_recorded: the shape of the plot settings files LTspice ships with its examples (manifest: plot_settings), and that reading a results file's description opens it and leaves it the one in front (conversation.json). LTspice XVII has no bridge to open a file through."
+
 [behaviour.reference-documents]
 summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."
 model = ["lib/simulator_docs.py"]

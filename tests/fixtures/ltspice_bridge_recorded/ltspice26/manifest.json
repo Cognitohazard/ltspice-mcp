@@ -42,8 +42,34 @@
    "version"
   ]
  },
+ "plot_settings": {
+  "files": 57,
+  "sections": [
+   "AC Analysis",
+   "DC transfer characteristic",
+   "Noise Spectral Density - (V/Hz\u00bd or A/Hz\u00bd)",
+   "Operating Point",
+   "Transient Analysis"
+  ],
+  "keys": [
+   "Active Pane",
+   "Amps",
+   "EyeDiagDelay",
+   "EyeDiagPeriod",
+   "GridStyle",
+   "Log",
+   "Npanes",
+   "PltMag",
+   "PltPhi",
+   "Units",
+   "Volts",
+   "X",
+   "Y",
+   "traces"
+  ]
+ },
  "files": {
-  "conversation.json": "e3e0ed867b02599b351feabaf4d768c222301660207ff75e5dc28bbd024000ca",
+  "conversation.json": "40a921aa03b6456fc44356fb9e65fb1f76f61b611c781a04dcb84b3b92fcdfa0",
   "sheets/micro_sign.asc": "dbffac4fb966f3ed9e5763b2df01abec94f2377807ed05e0621b1706b0208780",
   "sheets/older_version.asc": "40215aa9190185b18b7882456b6fac1e440f59aa0a7ba0e5ad98e158c5b3adda",
   "sheets/symbol_attributes.asc": "bc4f46b09698546d188a8ceca7650b6512d2a2866bab62ba1751903ad7e22129",

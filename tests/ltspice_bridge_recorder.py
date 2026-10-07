@@ -136,6 +136,10 @@ class _Recording:
         if isinstance(kept.get("text"), str):
             # The sheet itself is recorded beside this file, once.
             kept["text"] = f"<{len(kept['text'].splitlines())} lines>"
+        if name == "get_raw_info":
+            # The server opens a results file with this call and reads nothing
+            # of what it describes, which is the main recorder's subject.
+            kept = {"path": kept.get("path")}
         step["reply"] = self._scrub(kept)
         self.steps.append(step)
         return reply
@@ -162,6 +166,49 @@ def wait_for_window(command: Sequence[str], pid: int, sheet: Path) -> tuple[int,
                     return pid, int(row["port"])
         time.sleep(0.25)  # timing: between two looks; what is waited for is the listing
     raise RecorderError(f"LTspice process {pid} never offered its window to the bridge")
+
+
+def _run_in_window(session: BridgeSession, recording: _Recording, sheet: Path) -> Path:
+    """Run ``sheet`` in the window, which is how a results file comes to be."""
+    recording.call(session, "run the sheet in the window", "start_simulation", path=str(sheet))
+    deadline = time.monotonic() + _STARTED_S
+    while time.monotonic() < deadline:
+        running = session.call("is_simulation_running", path=str(sheet))
+        if str(running.get("result")).lower() == "false":
+            break
+        time.sleep(0.25)  # timing: between two looks; what is waited for is the run's end
+    results = sheet.with_suffix(".raw")
+    deadline = time.monotonic() + _STARTED_S
+    while not results.is_file() and time.monotonic() < deadline:
+        time.sleep(0.25)  # timing: between two looks; what is waited for is the file
+    if not results.is_file():
+        raise RecorderError(f"running {sheet.name} in the window left no results file")
+    return results
+
+
+def plot_settings_record(build: Build) -> dict[str, Any] | None:
+    """The shape of the plot settings files ``build`` ships with its examples:
+    the names of their sections and the words their lines begin with. They are
+    what LTspice itself writes; their content is not recorded."""
+    library = build.library_root
+    examples = library.parent / "examples" if library is not None else None
+    if examples is None or not examples.is_dir():
+        return None
+    sections: set[str] = set()
+    keys: set[str] = set()
+    files = 0
+    for path in examples.rglob("*.plt"):
+        data = path.read_bytes()
+        if b"\x00" in data:
+            continue  # the few stored as UTF-16 say nothing the others do not
+        files += 1
+        for line in data.decode("cp1252").splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                sections.add(line.strip("[]"))
+            elif ":" in line:
+                keys.add(line.split(":", 1)[0].split("[", 1)[0])
+    return {"files": files, "sections": sorted(sections), "keys": sorted(keys)}
 
 
 def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
@@ -260,6 +307,20 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     text=held,
                 )
 
+                results = _run_in_window(session, recording, edited)
+                recording.call(session, "open a results file", "get_raw_info", path=str(results))
+                recording.call(session, "put it in front", "bring_to_front", path=str(results))
+                recording.fact(
+                    "the results file is then the one LTspice has in front",
+                    session.call("get_raw_info").get("path") == str(results),
+                )
+                recording.call(
+                    session,
+                    "a results file that is not there",
+                    "get_raw_info",
+                    path=str(work / "absent.raw"),
+                )
+
                 window.kill()
                 window.wait(timeout=30)
                 recording.call(session, "the window has closed", "list_open_designs")
@@ -291,6 +352,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         },
         "inputs": {name: sha256_bytes((INPUTS / f"{name}.asc").read_bytes()) for name in names},
         "reference": reference_record(build),
+        "plot_settings": plot_settings_record(build),
         "files": {name: sha256_bytes(data) for name, data in sorted(files.items())},
     }
     if out.exists():

@@ -111,7 +111,10 @@ the target open, refuses to commit under one whose copy differs from the file,
 and after a commit replaces the window's copy with the committed sheet, which
 appears at once and is one step of the window's undo history
 (`lib/ltspice_window.py`; the contract is in
-[mcp_surface.md](design/mcp_surface.md), "A sheet open in LTspice").
+[mcp_surface.md](design/mcp_surface.md), "A sheet open in LTspice"). The same
+route answers "what do I have open" (`inspect(kind="open_in_ltspice")`), and
+opens a finished run's results in the window when a person asks to see it
+there (`plot_waveform(in_ltspice=true)`, under *Export & plot surface* below).
 
 The file stays the record, and the window is a view of it. LTspice's server
 takes the other side: the window is the document and saving is the user's. Had
@@ -433,6 +436,24 @@ so zoom / pan / hover does nothing for it.
   Both always return the file path and a text summary, so a host with neither
   surface still gets a usable result (the fallback the MCP Apps spec
   describes).
+- **In the user's LTspice — on request, on `plot_waveform`.** A person who
+  works in LTspice wants to look in LTspice: its cursors, its Add Trace box,
+  the viewer they already know. `in_ltspice` opens the run's results file in
+  the LTspice window that is already running, through the bridge LTspice
+  ships (`OpenWindows.show_results`). A results file opened there shows an
+  empty plot unless a plot settings file of the same name sits beside it, so
+  the server writes one naming the panels' traces (`lib/plot_settings.py`):
+  the traces only, which is enough for LTspice to draw them and scale the
+  axes itself. A settings file a person saved from LTspice is left alone, and
+  is told from one written here by what it holds. LTspice is not started for
+  this; with no window open the settings are still written, so the file opens
+  with its traces when the person opens it by hand. It is the one place the
+  server opens anything in a window, and it does so only when asked, which is
+  why it is an argument and not a setting. The chart and the trace summaries
+  are made all the same, and the browser is not opened as well. What LTspice
+  loads when it opens a results file it does not load again while the file
+  stays open, and nothing the bridge answers says whether it was open, so the
+  reply says that a file already open keeps the traces it had.
 - **Static PNG (the vision tier) — opt-in, on `plot_waveform`.** A config
   default `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
   parameter that overrides it: an operator can attach a plot to every

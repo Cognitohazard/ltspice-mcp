@@ -17,6 +17,7 @@ The layout, rooted at the working directory::
     |   |-- by-circuit/{digest}/{job_id}     which jobs used a circuit
     |   `-- cancellations/{job_id}.json     durable cancellation marker
     |-- runs/{job_id}/                      everything one job produced
+    |   |-- {run}.plt                       the traces a run was shown in LTspice with
     |   |-- startup/spinit                  controlled recoverable ngspice startup
     |   |-- startup/template.ini            immutable established LTspice settings
     |   |-- startup/{run_token}/LTspice.ini  one attempt's writable settings

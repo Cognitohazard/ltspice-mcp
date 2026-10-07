@@ -855,6 +855,49 @@ class TestSheetOpenInAWindow:
         assert document["ok"] is True, document
         assert document["data"]["sections"], "the document came back with no sections"
 
+    async def test_a_finished_run_is_opened_in_the_window_with_its_traces_named(
+        self, ltspice_state: SessionState, open_sheet, tran_netlist: Path
+    ):
+        """A job this server ran, shown in the window: the plot settings are
+        written beside the run's results, and LTspice then has those results
+        in front. That it draws the traces was looked at and cannot be asked."""
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession, bridge_command
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+
+        _sheet, pid = open_sheet
+        receipt = await _run_deck(ltspice_state, "shown-in-ltspice", str(tran_netlist))
+        result = await handle_plot_waveform(
+            PlotWaveformInput(job_id=receipt["job_id"], signals=["V(out)"], in_ltspice=True),
+            ltspice_state,
+        )
+        assert result.structured_content is not None
+        shown = result.structured_content["ltspice"]
+
+        assert shown["shown"] is True, shown
+        assert shown["pid"] == pid
+        assert shown["panes"] == [["V(out)"]]
+        settings = await asyncio.to_thread(Path(shown["plot_settings"]).read_bytes)
+        assert settings == (
+            b"[Transient Analysis]\r\n{\r\n   Npanes: 1\r\n   {\r\n"
+            b'      traces: 1 {524290,0,"V(out)"}\r\n   }\r\n}\r\n'
+        )
+        assert Path(shown["plot_settings"]).with_suffix(".raw") == Path(shown["results"])
+
+        exe = executable_path(ltspice_state.default_simulator)
+        assert exe is not None
+        command = bridge_command(exe)
+        assert command is not None
+
+        def results_in_front() -> str:
+            with BridgeSession(command) as session:
+                session.attach(pid)
+                return str(session.call("get_raw_info")["path"])
+
+        assert Path(await asyncio.to_thread(results_in_front)) == Path(shown["results"])
+        # Nothing was opened in a browser beside it.
+        assert result.structured_content["opened"] is False
+
     def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
         self, ltspice_state: SessionState
     ):
