@@ -1141,9 +1141,10 @@ async def _zeros_a_failed_step_prints(
     In a stepped measurement table LTspice 24 and later print ``failed`` for a
     step whose measurement could not be taken; LTspice XVII and earlier print
     ``0``, which the log does not tell apart from a measurement that is 0. The
-    build is the one the run named in its own output, read from the head of
-    its log or raw. Every exact zero is named, as a fact for the caller to
-    weigh: a true zero and a failure read the same here.
+    build is the one the run named in its own output: as the job's case
+    recorded it, or for a bare path, read from the head of its log or raw.
+    Every exact zero is named, as a fact for the caller to weigh: a true zero
+    and a failure read the same here.
     """
     measurements = parsed.get("measurements") or {}
     if (parsed.get("step_count") or 0) < 2 or not measurements:
@@ -1156,7 +1157,9 @@ async def _zeros_a_failed_step_prints(
     zeros = {name: steps for name, steps in zeros.items() if steps}
     if not zeros:
         return []
-    build = await asyncio.to_thread(reported_build, source.log, source.raw)
+    build = source.simulator_version or await asyncio.to_thread(
+        reported_build, source.log, source.raw
+    )
     if build is None or not is_cp1252_ltspice_build(build):
         return []
     listed = "; ".join(
