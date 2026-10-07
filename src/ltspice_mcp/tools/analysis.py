@@ -28,7 +28,9 @@ import asyncio
 import csv
 import json
 import math
+import os
 import re
+import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -38,16 +40,26 @@ from typing import Annotated, Any, Literal, NotRequired
 import numpy as np
 from pydantic import Field
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, NetlistError, ResultError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    LTSpiceMCPError,
+    NetlistError,
+    ResultError,
+)
 from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, plot_settings, services
 from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
+from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
-from ltspice_mcp.lib.ltspice_window import WindowsUnavailable
+from ltspice_mcp.lib.ltspice_window import (
+    ResultsAlreadyOpen,
+    ResultsNotLookedFor,
+    WindowsUnavailable,
+)
 from ltspice_mcp.lib.metrics import (
     guarded_axis,
     parse_time,
@@ -82,6 +94,7 @@ from ltspice_mcp.tools._base import (
     image_content,
     registry,
     safe_path,
+    window_difference,
 )
 from ltspice_mcp.tools._schema import schema_from_typeddict
 
@@ -1028,7 +1041,9 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
         default=False,
         description=(
             "Also open the run in the user's open LTspice window (26.1+) with "
-            "these traces drawn; writes a .plt beside the results file."
+            "these traces drawn; writes a .plt beside the results file. A sheet's "
+            "run is opened from the sheet, so a click on a net plots it: its "
+            "results replace those beside the sheet."
         ),
     )
     annotate: bool = Field(
@@ -1122,6 +1137,115 @@ def _show_in_ltspice(
     return report
 
 
+def _sheet_to_tie(results: Path, circuit: Path | None, state: SessionState) -> Path | None:
+    """The sheet a plot of ``results`` can be tied to in LTspice, or None. Blocking.
+
+    A job's case names the circuit it ran; results named by path belong to the
+    sheet of their own name beside them. Only a sheet the sandbox admits: its
+    results and plot settings are written beside it.
+    """
+    candidate = circuit if circuit is not None else results.with_suffix(".asc")
+    if candidate.suffix.lower() != ".asc":
+        return None
+    try:
+        sheet = safe_path(str(candidate), state)
+    except (LTSpiceMCPError, OSError, ValueError):
+        return None
+    return sheet if sheet.is_file() else None
+
+
+def _place_beside_sheet(sheet: Path, results: Path, log: Path | None) -> None:
+    """Put a run's results and log beside ``sheet`` under its name. Blocking.
+
+    That is where LTspice keeps a sheet's own results and where its Visible
+    Traces command looks for them. What is there is the last run's and is
+    replaced, as a run in LTspice replaces it; each file whole or not at all.
+    """
+    for source, suffix in ((results, ".raw"), (log, ".log")):
+        if source is None or not source.is_file():
+            continue
+        target = sheet.with_suffix(suffix)
+        if target.exists() and os.path.samefile(source, target):
+            continue
+        with source.open("rb") as read, atomic_write(target, mode="wb", durable=False) as write:
+            shutil.copyfileobj(read, write)
+
+
+_TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
+_BY_HAND_NOTE = (
+    "The results are beside the sheet: View > Visible Traces on it in LTspice opens "
+    "them, and a click on a net then plots it."
+)
+
+
+def _show_tied_in_ltspice(
+    state: SessionState,
+    sheet: Path,
+    results: Path,
+    log: Path | None,
+    plot_name: str,
+    panes: list[list[str]],
+) -> dict[str, Any]:
+    """Open a run in an LTspice window from ``sheet``, tied to it. Blocking.
+
+    The results are put beside the sheet under its name, with the plot
+    settings that name ``panes``, and the sheet's own command opens them
+    (``OpenWindows.results_from_sheet``). Nothing is written until a window is
+    known that can show them, and until then the reply names the run's own
+    results and no sheet. As for a run opened on its own, nothing here fails
+    the plot.
+    """
+    beside = sheet.with_suffix(".raw")
+    report: dict[str, Any] = {
+        "shown": False,
+        "results": str(results),
+        "plot_settings": None,
+        "panes": panes,
+    }
+    placed: dict[str, str | None] = {}
+
+    def place() -> None:
+        _place_beside_sheet(sheet, results, log)
+        report.update(results=str(beside), sheet=str(sheet))
+        try:
+            placed["left_alone"] = plot_settings.write_beside(beside, plot_name, panes)
+        except (NetlistError, OSError) as error:
+            placed["left_alone"] = f"the plot settings could not be written ({error})"
+        if placed["left_alone"] is None:
+            report["plot_settings"] = str(plot_settings.plot_settings_path(beside))
+
+    try:
+        window, held = state.open_windows.results_from_sheet(sheet, place)
+    except ResultsAlreadyOpen as error:
+        report["reason"] = f"{error}; close that plot there and ask again"
+        return report
+    except ResultsNotLookedFor as error:
+        report["reason"] = str(error)
+        report["note"] = (
+            f"Close {sheet.name} in LTspice and ask again: it is then opened with these "
+            "results, which are beside it now."
+        )
+        return report
+    except BridgeError as error:
+        report["reason"] = str(error)
+        if placed:
+            report["note"] = _BY_HAND_NOTE
+        return report
+    except OSError as error:
+        report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
+        return report
+    left_alone = placed.get("left_alone")
+    report.update(
+        shown=True,
+        pid=window.pid,
+        version=window.version,
+        note=_TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}.",
+    )
+    if held is not None:
+        report.update(window_difference(sheet.read_bytes(), held))
+    return report
+
+
 def _ltspice_line(report: Mapping[str, Any]) -> str:
     if report["shown"]:
         return f"Opened in LTspice {report['version']} (process {report['pid']}). {report['note']}"
@@ -1181,6 +1305,21 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                     "shown": {"type": "boolean"},
                     **LTSPICE_WINDOW_PROPERTIES,
                     "results": {"type": "string", "description": "The file opened."},
+                    "sheet": {
+                        "type": "string",
+                        "description": (
+                            "The sheet the results were opened from and put beside, "
+                            "when the run is a sheet's: the plot is tied to it."
+                        ),
+                    },
+                    "differs_from_file": {
+                        "type": "boolean",
+                        "description": (
+                            "The window already had the sheet open and its copy is "
+                            "not the file the run was made from."
+                        ),
+                    },
+                    "difference": {"type": "string"},
                     "plot_settings": {
                         "type": ["string", "null"],
                         "description": "The .plt written beside it; null when none was.",
@@ -1357,9 +1496,20 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     shown_in_ltspice: dict[str, Any] | None = None
     if args.in_ltspice:
         panes = [[sig.name for sig in group] for group in plan.groups if group]
-        shown_in_ltspice = await asyncio.to_thread(
-            _show_in_ltspice, state, raw_path, raw.descriptor.original_plot_name, panes
+        plot_name = raw.descriptor.original_plot_name
+        sheet = await asyncio.to_thread(
+            _sheet_to_tie, raw_path, case.circuit_path if case is not None else None, state
         )
+        if sheet is None:
+            shown_in_ltspice = await asyncio.to_thread(
+                _show_in_ltspice, state, raw_path, plot_name, panes
+            )
+        else:
+            # The sheet's plot settings are also set_plot_panes's to write.
+            async with circuit_file_lock(plot_settings.plot_settings_path(sheet)):
+                shown_in_ltspice = await asyncio.to_thread(
+                    _show_tied_in_ltspice, state, sheet, raw_path, source.log, plot_name, panes
+                )
 
     # The model's own frame: a static PNG of the same panels, on request.
     image: RenderedImage | None = None

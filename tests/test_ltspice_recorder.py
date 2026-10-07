@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib import pe_menu
 from tests import ltspice_recorder as recorder
 from tests._ltspice_recorded import installed_counterpart
 from tests.ltspice_recorder import (
@@ -502,9 +503,9 @@ class TestPlotCases:
             load_cases(inputs)
 
     def test_a_menu_label_is_the_text_a_case_names(self):
-        assert recorder.menu_label("&Save Plot Settings\tCtrl+S") == "Save Plot Settings"
-        assert recorder.menu_label("Save Plot Settings &As...") == "Save Plot Settings As"
-        assert recorder.menu_label("Add &Plot Pane Below Active Pane") == (
+        assert pe_menu.menu_label("&Save Plot Settings\tCtrl+S") == "Save Plot Settings"
+        assert pe_menu.menu_label("Save Plot Settings &As...") == "Save Plot Settings As"
+        assert pe_menu.menu_label("Add &Plot Pane Below Active Pane") == (
             "Add Plot Pane Below Active Pane"
         )
 
@@ -525,7 +526,7 @@ class TestPlotCases:
             + item(0, "Add trace\tCtrl+A", 32855)
             + item(0x80, "Save Plot Settings As...", 32914)
         )
-        assert recorder._menu_items(template) == [
+        assert pe_menu.menu_items(template) == [
             (None, "&File"),
             (57603, "&Save Plot Settings\tCtrl+S"),
             (None, "&Plot Settings"),

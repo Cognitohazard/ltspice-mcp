@@ -117,6 +117,7 @@ class _ProcessInformation(ctypes.Structure):
 
 
 _NEEDS_WINDOWS = "A desktop of its own for a program needs Windows"
+_WM_COMMAND = 0x0111
 
 
 @cache
@@ -223,6 +224,10 @@ def _user() -> Any:
             wintypes.DWORD,
         ),
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
+        "PostMessageW": (
+            [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
+            wintypes.BOOL,
+        ),
     }
     for name, (arguments, result) in signatures.items():
         function = getattr(user, name)
@@ -264,6 +269,27 @@ def child_windows(window: int) -> list[int]:
     return [
         child for child, _owner in _listed(lambda note: _user().EnumChildWindows(window, note, 0))
     ]
+
+
+def windows_here(pid: int) -> list[int]:
+    """The top-level windows ``pid`` has on the desktop this process runs on."""
+    return [
+        window
+        for window, owner in _listed(lambda note: _user().EnumWindows(note, 0))
+        if owner == pid
+    ]
+
+
+def post_command(window: int, command: int) -> None:
+    """Hand ``window`` a command of its own menu, as choosing the item would.
+
+    Posted, not sent: the window carries it out in its own time, and a window
+    that has stopped answering does not hold the caller. It works across
+    desktops, which a window message does not always. Raises ``OSError`` when
+    Windows refuses the message.
+    """
+    if not _user().PostMessageW(window, _WM_COMMAND, command, 0):
+        raise _last_error()
 
 
 def _last_error() -> OSError:

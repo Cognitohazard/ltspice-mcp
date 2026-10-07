@@ -777,7 +777,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # the LTspice window the user already has, with the plotted traces drawn:
     # the argument, and a clause in the description so that a host asked to
     # "show it in LTspice" finds it. Measured 4,294.
-    "plot_waveform": 4300,
+    # Raised by about 110 characters for one sentence on in_ltspice: a sheet's
+    # run is opened from the sheet, and its results replace those beside the
+    # sheet. That is a file written beside the caller's circuit, which a caller
+    # has to be told before it asks. Measured 4,408.
+    "plot_waveform": 4410,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
