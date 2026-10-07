@@ -973,12 +973,12 @@ async def _prepare_circuit(
                 # staging route the deck's rewritten references cannot be
                 # re-read from the Linux side, and a model defined in an
                 # include must not lint as missing.
-                includes=[(included.staged_path, included.text) for included in staged.includes],
+                includes=[
+                    (included.staged_path, included.text, included.codec)
+                    for included in staged.includes
+                ],
                 ngbehavior=NGBEHAVIOR if native is not None else None,
-                codecs={
-                    staged.staged_deck: staged.codec,
-                    **{included.staged_path: included.codec for included in staged.includes},
-                },
+                codec=staged.codec,
                 cp1252_reader=cp1252_reader,
             )
         )

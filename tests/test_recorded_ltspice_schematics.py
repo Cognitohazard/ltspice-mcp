@@ -33,6 +33,7 @@ from ltspice_mcp.lib.schematic_ops import (
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene
 from ltspice_mcp.lib.simulator import _in_generation
+from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from tests import _ltspice_recorded as rec
@@ -332,6 +333,8 @@ class TestExportBoilerplate:
         )
         for path in exports:
             assert export_writer(read_spice_text_with_encoding(path)[0]) == expected, path.name
+        # verify_circuit takes the export's writer for the reader of its micro signs.
+        assert is_cp1252_ltspice_build(expected) == (rec.generation(build) == "xvii")
 
     def test_a_bipolar_transistor_is_exported_with_a_grounded_substrate(self, build: str):
         cards = rec.export_instances(build, "export/boilerplate")

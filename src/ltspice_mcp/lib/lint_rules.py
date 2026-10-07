@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import functools
 import re
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    IncludeReference,
     is_absolute_reference,
     resolve_reference,
     scan_include_references,
@@ -30,7 +31,7 @@ from ltspice_mcp.lib.spice_validator import (
     EXCLUSIVE_ANALYSIS_KINDS,
     PROBE_REF_RE,
     drop_title_card,
-    validate_directive,
+    meas_functions_refused,
     validate_netlist_arity,
 )
 
@@ -59,6 +60,17 @@ class LintRule:
     check: RuleCheck
 
 
+class _LintFile(NamedTuple):
+    """One file a rule reads: the deck or a staged include, lexed once."""
+
+    path: Path
+    text: str
+    cards: list[SpiceCard]
+    # The codec it was decoded in (``StagedFile.codec``). Only an 8-bit file
+    # (``cp1252``) can hold a byte UTF-8 would not.
+    codec: str
+
+
 @dataclass(frozen=True)
 class _LintContext:
     text: str
@@ -69,15 +81,15 @@ class _LintContext:
     cards: list[SpiceCard]
     # The simulator family the deck is linted for (see ``lint_deck``).
     family: str
-    # The staged include closure, as (staged path, staged text) snapshots. On
-    # a deck staged for a Windows simulator the rewritten references cannot be
-    # re-read from the Linux side, so the snapshots are the authoritative
-    # source for declarations the deck reaches through an include.
-    includes: tuple[tuple[Path, str], ...] = ()
+    # The staged include closure, as (staged path, staged text, codec)
+    # snapshots. On a deck staged for a Windows simulator the rewritten
+    # references cannot be re-read from the Linux side, so the snapshots are
+    # the authoritative source for declarations the deck reaches through an
+    # include.
+    includes: tuple[tuple[Path, str, str], ...] = ()
     ngbehavior: str | None = None
-    # The codec each file was decoded in, by the path above; a file not named
-    # was UTF-8. Only an 8-bit file can hold a byte UTF-8 would not.
-    codecs: Mapping[Path, str] = field(default_factory=dict)
+    # The codec the deck itself was decoded in.
+    codec: str = "utf-8"
     # An LTspice the session knows reads decks as cp1252 (XVII or earlier),
     # with the evidence; None when nothing shows one.
     cp1252_reader: str | None = None
@@ -96,9 +108,15 @@ class _LintContext:
         return validate_netlist_arity(self.cards, simulator=SIMULATOR_DISPLAY[self.family])
 
     @functools.cached_property
-    def include_cards(self) -> tuple[tuple[Path, str, list[SpiceCard]], ...]:
-        """Each staged include snapshot with its cards, lexed once for every rule."""
-        return tuple((path, text, lex(text).cards) for path, text in self.includes)
+    def files(self) -> tuple[_LintFile, ...]:
+        """The deck, then each staged include snapshot, lexed once for every rule."""
+        return (
+            _LintFile(self.path, self.text, self.cards, self.codec),
+            *(
+                _LintFile(path, text, lex(text).cards, codec)
+                for path, text, codec in self.includes
+            ),
+        )
 
 
 # The severity a finding reports for its rule's disposition.
@@ -234,6 +252,15 @@ def _step_ngspice(
     return findings
 
 
+def _sectioned_libs(context: _LintContext) -> list[IncludeReference]:
+    """The deck's ``.lib file section`` cards, as deck staging reads them."""
+    return [
+        reference
+        for reference in scan_include_references(context.cards, context.path)
+        if reference.section is not None
+    ]
+
+
 def _lib_section_ngspice(
     context: _LintContext,
     rule: LintRule,
@@ -246,20 +273,15 @@ def _lib_section_ngspice(
     if "lt" not in mode and "ps" not in mode:
         return []
     findings = []
-    for card in context.cards:
-        if card.kind != "directive":
-            continue
-        tokens = tokenize_body(card.body)
-        if len(tokens) < 3 or tokens[0].text.casefold() != ".lib":
-            continue
+    for reference in _sectioned_libs(context):
         findings.append(
             _finding(
                 context,
                 rule,
-                line=card.line_start,
-                subject=tokens[2].text.strip("\"'"),
+                line=reference.card.line_start,
+                subject=reference.section,
                 evidence={
-                    "directive": card.body,
+                    "directive": reference.card.body,
                     "ngbehavior": mode,
                     "reason": (
                         "this compatibility mode treats a sectioned .lib as plain "
@@ -284,13 +306,9 @@ def _analysis_count_ltspice(
     if context.family != "ltspice":
         return []
     analyses = [
-        (context.path, card)
-        for card in context.cards
-        if card.kind == "directive" and _directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
-    ] + [
-        (path, card)
-        for path, _text, cards in context.include_cards
-        for card in cards
+        (file.path, card)
+        for file in context.files
+        for card in file.cards
         if card.kind == "directive" and _directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
     ]
     if len(analyses) < 2:
@@ -326,17 +344,16 @@ def _meas_function_ltspice(
         return []
     findings = []
     for card in context.cards:
-        if card.kind != "meas":
+        refused = meas_functions_refused(card, "LTspice") if card.kind == "meas" else []
+        if not refused:
             continue
-        error = validate_directive(card.body, SIMULATOR_DISPLAY[context.family])
-        if error is None or not error.rule_name.endswith("_in_meas"):
-            continue
+        function, error = refused[0]
         findings.append(
             _finding(
                 context,
                 rule,
                 line=card.line_start,
-                subject=error.rule_name.removesuffix("_in_meas"),
+                subject=function,
                 evidence={
                     "directive": card.body,
                     "reason": f"{error.message} {error.suggestion}",
@@ -356,20 +373,15 @@ def _lib_section_ltspice(
     if context.family != "ltspice":
         return []
     findings = []
-    for card in context.cards:
-        if card.kind != "directive":
-            continue
-        tokens = tokenize_body(card.body)
-        if len(tokens) < 3 or tokens[0].text.casefold() != ".lib":
-            continue
+    for reference in _sectioned_libs(context):
         findings.append(
             _finding(
                 context,
                 rule,
-                line=card.line_start,
-                subject=tokens[2].text.strip("\"'"),
+                line=reference.card.line_start,
+                subject=reference.section,
                 evidence={
-                    "directive": card.body,
+                    "directive": reference.card.body,
                     "reason": (
                         "LTspice has no library sections: it reads the rest of the "
                         "line as one file name and stops when no such file exists. "
@@ -439,9 +451,9 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
     """
     declared: set[str] = set()
     snapshot: dict[Path, list[SpiceCard]] = {}
-    for path, _text, cards in context.include_cards:
-        declared.update(_declared_models(cards))
-        snapshot[path.resolve(strict=False)] = cards
+    for file in context.files[1:]:
+        declared.update(_declared_models(file.cards))
+        snapshot[file.path.resolve(strict=False)] = file.cards
     visited: set[Path] = set(snapshot)
 
     def walk(cards: list[SpiceCard], source: Path, depth: int) -> None:
@@ -685,8 +697,7 @@ def _value_suffix_findings(
     'u' by the time the deck is linted.
     """
     findings: list[LintFinding] = []
-    files = [(context.path, context.text, context.cards), *context.include_cards]
-    for path, text, cards in files:
+    for path, text, cards, _codec in context.files:
         sites = [
             site
             for site in value_suffix_sites(cards)
@@ -712,9 +723,9 @@ def _value_suffix_findings(
     return findings
 
 
-# Byte 0x85 is an ellipsis to cp1252, which is how the server reads an 8-bit
-# file, and the next-line control to Latin-1, which is how LTspice reads one.
-_BYTE_85 = "\u2026"
+# Byte 0x85 as the server reads an 8-bit file: cp1252's ellipsis. LTspice
+# reads it as Latin-1's next-line control.
+_BYTE_85 = bytes([0x85]).decode("cp1252")
 
 
 def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
@@ -728,8 +739,8 @@ def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]
     if context.family != "ltspice" or context.cp1252_reader is not None:
         return []
     findings: list[LintFinding] = []
-    for path, text in [(context.path, context.text), *context.includes]:
-        if context.codecs.get(path) != "cp1252" or _BYTE_85 not in text:
+    for path, text, _cards, codec in context.files:
+        if codec != "cp1252" or _BYTE_85 not in text:
             continue
         for number, line in enumerate(text.splitlines(), start=1):
             after = [part.strip() for part in line.split(_BYTE_85)[1:]]
@@ -759,8 +770,9 @@ def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]
     return findings
 
 
-def _c1_control(name: str) -> bool:
-    return any(0x80 <= ord(char) <= 0x9F for char in latin1_reading(name))
+def _holds_c1_control(text: str) -> bool:
+    """``text`` holds a control character from U+0080 to U+009F."""
+    return any("\x80" <= char <= "\x9f" for char in text)
 
 
 def _node_control_byte_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
@@ -774,16 +786,19 @@ def _node_control_byte_ltspice(context: _LintContext, rule: LintRule) -> list[Li
     if context.family != "ltspice":
         return []
     findings: list[LintFinding] = []
-    files = [(context.path, context.cards), *((p, c) for p, _t, c in context.include_cards)]
-    for path, cards in files:
-        if context.codecs.get(path) != "cp1252":
+    for path, text, cards, codec in context.files:
+        # One scan of the file before any card is read: most 8-bit files hold
+        # only characters from 0xA0 up (a degree sign, a copyright).
+        if codec != "cp1252" or not _holds_c1_control(latin1_reading(text)):
             continue
         for card in cards:
-            line = read_instance(card) if card.kind == "instance" else None
+            if card.kind != "instance" or not _holds_c1_control(latin1_reading(card.body)):
+                continue
+            line = read_instance(card)
             for node in line.nodes if line is not None else ():
-                if not _c1_control(node):
-                    continue
                 saved = latin1_reading(node)
+                if not _holds_c1_control(saved):
+                    continue
                 findings.append(
                     _finding(
                         context,
@@ -883,18 +898,18 @@ def lint_deck(
     simulator: type | str | None,
     *,
     suppress: list[str] | set[str] | tuple[str, ...] = (),
-    includes: Sequence[tuple[Path, str]] = (),
+    includes: Sequence[tuple[Path, str, str]] = (),
     ngbehavior: str | None = None,
-    codecs: Mapping[Path, str] | None = None,
+    codec: str = "utf-8",
     cp1252_reader: str | None = None,
 ) -> list[LintFinding]:
     """Run all unsuppressed rules and return fixable findings only.
 
     ``includes`` carries the staged include closure as (staged path, staged
-    text) snapshots so rules resolve declarations through the snapshot
-    instead of re-reading the deck's rewritten references from disk.
-    ``codecs`` names the codec each of those files and the deck was decoded
-    in (``StagedFile.codec``); ``cp1252_reader`` is the evidence that the
+    text, codec) snapshots so rules resolve declarations through the snapshot
+    instead of re-reading the deck's rewritten references from disk. ``codec``
+    is the one the deck was decoded in, as each snapshot's is
+    (``StagedFile.codec``); ``cp1252_reader`` is the evidence that the
     session's LTspice reads decks as cp1252 (``services.cp1252_ltspice``).
     """
     suppressed = set(suppress)
@@ -909,7 +924,7 @@ def lint_deck(
         family=named_by_dialect or simulator_family(simulator) or "ltspice",
         includes=tuple(includes),
         ngbehavior=ngbehavior,
-        codecs=dict(codecs or {}),
+        codec=codec,
         cp1252_reader=cp1252_reader,
     )
     findings: list[LintFinding] = []
