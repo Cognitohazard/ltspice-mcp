@@ -462,6 +462,16 @@ prove them. There are no fabricated plot or step identities; measurement
 vector ordinals are not RAW steps. Rows and metadata are detached plain values,
 so agent code can arrange arrays or export them without another result class.
 
+The `measurements` recipe's rows are the MCP rows, rendered by the same code.
+A run that holds one value per `.meas`, such as one case of a sweep, reads as
+`row["value"]["measured"][name]`, null where the log holds no number for that
+name, which is then listed in `row["value"]["failed_measurements"]`. Any
+crossing or `AT` point the log printed is under `row["value"]["at"][name]`. Its
+per-name `stats` block is left off the default row; `include={"fields":
+["value"]}` returns it. A stepped run's row carries `stats` alone. Reductions
+read `stats` either way, so `reduced` does not depend on which rendering a row
+was given.
+
 Direct log imports capture no RAW sibling, even when one exists. Log views
 require `plot_index` omission. Analysis and attached analysis accept an omitted
 selector; it selects plot zero only for a RAW recipe. Whole-log measurements run

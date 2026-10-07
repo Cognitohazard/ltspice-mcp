@@ -824,6 +824,25 @@ the selected descriptor's dialect; log hints alone do not prove a producer.
 whole-log rows report only the recorded producer, which may be null.
 Companion edits and absent-to-present changes invalidate stored continuations.
 
+A `measurements` row whose run holds one value per `.meas`, as each case of a
+sweep with no `.step` does, carries that value by name: `measured: {name:
+value}`, the number a reduction or a spec reads for that name; `at: {name:
+point}` where the log printed a crossing or `AT` point with it; and
+`failed_measurements: [name]` for each name the run's log holds no number for
+(LTspice printed it FAIL'ed, or printed a value that is not finite), whose
+`measured` entry is null rather than absent: a null there is always a listed
+failure. The default row leaves off the per-name `stats` block beside them,
+which restated the one value as min, max, mean, median, p10 and p90 next to its
+counts, a zero spread, step indices and an empty histogram: 856 characters a
+row for two measurements, where the row is now 291. `include.fields=["value"]`
+still returns the block, and reductions and specs read it as before. A stepped
+run's row is `stats` alone, since its spread across steps is the answer. No
+argument was added for this: the default row is the answer channel, and a run
+with one number per name should answer in one number per name. A flag would
+have left the default as it was, and a projection wildcard
+(`value.stats.*.mean`) would have reached only the mean, four levels down, for
+a caller who already knew to ask.
+
 `step`/`all_steps` are call-level, not per-recipe. A RAW run's step axis belongs to
 the run, so the choice is made once and every recipe in the call reads it; the
 per-recipe spelling asked twenty-one branches to restate one fact and let two
@@ -1658,7 +1677,7 @@ others under the first name. A scalar recipe takes none, having one number.
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name. A run holding one value per name also carries `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
