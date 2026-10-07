@@ -51,6 +51,9 @@ class _Plot(_Record):
     data_convention: Literal["stored"]
     step_status: Literal["unstepped", "matched", "unresolved", "mismatch"]
     step_ranges: list[_Range] | None
+    # The variables holding each step's parameter values, when the plot stores
+    # them itself (a stepped LTspice .op: one point a step, parameters first).
+    step_parameters: list[int] | None = None
 
 
 class _Parameter(_Record):
@@ -184,6 +187,22 @@ def _validate_step_log(log: _StepLog) -> None:
 def _step_values(
     plot: _Plot, points: int, log: _StepLog
 ) -> tuple[list[int] | None, list[dict[str, StepValue]] | None]:
+    if plot.step_parameters is not None:
+        # Values come from the stored parameters once the arrays are read.
+        if (
+            plot.step_status != "matched"
+            or plot.step_ranges is None
+            or len(plot.step_ranges) != points
+            or any(
+                part.step_index != index
+                or part.offset != index
+                or part.length != 1
+                or part.log_row is not None
+                for index, part in enumerate(plot.step_ranges)
+            )
+        ):
+            raise ValueError("Stored step parameters need one unbound point per step")
+        return list(range(points)), None
     if plot.step_ranges is None:
         if plot.step_status not in {"unresolved", "mismatch"}:
             raise ValueError("Resolved steps require complete ranges")
@@ -286,6 +305,14 @@ def _materialize_raw(
             and reply.plots[index].step_status == "unstepped"
         ):
             raise ValueError("Unstepped status contradicts stored step evidence")
+        parameters = reply.plots[index].step_parameters
+        if parameters is not None and (
+            not parameters
+            or parameters != list(range(len(parameters)))
+            or len(parameters) >= plot.variable_count
+            or any(plot.variables[i].declared_type.casefold() != "param" for i in parameters)
+        ):
+            raise ValueError("Stored step parameters must be the plot's leading param variables")
         step_views.append(_step_values(reply.plots[index], plot.point_count, reply.step_log))
         for trace, width in enumerate(plot.value_bytes):
             if width not in {4, 8, 16} or plot.variables[trace].index != trace:
@@ -334,6 +361,12 @@ def _materialize_raw(
                 raise ValueError("Parser numeric file digest disagrees")
             waves.append(wave)
         ranges, steps = step_views[index]
+        parameters = reply.plots[index].step_parameters
+        if parameters is not None:
+            steps = [
+                {plot.variables[i].name: float(np.real(waves[i][point])) for i in parameters}
+                for point in range(plot.point_count)
+            ]
         plots.append(
             DecodedPlot(
                 plot,
