@@ -123,14 +123,12 @@ above. This server reaches your LTspice window through the bridge program
 LTspice installs, by itself, and only attaches to an LTspice you already have
 running.
 
-One thing to know about clicking a net to plot it. LTspice ties a plot to a
-sheet when the results are opened from the sheet: by pressing Run there, or by
-View > Visible Traces, which opens the results an earlier run left beside the
-sheet. A job's results, opened in the window by this server, are drawn but
-not tied, so clicking the sheet adds nothing to them. For a plot you can click
-through, run the sheet in LTspice (an assistant with LTspice's server can
-start that run for you), and this server measures the results it leaves
-beside the sheet.
+Asked to show a run of a sheet in LTspice, this server opens it so that
+clicking a net on the sheet plots it, as after a run you made there yourself.
+LTspice ties a plot to a sheet only when the results are opened from the
+sheet, so the run's results are put beside the sheet, in place of the ones
+there, and the sheet's own Visible Traces command is what opens them. No
+second simulation is run, and LTspice's server is not needed for it.
 
 If you registered this server as `ltspice`, rename the entry to
 `spice`. In the Claude Code plugin the rename is already made, so the tool

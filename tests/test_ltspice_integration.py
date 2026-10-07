@@ -758,6 +758,8 @@ class TestSheetOpenInAWindow:
     def open_sheet(self, ltspice_state: SessionState, work_dir: Path):
         """A sheet in the sandbox, open in an LTspice window nobody can see."""
         from ltspice_mcp.lib.ltspice_bridge import bridge_command
+        from ltspice_mcp.lib.ltspice_frame import LtspiceFrame
+        from ltspice_mcp.lib.ltspice_window import OpenWindows
         from ltspice_mcp.lib.simulator_build import executable_path
         from tests.ltspice_bridge_recorder import wait_for_window
         from tests.ltspice_recorder import identify_build, neutral_settings
@@ -778,6 +780,8 @@ class TestSheetOpenInAWindow:
         with hidden_desktop.HiddenDesktop(f"ltspice-mcp-window-{os.getpid()}") as desktop:
             if not desktop.available:
                 pytest.skip("Windows gave no desktop to keep the window off this one")
+            # The window's frame is on that desktop, not on this one.
+            ltspice_state.open_windows = OpenWindows(command, frame=LtspiceFrame(desktop.windows))
             with desktop.start([exe, str(sheet), "-ini", str(ini)]) as window:
                 wait_for_window(command, window.pid, sheet)
                 yield sheet, window.pid
@@ -998,6 +1002,59 @@ class TestSheetOpenInAWindow:
         assert shown["differs_from_file"] is False
         front, _designs = await asyncio.to_thread(in_front)
         assert Path(front) == already_open
+
+    async def test_a_sheets_run_is_opened_from_the_sheet_in_the_window(
+        self, ltspice_state: SessionState, open_sheet, work_dir: Path
+    ):
+        """A job that ran a sheet, shown in the window: its results are put
+        beside the sheet, the sheet is opened there, and the sheet's own
+        Visible Traces command opens them. That LTspice then ties the plot to
+        the sheet was looked at and cannot be asked; that the command opens
+        them, and only for a sheet opened with results beside it, is in the
+        bridge recording."""
+        from ltspice_mcp.lib.ltspice_bridge import Instance
+        from ltspice_mcp.lib.plot_settings import read_plot_settings
+        from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+
+        already_open, pid = open_sheet
+        sheet = work_dir / "amp.asc"
+
+        def a_sheet_with_a_run() -> None:
+            drawn = already_open.read_bytes().rstrip(b"\r\n")
+            sheet.write_bytes(drawn + b"\nTEXT -64 320 Left 2 !.tran 10m\n")
+
+        await asyncio.to_thread(a_sheet_with_a_run)
+        receipt = await _run_deck(ltspice_state, "tied-in-ltspice", str(sheet))
+        result = await handle_plot_waveform(
+            PlotWaveformInput(job_id=receipt["job_id"], signals=["V(filtered)"], in_ltspice=True),
+            ltspice_state,
+        )
+        assert result.structured_content is not None
+        shown = result.structured_content["ltspice"]
+
+        assert shown["shown"] is True, shown
+        assert shown["pid"] == pid
+        assert Path(shown["sheet"]) == sheet
+        assert Path(shown["results"]) == sheet.with_suffix(".raw")
+        assert "differs_from_file" not in shown  # the window opened it from the file
+        settings = await asyncio.to_thread(Path(shown["plot_settings"]).read_bytes)
+        section = read_plot_settings(settings).section("Transient Analysis")
+        assert section is not None
+        assert [pane.traces for pane in section.panes] == [("V(filtered)",)]
+
+        window = Instance(pid=pid, mode="gui", version=shown["version"])
+        assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, window, sheet)
+
+        # Asked again with the plot open, nothing is replaced and nothing sent:
+        # LTspice would go on showing what it read, and ask which traces to show.
+        again = await handle_plot_waveform(
+            PlotWaveformInput(job_id=receipt["job_id"], signals=["V(filtered)"], in_ltspice=True),
+            ltspice_state,
+        )
+        assert again.structured_content is not None
+        refused = again.structured_content["ltspice"]
+        assert refused["shown"] is False
+        assert "already has amp.raw open" in refused["reason"]
 
     def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
         self, ltspice_state: SessionState

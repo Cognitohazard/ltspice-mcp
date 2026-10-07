@@ -157,6 +157,8 @@ class Bridge:
             else:
                 raise _Refused("file not found")
             entry["active"] = path
+            if Path(path).with_suffix(".raw").is_file():
+                entry.setdefault("with_results", []).append(path)
 
         if not already:
             self._in_window(load)

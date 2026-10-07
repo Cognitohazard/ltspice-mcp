@@ -114,6 +114,15 @@ class TestRecording:
             "the run did not write the sheet": True,
             "what the run left beside the sheet": [".asc", ".log", ".net", ".op.raw", ".raw"],
             "the results file is then the one LTspice has in front": True,
+            # What the window's frame shows and does (lib/ltspice_frame.py).
+            "the frame has a pane titled for an open sheet, and none for results "
+            "it has not opened": [True, False],
+            "results put beside a sheet that was already open are not opened by its command": True,
+            "results beside a sheet when it is opened are opened by its command": True,
+            "it asks nothing on the way": True,
+            "with those results open the same command asks which traces to show": (
+                "Select Visible Waveforms"
+            ),
             "no LTspice was started in its place": True,
         }
 
@@ -234,6 +243,8 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
         "designs": {f"{NEUTRAL_DIR}\\{started_with}.asc": recorded_sheet(build, started_with)},
     }
     files = {f"{NEUTRAL_DIR}\\{name}.asc": recorded_sheet(build, name) for name in opened_later}
+    # The sheet the recorder puts results beside and then opens.
+    files[f"{NEUTRAL_DIR}\\placed.asc"] = recorded_sheet(build, "older_version")
     steps = [
         step for step in load_conversation(FIXTURES / build) if step.get("call") in SERVER_CALLS
     ]

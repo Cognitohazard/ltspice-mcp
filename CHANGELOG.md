@@ -716,14 +716,16 @@ recording that showed it.
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says
   when that is not the file that was checked.
-- The guide says what to do when a person wants to plot nets by clicking the
-  sheet in LTspice. LTspice ties a plot to a sheet when the results are opened
-  from the sheet (a run in its window, or View > Visible Traces for results
-  beside the sheet), and a job's results opened by this server are drawn but
-  not tied. So the sheet's own results are the ones to click through, made by
-  a run in the window where there are none, and measured by path with
-  `analyze_results(raw_path)`. Such a run simulates the window's copy of the
-  sheet, not the file.
+- `plot_waveform(in_ltspice=true)` opens a run of a sheet from the sheet, so
+  that LTspice ties the plot to it and a click on a net plots it, as after a
+  run made in LTspice. The run's results and log are put beside the sheet
+  under its name, replacing the ones there, and the sheet's own Visible Traces
+  command opens them: no second simulation. The reply's `ltspice` block names
+  the `sheet`. Nothing is written when no window is open, when the sheet is
+  outside the sandbox, or when LTspice already has that plot open (it would go
+  on showing what it read); a sheet LTspice had open before it had any
+  results has to be closed there once, and the reply says so. A run of a
+  netlist opens on its own, as before.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 
