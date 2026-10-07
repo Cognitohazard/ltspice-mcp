@@ -14,7 +14,10 @@ from ltspice_mcp.lib.format import parse_spice_value
 MAX_EXPRESSION_LENGTH = 2048
 MAX_EXPRESSION_NODES = 128
 MAX_PARAMETER_DEPTH = 32
-_NUMBER = re.compile(r"(?<![\w.])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[a-zA-Zµμ]*")
+# A number, its exponent and the letters after it, then whatever else of the
+# word follows the letters (group 1), so that 1k5 is one token, not 1k and a
+# stray 5. The letters are possessive, so a failed fullmatch does not backtrack.
+_NUMBER = re.compile(r"(?<![\w.])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[a-zA-Zµμ]*+(\w*)")
 _BINARY = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -33,26 +36,50 @@ class NumericFact:
     reason: str | None = None
 
 
+def _number(token: re.Match[str]) -> str:
+    """A number token as a Python literal, declining one with more after its letters."""
+    if token[1]:
+        raise ValueError(f"no recorded reading of '{token[0]}' inside an expression")
+    return repr(parse_spice_value(token[0]))
+
+
 def references_sibling(expression: str, siblings: set[str]) -> bool:
     """Conservatively identify references to other assignments on an X call."""
     names = re.findall(r"[A-Za-z_][\w]*", _NUMBER.sub("0", expression))
     return any(name.casefold() in siblings for name in names)
 
 
-def evaluate(expression: str, lookup: Callable[[str], float], *, simulator: str) -> float:
-    """Interpret finite arithmetic, identifiers and SPICE suffixes under fixed bounds."""
+def evaluate(
+    expression: str,
+    lookup: Callable[[str], float],
+    *,
+    simulator: str,
+    element_value: bool = False,
+) -> float:
+    """Interpret finite arithmetic, identifiers and SPICE suffixes under fixed bounds.
+
+    With ``element_value`` the text is an element's value field, where a bare
+    number is read as LTspice reads a value (``1k5`` is 1500, ``9V1`` is 9,
+    recorded). What LTspice makes of those spellings inside an expression is
+    not recorded, so there they are declined.
+    """
     if simulator == "ltspice" and "^" in expression:
         raise ValueError("LTspice caret semantics are unsupported")
     if len(expression) > MAX_EXPRESSION_LENGTH:
         raise ValueError(f"expression exceeds {MAX_EXPRESSION_LENGTH} characters")
     text = expression.strip()
+    if element_value and simulator == "ltspice" and _NUMBER.fullmatch(text):
+        value = parse_spice_value(text)
+        if not math.isfinite(value):
+            raise ValueError("expression is not a finite real number")
+        return value
     while len(text) >= 2 and (text[0], text[-1]) in {("{", "}"), ("'", "'")}:
         text = text[1:-1].strip()
     if re.search(r"[^\w\s.()+*/^µμ-]", text):
         raise ValueError("unsupported expression characters")
     if len(re.findall(r"\^|\*\*", text)) > 1:
         raise ValueError("multiple power operators have unsupported associativity")
-    text = _NUMBER.sub(lambda m: repr(parse_spice_value(m[0])), text)
+    text = _NUMBER.sub(_number, text)
     tree = ast.parse(text.replace("^", "**"), mode="eval")
     if sum(1 for _ in ast.walk(tree)) > MAX_EXPRESSION_NODES:
         raise ValueError(f"expression exceeds {MAX_EXPRESSION_NODES} syntax nodes")
@@ -123,7 +150,9 @@ class Environment:
         finally:
             self._stack.remove(key)
 
-    def fact(self, expression: str | None, unit: str | None = None) -> NumericFact:
+    def fact(
+        self, expression: str | None, unit: str | None = None, *, element_value: bool = False
+    ) -> NumericFact:
         if expression is None:
             return NumericFact(None, unit=unit, reason="no explicit value")
         if self.dynamic_reason:
@@ -136,7 +165,9 @@ class Environment:
             return fact.value
 
         try:
-            value = evaluate(expression, lookup, simulator=self.simulator)
+            value = evaluate(
+                expression, lookup, simulator=self.simulator, element_value=element_value
+            )
             return NumericFact(expression, value, unit, "resolved")
         except (ValueError, SyntaxError, ArithmeticError, RecursionError) as exc:
             return NumericFact(expression, unit=unit, reason=str(exc))

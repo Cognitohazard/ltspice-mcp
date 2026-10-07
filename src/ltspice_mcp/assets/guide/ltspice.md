@@ -233,7 +233,9 @@ C1 out 0 {C}
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)
-  are LTspice's own.
+  are LTspice's own, netlisted with prefix `A`. What one is and the
+  parameters it takes are attributes of its symbol, which
+  `inspect(kind="symbol")` lists.
 - **`*!LTspice: <directive>`** is read as a directive, not a comment, despite
   the `*`.
 - **Area multipliers**: an undocumented `m=<value>` works on R, Q and J as well
