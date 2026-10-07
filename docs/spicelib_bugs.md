@@ -2434,3 +2434,105 @@ def test_log_with_a_byte_no_listed_codec_defines(tmp_path):
 `tests/test_recorded_ltspice_results.py::test_a_run_whose_title_holds_a_byte_cp1252_lacks_is_read`
 reads the recorded log through `parse_measurements`. Once upstream reads
 such a log, the last candidate in `make_log_reader` goes.
+
+---
+
+## Bug 25 — `AsyReader` cannot read a symbol with a space in a pin name
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-07
+against the symbol library and example sheets installed with LTspice 26.1.1.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asy_reader.py`,
+`AsyReader.__init__`; reached from `spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist` and `AscEditor._get_symbol`).
+**Our workaround:** none. A sheet that places such a symbol cannot be opened
+by anything that reads it through `AscEditor`, which is `edit_schematic` and
+the editor-backed reads of `inspect`. `verify_circuit` draws and checks it,
+because it reads symbols with `lib/symbol_file.py`, which takes everything
+after `PINATTR PinName` as the name.
+
+### Summary
+
+A pin's name may hold a space: LTspice's own library names pins `OUT A`
+and `INV B`. `AsyReader` splits a `PINATTR` line on spaces into at
+most four parts and unpacks them into three names, so a name with one space
+raises `ValueError: too many values to unpack (expected 3)` and the symbol is
+not read. `AscEditor` reads every symbol a sheet places while it loads the
+sheet, so the sheet is not read either.
+
+### Affected code
+
+`spicelib/editor/asy_reader.py`, `AsyReader.__init__` (~line 90):
+
+```python
+elif line.startswith("PINATTR"):
+    assert pin is not None, "A PIN was already created."
+    tag, attribute, value = line.split(' ', maxsplit=3)
+```
+
+`maxsplit=3` allows four parts where three are unpacked. The `SYMATTR` branch
+above it splits with `maxsplit=2` and has no such trouble.
+
+### Reproduction
+
+`dual.asy` beside the sheet:
+
+```
+Version 4
+SymbolType CELL
+RECTANGLE Normal 0 0 32 32
+PIN 0 16 NONE 0
+PINATTR PinName OUT A
+PINATTR SpiceOrder 1
+```
+
+```
+Version 4
+SHEET 1 880 680
+SYMBOL dual 0 0 R0
+SYMATTR InstName U1
+```
+
+```python
+AsyReader("dual.asy")        # ValueError: too many values to unpack (expected 3)
+AscEditor("with_dual.asc")   # the same error, from reset_netlist
+```
+
+### Impact
+
+- 39 of the 6,678 symbols installed with LTspice 26.1.1 have such a pin name
+  (`Comparators/LTC1442`, `FilterProducts/LTC1060` and `LTC1068`, among
+  others), and 4 of its 150 largest example sheets place one of them
+  (`LTC1439.asc`, `LTC1539.asc`, `ADAQ7768-1.asc`, `ADAQ7769-1.asc`). None of
+  those sheets can be opened for editing.
+- The error names neither the symbol nor the line, so a caller is told only
+  that some unpacking failed.
+
+### Proposed fix
+
+Split with `maxsplit=2`, as the `SYMATTR` branch does, so that the value is
+everything after the attribute's name:
+
+```python
+tag, attribute, value = line.split(' ', maxsplit=2)
+```
+
+### Suggested upstream test
+
+```python
+def test_a_pin_name_with_a_space_is_read(tmp_path):
+    asy = tmp_path / "dual.asy"
+    asy.write_text(
+        "Version 4\nSymbolType CELL\nPIN 0 16 NONE 0\n"
+        "PINATTR PinName OUT A\nPINATTR SpiceOrder 1\n"
+    )
+    assert AsyReader(asy).pins[0].text == "PinName=OUT A;SpiceOrder=1;"
+```
+
+### Cross-reference
+
+`tests/test_symbol_file.py::TestAPinNameWithASpace` pins both halves: this
+project's reader takes `OUT A` as the pin's name, and the schematic editor
+cannot open a sheet that places the symbol. Once upstream reads it, the second
+half goes and such a sheet joins the ones the editor is held to. Reading
+sheets without spicelib (`docs/design/schematic_engine.md`, section 6) removes
+the dependence altogether.

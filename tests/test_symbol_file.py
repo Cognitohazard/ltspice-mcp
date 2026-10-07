@@ -10,6 +10,7 @@ import pytest
 
 from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.schematic_ops import make_editor
 from ltspice_mcp.lib.schematic_scene import parse_symbol
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolArc, read_symbol
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
@@ -143,6 +144,31 @@ class TestLinesThatDoNotRead:
 
     def test_a_pin_line_outside_a_pin_is_not_read(self) -> None:
         assert read_symbol("PINATTR PinName stray\nPINATTR SpiceOrder x\n") == read_symbol("")
+
+
+class TestAPinNameWithASpace:
+    """LTspice's own library names pins ``OUT A`` and ``INV B``."""
+
+    SYMBOL = (
+        "Version 4\nSymbolType CELL\nRECTANGLE Normal 0 0 32 32\n"
+        "PIN 0 16 NONE 0\nPINATTR PinName OUT A\nPINATTR SpiceOrder 1\n"
+    )
+
+    def test_the_name_is_everything_after_the_attribute(self) -> None:
+        assert read_symbol(self.SYMBOL).pins == (PinInfo("OUT A", 1, 0, 16),)
+
+    def test_the_editor_cannot_open_a_sheet_that_places_it(self, tmp_path: Path) -> None:
+        """spicelib's symbol reader unpacks the line into three words
+        (``docs/spicelib_bugs.md``, Bug 25), and it reads every symbol a sheet
+        places while it loads the sheet."""
+        (tmp_path / "dual.asy").write_text(self.SYMBOL, encoding="utf-8")
+        sheet = tmp_path / "with_dual.asc"
+        sheet.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL dual 0 0 R0\nSYMATTR InstName U1\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="too many values to unpack"):
+            make_editor(sheet)
 
 
 class TestBothReadersUseIt:
