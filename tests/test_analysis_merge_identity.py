@@ -155,8 +155,10 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
     )
     rejected = drifted.structured_content
     assert rejected is not None and "loop" not in rejected["results"]
-    assert len(rejected["failures"]) == 15
-    assert all(failure["code"] == "source_drift" for failure in rejected["failures"])
+    # One drift, fifteen sources: one row, counted.
+    (drift,) = rejected["failures"]
+    assert drift["code"] == "source_drift"
+    assert drift["count"] == 15
     assert len(operations) <= 2
     assert "load_raw" not in operations
 

@@ -592,7 +592,9 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
             code="recipe_failed",
             stage="analyze",
             where=f"run-{index}",
-            message=f"failure {index}",
+            # A reason of its own per run (the digits inside a word are not
+            # folded), so the page has more distinct rows than its cap.
+            message=f"failure on V(n{index})",
         )
         for index in range(analyze_mod._FAILURE_CAP + 7)
     ]
@@ -2255,7 +2257,15 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     assert {failure["where"] for failure in data["failures"]} == {"dut:0"}
     assert "gain" not in data["results"]
     assert "impedance" not in data["results"]
-    assert sum("no sampled axis" in message for message in refusals) == 2
+    # The two value recipes fail on the one run for one reason: one row, counted.
+    assert (
+        sum(
+            failure.get("count", 1)
+            for failure in data["failures"]
+            if "no sampled axis" in failure["message"]
+        )
+        == 2
+    )
     reply = await inspect_tools.handle_inspect(
         inspect_tools.InspectInput.model_validate(
             {"queries": [{"kind": "results", "view": "table", "path": str(raw)}]}
