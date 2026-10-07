@@ -1686,9 +1686,11 @@ The existing routes reach it only with care. A `.meas INTEG` correlation
 integral puts hand-written trigonometry in the deck; numpy over `RawResult`
 samples weights LTspice's clustered timestep by sample count unless the caller
 interpolates, and has to cut the window to whole periods itself. `.four`, read
-back through `summary`, covers only the periods at the end of the run, is
-skipped by ngspice in batch mode, and prints phase in a convention that differs
-between LTspice 26 and XVII (`tests/test_recorded_ltspice_results.py`). The
+back through `summary`, covers the last periods before the stop time or the
+whole run (LTspice's help; the recordings show only its default of one period),
+never a window the caller places; it is skipped by ngspice in batch mode, and
+it prints phase in a convention that differs between LTspice 26 and XVII
+(`tests/test_recorded_ltspice_results.py`). The
 server-owned burden is therefore time weighting, whole-period alignment and a
 stated phase reference. `thd` already carried the first two, so `tone` reuses
 its trim and resample (`signal_analysis._whole_periods`, `_resample_uniform`)
