@@ -48,6 +48,7 @@ from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, r
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.encoding import leading_byte_order_mark
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -77,7 +78,6 @@ from ltspice_mcp.lib.schematic_ops import (
     build_on_wire_predicate,
     collapse_result_warnings,
     collect_component_geometry,
-    data_flag_records,
     edit_guard,
     files_written_beside,
     get_asc_editor,
@@ -1282,8 +1282,9 @@ async def _evaluate_edit_schematic(
         # existing sheet as it is: nothing in it is read twice or written.
         sheet_kept = not use_template and all(isinstance(op, OpSetPlotPanes) for op in args.ops)
         plot = SheetPlotSettings.beside(target)
-        # Read before the ops run: what the commit's codec turns on.
-        sheet_was_ascii = use_template or target.read_bytes().isascii()
+        # The sheet as it was before the ops run (None for a blank base): what
+        # the commit's codec turns on, and the records spicelib does not keep.
+        original = None if use_template else target.read_bytes()
         editor = _build_editor(target, use_template, state)
         # Set once the atomic rename lands. From that point every escape must be
         # reported on a committed envelope instead of re-raised (see the except
@@ -1353,10 +1354,9 @@ async def _evaluate_edit_schematic(
             # accounts for. The rest is counted under preexisting.
             warnings = _op_warnings(results) + [w["message"] for w in findings_reported]
             op_results = _op_results(results)
-            committed_text = _render_editor_text(editor)
-            encoding = _commit_codec(
-                getattr(editor, "encoding", "utf-8") or "utf-8", sheet_was_ascii, committed_text
-            )
+            loaded_as = getattr(editor, "encoding", "utf-8") or "utf-8"
+            committed_text = _render_editor_text(editor, _data_flag_lines(original, loaded_as))
+            encoding = _commit_codec(loaded_as, original, committed_text)
 
             # --- dry run: validate-only, nothing written, target dir untouched
             if dry_run:
@@ -1615,8 +1615,8 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
             raise NetlistError(f"invalid view_cursors.{kind}: {exc}") from exc
 
 
-def _commit_codec(loaded_as: str, sheet_was_ascii: bool, text: str) -> str:
-    """The codec an edited sheet is committed in.
+def _commit_codec(loaded_as: str, original: bytes | None, text: str) -> str:
+    """The codec an edited sheet is committed in; ``original`` is the sheet as read.
 
     A sheet is written back in the encoding it was read in, with two
     exceptions. The loader names a sheet that holds only ASCII "utf-8", and
@@ -1626,19 +1626,18 @@ def _commit_codec(loaded_as: str, sheet_was_ascii: bool, text: str) -> str:
     therefore written in cp1252, where cp1252 has it. A sheet that already
     held non-ASCII text keeps the encoding it came in.
 
-    The loader names a UTF-16 sheet "utf-16" when it read a byte order mark
-    (one without is "utf_16_le"), and that codec writes the mark back. Neither
-    LTspice build reads a sheet that starts with one, and both read UTF-16 LE
-    without it (``export/micro_utf16le_bom`` and ``export/micro_utf16le``), so
-    such a sheet is written as UTF-16 LE.
+    A UTF-16 sheet that starts with a byte order mark is written as UTF-16 LE
+    without it. Neither LTspice build reads a sheet that starts with one, and
+    both read UTF-16 LE without it (``export/micro_utf16le_bom`` and
+    ``export/micro_utf16le``).
     """
+    if leading_byte_order_mark(original or b"") in ("utf-16-le", "utf-16-be"):
+        return "utf-16-le"
     try:
-        loaded_name = codecs.lookup(loaded_as).name
+        loaded_as_utf8 = codecs.lookup(loaded_as).name == "utf-8"
     except LookupError:
         return loaded_as
-    if loaded_name == "utf-16":
-        return "utf-16-le"
-    loaded_as_utf8 = loaded_name == "utf-8"
+    sheet_was_ascii = original is None or original.isascii()
     if not (loaded_as_utf8 and sheet_was_ascii) or text.isascii():
         return loaded_as
     try:
@@ -1648,8 +1647,8 @@ def _commit_codec(loaded_as: str, sheet_was_ascii: bool, text: str) -> str:
     return "cp1252"
 
 
-def _render_editor_text(editor: AscEditor) -> str:
-    """Render this sheet without losing ports or data labels, or saving loaded child sheets."""
+def _render_editor_text(editor: AscEditor, data_flags: tuple[str, ...] = ()) -> str:
+    """Render this sheet with its ports and ``data_flags``, saving no loaded child sheet."""
     _refuse_pending_child_edits(editor)
     label_counts = Counter(id(label) for label in editor.labels)
     port_directions: dict[int, str] = {}
@@ -1661,19 +1660,27 @@ def _render_editor_text(editor: AscEditor) -> str:
 
     buf = io.StringIO()
     editor.save_netlist(buf)
-    rendered = buf.getvalue().splitlines(keepends=True)
-    if not port_directions:
-        return "".join(_with_data_flags(rendered, data_flag_records(editor)))
+    lines = buf.getvalue().splitlines(keepends=True)
+    if port_directions:
+        lines = _with_ports(lines, editor.labels, port_directions)
+    return "".join(_with_data_flags(lines, data_flags))
 
-    # spicelib 1.5.1 emits FLAGs in label order but omits their IOPIN records.
-    # Match occurrences, since different label objects may have identical text.
-    labels = iter(editor.labels)
+
+def _with_ports(
+    rendered: list[str], labels: Iterable[Any], port_directions: dict[int, str]
+) -> list[str]:
+    """Put back each port's IOPIN record, which spicelib 1.5.1 omits, after its FLAG.
+
+    spicelib emits FLAGs in label order. Occurrences are matched, since
+    different label objects may have identical text.
+    """
+    remaining = iter(labels)
     lines: list[str] = []
     for line in rendered:
         lines.append(line)
         if not line.startswith("FLAG "):
             continue
-        label = next(labels, None)
+        label = next(remaining, None)
         if label is None or line.rstrip("\r\n") != (
             f"FLAG {label.coord.X} {label.coord.Y} {label.text}"
         ):
@@ -1682,9 +1689,19 @@ def _render_editor_text(editor: AscEditor) -> str:
         if direction is not None:
             ending = line[len(line.rstrip("\r\n")) :]
             lines.append(f"IOPIN {label.coord.X} {label.coord.Y} {direction}{ending}")
-    if next(labels, None) is not None:
+    if next(remaining, None) is not None:
         raise NetlistError("Cannot preserve hierarchical ports: serialized labels are missing.")
-    return "".join(_with_data_flags(lines, data_flag_records(editor)))
+    return lines
+
+
+def _data_flag_lines(original: bytes | None, encoding: str) -> tuple[str, ...]:
+    """The sheet's DATAFLAG lines, which spicelib 1.5.1 skips when it reads one
+    (docs/spicelib_bugs.md, Bug 25): decoded the way spicelib read the sheet,
+    in its codec with universal newlines, and picked by its test."""
+    if original is None:
+        return ()
+    text = io.StringIO(original.decode(encoding, errors="replace"), newline=None)
+    return tuple(line.removesuffix("\n") for line in text if line.startswith("DATAFLAG"))
 
 
 # What spicelib writes ahead of a sheet's first symbol, text or drawing: the
@@ -1704,7 +1721,7 @@ def _with_data_flags(lines: list[str], records: tuple[str, ...]) -> list[str]:
     at = 0
     while at < len(lines) and lines[at].startswith(_AHEAD_OF_SYMBOLS):
         at += 1
-    ending = lines[0][len(lines[0].rstrip("\r\n")) :] or "\n"
+    ending = lines[0][len(lines[0].rstrip("\r\n")) :]
     return [*lines[:at], *(f"{record}{ending}" for record in records), *lines[at:]]
 
 
