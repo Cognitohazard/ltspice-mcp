@@ -44,6 +44,7 @@ NO_LTSPICE = (
 
 def own_desktop() -> str:
     """The name of the desktop this program's windows would open on."""
+    assert sys.platform == "win32"
     import ctypes
     from ctypes import wintypes
 
