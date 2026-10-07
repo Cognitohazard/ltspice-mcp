@@ -567,6 +567,93 @@ waveform window, among the windows of the process it started there. That is
 how the box XVII stops on for the two sheets with a byte order mark is
 recorded under Wine as it is on Windows.
 
+### An open window and the bridge
+
+`edit_schematic` keeps a sheet that is open in an LTspice window in step with
+its file, through the MCP bridge LTspice has shipped since 26.1
+(`lib/ltspice_bridge.py`, `lib/ltspice_window.py`). What that models is
+recorded too, by a recorder of its own, because it needs a window and the main
+one runs a build once per input:
+
+```bash
+uv run python scripts/record_ltspice_bridge.py
+```
+
+It starts LTspice with its window on a desktop of its own and talks to it with
+the server's own client, whose bridge runs on the server's desktop, another
+one: every recording is also of a bridge reaching a window on a desktop it is
+not on, as it does a person's. It opens each sheet in
+`tests/fixtures/ltspice_bridge_recorded/inputs/`, and writes under
+`ltspice26/` the window's copy of each (`sheets/`), every call it made and the
+answer (`conversation.json`), and a manifest of digests. The two behaviours are
+listed in `cases.toml` with that tree as their `evidence`. LTspice XVII has no
+bridge, so there is one generation here.
+
+Two things read it. `test_ltspice_bridge.py` holds `sheet_content` to the
+recorded pairs: a sheet LTspice only opened must compare equal to its file,
+though the text differs. It also replays the recorded conversation against
+`tests/fake_ltspice_bridge.py`, the stand-in the rest of the suite runs, so a
+test that passes against the stand-in passes for a recorded reason. The pairs
+are what showed that comparing text would not do: of 700 of LTspice's own
+example sheets read back through the bridge, 79 came back as written. A new
+way LTspice rewrites a sheet on opening it goes in as an input here, not as a
+rule worked out by hand; the text-grid rule was first written from one example
+and was wrong for a negative coordinate.
+
+The manifest also notes the reference documents the install holds, by file
+name and front matter key, which is what `lib/simulator_docs.py` reads; the
+documents themselves are the vendor's and are not recorded. The opt-in tier
+checks that the documents read from the install are the ones LTspice's own
+server lists.
+
+One thing here is observed and not recorded: that LTspice loads the plot
+settings file beside a results file it is asked to open on its own, as it does
+when a sheet runs, which is what `plot_waveform(in_ltspice=true)` relies on. A
+window does not report what it draws, so it was looked at, by capturing the
+window on its hidden desktop: the traces the file names are drawn, and a
+results file that is already open keeps the traces it had. `cases.toml` lists
+it as unrecordable (`plot-settings-on-open`) and says what is recorded around
+it: how each build reads a file written here when a sheet runs with it beside
+it (*Plot settings*, above), and that the call the server uses opens a results
+file and leaves it in front. If that needs checking again, capture the window;
+`PrintWindow` works on a window of another desktop when the capturing process
+is started on that desktop.
+
+A second is behind a paragraph of the guide and no code: that LTspice ties a
+waveform pane to a sheet, so that clicking a net plots it, only for a run made
+in that window. The same grid of clicks was posted to the sheet's view in four
+windows and each captured. After a run made in the window the clicks added
+traces, whether the panes were tiled or the sheet covered the results; with a
+batch run's results beside the sheet under its name and opened in the window,
+they added none in either layout. That is why `plot_waveform(in_ltspice=true)`
+leaves a job's results where the job wrote them, and why the guide sends a
+session to a run in the window when a person wants to probe by clicking. What
+such a run simulates is recorded: the recorder makes its run with the window
+holding one resistor value and the file another, and notes which the netlist
+beside the sheet carries, and that the sheet was not written.
+
+A third is what makes replacing a window's copy safe to do unasked: the
+replaced sheet is one step of the window's undo history. Undo is a key press,
+which the bridge has no call for, so it was posted to the sheet's view on the
+hidden desktop, with the Control key down in that window's own key state
+(`AttachThreadInput`, then `SetKeyboardState`), and the window's copy read
+back through the bridge. After two sheets pushed one after the other, one
+Ctrl+Z gave back the first, a second the sheet as opened, and Ctrl+Shift+Z the
+first again, with the file never written.
+
+A fourth observation is behind a refusal. Handed a document with a NUL
+character in it, LTspice 26.1.1 stops answering for good, which in a window is
+every document a person has open; it was seen by pushing a UTF-16 sheet read as
+an 8-bit one. The client refuses to send such text (`replace_design_text`), so
+there is nothing to record: the test is that it is never sent.
+
+The bridge can start an LTspice of its own, and one thing about that is not
+in the recording because the recording is made with the launch disabled. The
+opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to
+stop the launch and checks that the LTspice it starts has its windows on the
+server's desktop, none on the desktop the test runs on, and is gone when the
+session closes.
+
 ### The opt-in tier
 
 With `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`,

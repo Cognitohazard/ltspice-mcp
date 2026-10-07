@@ -22,6 +22,8 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | read `.meas` results | recipe `{"metric": "measurements"}` |
 | page RAW plots, trace descriptors, or printed log facts | `inspect(queries=[{"kind": "results", "path": …, "view": …}])` |
 | a scalar, a trace, a chart | recipes `value`, `waveform`, `plot` |
+| show a run in the user's own LTspice, when they ask to see it there | `plot_waveform(job_id=…, signals=[…], in_ltspice=true)` |
+| let the user plot nets by clicking the sheet in LTspice | a run made in the window, not a job: guide section 'schematics' |
 | device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
@@ -29,8 +31,11 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
 | nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
+| what the user has open in LTspice, and which sheet is in front | `inspect(kind="open_in_ltspice")` |
+| LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(kind="simulator_docs")`, then `name=` one of them |
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
+| open a sheet in the user's own LTspice, when they ask to see it there | `verify_circuit(path=…, in_ltspice=true)` |
 
 A case has no time limit unless `execution.run_timeout_s` (or the server's
 `[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or

@@ -8,6 +8,12 @@ description: >
 
 # LTspice-Specific
 
+This section is about decks: what LTspice accepts and where it differs. For
+the program itself (a keyboard shortcut, a menu, the waveform viewer, the
+`.asc` file format) LTspice 26.1 and later installs its own reference, which
+`inspect(kind="simulator_docs")` lists and reads. Prefer it to memory for
+anything about using the LTspice window.
+
 ## Parameters and Expressions
 
 ```spice

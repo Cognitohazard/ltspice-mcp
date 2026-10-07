@@ -521,6 +521,14 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_path_list,
     ),
     _Setting(
+        field="sync_open_window",
+        section="schematic",
+        key="sync_open_window",
+        from_toml=_toml_bool("schematic.sync_open_window"),
+        env="LTSPICE_MCP_SYNC_OPEN_WINDOW",
+        from_env=_env_bool("LTSPICE_MCP_SYNC_OPEN_WINDOW"),
+    ),
+    _Setting(
         field="tool_listing",
         section="tools",
         key="listing",
@@ -721,6 +729,17 @@ class ServerConfig:
     symbol_paths: list[Path] = field(default_factory=list)
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
     On Windows and WSL these are auto-detected; set this to override."""
+
+    sync_open_window: bool = True
+    """Keep a sheet that is open in an LTspice window in step with
+    ``edit_schematic``. LTspice never reads a file again once it is open, so
+    without this an edit stays invisible there and the window's next save
+    writes the old sheet back. With it the committed sheet is shown in the
+    window, as one step of its undo history, and an edit is refused while the
+    window holds changes nobody saved. Needs LTspice 26.1 or later and the
+    server on Windows itself; LTspice is never started for it. ``False``
+    leaves open windows alone. ``[schematic] sync_open_window`` or
+    ``LTSPICE_MCP_SYNC_OPEN_WINDOW``."""
 
     tool_listing: ToolListing = "compact"
     """How much of each tool definition the tool list carries.
@@ -1037,6 +1056,12 @@ def generate_default_config(path: Path) -> None:
     schem.add(comment("On Windows and WSL these are auto-detected from the LTspice installation"))
     schem.add(comment("Set this to override auto-detection or for non-standard installs"))
     _shown_default(schem, "symbol_paths", example=["/path/to/LTspice/lib/sym"])
+    schem.add(nl())
+    schem.add(comment("Show an edit_schematic commit in the LTspice window that has the sheet"))
+    schem.add(comment("open, and refuse an edit while that window holds unsaved changes."))
+    schem.add(comment("Windows with LTspice 26.1 or later; LTspice is never started for it."))
+    schem.add(comment("false leaves windows alone."))
+    _shown_default(schem, "sync_open_window")
     doc.add("schematic", schem)
     doc.add(nl())
 

@@ -94,6 +94,6 @@ def test_plugin_launches_with_the_raster_extra() -> None:
     """The plugin's launch line is fixed in its manifest, so a Claude Code user
     cannot add the extra to it either. Launched without it, the server can
     never render the PNG it returns inline."""
-    server = _plugin()["mcpServers"]["ltspice"]
+    server = _plugin()["mcpServers"]["spice"]
     assert server["command"] == "uvx"
     assert server["args"] == ["--from", "ltspice-mcp[raster]", "ltspice-mcp"]

@@ -21,6 +21,7 @@ from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
+from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
@@ -111,6 +112,9 @@ class SessionState:
     code_worker: "CodeWorker | None" = field(default=None, repr=False)
     """The ``run_code`` worker supervisor, created on the first call and
     closed at shutdown."""
+    open_windows: OpenWindows = field(default_factory=lambda: OpenWindows(None), repr=False)
+    """The LTspice windows someone has open, which ``edit_schematic`` keeps in
+    step with the files it commits."""
     background: BackgroundTasks = field(default_factory=BackgroundTasks, repr=False)
     """Tasks this session started without awaiting them, such as recording a
     circuit in the recent index. ``settled`` waits for them."""
@@ -258,6 +262,7 @@ class SessionState:
         the caller gave ``allowed_paths`` explicitly (see the field).
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
+        from ltspice_mcp.lib.simulator_build import executable_path
 
         diagnostics = diagnostics if diagnostics is not None else []
         default = select_default_simulator(available, config, diagnostics)
@@ -281,6 +286,16 @@ class SessionState:
             named_simulators=dict(named or {}),
             diagnostics=diagnostics,
             sandbox_pinned=sandbox_pinned,
+            open_windows=OpenWindows.detect(
+                filter(
+                    None,
+                    (
+                        executable_path(simulator)
+                        for simulator in (*available.values(), *(named or {}).values())
+                    ),
+                ),
+                enabled=config.sync_open_window,
+            ),
         )
 
     # ------------------------------------------------------------------

@@ -67,7 +67,7 @@ import re
 import shutil
 import uuid
 from collections import Counter
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
@@ -88,6 +88,7 @@ from ltspice_mcp.lib.lint_rules import (
     rule_severity,
     value_suffix_evidence,
 )
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -130,6 +131,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FINDING_SCHEMA,
     HINT_SCHEMA,
+    LTSPICE_WINDOW_PROPERTIES,
     REPEATABLE_CHANGE_ANNOTATIONS,
     WARNINGS_SCHEMA,
     CompareSpec,
@@ -149,6 +151,7 @@ from ltspice_mcp.tools._base import (
     resolve_reference,
     safe_path,
     symbol_resolver_for,
+    window_difference,
 )
 
 # The wiring geometry comes from lib/schematic_ops.py rather than a second copy,
@@ -674,6 +677,29 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
         "scene": _SCENE_SCHEMA,
+        "ltspice": {
+            "type": "object",
+            "description": "Present with in_ltspice: what happened in the LTspice window.",
+            "properties": {
+                "shown": {"type": "boolean"},
+                "path": {"type": "string", "description": "The file opened."},
+                **LTSPICE_WINDOW_PROPERTIES,
+                "already_open": {
+                    "type": "boolean",
+                    "description": (
+                        "The window had it open, and shows the copy it holds: "
+                        "LTspice does not read the file again."
+                    ),
+                },
+                "differs_from_file": {
+                    "type": "boolean",
+                    "description": "That copy is not the file's. A sheet already open only.",
+                },
+                "difference": {"type": "string"},
+                "reason": {"type": "string", "description": "Why it was not shown."},
+            },
+            "required": ["shown", "path"],
+        },
         "observations": {
             **WARNINGS_SCHEMA,
             "description": (
@@ -822,6 +848,11 @@ class VerifyCircuitInput(ToolInput):
         ),
     )
 
+    in_ltspice: bool = Field(
+        default=False,
+        description=("Also open the file in the user's open LTspice window (26.1+), in front."),
+    )
+
     export_to: Literal["sidecar", "managed"] = Field(
         default="sidecar",
         description=(
@@ -846,7 +877,8 @@ VERIFY_DESCRIPTION = (
     "facts (net connected only by label stubs with no drawn wire; text anchored "
     "inside a symbol). Supply 'compare' to graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
-    "Every fixable finding carries its location and subject."
+    "Every fixable finding carries its location and subject. in_ltspice also "
+    "opens the file in the user's LTspice window."
 )
 
 
@@ -2084,6 +2116,43 @@ def _outcome(
     )
 
 
+def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
+    """Open ``path`` in an LTspice window, in front, and say what happened. Blocking.
+
+    Nothing here fails the checks: they are made, and what happened in LTspice
+    is a fact beside them. A sheet the window already had open is shown as the
+    window holds it, so that copy is compared with the file and the reply says
+    when the person is looking at something else than was checked.
+    """
+    report: dict[str, Any] = {"shown": False, "path": str(path)}
+    try:
+        window, held = state.open_windows.open_sheet(path)
+    except BridgeError as error:
+        report["reason"] = str(error)
+        return report
+    report.update(
+        shown=True, pid=window.pid, version=window.version, already_open=held is not None
+    )
+    if held is not None and path.suffix.lower() == ".asc":
+        report.update(window_difference(path.read_bytes(), held))
+    return report
+
+
+def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
+    """What the caller should know about the LTspice window, if it was asked for."""
+    if shown is None:
+        return None
+    if not shown["shown"]:
+        return f"Not opened in LTspice: {shown['reason']}."
+    if shown.get("differs_from_file"):
+        return (
+            "LTspice already had the sheet open and shows a different one from the file "
+            f"that was checked ({shown['difference']}); to see the file's, close it there "
+            "without saving and ask again."
+        )
+    return "In front in LTspice."
+
+
 def _hint(data: dict[str, Any]) -> str:
     """One concrete thing the caller most needs to know."""
     failures = data["failures"]
@@ -2136,7 +2205,12 @@ def _hint(data: dict[str, Any]) -> str:
         headline = "No problems found in the checks that ran."
         if skipped:
             headline += " Not run: " + ", ".join(f"{s['check']} ({s['reason']})" for s in skipped)
-    return f"{headline.rstrip('.')}. {delivery_note}" if delivery_note else headline
+    if delivery_note:
+        headline = f"{headline.rstrip('.')}. {delivery_note}"
+    in_ltspice = _ltspice_hint(data.get("ltspice"))
+    if in_ltspice:
+        headline = f"{headline.rstrip('.')}. {in_ltspice}"
+    return headline
 
 
 # ---------------------------------------------------------------------------
@@ -2473,6 +2547,10 @@ async def evaluate_verify_circuit(
             data["render"] = render_payload
         failures.extend(render_failures)
         observation_events.extend(render_obs)
+
+    # --- shown in LTspice ---------------------------------------------------
+    if args.in_ltspice:
+        data["ltspice"] = await asyncio.to_thread(_open_in_ltspice, state, path)
 
     data.update(
         {
