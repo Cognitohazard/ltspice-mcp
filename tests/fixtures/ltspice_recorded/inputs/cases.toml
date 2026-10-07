@@ -293,8 +293,8 @@ inputs = ["log/step_temp.cir", "log/step_two_params.cir"]
 keep = ["log"]
 
 [behaviour.log-fourier]
-summary = "The Fourier block a .four directive prints, with its harmonic table and distortion totals."
-model = ["lib/log_parser.py", "lib/log_decode.py"]
+summary = "The Fourier block a .four directive prints, with its harmonic table, phases and distortion totals; the number after the frequency is the harmonic count."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/result_observations.py"]
 inputs = ["log/fourier.cir"]
 keep = ["log"]
 
