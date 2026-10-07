@@ -1082,6 +1082,28 @@ class TestReceiptFloor:
         assert response_budget.estimate_tokens(data) <= budget
         assert 0 < data["runs"]["returned"] < 24
 
+    async def test_a_jobs_receipt_keeps_as_many_rows_as_the_run_receipt(
+        self, state_with_sim: SessionState, grid_deck: Path
+    ):
+        """One receipt, one measure. jobs(status) left the attached analysis's
+        rows out of its estimate, charging them as fixed cost, so it started its
+        search at one row and returned that where run_experiments, for the same
+        job under the same budget, returned as many as fit."""
+        budget = 6000
+        receipt = await _grid_receipt(state_with_sim, grid_deck, 24, budget)
+
+        status = await _jobs(
+            state_with_sim, action="status", job_id=receipt["job_id"], budget=budget
+        )
+
+        assert _observation(status, "budget_not_met") is None
+        assert response_budget.estimate_tokens(status) <= budget
+        # The envelopes differ by a few keys, which may cost a row either way.
+        assert abs(status["runs"]["returned"] - receipt["runs"]["returned"]) <= 1, (
+            status["runs"]["returned"],
+            receipt["runs"]["returned"],
+        )
+
     async def test_the_server_default_empties_the_attached_identity_echo(
         self, state_with_sim: SessionState, grid_deck: Path
     ):
