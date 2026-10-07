@@ -250,7 +250,11 @@ class TestExtractLogDiagnostics:
         log = tmp_path / "four.log"
         log.write_text(".fourier line ignored since rawfile was produced.\n")
         result = extract_log_diagnostics(log)
-        assert any("fourier" in w.lower() for w in result["warnings"])
+        (warning,) = [w for w in result["warnings"] if "fourier" in w.lower()]
+        # The raw is still written, and the recipes that read a harmonic's
+        # amplitude and phase from it are named as the way on.
+        assert "'tone'" in warning and "'thd'" in warning
+        assert "unavailable" not in warning
 
     def test_bare_singular_matrix(self, tmp_path: Path):
         log = tmp_path / "sing.log"

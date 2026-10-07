@@ -150,6 +150,7 @@ EXECUTION_CASES = [
         {"signal": "V(out)", "mode": "step"},
     ),
     ("thd", "ltspice_step_tran", {"signal": "V(out)"}),
+    ("tone", "ltspice_step_tran", {"signal": "V(out)", "frequency_hz": "1k"}),
     ("bode_filter", "ltspice_ac_rc", {"signal": "V(out)"}),
     ("bode_point", "ltspice_ac_rc", {"signal": "V(out)", "at_hz": "1k"}),
     (
@@ -1540,6 +1541,106 @@ def _raw_with_non_finite(work_dir: Path) -> Path:
     path = work_dir / "diverged.raw"
     writer.save(path)
     return path
+
+
+def _two_tone_raw(work_dir: Path) -> Path:
+    """A .raw on SPICE-shaped steps: V(in) is sin(2*pi*1k*t + 20 deg) and
+    V(out) is 0.25 + 0.5*sin(2*pi*1k*t - 40 deg) with a third harmonic, so the
+    path has a gain of 0.5 and a phase of -60 degrees at 1 kHz."""
+    import numpy as np
+    from spicelib.raw.raw_write import RawWrite, Trace
+
+    from tests.test_signal_analysis import _clustered_grid
+
+    t = _clustered_grid(1000.0, 0.0, 12)
+    w = 2 * np.pi * 1000.0
+    v_in = np.sin(w * t + np.radians(20.0))
+    v_out = 0.25 + 0.5 * np.sin(w * t - np.radians(40.0)) + 0.05 * np.sin(3 * w * t)
+    writer = RawWrite(plot_name="Transient Analysis")
+    writer.add_trace(Trace("time", t, whattype="time"))
+    writer.add_trace(Trace("V(in)", v_in, whattype="voltage"))
+    writer.add_trace(Trace("V(out)", v_out, whattype="voltage"))
+    path = work_dir / "two_tone.raw"
+    writer.save(path)
+    return path
+
+
+_TONE_RECIPES: list[dict[str, Any]] = [
+    {
+        "key": "in",
+        "metric": "tone",
+        "signal": "V(in)",
+        "frequency_hz": "1k",
+        "window": {"start": "0.37m"},
+    },
+    {
+        "key": "out",
+        "metric": "tone",
+        "signal": "V(out)",
+        "frequency_hz": 1000.0,
+        "window": {"start": "0.37m"},
+    },
+    {
+        "key": "phase",
+        "metric": "tone",
+        "signal": "V(out)",
+        "frequency_hz": "1k",
+        "reduce": ["mean"],
+        "field": "phase_deg",
+    },
+    {
+        "key": "gain",
+        "metric": "tone",
+        "signal": "V(out)",
+        "frequency_hz": "1kHz",
+        "field": "amplitude",
+        "spec": {"min": 0.49, "max": 0.51},
+    },
+]
+
+
+def _assert_two_tone_answer(data: dict[str, Any]) -> None:
+    assert data["failures"] == []
+    results = data["results"]
+    (v_in,) = results["in"]["values"]
+    (v_out,) = results["out"]["values"]
+    v_in, v_out = v_in["value"], v_out["value"]
+    assert v_in["unit"] == v_out["unit"] == "V"
+    assert v_in["amplitude"] == pytest.approx(1.0, rel=1e-3)
+    assert v_in["phase_deg"] == pytest.approx(20.0, abs=0.02)
+    assert v_out["amplitude"] == pytest.approx(0.5, rel=1e-3)
+    assert v_out["phase_deg"] == pytest.approx(-40.0, abs=0.02)
+    assert v_out["dc"] == pytest.approx(0.25, abs=1e-4)
+    # The window starts at the first sample at or after 0.37 ms and keeps the
+    # eleven whole periods that fit; the phase is still referred to t = 0.
+    assert v_out["n_cycles"] == 11
+    assert 0.37e-3 - 1e-12 <= v_out["t_start"] < 0.37e-3 + 8.75e-6  # one sample step
+    assert v_out["phase_deg"] - v_in["phase_deg"] == pytest.approx(-60.0, abs=0.03)
+    (reduced,) = results["phase"]["reduced"]
+    assert (reduced["field"], reduced["stat"]) == ("phase_deg", "mean")
+    assert reduced["value"] == pytest.approx(-40.0, abs=0.02)
+    assert results["gain"]["spec"]["verdict"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_tone_reads_amplitude_and_phase_from_a_real_raw(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    import jsonschema
+
+    data = await _analyze(state_no_sim, _two_tone_raw(work_dir), _TONE_RECIPES)
+    _assert_two_tone_answer(data)
+    jsonschema.Draft202012Validator(analyze_mod.OUTPUT_SCHEMA).validate(data)
+
+
+def test_tone_reads_the_same_through_the_python_api(state_no_sim: SessionState, work_dir: Path):
+    from tests.conftest import SyncApi
+
+    data = SyncApi(state_no_sim).analyze_results(
+        sources=[_source(_two_tone_raw(work_dir))], recipes=_TONE_RECIPES
+    )
+    _assert_two_tone_answer(data)
 
 
 @pytest.mark.asyncio

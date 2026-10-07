@@ -21,6 +21,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_pulse_response,
     analyze_thd,
     analyze_timing_between,
+    analyze_tone,
     compute_measurement_stats,
     compute_signal_stats,
     stat_envelope,
@@ -1537,6 +1538,135 @@ class TestAnalyzeThd:
         y = np.sin(2 * np.pi * 9.6 * t)
         with pytest.raises(ValueError, match="zero magnitude"):
             analyze_thd(t, y, fundamental=9.6, window="hann")
+
+
+# ---------------------------------------------------------------------------
+# analyze_tone
+# ---------------------------------------------------------------------------
+
+
+def _clustered_grid(f: float, t0: float, n_periods: int) -> np.ndarray:
+    """SPICE-shaped sampling: every period packs 1000 samples into its first
+    eighth, as a simulator does around an edge, and spreads 100 over the rest,
+    so a sample stands for 70 times less time in the cluster than outside it."""
+    period = 1.0 / f
+    pieces = []
+    for k in range(n_periods):
+        start = t0 + k * period
+        pieces.append(start + np.linspace(0.0, period / 8, 1000, endpoint=False))
+        pieces.append(start + np.linspace(period / 8, period, 100, endpoint=False))
+    return np.concatenate([*pieces, [t0 + n_periods * period]])
+
+
+def _sine(t: np.ndarray, f: float, amplitude: float, phase_deg: float) -> np.ndarray:
+    return amplitude * np.sin(2 * np.pi * f * t + np.radians(phase_deg))
+
+
+class TestAnalyzeTone:
+    """One frequency's amplitude and phase over whole periods, weighted by time."""
+
+    F = 1000.0
+
+    def test_a_clustered_grid_is_weighted_by_time(self):
+        t = _clustered_grid(self.F, 0.37e-3, 12)
+        y = 0.5 + _sine(t, self.F, 0.37, 33.0) + _sine(t, 3 * self.F, 0.08, -57.3)
+        r = analyze_tone(t, y, self.F)
+        assert r["amplitude"] == pytest.approx(0.37, rel=1e-3)
+        assert r["phase_deg"] == pytest.approx(33.0, abs=0.02)
+        assert r["dc"] == pytest.approx(0.5, abs=1e-4)
+        assert r["warnings"] == []
+        # The grid is one that tells weighting apart: the same whole periods
+        # projected sample by sample, as np.mean over the samples does, read
+        # an amplitude more than twice too large and a phase 90 degrees off.
+        inside = t < r["t_end"]
+        w = 2 * np.pi * self.F
+        s = 2 * np.mean(y[inside] * np.sin(w * t[inside]))
+        c = 2 * np.mean(y[inside] * np.cos(w * t[inside]))
+        assert abs(math.hypot(s, c) / 0.37 - 1) > 1.0
+        assert abs(math.degrees(math.atan2(c, s)) - 33.0) > 60.0
+
+    def test_the_window_is_the_whole_periods_from_its_first_sample(self):
+        t = np.linspace(0.25e-3, 10.85e-3, 20001)  # 10.6 periods
+        y = 2.0 + _sine(t, self.F, 1.0, 10.0) + _sine(t, 2 * self.F, 0.5, 0.0)
+        r = analyze_tone(t, y, self.F)
+        assert r["n_cycles"] == 10
+        assert r["t_start"] == pytest.approx(0.25e-3)
+        assert r["t_end"] == pytest.approx(10.25e-3)
+        # Whole periods make the projection blind to the DC and the harmonic.
+        assert r["amplitude"] == pytest.approx(1.0, rel=1e-5)
+        assert r["dc"] == pytest.approx(2.0, abs=1e-5)
+
+    @pytest.mark.parametrize(
+        ("signal", "phase"),
+        [
+            (lambda w, t: np.sin(w * t), 0.0),
+            (lambda w, t: np.cos(w * t), 90.0),
+            (lambda w, t: -np.cos(w * t), -90.0),
+            (lambda w, t: -np.sin(w * t), 180.0),
+        ],
+    )
+    def test_phase_is_that_of_a_sine_in_degrees(self, signal, phase: float):
+        t = np.linspace(0.0, 5e-3, 5001)
+        r = analyze_tone(t, signal(2 * np.pi * self.F, t), self.F)
+        assert r["phase_deg"] == pytest.approx(phase, abs=1e-6)
+
+    @pytest.mark.parametrize("t0", [0.0, 0.123e-3, 0.5e-3, 731.4e-3])
+    def test_phase_is_referred_to_time_zero_not_to_the_window(self, t0: float):
+        t = _clustered_grid(self.F, t0, 4)
+        r = analyze_tone(t, _sine(t, self.F, 1.0, -48.0), self.F)
+        assert r["phase_deg"] == pytest.approx(-48.0, abs=0.02)
+
+    def test_components_are_the_sine_and_cosine_coefficients(self):
+        t = _clustered_grid(self.F, 0.2e-3, 6)
+        w = 2 * np.pi * self.F
+        r = analyze_tone(t, 0.3 * np.sin(w * t) - 0.4 * np.cos(w * t), self.F)
+        assert r["sin_component"] == pytest.approx(0.3, abs=1e-3)
+        assert r["cos_component"] == pytest.approx(-0.4, abs=1e-3)
+        assert r["amplitude"] == pytest.approx(0.5, rel=1e-3)
+        assert r["phase_deg"] == pytest.approx(math.degrees(math.atan2(-0.4, 0.3)), abs=0.02)
+
+    def test_agrees_with_thd_on_the_same_window(self):
+        # One resample and one window serve both, so a harmonic's amplitude
+        # reads the same through either.
+        t = _clustered_grid(self.F, 0.1e-3, 8)
+        y = _sine(t, self.F, 1.0, 0.0) + _sine(t, 2 * self.F, 0.1, 25.0)
+        thd = analyze_thd(t, y, fundamental=self.F, n_harmonics=2)
+        (second,) = thd["harmonics"]
+        tone = analyze_tone(t, y, 2 * self.F)
+        assert tone["amplitude"] == pytest.approx(second["magnitude"], rel=1e-3)
+
+    def test_a_step_too_wide_for_straight_lines_is_named(self):
+        # Ten samples a period: straight lines between them keep sinc(0.1)**2
+        # of the amplitude, the loss the warning states.
+        t = np.linspace(0.0, 10e-3, 101)
+        r = analyze_tone(t, np.sin(2 * np.pi * self.F * t), self.F)
+        expected = (math.sin(math.pi * 0.1) / (math.pi * 0.1)) ** 2
+        assert r["amplitude"] == pytest.approx(expected, rel=1e-4)
+        (warning,) = r["warnings"]
+        assert "0.1 of a period" in warning
+        assert f"{(1 - expected) * 100:.2g}% low" in warning
+        dense = np.linspace(0.0, 10e-3, 321)
+        assert analyze_tone(dense, np.sin(2 * np.pi * self.F * dense), self.F)["warnings"] == []
+
+    def test_less_than_one_period_is_refused(self):
+        t = np.linspace(0.0, 0.9e-3, 900)
+        with pytest.raises(ValueError, match="whole-period"):
+            analyze_tone(t, np.sin(2 * np.pi * self.F * t), self.F)
+
+    @pytest.mark.parametrize("frequency", [0.0, -1.0, math.inf, math.nan])
+    def test_a_frequency_that_is_not_positive_and_finite_is_refused(self, frequency: float):
+        t = np.linspace(0.0, 5e-3, 501)
+        with pytest.raises(ValueError, match="frequency"):
+            analyze_tone(t, np.sin(2 * np.pi * self.F * t), frequency)
+
+    def test_a_capped_grid_warns_and_one_too_coarse_is_refused(self):
+        t = np.linspace(0.0, 10e-3, 5001)
+        y = np.sin(2 * np.pi * self.F * t)
+        capped = analyze_tone(t, y, self.F, max_fft=1024)
+        assert any("alias" in warning for warning in capped["warnings"])
+        assert capped["amplitude"] == pytest.approx(1.0, rel=1e-3)
+        with pytest.raises(ValueError, match="do not fit"):
+            analyze_tone(t, y, self.F, max_fft=16)
 
 
 class TestDisturbanceResponse:
