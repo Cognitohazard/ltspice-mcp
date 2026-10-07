@@ -1913,11 +1913,20 @@ class TestHierarchicalPortPreservation:
 # Records the schematic editor does not model
 # ---------------------------------------------------------------------------
 #
-# The sheets below are hand-written. No LTspice was available to record one
-# holding these records, so none of them is a recording (docs/TESTING.md,
-# "Recorded LTspice behaviour"). Their field layouts, DATAFLAG <x> <y>
-# <expression> and BUSTAP <x1> <y1> <x2> <y2>, are the ones KiCad's LTspice
-# importer reads.
+# Both LTspice builds are recorded reading a sheet that holds each of these
+# lines: a data label (export/data_flags), a bus tap (export/bus_tap) and an
+# empty line (export/blank_line), where neither exports a sheet holding a
+# keyword it does not know (export/unknown_record). TestSheetRecords in
+# tests/test_recorded_ltspice_schematics.py holds the editor to those sheets.
+# The sheets below hold the same lines, each in the smallest sheet that shows
+# its case: a port between two data labels, a second codec, a blank base, a
+# sheet loaded as a block.
+#
+# DATAFLAG <x> <y> "<expression>" is the form in the example sheets both
+# builds install, which have an empty expression. BUSTAP <x1> <y1> <x2> <y2>
+# is the layout KiCad's LTspice importer reads; no recording confirms it,
+# because an export does not check a tap's fields (docs/spicelib_bugs.md,
+# Bug 26).
 
 # An edit that touches none of the records under test.
 _MID_LABEL = {"op": "add_net_label", "net": "MID", "x": 40, "y": 0}

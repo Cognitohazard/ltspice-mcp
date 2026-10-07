@@ -34,7 +34,9 @@ tool-surface changes.
   `inspect`'s schematic queries as `internal_error`, naming neither the file
   nor the line. Both now refuse it with the file, the line number and the
   line, also when the line is in a sheet the target loads as a block. Such a
-  sheet still cannot be opened for editing. `verify_circuit`, which draws the
+  sheet still cannot be opened for editing, though LTspice 26 and LTspice XVII
+  both read one (`export/bus_tap`, `export/blank_line`), and a bus tap
+  connects nothing in the netlist they export. `verify_circuit`, which draws the
   sheet with its own parser, used to leave such a record out of the drawing
   and of every check built on it without saying so; it now reports each
   keyword it did not read, how many lines hold it and the first.

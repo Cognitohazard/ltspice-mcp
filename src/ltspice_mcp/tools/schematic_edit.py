@@ -1715,6 +1715,9 @@ def _with_data_flags(lines: list[str], records: tuple[str, ...]) -> list[str]:
     Each is a standalone point record, so they go together after the labels
     and their ports and ahead of the first symbol: never between a FLAG and
     its IOPIN, and never inside a symbol's block of WINDOW and SYMATTR lines.
+    That is where the example sheets LTspice 26 and LTspice XVII install have
+    theirs, and both builds read a sheet that has them there (recorded as
+    ``export/data_flags``).
     """
     if not records:
         return lines

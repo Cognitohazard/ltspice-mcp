@@ -1150,6 +1150,10 @@ def _unreadable_record(path: Path, exc: NotImplementedError) -> NetlistError:
     spicelib raises ``NotImplementedError`` naming the line but neither its
     file nor its number (docs/spicelib_bugs.md, Bug 26). The read that refused
     names the sheet and its codec, and its ``line`` the record.
+
+    Both LTspice builds read a sheet holding a bus tap or an empty line
+    (recorded as ``export/bus_tap`` and ``export/blank_line``), so this refuses
+    sheets that LTspice opens.
     """
     names = _refusing_read(exc, AscEditor.reset_netlist.__code__)
     record = names.get("line")

@@ -1,0 +1,6 @@
+* C:\recording\bus_label.asc
+R1 D[0] 0 1k
+R2 D[0] 0 2k
+R3 D[1] 0 3k
+.backanno
+.end
