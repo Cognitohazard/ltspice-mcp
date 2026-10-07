@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import functools
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,7 +37,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "5"
+linter_version = "6"
 
 _SIGNAL_RE = PROBE_REF_RE
 # A capital M straight after a number is milli unless the letters after it
@@ -75,6 +75,12 @@ class _LintContext:
     # source for declarations the deck reaches through an include.
     includes: tuple[tuple[Path, str], ...] = ()
     ngbehavior: str | None = None
+    # The codec each file was decoded in, by the path above; a file not named
+    # was UTF-8. Only an 8-bit file can hold a byte UTF-8 would not.
+    codecs: Mapping[Path, str] = field(default_factory=dict)
+    # An LTspice the session knows reads decks as cp1252 (XVII or earlier),
+    # with the evidence; None when nothing shows one.
+    cp1252_reader: str | None = None
 
     @property
     def ngspice(self) -> bool:
@@ -706,6 +712,53 @@ def _value_suffix_findings(
     return findings
 
 
+# Byte 0x85 is an ellipsis to cp1252, which is how the server reads an 8-bit
+# file, and the next-line control to Latin-1, which is how LTspice reads one.
+_BYTE_85 = "\u2026"
+
+
+def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A byte 0x85 in an 8-bit file, with a card after it on the same line.
+
+    LTspice 24 and later end the line at that byte, so what follows it is read
+    as a card of its own; XVII reads one line, as the server does. The byte is
+    an ellipsis typed in a Western editor, and half of many double-byte
+    characters. Silent when the session's LTspice is known to be XVII.
+    """
+    if context.family != "ltspice" or context.cp1252_reader is not None:
+        return []
+    findings: list[LintFinding] = []
+    for path, text in [(context.path, context.text), *context.includes]:
+        if context.codecs.get(path) != "cp1252" or _BYTE_85 not in text:
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
+            after = [part.strip() for part in line.split(_BYTE_85)[1:]]
+            cards = [part for part in after if part and not part.startswith("*")]
+            if not cards:
+                continue
+            findings.append(
+                _finding(
+                    context,
+                    rule,
+                    line=number,
+                    subject=cards[0],
+                    file=path,
+                    evidence={
+                        "line": line.strip(),
+                        "read_as_cards": cards,
+                        "reason": (
+                            "byte 0x85, shown here as an ellipsis, ends the line for "
+                            "LTspice 24 and later, which read an 8-bit file as Latin-1, "
+                            "where it is the next-line control. What follows it is read "
+                            "as a card of its own; LTspice XVII reads one line. Remove "
+                            "the byte, or save the file as UTF-8."
+                        ),
+                    },
+                )
+            )
+    return findings
+
+
 def _normalize_signal(value: str) -> str:
     return re.sub(r"\s+", "", value).casefold()
 
@@ -726,6 +779,10 @@ RULES: tuple[LintRule, ...] = (
     LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice),
     LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice),
     LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice),
+    # A warning, not blocking: LTspice 24 and later run another circuit than
+    # the one the server reads, XVII the same one, and which build will run
+    # the deck is not always known here.
+    LintRule("byte-85-ltspice", "warning", _byte_85_ltspice),
     LintRule("model-missing", "blocking", _model_missing),
     # One rule per validate_netlist_arity check, each at the disposition its
     # declared severity names, so suppressing one never silences another.
@@ -776,12 +833,17 @@ def lint_deck(
     suppress: list[str] | set[str] | tuple[str, ...] = (),
     includes: Sequence[tuple[Path, str]] = (),
     ngbehavior: str | None = None,
+    codecs: Mapping[Path, str] | None = None,
+    cp1252_reader: str | None = None,
 ) -> list[LintFinding]:
     """Run all unsuppressed rules and return fixable findings only.
 
     ``includes`` carries the staged include closure as (staged path, staged
     text) snapshots so rules resolve declarations through the snapshot
     instead of re-reading the deck's rewritten references from disk.
+    ``codecs`` names the codec each of those files and the deck was decoded
+    in (``StagedFile.codec``); ``cp1252_reader`` is the evidence that the
+    session's LTspice reads decks as cp1252 (``services.cp1252_ltspice``).
     """
     suppressed = set(suppress)
     # A raw dialect names its family for every simulator but LTspice, so a
@@ -795,6 +857,8 @@ def lint_deck(
         family=named_by_dialect or simulator_family(simulator) or "ltspice",
         includes=tuple(includes),
         ngbehavior=ngbehavior,
+        codecs=dict(codecs or {}),
+        cp1252_reader=cp1252_reader,
     )
     findings: list[LintFinding] = []
     for rule in RULES:
