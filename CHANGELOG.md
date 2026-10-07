@@ -717,10 +717,11 @@ recording that showed it.
   window already had open is shown as the window holds it, and the reply says
   when that is not the file that was checked.
 - The guide says what to do when a person wants to plot nets by clicking the
-  sheet in LTspice. LTspice offers that only after a run made in its own
-  window, and a job's results opened there are drawn but not tied to the
-  sheet. So that one run is started through LTspice's own MCP server where it
-  is connected, or by the person, and measured by path with
+  sheet in LTspice. LTspice ties a plot to a sheet when the results are opened
+  from the sheet (a run in its window, or View > Visible Traces for results
+  beside the sheet), and a job's results opened by this server are drawn but
+  not tied. So the sheet's own results are the ones to click through, made by
+  a run in the window where there are none, and measured by path with
   `analyze_results(raw_path)`. Such a run simulates the window's copy of the
   sheet, not the file.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
