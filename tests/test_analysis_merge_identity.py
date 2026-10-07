@@ -224,7 +224,7 @@ async def test_unlabelled_log_continuation_echo_keeps_the_immutable_record(
     assert data is not None and data["failures"] == []
     row = data["results"]["meas"]["per_run"]["items"][0]
     assert row["source"] == raw.stem
-    assert row["value"]["stats"]["vfinal"]["mean"] == LTSPICE_TRAN_RC_VFINAL
+    assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
     manifest = data["source_hashes"][0]
     assert manifest["raw_present"] is False and manifest["log_sha256"]
     path = result_store.result_path(data["result_set_id"], work_dir)
