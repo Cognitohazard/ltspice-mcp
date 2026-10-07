@@ -527,6 +527,46 @@ an empty one behaves as on first launch, and XVII then runs its updater);
 `-ascii` is ignored when a settings file is also named, and when the deck's
 own file name contains "ascii".
 
+### An open window and the bridge
+
+`edit_schematic` keeps a sheet that is open in an LTspice window in step with
+its file, through the MCP bridge LTspice has shipped since 26.1
+(`lib/ltspice_bridge.py`, `lib/ltspice_window.py`). What that models is
+recorded too, by a recorder of its own, because it needs a window and the main
+one runs a build once per input:
+
+```bash
+uv run python scripts/record_ltspice_bridge.py
+```
+
+It starts LTspice with its window on a desktop of its own and talks to it with
+the server's own client, whose bridge runs on the server's desktop, another
+one: every recording is also of a bridge reaching a window on a desktop it is
+not on, as it does a person's. It opens each sheet in
+`tests/fixtures/ltspice_bridge_recorded/inputs/`, and writes under
+`ltspice26/` the window's copy of each (`sheets/`), every call it made and the
+answer (`conversation.json`), and a manifest of digests. The two behaviours are
+listed in `cases.toml` with that tree as their `evidence`. LTspice XVII has no
+bridge, so there is one generation here.
+
+Two things read it. `test_ltspice_bridge.py` holds `sheet_content` to the
+recorded pairs: a sheet LTspice only opened must compare equal to its file,
+though the text differs. It also replays the recorded conversation against
+`tests/fake_ltspice_bridge.py`, the stand-in the rest of the suite runs, so a
+test that passes against the stand-in passes for a recorded reason. The pairs
+are what showed that comparing text would not do: of 700 of LTspice's own
+example sheets read back through the bridge, 79 came back as written. A new
+way LTspice rewrites a sheet on opening it goes in as an input here, not as a
+rule worked out by hand; the text-grid rule was first written from one example
+and was wrong for a negative coordinate.
+
+The bridge can start an LTspice of its own, and one thing about that is not
+in the recording because the recording is made with the launch disabled. The
+opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to
+stop the launch and checks that the LTspice it starts has its windows on the
+server's desktop, none on the desktop the test runs on, and is gone when the
+session closes.
+
 ### The opt-in tier
 
 With `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`,

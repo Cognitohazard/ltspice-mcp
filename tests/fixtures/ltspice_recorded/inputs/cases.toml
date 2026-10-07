@@ -349,6 +349,18 @@ summary = "That a build started on a desktop of its own, where its window cannot
 model = ["lib/hidden_desktop.py", "lib/ltspice_windows.py"]
 evidence = "every case here was recorded with the build on a desktop of its own; manifest: cases.*.dialog holds the two message boxes LTspice XVII stopped on there"
 
+# ---------------------------------------------------------------- an open window
+
+[behaviour.open-window-copy]
+summary = "That a window holds its own copy of a sheet: how that copy differs in text from the file it read (the first line, the order of wires and of a symbol's attributes, an attribute with no value, the micro sign, text off the grid), that replacing it leaves the file alone, and that it never follows the file."
+model = ["lib/ltspice_window.py", "tools/schematic_edit.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded (sheets/ and conversation.json), recorded from LTspice 26.1 by tests/ltspice_bridge_recorder.py, which needs a window and so is a recorder of its own; LTspice XVII has no bridge to ask"
+
+[behaviour.bridge-replies]
+summary = "What ltspice-mcp-bridge.exe answers to each call the server makes, that started with --ltspice-path naming no file it attaches to a window and its launch of an LTspice fails, and that it reaches a window on a desktop it is not on."
+model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json, which test_ltspice_bridge.py also replays against the stand-in bridge the suite uses"
+
 # ---------------------------------------------------------------- cases an input path cannot describe
 
 [[case]]

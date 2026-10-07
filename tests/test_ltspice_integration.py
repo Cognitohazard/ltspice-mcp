@@ -658,3 +658,155 @@ class TestMessageBoxWhereNobodyCanAnswer:
 
         assert stopped.value.text == recorded.entry("ltspice17", case_id)["dialog"]
         assert not sheet.with_suffix(".net").exists()
+
+
+def _open_window_skip_reason() -> str | None:
+    if sys.platform != "win32":
+        return "an LTspice window is reached through a Windows program"
+    from ltspice_mcp.lib.ltspice_bridge import bridge_command
+    from ltspice_mcp.lib.simulator_build import executable_path
+
+    with __import__("tempfile").TemporaryDirectory() as scratch:
+        state = _make_ltspice_state(Path(scratch))
+    exe = executable_path(state.default_simulator) if state is not None else None
+    if exe is None or bridge_command(exe) is None:
+        return "the detected LTspice has no ltspice-mcp-bridge.exe beside it (26.1 or later)"
+    return None
+
+
+@pytest.mark.skipif(
+    _skip_reason is None and _open_window_skip_reason() is not None,
+    reason="no LTspice with a bridge to reach its window through",
+)
+class TestSheetOpenInAWindow:
+    """The stand-in bridge the suite runs is held to a recording; this is the
+    recording's subject itself: a real window, the real bridge, a real edit."""
+
+    @pytest.fixture
+    def open_sheet(self, ltspice_state: SessionState, work_dir: Path):
+        """A sheet in the sandbox, open in an LTspice window nobody can see."""
+        from ltspice_mcp.lib.ltspice_bridge import bridge_command
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from tests.ltspice_bridge_recorder import wait_for_window
+        from tests.ltspice_recorder import identify_build, neutral_settings
+
+        exe = executable_path(ltspice_state.default_simulator)
+        assert exe is not None
+        settings = identify_build(Path(exe)).settings_file
+        if settings is None:
+            pytest.skip("this LTspice has no settings file yet; start it once")
+        sheet = work_dir / "Draft1.asc"
+        shutil.copyfile(_FIXTURE_DIR / "Draft1.asc", sheet)
+        ini = work_dir / settings.name
+        ini.write_bytes(neutral_settings(settings.read_bytes(), {}))
+        command = bridge_command(exe)
+        assert command is not None
+        # A desktop of the window's own, not the server's: the bridge then
+        # reaches a window on a desktop it is not on, as it does a person's.
+        with hidden_desktop.HiddenDesktop(f"ltspice-mcp-window-{os.getpid()}") as desktop:
+            if not desktop.available:
+                pytest.skip("Windows gave no desktop to keep the window off this one")
+            with desktop.start([exe, str(sheet), "-ini", str(ini)]) as window:
+                wait_for_window(command, window.pid, sheet)
+                yield sheet, window.pid
+
+    @staticmethod
+    async def _edit(state: SessionState, sheet: Path, value: str) -> dict:
+        import hashlib
+
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+
+        digest = await asyncio.to_thread(lambda: hashlib.sha256(sheet.read_bytes()).hexdigest())
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "target": str(sheet),
+                    "expected_sha256": digest,
+                    "ops": [{"op": "set_component_value", "reference": "R1", "value": value}],
+                }
+            ),
+            state,
+        )
+        assert result.structured_content is not None
+        return result.structured_content
+
+    async def test_an_edit_is_shown_in_the_window_and_a_changed_window_stops_the_next(
+        self, ltspice_state: SessionState, open_sheet
+    ):
+        from ltspice_mcp.lib.ltspice_window import content_difference
+
+        sheet, pid = open_sheet
+        windows = ltspice_state.open_windows
+        assert windows.available, windows.unavailable
+
+        data = await self._edit(ltspice_state, sheet, "2.2k")
+
+        assert data["commit_state"] == "committed"
+        assert data["observations"] == []
+        assert [(row["pid"], row["shown"]) for row in data["open_in_ltspice"]] == [(pid, True)]
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        assert "SYMATTR Value 2.2k" in held.text
+        committed = await asyncio.to_thread(sheet.read_bytes)
+        assert content_difference(committed.decode("cp1252"), held.text) is None
+
+        # Someone changes the sheet in the window and does not save it.
+        changed = held.text.replace("SYMATTR Value 2.2k", "SYMATTR Value 9k")
+        await asyncio.to_thread(windows.show, held, changed)
+
+        refused = await self._edit(ltspice_state, sheet, "4.7k")
+
+        assert refused["commit_state"] == "not_committed"
+        assert refused["error"]["code"] == "open_window_differs"
+        assert await asyncio.to_thread(sheet.read_bytes) == committed
+        (still,) = await asyncio.to_thread(windows.holding, sheet)
+        assert "SYMATTR Value 9k" in still.text
+
+    def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
+        self, ltspice_state: SessionState
+    ):
+        """What holds whatever the bridge does. Here nothing stops it starting
+        an LTspice (the command leaves out the path that makes the launch
+        fail): the one it starts has its windows on the server's desktop and
+        none on this one, and is gone when the session is closed."""
+        import ctypes
+        from ctypes import wintypes
+
+        from ltspice_mcp.lib.ltspice_bridge import BRIDGE_NAME, BridgeSession
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from tests.conftest import LIVENESS_S
+
+        exe = executable_path(ltspice_state.default_simulator)
+        assert exe is not None
+        desktop = hidden_desktop.shared()
+        if desktop is None:
+            pytest.skip("Windows gave no desktop to start the bridge on")
+
+        user = ctypes.WinDLL("user32")
+        listed = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user.EnumWindows.argtypes = [listed, wintypes.LPARAM]
+        user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+
+        def owners_on_this_desktop() -> set[int]:
+            found: set[int] = set()
+
+            def note(window: int, _unused: int) -> bool:
+                pid = wintypes.DWORD(0)
+                user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+                found.add(int(pid.value))
+                return True
+
+            user.EnumWindows(listed(note), 0)
+            return found
+
+        with BridgeSession([str(Path(exe).with_name(BRIDGE_NAME))], timeout=LIVENESS_S) as session:
+            if session.instances():
+                pytest.skip("an LTspice is already running: the bridge would attach to it")
+            session.call("list_open_designs")  # a read is enough for it to start one
+            (started,) = session.instances()
+            assert started.mode == "headless"
+            launched = psutil.Process(started.pid)
+            assert launched.name().casefold() == Path(exe).name.casefold()
+            assert started.pid in desktop.window_owners()
+            assert started.pid not in owners_on_this_desktop()
+        launched.wait(timeout=LIVENESS_S)
+        assert not launched.is_running()

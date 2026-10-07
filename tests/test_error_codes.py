@@ -516,6 +516,7 @@ FROZEN_ERROR_CODES = (
     "not_recoverable",
     "op_failed",
     "open_failed",
+    "open_window_differs",
     "order_disagreement",
     "overlapping_assignment",
     "overlapping_mismatch_rules",

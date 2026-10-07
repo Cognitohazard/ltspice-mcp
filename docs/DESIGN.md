@@ -75,12 +75,66 @@ Python, and there's an extra process to maintain.
 |`xuio/ltspice-mcp`|create/modify/lint|not compared|not compared|macOS-only|
 |`daviditkin/ltspice-mcp`|netlist-level (9 tools)|none|none|not compared|
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
+|LTspice's own MCP server (26.1+)|replaces a whole open sheet with text the model wrote|none|none: one run of the open design, raw waveform reads|Windows only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
 "not compared" means we have not run that project and are not claiming
 anything about it either way. It is not a statement that the capability is
 absent — the other cells are read from each project's own description, and
 none of the third-party rows have been benchmarked against this one.
+
+The row for LTspice's own server is read from the tools the 26.1.1 bridge
+lists, not from a description of it.
+
+### LTspice's own MCP server
+
+From 26.1 LTspice carries an MCP server: each LTspice window listens on the
+loopback interface, and `ltspice-mcp-bridge.exe`, installed beside
+`LTspice.exe`, is the stdio program a client registers. It does a different
+job from this server. It is a remote control for the window: it lists and reads
+the documents that are open, replaces one with text the model wrote, asks for
+the netlist, starts a run of the open design and reads a log or samples from a
+raw file. It has no notion of a pin, a sweep, a job or a metric, and its own
+help advises keeping a model away from drawing.
+
+Most of that this server already does on files, with more behind it: typed and
+validated ops in place of whole-sheet text, experiments in place of one run,
+recipes in place of raw samples. None of it is routed through the bridge.
+
+The one thing only LTspice can reach is the window, and that is what the bridge
+is used for. LTspice reads a sheet once: a sheet edited on disk while it is
+open stays as it was on screen, and the window's next save writes the old sheet
+back over the edit. So `edit_schematic` asks the bridge whether a window has
+the target open, refuses to commit under one whose copy differs from the file,
+and after a commit replaces the window's copy with the committed sheet, which
+appears at once and is one step of the window's undo history
+(`lib/ltspice_window.py`; the contract is in
+[mcp_surface.md](design/mcp_surface.md), "A sheet open in LTspice").
+
+The file stays the record, and the window is a view of it. LTspice's server
+takes the other side: the window is the document and saving is the user's. Had
+this server followed, every tool that reads a file (a run, an export, a
+comparison) would read something behind what the user sees.
+
+Two constraints came from observing the bridge and are recorded in
+`tests/fixtures/ltspice_bridge_recorded`. The first is that it starts an
+LTspice of its own when it has none to talk to, on any request that needs one
+and even when told which instance to use. Nothing in the bridge turns that off,
+so it is contained instead: the bridge is started on the server's hidden
+desktop, in a job that ends with the session, and whatever it launches has its
+windows there and does not outlive the session
+(`lib/hidden_desktop.py`, which is where anything that can start LTspice on
+Windows is started from). It is also run with `--ltspice-path` naming a file
+that does not exist, which makes the launch fail before it starts; that keeps
+the common case from starting anything at all, but it is a failure the bridge
+reports, not a mode it offers, so it is the second line and not the first. The
+session lists the windows and attaches to one by process id before it asks for
+anything, so a launch is attempted only when that window closes in between.
+
+The second is that what a window hands back is LTspice's own writing of the
+sheet, which differs from the file in ways that change nothing, so the
+comparison reads content and not text. Only the bridge's stdio interface is
+used; the loopback protocol behind it is not documented and is left alone.
 
 Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,

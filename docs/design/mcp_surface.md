@@ -1060,6 +1060,49 @@ rebuild from its own ops. What is lost is a one-call "undo everything this
 session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
+**A sheet open in LTspice.** LTspice reads a sheet once. A window that has the
+target open holds a copy of its own from then on: a write to the file changes
+nothing on screen, and the window's next save puts the old sheet back over the
+new file. So the transaction looks for such a window, inside the edit guard,
+through the MCP bridge LTspice ships from 26.1 (`lib/ltspice_window.py`):
+
+- **Before the commit** the window's copy is compared with the file. A window
+  that differs either has changes nobody saved or was opened before the file
+  last changed, and committing under it would leave two sheets each missing the
+  other's changes. The call fails as `open_window_differs` at stage
+  `window_check`, naming a few of the entries that differ, with nothing
+  written; the remedy is the user's (save the window to keep its version, or
+  close it without saving to keep the file's). A dry run reports the same thing
+  in `observations` and is not refused. The comparison is of content, not text:
+  LTspice hands back its own writing of a sheet, which differs from the file it
+  read in the first line, the order of wires and attributes, attributes with no
+  value, the micro sign and off-grid text, none of which is a change.
+- **After the commit** the committed sheet replaces the window's copy, which
+  LTspice records as one step of that window's undo history. `open_in_ltspice`
+  has one entry per window, `{pid, version, shown, reason?}`. A window that
+  could not be updated (`shown: false`) does not fail the call, since the file
+  is committed and that is what was asked for, but the entry and the `hint` say
+  that it still shows the old sheet and that a save from it would overwrite the
+  edit.
+
+The file stays the record: `expected_sha256` is still of the file, the window
+is never read in place of it, and a save from the window afterwards is an
+external write like any other (LTspice rewrites the sheet its own way, so the
+digest changes and the next edit must read it again). The alternative, editing
+the window's copy and leaving the save to the user as LTspice's own MCP server
+does, would make every other tool on the surface read a file that is behind
+what the user sees. LTspice is not started for this, and a sheet is never
+opened in a window that did not have it. The bridge would start an LTspice of
+its own if the window closed under it, so it runs on the server's hidden
+desktop in a job that ends with the call, where one it started could not be
+seen or left behind, and it is told where LTspice is not, so that the launch
+fails (`lib/ltspice_bridge.py`). It applies where the server
+runs on Windows itself with LTspice 26.1 or later; elsewhere, and with
+`[schematic] sync_open_window = false`, nothing is asked and
+`inspect(kind: "capabilities")` says why under `open_window_sync`. A bridge
+that cannot be asked does not stop an edit: the commit goes ahead and
+`observations` says the window could not be checked.
+
 **Per-op facts.** `results` carries what each op found on the sheet, one entry
 per op, keyed by `index` and `op` like a `failures` entry: for `wire_pins` the
 segments it found `already_present` and the `junctions` it made, for the
@@ -1157,6 +1200,7 @@ compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
 views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
+open_in_ltspice? (one entry per LTspice window that had the sheet open),
 warnings, failures, observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
@@ -1281,7 +1325,9 @@ Python API), which are never capped. The gate stays a whole-file answer.
     one the `remediation` that would turn it on; named_executables: the same
     facts and the family for each [simulator.executables] entry bound at
     startup, keyed by the selector execution.simulator takes ("ltspice:xvii");
-    exporter presence, dialects, persistence,
+    exporter presence, `open_window_sync: {available, reason}` (whether
+    edit_schematic can keep a sheet open in an LTspice window in step with
+    its file), dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,
