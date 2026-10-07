@@ -1158,9 +1158,11 @@ taken after the sheet's, the fixed order an export takes the sheet's and its
 netlist's in, and it is read under both. The commit stages the sheet, then
 replaces the `.plt` (staged and renamed the same way), then renames the sheet
 last; a sheet rename that fails puts the `.plt`'s old bytes back, so a batch
-that set panes commits both files or neither. A `.plt` that cannot be read or
-written fails the batch at `apply_ops` or `stage_plot_settings`, with nothing
-written.
+that set panes commits both files or neither. A batch of nothing but
+`set_plot_panes` leaves the sheet as it is, file and all, and a `.plt` the
+batch leaves holding what it held is not written. The `.plt` is read only when
+an op sets panes. One that cannot be read or written fails the batch at
+`apply_ops` or `stage_plot_settings`, with nothing written.
 
 **Domain rule: the AUTHOR plane edits schematics and not netlists.** Both
 `.asc` and `.cir` are text files, so the split is not about file format. The

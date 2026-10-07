@@ -19,7 +19,6 @@ import pytest
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.plot_settings import (
     DEFAULT_SCALES,
-    PLOT_ENCODING,
     SECTION_NAMES,
     PlotPane,
     check_trace,
@@ -33,6 +32,8 @@ WRITTEN = rec.cases_of("plot-settings")
 READ = rec.cases_of("plot-settings-read")
 TRAN = SECTION_NAMES["tran"]
 AC = SECTION_NAMES["ac"]
+CURRENT = next(build for build in rec.BUILDS if rec.generation(build) == "current")
+XVII = next(build for build in rec.BUILDS if rec.generation(build) == "xvii")
 
 
 def saved(build: str, case_id: str) -> bytes:
@@ -77,11 +78,8 @@ def test_each_build_writes_its_own_encoding_with_lf_line_ends(build: str, case_i
 
 def test_the_server_writes_the_form_ltspice_xvii_writes():
     """UTF-16 LE without a byte order mark, LF line ends: XVII's own form."""
-    xvii = next(build for build in rec.BUILDS if rec.generation(build) == "xvii")
-    own = saved(xvii, "plot/one_trace")
-    text = own.decode("utf-16-le")
-    assert PLOT_ENCODING == "utf-16-le"
-    assert encode_plot_settings(text) == own
+    own = saved(XVII, "plot/one_trace")
+    assert encode_plot_settings(own.decode("utf-16-le")) == own
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -112,16 +110,14 @@ def test_the_pane_ltspice_26_adds_below_is_listed_first():
     LTspice 26's Add Plot Pane Below Active Pane, and gives the new pane V(in)
     and I(R1). Read top first, the file is V(out) over V(in) and I(R1).
     """
-    build = next(build for build in rec.BUILDS if rec.generation(build) == "current")
-    assert traces(saved(build, "plot/pane_below"), TRAN) == [("V(out)",), ("V(in)", "I(R1)")]
+    assert traces(saved(CURRENT, "plot/pane_below"), TRAN) == [("V(out)",), ("V(in)", "I(R1)")]
 
 
 def test_the_pane_ltspice_xvii_adds_is_above_the_active_one():
     """XVII has one Add Plot Pane, with the command id LTspice 26 gives Add Plot
     Pane Above Active Pane. Read with the bottom-first order LTspice 26's own
     file shows, XVII's new pane is on top, where that command puts it."""
-    build = next(build for build in rec.BUILDS if rec.generation(build) == "xvii")
-    assert traces(saved(build, "plot/pane_added"), TRAN) == [("V(in)", "I(R1)"), ("V(out)",)]
+    assert traces(saved(XVII, "plot/pane_added"), TRAN) == [("V(in)", "I(R1)"), ("V(out)",)]
 
 
 # --------------------------------------------------------------------------
@@ -173,19 +169,17 @@ def test_a_trace_is_read_only_up_to_its_first_space(build: str):
 
 
 def test_ltspice_26_reads_a_file_in_utf8():
-    build = next(build for build in rec.BUILDS if rec.generation(build) == "current")
     written = handed("plot/read_utf8")
     assert written.decode("utf-8").startswith("[Transient Analysis]")
-    assert panes(saved(build, "plot/read_utf8"), TRAN) == panes(written, TRAN)
+    assert panes(saved(CURRENT, "plot/read_utf8"), TRAN) == panes(written, TRAN)
 
 
 def test_ltspice_xvii_reads_a_file_in_utf8_and_appends_it_to_its_own_when_it_saves():
     """XVII shows the panes of a UTF-8 file, then saves its own UTF-16 section
     followed by the old file's bytes. That is the file the server would leave
     behind by writing UTF-8, and why it writes UTF-16; the reader refuses one."""
-    build = next(build for build in rec.BUILDS if rec.generation(build) == "xvii")
     written = handed("plot/read_utf8")
-    data = saved(build, "plot/read_utf8")
+    data = saved(XVII, "plot/read_utf8")
     own = data[: data.index("}\n}\n".encode("utf-16-le")) + 8]
     assert panes(own, TRAN) == panes(written, TRAN)
     assert data[len(own) :].startswith(written)

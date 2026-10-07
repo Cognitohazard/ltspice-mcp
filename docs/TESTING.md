@@ -551,20 +551,21 @@ The committed plot cases were recorded under Wine 11, on the same executables
 as the rest of the recording (the digests match the manifest's), and each
 entry says so in `host`. A recording made on Windows has no `host`, so
 recording them again there with
-`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*' --keep-library`
-replaces them. Every other committed case was recorded again under Wine
+`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`
+replaces them. A partial recording like that keeps the library facts the rest
+of the recording was made with, and says so when the machine's own differ: a
+Wine prefix has the library the installer unpacked, not the one the committed
+manifest describes. Every other committed case was recorded again under Wine
 (`--check`) to see what the host changes. On LTspice 26 every file came out
 as committed but those of the two cases that run on the recording user's own
-settings, which differ by design. On XVII two things differed: each log ended
-without the blank line that follows the matrix compiler report, and a message
-box the build stopped on (the two sheets with a byte order mark) was not seen,
-because a run case finds a box only on a desktop of its own, and under Wine
-the windows on one cannot be listed, so the recorder launches on Wine's
-display there. Neither touches a plot case. What it keeps is the build's own
-serialisation of the file. Its driver looks for a box among the process's own
-windows, which Wine does list. `--keep-library` keeps the library facts of
-the committed manifest: a Wine prefix has the library the installer unpacked,
-not the one the rest of the recording describes.
+settings, which differ by design. On XVII each log ended without the blank
+line that follows the matrix compiler report. Neither touches a plot case,
+whose recording is the build's own serialisation of the file. Under Wine a
+desktop of the recorder's own is made but the windows on it cannot be listed,
+so the recorder launches on Wine's display instead and looks for a box, or the
+waveform window, among the windows of the process it started there. That is
+how the box XVII stops on for the two sheets with a byte order mark is
+recorded under Wine as it is on Windows.
 
 ### The opt-in tier
 

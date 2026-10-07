@@ -287,20 +287,13 @@ class TestCaseList:
                 assert path.exists(), f"{key}: {name} is not in the repository"
 
     def test_every_input_file_belongs_to_a_case(self):
-        used = {name for case in CASES.cases for name in case.inputs}
+        used = {name for case in CASES.cases for name in case.copies}
         present = {
             path.relative_to(INPUTS).as_posix()
             for path in INPUTS.rglob("*")
             if path.is_file() and path.name != recorder.CASES_FILE
         }
         assert present == used
-
-    def test_only_a_plot_case_has_steps_or_plot_settings_and_each_has_one(self):
-        for case in CASES.cases:
-            if case.kind == "plot":
-                assert case.steps or case.plot, case.case_id
-            else:
-                assert not (case.steps or case.plot), case.case_id
 
     def test_a_case_stopped_part_way_is_marked_as_varying(self):
         # How far a stopped run got differs every time, so comparing its
@@ -375,7 +368,7 @@ class TestCommittedRecordings:
         for case_id, entry in manifest["cases"].items():
             command = entry["command"]
             assert command[0] == manifest["executable"]["name"], case_id
-            mode = list(recorder.MODE_SWITCHES.get(entry["kind"], ("-Run", "-b")))
+            mode = {"netlist": ["-netlist"], "plot": ["-Run"]}.get(entry["kind"], ["-Run", "-b"])
             assert command[1 : 1 + len(mode)] == mode, case_id
             assert command[1 + len(mode)].startswith("<dir>/"), case_id
 
@@ -480,6 +473,25 @@ class TestPlotCases:
         )
         with pytest.raises(RecorderError, match="a step is one of"):
             load_cases(inputs)
+
+    def test_a_case_of_another_kind_with_steps_is_refused(self, tmp_path: Path):
+        inputs = self._case_file(
+            tmp_path,
+            '[[case]]\nid = "plot/x"\nbehaviour = "b"\nsource = "plot/rc.asc"\n'
+            'steps = [{ trace = "V(out)" }]\n',
+        )
+        with pytest.raises(RecorderError, match="only a plot case"):
+            load_cases(inputs)
+
+    def test_the_plot_settings_go_beside_the_sheet_under_its_name(self, tmp_path: Path):
+        inputs = self._case_file(
+            tmp_path,
+            '[[case]]\nid = "plot/read_x"\nbehaviour = "b"\nkind = "plot"\n'
+            'source = "plot/rc.asc"\nplot = "plot/x.plt"\n',
+        )
+        (inputs / "plot" / "x.plt").write_bytes(b"")
+        (case,) = load_cases(inputs).cases
+        assert case.copies == {"plot/rc.asc": "read_x.asc", "plot/x.plt": "read_x.plt"}
 
     def test_a_plot_case_with_nothing_to_read_or_make_is_refused(self, tmp_path: Path):
         inputs = self._case_file(
