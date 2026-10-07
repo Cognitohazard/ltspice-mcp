@@ -107,6 +107,11 @@ recording that showed it.
   character and is written back as it was read. LTspice reads such a file a
   byte at a time, so the copy is again what the simulator would have been
   given.
+- A `.four` card carrying a harmonic or period count, such as
+  `.four 1k 5 V(in)`, had the count read as a trace it asked for. When the
+  run produced no Fourier table, as on ngspice, an observation reported a
+  trace named "5" as requested and missing. Both builds read the number after
+  the frequency as the harmonic count, and the counts are skipped now.
 - On LTspice XVII no result of a run could be read when the deck's title line
   held one of those bytes. XVII copies the title into its log, and the log was
   refused as undecodable; `.meas` results failed the same way inside the log
@@ -650,6 +655,22 @@ recording that showed it.
   read only up to its first space, so a trace with whitespace is refused.
   The recorder gained a `plot` case kind that runs a sheet in LTspice's
   window, builds panes with the window's own menu commands and saves them.
+- An `analyze_results` recipe, `tone`, reads the amplitude and phase of a
+  transient signal at one frequency you give. It cuts the window to the whole
+  periods that fit from its start and weights the samples by time, sharing
+  `thd`'s trim and resample, and returns `amplitude`, `phase_deg`, `dc` and the
+  sine and cosine coefficients, each reducible. The phase is that of
+  `sin(2*pi*f*t)` with `t` the simulation's own time, so it does not move with
+  the window and two signals' phases subtract. A warning names a sampling step
+  too wide for straight lines between samples to follow a sinusoid. The same
+  calculation is `analyze_tone` in the Python API. The guide's `signals`
+  section now names it and LTspice's `.four`, which the `summary` recipe reads;
+  LTspice 26 and XVII print a `.four` phase in different conventions (a
+  `SINE(0 1 1k)` source's fundamental at 90 and 0 degrees), so `.four` is not
+  the place to read phase from.
+- The warning for an ngspice run that skipped `.four` names the `tone` and
+  `thd` recipes, which read harmonics from the raw it still wrote, instead of
+  saying Fourier and THD are unavailable.
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains
   verified completed cases and retries eligible unfinished cases under the

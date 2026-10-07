@@ -55,6 +55,7 @@ EXPECTED_ALL = [
     "analyze_timing_between",
     "analyze_periodic",
     "analyze_thd",
+    "analyze_tone",
     "compute_signal_stats",
     "time_weighted_quantiles",
     "compute_measurement_stats",
@@ -87,6 +88,7 @@ EXPECTED_ALL = [
     "TimeWeightedQuantilesOutput",
     "ThdOutput",
     "HarmonicEntry",
+    "ToneOutput",
     "MeasurementStatsEntry",
     "HistogramBin",
     "AcStructureResult",
@@ -94,12 +96,12 @@ EXPECTED_ALL = [
     "Observation",
 ]
 
-METRIC_NAMES = EXPECTED_ALL[9:34]
+METRIC_NAMES = EXPECTED_ALL[9:35]
 # Not a metric: a value reader, published because SPICE literals cross the
 # boundary in both directions and nothing else on the facade parses one.
-VALUE_HELPER_NAMES = EXPECTED_ALL[34:35]
-ALIAS_NAMES = EXPECTED_ALL[35:41]
-OUTPUT_TYPE_NAMES = EXPECTED_ALL[41:]
+VALUE_HELPER_NAMES = EXPECTED_ALL[35:36]
+ALIAS_NAMES = EXPECTED_ALL[36:42]
+OUTPUT_TYPE_NAMES = EXPECTED_ALL[42:]
 
 
 def test_raw_result_xor_step_slicing_and_mutation_isolation(

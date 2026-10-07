@@ -199,6 +199,17 @@ class TestSectionContent:
             assert recipe in DISCRIMINANTS, f"{recipe} is no longer a recipe"
             assert names(text, recipe), f"the guide never names {recipe} where it teaches it"
 
+    def test_teaches_one_frequency_and_names_four(self):
+        # Amplitude and phase at one frequency is the tone recipe; .four is
+        # named with the recipe that reads it back, and with why its phase is
+        # not the one to use. The recipes are checked against the live union.
+        text = section(guide.read("signals"), "One frequency")
+        for recipe in ("tone", "summary"):
+            assert recipe in DISCRIMINANTS, f"{recipe} is no longer a recipe"
+            assert names(text, recipe), f"the one-frequency section never names {recipe}"
+        assert ".four" in text
+        assert "phase_deg" in text and "sin(2*pi*f*t + phase_deg)" in text
+
     def test_teaches_the_response_budget(self):
         # The budget section names every tool that takes one, its unit and its
         # floor, each read off the code, so it can neither be gutted nor fall

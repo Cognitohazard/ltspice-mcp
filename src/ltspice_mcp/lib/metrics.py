@@ -94,6 +94,7 @@ from ltspice_mcp.lib.recipes import (
     SummaryRecipe,
     ThdRecipe,
     TimingRecipe,
+    ToneRecipe,
     TransientResponseRecipe,
     ValueRecipe,
     WaveformRecipe,
@@ -111,6 +112,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_pulse_response,
     analyze_thd,
     analyze_timing_between,
+    analyze_tone,
     compute_measurement_stats,
     compute_signal_stats,
     time_weighted_quantiles,
@@ -156,21 +158,28 @@ def parse_time(s: str | None, name: str) -> float | None:
     return v
 
 
-def parse_freq(s: str, name: str = "frequency") -> float:
+def parse_freq(s: str | float, name: str = "frequency") -> float:
     """Parse a SPICE-notation frequency into a finite positive float.
 
     Tolerates a trailing ``Hz`` unit, spaced or not: ``'159Hz'``, ``'15.9kHz'``
     and ``'159 Hz'`` are the natural ways to write a frequency. The value parser
     reads a unit written against the number as LTspice does; the strip also
     takes the spaced one.
+
+    A number is taken as given, never through SPICE text: ``spice_text``
+    rounds to ten digits, which moves a phase referred to t = 0 by up to
+    360 * f * t * 5e-10 degrees.
     """
-    cleaned = s.strip()
-    if cleaned[-2:].lower() == "hz":
-        cleaned = cleaned[:-2].strip()
-    try:
-        v = parse_spice_value(cleaned)
-    except ValueError as e:
-        raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
+    if isinstance(s, str):
+        cleaned = s.strip()
+        if cleaned[-2:].lower() == "hz":
+            cleaned = cleaned[:-2].strip()
+        try:
+            v = parse_spice_value(cleaned)
+        except ValueError as e:
+            raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
+    else:
+        v = float(s)
     if not math.isfinite(v):
         raise ResultError(f"{name} must be finite, got {s!r}")
     if v <= 0:
@@ -1780,13 +1789,37 @@ async def thd(
         window=window,
     )
     data["signal"] = recipe.signal
-    # A differential signal takes its unit from its resolved voltage trace.
+    await _label_unit(source, recipe.signal, data, state)
+    return await relay_solve_failures(source, data, state)
+
+
+async def tone(
+    source: services.AnalysisSource,
+    recipe: ToneRecipe,
+    step: int,
+    state: SessionState,
+) -> MetricValue:
+    """Amplitude and phase of one frequency over the window's whole periods."""
+    t_start, t_end = window_bounds(recipe.window)
+    axis, wave = await load_real_signal(source, recipe.signal, step, state)
+    t, y, _ = apply_window(axis, wave, t_start, t_end)
+    frequency = parse_freq(recipe.frequency_hz, "frequency_hz")
+    data = await run_metric(source, state, analyze_tone, t, y, frequency)
+    data["signal"] = recipe.signal
+    await _label_unit(source, recipe.signal, data, state)
+    return await relay_solve_failures(source, data, state)
+
+
+async def _label_unit(
+    source: services.AnalysisSource, signal: str, data: MetricValue, state: SessionState
+) -> None:
+    """The signal's native unit, which a spectral metric's amplitudes are in.
+    A differential signal takes its unit from its resolved voltage trace."""
     raw = await services.load_raw(source, state)
-    signal = services.resolve_signal(raw, recipe.signal)
-    unit = trace_unit(raw, signal.trace)
+    resolved = services.resolve_signal(raw, signal)
+    unit = trace_unit(raw, resolved.trace)
     if unit:
         data["unit"] = unit
-    return await relay_solve_failures(source, data, state)
 
 
 async def filter_metrics(
@@ -2302,6 +2335,7 @@ METRICS: dict[type[Recipe], MetricFn] = {
     PeriodicRecipe: periodic,
     TransientResponseRecipe: transient_response,
     ThdRecipe: thd,
+    ToneRecipe: tone,
     BodeFilterRecipe: bode_filter,
     BodePointRecipe: bode_point,
     BodeCrossingRecipe: bode_crossing,

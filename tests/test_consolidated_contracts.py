@@ -698,7 +698,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 120 characters so spec.allow_incomplete says it also
     # judges past runs with no number for the field, which a spec now counts
     # and holds indeterminate for instead of passing over. Measured 20,360.
-    "analyze_results": 20400,
+    # Raised by about 600 characters for the tone recipe, amplitude and phase
+    # at one frequency: its branch, a frequency_hz description that states
+    # the window rule and the phase convention (on a full listing the only
+    # place a caller reads which sine and which time zero phase_deg is
+    # measured from), and its entry on the roster. Measured 20,959.
+    "analyze_results": 21000,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -1067,7 +1072,7 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     """A host that routes on tool descriptions can only find a metric the
     description names.
 
-    ``analyze_results`` answers twenty-one different questions behind one name,
+    ``analyze_results`` answers twenty-two different questions behind one name,
     and the compact tool listing strips the per-branch schema prose, so this
     text is the only place the metric names appear. A recipe added to the union
     without joining the roster is a capability nothing can route to — which is

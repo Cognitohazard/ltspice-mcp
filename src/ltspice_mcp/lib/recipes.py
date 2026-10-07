@@ -54,6 +54,9 @@ REDUCIBLE_FIELDS: dict[str, tuple[str, ...]] = {
     # list at row-build time (tools/analyze.py _HEADLINE_LEAVES), so a reduce or
     # spec reads the same number the row shows.
     "stability": ("phase_margin_deg", "gain_margin_db", "unity_gain_hz", "dc_gain_db"),
+    # The two components reduce without the wrap at +-180 degrees that a
+    # spread of phase_deg straddling it would show.
+    "tone": ("amplitude", "phase_deg", "dc", "sin_component", "cos_component"),
     "return_loss": ("return_loss_db", "vswr", "reflection_coefficient"),
 }
 
@@ -278,7 +281,7 @@ class RecipeBase(StrictModel):
     reads is one choice for the whole call, so it lives on
     ``analyze_results``' own ``step``/``all_steps`` arguments (and on the
     attached-analysis block) rather than being restated on each of the
-    twenty-one recipes.
+    twenty-two recipes.
     """
 
     key: str = Field(min_length=1)
@@ -534,6 +537,18 @@ class ThdRecipe(ScalarRecipe):
     window: Window | None = None
 
 
+class ToneRecipe(MultiRecipe):
+    metric: Literal["tone"]
+    signal: str
+    frequency_hz: float | str = Field(
+        description=(
+            "Hz. The window is cut to the whole periods that fit from its start; "
+            "phase_deg is that of sin(2*pi*f*t), t from 0."
+        ),
+    )
+    window: Window | None = None
+
+
 class BodeFilterRecipe(MultiRecipe):
     metric: Literal["bode_filter"]
     signal: str
@@ -658,6 +673,7 @@ Recipe: TypeAlias = Annotated[
     | PeriodicRecipe
     | TransientResponseRecipe
     | ThdRecipe
+    | ToneRecipe
     | BodeFilterRecipe
     | BodePointRecipe
     | BodeCrossingRecipe
