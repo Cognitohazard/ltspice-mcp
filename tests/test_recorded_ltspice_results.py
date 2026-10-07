@@ -621,7 +621,7 @@ def test_a_failed_run_is_classified_by_its_cause(build: str, case_id: str):
 
 
 #: Decks LTspice refuses whose log gives the reason on a line of its own, with
-#: no "Error" in front. LTspice 26 words these three so.
+#: no "Error" in front on LTspice 26 and "Fatal Error:" in front on XVII.
 REASON_ON_A_BARE_LINE = {
     "log/err_no_analysis": "No analysis specified.",
     "deck/ac_and_tran": "More than one analysis specified.",
@@ -631,17 +631,14 @@ REASON_ON_A_BARE_LINE = {
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(list(REASON_ON_A_BARE_LINE))))
 def test_a_refusal_ltspice_26_states_on_a_bare_line(build: str, case_id: str):
-    """XVII prefixes each with "Fatal Error:" and it is extracted. LTspice 26
-    does not, and nothing is extracted: the caller is left with the log
-    excerpt, which does contain the line."""
-    log = rec.recorded(build, f"{case_id}.log")
-    errors = extract_log_diagnostics(log)["errors"]
+    """Each build's line is extracted as the run's error, so the caller gets
+    the reason rather than only the log excerpt that holds it."""
+    errors = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))["errors"]
+    (error,) = errors
     if rec.generation(build) == "xvii":
-        assert len(errors) == 1
-        assert errors[0].startswith("Fatal Error:")
+        assert error.startswith("Fatal Error:")
     else:
-        assert REASON_ON_A_BARE_LINE[case_id] in read_spice_text(log).replace("\r", "").split("\n")
-        assert errors == []
+        assert error == REASON_ON_A_BARE_LINE[case_id]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

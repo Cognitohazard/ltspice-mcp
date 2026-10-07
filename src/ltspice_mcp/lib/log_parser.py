@@ -140,7 +140,14 @@ _BARE_ERROR_PHRASES = [
     "time step too small",
     "no convergence",
     "questionable use of curly braces",
+    # LTspice 26 refuses a deck with these on a line of their own, where XVII
+    # writes "Fatal Error:" in front of them (recorded on both).
+    "no analysis specified.",
+    "more than one analysis specified.",
 ]
+# LTspice 26 refuses a component's value on a bare line naming the component
+# ("R1: Resistance must not be zero."); XVII puts "Fatal Error:" in front.
+_RE_COMPONENT_REFUSAL = re.compile(r"^[A-Za-z][\w.:§]*: [A-Za-z][\w ]* must not be zero\.$")
 # LTspice names an unsolvable matrix two ways that the bare phrase above
 # cannot reach: a source/inductor loop reports "…matrix is singular" and
 # paralleled ideal sources report an "over-defined circuit matrix", both
@@ -798,7 +805,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             errors.append(stripped)
             i += 1
             continue
-        if _RE_UNSOLVABLE_MATRIX.search(stripped):
+        if _RE_UNSOLVABLE_MATRIX.search(stripped) or _RE_COMPONENT_REFUSAL.match(stripped):
             errors.append(stripped)
             i += 1
             continue
