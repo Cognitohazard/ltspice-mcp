@@ -77,6 +77,7 @@ from ltspice_mcp.lib.schematic_ops import (
     build_on_wire_predicate,
     collapse_result_warnings,
     collect_component_geometry,
+    data_flag_records,
     edit_guard,
     files_written_beside,
     get_asc_editor,
@@ -1639,7 +1640,7 @@ def _commit_codec(loaded_as: str, sheet_was_ascii: bool, text: str) -> str:
 
 
 def _render_editor_text(editor: AscEditor) -> str:
-    """Render this sheet without losing ports or saving loaded child sheets."""
+    """Render this sheet without losing ports or data labels, or saving loaded child sheets."""
     _refuse_pending_child_edits(editor)
     label_counts = Counter(id(label) for label in editor.labels)
     port_directions: dict[int, str] = {}
@@ -1651,15 +1652,15 @@ def _render_editor_text(editor: AscEditor) -> str:
 
     buf = io.StringIO()
     editor.save_netlist(buf)
-    rendered = buf.getvalue()
+    rendered = buf.getvalue().splitlines(keepends=True)
     if not port_directions:
-        return rendered
+        return "".join(_with_data_flags(rendered, data_flag_records(editor)))
 
     # spicelib 1.5.1 emits FLAGs in label order but omits their IOPIN records.
     # Match occurrences, since different label objects may have identical text.
     labels = iter(editor.labels)
     lines: list[str] = []
-    for line in rendered.splitlines(keepends=True):
+    for line in rendered:
         lines.append(line)
         if not line.startswith("FLAG "):
             continue
@@ -1674,7 +1675,28 @@ def _render_editor_text(editor: AscEditor) -> str:
             lines.append(f"IOPIN {label.coord.X} {label.coord.Y} {direction}{ending}")
     if next(labels, None) is not None:
         raise NetlistError("Cannot preserve hierarchical ports: serialized labels are missing.")
-    return "".join(lines)
+    return "".join(_with_data_flags(lines, data_flag_records(editor)))
+
+
+# What spicelib writes ahead of a sheet's first symbol, text or drawing: the
+# header, then the wires, then each label with its port record.
+_AHEAD_OF_SYMBOLS = ("Version ", "SHEET ", "WIRE ", "FLAG ", "IOPIN ")
+
+
+def _with_data_flags(lines: list[str], records: tuple[str, ...]) -> list[str]:
+    """Put back the sheet's DATAFLAG records, which spicelib 1.5.1 drops on save.
+
+    Each is a standalone point record, so they go together after the labels
+    and their ports and ahead of the first symbol: never between a FLAG and
+    its IOPIN, and never inside a symbol's block of WINDOW and SYMATTR lines.
+    """
+    if not records:
+        return lines
+    at = 0
+    while at < len(lines) and lines[at].startswith(_AHEAD_OF_SYMBOLS):
+        at += 1
+    ending = lines[0][len(lines[0].rstrip("\r\n")) :] or "\n"
+    return [*lines[:at], *(f"{record}{ending}" for record in records), *lines[at:]]
 
 
 def _refuse_pending_child_edits(editor: AscEditor) -> None:

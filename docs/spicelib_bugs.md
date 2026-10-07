@@ -2434,3 +2434,227 @@ def test_log_with_a_byte_no_listed_codec_defines(tmp_path):
 `tests/test_recorded_ltspice_results.py::test_a_run_whose_title_holds_a_byte_cp1252_lacks_is_read`
 reads the recorded log through `parse_measurements`. Once upstream reads
 such a log, the last candidate in `make_log_reader` goes.
+
+---
+
+## Bug 25 — `AscEditor` drops a sheet's `DATAFLAG` records on save
+
+**Status:** draft for an upstream spicelib pull request. Found by reading the
+source; reproduced 2026-10-07 with a hand-written sheet (see *Reproduction*
+for why it is not a recording).
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist` ~line 272 and `AscEditor.save_netlist` ~line 81).
+**Our workaround:** `lib/schematic_ops.py::make_editor` reads the sheet's
+DATAFLAG lines beside spicelib's own read (`data_flag_records`), and
+`tools/schematic_edit.py::_render_editor_text` writes them back
+(`_with_data_flags`).
+
+### Summary
+
+A `DATAFLAG` record is a data label: an expression LTspice shows at a point on
+the sheet. spicelib's own comment calls it "the placeholder to show simulation
+information", and KiCad's LTspice importer reads it as
+`DATAFLAG <x> <y> <expression>`. `reset_netlist` skips the line and keeps
+nothing of it, and `save_netlist` therefore has no `DATAFLAG` to write, so
+loading a sheet and saving it, with or without a change, removes every data
+label on it. The 1.3.2 changelog lists "AscEditor: Adding support to
+DATAFLAG"; in 1.5.1 that support is the skip, so the line no longer stops the
+read the way an unmodelled one does (Bug 26).
+
+### Affected code
+
+`spicelib/editor/asc_editor.py`, `reset_netlist` (~line 272):
+
+```python
+elif line.startswith("DATAFLAG"):
+    pass  # DATAFLAG is the placeholder to show simulation information. It is ignored by AscEditor
+```
+
+`save_netlist` writes `Version`, `SHEET`, the wires, the labels, each symbol
+with its `WINDOW` and `SYMATTR` lines, the texts and the drawings, and nothing
+else.
+
+### Reproduction
+
+```python
+import io
+from pathlib import Path
+from spicelib.editor.asc_editor import AscEditor
+
+sheet = Path("dataflag.asc")
+sheet.write_bytes(
+    b"Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 IN\n"
+    b'DATAFLAG 80 0 ""\nDATAFLAG 160 0 "$*2"\nTEXT 0 64 Left 2 !.op\n'
+)
+out = io.StringIO()
+AscEditor(sheet).save_netlist(out)
+assert "DATAFLAG" not in out.getvalue()   # both data labels are gone
+```
+
+Through our server before the workaround, an `edit_schematic` commit that
+added one net label to such a sheet reported a complete, committed edit, and
+the file it wrote held no `DATAFLAG` line.
+
+The sheet is hand-written. The recorder cannot record what LTspice writes for a
+data label, because LTspice saves a sheet only from its window
+(`schematic-save-encoding` in `tests/fixtures/ltspice_recorded/inputs/cases.toml`).
+What it can record, exporting such a sheet with `-netlist` to show LTspice
+reads it, needs an LTspice build, and none was available.
+
+### Impact
+
+- Any tool that edits a sheet through `AscEditor` and saves it deletes the
+  sheet's data labels and reports nothing. The circuit is unchanged, so
+  neither a netlist comparison nor a simulation shows the loss; the user finds
+  the labels gone the next time the sheet is open in LTspice.
+
+### Proposed fix
+
+Keep each `DATAFLAG` as a positioned text (coordinate and expression, the
+expression verbatim) in a list of its own, and write those records in
+`save_netlist` after the labels and their `IOPIN` records. A data label is
+placed by its coordinate alone, so it needs no association with another
+record.
+
+### Suggested upstream test
+
+```python
+def test_data_flags_survive_a_save(tmp_path):
+    p = tmp_path / "flags.asc"
+    p.write_text('Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nDATAFLAG 80 0 ""\n')
+    out = io.StringIO()
+    AscEditor(p).save_netlist(out)
+    assert 'DATAFLAG 80 0 ""\n' in out.getvalue()
+```
+
+### Cross-reference
+
+`tests/test_edit_schematic.py::TestDataFlagPreservation` edits a sheet holding
+two data labels and a hierarchical port and reads the file back: both labels,
+in their order, after the labels and their ports. A second sheet is cp1252
+with a micro sign in its label, which comes back in the sheet's own codec. The
+workaround places the records together ahead of the first symbol, which keeps
+them out of a symbol's block of `WINDOW` and `SYMATTR` lines and from between a
+`FLAG` and its `IOPIN`; where LTspice itself puts them in a sheet it saves is
+not recorded. `TestPathsThatLeaveTheSheetAsItIs` pins that a read, a dry run
+and a batch of plot panes alone leave such a sheet's bytes as they were. Once
+upstream keeps the records, `data_flag_records`, `_read_data_flags` and
+`_with_data_flags` go.
+
+---
+
+## Bug 26 — a line `AscEditor` does not model makes the whole sheet unreadable (limitation)
+
+**Status:** known limitation; draft for an upstream enhancement. Found by
+reading the source; reproduced 2026-10-07 with hand-written sheets.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist` ~line 274).
+**Our workaround:** `lib/schematic_ops.py::make_editor` turns the
+`NotImplementedError` into a `NetlistError` (`_unreadable_record`) naming the
+sheet that holds the line, the target or a sheet it loads, with the line's
+number and text. It finds that sheet in the traceback: the innermost
+`reset_netlist` frame is the read that refused, its editor names the file and
+codec, and its `line` the line.
+
+### Summary
+
+`reset_netlist` dispatches each line on the keyword it starts with and ends in
+`raise NotImplementedError`. A record it does not model therefore makes the
+whole sheet unreadable, and so does any line that does not start with a known
+keyword in its first column: an empty line, or an indented one. The message
+quotes the line but names neither the file nor the line number, and since the
+sheet of a block symbol is read while its parent loads, the line may be in a
+different file from the one being opened.
+
+The record most likely to reach this in a sheet LTspice wrote is a bus tap.
+KiCad's LTspice importer reads every keyword spicelib reads and one more,
+`BUSTAP <x1> <y1> <x2> <y2>`. That is another reader's view, not a recording:
+which records LTspice writes, and whether it reads the sheets below, is not
+recorded here, because no LTspice build was available.
+
+### Affected code
+
+`spicelib/editor/asc_editor.py`, `reset_netlist` (~line 274):
+
+```python
+elif line.startswith("DATAFLAG"):
+    pass  # DATAFLAG is the placeholder to show simulation information. It is ignored by AscEditor
+else:
+    raise NotImplementedError("Primitive not supported for ASC file\n"
+                              f'"{line}"')
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib.editor.asc_editor import AscEditor
+
+Path("bustap.asc").write_bytes(
+    b"Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 D[0:3]\n"
+    b"BUSTAP 80 0 80 16\n"
+)
+AscEditor("bustap.asc")
+# NotImplementedError: Primitive not supported for ASC file
+# "BUSTAP 80 0 80 16
+# "
+
+Path("blank_line.asc").write_bytes(b"Version 4\nSHEET 1 880 680\n\nWIRE 0 0 160 0\n")
+AscEditor("blank_line.asc")    # the same error, for the line "\n"
+```
+
+Through our server before the workaround, `edit_schematic` on the first sheet
+failed as `Internal error in edit_schematic: NotImplementedError: ...`, and
+`inspect`'s `components` and `net` queries on it answered `internal_error`.
+
+### Impact
+
+- One record spicelib does not model makes a sheet impossible to open, read or
+  edit through `AscEditor`, and with it every sheet that uses that sheet as a
+  block.
+- The exception type says "not implemented" and the message gives no file or
+  line, so a caller cannot tell an unreadable sheet from a defect, or find the
+  line in a hierarchy.
+- Downstream, `verify_circuit` reads a sheet with its own parser
+  (`lib/schematic_scene.py::_parse_asc`), which skips a keyword it does not
+  draw, so it draws and checks such a sheet without that record while the
+  editing tools refuse it.
+
+### Proposed fix
+
+Two parts. Raise a parse error that names the file and the line number (a
+`ValueError` subclass, say) instead of `NotImplementedError`. And keep a
+record the editor does not model verbatim, in its place among the records
+around it, writing it back on save, so a sheet holding a bus tap can be opened
+and edited without losing it.
+
+### Suggested upstream test
+
+```python
+def test_an_unmodelled_record_is_kept(tmp_path):
+    p = tmp_path / "bus.asc"
+    p.write_text("Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nBUSTAP 80 0 80 16\n")
+    out = io.StringIO()
+    AscEditor(p).save_netlist(out)
+    assert "BUSTAP 80 0 80 16\n" in out.getvalue()
+
+def test_an_unreadable_line_names_its_file_and_line(tmp_path):
+    p = tmp_path / "bad.asc"
+    p.write_text("Version 4\nSHEET 1 880 680\nNOSUCHRECORD 1 2\n")
+    with pytest.raises(ValueError, match=r"bad\.asc.*line 3"):
+        AscEditor(p)
+```
+
+### Cross-reference
+
+`tests/test_edit_schematic.py::TestRecordTheEditorCannotRead`: an edit of a
+sheet holding a bus tap, or an empty line, is refused with a `NetlistError`
+naming the file, line 5 and the line, and the sheet is left as it was;
+`inspect`'s `components` and `net` queries answer with the same refusal
+instead of `internal_error`; and a bus tap in a block's sheet is named in that
+sheet, not in the parent being opened. The sheets are hand-written. The
+recording this needs is an input sheet holding a bus tap, exported with
+`-netlist` on each build, which would show whether LTspice reads it. Once
+upstream opens such a sheet, `_unreadable_record` goes, and an edit of a sheet
+holding a bus tap then needs the check Bug 25 needed: a commit must write the
+record back, not drop it.

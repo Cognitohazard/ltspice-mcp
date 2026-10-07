@@ -25,6 +25,16 @@ tool-surface changes.
   LTspice launch a recoverable experiment resumes with, which keeps its
   command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
+- An `edit_schematic` commit removed every data label (`DATAFLAG` record) from
+  the sheet it edited and reported a complete edit: the schematic editor
+  underneath skips them when it reads a sheet and never writes them. They are
+  now written back, in their order, after the sheet's labels and ports.
+- A sheet holding a line the schematic editor does not read, such as a bus tap
+  (`BUSTAP`) or an empty line, failed `edit_schematic` as an internal error and
+  `inspect`'s schematic queries as `internal_error`, naming neither the file
+  nor the line. Both now refuse it with the file, the line number and the
+  line, also when the line is in a sheet the target loads as a block. Such a
+  sheet still cannot be opened for editing.
 
 The entries in this group were found by holding the server against files
 LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
