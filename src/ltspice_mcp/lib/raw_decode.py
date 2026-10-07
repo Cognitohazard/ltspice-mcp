@@ -30,6 +30,7 @@ from ltspice_mcp.lib.raw_header import (
     RawLimitError,
     RawLimits,
     RawPlotHeader,
+    leading_parameters,
     preflight_raw,
 )
 from ltspice_mcp.lib.store import parser_file_in
@@ -374,6 +375,17 @@ def _step_facts(
     result["step_status"] = "unresolved"
     result["step_ranges"] = None
     plot_name = header.plot_name.lower()
+    parameters = leading_parameters(header)
+    if header.dialect == "ltspice" and plot_name == "operating point" and parameters:
+        # A stepped .op stores one point a step, the stepped parameters first.
+        # Its log names no step values, so the raw's own are the record.
+        result["step_status"] = "matched"
+        result["step_ranges"] = [
+            {"step_index": index, "offset": index, "length": 1, "log_row": None}
+            for index in range(header.point_count)
+        ]
+        result["step_parameters"] = parameters
+        return result
     if not has_axis or plot_name not in _SAMPLED_LT_PLOTS:
         if header.point_count == 1 and log["status"] == "parsed" and len(log["rows"]) > 1:
             result["step_status"] = "mismatch"

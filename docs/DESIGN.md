@@ -162,7 +162,8 @@ Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,
 `set_component_value`, `set_component_attribute`, `wire_pins`,
 `add_net_label` with `pin="M3.S"`, `remove_net_label`, `remove_wire`,
-`add_directive`, `remove_directive`). The ops work against pin
+`add_directive`, `remove_directive`, and `set_plot_panes`, which writes the
+waveform panes LTspice opens for the sheet to the `.plt` beside it). The ops work against pin
 coordinates, bounding boxes, and named-net topology: the `wire_pins` op
 refuses diagonal wires,
 pin collisions, wire-junction overlaps, named-net shorts, and a waypoint
@@ -459,10 +460,13 @@ so zoom / pan / hover does nothing for it.
   the LTspice window that is already running, through the bridge LTspice
   ships (`OpenWindows.show_results`). A results file opened there shows an
   empty plot unless a plot settings file of the same name sits beside it, so
-  the server writes one naming the panels' traces (`lib/plot_settings.py`):
-  the traces only, which is enough for LTspice to draw them and scale the
-  axes itself. A settings file a person saved from LTspice is left alone, and
-  is told from one written here by what it holds. LTspice is not started for
+  the server writes one naming the panels' traces, with the module that
+  writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`). That covers
+  the two analyses whose section is recorded, a transient and an AC run; any
+  other run opens with an empty plot and the reply says why. A settings file
+  a person saved from LTspice is left alone: writing its panes back never
+  gives its bytes, which is how it is told from one written here. LTspice is
+  not started for
   this; with no window open the settings are still written, so the file opens
   with its traces when the person opens it by hand. It is the one place the
   server opens anything in a window, and it does so only when asked, which is

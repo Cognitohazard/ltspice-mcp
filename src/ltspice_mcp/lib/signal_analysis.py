@@ -13,6 +13,8 @@ rejects AC analysis before calling in.
 
 from __future__ import annotations
 
+import cmath
+import math
 from collections.abc import Mapping, Sequence
 from typing import Literal, NotRequired, TypedDict
 
@@ -1289,6 +1291,43 @@ def _detect_fundamental(t: np.ndarray, y: np.ndarray) -> float | None:
     return float(freqs[k])
 
 
+def _whole_periods(cycles: float) -> int:
+    """The whole periods in a window spanning ``cycles`` of them. The small
+    allowance keeps a window that is an exact number of periods, give or take
+    rounding, at that number rather than one fewer."""
+    return int(np.floor(cycles + 1e-9))
+
+
+def _resample_uniform(
+    t: np.ndarray, y: np.ndarray, t_end: float, *, max_fft: int, n_min: int = 0
+) -> tuple[np.ndarray, list[str]]:
+    """``y`` on a uniform grid over ``[t[0], t_end)``, by linear interpolation.
+
+    This is how the spectral metrics weight SPICE's non-uniform timestep: each
+    grid point reads the straight line between the two simulator samples around
+    it, so a cluster of samples packed around an edge counts for the time it
+    covers, not for how many samples it holds. The grid has at least as many
+    points as the samples and at least ``n_min``, rounded up to a power of two
+    and capped at ``max_fft``.
+
+    Returns ``(yu, warnings)``. np.interp is plain linear interpolation with
+    no anti-alias filter. It only adds points (no folding) while up-sampling,
+    but if the cap forced the grid below the window's own sample count it is
+    down-sampling, and content above the grid's Nyquist folds into low bins; the
+    warning says so rather than leaving a silently aliased number.
+    """
+    n = min(_next_pow2(max(t.size, n_min)), max_fft)
+    tu = np.linspace(float(t[0]), t_end, n, endpoint=False)
+    warnings: list[str] = []
+    if n < t.size:
+        warnings.append(
+            f"Resampled to {n} points from {t.size} samples (FFT length cap "
+            f"{max_fft}); content above the resample Nyquist may alias into the "
+            "spectrum. Raise max_fft or narrow the window."
+        )
+    return np.interp(tu, t, y), warnings
+
+
 def analyze_thd(
     t: np.ndarray,
     y: np.ndarray,
@@ -1351,23 +1390,25 @@ def analyze_thd(
 
     n_cyc = 0  # set in the coherent branch; the coherence guard only reads it there
     if window == "coherent":
-        n_cyc = int(np.floor(cycles_avail + 1e-9))
+        n_cyc = _whole_periods(cycles_avail)
         if n_cyc < 1:
             raise ValueError(
                 f"Window spans {cycles_avail:.3g} fundamental cycles (< 1); cannot "
                 "sample coherently. Widen [t_start, t_end] or use window='hann'."
             )
         t_end = float(t[0]) + n_cyc / f0
-        n_fft = min(_next_pow2(max(t.size, 4 * n_harmonics * n_cyc + 1)), max_fft)
-        tu = np.linspace(float(t[0]), t_end, n_fft, endpoint=False)
+        yu, resample_warnings = _resample_uniform(
+            t, y, t_end, max_fft=max_fft, n_min=4 * n_harmonics * n_cyc + 1
+        )
+        n_fft = yu.size
         win = np.ones(n_fft)
         coherent = True
         n_cycles = float(n_cyc)
         window_label = "coherent (rectangular)"
         fs = n_fft / (n_cyc / f0)
     else:
-        n_fft = min(_next_pow2(t.size), max_fft)
-        tu = np.linspace(float(t[0]), float(t[-1]), n_fft, endpoint=False)
+        yu, resample_warnings = _resample_uniform(t, y, float(t[-1]), max_fft=max_fft)
+        n_fft = yu.size
         win = np.hanning(n_fft)
         coherent = False
         n_cycles = cycles_avail
@@ -1377,20 +1418,8 @@ def analyze_thd(
             "Hann window: harmonics may straddle bins (spectral leakage), so THD "
             "is approximate. Use window='coherent' for an exact result."
         )
+    warnings.extend(resample_warnings)
 
-    # np.interp is plain linear interpolation with no anti-alias filter. It only
-    # ADDS points (no folding) while up-sampling, but if the FFT-length cap
-    # forced n_fft below the window's own sample count we are DOWN-sampling, and
-    # content above the new Nyquist folds into low bins and corrupts THD/THD+N.
-    # Surface that rather than return a silently-aliased number.
-    if n_fft < t.size:
-        warnings.append(
-            f"Resampled to {n_fft} points from {t.size} samples (FFT length cap "
-            f"{max_fft}); content above the resample Nyquist may alias into the "
-            "spectrum. Raise max_fft or narrow the window."
-        )
-
-    yu = np.interp(tu, t, y)
     yu = yu - yu.mean()
     # Scale to amplitude units (2/sum(win) = one-sided amplitude with window
     # coherent-gain correction; for the rectangular window this is 2/N). Raw
@@ -1510,6 +1539,134 @@ def analyze_thd(
         "n_cycles": n_cycles,
         "n_fft": n_fft,
         "fs_hz": float(fs),
+        "warnings": warnings,
+    }
+
+
+class ToneOutput(TypedDict):
+    """Return shape of :func:`analyze_tone`.
+
+    The window reads as ``dc + amplitude * sin(2*pi*frequency_hz*t + phase)``
+    plus whatever is not at ``frequency_hz``, with ``t`` the run's own time
+    axis: zero at the start of the simulation, not of the window, so the phase
+    does not depend on where the window starts and two signals' phases
+    subtract. ``sin_component`` and ``cos_component`` are the coefficients of
+    ``sin(2*pi*frequency_hz*t)`` and ``cos(2*pi*frequency_hz*t)`` in that sum.
+
+    ``signal`` and ``unit`` are added by the tool layer, as on :class:`ThdOutput`.
+    """
+
+    signal: NotRequired[str]
+    unit: NotRequired[str]
+    frequency_hz: float
+    # Peak amplitude, in the signal's own unit.
+    amplitude: float
+    # Degrees in (-180, 180]: atan2(cos_component, sin_component).
+    phase_deg: float
+    sin_component: float
+    cos_component: float
+    # Mean over the analyzed window.
+    dc: float
+    # The analyzed window: the whole periods that fit from the first sample.
+    t_start: float
+    t_end: float
+    n_cycles: int
+    warnings: list[str]
+
+
+#: The fewest grid points per period the tone projection resamples onto. On a
+#: grid of N points over n whole periods, harmonic h of the tone lands on bin
+#: h*n, which folds onto the measured bin n only if (h-1)*n or (h+1)*n is a
+#: multiple of N; with N at least 64*n, no harmonic below the 63rd can.
+_TONE_GRID_POINTS_PER_PERIOD = 64
+
+#: Where a sampling step is wide enough to name. The samples are joined by
+#: straight lines, and a sinusoid sampled every h and joined that way keeps
+#: np.sinc(f*h)**2 of its amplitude: 1.3% low when every step is 1/16 period.
+_TONE_WIDEST_STEP_PERIODS = 1 / 16
+
+
+def analyze_tone(
+    t: np.ndarray,
+    y: np.ndarray,
+    frequency: float,
+    *,
+    max_fft: int = 1 << 18,
+) -> ToneOutput:
+    """Amplitude and phase of one frequency in a transient signal.
+
+    The window is trimmed to the whole periods of ``frequency`` that fit from
+    its first sample, and the samples are resampled onto a uniform grid by
+    linear interpolation, both exactly as :func:`analyze_thd`'s coherent path
+    does; so a non-uniform SPICE timestep is weighted by time, and the
+    projection onto ``frequency`` is orthogonal to DC and to every harmonic of
+    it. See :class:`ToneOutput` for the phase convention.
+
+    ``frequency`` must be the signal's own frequency, given rather than found:
+    the phase is referred to time zero, so an error of df in the frequency
+    moves it by 360*df*t_start degrees.
+    """
+    if t.shape != y.shape:
+        raise ValueError(f"t/y length mismatch: {t.size} vs {y.size}")
+    if t.size < 3:
+        raise ValueError(f"Need at least 3 samples; got {t.size}")
+    if not math.isfinite(frequency) or frequency <= 0:
+        raise ValueError(f"frequency must be finite and > 0; got {frequency}")
+    t_start = float(t[0])
+    cycles = frequency * (float(t[-1]) - t_start)
+    n_cyc = _whole_periods(cycles)
+    if n_cyc < 1:
+        raise ValueError(
+            f"The window spans {cycles:.3g} periods of {frequency:g} Hz; "
+            "a whole-period measurement needs at least one. Widen the window or "
+            "start it earlier."
+        )
+    t_end = t_start + n_cyc / frequency
+    yu, warnings = _resample_uniform(
+        t, y, t_end, max_fft=max_fft, n_min=_TONE_GRID_POINTS_PER_PERIOD * n_cyc + 1
+    )
+    n = yu.size
+    if n_cyc >= n // 2:
+        raise ValueError(
+            f"{n_cyc} periods of {frequency:g} Hz do not fit on a {n}-point resample "
+            "grid (two points a period at the least); narrow the window or raise max_fft."
+        )
+
+    # The grid runs exactly n_cyc turns of the tone, so bin n_cyc is the tone and
+    # bin 0 the mean; scaled to amplitude, yu reads dc + Re(c * e^{jw(t - t_start)}).
+    spectrum = np.fft.rfft(yu)
+    c = 2.0 * complex(spectrum[n_cyc]) / n
+    # Refer it to t = 0. The rotation is the fractional turn at t_start, taken
+    # before the multiply by 2*pi so a window many periods in loses no digits.
+    c *= cmath.exp(-2j * math.pi * math.fmod(frequency * t_start, 1.0))
+    cos_component = c.real
+    sin_component = -c.imag
+    phase_deg = math.degrees(math.atan2(cos_component, sin_component))
+    if phase_deg == -180.0:  # atan2 gives -pi for a negative zero cosine part
+        phase_deg = 180.0
+
+    # Joining samples by straight lines reads a sinusoid low across a wide
+    # step. The step that straddles t_end is part of the window too.
+    widest = float(np.max(np.diff(t[: np.searchsorted(t, t_end) + 1]))) * frequency
+    if widest > _TONE_WIDEST_STEP_PERIODS:
+        loss_pct = (1.0 - float(np.sinc(min(widest, 1.0))) ** 2) * 100.0
+        warnings.append(
+            f"The widest sampling step in the window is {widest:.3g} of a period. "
+            "Samples are joined by straight lines, which read a sinusoid's "
+            f"amplitude low across steps that wide ({loss_pct:.2g}% low were every "
+            "step that wide); a smaller .tran maximum timestep removes it."
+        )
+
+    return {
+        "frequency_hz": float(frequency),
+        "amplitude": abs(c),
+        "phase_deg": phase_deg,
+        "sin_component": sin_component,
+        "cos_component": cos_component,
+        "dc": float(spectrum[0].real) / n,
+        "t_start": t_start,
+        "t_end": t_end,
+        "n_cycles": n_cyc,
         "warnings": warnings,
     }
 

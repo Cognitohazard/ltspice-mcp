@@ -440,7 +440,9 @@ Everything is under `tests/fixtures/ltspice_recorded/`.
   small, and `inputs/cases.toml`, which is the inventory. Each
   `[behaviour.<key>]` table names a behaviour, the code that models it, and
   the inputs that record it. A sheet is exported with `-netlist`; anything
-  else is run with `-Run -b`. A behaviour with no input says why:
+  else is run with `-Run -b`. A `plot` case runs a sheet in LTspice's window
+  instead, the way the person it is handed to does (*Plot settings* below). A
+  behaviour with no input says why:
   `evidence` when the manifest records it some other way, `unrecordable` when
   nothing can (LTspice saves a sheet only from its window, for one).
 - `ltspice26/` and `ltspice17/` hold what each build wrote, one file per
@@ -461,7 +463,8 @@ These run everywhere, with no LTspice:
 |-|-|
 |`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, and how an export is spelled and encoded|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
-|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
 |`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
 
 They go through the code a live result goes through: the contained decoder,
@@ -473,8 +476,8 @@ A difference between the server and a recording is a finding. Fix the server
 if the fix is small, with the recording as the regression test, which must
 fail before the fix. Otherwise pin what LTspice does and what the server does
 side by side in the test, under a name that says so
-(`READ_BY_LTSPICE_ONLY`, `NOT_REFUSED_YET`), so the gap is written down where
-the next person will find it.
+(`READ_AS_CP1252_BY_THE_SERVER_ONLY` in `test_recorded_ltspice_decks.py`), so
+the gap is written down where the next person will find it.
 
 ### Recording again
 
@@ -527,6 +530,43 @@ an empty one behaves as on first launch, and XVII then runs its updater);
 `-ascii` is ignored when a settings file is also named, and when the deck's
 own file name contains "ascii".
 
+### Plot settings
+
+LTspice writes a plot settings file (`.plt`) only from its waveform window,
+so a `plot` case drives the window (`ltspice_recorder.drive_plot`). It runs
+an RC sheet with `-Run`, as a person opening it does, and finds the waveform
+window of the sheet's raw file. Its `steps` are sent as the window's own menu
+commands, each by the id the build's menu resource gives its label (Add trace,
+Add Plot Pane Below Active Pane), read from the executable rather than from
+the running window. A trace is typed into the Add Traces dialog. The case ends
+with the File menu's Save Plot Settings, which writes `<sheet>.plt`. A case
+with a `plot` input puts that file beside the sheet first and saves straight
+away, so what the build writes is what it read. Commands go to the waveform
+window's own frame: after a run the schematic window can be the active one,
+and its Save saves the sheet. A dialog the case did not open is a box the
+build stopped on and is recorded as one, with no `.plt` kept. A window that
+does none of this in the timeout fails the recording.
+
+The committed plot cases were recorded under Wine 11, on the same executables
+as the rest of the recording (the digests match the manifest's), and each
+entry says so in `host`. A recording made on Windows has no `host`, so
+recording them again there with
+`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`
+replaces them. A partial recording like that keeps the library facts the rest
+of the recording was made with, and says so when the machine's own differ: a
+Wine prefix has the library the installer unpacked, not the one the committed
+manifest describes. Every other committed case was recorded again under Wine
+(`--check`) to see what the host changes. On LTspice 26 every file came out
+as committed but those of the two cases that run on the recording user's own
+settings, which differ by design. On XVII each log ended without the blank
+line that follows the matrix compiler report. Neither touches a plot case,
+whose recording is the build's own serialisation of the file. Under Wine a
+desktop of the recorder's own is made but the windows on it cannot be listed,
+so the recorder launches on Wine's display instead and looks for a box, or the
+waveform window, among the windows of the process it started there. That is
+how the box XVII stops on for the two sheets with a byte order mark is
+recorded under Wine as it is on Windows.
+
 ### An open window and the bridge
 
 `edit_schematic` keeps a sheet that is open in an LTspice window in step with
@@ -566,17 +606,18 @@ documents themselves are the vendor's and are not recorded. The opt-in tier
 checks that the documents read from the install are the ones LTspice's own
 server lists.
 
-One thing here is observed and not recorded: that LTspice draws the traces
-named in a plot settings file beside a results file it opens
-(`lib/plot_settings.py`, behind `plot_waveform(in_ltspice=true)`). A window
-does not report what it draws, so it was looked at, by capturing the window on
-its hidden desktop: a file holding only the traces is enough, a section named
-for another analysis draws nothing, and a results file that is already open
-keeps the traces it had. `cases.toml` lists it as unrecordable and says what is
-recorded around it: the shape of the settings files LTspice itself ships, and
-that the call the server uses opens a results file and leaves it in front. If
-that needs checking again, capture the window; `PrintWindow` works on a window
-of another desktop when the capturing process is started on that desktop.
+One thing here is observed and not recorded: that LTspice loads the plot
+settings file beside a results file it is asked to open on its own, as it does
+when a sheet runs, which is what `plot_waveform(in_ltspice=true)` relies on. A
+window does not report what it draws, so it was looked at, by capturing the
+window on its hidden desktop: the traces the file names are drawn, and a
+results file that is already open keeps the traces it had. `cases.toml` lists
+it as unrecordable (`plot-settings-on-open`) and says what is recorded around
+it: how each build reads a file written here when a sheet runs with it beside
+it (*Plot settings*, above), and that the call the server uses opens a results
+file and leaves it in front. If that needs checking again, capture the window;
+`PrintWindow` works on a window of another desktop when the capturing process
+is started on that desktop.
 
 A second is behind a paragraph of the guide and no code: that LTspice ties a
 waveform pane to a sheet, so that clicking a net plots it, only for a run made

@@ -76,6 +76,7 @@ from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
     JOBS_PAGE_LIMIT,
     OBSERVATION_SCHEMA,
+    RECEIPT_DEFAULT_ROUTE,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
     RUNS_PAGE_SCHEMA,
@@ -83,7 +84,6 @@ from ltspice_mcp.tools.receipts import (
     ReceiptBuilt,
     ReceiptSnapshot,
     finalize_receipt,
-    jobs_rows,
     negotiate_receipt,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
@@ -639,6 +639,7 @@ _BUDGET_NOTES = response_budget.Notes(
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on with next_cursor."
     ),
+    default_route=RECEIPT_DEFAULT_ROUTE,
 )
 
 
@@ -648,13 +649,7 @@ async def _negotiate_jobs(
     page_limit: int,
 ) -> _JobsBuilt:
     """Render this jobs response at the mildest ladder rung that fits ``budget``."""
-    return await negotiate_receipt(
-        budget,
-        build,
-        page_limit,
-        rows=jobs_rows,
-        notes=_BUDGET_NOTES,
-    )
+    return await negotiate_receipt(budget, build, page_limit, notes=_BUDGET_NOTES)
 
 
 def _without_control_tokens(value: Any) -> Any:

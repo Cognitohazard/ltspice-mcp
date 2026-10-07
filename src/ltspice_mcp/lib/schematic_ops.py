@@ -7,11 +7,14 @@ enforces and a finding the checker reports cannot drift apart.
 
 What lives here:
 
-- the typed op union (``OpAddComponent`` … ``OpRemoveDirective``), the in-place
+- the typed op union (``OpAddComponent`` … ``OpSetPlotPanes``), the in-place
   applier ``apply_op_inplace``, the facts its results report
   (``OP_RESULT_FACTS``), and the batch runner ``run_op_batch``;
+- ``SheetPlotSettings``, the plot settings file beside a sheet as one batch
+  changes it: the one op that does not edit the sheet itself writes there;
 - ``edit_guard``, which serializes one file's mutation in-process and across
-  parallel server sessions, and the cached-editor accessors it wraps;
+  parallel server sessions (with the files beside it a batch writes,
+  ``files_written_beside``), and the cached-editor accessors it wraps;
 - the placement, routing and net-partition geometry (``placed_geometry``,
   ``resolve_pin``, ``plan_connect_route``, ``net_partition``, ``trace_nets``),
   which reads each symbol once per request through ``symbol_info_for``;
@@ -31,9 +34,10 @@ import math
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
 from pydantic import Field
@@ -47,6 +51,7 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
+from spicelib.utils.file_search import search_file_in_containers
 
 # The concrete class to instantiate for a from-scratch .asc component.
 # spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
@@ -67,9 +72,23 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
+from ltspice_mcp.lib.plot_settings import (
+    SECTION_NAMES,
+    PlotAnalysis,
+    PlotPane,
+    PlotSettings,
+    XScale,
+    YScale,
+    plot_settings_path,
+    read_plot_settings,
+    scale_names,
+    scales_of,
+    with_panes,
+    write_plot_settings,
+)
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
@@ -191,7 +210,7 @@ def _get_edit_lock(path: Path) -> asyncio.Lock:
 
 
 @asynccontextmanager
-async def edit_guard(path: Path) -> AsyncIterator[None]:
+async def edit_guard(path: Path, *beside: Path) -> AsyncIterator[None]:
     """Serialize a mutation of one circuit file, in-process and cross-process.
 
     Layering: the per-path asyncio lock first (tasks in this session), then
@@ -200,8 +219,15 @@ async def edit_guard(path: Path) -> AsyncIterator[None]:
     unserialized concurrent edit is last-writer-wins; this guard plus the
     editor cache's stat-on-fetch — which must happen INSIDE the guard —
     turn that into edit-on-latest.
+
+    ``beside`` names the other files the same mutation writes
+    (``files_written_beside``). Their file locks are taken after the
+    circuit's own, the order a netlist export takes a sheet's and its
+    netlist's in, so no two guards wait on each other in a cycle.
     """
-    async with _get_edit_lock(path), circuit_file_lock(path):
+    async with _get_edit_lock(path), circuit_file_lock(path), AsyncExitStack() as stack:
+        for other in beside:
+            await stack.enter_async_context(circuit_file_lock(other))
         yield
 
 
@@ -262,11 +288,12 @@ _OFF_CLASSES = frozenset("QJDM")
 
 
 def _is_spice_number(text: str) -> bool:
-    """Whether ``text`` is one finite SPICE number (``2``, ``0.5``, ``10u``)."""
-    try:
-        return math.isfinite(parse_spice_value(text))
-    except ValueError:
-        return False
+    """Whether ``text`` is one finite SPICE number (``2``, ``0.5``, ``10u``).
+
+    Strict: a model name such as ``2N2222`` is a value to LTspice, but here it
+    is the name it looks like.
+    """
+    return is_scaled_number(text) and math.isfinite(parse_spice_value(text))
 
 
 def _device_tail_ok(element: str, tokens: list) -> bool:
@@ -1099,6 +1126,45 @@ class GridPoint(StrictModel):
 # ---------------------------------------------------------------------------
 
 
+class _AscEditor(AscEditor):
+    """spicelib's editor, opening a sheet whose block symbol has no sheet.
+
+    LTspice netlists an instance of a block symbol as a call to a subcircuit
+    of the symbol's name, defined by its own sheet, by a library on the sheet,
+    or not yet at all. spicelib's loader requires the sheet and refuses to open
+    the parent without it (``docs/spicelib_bugs.md``, Bug 22). Here such an
+    instance loads with no resolved subcircuit, as spicelib already loads a
+    cell symbol with no library, and a sheet that is there opens as one of
+    these, so a block nested further down is read the same way.
+    """
+
+    def __init__(
+        self,
+        asc_file: str | Path,
+        encoding: str = "autodetect",
+        *,
+        searched: dict[tuple[str, str], str | None] | None = None,
+    ) -> None:
+        # Where each sheet not beside its symbol was found, shared with the
+        # sheets this one opens: a search walks every folder it is given, and
+        # a sheet may place the same block many times.
+        self._searched = {} if searched is None else searched
+        super().__init__(asc_file, encoding)
+
+    def _get_subcircuit(self, symbol: Any) -> Any:
+        if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
+            return super()._get_subcircuit(symbol)
+        sheet = symbol.get_schematic_file()
+        if not sheet.exists():
+            folder = str(self.asc_file_path.parent)
+            if (sheet.name, folder) not in self._searched:
+                self._searched[sheet.name, folder] = search_file_in_containers(
+                    sheet.name, folder, ".", *self.custom_lib_paths
+                )
+            sheet = self._searched[sheet.name, folder]
+        return None if sheet is None else type(self)(sheet, searched=self._searched)
+
+
 def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
@@ -1106,13 +1172,13 @@ def make_editor(path: Path) -> Editor:
     """
     try:
         if path.suffix.lower() == ".asc":
-            return AscEditor(str(path))
+            return _AscEditor(str(path))
         return SpiceEditor(str(path))
     except FileNotFoundError as e:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
         # The schematic itself opened, so what is missing is something it
-        # refers to: a symbol, a hierarchical sub-sheet, or a model library.
+        # refers to: a symbol or a model library.
         # Which one it is comes from the file that is there, not from whether
         # the editor's message happened to spell ".asy".
         raise SymbolResolutionError(
@@ -2407,6 +2473,31 @@ class OpRemoveDirective(StrictModel):
     )
 
 
+class PlotPaneSpec(StrictModel):
+    """One waveform pane."""
+
+    traces: list[str] = Field(
+        min_length=1,
+        description="Expressions as typed in Add Traces, no spaces: 'V(out)', 'V(in)-V(out)'.",
+    )
+    x_scale: XScale | None = Field(
+        default=None, description="Default: linear for tran, log for ac."
+    )
+    y_scale: YScale | None = Field(
+        default=None, description="Left Y axis. Default: linear for tran, db for ac."
+    )
+
+
+class OpSetPlotPanes(StrictModel):
+    """Set one analysis's waveform panes in the .plt beside the sheet."""
+
+    op: Literal["set_plot_panes"]
+    analysis: PlotAnalysis
+    panes: list[PlotPaneSpec] = Field(
+        description="Top to bottom; replaces the analysis's panes, and [] removes them."
+    )
+
+
 SchematicOp = (
     OpAddComponent
     | OpSetComponentValue
@@ -2419,7 +2510,60 @@ SchematicOp = (
     | OpWirePins
     | OpAddDirective
     | OpRemoveDirective
+    | OpSetPlotPanes
 )
+
+
+def files_written_beside(sheet: Path, ops: Sequence[object]) -> tuple[Path, ...]:
+    """The files other than ``sheet`` a batch of ``ops`` may write, for ``edit_guard``."""
+    if any(isinstance(op, OpSetPlotPanes) for op in ops):
+        return (plot_settings_path(sheet),)
+    return ()
+
+
+@dataclass
+class SheetPlotSettings:
+    """The plot settings file beside a sheet, as one op batch changes it.
+
+    Nothing is read until a ``set_plot_panes`` loads it, so a batch without one
+    neither reads nor writes the file. Once loaded, ``original`` is the file's
+    bytes (None when there was none), so a commit that fails after replacing
+    the file can put them back, and ``settings`` takes each ``set_plot_panes``
+    in turn.
+    """
+
+    path: Path
+    loaded: bool = False
+    original: bytes | None = None
+    settings: PlotSettings = field(default_factory=PlotSettings)
+
+    @classmethod
+    def beside(cls, sheet: Path) -> "SheetPlotSettings":
+        return cls(path=plot_settings_path(sheet))
+
+    def load(self) -> None:
+        """Read the file, once; the batch holds the edit guard of both files."""
+        if self.loaded:
+            return
+        try:
+            original: bytes | None = self.path.read_bytes()
+        except FileNotFoundError:
+            original = None
+        except OSError as exc:
+            raise NetlistError(f"cannot read {self.path.name}: {exc}") from exc
+        if original is not None:
+            self.settings = read_plot_settings(original)
+        self.original = original
+        self.loaded = True
+
+    def contents(self) -> bytes | None:
+        """The bytes to commit, or None when no section is left and the file goes."""
+        return write_plot_settings(self.settings) if self.settings.sections else None
+
+    @property
+    def changed(self) -> bool:
+        """Whether committing the batch rewrites or removes the file."""
+        return self.loaded and self.contents() != self.original
 
 
 def _resolve_op_xy(
@@ -2446,18 +2590,52 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
     "remove_component": ("deleted_wires",),
+    "set_plot_panes": ("plot_settings", "replaced_panes"),
 }
 
 
-def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict[str, object]:
+def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, object]:
+    """Replace one analysis's panes in ``plot``; report the panes it had.
+
+    ``replaced_panes`` is in this op's own form, so passing it back as
+    ``panes`` restores them.
+    """
+    plot.load()
+    panes = [
+        PlotPane(
+            traces=tuple(spec.traces), scales=scales_of(op.analysis, spec.x_scale, spec.y_scale)
+        )
+        for spec in op.panes
+    ]
+    before = plot.settings.section(SECTION_NAMES[op.analysis])
+    plot.settings = with_panes(plot.settings, op.analysis, panes)
+    replaced = [
+        {"traces": list(pane.traces), **scale_names(pane.scales)}
+        for pane in (before.panes if before is not None else ())
+    ]
+    return {"op": op.op, "plot_settings": str(plot.path), "replaced_panes": replaced}
+
+
+def apply_op_inplace(
+    editor: AscEditor,
+    op: SchematicOp,
+    asc_path: Path,
+    plot: SheetPlotSettings | None = None,
+) -> dict[str, object]:
     """Apply one schematic op against ``editor`` in place, return its result.
 
     Skips the load / save / lock dance: the batch runner's caller holds the
     edit guard and saves once, after every op in the batch has applied.
+    ``set_plot_panes`` changes ``plot`` instead, which the caller commits
+    beside the sheet; a batch holding one must pass it.
 
     Raises ``NetlistError`` on any per-op validation failure; the caller
     decides whether to abort or continue based on ``stop_on_error``.
     """
+    if isinstance(op, OpSetPlotPanes):
+        if plot is None:
+            raise NetlistError("set_plot_panes needs the sheet's plot settings to write into.")
+        return _set_plot_panes(op, plot)
     if isinstance(op, OpAddComponent):
         symbol_info = symbol_info_for(editor, op.symbol)
         if symbol_info is None:
@@ -2728,6 +2906,7 @@ def run_op_batch(
     asc_path: Path,
     *,
     stop_on_error: bool,
+    plot: SheetPlotSettings | None = None,
 ) -> tuple[list[dict[str, object]], str | None]:
     """Apply ``ops`` in order via ``apply_op_inplace``; return (results, abort_reason).
 
@@ -2741,7 +2920,7 @@ def run_op_batch(
     for i, op in enumerate(ops):
         entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
         try:
-            op_result = apply_op_inplace(editor, op, asc_path)
+            op_result = apply_op_inplace(editor, op, asc_path, plot)
             entry.update({k: v for k, v in op_result.items() if k != "op"})
         except (NetlistError, ValueError) as e:
             entry["ok"] = False

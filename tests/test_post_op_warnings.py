@@ -215,10 +215,10 @@ class TestAbortedTransaction:
         real_apply = circuit_mod.apply_op_inplace
         calls = {"n": 0}
 
-        def flaky_apply(editor, op, asc_path):
+        def flaky_apply(editor, op, asc_path, plot=None):
             calls["n"] += 1
             if calls["n"] == 1:
-                return real_apply(editor, op, asc_path)
+                return real_apply(editor, op, asc_path, plot)
             raise RuntimeError("injected mid-batch failure")
 
         monkeypatch.setattr(circuit_mod, "apply_op_inplace", flaky_apply)

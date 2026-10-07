@@ -45,9 +45,6 @@ class PinInfo:
     x: int
     y: int
 
-    def to_dict(self) -> dict:
-        return {"name": self.name, "order": self.order, "x": self.x, "y": self.y}
-
 
 # .asy graphic primitives. Bbox-relevant fields only — line style ("Normal",
 # "Dotted", ...) is parsed but discarded since nothing downstream uses it.
@@ -143,29 +140,36 @@ def bbox_from_elements(
 
 @dataclass(frozen=True)
 class SymbolInfo:
-    """Parsed symbol metadata: pins, bounding box, description, netlist prefix.
+    """Parsed symbol metadata: pins, bounding box, type and attributes.
 
     The bounding box is in the symbol's local coordinate space. LTspice
     symbols are typically centered around the origin, so ``bbox.x1`` and
-    ``bbox.y1`` are usually negative. ``prefix`` is the symbol's
-    ``SYMATTR Prefix`` (``R``, ``QN``, ``MN``, ``X``...), empty when it has
-    none; its first letter is the element class LTspice netlists the part as,
-    whatever the instance is named.
+    ``bbox.y1`` are usually negative. ``attributes`` is every ``SYMATTR`` the
+    symbol carries, in file order (``Prefix``, ``Description``, ``SpiceModel``,
+    ``Value``, ``SpiceLine``, ``ModelFile``...), and ``symbol_type`` its
+    ``SymbolType`` (``CELL``, ``BLOCK``), empty when it states none.
     """
 
     name: str
-    description: str
     pins: tuple[PinInfo, ...]
     bbox: BBox
-    prefix: str = ""
+    symbol_type: str = ""
+    attributes: tuple[tuple[str, str], ...] = ()
 
-    def to_dict(self) -> dict:
-        return {
-            "symbol": self.name,
-            "description": self.description,
-            "pins": [p.to_dict() for p in self.pins],
-            "bounding_box": self.bbox.to_origin_size_dict(),
-        }
+    def attribute(self, name: str) -> str:
+        """The value of the symbol's last ``SYMATTR name``, "" when it has none."""
+        return dict(self.attributes).get(name, "")
+
+    @property
+    def description(self) -> str:
+        return self.attribute("Description")
+
+    @property
+    def prefix(self) -> str:
+        """``SYMATTR Prefix`` (``R``, ``QN``, ``MN``, ``X``...): its first letter
+        is the element class LTspice netlists the part as, whatever the
+        instance is named."""
+        return self.attribute("Prefix")
 
 
 def _apply_rotation(x: int, y: int, rotation: str) -> tuple[int, int]:
@@ -220,10 +224,10 @@ def _find_asy_file(symbol: str) -> Path | None:
     return None
 
 
-def _symattr_value(line: str) -> str:
-    """The value of a ``SYMATTR <name> <value>`` line, or "" when it has none."""
-    parts = line.split(None, 2)
-    return parts[2].strip() if len(parts) > 2 else ""
+def _symattr(line: str) -> tuple[str, str]:
+    """The name and value of a ``SYMATTR <name> <value>`` line; "" for no value."""
+    _, name, *value = line.split(None, 2)
+    return name, value[0].strip() if value else ""
 
 
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
@@ -238,8 +242,8 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
     lines = read_spice_text(asy_path).splitlines()
 
     pins: list[PinInfo] = []
-    description = ""
-    prefix = ""
+    attributes: list[tuple[str, str]] = []
+    symbol_type = ""
     elements: list[Element] = []
 
     i = 0
@@ -271,10 +275,10 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
         if shape is not None:
             elements.append(shape)
 
-        if line.startswith("SYMATTR Description"):
-            description = _symattr_value(line)
-        elif line.startswith("SYMATTR Prefix"):
-            prefix = _symattr_value(line)
+        if line.startswith("SYMATTR "):
+            attributes.append(_symattr(line))
+        elif line.startswith("SymbolType "):
+            symbol_type = line.split(None, 1)[1].strip()
 
         i += 1
 
@@ -284,10 +288,10 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
     pins.sort(key=lambda p: p.order)
     return SymbolInfo(
         name=asy_path.stem,
-        description=description,
         pins=tuple(pins),
         bbox=bbox,
-        prefix=prefix,
+        symbol_type=symbol_type,
+        attributes=tuple(attributes),
     )
 
 

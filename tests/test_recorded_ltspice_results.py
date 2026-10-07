@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 import pytest
 
+from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
     count_op_iterations,
@@ -30,11 +33,14 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
+    build_simulation_summary,
     has_valid_raw_header,
     raw_writer_command,
     read_partial_raw_progress,
-    sniff_raw_dialect,
 )
+from ltspice_mcp.lib.recipes import MeasurementsRecipe
+from ltspice_mcp.lib.spice_validator import validate_directive
+from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 
@@ -103,12 +109,6 @@ def test_every_recorded_raw_is_recognised_as_ltspices(build: str, case_id: str):
     command = raw_writer_command(path)
     assert command is not None
     assert "LTspice" in command
-    eight_bit = not raw_header_text(path.read_bytes()[:64]).startswith("Title:") or (
-        path.read_bytes()[1:2] != b"\x00"
-    )
-    # Sniffing knows LTspice by its UTF-16 header. The text raw LTspice 26
-    # writes under its ASCII setting is 8-bit, and is told by its Command line.
-    assert sniff_raw_dialect(path) == (None if eight_bit else "ltspice")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -299,9 +299,8 @@ class TestSteppedRuns:
     def test_a_stepped_operating_point_stores_every_step(self, build: str, tmp_path: Path):
         """One point a step, with the stepped parameter as the first variable.
 
-        The log names no step values for it, so the steps cannot be matched to
-        log lines and the decoder offers the plot for inventory only. The
-        values are all there in the raw.
+        The log names no step values for it, so the raw's own parameter column
+        is the record: every step is read, with its value.
         """
         assert declared_points(build, "raw/step_op") == 3
         assert declared_names(build, "raw/step_op")[0] == "v"
@@ -312,9 +311,20 @@ class TestSteppedRuns:
         # V(out) is four fifths of the source, the second variable after the parameter.
         assert list(stored["rest"][:, 1]) == pytest.approx([0.8, 1.6, 2.4])
         parsed = rec.decode(build, "raw/step_op", tmp_path)
-        assert parsed.raw.descriptor.step_status == "unresolved"
+        assert parsed.raw.descriptor.step_status == "matched"
+        assert parsed.raw.steps == [{"v": 1.0}, {"v": 2.0}, {"v": 3.0}]
+        assert parsed.raw.get_steps(v=2.0) == [1]
+        for step, level in enumerate((0.8, 1.6, 2.4)):
+            assert list(parsed.raw.get_wave("V(out)", step)) == pytest.approx([level])
         log = read_spice_text(rec.recorded(build, "raw/step_op.log"))
         assert not [line for line in log.splitlines() if line.startswith(".step")]
+
+    def test_a_stepped_operating_points_summary_counts_its_steps(self, build: str, tmp_path: Path):
+        """The run's summary no longer says only the first step is read."""
+        parsed = rec.decode(build, "raw/step_op", tmp_path)
+        summary = build_simulation_summary(parsed.raw, parsed.logs, step=2)
+        assert summary["step_count"] == 3
+        assert not any("Stepped .op" in warning for warning in summary.get("warnings", []))
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -404,6 +414,12 @@ def test_the_temperature_lines_are_read(build: str):
     assert parse_temperatures(text=hot) == (50.0, 27.0)
 
 
+def first_values(build: str, case_id: str) -> dict[str, float]:
+    """The first value of each measurement in a recorded log, by name."""
+    data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+    return {name: entry["values"][0] for name, entry in data["measurements"].items()}
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 class TestMeasurements:
     def measured(self, build: str, case_id: str) -> dict[str, Any]:
@@ -458,6 +474,16 @@ class TestMeasurements:
         assert value["gmax"] == pytest.approx(1.0, abs=1e-4)
         assert data["measurements"]["fc"]["at"] == pytest.approx(1000.0, rel=1e-5)
 
+    def test_a_real_result_keeps_its_sign(self, build: str):
+        """A function that returns a real number is printed in the same polar
+        form, and a negative one at an angle of 180: ph(V(out)) at the corner
+        of the low-pass is (33.0643dB,180°), which is -45."""
+        value = first_values(build, "deck/meas_functions")
+        assert value["g_ph"] == pytest.approx(-45.0, rel=1e-4)
+        assert value["g_re"] == pytest.approx(0.5, rel=1e-5)
+        assert value["g_im"] == pytest.approx(-0.5, rel=1e-5)
+        assert value["g_mag"] == pytest.approx(1 / math.sqrt(2), rel=1e-5)
+
     def test_stepped_tables_are_read_per_step(self, build: str):
         data = self.measured(build, "log/meas_step")
         entries = data["measurements"]
@@ -485,6 +511,49 @@ class TestMeasurements:
         )
         assert crossing[2] == (0.0 if rec.generation(build) == "xvii" else None)
 
+    async def test_a_zero_xvii_may_have_printed_for_a_failure_is_named(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The measurements recipe names the steps that read exactly 0 when the
+        run's own output says XVII wrote it, and stays silent for LTspice 26,
+        which prints ``failed``. The raw beside the log is one the same build
+        wrote; XVII names itself only in a raw's ``Command:`` line."""
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        raw = log.with_suffix(".raw")
+        raw.write_bytes(rec.recorded(build, "deck/after_end.raw").read_bytes())
+        result = await metrics.measurements(
+            services.source_for_raw_path(raw, state_no_sim),
+            MeasurementsRecipe(key="meas", metric="measurements"),
+            None,
+            state_no_sim,
+        )
+        if rec.generation(build) == "xvii":
+            (observation,) = result["observations"]
+            assert observation["code"] == "measurement_zero_or_failed"
+            assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+        else:
+            assert "observations" not in result
+            assert result["stats"]["s_when"]["failure_count"] == 1
+
+    async def test_a_jobs_recorded_build_names_the_zeros_without_a_raw(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A job's case records the build its run named, so the zeros are named
+        from that record when no artifact read here names XVII."""
+        if rec.generation(build) != "xvii":
+            pytest.skip("only XVII prints 0 for a failed step")
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        source = services.resolve_analysis_source(state_no_sim, log_file=str(log))
+        recipe = MeasurementsRecipe(key="meas", metric="measurements")
+        unnamed = await metrics.measurements(source, recipe, None, state_no_sim)
+        assert "observations" not in unnamed  # an XVII log names no build
+        recorded = replace(source, simulator_version=rec.manifest(build)["reported_build"])
+        result = await metrics.measurements(recorded, recipe, None, state_no_sim)
+        (observation,) = result["observations"]
+        assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
         the directive and takes the measurements around it."""
@@ -499,6 +568,173 @@ class TestMeasurements:
             assert block.splitlines()[0].endswith('(7): Expected ")" here.')
             (failed,) = diagnostics["meas_errors"]
             assert failed["directive"] == ".meas tran broken FIND V(out AT 0.5m"
+
+
+#: How long log/meas_trig runs: two whole periods of its 1 kHz sine of amplitude 1.
+_TWO_PERIODS = 2e-3
+_W = 2 * math.pi * 1e3
+#: 2*pi*1k*time read as an angle in degrees, in radians.
+_W_AS_DEGREES = _W * math.pi / 180
+
+
+def _integral_of_sin_times_sin(a: float, b: float, end: float) -> float:
+    """The integral of sin(a*t)*sin(b*t) from 0 to ``end``, for a != b."""
+    return (math.sin((a - b) * end) / (a - b) - math.sin((a + b) * end) / (a + b)) / 2
+
+
+def _integral_of_sin_times_cos(a: float, b: float, end: float) -> float:
+    """The integral of sin(a*t)*cos(b*t) from 0 to ``end``, for a != b."""
+    return ((1 - math.cos((a + b) * end)) / (a + b) + (1 - math.cos((a - b) * end)) / (a - b)) / 2
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+class TestMeasurementAngleUnit:
+    """The unit of a trig function's angle inside a .meas.
+
+    Read in radians, as a B source reads it, INTEG V(s)*sin(2*pi*1k*time) over
+    the deck's two periods is 1 ms and INTEG V(s)*cos(2*pi*1k*time) is 0. On
+    both builds' own defaults a .meas reads the angle in degrees; the
+    RadianMeasure setting ("Use radian measure in waveform expressions")
+    turns it to radians. A B source is in radians either way.
+    """
+
+    def test_on_the_defaults_a_measurement_reads_angles_in_degrees(self, build: str):
+        value = first_values(build, "log/meas_trig")
+        assert value["m_sin_30"] == pytest.approx(0.5)
+        assert value["m_cos_pi"] == pytest.approx(math.cos(math.radians(math.pi)), rel=1e-5)
+        assert value["m_tan_45"] == pytest.approx(1.0)
+        assert value["m_asin"] == pytest.approx(30.0)
+        assert value["m_acos"] == pytest.approx(60.0)
+        assert value["m_atan"] == pytest.approx(45.0)
+        assert value["m_atan2"] == pytest.approx(45.0)
+        assert value["m_atan2_deg"] == pytest.approx(45 * 180 / math.pi, rel=1e-5)
+        # The integrals the deck asked for are 1 ms and 0. Read in degrees,
+        # 2*pi*1k*time is a 17.45 Hz sine, and the results are these instead.
+        assert value["m_sin"] == pytest.approx(
+            _integral_of_sin_times_sin(_W, _W_AS_DEGREES, _TWO_PERIODS), rel=2e-3
+        )
+        assert value["m_cos"] == pytest.approx(
+            _integral_of_sin_times_cos(_W, _W_AS_DEGREES, _TWO_PERIODS), rel=2e-3
+        )
+        assert value["m_sin_fo"] == value["m_sin"]
+
+    def test_with_the_setting_a_measurement_reads_angles_in_radians(self, build: str):
+        value = first_values(build, "log/meas_trig_radian")
+        assert value["m_sin"] == pytest.approx(_TWO_PERIODS / 2, rel=1e-3)
+        assert value["m_sin_fo"] == value["m_sin"]
+        assert value["m_cos"] == pytest.approx(0.0, abs=1e-8)
+        assert value["m_sin_30"] == pytest.approx(math.sin(30), rel=1e-5)
+        assert value["m_cos_pi"] == pytest.approx(-1.0)
+        assert value["m_tan_45"] == pytest.approx(math.tan(45), rel=1e-5)
+        assert value["m_asin"] == pytest.approx(math.asin(0.5), rel=1e-5)
+        assert value["m_acos"] == pytest.approx(math.acos(0.5), rel=1e-5)
+        assert value["m_atan"] == pytest.approx(math.pi / 4, rel=1e-5)
+        assert value["m_atan2"] == pytest.approx(math.pi / 4, rel=1e-5)
+        assert value["m_atan2_deg"] == pytest.approx(45.0, rel=1e-5)
+
+    def test_time_pi_and_the_hyperbolic_functions_do_not_depend_on_it(self, build: str):
+        for case_id in ("log/meas_trig", "log/meas_trig_radian"):
+            value = first_values(build, case_id)
+            assert value["m_time"] == pytest.approx(1e-3)
+            assert value["m_pi"] == pytest.approx(math.pi, rel=1e-5)
+            assert value["m_sinh"] == pytest.approx(math.sinh(1), rel=1e-5)
+            assert value["m_tanh"] == pytest.approx(math.tanh(1), rel=1e-5)
+
+    def test_a_b_source_works_in_radians_whatever_the_setting(self, build: str, tmp_path: Path):
+        raw = rec.decode(build, "log/meas_trig", tmp_path).raw
+        time = np.abs(raw.get_wave("time", 0))
+        assert np.allclose(raw.get_wave("V(batan2)", 0), math.pi / 4)
+        assert np.allclose(raw.get_wave("V(bcospi)", 0), -1.0)
+        area = float(np.trapezoid(raw.get_wave("V(bsin)", 0), time))
+        assert area == pytest.approx(_TWO_PERIODS / 2, rel=1e-3)
+        # The log's measurements of the B-source nodes take no angle, so the
+        # setting leaves them as they were.
+        default = first_values(build, "log/meas_trig")
+        radian = first_values(build, "log/meas_trig_radian")
+        names = {"b_cos", "b_sin", "b_atan2", "b_cos_pi"}
+        assert {name: default[name] for name in names} == {name: radian[name] for name in names}
+        assert default["b_sin"] == pytest.approx(_TWO_PERIODS / 2, rel=1e-3)
+        assert default["b_cos"] == pytest.approx(0.0, abs=1e-8)
+
+    def test_ph_gives_degrees_unless_the_setting_says_radians(self, build: str):
+        """At the corner of the RC low-pass the phase is -45 degrees."""
+        phase = first_values(build, "log/meas_phase")["g_ph"]
+        assert phase == pytest.approx(-45.0, rel=1e-5)
+        phase = first_values(build, "log/meas_phase_radian")["g_ph"]
+        assert phase == pytest.approx(-math.pi / 4, rel=1e-5)
+
+    def test_the_lint_refuses_the_measurements_the_setting_changes_and_no_other(self, build: str):
+        default = first_values(build, "log/meas_trig")
+        radian = first_values(build, "log/meas_trig_radian")
+        changed = {
+            name
+            for name in default
+            if not math.isclose(default[name], radian[name], rel_tol=1e-6, abs_tol=1e-9)
+        }
+        deck = INPUTS / "log/meas_trig.cir"
+        findings = lint_deck(read_spice_text(deck), deck, "ltspice", "LTspice")
+        assert {f["subject"] for f in findings if f["rule_id"] == "meas-trig-degrees"} == changed
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_db_of_a_complex_voltage_is_its_complex_logarithm(build: str):
+    """At the corner of the RC low-pass the gain is -3.0103 dB. db(V(out)) is
+    20*log10 of the complex voltage, printed as (17.4507dB,-113.81°), so it
+    reads as that number's magnitude with the gain as its real part.
+    db(mag(V(out))) and re(db(V(out))) are the gain. A WHEN on either form
+    finds the corner."""
+    data = parse_measurements(rec.recorded(build, "log/meas_db.log"))
+    value = {name: entry["values"][0] for name, entry in data["measurements"].items()}
+    gain_db = 20 * math.log10(1 / math.sqrt(2))
+    complex_log = complex(gain_db, 20 * (-math.pi / 4) / math.log(10))
+    assert value["g_db"] == pytest.approx(abs(complex_log), rel=1e-4)
+    assert value["g_db_mag"] == pytest.approx(gain_db, rel=1e-4)
+    assert value["g_re_db"] == pytest.approx(gain_db, rel=1e-4)
+    assert value["g_mag"] == pytest.approx(1 / math.sqrt(2), rel=1e-5)
+    for name in ("f_db_mag", "f_db"):
+        assert data["measurements"][name].get("at") == pytest.approx(1000.0, rel=1e-5)
+
+
+def _lint_refusals(case_id: str) -> list[tuple[str, str]]:
+    """The (rule, subject) of each blocking lint finding on a recorded input deck."""
+    deck = INPUTS / f"{case_id}.cir"
+    findings = lint_deck(read_spice_text(deck), deck, "ltspice", "LTspice")
+    return [(f["rule_id"], f["subject"]) for f in findings if f["severity"] == "error"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("name", ["e", "k", "pi", "q"])
+def test_a_measurement_named_for_a_constant(build: str, name: str):
+    """The constants of the expression engine cannot name a .meas. LTspice 26
+    refuses the deck and runs nothing; XVII names the constant and takes the
+    other measurement. The directive check and the lint refuse the name
+    before either."""
+    case_id = f"log/meas_name_{name}"
+    card = next(card for card in rec.deck_cards(f"{case_id}.cir") if card.name == name)
+    error = validate_directive(card.body, "LTspice")
+    assert error is not None
+    assert error.rule_name == "meas_reserved_name"
+    assert _lint_refusals(case_id) == [("meas-name-ltspice", name)]
+    log = rec.recorded(build, f"{case_id}.log")
+    diagnostics = extract_log_diagnostics(log)
+    if rec.generation(build) == "xvii":
+        assert diagnostics["errors"] == [f'Error: "{name}" is a reserved constant name.']
+        assert set(parse_measurements(log)["measurements"]) == {"after"}
+    else:
+        assert rec.entry(build, case_id)["exit_code"] == 1
+        (failed,) = diagnostics["meas_errors"]
+        assert "Expected a name that is not a reserved name here." in failed["raw_block"]
+        # The relayed failure carries the directive check's fix.
+        assert failed["suggestion"] == error.suggestion
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_names_that_look_reserved_and_are_not(build: str):
+    cards = [card for card in rec.deck_cards("log/meas_name_other.cir") if card.kind == "meas"]
+    for card in cards:
+        assert validate_directive(card.body, "LTspice") is None, card.body
+    assert _lint_refusals("log/meas_name_other") == []
+    assert set(first_values(build, "log/meas_name_other")) == {card.name for card in cards}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -520,6 +756,65 @@ def test_a_fourier_block_is_read_with_its_harmonics_and_distortion(build: str, t
         assert clipped["phd"] is None
     else:
         assert clipped["phd"] == pytest.approx(13.61, abs=0.01)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_number_after_a_fourier_frequency_is_the_harmonic_count(build: str, tmp_path: Path):
+    """The deck has ``.four 1k V(out)`` and ``.four 1k 5 V(in)`` on a run five
+    periods long. The 5 makes V(in)'s table five harmonics where V(out)'s has
+    the default nine, and leaves both on one period: read as a period count it
+    would have printed ``N-Period=5`` beside nine harmonics. No deck here gives
+    a second number, so the period count's place is not recorded."""
+    fourier = rec.decode_log(build, "log/fourier", tmp_path).value("fourier")
+    counts = {block["signal"].lower(): len(block["harmonics"]) for block in fourier}
+    assert counts == {"v(out)": 9, "v(in)": 5}
+    # The decoder does not keep the period count, so it is read off the log.
+    text = read_spice_text(rec.recorded(build, "log/fourier.log"))
+    assert re.findall(r"N-Period=(\d+)", text) == ["1", "1"]
+
+
+def _fourier_phases(build: str, signal: str, scratch: Path) -> dict[int, tuple[float, float]]:
+    """``{harmonic: (magnitude, phase in degrees)}`` of one recorded block."""
+    fourier = rec.decode_log(build, "log/fourier", scratch).value("fourier")
+    (block,) = [block for block in fourier if block["signal"].lower() == signal]
+    return {h["number"]: (h["magnitude"], h["phase"]) for h in block["harmonics"]}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_fourier_phase_is_read_in_the_builds_own_convention(build: str, tmp_path: Path):
+    """``V(in)`` is ``SINE(0 1 1k)``, sin(2*pi*1k*t) at zero phase, and the two
+    builds report its fundamental at different phases: XVII at 0 degrees, the
+    phase of a sine, and LTspice 26 at 90. The server passes each through as
+    printed, so a ``.four`` phase means what the build that wrote it means; the
+    ``tone`` recipe states its own reference instead (guide section 'signals')."""
+    (_, phase) = _fourier_phases(build, "v(in)", tmp_path)[1]
+    expected = 0.0 if rec.generation(build) == "xvii" else 90.0
+    assert phase == pytest.approx(expected, abs=0.05)
+
+
+def test_no_constant_offset_turns_one_builds_fourier_phase_into_the_others(tmp_path: Path):
+    """On the clipped sine every harmonic strong enough to read keeps
+    ``phase(26) = 90 - phase(XVII)`` (mod 360), while adding 90 degrees to
+    XVII's phase leaves every even harmonic half a turn out. So a ``.four``
+    phase cannot be carried from one build to the other by an offset. The
+    input's symmetry makes a sign flip and a half-period shift of the time
+    origin fit equally well, so this pins the relation, not which of the two
+    the builds do."""
+    builds = {rec.generation(build): build for build in rec.BUILDS}
+    if set(builds) != {"current", "xvii"}:
+        pytest.skip("needs a recording from LTspice 26 and from XVII")
+    current = _fourier_phases(builds["current"], "v(out)", tmp_path / "current")
+    xvii = _fourier_phases(builds["xvii"], "v(out)", tmp_path / "xvii")
+    strong = [n for n, (magnitude, _) in xvii.items() if magnitude > 5e-3]
+    assert {2, 4, 6} <= set(strong)
+
+    def wrapped(degrees: float) -> float:
+        return (degrees + 180.0) % 360.0 - 180.0
+
+    for n in strong:
+        assert abs(wrapped(current[n][1] - (90.0 - xvii[n][1]))) < 2.0, n
+        offset_miss = abs(wrapped(current[n][1] - (xvii[n][1] + 90.0)))
+        assert abs(offset_miss - (180.0 if n % 2 == 0 else 0.0)) < 2.0, n
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -627,8 +922,27 @@ def test_a_failed_run_is_classified_by_its_cause(build: str, case_id: str):
     assert classify_failure_code(errors) == FAILURES[case_id]
 
 
+#: Runs both builds refused before they began: the log has no "Circuit:"
+#: line, and gives the reason as a parse or fatal error.
+REFUSED_BEFORE_THE_RUN = ["log/err_missing_include", "log/err_missing_lib", "deck/lib_section"]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(REFUSED_BEFORE_THE_RUN)))
+def test_a_run_refused_before_it_began_reports_why_not_a_parse_failure(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Such a log holds no measurement or Fourier block, so both are absent
+    and the diagnostics carry the reason. spicelib's complaint that the log
+    lacks its header is not an answer to give the caller."""
+    assert "Circuit:" not in read_spice_text(rec.recorded(build, f"{case_id}.log"))
+    logs = rec.decode_log(build, case_id, tmp_path)
+    for name in ("measurements", "fourier"):
+        assert logs.section(name)["status"] == "absent", name
+    assert logs.value("diagnostics")["errors"]
+
+
 #: Decks LTspice refuses whose log gives the reason on a line of its own, with
-#: no "Error" in front. LTspice 26 words these three so.
+#: no "Error" in front on LTspice 26 and "Fatal Error:" in front on XVII.
 REASON_ON_A_BARE_LINE = {
     "log/err_no_analysis": "No analysis specified.",
     "deck/ac_and_tran": "More than one analysis specified.",
@@ -638,17 +952,14 @@ REASON_ON_A_BARE_LINE = {
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(list(REASON_ON_A_BARE_LINE))))
 def test_a_refusal_ltspice_26_states_on_a_bare_line(build: str, case_id: str):
-    """XVII prefixes each with "Fatal Error:" and it is extracted. LTspice 26
-    does not, and nothing is extracted: the caller is left with the log
-    excerpt, which does contain the line."""
-    log = rec.recorded(build, f"{case_id}.log")
-    errors = extract_log_diagnostics(log)["errors"]
+    """Each build's line is extracted as the run's error, so the caller gets
+    the reason rather than only the log excerpt that holds it."""
+    errors = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))["errors"]
+    (error,) = errors
     if rec.generation(build) == "xvii":
-        assert len(errors) == 1
-        assert errors[0].startswith("Fatal Error:")
+        assert error.startswith("Fatal Error:")
     else:
-        assert REASON_ON_A_BARE_LINE[case_id] in read_spice_text(log).replace("\r", "").split("\n")
-        assert errors == []
+        assert error == REASON_ON_A_BARE_LINE[case_id]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

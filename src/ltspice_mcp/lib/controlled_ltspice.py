@@ -3,6 +3,15 @@
 The runner retains submission, permits, cancellation and completion. This
 adapter only supplies the audited command and a private subprocess environment.
 It never answers a dialog or changes the captured profile's effective values.
+
+LTspice is started on the server's hidden desktop (``lib/hidden_desktop.py``)
+where there is one, as every other LTspice launch on Windows is, so a recovery
+run cannot take the keyboard focus. The launch is the audited one in every
+other respect: the same command, working directory and environment, no stream
+redirected and no handle inherited, and the timeout of ``subprocess.run``. A
+message box there ends the attempt with what it said (``DialogError``) rather
+than holding it to the timeout; none is ever answered. Where there is no
+hidden desktop the launch is ``subprocess.run`` as audited.
 """
 
 from __future__ import annotations
@@ -20,7 +29,8 @@ from typing import ClassVar
 
 from spicelib.simulators.ltspice_simulator import LTspice
 
-from ltspice_mcp.lib import atomic_write_bytes
+from ltspice_mcp.lib import atomic_write_bytes, hidden_desktop
+from ltspice_mcp.lib.ltspice_windows import run_on_desktop
 from ltspice_mcp.lib.pdk_native import ArtifactDigest
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
 
@@ -279,6 +289,11 @@ def controlled_ltspice(
             env["APPDATA"] = str(ini_path.parent)
             # Keep the measured startup without stream redirection. Ignore
             # exe_log: LTspice's .log and .raw carry results.
+            desktop = hidden_desktop.shared()
+            if desktop is not None:
+                # Naming no stream leaves STARTF_USESTDHANDLES unset and the
+                # handle list empty, so nothing is inherited, as below.
+                return run_on_desktop(desktop, argv, timeout=timeout, cwd=cwd, env=env)
             # Omitting every stream also avoids STARTF_USESTDHANDLES; closing
             # descriptors disables Windows process handle inheritance.
             return subprocess.run(

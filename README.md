@@ -436,7 +436,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 |-|-|
 | `analyze_results` recipes | `summary`, `measurements`, `value`, `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd`, `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure`, `resonance`, `return_loss`, `noise_integral`, `operating_point`, `waveform` (inline envelope or full-fidelity CSV), `plot` |
 | `inspect` kinds | `capabilities`, `components`, `symbol`, `symbols`, `net`, `model` |
-| `edit_schematic` ops | `add_component`, `set_component_value`, `set_component_attribute`, `move_component`, `remove_component`, `wire_pins`, `add_net_label`, `remove_net_label`, `remove_wire`, `add_directive`, `remove_directive` |
+| `edit_schematic` ops | `add_component`, `set_component_value`, `set_component_attribute`, `move_component`, `remove_component`, `wire_pins`, `add_net_label`, `remove_net_label`, `remove_wire`, `add_directive`, `remove_directive`, `set_plot_panes` |
 | `jobs` actions | `status`, `wait`, `cancel`, `list`, `runs` |
 | `verify_circuit` checks | `syntax`, `symbols`, `export`, `layout`, `quality`, `compare` |
 

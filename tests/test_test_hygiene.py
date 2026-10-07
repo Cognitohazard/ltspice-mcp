@@ -441,6 +441,25 @@ def test_a_process_is_told_from_a_later_one_on_its_pid():
     assert not process_running(child.pid)
 
 
+def test_a_process_that_has_exited_is_not_running():
+    """An exit is an exit, whatever psutil can still find.
+
+    psutil reads a Windows process as running when its exit code is 259 or its
+    pid is still listed, and a process object outlives its process while this
+    test's Popen holds a handle to it. A parser worker the job had confirmed
+    gone read as running that way on Windows CI. Exiting with 259 makes it
+    certain rather than a matter of timing.
+    """
+    import subprocess
+    import sys
+
+    from tests.conftest import LIVENESS_S, process_running
+
+    child = subprocess.Popen([sys.executable, "-c", "raise SystemExit(259)"])
+    child.wait(timeout=LIVENESS_S)
+    assert not process_running(child.pid)
+
+
 def test_the_rules_catch_what_they_name():
     """Each rule flags its pattern and a reason excuses it, on the line, on
     the statement, or in the comment block above it."""

@@ -695,7 +695,15 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Measured 19,659.
     # Explicit plot/dialect selection and imported log sources also
     # contribute to the schema bound.
-    "analyze_results": 20300,
+    # Raised by about 120 characters so spec.allow_incomplete says it also
+    # judges past runs with no number for the field, which a spec now counts
+    # and holds indeterminate for instead of passing over. Measured 20,360.
+    # Raised by about 600 characters for the tone recipe, amplitude and phase
+    # at one frequency: its branch, a frequency_hz description that states
+    # the window rule and the phase convention (on a full listing the only
+    # place a caller reads which sine and which time zero phase_deg is
+    # measured from), and its entry on the roster. Measured 20,959.
+    "analyze_results": 21000,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -729,7 +737,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # vendor's own account of them. Its name and cursor arguments are most of
     # the cost. Measured 11,246.
     "inspect": 11250,
-    # The typed op union — eleven ops, each its own branch — plus the compare
+    # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
     # compare is verify_circuit's spec: the mode field rides along.
@@ -739,7 +747,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # for wire_pins' {x, y} endpoint, the one way to end a route on a wire's
     # interior (a T-junction), which from_pin names beside the SpiceOrder form.
     # Measured 12,038.
-    "edit_schematic": 12040,
+    # Raised by about 1,030 characters for set_plot_panes, the twelfth op: the
+    # waveform panes LTspice opens for the sheet, written to the .plt beside
+    # it. Most of it is the pane model's structure (a trace list and two scale
+    # enums); the descriptions are a line each. Measured 13,070.
+    "edit_schematic": 13080,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
@@ -1079,7 +1091,7 @@ class TestAnalyzeDescriptionNamesEveryRecipe:
     """A host that routes on tool descriptions can only find a metric the
     description names.
 
-    ``analyze_results`` answers twenty-one different questions behind one name,
+    ``analyze_results`` answers twenty-two different questions behind one name,
     and the compact tool listing strips the per-branch schema prose, so this
     text is the only place the metric names appear. A recipe added to the union
     without joining the roster is a capability nothing can route to — which is

@@ -10,8 +10,9 @@ sheet (``show``), which LTspice records as one step of that window's undo
 history. It reaches the windows through the bridge LTspice ships
 (``BridgeSession``), attaching to instances that are already running and never
 starting one. ``open_sheet`` opens a sheet in a window and ``show_results``
-a finished run's results file, each for a caller who was asked to show it there; with the plot settings
-file ``lib/plot_settings.py`` writes beside it, it opens with its traces drawn.
+a finished run's results file, each for a caller who was asked to show it
+there; with a plot settings file beside it, the results open with its traces
+drawn.
 
 The file stays the record. Before an edit is committed, the window's copy is
 compared with the file, and one that differs holds work nobody saved: the

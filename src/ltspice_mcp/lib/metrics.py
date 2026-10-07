@@ -94,6 +94,7 @@ from ltspice_mcp.lib.recipes import (
     SummaryRecipe,
     ThdRecipe,
     TimingRecipe,
+    ToneRecipe,
     TransientResponseRecipe,
     ValueRecipe,
     WaveformRecipe,
@@ -111,11 +112,13 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_pulse_response,
     analyze_thd,
     analyze_timing_between,
+    analyze_tone,
     compute_measurement_stats,
     compute_signal_stats,
     time_weighted_quantiles,
     window_and_clean,
 )
+from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
 from ltspice_mcp.state import SessionState
 
 #: One metric's answer. See the module docstring for why this is not a
@@ -155,21 +158,28 @@ def parse_time(s: str | None, name: str) -> float | None:
     return v
 
 
-def parse_freq(s: str, name: str = "frequency") -> float:
+def parse_freq(s: str | float, name: str = "frequency") -> float:
     """Parse a SPICE-notation frequency into a finite positive float.
 
-    Tolerates a trailing ``Hz`` unit — ``'159Hz'`` and ``'15.9kHz'`` are the
-    natural way to write a frequency, but the SPICE value parser only knows SI
-    prefixes (k, meg, …). Strip a trailing ``hz`` before parsing so the unit is
-    accepted rather than rejected with a confusing error.
+    Tolerates a trailing ``Hz`` unit, spaced or not: ``'159Hz'``, ``'15.9kHz'``
+    and ``'159 Hz'`` are the natural ways to write a frequency. The value parser
+    reads a unit written against the number as LTspice does; the strip also
+    takes the spaced one.
+
+    A number is taken as given, never through SPICE text: ``spice_text``
+    rounds to ten digits, which moves a phase referred to t = 0 by up to
+    360 * f * t * 5e-10 degrees.
     """
-    cleaned = s.strip()
-    if cleaned[-2:].lower() == "hz":
-        cleaned = cleaned[:-2].strip()
-    try:
-        v = parse_spice_value(cleaned)
-    except ValueError as e:
-        raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
+    if isinstance(s, str):
+        cleaned = s.strip()
+        if cleaned[-2:].lower() == "hz":
+            cleaned = cleaned[:-2].strip()
+        try:
+            v = parse_spice_value(cleaned)
+        except ValueError as e:
+            raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
+    else:
+        v = float(s)
     if not math.isfinite(v):
         raise ResultError(f"{name} must be finite, got {s!r}")
     if v <= 0:
@@ -1125,7 +1135,58 @@ async def measurements(
                 entry["at"] = crossings[0]
     if recipe.names is not None:
         stats = {name: entry for name, entry in stats.items() if name in recipe.names}
-    return {"stats": stats}
+    data: MetricValue = {"stats": stats}
+    observations = await _zeros_a_failed_step_prints(source, parsed, set(stats))
+    if observations:
+        data["observations"] = observations
+    return data
+
+
+async def _zeros_a_failed_step_prints(
+    source: services.AnalysisSource, parsed: MeasurementsOutput, names: set[str]
+) -> list[dict[str, Any]]:
+    """Name the steps that read exactly 0 on a build that prints 0 for a failure.
+
+    In a stepped measurement table LTspice 24 and later print ``failed`` for a
+    step whose measurement could not be taken; LTspice XVII and earlier print
+    ``0``, which the log does not tell apart from a measurement that is 0. The
+    build is the one the run named in its own output: as the job's case
+    recorded it, or for a bare path, read from the head of its log or raw.
+    Every exact zero is named, as a fact for the caller to weigh: a true zero
+    and a failure read the same here.
+    """
+    measurements = parsed.get("measurements") or {}
+    if (parsed.get("step_count") or 0) < 2 or not measurements:
+        return []
+    zeros = {
+        name: [index for index, value in enumerate(entry.get("values") or []) if value == 0]
+        for name, entry in measurements.items()
+        if name in names
+    }
+    zeros = {name: steps for name, steps in zeros.items() if steps}
+    if not zeros:
+        return []
+    build = source.simulator_version or await asyncio.to_thread(
+        reported_build, source.log, source.raw
+    )
+    if build is None or not is_cp1252_ltspice_build(build):
+        return []
+    listed = "; ".join(
+        f"{name} at step(s) {', '.join(map(str, steps))}" for name, steps in zeros.items()
+    )
+    return [
+        {
+            "code": "measurement_zero_or_failed",
+            "kind": "value",
+            "detail": (
+                f"This run was written by {build}, which prints 0 in a stepped "
+                f"measurement table for a step whose measurement failed, where "
+                f"LTspice 24 and later print 'failed'. These read exactly 0 and "
+                f"may be failures: {listed} (0-based steps)."
+            ),
+            "evidence": {"build": build, "zero_steps": zeros},
+        }
+    ]
 
 
 async def value(
@@ -1728,13 +1789,37 @@ async def thd(
         window=window,
     )
     data["signal"] = recipe.signal
-    # A differential signal takes its unit from its resolved voltage trace.
+    await _label_unit(source, recipe.signal, data, state)
+    return await relay_solve_failures(source, data, state)
+
+
+async def tone(
+    source: services.AnalysisSource,
+    recipe: ToneRecipe,
+    step: int,
+    state: SessionState,
+) -> MetricValue:
+    """Amplitude and phase of one frequency over the window's whole periods."""
+    t_start, t_end = window_bounds(recipe.window)
+    axis, wave = await load_real_signal(source, recipe.signal, step, state)
+    t, y, _ = apply_window(axis, wave, t_start, t_end)
+    frequency = parse_freq(recipe.frequency_hz, "frequency_hz")
+    data = await run_metric(source, state, analyze_tone, t, y, frequency)
+    data["signal"] = recipe.signal
+    await _label_unit(source, recipe.signal, data, state)
+    return await relay_solve_failures(source, data, state)
+
+
+async def _label_unit(
+    source: services.AnalysisSource, signal: str, data: MetricValue, state: SessionState
+) -> None:
+    """The signal's native unit, which a spectral metric's amplitudes are in.
+    A differential signal takes its unit from its resolved voltage trace."""
     raw = await services.load_raw(source, state)
-    signal = services.resolve_signal(raw, recipe.signal)
-    unit = trace_unit(raw, signal.trace)
+    resolved = services.resolve_signal(raw, signal)
+    unit = trace_unit(raw, resolved.trace)
     if unit:
         data["unit"] = unit
-    return await relay_solve_failures(source, data, state)
 
 
 async def filter_metrics(
@@ -2250,6 +2335,7 @@ METRICS: dict[type[Recipe], MetricFn] = {
     PeriodicRecipe: periodic,
     TransientResponseRecipe: transient_response,
     ThdRecipe: thd,
+    ToneRecipe: tone,
     BodeFilterRecipe: bode_filter,
     BodePointRecipe: bode_point,
     BodeCrossingRecipe: bode_crossing,

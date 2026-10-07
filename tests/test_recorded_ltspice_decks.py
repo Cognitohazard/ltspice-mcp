@@ -13,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    read_spice_text,
+    read_spice_text_with_encoding,
+    rewrite_codec,
+)
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -35,6 +40,14 @@ MICRO = "µ"
 
 def deck_text(case_id: str) -> str:
     return read_spice_text(INPUTS / rec.CASES.case(case_id).source)
+
+
+def lint_input(case_id: str, **options) -> list[dict]:
+    """The linter's findings on a recorded input, read in the codec staging
+    would write it in, as ``run_experiments`` lints it."""
+    path = INPUTS / rec.CASES.case(case_id).source
+    text, encoding = read_spice_text_with_encoding(path)
+    return lint_deck(text, path, "ltspice", "LTspice", codec=rewrite_codec(encoding), **options)
 
 
 def resistances(case_id: str) -> dict[str, str]:
@@ -62,29 +75,14 @@ SUFFIX_DECKS = [
     "deck/suffix_prefix_match",
 ]
 
-#: Values LTspice reads and the server's parser refuses, with what LTspice
-#: makes of each (the same on both recorded builds). Two families: a letter
-#: that is no scale suffix, which LTspice skips, and the "3k4" shorthand that
-#: puts the suffix where the decimal point goes, which both builds accept as
-#: installed. ``parse_spice_value`` raises on all of them; a caller that
-#: validates a value with it turns away a deck LTspice would run.
-READ_BY_LTSPICE_ONLY = {
-    "2Hz": 2.0,
-    "3V": 3.0,
-    "2ohm": 2.0,
-    "2A": 2.0,
-    "7x": 7.0,
-    "5s": 5.0,
-    "2Ohms": 2.0,
-    "4H": 4.0,
-    "6W": 6.0,
-    "9V1": 9.0,
-    "1k5": 1500.0,
-    "4R7": 4.7,
-    "2M2": 2.2e-3,
-    "3u3": 3.3e-6,
-    "1Meg5": 1.5e6,
-}
+#: Spellings the server's parser refused until it read values as LTspice
+#: does: a letter that is no scale suffix, which LTspice skips with what
+#: follows it, and the "3k4" shorthand that puts the suffix where the decimal
+#: point goes. What LTspice made of each is the recording's to say.
+ONCE_REFUSED = frozenset(
+    {"2Hz", "3V", "2ohm", "2A", "7x", "5s", "2Ohms", "4H", "6W", "9V1"}
+    | {"1k5", "4R7", "2M2", "3u3", "1Meg5"}
+)
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
@@ -92,35 +90,65 @@ def test_a_value_the_server_parses_is_the_value_ltspice_read(
     build: str, case_id: str, tmp_path: Path
 ):
     """Scale suffixes in either case, ``M`` against ``Meg``, ``mil``, unit
-    tails, and words that merely begin with a suffix (``1MHz`` is a millihertz
-    to LTspice, ``1milli`` a mil)."""
+    tails, the ``1k5`` shorthand, and words that merely begin with a suffix
+    (``1MHz`` is a millihertz to LTspice, ``1milli`` a mil)."""
     voltages = rec.operating_point(build, case_id, tmp_path)
     written = resistances(case_id)
     assert len(written) >= 5
-    refused: dict[str, float] = {}
     for node, spelling in written.items():
-        read = voltages[f"v({node})"]
-        try:
-            parsed = parse_spice_value(spelling)
-        except ValueError:
-            refused[spelling] = read
-            continue
         # A raw stores a node voltage in four bytes.
-        assert parsed == pytest.approx(read, rel=1e-6), spelling
-    assert refused == pytest.approx(
-        {spelling: READ_BY_LTSPICE_ONLY[spelling] for spelling in refused}, rel=1e-6
-    )
+        assert parse_spice_value(spelling) == pytest.approx(voltages[f"v({node})"], rel=1e-6), (
+            spelling
+        )
 
 
-def test_every_value_only_ltspice_reads_is_recorded():
-    """The table above is what the recordings hold, no more and no less."""
+def test_the_spellings_once_refused_are_all_recorded():
+    """Each spelling above is in a recorded deck, so the test before this one
+    holds the server to LTspice's reading of it."""
     spellings = {
         spelling
         for case_id in SUFFIX_DECKS
         for spelling in resistances(case_id).values()
-        if spelling in READ_BY_LTSPICE_ONLY
+        if spelling in ONCE_REFUSED
     }
-    assert spellings == set(READ_BY_LTSPICE_ONLY)
+    assert spellings == ONCE_REFUSED
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+async def test_a_value_the_hierarchy_resolves_is_the_value_ltspice_read(
+    build: str, case_id: str, tmp_path: Path, state_no_sim, work_dir: Path
+):
+    """``inspect(kind="hierarchy")`` reads a resistor's value through the
+    expression evaluator, which once took ``4R7`` for 4 followed by a stray 7
+    and answered 4.07."""
+    voltages = rec.operating_point(build, case_id, tmp_path)
+    rows = await hierarchy_rows(state_no_sim, work_dir, case_id)
+    resistors = {path: row for path, row in rows.items() if path[0][:1].upper() == "R"}
+    assert len(resistors) == len(resistances(case_id))
+    for (reference,), row in resistors.items():
+        node = row["nodes"][0]["name"].lower()
+        assert row["value"]["value"] == pytest.approx(voltages[f"v({node})"], rel=1e-6), (
+            reference,
+            row["value"]["expression"],
+        )
+
+
+def test_a_digit_after_the_letters_is_declined_inside_an_expression():
+    """In braces LTspice's reading of ``1k5`` is not recorded, so the evaluator
+    claims no value for it rather than read ``1k`` and a stray 5. The digits of
+    an exponent are not after the letters."""
+
+    def ltspice(text: str, **options) -> float:
+        return evaluate(text, lambda name: 0.0, simulator="ltspice", **options)
+
+    with pytest.raises(ValueError, match="1k5"):
+        ltspice("{1k5}")
+    assert ltspice("{2*1k}") == pytest.approx(2000.0)
+    assert ltspice("{1e5}") == pytest.approx(1e5)
+    assert ltspice("{2.5E3k*2}") == pytest.approx(5e6)
+    # A bare element value is held to the same bounds as an expression.
+    with pytest.raises(ValueError, match="finite"):
+        ltspice("1e999", element_value=True)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -136,10 +164,9 @@ def test_a_percent_sign_is_an_error_to_26_and_a_hundredth_to_xvii(build: str, tm
 
 
 def flagged_as_milli(case_id: str) -> set[str]:
-    path = INPUTS / rec.CASES.case(case_id).source
     return {
         token
-        for finding in lint_deck(deck_text(case_id), path, "ltspice", "LTspice")
+        for finding in lint_input(case_id)
         if finding["rule_id"] == "suffix-mega-milli"
         for token in finding["evidence"]["tokens"]
     }
@@ -284,21 +311,51 @@ def test_a_byte_cp1252_leaves_undefined_is_read_as_each_build_reads_it(build: st
         assert f"n{as_cp1252}{letter}" in nodes
 
 
+def test_every_node_name_holding_a_control_byte_is_named_before_the_run():
+    """Each node of ``deck/bytes_in_node_names`` holding a byte from 0x80 to
+    0x9F is a lint warning, whichever of the two readings the server shows,
+    and its ``saved_as`` is the name XVII saved (LTspice 26 refused them)."""
+    findings = [
+        finding
+        for finding in lint_input("deck/bytes_in_node_names")
+        if finding["rule_id"] == "node-control-byte-ltspice"
+    ]
+    saved = {finding["evidence"]["saved_as"] for finding in findings}
+    expected = {
+        *(f"n{chr(byte)}{letter}" for byte, letter in UNDEFINED_IN_CP1252.items()),
+        *(
+            f"n{chr(byte)}{letter}"
+            for byte, (letter, _) in READ_AS_CP1252_BY_THE_SERVER_ONLY.items()
+        ),
+    }
+    assert saved == {name.encode("unicode_escape").decode("ascii") for name in expected}
+    assert {finding["severity"] for finding in findings} == {"warning"}
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_byte_85_in_a_comment_ends_the_line_for_ltspice_26_alone(build: str, tmp_path: Path):
     """85 is an ellipsis in cp1252 and the next-line control in Latin-1, and
     it is half of many double-byte characters. LTspice 26 ends the comment
     there, and what follows is a card: the deck has a third resistor. XVII
     reads one comment. The server reads it as XVII does, so on LTspice 26 the
-    circuit it describes is not the one that ran, and no check says so."""
+    circuit it describes is not the one that ran; the linter says so unless
+    the session's LTspice is known to be XVII."""
     case_id = "deck/byte_85_in_comment"
     traces = set(rec.operating_point(build, case_id, tmp_path))
     assert ("i(r3)" in traces) == (rec.generation(build) != "xvii")
     cards = drop_title_card(lex(deck_text(case_id)).cards)
     assert {card.name for card in cards if card.kind == "instance"} == {"V1", "R1", "R2"}
-    path = INPUTS / rec.CASES.case(case_id).source
-    findings = lint_deck(deck_text(case_id), path, "ltspice", "LTspice")
-    assert [finding["rule_id"] for finding in findings] == []
+    xvii = rec.generation(build) == "xvii"
+    findings = lint_input(
+        case_id, cp1252_reader=rec.manifest(build)["reported_build"] if xvii else None
+    )
+    if xvii:
+        assert findings == []
+    else:
+        (finding,) = findings
+        assert finding["rule_id"] == "byte-85-ltspice"
+        assert finding["at"]["line"] == 5
+        assert finding["evidence"]["read_as_cards"] == ["R3 b 0 1k"]
 
 
 # --------------------------------------------------------------------------
@@ -414,19 +471,20 @@ REFUSED = {
     "deck/default_models": {"model-missing"},
     # LTspice runs it and the measurement fails for want of the unsaved node.
     "deck/save_omits_meas": {"save-meas-coverage"},
+    # "More than one analysis specified."
+    "deck/ac_and_tran": {"analysis-count-ltspice"},
+    # Functions only LTspice's waveform viewer has.
+    "deck/meas_function_vdb": {"meas-function-ltspice"},
+    "deck/meas_function_phase": {"meas-function-ltspice"},
+    "deck/meas_function_group_delay": {"meas-function-ltspice"},
 }
 
 FORMS = sorted(rec.cases_of("deck-forms"))
 
 
 def refusals(case_id: str) -> set[str]:
-    path = INPUTS / rec.CASES.case(case_id).source
     text = deck_text(case_id)
-    lint = {
-        f["rule_id"]
-        for f in lint_deck(text, path, "ltspice", "LTspice")
-        if f["severity"] == "error"
-    }
+    lint = {f["rule_id"] for f in lint_input(case_id) if f["severity"] == "error"}
     arity = {
         str(issue["check"])
         for issue in validate_netlist_arity(drop_title_card(lex(text).cards), simulator="LTspice")
@@ -446,22 +504,9 @@ def test_a_form_the_checks_accept_ran_on_ltspice(build: str, case_id: str):
     ``IC=`` values, ``Q=`` and ``Flux=``, a value keyed ``R=``, ``params:`` on a
     subcircuit, trailing area factors, the ``.tran`` shorthands, ``.op`` beside
     ``.tran``."""
-    if case_id in REFUSED or case_id in NOT_REFUSED_YET:
+    if case_id in REFUSED:
         pytest.skip("not a form the checks accept")
     assert ran(build, case_id)
-
-
-#: Decks LTspice refuses that no check turns away before the run.
-NOT_REFUSED_YET = {
-    # "More than one analysis specified." The one-analysis rule is written
-    # down in spice_validator.EXCLUSIVE_ANALYSIS_KINDS and enforced nowhere.
-    "deck/ac_and_tran",
-    # vdb(), phase() and group_delay() in a .meas: caught by the directive
-    # check below, which is not part of the lint.
-    "deck/meas_function_vdb",
-    "deck/meas_function_phase",
-    "deck/meas_function_group_delay",
-}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -547,8 +592,7 @@ class TestDeckSemantics:
     def test_a_parameter_named_temp_never_sets_the_temperature(self, build: str, tmp_path: Path):
         """LTspice 26 refuses ``.param temp=50``; XVII runs the deck at 27
         degrees as if the line were not there. The lint refuses it for both."""
-        path = INPUTS / "deck/param_temp.cir"
-        findings = lint_deck(deck_text("deck/param_temp"), path, "ltspice", "LTspice")
+        findings = lint_input("deck/param_temp")
         assert [f["rule_id"] for f in findings if f["severity"] == "error"] == ["temp-as-param"]
         if rec.generation(build) == "xvii":
             # 1 V across 1k with tc1=0.01: 1 mA only at the nominal 27 degrees.
@@ -607,8 +651,8 @@ def test_an_include_beside_the_deck_is_found(build: str, tmp_path: Path):
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_ltspice_reads_a_lib_section_name_as_part_of_the_file_name(build: str):
     """``.lib corners.lib tt`` selects a section in ngspice. LTspice has no
-    sections: it looks for a file called ``corners.lib tt`` and stops. Nothing
-    in the lint says so before the run."""
+    sections: it looks for a file called ``corners.lib tt`` and stops. The lint
+    refuses the deck before the run."""
     assert not ran(build, "deck/lib_section")
     log = read_spice_text(rec.recorded(build, "deck/lib_section.log"))
     if rec.generation(build) == "xvii":
@@ -616,6 +660,5 @@ def test_ltspice_reads_a_lib_section_name_as_part_of_the_file_name(build: str):
     else:
         assert "File not found." in log
         assert ".lib corners.lib tt" in log
-    path = INPUTS / "deck/lib_section.cir"
-    findings = lint_deck(deck_text("deck/lib_section"), path, "ltspice", "LTspice")
-    assert [f["rule_id"] for f in findings if f["severity"] == "error"] == []
+    findings = lint_input("deck/lib_section")
+    assert [f["rule_id"] for f in findings if f["severity"] == "error"] == ["lib-section-ltspice"]
