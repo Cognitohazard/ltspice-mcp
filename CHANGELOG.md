@@ -116,6 +116,10 @@ recording that showed it.
   a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
   value runs as 1, not 1e-6. An export that opens with its schematic's path and
   names no generator is now read as XVII's, and the micro sign is a warning.
+- `inspect(kind="symbol")` gave a symbol's pins but not what an instance of it
+  is netlisted with, so a model name such as an A-device's had to be read from
+  the `.asy`. It now lists the symbol's `SymbolType`, prefix and every
+  attribute it carries (`SpiceModel`, `Value`, `SpiceLine`, `ModelFile`...).
 - A sheet using a block symbol with no sheet of its own (`SymbolType BLOCK`,
   its subcircuit defined in a library, or not yet) could not be opened at all:
   `edit_schematic`, `inspect` and `verify_circuit` failed with "File ….asc not

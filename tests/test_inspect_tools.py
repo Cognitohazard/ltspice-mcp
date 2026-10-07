@@ -1261,3 +1261,36 @@ async def test_reference_is_advertised_as_a_supported_kind(cap_state: SessionSta
     assert res["ok"] is False
     assert "reference" in res["error"]["supported"]
     assert "reference" in insp.SUPPORTED_KINDS
+
+
+async def test_symbol_reports_what_an_instance_netlists_with(
+    asc_file: Path, asc_state: SessionState
+):
+    """The prefix, the symbol type and every SYMATTR, so the model name and
+    parameters an instance is netlisted with need no reading of the .asy."""
+    (asc_file.parent / "schmitt_buf.asy").write_text(
+        "Version 4\n"
+        "SymbolType CELL\n"
+        "LINE Normal 0 -16 32 0\n"
+        "SYMATTR Prefix A\n"
+        "SYMATTR SpiceModel SCHMITT\n"
+        "SYMATTR SpiceLine Vt=.5 Vh=.1\n"
+        "SYMATTR Description Schmitt trigger buffer\n"
+        "PIN 0 0 LEFT 8\n"
+        "PINATTR PinName In\n"
+        "PINATTR SpiceOrder 1\n",
+        encoding="utf-8",
+    )
+    (res,) = await _run(
+        asc_state, [{"kind": "symbol", "name": "schmitt_buf", "path": str(asc_file)}]
+    )
+    assert res["ok"] is True, res
+    data = res["data"]
+    assert (data["symbol_type"], data["prefix"]) == ("CELL", "A")
+    assert data["attributes"] == {
+        "Prefix": "A",
+        "SpiceModel": "SCHMITT",
+        "SpiceLine": "Vt=.5 Vh=.1",
+        "Description": "Schmitt trigger buffer",
+    }
+    assert data["description"] == "Schmitt trigger buffer"

@@ -150,7 +150,10 @@ class SymbolInfo:
     ``bbox.y1`` are usually negative. ``prefix`` is the symbol's
     ``SYMATTR Prefix`` (``R``, ``QN``, ``MN``, ``X``...), empty when it has
     none; its first letter is the element class LTspice netlists the part as,
-    whatever the instance is named.
+    whatever the instance is named. ``attributes`` is every ``SYMATTR`` the
+    symbol carries, in file order (``SpiceModel``, ``Value``, ``SpiceLine``,
+    ``ModelFile``...), and ``symbol_type`` its ``SymbolType`` (``CELL``,
+    ``BLOCK``), empty when it states none.
     """
 
     name: str
@@ -158,6 +161,8 @@ class SymbolInfo:
     pins: tuple[PinInfo, ...]
     bbox: BBox
     prefix: str = ""
+    symbol_type: str = ""
+    attributes: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -238,8 +243,8 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
     lines = read_spice_text(asy_path).splitlines()
 
     pins: list[PinInfo] = []
-    description = ""
-    prefix = ""
+    attributes: list[tuple[str, str]] = []
+    symbol_type = ""
     elements: list[Element] = []
 
     i = 0
@@ -271,10 +276,10 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
         if shape is not None:
             elements.append(shape)
 
-        if line.startswith("SYMATTR Description"):
-            description = _symattr_value(line)
-        elif line.startswith("SYMATTR Prefix"):
-            prefix = _symattr_value(line)
+        if line.startswith("SYMATTR "):
+            attributes.append((line.split(None, 2)[1], _symattr_value(line)))
+        elif line.startswith("SymbolType "):
+            symbol_type = line.split(None, 1)[1].strip()
 
         i += 1
 
@@ -282,12 +287,15 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
     bbox = bbox_from_elements(elements, extra_points=pin_points) or BBox(0, 0, 0, 0)
 
     pins.sort(key=lambda p: p.order)
+    named = dict(attributes)
     return SymbolInfo(
         name=asy_path.stem,
-        description=description,
+        description=named.get("Description", ""),
         pins=tuple(pins),
         bbox=bbox,
-        prefix=prefix,
+        prefix=named.get("Prefix", ""),
+        symbol_type=symbol_type,
+        attributes=tuple(attributes),
     )
 
 
