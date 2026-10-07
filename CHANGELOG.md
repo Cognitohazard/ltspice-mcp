@@ -124,6 +124,11 @@ recording that showed it.
   reads to the number LTspice ran. `8%` stays refused: LTspice 26 refuses it.
   Where a value has to be told from a name (comparing two netlists, Monte
   Carlo, a variation's assignment), `2N2222` and `1N4148` are still names.
+- `inspect(kind="hierarchy")` read the same infix values wrongly: it took
+  `4R7` for 4 followed by a stray 7 and gave 4.07, and `1k5` as 1000.05. A
+  bare element value is now read as LTspice reads it. Inside an expression
+  (`{1k5}`, or a `.param`) what LTspice makes of a digit after the letters is
+  not recorded, so the value is left unresolved with that reason.
 - Three refusals LTspice 26 states on a line of their own (`No analysis
   specified.`, `More than one analysis specified.`, `R1: Resistance must not
   be zero.`) were not extracted, so the caller got a log excerpt and no

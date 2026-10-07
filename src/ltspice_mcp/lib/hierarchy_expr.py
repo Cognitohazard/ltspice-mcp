@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import math
 import operator
 import re
@@ -14,7 +15,10 @@ from ltspice_mcp.lib.format import parse_spice_value
 MAX_EXPRESSION_LENGTH = 2048
 MAX_EXPRESSION_NODES = 128
 MAX_PARAMETER_DEPTH = 32
-_NUMBER = re.compile(r"(?<![\w.])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[a-zA-Zµμ]*")
+# A number and the letters after it, plus any digits after those letters, so
+# that a spelling such as 1k5 is one token rather than 1k and a stray 5.
+_NUMBER = re.compile(r"(?<![\w.])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[a-zA-Zµμ]*\w*")
+_DIGIT_AFTER_LETTER = re.compile(r"[a-zA-Zµμ]\d")
 _BINARY = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -31,6 +35,18 @@ class NumericFact:
     unit: str | None = None
     status: str = "unresolved"
     reason: str | None = None
+
+
+def _number(token: str) -> float:
+    """A number token's value; one with a digit after its letters is declined.
+
+    In a component value LTspice reads ``1k5`` as 1500 (recorded), but what it
+    makes of the same spelling inside an expression is not recorded, so no
+    value is claimed for it.
+    """
+    if _DIGIT_AFTER_LETTER.search(token):
+        raise ValueError(f"'{token}' in an expression has no recorded LTspice reading")
+    return parse_spice_value(token)
 
 
 def references_sibling(expression: str, siblings: set[str]) -> bool:
@@ -52,7 +68,7 @@ def evaluate(expression: str, lookup: Callable[[str], float], *, simulator: str)
         raise ValueError("unsupported expression characters")
     if len(re.findall(r"\^|\*\*", text)) > 1:
         raise ValueError("multiple power operators have unsupported associativity")
-    text = _NUMBER.sub(lambda m: repr(parse_spice_value(m[0])), text)
+    text = _NUMBER.sub(lambda m: repr(_number(m[0])), text)
     tree = ast.parse(text.replace("^", "**"), mode="eval")
     if sum(1 for _ in ast.walk(tree)) > MAX_EXPRESSION_NODES:
         raise ValueError(f"expression exceeds {MAX_EXPRESSION_NODES} syntax nodes")
@@ -140,6 +156,20 @@ class Environment:
             return NumericFact(expression, value, unit, "resolved")
         except (ValueError, SyntaxError, ArithmeticError, RecursionError) as exc:
             return NumericFact(expression, unit=unit, reason=str(exc))
+
+    def value_fact(self, text: str | None, unit: str | None = None) -> NumericFact:
+        """An element's value field: a bare number is read as LTspice reads a
+        value (``1k5`` is 1500, ``9V1`` is 9, recorded); anything else is an
+        expression."""
+        if (
+            text is not None
+            and not self.dynamic_reason
+            and self.simulator == "ltspice"
+            and _NUMBER.fullmatch(text)
+        ):
+            with contextlib.suppress(ValueError):
+                return NumericFact(text, parse_spice_value(text), unit, "resolved")
+        return self.fact(text, unit)
 
     def facts(self) -> tuple[tuple[str, NumericFact], ...]:
         return tuple(

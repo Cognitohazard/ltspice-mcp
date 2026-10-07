@@ -102,6 +102,33 @@ def test_a_value_the_server_parses_is_the_value_ltspice_read(
         )
 
 
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+async def test_a_value_the_hierarchy_resolves_is_the_value_ltspice_read(
+    build: str, case_id: str, tmp_path: Path, state_no_sim, work_dir: Path
+):
+    """``inspect(kind="hierarchy")`` reads a resistor's value through the
+    expression evaluator, which once took ``4R7`` for 4 followed by a stray 7
+    and answered 4.07."""
+    voltages = rec.operating_point(build, case_id, tmp_path)
+    rows = await hierarchy_rows(state_no_sim, work_dir, case_id)
+    resistors = {path: row for path, row in rows.items() if path[0][:1].upper() == "R"}
+    assert len(resistors) == len(resistances(case_id))
+    for (reference,), row in resistors.items():
+        node = row["nodes"][0]["name"].lower()
+        assert row["value"]["value"] == pytest.approx(voltages[f"v({node})"], rel=1e-6), (
+            reference,
+            row["value"]["expression"],
+        )
+
+
+def test_a_digit_after_the_letters_is_declined_inside_an_expression():
+    """In braces LTspice's reading of ``1k5`` is not recorded, so the evaluator
+    claims no value for it rather than read ``1k`` and a stray 5."""
+    with pytest.raises(ValueError, match="1k5"):
+        evaluate("{1k5}", lambda name: 0.0, simulator="ltspice")
+    assert evaluate("{2*1k}", lambda name: 0.0, simulator="ltspice") == pytest.approx(2000.0)
+
+
 def test_the_spellings_once_refused_are_all_recorded():
     """Each spelling above is in a recorded deck, so the test before this one
     holds the server to LTspice's reading of it."""
