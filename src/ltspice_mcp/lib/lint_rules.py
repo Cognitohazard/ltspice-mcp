@@ -11,7 +11,6 @@ from typing import Any, Literal, NamedTuple
 
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
-    IncludeReference,
     is_absolute_reference,
     resolve_reference,
     scan_include_references,
@@ -252,10 +251,11 @@ def _step_ngspice(
     return findings
 
 
-def _sectioned_libs(context: _LintContext) -> list[IncludeReference]:
-    """The deck's ``.lib file section`` cards, as deck staging reads them."""
+def _sectioned_libs(context: _LintContext) -> list[tuple[SpiceCard, str]]:
+    """The deck's ``.lib file section`` cards and their sections, as deck
+    staging reads them."""
     return [
-        reference
+        (reference.card, reference.section)
         for reference in scan_include_references(context.cards, context.path)
         if reference.section is not None
     ]
@@ -273,15 +273,15 @@ def _lib_section_ngspice(
     if "lt" not in mode and "ps" not in mode:
         return []
     findings = []
-    for reference in _sectioned_libs(context):
+    for card, section in _sectioned_libs(context):
         findings.append(
             _finding(
                 context,
                 rule,
-                line=reference.card.line_start,
-                subject=reference.section,
+                line=card.line_start,
+                subject=section,
                 evidence={
-                    "directive": reference.card.body,
+                    "directive": card.body,
                     "ngbehavior": mode,
                     "reason": (
                         "this compatibility mode treats a sectioned .lib as plain "
@@ -373,15 +373,15 @@ def _lib_section_ltspice(
     if context.family != "ltspice":
         return []
     findings = []
-    for reference in _sectioned_libs(context):
+    for card, section in _sectioned_libs(context):
         findings.append(
             _finding(
                 context,
                 rule,
-                line=reference.card.line_start,
-                subject=reference.section,
+                line=card.line_start,
+                subject=section,
                 evidence={
-                    "directive": reference.card.body,
+                    "directive": card.body,
                     "reason": (
                         "LTspice has no library sections: it reads the rest of the "
                         "line as one file name and stops when no such file exists. "
