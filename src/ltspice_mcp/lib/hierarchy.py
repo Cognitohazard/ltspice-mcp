@@ -735,7 +735,7 @@ def resolve_hierarchy(
             )
             unit = {"R": "ohm", "C": "F", "L": "H", "V": "V", "I": "A"}.get(kind)
             value = (
-                env.fact(view.value, unit)
+                env.value_fact(view.value, unit)
                 if supported
                 else NumericFact(
                     view.value, reason="value semantics unsupported for this element form"
