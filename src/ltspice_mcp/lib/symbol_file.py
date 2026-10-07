@@ -18,6 +18,7 @@ file names or search paths.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -40,11 +41,24 @@ class PinInfo:
         return {"name": self.name, "order": self.order, "x": self.x, "y": self.y}
 
 
+#: Slack for an angle or a coordinate that arithmetic left a hair off the value
+#: it stands for, so that an arc ending on a quarter turn reaches it.
+_SLACK = 1e-9
+
+
 @dataclass(frozen=True)
 class SymbolArc:
-    """An ``ARC``: the box of its ellipse, then the points it starts and ends at.
+    """An ``ARC``: the box of its ellipse, then a start point and an end point.
 
-    Both points lie on the ellipse, so the box alone bounds the arc.
+    What is drawn is the part of the ellipse from the direction of the start
+    point to the direction of the end point, each seen from the centre, so
+    neither point need lie on the ellipse. LTspice draws it counter-clockwise
+    *as displayed*. Its y axis points down, and with the ellipse written as
+    ``(cx + rx·cosθ, cy + ry·sinθ)`` the angle on screen *increases clockwise*,
+    so the displayed counter-clockwise turn is a *decreasing* θ. The stock
+    ``ind.asy`` shows it: its three arcs make the coil (each a loop of more
+    than half a turn) only under a decreasing θ, where an increasing one draws
+    the three small arcs left over.
     """
 
     x1: int
@@ -55,6 +69,59 @@ class SymbolArc:
     sy: int
     ex: int
     ey: int
+
+    def sweep(self) -> tuple[float, float] | None:
+        """The θ the arc starts at and the angle it turns through, which is
+        negative; ``None`` for an ellipse with no area, which draws nothing.
+
+        A start and an end in one direction are the whole ellipse.
+        """
+        cx, cy = (self.x1 + self.x2) / 2.0, (self.y1 + self.y2) / 2.0
+        rx, ry = abs(self.x2 - self.x1) / 2.0, abs(self.y2 - self.y1) / 2.0
+        if rx == 0 or ry == 0:
+            return None
+        start = math.atan2((self.sy - cy) / ry, (self.sx - cx) / rx)
+        turn = math.atan2((self.ey - cy) / ry, (self.ex - cx) / rx) - start
+        while turn >= 0:
+            turn -= 2 * math.pi
+        return start, turn
+
+    def at(self, angle: float) -> tuple[float, float]:
+        """The point of the ellipse at θ = ``angle``."""
+        cx, cy = (self.x1 + self.x2) / 2.0, (self.y1 + self.y2) / 2.0
+        rx, ry = abs(self.x2 - self.x1) / 2.0, abs(self.y2 - self.y1) / 2.0
+        return cx + rx * math.cos(angle), cy + ry * math.sin(angle)
+
+    def extent(self) -> Box | None:
+        """The smallest box of whole units around the arc as drawn; ``None``
+        for one that draws nothing.
+
+        The box of the ellipse bounds the arc too, and more: a shallow arc cut
+        from a large circle, the curved plate of a polarized capacitor, is a
+        sliver of that circle's box.
+        """
+        swept = self.sweep()
+        if swept is None:
+            return None
+        start, turn = swept
+        ends = [self.at(start), self.at(start + turn)]
+        xs, ys = [x for x, _ in ends], [y for _, y in ends]
+        # Where θ is a quarter turn the ellipse touches its box, and the box
+        # says where exactly: its right, bottom, left and top, in order of θ.
+        left, right = sorted((self.x1, self.x2))
+        top, bottom = sorted((self.y1, self.y2))
+        cx, cy = (left + right) / 2.0, (top + bottom) / 2.0
+        touches = ((right, cy), (cx, bottom), (left, cy), (cx, top))
+        for quarter, (x, y) in enumerate(touches):
+            if (start - quarter * math.pi / 2) % (2 * math.pi) <= -turn + _SLACK:
+                xs.append(x)
+                ys.append(y)
+        return (
+            math.floor(min(xs) + _SLACK),
+            math.floor(min(ys) + _SLACK),
+            math.ceil(max(xs) - _SLACK),
+            math.ceil(max(ys) - _SLACK),
+        )
 
 
 @dataclass(frozen=True)
@@ -92,15 +159,24 @@ class SymbolFile:
         return self.attr("Prefix")
 
     @property
+    def body(self) -> BBox | None:
+        """The smallest box around what the symbol draws, its pins apart;
+        ``None`` for a symbol that draws nothing. An arc counts as what is
+        drawn of it (``SymbolArc.extent``)."""
+        drawn = [extent for arc in self.arcs if (extent := arc.extent()) is not None]
+        points: list[tuple[int, int]] = []
+        for x1, y1, x2, y2 in (*self.lines, *self.rects, *self.circles, *drawn):
+            points += [(x1, y1), (x2, y2)]
+        return BBox.from_points(points)
+
+    @property
     def bbox(self) -> BBox:
         """The smallest box around the body and the pins; empty at the origin for
         a symbol that has neither."""
-        points: list[tuple[int, int]] = []
-        for x1, y1, x2, y2 in (*self.lines, *self.rects, *self.circles):
-            points += [(x1, y1), (x2, y2)]
-        for arc in self.arcs:
-            points += [(arc.x1, arc.y1), (arc.x2, arc.y2)]
-        points += [(pin.x, pin.y) for pin in self.pins]
+        points = [(pin.x, pin.y) for pin in self.pins]
+        body = self.body
+        if body is not None:
+            points += [(body.x1, body.y1), (body.x2, body.y2)]
         return BBox.from_points(points) or BBox(0, 0, 0, 0)
 
 

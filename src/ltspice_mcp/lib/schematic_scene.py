@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -424,6 +423,7 @@ class SymbolProto:
     pins: tuple[PinInfo, ...]
     windows: tuple[Window, ...]
     bbox: BBox
+    body: BBox | None
 
     def window(self, number: int) -> Window | None:
         for w in self.windows:
@@ -446,6 +446,11 @@ class PlacedSymbol:
     rotation: str
     resolved_path: Path | None
     missing: bool
+    #: The part's extent with its pins, and of what it draws alone: its
+    #: symbol's two boxes as placed. A part whose symbol was not found has the
+    #: placeholder it is drawn as for both.
+    box: BBox | None = None
+    body: BBox | None = None
     graphics: list[Graphic] = field(default_factory=list)
     pins: list[DrawPin] = field(default_factory=list)
     texts: list[DrawText] = field(default_factory=list)
@@ -568,6 +573,7 @@ def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
         pins=symbol.pins,
         windows=symbol.windows,
         bbox=symbol.bbox,
+        body=symbol.body,
     )
 
 
@@ -840,44 +846,25 @@ def _place_aabb(
     return (bb.x1, bb.y1, bb.x2, bb.y2)
 
 
+def _place_box(box: BBox, ox: int, oy: int, rot: str) -> BBox:
+    return BBox(*_place_aabb(box.x1, box.y1, box.x2, box.y2, ox, oy, rot))
+
+
 def _arc_polyline(arc: SymbolArc, ox: int, oy: int, rot: str) -> DrawPolyline | None:
     """Sample an arc into an absolute-coordinate polyline.
 
     Sampling in symbol-local space and transforming each point means mirror and
     rotation are handled by the shared transform — no SVG sweep-flag reasoning.
-    Degenerate (zero-area) ellipses are skipped.
-
-    Sweep direction: LTspice draws an ARC counter-clockwise *as displayed*, from
-    the start point to the end point. LTspice's y axis points down, and with the
-    parameterization ``(cx + rx·cosθ, cy + ry·sinθ)`` the on-screen angle
-    *increases clockwise*; therefore the displayed counter-clockwise sweep is a
-    *decreasing* θ. Empirically confirmed against the stock ``ind.asy``: its
-    three arcs form the familiar coil spring (each a major, >180° loop) only
-    under a decreasing-θ sweep — the increasing-θ sweep would draw the
-    complementary minor arcs and the inductor would not read as a coil.
+    Degenerate (zero-area) ellipses are skipped. Which way an arc turns is
+    ``SymbolArc.sweep``'s to say.
     """
-    cx = (arc.x1 + arc.x2) / 2.0
-    cy = (arc.y1 + arc.y2) / 2.0
-    rx = abs(arc.x2 - arc.x1) / 2.0
-    ry = abs(arc.y2 - arc.y1) / 2.0
-    if rx == 0 or ry == 0:
+    swept = arc.sweep()
+    if swept is None:
         return None
-
-    def angle_of(sx: int, sy: int) -> float:
-        return math.atan2((sy - cy) / ry, (sx - cx) / rx)
-
-    a0 = angle_of(arc.sx, arc.sy)
-    a1 = angle_of(arc.ex, arc.ey)
-    # Displayed counter-clockwise = decreasing θ, so keep the sweep negative.
-    sweep = a1 - a0
-    while sweep >= 0:
-        sweep -= 2 * math.pi
-
+    start, turn = swept
     pts: list[tuple[int, int]] = []
     for k in range(_ARC_SEGMENTS + 1):
-        a = a0 + sweep * (k / _ARC_SEGMENTS)
-        lx = cx + rx * math.cos(a)
-        ly = cy + ry * math.sin(a)
+        lx, ly = arc.at(start + turn * (k / _ARC_SEGMENTS))
         pts.append(_place_point(round(lx), round(ly), ox, oy, rot))
     return DrawPolyline(tuple(pts))
 
@@ -900,6 +887,7 @@ def _place_symbol(raw: _RawSymbol, proto: SymbolProto | None) -> PlacedSymbol:
             _PLACEHOLDER.x1, _PLACEHOLDER.y1, _PLACEHOLDER.x2, _PLACEHOLDER.y2, ox, oy, rot
         )
         placed.graphics.append(DrawRect(x1, y1, x2, y2))
+        placed.box = placed.body = BBox(x1, y1, x2, y2)
         label = ref or raw.symbol
         placed.texts.append(
             DrawText(
@@ -921,6 +909,8 @@ def _place_symbol(raw: _RawSymbol, proto: SymbolProto | None) -> PlacedSymbol:
         rotation=rot,
         resolved_path=proto.path,
         missing=False,
+        box=_place_box(proto.bbox, ox, oy, rot),
+        body=_place_box(proto.body, ox, oy, rot) if proto.body is not None else None,
     )
     for ln in proto.lines:
         ax1, ay1 = _place_point(ln.x1, ln.y1, ox, oy, rot)
@@ -1120,21 +1110,13 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
 # ---------------------------------------------------------------------------
 
 
-def _extent(sym: PlacedSymbol, *, with_pins: bool) -> BBox | None:
-    """The extent of everything a placed symbol draws, or of that and its pins:
-    the box the schematic editor reports."""
-    pts = [point for g in sym.graphics for point in g.points()]
-    if with_pins:
-        pts += [(pin.x, pin.y) for pin in sym.pins]
-    return BBox.from_points(pts)
-
-
 def sheet_view(scene: Scene) -> SheetView:
     """``scene`` as the checks in ``lib/sheet_findings.py`` read it.
 
     Every part is in it, one whose symbol was not found as the placeholder it is
     drawn as. A part's box is what it draws together with its pins, and its
-    body what it draws alone.
+    body what it draws alone: its symbol's own two boxes, as placed, which are
+    the boxes the schematic editor's geometry is given too.
     """
     return SheetView(
         parts=tuple(
@@ -1142,8 +1124,8 @@ def sheet_view(scene: Scene) -> SheetView:
                 ref=sym.reference,
                 symbol=sym.symbol,
                 at=(sym.x, sym.y),
-                box=_extent(sym, with_pins=True),
-                body=_extent(sym, with_pins=False),
+                box=sym.box,
+                body=sym.body,
                 pins=tuple(("", pin.x, pin.y) for pin in sym.pins),
                 texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
                 missing=sym.missing,

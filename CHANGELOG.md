@@ -25,6 +25,17 @@ tool-surface changes.
   LTspice launch a recoverable experiment resumes with, which keeps its
   command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
+- The bounding box `inspect` and `edit_schematic` report for a part took
+  each `ARC` of its symbol as the whole ellipse the arc is cut from, so a part
+  drawn with arcs was reported larger than it is: a polarized capacitor 64 by
+  100 where it is 32 by 64, an inductor 4 units wider than its coil. A label
+  or a part beside one was then reported as overlapping it. `verify_circuit`
+  judged overlap by the arc as drawn, so the two disagreed on any sheet with
+  an inductor. An arc now counts as what is drawn of it, in one place, for
+  both tools. The boxes of 593 of the 6,678 symbols installed with LTspice
+  26.1.1 change, `ind`, `ind2` and `polcap` among them, and with them the
+  direction reported for thirteen pins of the `and`, `or` and `xor` gates,
+  whose inputs are now reported as leaving to the left.
 
 The entries in this group were found by holding the server against files
 LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs

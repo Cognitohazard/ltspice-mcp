@@ -422,6 +422,16 @@ Taken:
   the pins and the box without are the same box, and parts that meet pin to
   pin share an edge, which is not an overlap. They differ only for the few
   symbols with a pin drawn apart from the body.
+- An arc counts, in a part's box, as what is drawn of it. The editor took
+  the whole ellipse an `ARC` line is cut from and the checker the points of
+  the arc it drew, and on LTspice's own example sheets the two boxes differed
+  for some part on 43 of the 60 largest: every inductor, whose coil stops
+  short of its ellipses, and every polarized capacitor, whose curved plate is
+  a sliver of a circle 64 units across. `SymbolArc.extent` is the one
+  answer, `SymbolFile.body` and `SymbolFile.bbox` are built on it, and both
+  tools' views take a part's two boxes from there. Which way an arc turns is
+  read off the stock inductor, whose arcs make a coil one way round and three
+  scraps the other; it is the renderer's rule and is not from a recording.
 - A second schematic dialect is not built now. The format layer is where one
   would enter.
 - A formatted sheet is in LTspice's own form. Both builds were recorded
@@ -458,13 +468,6 @@ Open:
   sheet is read as 8-bit text and keeps its bytes, but a character an edit
   adds is written as one byte, which a reader in that code page takes for
   half of a two-byte character. This is so today and is not made worse.
-- Which box a part with an arc has. The editor's box takes the whole
-  ellipse an `ARC` line is cut from (`SymbolFile.bbox`); the checker's takes
-  the points of the arc as drawn (`schematic_scene.sheet_view`). For a symbol
-  with an arc that is less than its ellipse, the two tools can therefore
-  disagree about whether it overlaps a neighbour. One box, computed once on
-  the sheet, settles it when the two views become one (step 6); which of the
-  two it is changes the record of findings and is decided there.
 
 ## 8. The rules, after layout rule checking
 
