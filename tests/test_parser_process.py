@@ -822,6 +822,105 @@ def test_windows_job_default_and_parser_limits(monkeypatch):
     assert captured == [(0x2000 | 0x0800, 0, 0), (0x2000 | 0x0100 | 0x0200, 134217728, 134217728)]
 
 
+# A process that waits to be put in a job, then starts a descendant holding
+# enough memory for its exit to take a moment, and says who they are. Each
+# further line it is sent asks it to start one more process.
+_JOB_ROOT = """
+import json, os, subprocess, sys
+from pathlib import Path
+
+sys.stdin.readline()
+child = subprocess.Popen(
+    [sys.executable, "-c", (
+        "import os\\n"
+        "ballast = bytearray(64 * 1024 * 1024)\\n"
+        "for at in range(0, len(ballast), 4096): ballast[at] = 1\\n"
+        "print(os.getpid(), flush=True)\\n"
+        "while True: pass"
+    )],
+    stdout=subprocess.PIPE,
+)
+pids = [os.getpid(), child.pid, int(child.stdout.readline())]
+Path("ready.json").write_text(json.dumps(pids), encoding="utf-8")
+for _ in sys.stdin:
+    try:
+        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    except OSError:
+        Path("answer.txt").write_text("refused", encoding="utf-8")
+    else:
+        Path("answer.txt").write_text("started", encoding="utf-8")
+"""
+
+
+@contextlib.contextmanager
+def _job_with_descendants(directory: Path):
+    """A job holding a process and its descendants: (job, root, the processes).
+
+    The processes are identified while they run. On a virtual environment the
+    descendant is two: the environment's launcher and the interpreter it starts.
+    """
+    executable, env = python_launch()
+    root = subprocess.Popen(
+        [executable, "-c", _JOB_ROOT], stdin=subprocess.PIPE, cwd=directory, env=env, text=True
+    )
+    owned: list[psutil.Process | None] = []
+    job = None
+    try:
+        job = windows_job.WindowsJob(root.pid, allow_breakaway=False, cleanup_timeout_s=LIVENESS_S)
+        assert root.stdin is not None
+        root.stdin.write("the job holds you\n")
+        root.stdin.flush()
+        pids = wait_until(
+            written(directory / "ready.json", json.loads), what="the job's processes to start"
+        )
+        owned.extend(identify(pid) for pid in dict.fromkeys(pids))
+        yield job, root, owned
+    finally:
+        if job is not None:
+            job.close()
+        if root.poll() is None:
+            root.kill()
+        root.wait(timeout=LIVENESS_S)
+
+
+_NEEDS_WINDOWS = pytest.mark.skipif(
+    sys.platform != "win32", reason="a Windows Job Object needs Windows"
+)
+
+
+@_NEEDS_WINDOWS
+def test_a_closed_windows_job_has_no_process_still_exiting(tmp_path):
+    """A close with a cleanup bound returns once the job's processes have exited.
+
+    Windows counts a job's processes as gone the moment it is asked to
+    terminate them, while they are still exiting with their files open. The
+    tree's first process is waited for by the supervisor; its descendants are
+    confirmed by the job alone.
+    """
+    with _job_with_descendants(tmp_path) as (job, _root, owned):
+        assert len(owned) >= 2 and all(process_running(process) for process in owned)
+        job.close()
+        _assert_gone(owned)
+
+
+@_NEEDS_WINDOWS
+def test_a_sealed_windows_job_admits_no_further_process(tmp_path):
+    """A close takes a handle to each process before it ends them, so one
+    started after the handles were taken would be ended with the rest and
+    waited for by nothing. The job is sealed first, which refuses the start."""
+    with _job_with_descendants(tmp_path) as (job, root, owned):
+        job.seal()
+        assert root.stdin is not None
+        root.stdin.write("start another\n")
+        root.stdin.flush()
+        answer = wait_until(
+            written(tmp_path / "answer.txt", str.strip), what="the process to try a start"
+        )
+        assert answer == "refused"
+        assert job.active_processes() == len(owned)
+        assert all(process_running(process) for process in owned)
+
+
 # ---------------------------------------------------------------------------
 # A tree kept between calls
 # ---------------------------------------------------------------------------
