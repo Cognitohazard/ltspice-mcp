@@ -287,13 +287,20 @@ class TestCaseList:
                 assert path.exists(), f"{key}: {name} is not in the repository"
 
     def test_every_input_file_belongs_to_a_case(self):
-        used = {name for case in CASES.cases for name in (case.source, *case.extra)}
+        used = {name for case in CASES.cases for name in case.inputs}
         present = {
             path.relative_to(INPUTS).as_posix()
             for path in INPUTS.rglob("*")
             if path.is_file() and path.name != recorder.CASES_FILE
         }
         assert present == used
+
+    def test_only_a_plot_case_has_steps_or_plot_settings_and_each_has_one(self):
+        for case in CASES.cases:
+            if case.kind == "plot":
+                assert case.steps or case.plot, case.case_id
+            else:
+                assert not (case.steps or case.plot), case.case_id
 
     def test_a_case_stopped_part_way_is_marked_as_varying(self):
         # How far a stopped run got differs every time, so comparing its
@@ -362,11 +369,13 @@ class TestCommittedRecordings:
         assert not stale, f"inputs changed since they were recorded; record again: {stale}"
 
     def test_every_command_is_the_one_the_server_launches(self, build: str):
+        """A plot case is the one exception: it runs the sheet in the window,
+        as the person the sheet is handed to does."""
         manifest = load_manifest(FIXTURES / build)
         for case_id, entry in manifest["cases"].items():
             command = entry["command"]
             assert command[0] == manifest["executable"]["name"], case_id
-            mode = ["-netlist"] if entry["kind"] == "netlist" else ["-Run", "-b"]
+            mode = list(recorder.MODE_SWITCHES.get(entry["kind"], ("-Run", "-b")))
             assert command[1 : 1 + len(mode)] == mode, case_id
             assert command[1 + len(mode)].startswith("<dir>/"), case_id
 
@@ -437,3 +446,77 @@ def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tm
         f"LTspice {version} no longer matches the {label} recording:\n  "
         + "\n  ".join(differences[:40])
     )
+
+
+class TestPlotCases:
+    """The parts of a plot case that run anywhere: its steps and the menu it reads."""
+
+    def _case_file(self, tmp_path: Path, case: str) -> Path:
+        (tmp_path / "plot").mkdir()
+        (tmp_path / "plot" / "rc.asc").write_text("Version 4\n", encoding="utf-8")
+        (tmp_path / "cases.toml").write_text(
+            '[behaviour.b]\nsummary = "s"\nmodel = ["m"]\n\n' + case, encoding="utf-8"
+        )
+        return tmp_path
+
+    def test_a_step_is_a_trace_or_a_command(self, tmp_path: Path):
+        inputs = self._case_file(
+            tmp_path,
+            '[[case]]\nid = "plot/x"\nbehaviour = "b"\nkind = "plot"\nsource = "plot/rc.asc"\n'
+            'steps = [{ trace = "V(out)" }, { command = "Add Plot Pane" }]\n',
+        )
+        (case,) = load_cases(inputs).cases
+        assert case.steps == (("trace", "V(out)"), ("command", "Add Plot Pane"))
+        assert recorder.DEFAULT_KEEP[case.kind] == ("plt",)
+
+    @pytest.mark.parametrize(
+        "steps", ['[{ trace = "V(out)", command = "Add Plot Pane" }]', '[{ pane = "x" }]']
+    )
+    def test_a_step_that_is_neither_is_refused(self, tmp_path: Path, steps: str):
+        inputs = self._case_file(
+            tmp_path,
+            '[[case]]\nid = "plot/x"\nbehaviour = "b"\nkind = "plot"\nsource = "plot/rc.asc"\n'
+            f"steps = {steps}\n",
+        )
+        with pytest.raises(RecorderError, match="a step is one of"):
+            load_cases(inputs)
+
+    def test_a_plot_case_with_nothing_to_read_or_make_is_refused(self, tmp_path: Path):
+        inputs = self._case_file(
+            tmp_path,
+            '[[case]]\nid = "plot/x"\nbehaviour = "b"\nkind = "plot"\nsource = "plot/rc.asc"\n',
+        )
+        with pytest.raises(RecorderError, match="reads plot settings or makes them"):
+            load_cases(inputs)
+
+    def test_a_menu_label_is_the_text_a_case_names(self):
+        assert recorder.menu_label("&Save Plot Settings\tCtrl+S") == "Save Plot Settings"
+        assert recorder.menu_label("Save Plot Settings &As...") == "Save Plot Settings As"
+        assert recorder.menu_label("Add &Plot Pane Below Active Pane") == (
+            "Add Plot Pane Below Active Pane"
+        )
+
+    def test_a_menu_template_gives_each_item_its_command(self):
+        """The classic template form both builds' waveform menus are in."""
+
+        def item(flags: int, text: str, command: int | None = None) -> bytes:
+            head = flags.to_bytes(2, "little")
+            if command is not None:
+                head += command.to_bytes(2, "little")
+            return head + text.encode("utf-16-le") + b"\0\0"
+
+        template = (
+            b"\0\0\0\0"
+            + item(0x10, "&File")
+            + item(0x80, "&Save Plot Settings\tCtrl+S", 57603)
+            + item(0x10 | 0x80, "&Plot Settings")
+            + item(0, "Add trace\tCtrl+A", 32855)
+            + item(0x80, "Save Plot Settings As...", 32914)
+        )
+        assert recorder._menu_items(template) == [
+            (None, "&File"),
+            (57603, "&Save Plot Settings\tCtrl+S"),
+            (None, "&Plot Settings"),
+            (32855, "Add trace\tCtrl+A"),
+            (32914, "Save Plot Settings As..."),
+        ]

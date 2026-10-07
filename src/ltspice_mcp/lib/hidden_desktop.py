@@ -411,6 +411,10 @@ class HiddenDesktop:
         """The process of every top-level window on this desktop."""
         return {owner for _window, owner in self._top_level_windows()}
 
+    def windows(self, pid: int) -> list[int]:
+        """The top-level windows ``pid`` has on this desktop."""
+        return [window for window, owner in self._top_level_windows() if owner == pid]
+
     def dialog(self, pid: int) -> str | None:
         """What a message box ``pid`` has open here says, or None when it has none.
 
