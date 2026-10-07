@@ -102,6 +102,18 @@ def test_a_value_the_server_parses_is_the_value_ltspice_read(
         )
 
 
+def test_the_spellings_once_refused_are_all_recorded():
+    """Each spelling above is in a recorded deck, so the test before this one
+    holds the server to LTspice's reading of it."""
+    spellings = {
+        spelling
+        for case_id in SUFFIX_DECKS
+        for spelling in resistances(case_id).values()
+        if spelling in ONCE_REFUSED
+    }
+    assert spellings == ONCE_REFUSED
+
+
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
 async def test_a_value_the_hierarchy_resolves_is_the_value_ltspice_read(
     build: str, case_id: str, tmp_path: Path, state_no_sim, work_dir: Path
@@ -123,22 +135,20 @@ async def test_a_value_the_hierarchy_resolves_is_the_value_ltspice_read(
 
 def test_a_digit_after_the_letters_is_declined_inside_an_expression():
     """In braces LTspice's reading of ``1k5`` is not recorded, so the evaluator
-    claims no value for it rather than read ``1k`` and a stray 5."""
+    claims no value for it rather than read ``1k`` and a stray 5. The digits of
+    an exponent are not after the letters."""
+
+    def ltspice(text: str, **options) -> float:
+        return evaluate(text, lambda name: 0.0, simulator="ltspice", **options)
+
     with pytest.raises(ValueError, match="1k5"):
-        evaluate("{1k5}", lambda name: 0.0, simulator="ltspice")
-    assert evaluate("{2*1k}", lambda name: 0.0, simulator="ltspice") == pytest.approx(2000.0)
-
-
-def test_the_spellings_once_refused_are_all_recorded():
-    """Each spelling above is in a recorded deck, so the test before this one
-    holds the server to LTspice's reading of it."""
-    spellings = {
-        spelling
-        for case_id in SUFFIX_DECKS
-        for spelling in resistances(case_id).values()
-        if spelling in ONCE_REFUSED
-    }
-    assert spellings == ONCE_REFUSED
+        ltspice("{1k5}")
+    assert ltspice("{2*1k}") == pytest.approx(2000.0)
+    assert ltspice("{1e5}") == pytest.approx(1e5)
+    assert ltspice("{2.5E3k*2}") == pytest.approx(5e6)
+    # A bare element value is held to the same bounds as an expression.
+    with pytest.raises(ValueError, match="finite"):
+        ltspice("1e999", element_value=True)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
