@@ -88,6 +88,7 @@ def to_windows_path(linux_path: Path) -> str:
             ["wslpath", "-w", str(linux_path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
             timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
@@ -112,6 +113,24 @@ def to_windows_path(linux_path: Path) -> str:
         return str(linux_path)
 
 
+def _cmd_unicode_text(output: bytes) -> str:
+    """What ``cmd.exe /U`` wrote to a pipe: UTF-16, whatever the console's code page."""
+    return output.decode("utf-16-le")
+
+
+def _console_text(output: bytes | None) -> str:
+    """What a Windows console program wrote, for its ASCII fields or a log line.
+
+    Such a program writes in the console's code page, which cannot be asked
+    for from the Linux side, and its messages are in the Windows display
+    language. Digits and English read the same in every code page; anything
+    else is kept where it happens to be UTF-8 and replaced where it is not.
+    This never raises: a message that cannot be read must not fail the kill
+    it reports on.
+    """
+    return (output or b"").decode("utf-8", errors="replace")
+
+
 # Cache for resolved Windows env-var paths (constant for the process lifetime)
 _win_env_cache: dict[str, Path | None] = {}
 
@@ -130,17 +149,21 @@ def _resolve_win_env(var: str) -> Path | None:
         return _win_env_cache[var]
     try:
         win_result = subprocess.run(
-            ["cmd.exe", "/C", "echo", f"%{var}%"],
+            # /U: a built-in command writes UTF-16 to a pipe. Without it the
+            # value comes in the console's code page: a profile directory
+            # named outside ASCII is then bytes that are not UTF-8, and a
+            # letter the code page lacks is a question mark.
+            ["cmd.exe", "/U", "/C", "echo", f"%{var}%"],
             capture_output=True,
-            text=True,
             check=True,
             timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
         )
         wsl_result = subprocess.run(
-            ["wslpath", "-u", win_result.stdout.strip()],
+            ["wslpath", "-u", _cmd_unicode_text(win_result.stdout).strip()],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
             timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
@@ -400,7 +423,6 @@ def kill_windows_ltspice_by_token(token: str, executable_names: Iterable[str] = 
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_script],
             capture_output=True,
-            text=True,
             timeout=30,
             stdin=subprocess.DEVNULL,
         )
@@ -408,14 +430,17 @@ def kill_windows_ltspice_by_token(token: str, executable_names: Iterable[str] = 
         logger.warning("kill_windows_ltspice_by_token: process query failed: %s", e)
         return 0
 
-    pids = [line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()]
+    # Read as bytes and decoded here: both programs write messages in the
+    # Windows display language and the console's code page, and decoding
+    # those as the Linux locale's UTF-8 raised out of a kill that had worked.
+    listed = _console_text(result.stdout)
+    pids = [line.strip() for line in listed.splitlines() if line.strip().isdigit()]
     killed = 0
     for pid in pids:
         try:
             kill = subprocess.run(
                 ["taskkill.exe", "/F", "/PID", pid],
                 capture_output=True,
-                text=True,
                 timeout=_WSL_INTEROP_TIMEOUT_S,
                 stdin=subprocess.DEVNULL,
             )
@@ -428,7 +453,7 @@ def kill_windows_ltspice_by_token(token: str, executable_names: Iterable[str] = 
             logger.warning(
                 "kill_windows_ltspice_by_token: taskkill PID %s failed: %s",
                 pid,
-                (kill.stdout or kill.stderr).strip(),
+                _console_text(kill.stdout or kill.stderr).strip(),
             )
     if killed:
         logger.info("Killed %d Windows LTspice process(es) for token %s", killed, token)

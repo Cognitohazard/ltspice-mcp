@@ -1,8 +1,11 @@
 """Unit tests for WSL detection and path conversion."""
 
 import subprocess
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 from ltspice_mcp.lib.wsl import (
     _resolve_win_env,
@@ -14,6 +17,30 @@ from ltspice_mcp.lib.wsl import (
     kill_windows_ltspice_by_token,
     to_windows_path,
 )
+
+
+def as_subprocess_decodes(
+    wrote: Callable[[list[str]], bytes], exit_code: Mapping[str, int] | None = None
+) -> Callable[..., subprocess.CompletedProcess]:
+    """A ``subprocess.run`` for programs that are not here to run.
+
+    ``wrote`` gives the bytes a command writes. They reach the caller as
+    ``subprocess.run`` hands them over for the arguments it was called with:
+    as bytes, or decoded with the codec named, which without one is the
+    locale's, UTF-8 under WSL. So a caller that leaves the decoding to
+    ``text=True`` gets the ``UnicodeDecodeError`` it would get there.
+    """
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        data = wrote(command)
+        code = (exit_code or {}).get(command[0], 0)
+        if not kwargs.get("text"):
+            return subprocess.CompletedProcess(command, code, data, b"")
+        codec = str(kwargs.get("encoding") or "utf-8")
+        text = data.decode(codec, str(kwargs.get("errors") or "strict"))
+        return subprocess.CompletedProcess(command, code, text, "")
+
+    return run
 
 
 class TestIsWsl:
@@ -141,14 +168,49 @@ class TestResolveWinEnv:
     def test_passes_timeout(self):
         captured: list = []
 
+        def wrote(command):
+            return (
+                "C:\\Windows\r\n".encode("utf-16-le")
+                if command[0] == "cmd.exe"
+                else b"/mnt/c/Windows\n"
+            )
+
         def fake_run(cmd, **kwargs):
             captured.append(kwargs.get("timeout"))
-            return MagicMock(stdout="C:\\Windows\n", stderr="", returncode=0)
+            return as_subprocess_decodes(wrote)(cmd, **kwargs)
 
         with patch("subprocess.run", side_effect=fake_run):
-            _resolve_win_env("VAR_TIMEOUT_KWARG_TEST")
+            assert _resolve_win_env("VAR_TIMEOUT_KWARG_TEST") == Path("/mnt/c/Windows")
         # Both the cmd.exe echo and the wslpath convert get a bounded timeout.
-        assert captured and all(t == 15 for t in captured)
+        assert captured == [15, 15]
+
+    def test_a_directory_named_outside_ascii_is_resolved(self):
+        """A Windows directory whose name is not ASCII, as ``%LOCALAPPDATA%``
+        is for a user named so. The two shapes are what cmd.exe was seen to
+        write through WSL interop on a machine whose console code page is
+        936: without ``/U`` the Chinese name comes in that code page, which
+        is not UTF-8, and the letter it lacks comes as a question mark; with
+        ``/U`` both come as UTF-16."""
+        windows = "D:\\profiles\\模型 Zoë\\AppData\\Local"
+        in_the_console_code_page = (windows + "\r\n").encode("cp936", errors="replace")
+        assert b"Zo?" in in_the_console_code_page
+        with pytest.raises(UnicodeDecodeError):
+            in_the_console_code_page.decode("utf-8")
+        asked: list[str] = []
+
+        def wrote(command):
+            if command[0] == "cmd.exe":
+                if "/U" in command:
+                    return (windows + "\r\n").encode("utf-16-le")
+                return in_the_console_code_page
+            asked.append(command[-1])
+            return "/mnt/d/profiles/模型 Zoë/AppData/Local\n".encode()
+
+        with patch("subprocess.run", side_effect=as_subprocess_decodes(wrote)):
+            resolved = _resolve_win_env("VAR_NON_ASCII_PROFILE_TEST")
+
+        assert asked == [windows]
+        assert resolved == Path("/mnt/d/profiles/模型 Zoë/AppData/Local")
 
 
 class TestGetWindowsOutputDir:
@@ -284,8 +346,8 @@ class TestKillWindowsLtspiceByToken:
             run.assert_not_called()
 
     def test_taskkills_matched_pids(self):
-        ps_result = MagicMock(stdout="4321\n8765\n", stderr="", returncode=0)
-        kill_result = MagicMock(stdout="SUCCESS", stderr="", returncode=0)
+        ps_result = MagicMock(stdout=b"4321\r\n8765\r\n", stderr=b"", returncode=0)
+        kill_result = MagicMock(stdout=b"SUCCESS", stderr=b"", returncode=0)
         calls = []
 
         def fake_run(cmd, **kwargs):
@@ -315,3 +377,26 @@ class TestKillWindowsLtspiceByToken:
             patch("ltspice_mcp.lib.wsl.subprocess.run", side_effect=OSError("boom")),
         ):
             assert kill_windows_ltspice_by_token("sim_x_y") == 0
+
+    @pytest.mark.parametrize("exit_code", [0, 128])
+    def test_a_message_in_the_display_language_does_not_fail_the_kill(self, exit_code: int):
+        """taskkill reports in the Windows display language and the console's
+        code page. On a Chinese Windows that is not UTF-8, and decoding it as
+        the Linux locale raised out of a kill that had already happened."""
+        message = "成功: 已终止 PID 为 4321 的进程。\r\n".encode("cp936")
+        with pytest.raises(UnicodeDecodeError):
+            message.decode("utf-8")
+
+        def wrote(command):
+            return b"4321\r\n" if command[0] == "powershell.exe" else message
+
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
+            patch(
+                "ltspice_mcp.lib.wsl.subprocess.run",
+                side_effect=as_subprocess_decodes(wrote, exit_code={"taskkill.exe": exit_code}),
+            ),
+        ):
+            killed = kill_windows_ltspice_by_token("sim_1780260079_ad700460")
+
+        assert killed == (1 if exit_code == 0 else 0)
