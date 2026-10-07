@@ -36,10 +36,11 @@ import math
 import os
 import sys
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
 from ltspice_mcp.lib.ltspice_bridge import (
     DEFAULT_TIMEOUT_S,
     BridgeError,
@@ -124,6 +125,35 @@ def content_difference(file_text: str, window_text: str, *, limit: int = 3) -> s
     if only_file:
         parts.append(f"only in the file: {named(only_file)}")
     return ". ".join(parts)
+
+
+def file_difference(on_disk: bytes, window_text: str) -> str | None:
+    """How a window's copy of a sheet differs from the file's bytes, or None.
+
+    The file is read both as this server reads it and as LTspice does, which
+    differ for a sheet stored as UTF-8: a window showing either reading of the
+    file holds nothing of its own. A window that differs has unsaved changes
+    or was opened before the file last changed, and nothing tells which.
+    """
+    readings = (decode_spice_bytes(on_disk), decode_windows_1252(on_disk))
+    differences = [content_difference(reading, window_text) for reading in readings]
+    return differences[0] if all(differences) else None
+
+
+@dataclass(frozen=True)
+class OpenDesign:
+    """A document one LTspice window has open.
+
+    ``path`` is as LTspice spells it. ``active`` says it is the document in
+    front in that window. ``text`` is the window's copy, read only when the
+    caller asked for this one, and None otherwise.
+    """
+
+    pid: int
+    version: str
+    path: str
+    active: bool
+    text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +243,39 @@ class OpenWindows:
                             )
                         )
         return sheets
+
+    def designs(
+        self, wants_text: Callable[[str], bool] = lambda _path: False
+    ) -> tuple[int, list[OpenDesign]]:
+        """How many windows there are, and every document open in them.
+
+        The window's copy of a document is read where ``wants_text`` says so
+        of its path, which is how a caller keeps to the files it may read.
+        Blocks; raises ``BridgeError`` when there is no bridge to ask or it
+        cannot say.
+        """
+        if self._command is None:
+            raise BridgeError(self.unavailable or "no bridge")
+        found: list[OpenDesign] = []
+        windows = 0
+        with BridgeSession(self._command, timeout=self._timeout) as session:
+            for instance in session.instances():
+                if instance.mode != _WINDOW:
+                    continue
+                windows += 1
+                session.attach(instance.pid)
+                in_front = session.active_design()
+                for spelled in session.open_designs():
+                    found.append(
+                        OpenDesign(
+                            pid=instance.pid,
+                            version=instance.version,
+                            path=spelled,
+                            active=in_front is not None and _same_file(Path(in_front), spelled),
+                            text=session.design_text(spelled) if wants_text(spelled) else None,
+                        )
+                    )
+        return windows, found
 
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""

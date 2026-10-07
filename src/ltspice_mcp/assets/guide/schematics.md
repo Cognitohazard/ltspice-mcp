@@ -19,6 +19,13 @@ transaction, so batch a whole build into one call. Place components with the
 nets, `warnings` any overlap, and `inspect(kind="symbol")` previews the same
 geometry before you place anything.
 
+When the user says "this circuit" and names no file, ask what they have open:
+`inspect(kind="open_in_ltspice")` lists the sheets and netlists open in LTspice
+and marks the one in front `active`. Work on that path as on any other. A
+sheet with `differs_from_file: true` has changes in the window that are not in
+the file, so a run would simulate something else than they see: say so, and
+ask them to save.
+
 A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
 in step: a commit's reply lists the window under `open_in_ltspice`, and with
 `shown: true` the user is already looking at the edit. `shown: false` means

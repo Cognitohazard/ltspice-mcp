@@ -717,7 +717,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # find out. Measured 9,151.
     # Results inventory, signal/table pages and log facts also
     # contribute to the merged schema bound.
-    "inspect": 10550,
+    # Raised by about 200 characters for the 'open_in_ltspice' kind and the
+    # open_window_sync report key: a request about "this circuit" had nowhere
+    # to start without a path, and LTspice can now be asked what is in front.
+    # The kind takes no arguments, so this is its name, its one-line
+    # description and its branch. Measured 10,739.
+    "inspect": 10750,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

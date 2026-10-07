@@ -43,9 +43,8 @@ from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, r
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
-from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
-from ltspice_mcp.lib.ltspice_window import OpenSheet, content_difference
+from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -1067,20 +1066,13 @@ def _envelope(
 
 
 def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> str | None:
-    """How an LTspice window's copy of the sheet differs from the file, or None.
-
-    The file is read both as this server reads it and as LTspice does, which
-    differ for a sheet stored as UTF-8: a window showing either reading of the
-    file holds nothing of its own. A window that differs has unsaved changes
-    or was opened before the file last changed, and nothing tells which.
-    """
-    readings = (decode_spice_bytes(on_disk), decode_windows_1252(on_disk))
+    """Which LTspice window holds a different sheet from the file, and how, or None."""
     for sheet in sheets:
-        differences = [content_difference(reading, sheet.text) for reading in readings]
-        if all(differences):
+        difference = file_difference(on_disk, sheet.text)
+        if difference is not None:
             return (
                 f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
-                f"a different one from the file ({differences[0]}): either it has changes "
+                f"a different one from the file ({difference}): either it has changes "
                 "nobody saved, or the file changed after it was opened."
             )
     return None

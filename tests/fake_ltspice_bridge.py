@@ -8,8 +8,12 @@ two cannot drift apart). The LTspice it stands in front of is a JSON file, the
 world, named on its command line and read again for every request, so a test
 changes what is running between two calls by rewriting it:
 
-    {"windows": [{"pid": 1000, "version": "26.1.1", "designs": {"<path>": "<text>"}}],
+    {"windows": [{"pid": 1000, "version": "26.1.1", "designs": {"<path>": "<text>"},
+                  "active": "<path>"}],
      "silent_on": "set_design_content"}
+
+``active`` is the document in front in that window; left out, it is the last
+one listed, which is the one LTspice had in front after opening them in turn.
 
 ``silent_on`` names a tool this program stops answering at, for the tests of a
 bridge that hangs. A replaced design is written back to the world. One tool is
@@ -147,6 +151,15 @@ class Bridge:
             return self._attach(arguments.get("pid"))
         if name == "list_open_designs":
             return {"paths": "\n".join(self._window()["designs"])}
+        if name == "get_active_design_path":
+            window = self._window()
+            if not window["designs"]:
+                # What the bridge answers for a window with no document is not
+                # recorded; the client reads a refusal and an empty path alike.
+                raise _Refused("document not found")
+            in_front = window.get("active") or list(window["designs"])[-1]
+            kind = "schematic" if in_front.lower().endswith(".asc") else "netlist"
+            return {"path": in_front, "type": kind}
         if name == "get_design_content":
             return {"path": arguments["path"], "text": self._design(arguments["path"])[1]}
         if name == "set_design_content":

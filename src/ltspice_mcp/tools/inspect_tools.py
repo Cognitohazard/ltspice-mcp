@@ -57,6 +57,15 @@ than a hunt.
   core a session reads first and the index of topic sections and task
   playbooks; with one, that section. It records on the session that the guide
   was read, which retires the one read-the-guide reminder.
+* ``open_in_ltspice`` — the documents open in the LTspice windows on this
+  machine, and which is in front in its window: where a request about "this
+  circuit" starts when no path was given. A sheet inside the sandbox comes
+  with its ``sha256`` and with whether the window's copy differs from the file
+  (unsaved changes, or a file that changed after it was opened), which is what
+  ``edit_schematic`` refuses on. A document outside the sandbox is listed and
+  not read. It is asked of LTspice itself, through the bridge it ships from
+  26.1; where that cannot be reached the query fails, saying why, since
+  "nothing is open" would be a different answer.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
@@ -77,6 +86,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import sys
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
@@ -115,6 +125,8 @@ from ltspice_mcp.lib.library_manager import (
     rank_models,
 )
 from ltspice_mcp.lib.lint_rules import linter_version
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
+from ltspice_mcp.lib.ltspice_window import OpenDesign, file_difference
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
@@ -710,6 +722,12 @@ class GuideQuery(StrictModel):
     )
 
 
+class OpenInLtspiceQuery(StrictModel):
+    """List the sheets and netlists open in LTspice windows, and which one is in front."""
+
+    kind: Literal["open_in_ltspice"]
+
+
 Query: TypeAlias = Annotated[
     CapabilitiesQuery
     | SymbolsQuery
@@ -720,7 +738,8 @@ Query: TypeAlias = Annotated[
     | ModelQuery
     | ResultsQuery
     | ReferenceQuery
-    | GuideQuery,
+    | GuideQuery
+    | OpenInLtspiceQuery,
     Field(discriminator="kind"),
 ]
 
@@ -1786,6 +1805,94 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 # ---------------------------------------------------------------------------
+# open_in_ltspice
+# ---------------------------------------------------------------------------
+
+#: The most documents one reply lists; the rest are counted.
+_OPEN_DESIGNS_LIMIT = 100
+
+
+def _sandboxed(spelled: str, state: SessionState) -> Path | None:
+    """``spelled`` as a path this server may read, or None when it may not."""
+    try:
+        return safe_path(spelled, state)
+    except (LTSpiceMCPError, OSError, ValueError):
+        return None
+
+
+def _design_kind(spelled: str) -> str:
+    suffix = Path(spelled).suffix.lower()
+    if suffix == ".asc":
+        return "schematic"
+    return "netlist" if suffix in NETLIST_SUFFIXES else "other"
+
+
+def _design_row(design: OpenDesign, state: SessionState) -> dict[str, Any]:
+    """One open document as the reply lists it. Reads the file: call off the loop."""
+    row: dict[str, Any] = {
+        "path": design.path,
+        "kind": _design_kind(design.path),
+        "active": design.active,
+        "pid": design.pid,
+        "version": design.version,
+    }
+    resolved = _sandboxed(design.path, state)
+    row["in_sandbox"] = resolved is not None
+    if resolved is None or row["kind"] != "schematic" or not resolved.is_file():
+        return row
+    on_disk = resolved.read_bytes()
+    row["sha256"] = hashlib.sha256(on_disk).hexdigest()
+    if design.text is not None:
+        difference = file_difference(on_disk, design.text)
+        row["differs_from_file"] = difference is not None
+        if difference is not None:
+            row["difference"] = difference
+    return row
+
+
+async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
+    """What LTspice has open, asked of LTspice (``OpenWindows.designs``).
+
+    A sheet's copy in the window is read only for a file the sandbox admits,
+    and compared with that file by content. Both the bridge and the files are
+    read off the loop.
+    """
+    windows = state.open_windows
+    if not windows.available:
+        raise _QueryError(
+            "open_windows_unavailable",
+            f"LTspice windows cannot be read here: {windows.unavailable}. "
+            "inspect(kind='capabilities') reports this under open_window_sync.",
+        )
+
+    def is_readable_sheet(spelled: str) -> bool:
+        return _design_kind(spelled) == "schematic" and _sandboxed(spelled, state) is not None
+
+    try:
+        count, designs = await asyncio.to_thread(windows.designs, is_readable_sheet)
+    except BridgeError as exc:
+        raise _QueryError(
+            "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
+        ) from exc
+    listed = designs[:_OPEN_DESIGNS_LIMIT]
+    rows = await asyncio.to_thread(lambda: [_design_row(design, state) for design in listed])
+    data: dict[str, Any] = {"windows": count, "designs": rows, "total": len(designs)}
+    hints: list[str] = []
+    if any(row.get("differs_from_file") for row in rows):
+        hints.append(
+            "A sheet whose window differs from its file is refused by edit_schematic until "
+            "it is saved or closed in LTspice; a run or a check reads the file, not the window."
+        )
+    if any(not row["in_sandbox"] for row in rows):
+        hints.append(
+            "A document outside the sandbox is listed and not read. " + state.sandbox_guidance()
+        )
+    if hints:
+        data["hint"] = " ".join(hints)
+    return {"data": data}
+
+
+# ---------------------------------------------------------------------------
 # guide
 # ---------------------------------------------------------------------------
 
@@ -2117,6 +2224,8 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return _do_reference(query, view, frozenset(state.tool_dispatch))
     if isinstance(query, GuideQuery):
         return _do_guide(query, state)
+    if isinstance(query, OpenInLtspiceQuery):
+        return await _do_open_in_ltspice(state)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -2221,6 +2330,45 @@ _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "text": {"type": "string", "description": "Markdown."},
 }
 
+#: The ``open_in_ltspice`` kind's payload.
+_OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
+    "windows": {"type": "integer", "description": "How many LTspice windows are running."},
+    "total": {"type": "integer", "description": "How many documents they have open in all."},
+    "designs": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "As LTspice spells it."},
+                "kind": {"enum": ["schematic", "netlist", "other"]},
+                "active": {
+                    "type": "boolean",
+                    "description": "The document in front in its window.",
+                },
+                "pid": {"type": "integer", "description": "The LTspice process."},
+                "version": {"type": "string"},
+                "in_sandbox": {
+                    "type": "boolean",
+                    "description": "Whether this server may read and edit the file.",
+                },
+                "sha256": {
+                    "type": "string",
+                    "description": "Of the file: what edit_schematic takes as expected_sha256.",
+                },
+                "differs_from_file": {
+                    "type": "boolean",
+                    "description": (
+                        "The window's copy is not the file's: unsaved changes, or a "
+                        "file that changed after it was opened. A sheet in the sandbox only."
+                    ),
+                },
+                "difference": {"type": "string"},
+            },
+            "required": ["path", "kind", "active", "pid", "version", "in_sandbox"],
+        },
+    },
+}
+
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -2248,6 +2396,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         "properties": {
                             **_REFERENCE_DATA_PROPERTIES,
                             **_GUIDE_DATA_PROPERTIES,
+                            **_OPEN_DESIGNS_DATA_PROPERTIES,
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
                             "dialect": {"type": "string"},
@@ -2344,7 +2493,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide' — each with its own arguments, "
+    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide', 'open_in_ltspice' "
+    "— each with its own arguments, "
     "described on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
     "returns the guide's core, or one 'section' its index names. A "

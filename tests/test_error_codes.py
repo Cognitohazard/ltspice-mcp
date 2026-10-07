@@ -517,6 +517,8 @@ FROZEN_ERROR_CODES = (
     "op_failed",
     "open_failed",
     "open_window_differs",
+    "open_windows_unavailable",
+    "open_windows_unreachable",
     "order_disagreement",
     "overlapping_assignment",
     "overlapping_mismatch_rules",

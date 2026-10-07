@@ -355,6 +355,18 @@ class BridgeSession:
         paths = self.call("list_open_designs").get("paths")
         return [line for line in str(paths or "").split("\n") if line.strip()]
 
+    def active_design(self) -> str | None:
+        """The path of the document in front in the attached window, or None.
+
+        None when the window has no document, which the bridge reports as a
+        refusal like any other.
+        """
+        try:
+            path = self.call("get_active_design_path").get("path")
+        except BridgeError:
+            return None
+        return path if isinstance(path, str) and path.strip() else None
+
     def design_text(self, path: str) -> str:
         """The open document at ``path`` as the window holds it, saved or not."""
         text = self.call("get_design_content", path=path).get("text")

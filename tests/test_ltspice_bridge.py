@@ -27,6 +27,7 @@ from ltspice_mcp.lib.ltspice_bridge import (
     bridge_command,
 )
 from ltspice_mcp.lib.ltspice_window import (
+    OpenDesign,
     OpenSheet,
     OpenWindows,
     content_difference,
@@ -53,6 +54,7 @@ SERVER_CALLS = {
     "status",
     "attach",
     "list_open_designs",
+    "get_active_design_path",
     "get_design_content",
     "set_design_content",
 }
@@ -289,6 +291,17 @@ class TestSession:
             assert session.open_designs() == ["C:\\work\\a.asc"]
             assert session.design_text("C:\\work\\a.asc") == "Version 4.1\n"
 
+    def test_it_says_which_document_is_in_front(self, world: Path, tmp_path: Path):
+        with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+            session.attach(4242)
+            assert session.active_design() == "C:\\work\\a.asc"
+
+    def test_a_window_with_no_document_has_none_in_front(self, world: Path):
+        write_world(world, [{"pid": 4242, "version": "26.1.1", "designs": {}}])
+        with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+            session.attach(4242)
+            assert session.active_design() is None
+
     def test_replacing_a_sheet_says_whether_it_changed(self, world: Path):
         with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
             session.attach(4242)
@@ -401,6 +414,33 @@ class TestOpenWindows:
         write_world(world, [{"pid": 8, "version": "26.1.1", "designs": {spelled: "B\n"}}])
         held = OpenWindows(fake_command(world), timeout=LIVENESS_S).holding(sheet)
         assert [found.path for found in held] == [spelled]
+
+    def test_it_lists_every_document_and_reads_only_the_ones_asked_for(self, tmp_path: Path):
+        sheet, deck = tmp_path / "amp.asc", tmp_path / "amp.net"
+        world = tmp_path / "world.json"
+        write_world(
+            world,
+            [
+                {
+                    "pid": 8,
+                    "version": "26.1.1",
+                    "designs": {str(sheet): "B\n", str(deck): "* deck\n"},
+                    "active": str(sheet),
+                },
+                {"pid": 9, "version": "26.1.1", "designs": {}},
+            ],
+        )
+        windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
+        count, designs = windows.designs(lambda spelled: spelled.endswith(".asc"))
+        assert count == 2
+        assert designs == [
+            OpenDesign(pid=8, version="26.1.1", path=str(sheet), active=True, text="B\n"),
+            OpenDesign(pid=8, version="26.1.1", path=str(deck), active=False, text=None),
+        ]
+
+    def test_with_no_bridge_what_is_open_cannot_be_said(self):
+        with pytest.raises(BridgeError, match="because"):
+            OpenWindows(None, unavailable="because").designs()
 
     def test_showing_a_sheet_replaces_what_that_window_holds(self, tmp_path: Path):
         sheet = tmp_path / "amp.asc"
