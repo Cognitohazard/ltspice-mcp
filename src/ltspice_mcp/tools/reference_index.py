@@ -2,7 +2,7 @@
 own arguments.
 
 Each tool hides a vocabulary behind a discriminator: ``analyze_results`` has
-twenty-one recipe metrics, ``edit_schematic`` eleven ops, ``run_experiments``
+twenty-two recipe metrics, ``edit_schematic`` eleven ops, ``run_experiments``
 its variation kinds and random rules, ``inspect`` its query kinds,
 ``verify_circuit`` its checks, ``jobs`` its actions. A host that searches tools
 sees only names and descriptions, so nothing there can lead it to "phase
@@ -168,6 +168,12 @@ _SUMMARIES: dict[tuple[str, str], str] = {
         "Total harmonic distortion of a transient signal, as a percentage and in "
         "dB, with the per-harmonic amplitudes."
     ),
+    ("analyze_results", "tone"): (
+        "Amplitude and phase of one given frequency in a transient signal, over "
+        "the whole periods of it that fit from the window's start, weighted by "
+        "time. phase_deg is that of sin(2*pi*f*t) with t from the start of the "
+        "simulation; sin_component and cos_component are the two coefficients."
+    ),
     ("analyze_results", "bode_filter"): (
         "Filter characteristics of an .AC sweep: passband gain and ripple, cutoff "
         "frequencies, bandwidth, stopband rejection, roll-off slope and order."
@@ -259,7 +265,12 @@ _SUMMARIES: dict[tuple[str, str], str] = {
 #: "phase margin", "distortion" and "bias point" reach the right branch. Only
 #: where the discriminant is not itself the phrase a caller would search for.
 _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("analyze_results", "summary"): ("overview", "what is in this run", "signals available"),
+    ("analyze_results", "summary"): (
+        "overview",
+        "what is in this run",
+        "signals available",
+        ".four results",
+    ),
     ("analyze_results", "measurements"): (".meas", "meas", "measure statement"),
     ("analyze_results", "value"): (
         "value at",
@@ -295,6 +306,15 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "distortion",
         "harmonics",
         "linearity",
+    ),
+    ("analyze_results", "tone"): (
+        "amplitude and phase",
+        "phase of a sine",
+        "transient phase",
+        "fourier component",
+        "fundamental amplitude",
+        "single frequency",
+        "lock-in",
     ),
     ("analyze_results", "bode_filter"): (
         "cutoff frequency",

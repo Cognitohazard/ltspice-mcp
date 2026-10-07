@@ -493,8 +493,8 @@ and real axes.
   `integrate_noise`, `classify_filter`, `analyze_ac_structure`.
 - Transient: `window_and_clean`, `analyze_edge`, `analyze_pulse_response`,
   `analyze_disturbance_response`, `analyze_timing_between`, `analyze_periodic`,
-  `analyze_thd`, `compute_signal_stats`, `time_weighted_quantiles`,
-  `compute_measurement_stats`.
+  `analyze_thd`, `analyze_tone`, `compute_signal_stats`,
+  `time_weighted_quantiles`, `compute_measurement_stats`.
 - Also `parse_spice_value`, which is not a metric but a value reader: variation
   values cross the boundary as SPICE literals (`'5p'`) in both directions, and
   nothing else on the facade parses one.
@@ -529,7 +529,7 @@ the literal typing surface:
   `ResonancesOutput` (`ResonancePeak`), `NoiseIntegralOutput`,
   `EdgeMetricsOutput`, `PulseResponseOutput`, `DisturbanceResponseOutput`,
   `TimingBetweenOutput`, `PeriodicMetricsOutput`, `SignalStatsOutput`,
-  `TimeWeightedQuantilesOutput`, `ThdOutput` (`HarmonicEntry`),
+  `TimeWeightedQuantilesOutput`, `ThdOutput` (`HarmonicEntry`), `ToneOutput`,
   `MeasurementStatsEntry`, `HistogramBin`, `AcStructureResult`, `Corner`,
   `Observation`.
 

@@ -549,6 +549,22 @@ recording that showed it.
 
 ### Added
 
+- An `analyze_results` recipe, `tone`, reads the amplitude and phase of a
+  transient signal at one frequency you give. It cuts the window to the whole
+  periods that fit from its start and weights the samples by time, sharing
+  `thd`'s trim and resample, and returns `amplitude`, `phase_deg`, `dc` and the
+  sine and cosine coefficients, each reducible. The phase is that of
+  `sin(2*pi*f*t)` with `t` the simulation's own time, so it does not move with
+  the window and two signals' phases subtract. A warning names a sampling step
+  too wide for straight lines between samples to follow a sinusoid. The same
+  calculation is `analyze_tone` in the Python API. The guide's `signals`
+  section now names it and LTspice's `.four`, which the `summary` recipe reads;
+  LTspice 26 and XVII print a `.four` phase in different conventions (a
+  `SINE(0 1 1k)` source's fundamental at 90 and 0 degrees), so `.four` is not
+  the place to read phase from.
+- The warning for an ngspice run that skipped `.four` names the `tone` and
+  `thd` recipes, which read harmonics from the raw it still wrote, instead of
+  saying Fourier and THD are unavailable.
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains
   verified completed cases and retries eligible unfinished cases under the
