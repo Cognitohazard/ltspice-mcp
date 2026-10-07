@@ -30,6 +30,7 @@ from ltspice_mcp.lib.raw_header import (
     RawLimitError,
     RawLimits,
     RawPlotHeader,
+    leading_parameters,
     preflight_raw,
 )
 from ltspice_mcp.lib.store import parser_file_in
@@ -352,17 +353,6 @@ def _validated_step_starts(
     return starts
 
 
-def _leading_parameters(header: RawPlotHeader) -> list[int]:
-    """The variables a stepped plot opens with that hold the stepped parameters
-    (LTspice declares them ``param``)."""
-    leading: list[int] = []
-    for variable in header.variables:
-        if variable.declared_type.casefold() != "param":
-            break
-        leading.append(variable.index)
-    return leading
-
-
 def _step_facts(
     header: RawPlotHeader,
     data: np.ndarray,
@@ -385,7 +375,7 @@ def _step_facts(
     result["step_status"] = "unresolved"
     result["step_ranges"] = None
     plot_name = header.plot_name.lower()
-    parameters = _leading_parameters(header)
+    parameters = leading_parameters(header)
     if header.dialect == "ltspice" and plot_name == "operating point" and parameters:
         # A stepped .op stores one point a step, the stepped parameters first.
         # Its log names no step values, so the raw's own are the record.
