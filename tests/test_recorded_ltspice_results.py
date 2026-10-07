@@ -380,6 +380,23 @@ def test_a_log_is_eight_bit_unless_xvii_did_not_finish_the_run(build: str):
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_run_whose_title_holds_a_byte_cp1252_lacks_is_read(build: str, tmp_path: Path):
+    """XVII copies a deck's title line into its log as the bytes it was given.
+    A title saved in a double-byte code page holds bytes cp1252 gives no
+    character (81, 8D, 8F, 90, 9D), and a log holding one was refused as
+    undecodable, the run's result with it. LTspice 26 names the deck's path
+    there instead."""
+    case_id = "deck/bytes_outside_cp1252"
+    title = (INPUTS / rec.CASES.case(case_id).source).read_bytes().split(b"\n")[0]
+    assert {0x81, 0x8D, 0x8F, 0x90, 0x9D} <= set(title)
+    log = rec.recorded(build, f"{case_id}.log")
+    assert (title in log.read_bytes()) == (rec.generation(build) == "xvii")
+    assert rec.operating_point(build, case_id, tmp_path)["v(b)"] == pytest.approx(0.5)
+    assert extract_log_diagnostics(log)["errors"] == []
+    assert parse_measurements(log)["measurements"] == {}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 def test_the_temperature_lines_are_read(build: str):
     text = read_spice_text(rec.recorded(build, "raw/op.log"))
     assert parse_temperatures(text=text) == (27.0, 27.0)

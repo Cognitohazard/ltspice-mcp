@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib import log_parser
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding
+from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
 from ltspice_mcp.lib.log_types import LogDecodeError as LogDecodeError
 from ltspice_mcp.lib.log_types import LogLimitError as LogLimitError
 from ltspice_mcp.lib.log_types import LogLimits as LogLimits
@@ -78,9 +78,8 @@ def _read_captures(captured: CapturedInputs, directory: Path, limits: LogLimits)
             data = handle.read(item.size_bytes + 1)
         if len(data) != item.size_bytes or hashlib.sha256(data).hexdigest() != item.sha256:
             raise LogDecodeError("Captured log digest or size changed")
-        _, encoding = decode_spice_bytes_with_encoding(data)
         try:
-            text = data.decode(encoding, errors="strict").removeprefix("\ufeff")
+            text = decode_spice_bytes_strictly(data)[0]
         except UnicodeError as exc:
             raise LogDecodeError("Invalid captured log encoding") from exc
         if "\x00" in text:

@@ -1,0 +1,7 @@
+* t
+V1 a 0 1
+R1 a b 1k
+R2 b 0 1k
+* 1k to 10k…R3 b 0 1k
+.op
+.end

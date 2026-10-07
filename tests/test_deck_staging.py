@@ -634,6 +634,31 @@ class TestMicroSuffixStaging:
         assert staged.staged_deck.read_bytes() == staged.text.encode(codec)
         assert "R§Load out 0 1k\n" in staged.text
 
+    @pytest.mark.parametrize(
+        ("code_page", "words"),
+        [("cp932", "フィルタ、抵抗"), ("cp936", "滤波器丂")],
+    )
+    def test_a_rewritten_file_keeps_text_in_a_code_page_it_cannot_name(
+        self, tmp_path: Path, code_page: str, words: str
+    ):
+        """A deck saved on a Japanese or Chinese Windows is 8-bit text holding
+        bytes cp1252 gives no character. LTspice XVII reads it a byte at a
+        time, so the copy staging rewrites must hold the same bytes: once they
+        were replaced, in the comment and in anything else on the line."""
+        root = tmp_path / "source"
+        root.mkdir()
+        (root / "core.inc").write_text("C1 out 0 1n\n")
+        comment = f"* {words}\n".encode(code_page)
+        assert set(comment) & {0x81, 0x8D, 0x8F, 0x90, 0x9D}
+        deck = root / "bench.cir"
+        deck.write_bytes(b'* bench\n.include "core.inc"\n' + comment + b"R1 out 0 1k\n.op\n.end\n")
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        assert '.include "core.inc"' not in staged.text, "the reference is rewritten"
+        assert comment in staged.staged_deck.read_bytes()
+        assert "�" not in staged.text
+
     def test_a_utf16_file_is_rewritten_as_utf8(self, tmp_path: Path):
         """Every step after staging edits a deck as ASCII bytes, so a rewritten
         UTF-16 deck is written as UTF-8, which spells every character it held."""
