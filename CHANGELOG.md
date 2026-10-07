@@ -120,7 +120,9 @@ recording that showed it.
   under it was listed as removed and added again and `equivalent` was false.
   Names that pair only across that `X`, one to one and of the same element
   type, now match; each instance paired that way is listed under `renamed`,
-  which is not a difference.
+  which is not a difference. The `structural_diff` mode, and an export's
+  `diff_vs_prior`, pair them the same way and list them under
+  `components_renamed`.
 - An arity error said only `reference_arity 3, candidate_arity 2`, and for an
   instance whose node count disagrees with its own subcircuit's ports those
   two numbers were not the two sides at all. Each arity error now carries a

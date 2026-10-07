@@ -71,7 +71,7 @@ verdict is unaffected.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -1063,34 +1063,45 @@ def compare_graphs(
 
 
 def _without_added_x(key: str) -> str:
-    """A flattened reference key with the ``X`` LTspice adds taken off each
-    instance segment (``xxe.r1`` is ``xe.r1``)."""
+    """A reference key with the ``X`` LTspice adds taken off each instance
+    segment (``xxe.r1`` is ``xe.r1``)."""
     return ".".join(seg[1:] if seg.startswith("xx") else seg for seg in key.split("."))
+
+
+def pair_across_added_x(reference: Iterable[str], candidate: Iterable[str]) -> dict[str, str]:
+    """Candidate keys that match a reference key only across LTspice's added ``X``.
+
+    LTspice exports a subcircuit symbol's instance with an ``X`` before its
+    name whatever the name is: ``Xe`` is ``X§Xe`` from LTspice 24 on and ``XXe``
+    from XVII, where a netlist written by hand names it ``Xe``. Keys are
+    :func:`canon_ref` keys, hierarchical ones included. Only keys left unmatched
+    by name on both sides are paired, and only one to one, so a netlist that
+    really holds both ``Xe`` and ``XXe`` is compared by name. Returns each
+    paired candidate key mapped to its reference key.
+    """
+    reference, candidate = set(reference), set(candidate)
+    unmatched_ref: dict[str, list[str]] = {}
+    for key in reference - candidate:
+        unmatched_ref.setdefault(_without_added_x(key), []).append(key)
+    unmatched_cand: dict[str, list[str]] = {}
+    for key in candidate - reference:
+        unmatched_cand.setdefault(_without_added_x(key), []).append(key)
+    pairs: dict[str, str] = {}
+    for stripped, cand_keys in unmatched_cand.items():
+        ref_keys = unmatched_ref.get(stripped, [])
+        if len(cand_keys) == 1 and len(ref_keys) == 1:
+            pairs[cand_keys[0]] = ref_keys[0]
+    return pairs
 
 
 def _pair_across_added_x(
     ref_by_ref: dict[str, FlatComponent], cand_by_ref: dict[str, FlatComponent]
 ) -> tuple[dict[str, FlatComponent], list[RenamedInstance]]:
-    """Re-key the candidate's components that match a reference one only across
-    the ``X`` LTspice adds, and name each instance paired that way once.
-
-    Only components left unmatched by name on both sides are considered, and a
-    pairing is taken only when it is one-to-one and keeps the element type, so
-    a netlist that really holds both ``Xe`` and ``XXe`` is compared by name.
-    """
-    unmatched_ref: dict[str, list[str]] = {}
-    for key in ref_by_ref.keys() - cand_by_ref.keys():
-        unmatched_ref.setdefault(_without_added_x(key), []).append(key)
-    unmatched_cand: dict[str, list[str]] = {}
-    for key in cand_by_ref.keys() - ref_by_ref.keys():
-        unmatched_cand.setdefault(_without_added_x(key), []).append(key)
+    """Re-key the candidate's components :func:`pair_across_added_x` pairs and
+    that keep their element type, and name each instance paired that way once."""
     rekeyed = dict(cand_by_ref)
     renamed: dict[tuple[str, str], RenamedInstance] = {}
-    for stripped, cand_keys in unmatched_cand.items():
-        ref_keys = unmatched_ref.get(stripped, [])
-        if len(cand_keys) != 1 or len(ref_keys) != 1:
-            continue
-        (cand_key,), (ref_key,) = cand_keys, ref_keys
+    for cand_key, ref_key in pair_across_added_x(ref_by_ref, cand_by_ref).items():
         rc, cc = ref_by_ref[ref_key], cand_by_ref[cand_key]
         if rc.type_letter != cc.type_letter:
             continue
