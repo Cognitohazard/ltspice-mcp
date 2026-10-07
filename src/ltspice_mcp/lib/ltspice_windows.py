@@ -25,7 +25,7 @@ from spicelib.simulators.ltspice_simulator import LTspice as _SpicelibLTspice
 
 from ltspice_mcp.lib import hidden_desktop
 
-_SEE_THE_BOX = (
+SEE_THE_BOX = (
     "To see LTspice's window and answer the box yourself, set [simulator] "
     "hidden_desktop = false (or LTSPICE_MCP_HIDDEN_DESKTOP=0) and restart"
 )
@@ -80,7 +80,7 @@ class LTspice(_SpicelibLTspice):
                 cwd=cwd,
                 stdout=console,
                 stderr=subprocess.STDOUT,
-                remedy=_SEE_THE_BOX,
+                remedy=SEE_THE_BOX,
             )
 
     @classmethod
