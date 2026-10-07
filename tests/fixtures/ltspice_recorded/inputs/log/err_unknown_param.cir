@@ -1,0 +1,5 @@
+* a parameter that is not defined
+V1 a 0 1
+R1 a 0 {undefined_r}
+.op
+.end

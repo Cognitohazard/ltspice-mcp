@@ -1,0 +1,19 @@
+* words that begin with a suffix: each resistor carries 1 A, so V(n<i>) is the resistance LTspice read
+I1 0 n01 1
+R1 n01 0 1milli
+I2 0 n02 1
+R2 n02 0 1min
+I3 0 n03 1
+R3 n03 0 1MHz
+I4 0 n04 1
+R4 n04 0 1megs
+I5 0 n05 1
+R5 n05 0 1mils
+I6 0 n06 1
+R6 n06 0 1micro
+I7 0 n07 1
+R7 n07 0 1nano
+I8 0 n08 1
+R8 n08 0 1femto
+.op
+.end

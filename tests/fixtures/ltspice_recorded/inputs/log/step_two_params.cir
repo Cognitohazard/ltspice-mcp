@@ -1,0 +1,9 @@
+* two stepped parameters
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 {c}
+.step param r list 1k 2k
+.step param c list 100n 200n
+.tran 0 1m 0 50u
+.meas tran vend FIND V(out) AT 0.9m
+.end

@@ -493,7 +493,7 @@ async def test_export_stage_reports_micro_signs_in_the_exported_netlist(
     assert finding["severity"] == "observation"
     assert finding["at"] == {"file": data["export"]["netlist"], "line": 3}
     assert finding["evidence"]["encoding"] == "utf-8"
-    assert finding["evidence"]["generated_by"] == "LTspice 24.1.9 for Windows."
+    assert finding["evidence"]["generated_by"] == "LTspice 24.1.9 for Windows"
     assert data["outcome"] == "complete"
     assert asc.read_bytes() == before
 

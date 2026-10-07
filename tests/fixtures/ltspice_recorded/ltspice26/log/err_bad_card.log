@@ -1,0 +1,6 @@
+C:\recording\err_bad_card.cir(4): Expected node name here.
+R2 a
+    ^
+C:\recording\err_bad_card.cir(4): Expected device instantiation or directive here.
+R2 a
+^^^^

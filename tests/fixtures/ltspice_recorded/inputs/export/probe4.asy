@@ -1,0 +1,17 @@
+Version 4
+SymbolType BLOCK
+RECTANGLE Normal -80 -64 64 80
+SYMATTR Prefix X
+SYMATTR Value probe4
+PIN -64 -48 NONE 0
+PINATTR PinName d
+PINATTR SpiceOrder 4
+PIN -32 64 NONE 0
+PINATTR PinName c
+PINATTR SpiceOrder 3
+PIN 48 -16 NONE 0
+PINATTR PinName b
+PINATTR SpiceOrder 2
+PIN 16 32 NONE 0
+PINATTR PinName a
+PINATTR SpiceOrder 1

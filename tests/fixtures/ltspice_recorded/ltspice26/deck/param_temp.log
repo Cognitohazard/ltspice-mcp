@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\param_temp.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\param_temp.cir(2): Invalid parameter name. "temp" is a reserved symbol for temperature. Use ".temp" to set temperature.
+.param temp=50
+       ^^^^

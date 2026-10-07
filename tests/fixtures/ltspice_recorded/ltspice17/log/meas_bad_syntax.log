@@ -1,0 +1,27 @@
+Circuit: * a measurement that does not parse, between two that do
+
+.OP point found by inspection.
+.meas tran broken find v(out at 0.5m
+  Error: FIND can not be evaluated over an interval.
+
+before: MAX(v(out))=0.999956 FROM 0 TO 0.001
+after: MIN(v(out))=0 FROM 0 TO 0.001
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 144
+traniter = 144
+tranpoints = 73
+accept = 73
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

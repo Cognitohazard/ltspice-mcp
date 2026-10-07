@@ -1,0 +1,15 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\continuation.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 3
+
+Files loaded:
+C:\recording\continuation.cir
+

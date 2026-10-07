@@ -1,0 +1,6 @@
+* spaces inside a behavioural expression
+V1 b 0 2
+B1 a 0 V = V(b) + 1
+R1 a 0 1k
+.op
+.end

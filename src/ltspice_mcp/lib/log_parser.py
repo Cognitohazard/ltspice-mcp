@@ -177,11 +177,14 @@ _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
 # LTspice writes for ``.step temp=-40°``. Without the ``°`` exclusion the
 # captured value is ``-40°``, which downstream value-parsing rejects.
 _RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s°]+)")
-# Stepped ``.op`` runs don't write ``.step name=val`` markers — LTspice
-# logs one of these per iteration instead. Counting them is the only
-# reliable signal that the bias point ran multiple times.
+# Stepped ``.op`` runs don't write ``.step name=val`` markers. LTspice 24 and
+# later log one of these per step instead, and counting them is the only sign
+# in the log that the bias point ran more than once. LTspice XVII words the
+# line "Direct Newton iteration for .op point succeeded." and prints it once
+# however many steps there are.
 _RE_OP_ITERATION = re.compile(
-    r"^\s*Direct Newton iteration succeeded in finding operating point",
+    r"^\s*Direct Newton iteration (?:succeeded in finding operating point"
+    r"|for \.op point succeeded)",
     re.IGNORECASE,
 )
 # Terminal success line of LTspice's OP-solve escalation ladder. Any of these
@@ -233,10 +236,21 @@ _RE_MISSING_MODEL_NGSPICE = re.compile(
 )
 # Missing .SUBCKT — appears in log as:
 #   Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741
-# The missing subcircuit name is the LAST token of the instance line.
+# The missing subcircuit name is the LAST token of the instance line. LTspice
+# XVII puts that line on the next line of the log, indented; the extraction
+# joins the two, so one pattern reads both.
 _RE_MISSING_SUBCKT = re.compile(
     r"Unknown subcircuit called in:\s+(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
+)
+# LTspice 24 and later report it as a located error with the card beneath:
+#   deck.cir(4): This sub-circuit name is not defined.
+#   X1 b 0 nosuchsub
+#          ^^^^^^^^^
+# The card is the second line of the block.
+_RE_MISSING_SUBCKT_LOCATED = re.compile(
+    r"\(\d+\):[ \t]*This sub-?circuit name is not defined\.[ \t]*\n[ \t]*(\S[^\r\n]*)",
+    re.IGNORECASE,
 )
 # ngspice phrasing for a missing subcircuit, e.g.:
 #   Error: unable to find subcircuit named 'lm741'
@@ -248,11 +262,25 @@ _RE_MISSING_SUBCKT_NGSPICE = re.compile(
     re.IGNORECASE,
 )
 # An .include / .lib the simulator could not open, e.g.:
-#   Error: Could not find include file tt          (ngspice)
-#   Can't find .include file corners.lib           (LTspice)
-# The file it named is the rest of the line, so a caller sees which one.
+#   Error: Could not find include file tt                          (ngspice)
+#   Can't find .include file corners.lib                           (LTspice)
+#   Fatal Error: Could not open include file "nosuchfile.lib"      (LTspice XVII)
+#   Fatal Error: Could not open library file "nosuchfile.lib"      (LTspice XVII)
+# The file it named follows: all of a quoted name, else the next word. XVII
+# quotes it, and the quotes matter: it reads ``.lib corners.lib tt`` as a file
+# called "corners.lib tt".
 _RE_MISSING_INCLUDE = re.compile(
-    r"(?:could not|couldn'?t|cannot|can'?t)\s+(?:find|open)\s+(?:the\s+)?\.?include\s+file\s*:?\s*(\S+)",
+    r"(?:could not|couldn'?t|cannot|can'?t)\s+(?:find|open)\s+(?:the\s+)?"
+    r"(?:\.?include|library)\s+file\s*:?\s*(?:\"([^\"\r\n]+)\"|(\S+))",
+    re.IGNORECASE,
+)
+# LTspice 24 and later report it as a located error with the directive beneath:
+#   deck.cir(2): File not found.
+#   .include nosuchfile.lib
+#            ^^^^^^^^^^^^^^
+# What follows the directive word is what it looked for.
+_RE_MISSING_INCLUDE_LOCATED = re.compile(
+    r"\(\d+\):[ \t]*File not found\.[ \t]*\n[ \t]*\.(?:include|inc|lib)[ \t]+([^\r\n]+)",
     re.IGNORECASE,
 )
 
@@ -261,8 +289,15 @@ def missing_includes_from_text(text: str) -> list[str]:
     """The include/library files a log says could not be opened, in order."""
     seen: set[str] = set()
     names: list[str] = []
-    for match in _RE_MISSING_INCLUDE.finditer(text):
-        name = match.group(1).strip("\"'")
+    found = [
+        (match.start(), match.group(1) or match.group(2))
+        for match in _RE_MISSING_INCLUDE.finditer(text)
+    ]
+    found += [
+        (match.start(), match.group(1)) for match in _RE_MISSING_INCLUDE_LOCATED.finditer(text)
+    ]
+    for _, raw in sorted(found):
+        name = raw.strip().strip("\"'")
         if name and name not in seen:
             seen.add(name)
             names.append(name)
@@ -295,11 +330,14 @@ def read_log_text(log_path: Path) -> str:
     """
     try:
         # Decode through the same BOM/UTF-16/cp1252 sniffer the netlist and
-        # library reads use — modern LTspice writes UTF-16 logs, and Windows-
-        # authored logs carry cp1252 bytes (° in ".step temp=-40°", µ, ±). A
-        # plain read_text() decodes those with the platform default (UTF-8 on
-        # Linux/WSL), garbling the degree/step lines so step detection finds
-        # no temperature steps and temp/tnom parsing comes back empty.
+        # library reads use. LTspice 24 and later write a log as UTF-8.
+        # LTspice XVII writes UTF-16 while it runs and rewrites the log as
+        # 8-bit text when the run completes, so the log of a run that failed
+        # or was stopped stays UTF-16, and a finished one carries cp1252
+        # bytes (° in ".step temp=-40°C"). A plain read_text() decodes those
+        # with the platform default, garbling the degree/step lines so step
+        # detection finds no temperature steps and temp/tnom parsing comes
+        # back empty.
         if log_path.stat().st_size > _LOG_READ_CAP_BYTES:
             with log_path.open("rb") as fh:
                 head = fh.read(_LOG_READ_CAP_BYTES)
@@ -483,8 +521,9 @@ def scan_op_step_log(
     successes) is deliberate: a stepped ``.op`` whose later step fails emits no
     success line for that step, so a success-only count would miss it and let the
     raw-validity demote in :func:`build_simulation_summary` mask a genuinely
-    unsolved bias point. Either signal exceeding 1 means the ``.raw`` (step 0
-    only) under-represents the run.
+    unsolved bias point. Either signal exceeding 1 means the first point of
+    the ``.raw``, which is all that is read of a stepped ``.op``,
+    under-represents the run.
     """
     iterations: list[dict[str, float]] = []
     op_solve_count = 0
@@ -518,16 +557,24 @@ def missing_refs_from_text(text: str) -> list[str]:
                 seen.add(name)
                 refs.append(name)
 
-    for m in _RE_MISSING_SUBCKT.finditer(text):
-        tokens = m.group(1).split()
-        if not tokens:
-            continue
-        name = tokens[-1]
-        if name and name not in seen:
-            seen.add(name)
-            refs.append(name)
+    for regex in (_RE_MISSING_SUBCKT, _RE_MISSING_SUBCKT_LOCATED):
+        for m in regex.finditer(text):
+            name = _called_subcircuit(m.group(1))
+            if name and name not in seen:
+                seen.add(name)
+                refs.append(name)
 
     return refs
+
+
+def _called_subcircuit(card: str) -> str | None:
+    """The subcircuit an ``X`` card calls: the last word before its parameters."""
+    words: list[str] = []
+    for word in card.split():
+        if "=" in word or word.casefold() == "params:":
+            break
+        words.append(word)
+    return words[-1] if len(words) > 1 else None
 
 
 # Phrases every simulator we support prints when the solver gave up. Grouped
@@ -698,6 +745,13 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 
         # Fatal Error:
         if _RE_FATAL.match(stripped):
+            # LTspice XVII ends "Unknown subcircuit called in:" with the colon
+            # and gives the card on the next line; the two are one message.
+            follows = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            if stripped.endswith(":") and follows:
+                errors.append(f"{stripped} {follows}")
+                i += 2
+                continue
             errors.append(stripped)
             i += 1
             continue

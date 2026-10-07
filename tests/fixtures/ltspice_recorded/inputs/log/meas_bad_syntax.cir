@@ -1,0 +1,9 @@
+* a measurement that does not parse, between two that do
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out 1k
+C1 out 0 100n
+.tran 0 1m 0 20u
+.meas tran before MAX V(out)
+.meas tran broken FIND V(out AT 0.5m
+.meas tran after MIN V(out)
+.end

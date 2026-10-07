@@ -1,0 +1,6 @@
+* a directive LTspice does not have
+V1 a 0 1
+R1 a 0 1k
+.frobnicate 1 2
+.op
+.end

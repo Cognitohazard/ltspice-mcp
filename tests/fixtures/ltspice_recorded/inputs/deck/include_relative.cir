@@ -1,0 +1,6 @@
+* a relative .include
+.include models.inc
+I1 0 a 1
+R1 a 0 {rval}
+.op
+.end

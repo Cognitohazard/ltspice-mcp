@@ -2162,3 +2162,179 @@ checks the generated driver contract. The isolated three-launch console
 probe verifies numeric repeatability for the tiny `.param AGAUSS` deck; no
 startup-file seed contract is claimed. This evidence
 does not establish reproducibility for every stochastic function or analysis.
+
+---
+
+## Bug 22 — `AscEditor` cannot open a sheet whose block symbol has no sheet of its own (limitation)
+
+**Status:** known limitation; draft for an upstream enhancement. Observed
+2026-10-06 against the exports of LTspice 26.1.1 and LTspice XVII 17.0.37.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist` and `AscEditor._get_subcircuit`).
+**Our workaround:** none. `lib/schematic_ops.py::make_editor` turns the
+`FileNotFoundError` into a `SymbolResolutionError` whose message names the
+missing file, so the caller learns which sheet is wanted.
+
+### Summary
+
+A symbol of `SymbolType BLOCK` stands for a subcircuit. LTspice netlists an
+instance of one as a call to a subcircuit of the symbol's name, whether or not
+a sheet of that name exists: the definition may come from a library named on
+the sheet, or be missing until the deck is run. `AscEditor` instead resolves
+every block symbol to its own `.asc` while it loads the parent, and raises
+`FileNotFoundError` when there is none. A sheet LTspice exports without
+complaint therefore cannot be opened, read or edited at all.
+
+### Affected code
+
+`spicelib/editor/asc_editor.py`, `_get_subcircuit` (~line 303):
+
+```python
+lib = symbol.get_library()
+if lib is None and symbol.symbol_type == "BLOCK":
+    asc_filename = symbol.get_schematic_file()
+    ...
+    if asc_path is None:
+        raise FileNotFoundError(f"File {asc_filename} not found")
+    answer = AscEditor(asc_path)
+```
+
+The same lookup for a `CELL` symbol with no library returns `None` and the load
+goes on.
+
+### Reproduction
+
+`probe4.asy` beside the sheet, with `SymbolType BLOCK` and `SYMATTR Prefix X`,
+and no `probe4.asc`:
+
+```
+Version 4
+SHEET 1 880 680
+SYMBOL probe4 96 480 R0
+SYMATTR InstName U1
+```
+
+```python
+AscEditor("block_symbol.asc")   # FileNotFoundError: File ...probe4.asc not found
+```
+
+`LTspice.exe -netlist block_symbol.asc` exits 0 and writes
+`X§U1 NC_01 NC_02 NC_03 NC_04 probe4` (LTspice XVII: `XU1 ...`). The sheet, the
+symbol and both exports are recorded under
+`tests/fixtures/ltspice_recorded/` as `export/block_symbol`.
+
+### Impact
+
+- A sheet using a block symbol whose subcircuit is defined in a library, or not
+  yet drawn, cannot be opened by any tool that reads schematics through
+  `AscEditor`, though LTspice itself reads and netlists it.
+
+### Proposed fix
+
+Treat a block symbol with no sheet the way a cell symbol with no library is
+already treated: leave the instance without a resolved subcircuit instead of
+failing the load, and raise only when something asks for the subcircuit's
+contents.
+
+### Suggested upstream test
+
+```python
+def test_block_symbol_without_its_sheet_still_loads(tmp_path):
+    # probe4.asy (SymbolType BLOCK) beside parent.asc, no probe4.asc
+    editor = AscEditor(tmp_path / "parent.asc")
+    assert "U1" in editor.get_components()
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::TestExportedNames::test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened`
+pins both halves: LTspice exports the sheet, and the editor refuses it with a
+message naming `probe4.asc`. Once upstream loads such a sheet, that test's
+second half goes and the sheet joins the ones the editor is held to.
+
+---
+
+## Bug 23 — a simulator launch cannot be kept off the user's desktop (limitation)
+
+**Status:** known API limitation; draft for an upstream enhancement. Measured
+2026-10-06 on Windows 11 with LTspice 26.1.1 and LTspice XVII 17.0.37.
+**Affected version:** spicelib 1.5.1 (`spicelib/sim/simulator.py`,
+`run_function`; `spicelib/simulators/ltspice_simulator.py`, `LTspice.run` and
+`LTspice.create_netlist`).
+**Our workaround:** none in the server yet. The fixture recorder starts
+LTspice itself, on a desktop of its own (`tests/ltspice_recorder.py`,
+`HiddenDesktop`).
+
+### Summary
+
+LTspice opens a window even for a batch run (`-Run -b`) and for a batch export
+(`-netlist`), and holds the keyboard focus until it exits. `run_function`
+starts it with a bare `subprocess.run`, and `Simulator.run` offers no way to
+pass startup information, so every simulation takes the focus from whatever
+the user is typing into, and a sweep takes it continuously.
+
+The usual remedy does not work: started with `STARTF_USESHOWWINDOW` and
+`SW_SHOWMINNOACTIVE` or `SW_HIDE`, LTspice was still the foreground window for
+about three quarters of a run. What does work is starting it with
+`STARTUPINFO.lpDesktop` naming a desktop made with `CreateDesktopW`: its
+windows exist only there. Python's `subprocess.STARTUPINFO` has no `lpDesktop`,
+so this needs `CreateProcessW` through `ctypes`.
+
+A second consequence of the visible window: LTspice answers some inputs with a
+message box and waits (XVII, given a sheet that starts with a byte order mark:
+"Aborting: Unknown schematic syntax"). On the user's desktop a stray key press
+dismisses it and the launch appears to have ended by itself; off it, the
+launch blocks until its timeout, which is the behaviour a caller can rely on.
+
+### Affected code
+
+`spicelib/sim/simulator.py`:
+
+```python
+def run_function(command, timeout=None, stdout=None, stderr=None, cwd=None):
+    result = subprocess.run(command, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd)
+    return result.returncode
+```
+
+### Reproduction
+
+Sample the foreground window's owning process every millisecond while
+`LTspice.run("deck.cir")` runs a deck that takes about a second.
+
+| launch | samples owned by LTspice |
+|-|-|
+| `SW_SHOWMINNOACTIVE` | 283 of 362 |
+| `SW_HIDE` | 272 of 348 |
+| own desktop, LTspice 26.1.1 | 0 of 356 |
+| own desktop, LTspice XVII | 0 of 375 |
+
+On its own desktop the run exits 0 and writes the same log and raw.
+
+### Impact
+
+- Any interactive use of a tool built on `LTspice.run` interrupts the user's
+  typing for the length of every run.
+- A message box the simulator raises can be dismissed by that typing, so
+  whether a launch returns depends on what the user happened to press.
+
+### Proposed fix
+
+Let a caller supply how the process is started: a `startupinfo` /
+`creationflags` pass-through on `Simulator.run` and `create_netlist` at the
+least, or an optional launcher callable in place of `run_function`. A
+`desktop=` option on Windows would cover this case directly.
+
+### Suggested upstream test
+
+On Windows, start a simulator through the new hook on a desktop created for
+the test, and assert the foreground window's owning process never becomes the
+simulator's while the run completes with exit code 0.
+
+### Cross-reference
+
+`tests/ltspice_recorder.py::HiddenDesktop` is the working launch, including
+reading the text of a message box (`dialog`) so that a build which stops to
+ask is recorded as having done so. The recordings of
+`export/micro_utf8_bom` and `export/micro_utf16le_bom` on LTspice XVII carry
+that text. Giving the server the same launch is tracked separately; once
+upstream offers a hook, both use it in place of their own `CreateProcessW`.

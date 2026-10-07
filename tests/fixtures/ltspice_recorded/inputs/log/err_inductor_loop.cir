@@ -1,0 +1,5 @@
+* a voltage source across an inductor
+V1 a 0 1
+L1 a 0 1m Rser=0
+.op
+.end

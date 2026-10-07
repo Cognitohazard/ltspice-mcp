@@ -1,0 +1,5 @@
+* a node with no DC path to ground
+I1 0 a 1
+C1 a 0 1n
+.op
+.end

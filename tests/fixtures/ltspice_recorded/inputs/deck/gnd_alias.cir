@@ -1,0 +1,17 @@
+* is gnd the ground node: at the top level, inside a subcircuit, and as the name of a port
+.subckt leg top
+R1 top gnd 1k
+.ends
+.subckt ported top gnd
+R1 top gnd 1k
+.ends
+I1 0 a 1
+R1 a gnd 1k
+R2 gnd 0 1k
+I2 0 b 1
+X1 b leg
+I3 0 c 1
+X2 c mid ported
+R3 mid 0 1k
+.op
+.end

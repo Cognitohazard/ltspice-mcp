@@ -1,0 +1,9 @@
+* fourier analysis of a clipped sine
+V1 in 0 SINE(0 1 1k)
+R1 in out 1k
+D1 out 0 DCLIP
+.model DCLIP D
+.tran 0 5m 0 1u
+.four 1k V(out)
+.four 1k 5 V(in)
+.end

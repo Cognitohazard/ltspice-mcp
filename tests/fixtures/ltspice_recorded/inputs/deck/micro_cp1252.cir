@@ -1,0 +1,5 @@
+* micro sign as a value suffix
+I1 0 a 1
+R1 a 0 1µ
+.op
+.end

@@ -1,0 +1,17 @@
+* an operating point Newton iteration alone does not find
+V1 vcc 0 12
+R1 vcc c1 1k
+R2 vcc c2 1k
+R3 c1 b2 10k
+R4 c2 b1 10k
+Q1 c1 b1 e QN
+Q2 c2 b2 e QN
+I1 e 0 5m
+D1 0 e DN
+D2 vcc x DN
+R5 x 0 1G
+B1 y 0 I=exp(40*V(y))-1e3
+.model QN NPN(BF=200 IS=1e-16)
+.model DN D
+.op
+.end

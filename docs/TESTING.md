@@ -228,10 +228,13 @@ above assumes them:
   closed-form expected values, not "it didn't crash."
 - **Recorded-real fixtures.** Real simulator `.raw` / `.log` output is captured
   under `tests/fixtures/` so dialect and parse seams run against true output
-  offline (see `tests/conftest.py`).
+  offline (see `tests/conftest.py`). For LTspice the recordings are a system
+  of their own, with a recorder and an inventory: see *Recorded LTspice
+  behaviour* below.
 - **Tiered live tests.** `tests/test_ngspice_e2e.py` runs whenever `ngspice` is
   on PATH (so it runs in CI); `tests/test_e2e.py` runs un-gated in degraded
-  mode; `tests/test_ltspice_integration.py` is opt-in via an environment flag.
+  mode; `tests/test_ltspice_integration.py` and the build comparison in
+  `tests/test_ltspice_recorder.py` are opt-in via an environment flag.
 - **Drift guards.** `tests/test_doc_drift.py` checks documented tool counts and
   names against the registry; `tests/test_guide_delivery.py` pins the guide's
   structure (the section list is the files present, the index lists every
@@ -340,6 +343,15 @@ the push, and `scripts/release_gate.sh` runs it:
 | Windows native, Python 3.12 and 3.13, checkout with conversion on | the primary platform, both supported interpreters (3.13 changed `Path.resolve` on a NUL byte), and the bytes a runner with `core.autocrlf=true` sees |
 | the publisher's own metadata check | the PyPI action's bundled `twine` rejected a metadata version the build backend had started emitting by default, after the build job's own newer `twine` had passed it |
 
+One Windows shape is not in the matrix, because no runner has it: a machine
+whose code page is not cp1252. Text read or written without a named encoding
+is in the machine's code page there, cp936 on a Simplified Chinese install
+and cp932 on a Japanese one. A test that read a UTF-8 source file that way,
+and one that wrote a log holding a degree sign that way, passed on every
+runner and failed on such a machine. Name the encoding in every text read and
+write, in a test as in the source; `PYTHONWARNDEFAULTENCODING=1` makes Python
+warn at each place that does not.
+
 The Windows shape needs a clone on a Windows disk with the Windows-side `uv`
 on PATH; point `LTSPICE_MCP_WINDOWS_CLONE` at its WSL path. Without it the
 script says SKIP, loudly, rather than passing by omission. The container
@@ -349,6 +361,10 @@ The native Windows integration tier also needs:
 
 - LTspice installed, `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`, and
   `LTSPICE_MCP_SYMBOL_PATHS` pointing to its symbol directory.
+- For the comparison with the recordings (*Recorded LTspice behaviour*), each
+  build to compare, started once so that it has a settings file: the current
+  build and LTspice XVII in their standard install locations, or named in
+  `LTSPICE_MCP_RECORDER_EXES`. A build that is missing is skipped by name.
 - The console build of ngspice available as `ngspice.exe` on PATH, with its
   accompanying DLLs available. The GUI executable does not provide the console
   output these tests inspect.
@@ -398,6 +414,131 @@ The upload step itself has no local proxy. The publish workflow can be
 dispatched by hand against TestPyPI with an explicit version, which
 exercises trusted publishing and the metadata check without spending a
 release tag.
+
+## Recorded LTspice behaviour
+
+Development and CI run on Linux, where there is no LTspice. For a long time
+"correct" therefore meant "matches what we believe LTspice does", and a test
+written from the same belief protects the belief. The M90 and M270 symbol
+placements were swapped, and the tests' expected pin positions had been worked
+out by hand from the swapped table, so the suite defended the bug until a
+user's own export disagreed. Whether LTspice XVII reads a micro sign stored as
+UTF-8 was inferred, never observed.
+
+**The rule: every LTspice behaviour the server models has a recording behind
+it, from the current build and from LTspice XVII, or a written reason it
+cannot have one.** When code comes to encode "LTspice does X", add an input
+that makes LTspice show X, record it, and write the test against the
+recording. An expected value derived by hand from the assumption under test
+is not evidence for it.
+
+### What is where
+
+Everything is under `tests/fixtures/ltspice_recorded/`.
+
+- `inputs/` holds the decks and sheets, kept minimal so the fixtures stay
+  small, and `inputs/cases.toml`, which is the inventory. Each
+  `[behaviour.<key>]` table names a behaviour, the code that models it, and
+  the inputs that record it. A sheet is exported with `-netlist`; anything
+  else is run with `-Run -b`. A behaviour with no input says why:
+  `evidence` when the manifest records it some other way, `unrecordable` when
+  nothing can (LTspice saves a sheet only from its window, for one).
+- `ltspice26/` and `ltspice17/` hold what each build wrote, one file per
+  output, and a `manifest.json`: the executable's digest, size and version,
+  the build as its own output names it, the build's defaults for the settings
+  the recorder neutralises, facts about its library (where it is, how each
+  `standard.*` file is encoded, the pins of the stock symbols), and per case
+  the command line, the digest of every input, the exit code, what was
+  written, and the text of any message box the build stopped on.
+
+The directory is named for the build's major version; XVII is 17.
+
+### What reads the recordings
+
+These run everywhere, with no LTspice:
+
+|test module|holds the server to|
+|-|-|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, and how an export is spelled and encoded|
+|`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
+|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
+
+They go through the code a live result goes through: the contained decoder,
+the schematic editor, the lexer. A sheet is staged with the symbols LTspice
+resolved, the build's own stock symbols being rebuilt from the pins the
+manifest recorded.
+
+A difference between the server and a recording is a finding. Fix the server
+if the fix is small, with the recording as the regression test, which must
+fail before the fix. Otherwise pin what LTspice does and what the server does
+side by side in the test, under a name that says so
+(`READ_BY_LTSPICE_ONLY`, `NOT_REFUSED_YET`), so the gap is written down where
+the next person will find it.
+
+### Recording again
+
+On a Windows machine with the builds installed, from the repository root:
+
+```bash
+uv run python scripts/record_ltspice_fixtures.py
+```
+
+With no argument it records every build it finds in the standard install
+locations; pass executables to choose, `LTSPICE_MCP_RECORDER_EXES` to name
+builds installed elsewhere, `--only 'raw/*'` to record some cases and keep the
+rest, and `--check` to record into a temporary directory and print the
+differences from what is committed. Recording the same build twice gives the
+same bytes, so `git diff` after a re-record shows exactly what LTspice now
+does differently.
+
+What makes that true, and what a recording must never carry:
+
+- **No settings of the person recording.** Each case runs against a copy of
+  the build's settings file with the keys that change a result removed, so
+  the build is on its own defaults; a case sets one back when it is the
+  point (`ini = { NoGreekMus = "true" }`). The build must have been started
+  once, so that it has a settings file to copy.
+- **No path, name, date or duration.** The run directory, the home directory,
+  dates, elapsed times and the thread count are rewritten to fixed values, in
+  the file's own encoding, a raw's samples untouched. The recorder then
+  refuses to finish if a user name, a host name or a local path survived.
+  A path is looked for as each build spells it: LTspice 26 in UTF-8, and
+  LTspice XVII in cp1252 on a machine of any code page, with a question mark
+  for each character cp1252 lacks (so a home folder named in Chinese reaches
+  an XVII export as `C:\Users\??`). The machine's own code page is searched
+  too.
+- **No person.** LTspice opens a window even for a batch run and takes the
+  keyboard focus for as long as it lasts, and it answers some inputs with a
+  message box that waits for OK. On the desktop someone is working at, a
+  stray key press answers it and the run looks as if it had ended by itself.
+  The recorder starts LTspice on a desktop of its own, where it cannot take
+  focus and nobody can answer; a build that stops to ask is recorded as
+  having done so, with what it asked.
+
+Things about the command line that cost an afternoon each: `-ini <file>` goes
+after the input (given first, LTspice 26 exits 0 having run nothing and XVII
+opens its window); the settings copy is never empty (a build that starts on
+an empty one behaves as on first launch, and XVII then runs its updater);
+`-ascii` is ignored when a settings file is also named, and when the deck's
+own file name contains "ascii".
+
+### The opt-in tier
+
+With `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`,
+`test_ltspice_recorder.py::test_an_installed_build_still_behaves_as_recorded`
+records each installed build again, a group of cases at a time, and compares
+the result with what is committed. A build of a newer major version than any
+recorded stands in for the newest recording of its generation, so a release
+that changes behaviour fails there by name. A build that is not installed
+skips with that reason; it never fails for it. Text files are compared as
+bytes, raw files by header and by samples to a part in a million (a solver's
+last bits depend on the processor), and a run stopped part way only by its
+header.
+
+When it fails, look at the difference before recording over it: either
+LTspice changed, in which case the model may need to follow, or the recorder
+missed something that varies, in which case it belongs in the scrubber.
 
 ## Conventions
 

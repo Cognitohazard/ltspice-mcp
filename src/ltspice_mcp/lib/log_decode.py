@@ -107,9 +107,14 @@ def _fourier(reader: Any, log_path: Path, text: str) -> list[dict[str, Any]]:
             current = {}
             originals.setdefault(signal, []).append(current)
         elif current is not None:
-            match = re.match(r"(Total|Partial) Harmonic Distortion:\s*(\S+)", line)
+            # LTspice 24 and later print each figure on a line of its own
+            # ("Total Harmonic Distortion:   13.617501%"). LTspice XVII prints
+            # one line with a second figure in parentheses
+            # ("Total Harmonic Distortion: 13.603246%(13.610258%)"); the first
+            # is the one read, as the shared reader reads it.
+            match = re.match(r"(Total|Partial) Harmonic Distortion:\s*([^\s%(]+)", line)
             if match:
-                current["thd" if match[1] == "Total" else "phd"] = float(match[2].rstrip("%"))
+                current["thd" if match[1] == "Total" else "phd"] = float(match[2])
     for signal, blocks in originals.items():
         decoded = reader.fourier.get(signal, [])
         if len(decoded) != len(blocks):
@@ -176,6 +181,10 @@ def _check_device_rows(text: str) -> None:
             devices = 0
         tokens = line.split()
         if not tokens:
+            # A blank line ends a group of devices. LTspice XVII goes on to
+            # "Date:" and "Total elapsed time:" after the last one, which are
+            # labelled lines of the log and not rows of the block.
+            devices = 0
             continue
         if tokens[0] == "Name:":
             devices = len(tokens) - 1

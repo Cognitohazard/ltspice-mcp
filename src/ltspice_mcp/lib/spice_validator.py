@@ -617,14 +617,15 @@ class _NodeUse:
 
 
 def drop_title_card(cards: list[SpiceCard]) -> list[SpiceCard]:
-    """Drop the line-1 instance card produced by a SPICE deck's title.
+    """Drop the card a SPICE deck's title line was lexed as.
 
-    Line 1 of a netlist is a free-text title by SPICE convention. The
-    lexer has no title concept, so a title starting with an element
-    letter parses as an instance card — its words would otherwise be
-    counted as circuit nodes by instance-level lints.
+    Line 1 of a netlist is a free-text title, whatever it says. The lexer has
+    no title concept, so a title that starts with an element letter parses as
+    an instance card, and one that starts with a dot as a directive. LTspice
+    reads neither: ``.param r=2k`` on line 1 defines nothing. A title that is
+    a comment or blank is no card and stays as it is.
     """
-    return [card for card in cards if not (card.kind == "instance" and card.line_start == 1)]
+    return [card for card in cards if card.line_start != 1 or card.kind in {"comment", "blank"}]
 
 
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:

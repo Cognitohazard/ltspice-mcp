@@ -58,7 +58,7 @@ async def test_hook_rejects_a_schema_violating_emission(
 
 def _scenario_tool_names() -> set[str]:
     """Tool names passed to ``session.call_tool(...)`` in the scenario script."""
-    source = (Path(__file__).parent / "scenario_active_filter.py").read_text()
+    source = (Path(__file__).parent / "scenario_active_filter.py").read_text(encoding="utf-8")
     return set(re.findall(r"call_tool\(\s*[\"']([A-Za-z_]\w*)[\"']", source))
 
 

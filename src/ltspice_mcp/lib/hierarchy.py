@@ -577,9 +577,10 @@ def resolve_hierarchy(
         top.append(item)
         i += 1
 
-    globals_: dict[str, str] = {"0": "0"}
-    if profile.simulator == "ngspice":
-        globals_["gnd"] = "0"
+    # ``gnd`` is node 0 to both simulators, at the top level and inside a
+    # subcircuit alike. They differ where a subcircuit names a port ``gnd``:
+    # see ``node`` below.
+    globals_: dict[str, str] = {"0": "0", "gnd": "0"}
     scale_expression = "1"
     dynamic_reason = None
     for item in occurrences:
@@ -620,6 +621,10 @@ def resolve_hierarchy(
                 "version-dependent ground alias 'gnd' in kiltpsa mode; "
                 "use explicit node 0 or inspect a supported native/hsa deck"
             )
+        if folded == "gnd" and profile.simulator == "ltspice" and folded in ports:
+            # To LTspice a port named gnd is that port; to ngspice it is still
+            # ground, which is the next branch.
+            return ports[folded]
         if folded in globals_:
             scope, name = (), globals_[folded]
         elif folded in ports:

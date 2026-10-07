@@ -51,7 +51,7 @@ _SEED_CASES = [
     ),
     (
         "lib-section-ngspice",
-        '.lib "models.lib" TT\n.op\n.end\n',
+        '* t\n.lib "models.lib" TT\n.op\n.end\n',
         "ngspice",
         "NGspiceSimulator",
     ),
@@ -93,7 +93,7 @@ _SEED_CASES = [
     ),
     (
         "include-relative",
-        '.include "models.lib"\n.op\n.end\n',
+        '* t\n.include "models.lib"\n.op\n.end\n',
         None,
         "LTspice",
     ),
@@ -176,7 +176,7 @@ def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
 @pytest.mark.parametrize("mode", ["hsa", ""])
 def test_explicit_launch_mode_overrides_session_lint_mode(tmp_path, monkeypatch, mode):
     monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
-    text = '.lib "models.lib" tt\n.op\n.end\n'
+    text = '* t\n.lib "models.lib" tt\n.op\n.end\n'
     findings = lint_deck(
         text, tmp_path / "deck.cir", "ngspice", "NGspiceSimulator", ngbehavior=mode
     )
@@ -191,7 +191,10 @@ def test_lib_section_ngspice_names_the_setting_that_fixes_it(tmp_path, monkeypat
     setting that makes ngspice load the section."""
     monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
     findings = lint_deck(
-        '.lib "models.lib" tt\n.op\n.end\n', tmp_path / "deck.cir", "ngspice", "NGspiceSimulator"
+        '* t\n.lib "models.lib" tt\n.op\n.end\n',
+        tmp_path / "deck.cir",
+        "ngspice",
+        "NGspiceSimulator",
     )
     finding = next(item for item in findings if item["rule_id"] == "lib-section-ngspice")
 
@@ -261,7 +264,7 @@ def test_step_ngspice_is_quiet_on_ltspice(tmp_path: Path):
 def test_model_missing_reads_staged_include_closure(tmp_path: Path):
     models = tmp_path / "models with spaces.lib"
     models.write_text(".model DFAST D(Is=1e-12)\n")
-    deck = '.include "models with spaces.lib"\nV1 in 0 1\nD1 in 0 DFAST\n.op\n.end\n'
+    deck = '* t\n.include "models with spaces.lib"\nV1 in 0 1\nD1 in 0 DFAST\n.op\n.end\n'
 
     assert "model-missing" not in _ids(deck, tmp_path)
 
@@ -334,7 +337,7 @@ def test_five_level_live_include_chain_resolves_models(tmp_path: Path):
         link = tmp_path / f"l{level}.inc"
         link.write_text(f'.include "{previous}"\n')
         previous = link
-    deck = f'.include "{previous}"\nD1 in 0 DDEEP\nV1 in 0 1\n.op\n.end\n'
+    deck = f'* t\n.include "{previous}"\nD1 in 0 DDEEP\nV1 in 0 1\n.op\n.end\n'
 
     assert "model-missing" not in _ids(deck, tmp_path)
 
@@ -346,7 +349,7 @@ def test_cyclic_live_includes_terminate(tmp_path: Path):
     second = tmp_path / "b.inc"
     first.write_text(f'.include "{second}"\n')
     second.write_text(f'.include "{first}"\n.model DCYC D(Is=1e-12)\n')
-    deck = f'.include "{first}"\nD1 in 0 DCYC\nV1 in 0 1\n.op\n.end\n'
+    deck = f'* t\n.include "{first}"\nD1 in 0 DCYC\nV1 in 0 1\n.op\n.end\n'
 
     assert "model-missing" not in _ids(deck, tmp_path)
 
@@ -356,7 +359,7 @@ def test_sectioned_lib_reference_resolves_through_the_walk(tmp_path: Path):
     section declarations inside it read as sections, not as missing files."""
     library = tmp_path / "corners.lib"
     library.write_text(".lib TT\n.model DTT D(Is=1e-12)\n.endl TT\n")
-    deck = f'.lib "{library}" TT\nD1 in 0 DTT\nV1 in 0 1\n.op\n.end\n'
+    deck = f'* t\n.lib "{library}" TT\nD1 in 0 DTT\nV1 in 0 1\n.op\n.end\n'
 
     assert "model-missing" not in _ids(deck, tmp_path)
 
@@ -366,14 +369,14 @@ def test_sectioned_lib_reference_resolves_through_the_walk(tmp_path: Path):
     [
         # The ratioed pair of a bandgap or PTAT cell: an area factor after the
         # model, as a number or a parameter.
-        ".model QN NPN\nV1 c 0 1\nQ1 c c 0 QN\nQ2 c c e QN 8\nR1 e 0 1k\n.op\n.end\n",
-        ".model QN NPN\n.param N=8\nV1 c 0 1\nQ2 c c 0 QN {N}\n.op\n.end\n",
-        ".model QN NPN\nV1 c 0 1\nQ1 c c 0 QN off\n.op\n.end\n",
-        ".model QN NPN\nV1 c 0 1\nQ1 c c 0 sub QN 8\n.op\n.end\n",
-        ".model JN NJF\nV1 d 0 1\nJ1 d 0 0 JN 2 off\n.op\n.end\n",
-        ".model NCH NMOS\nV1 d 0 1\nM1 d d 0 0 NCH off\n.op\n.end\n",
+        "* t\n.model QN NPN\nV1 c 0 1\nQ1 c c 0 QN\nQ2 c c e QN 8\nR1 e 0 1k\n.op\n.end\n",
+        "* t\n.model QN NPN\n.param N=8\nV1 c 0 1\nQ2 c c 0 QN {N}\n.op\n.end\n",
+        "* t\n.model QN NPN\nV1 c 0 1\nQ1 c c 0 QN off\n.op\n.end\n",
+        "* t\n.model QN NPN\nV1 c 0 1\nQ1 c c 0 sub QN 8\n.op\n.end\n",
+        "* t\n.model JN NJF\nV1 d 0 1\nJ1 d 0 0 JN 2 off\n.op\n.end\n",
+        "* t\n.model NCH NMOS\nV1 d 0 1\nM1 d d 0 0 NCH off\n.op\n.end\n",
         # ``params:`` introduces the overrides; the subckt name is before it.
-        ".subckt mysub a b params: R=1k\nR1 a b {R}\n.ends mysub\n"
+        "* t\n.subckt mysub a b params: R=1k\nR1 a b {R}\n.ends mysub\n"
         "V1 n1 0 1\nX1 n1 0 mysub params: R=2k\n.op\n.end\n",
     ],
 )
@@ -601,7 +604,7 @@ class TestValueSuffixRule:
             "value-suffix-mojibake",
         )
 
-        assert finding["evidence"]["generated_by"] == "LTspice 24.1.9 for Windows."
+        assert finding["evidence"]["generated_by"] == "LTspice 24.1.9 for Windows"
 
 
 def test_suppression_removes_named_rule(tmp_path: Path):

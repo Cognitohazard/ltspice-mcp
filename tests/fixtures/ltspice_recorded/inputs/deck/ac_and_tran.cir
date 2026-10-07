@@ -1,0 +1,7 @@
+* .ac and .tran in one deck
+V1 in 0 PULSE(0 1 0 1u 1u 1 2) AC 1
+R1 in out 1k
+C1 out 0 100n
+.ac dec 5 10 100k
+.tran 0 1m 0 20u
+.end
