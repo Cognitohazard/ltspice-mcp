@@ -1,8 +1,9 @@
 """Contracts for the caller-set response budget and its degradation ladder.
 
-Three claims are worth a test each and are the reason this file exists: a
+Four claims are worth a test each and are the reason this file exists: a
 budget never costs the caller a fact, a budget never changes what a result IS,
-and a page shrunk to fit a budget still pages to every row.
+a page shrunk to fit a budget still pages to every row, and the most degraded
+experiment receipt costs the same however many cases the job ran.
 """
 
 from __future__ import annotations
@@ -38,7 +39,14 @@ from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
+from tests.conftest import (
+    LIVENESS_S,
+    SyncApi,
+    make_experiment_job,
+    recorded_fixture_simulator,
+    stage_recorded_fixture,
+    submit_experiment,
+)
 
 # Every rung-0 allowlist the package declares, paired with the schema node whose
 # keys it names. Listed rather than derived, because the pairing is the point:
@@ -237,6 +245,22 @@ class TestLadderPrimitives:
         assert measure.fit_limit(20, generous) == 20
         starved = Rung(level=response_budget.RUNG_SHRINK, budget=500, measured=100_000)
         assert measure.fit_limit(20, starved) == 1
+
+    def test_largest_fitting_lands_on_a_limit_it_saw_fit(self):
+        seen: list[int] = []
+
+        def fits_up_to(bound: int):
+            def fits(limit: int) -> bool:
+                seen.append(limit)
+                return limit <= bound
+
+            return fits
+
+        assert response_budget.largest_fitting(50, fits_up_to(17)) == 17
+        assert 17 in seen
+        assert response_budget.largest_fitting(50, fits_up_to(99)) == 50
+        # Nothing fits: the floor, which is the one limit it may return unseen.
+        assert response_budget.largest_fitting(50, fits_up_to(-1), floor=1) == 1
 
     def test_rung_zero_removes_optional_and_only_empties_required(self):
         container = {"optional": [], "kept": [1], "required": [1, 2]}
@@ -869,6 +893,213 @@ class TestJobsBudget:
         assert data["job_id"] == job.job_id
         assert data["status"] == job.status
         assert _observation(data, "budget_truncated") is not None
+
+
+# ---------------------------------------------------------------------------
+# The experiment receipt's floor
+# ---------------------------------------------------------------------------
+
+_GRID_DECK = "V1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n"
+
+# Three recipes with no reduction, so the attached analysis carries one row per
+# run for each of them: a run page plus three row surfaces under one limit.
+_GRID_RECIPES: list[dict[str, Any]] = [
+    {"key": f"v_{at}", "metric": "value", "expr": "V(out)", "at": at}
+    for at in ("100u", "500u", "900u")
+]
+
+# How far the floor may move between a 4-case and a 64-case grid: the digits
+# of the counts it reports, not anything per case.
+_FLOOR_DIGIT_SLACK = 16
+
+
+# A signal no run carries: the recipe fails the same way on every run.
+_ABSENT_SIGNAL_RECIPE: dict[str, Any] = {
+    "key": "absent",
+    "metric": "value",
+    "expr": "V(nope)",
+    "at": "900u",
+}
+
+
+@pytest.fixture
+def grid_deck(work_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The grid's deck, run by an engine that hands back a recorded raw+log."""
+    recorded_fixture_simulator(monkeypatch)
+    deck = work_dir / "grid.cir"
+    deck.write_text(_GRID_DECK)
+    return deck
+
+
+async def _grid_receipt(
+    state: SessionState,
+    deck: Path,
+    cases: int,
+    budget: int | None,
+    recipes: list[dict[str, Any]] = _GRID_RECIPES,
+) -> dict[str, Any]:
+    """A completed ``cases``-case grid over two-by-two by ``cases // 4`` values.
+
+    ``budget=None`` sends none, so the server's default applies.
+    """
+    values = [f"{index}k" for index in range(1, cases // 4 + 1)]
+    payload: dict[str, Any] = {
+        "request_id": f"grid-{recipes[0]['key']}-{cases}-{budget}",
+        "circuits": [{"path": str(deck), "id": "dut"}],
+        "execution": {"wait_s": LIVENESS_S},
+        "variations": [
+            {"kind": "assign", "assign": {"R1": values, "C1": ["1u", "2u"], "V1": ["1", "2"]}}
+        ],
+        "analyze": {"recipes": recipes},
+    }
+    if budget is not None:
+        payload["budget"] = budget
+    _is_error, data = await submit_experiment(state, payload)
+    assert data["status"] == "completed", data["hint"]
+    assert data["completeness"]["produced"] == cases
+    return data
+
+
+def _assert_floor_flat(small: dict[str, Any], large: dict[str, Any]) -> None:
+    """Two floors that differ by the digits of their counts, nothing per case."""
+    sizes = (response_budget.estimate_tokens(small), response_budget.estimate_tokens(large))
+    assert sizes[1] - sizes[0] <= _FLOOR_DIGIT_SLACK, sizes
+
+
+@pytest.mark.asyncio
+class TestReceiptFloor:
+    """The most degraded receipt costs the same whatever the job's size.
+
+    A budget is set because a receipt is large, and a receipt is large because
+    the job ran many cases. A floor that carried a row per case — a run row, an
+    attributed value per recipe, an identity echo per run — grew with exactly
+    the number that made the caller reach for a budget, so a big grid came back
+    over any budget it could set. At the floor the per-case rows are counted
+    rather than carried, and the cursor and ``jobs(runs)`` reach every one.
+    """
+
+    async def test_the_floor_does_not_grow_with_the_case_count(
+        self, state_with_sim: SessionState, grid_deck: Path
+    ):
+        floor = response_budget.BUDGET_MIN_TOKENS
+
+        receipts = {
+            cases: await _grid_receipt(state_with_sim, grid_deck, cases, floor)
+            for cases in (4, 64)
+        }
+        statuses = {
+            cases: await _jobs(
+                state_with_sim, action="status", job_id=data["job_id"], budget=floor
+            )
+            for cases, data in receipts.items()
+        }
+
+        _assert_floor_flat(receipts[4], receipts[64])
+        _assert_floor_flat(statuses[4], statuses[64])
+        large = receipts[64]
+        # Counted, not carried: completeness and the page's total say how many
+        # runs there are; no row and no per-run echo is inline.
+        assert large["completeness"]["expanded"] == large["runs"]["total"] == 64
+        assert large["runs"]["returned"] == 0
+        assert large["analysis"]["result"]["source_hashes"] == []
+        assert large["analysis"]["result"]["coverage"]["runs_analyzed"] == 64
+        assert _observation(large, "budget_truncated") is not None
+        assert "jobs(runs)" in large["hint"]
+
+        # The cursor is the route back to every row, in order.
+        seen: list[str] = []
+        cursor = large["runs"]["next_cursor"]
+        while cursor is not None:
+            page = await _jobs(
+                state_with_sim, action="runs", job_id=large["job_id"], cursor=cursor
+            )
+            seen.extend(row["case_id"] for row in page["items"])
+            cursor = page["next_cursor"]
+        assert seen == [f"dut-case-{index:04d}" for index in range(64)]
+
+    async def test_a_recipe_failing_on_every_run_is_one_counted_row(
+        self, state_with_sim: SessionState, grid_deck: Path
+    ):
+        """Failures are a fact channel no rung trims, so a failure per run kept
+        the floor growing with the job: a signal no run carries is one message
+        per run, identical but for ``where``. It is one reason, so one row,
+        counted — on the receipt and on analyze_results over the job alike."""
+        floor = response_budget.BUDGET_MIN_TOKENS
+        # The row names its places up to a cap, so the floor stops moving once
+        # the job has more runs than that: both sizes here are past it.
+        sizes = (16, 64)
+        assert sizes[0] > analyze_mod._FAILURE_WHERE_CAP
+        # The places, in run order, capped: the count says how many more.
+        places = [
+            f"experiment:dut-case-{index:04d}" for index in range(analyze_mod._FAILURE_WHERE_CAP)
+        ]
+
+        receipts = {
+            cases: await _grid_receipt(
+                state_with_sim, grid_deck, cases, floor, recipes=[_ABSENT_SIGNAL_RECIPE]
+            )
+            for cases in sizes
+        }
+
+        _assert_floor_flat(receipts[sizes[0]], receipts[sizes[1]])
+        for cases, data in receipts.items():
+            (row,) = data["analysis"]["result"]["failures"]
+            assert row["code"] == "recipe_failed"
+            assert row["count"] == cases
+            assert row["wheres"] == places
+            assert row["where"] == places[0]
+
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": receipts[64]["job_id"]}],
+                    "recipes": [_ABSENT_SIGNAL_RECIPE],
+                }
+            ),
+            state_with_sim,
+        )
+        data = standalone.structured_content
+        assert data is not None
+        jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(data)
+        (row,) = data["failures"]
+        assert row["count"] == 64
+        assert data["coverage"]["runs_requested"] == 64
+        assert data["coverage"]["runs_analyzed"] == 0
+        assert data["outcome"] != "complete"
+
+    async def test_a_budget_the_rows_can_share_keeps_as_many_as_fit(
+        self, state_with_sim: SessionState, grid_deck: Path
+    ):
+        """The shrink rung's estimate counts every surface's rows but caps each
+        surface at the one limit it returns, so for a receipt with several row
+        surfaces it priced a page that cut nothing as one that fit. The rung
+        settles on a measured page instead."""
+        budget = 6000
+
+        data = await _grid_receipt(state_with_sim, grid_deck, 24, budget)
+
+        assert _observation(data, "budget_not_met") is None
+        assert response_budget.estimate_tokens(data) <= budget
+        assert 0 < data["runs"]["returned"] < 24
+
+    async def test_the_server_default_empties_the_attached_identity_echo(
+        self, state_with_sim: SessionState, grid_deck: Path
+    ):
+        """Rung 0 empties the identity echo, the attached analysis's included,
+        and the note under the default says where it still is."""
+        state_with_sim.config.default_budget = response_budget.BUDGET_MIN_TOKENS
+
+        data = await _grid_receipt(state_with_sim, grid_deck, 4, None, recipes=_GRID_RECIPES[:1])
+
+        attached = data["analysis"]["result"]
+        assert attached["source_hashes"] == []
+        # The default stops at rung 0: the rows the caller would read stand.
+        assert len(attached["results"]["v_100u"]["values"]) == 4
+        assert data["runs"]["returned"] == 4
+        note = _observation(data, "budget_truncated")
+        assert note is not None
+        assert "Emptied: analysis.result.source_hashes." in note["detail"]
+        assert note["detail"].endswith(receipts_mod.RECEIPT_DEFAULT_ROUTE)
 
 
 # ---------------------------------------------------------------------------
