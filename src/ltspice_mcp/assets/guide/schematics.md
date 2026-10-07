@@ -17,7 +17,9 @@ mutation below is an entry in its `ops` list, applied as one guarded
 transaction, so batch a whole build into one call. Place components with the
 `add_component` op; the response's `touched` view gives their placed pins and
 nets, `warnings` any overlap, and `inspect(kind="symbol")` previews the same
-geometry before you place anything.
+geometry before you place anything. It also lists the symbol's `prefix` and
+every attribute it carries (`SpiceModel`, `Value`, `SpiceLine`, `ModelFile`):
+the model name and parameters an instance is netlisted with.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to

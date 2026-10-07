@@ -15,7 +15,10 @@ and the circuits it can reach. Each query names one supported kind:
   precedence they resolve through. A ``path`` adds that schematic's own
   directory to the front of the reported precedence.
 * ``symbol`` — one symbol's pin positions per rotation (``R0``…``M270``),
-  bounding box, and origin (the ``symbol_info`` geometry internals).
+  bounding box, and origin (the ``symbol_info`` geometry internals), with its
+  ``SymbolType``, prefix and every ``SYMATTR`` it carries (``SpiceModel``,
+  ``Value``, ``SpiceLine``, ``ModelFile``...): the model and parameters an
+  instance of it is netlisted with.
 * ``net`` — everything on a net. On a ``.asc`` this is a geometric trace
   (``trace_net`` internals: pins, wire vertices, labels, shorts); an ``[x, y]``
   on a wire's interior traces that wire and reports it as ``snapped_to_wire``. On a
@@ -1240,6 +1243,11 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
     return {
         "symbol": sym_info.name,
         "description": sym_info.description,
+        # What the part netlists as: its element prefix, and the model, value
+        # and parameter attributes it carries (SpiceModel, Value, SpiceLine...).
+        "symbol_type": sym_info.symbol_type or None,
+        "prefix": sym_info.prefix or None,
+        "attributes": dict(sym_info.attributes),
         "source_path": str(asy),
         "origin": {"x": 0, "y": 0},
         "bounding_box": sym_info.bbox.to_origin_size_dict(),
