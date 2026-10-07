@@ -10,8 +10,9 @@ import logging
 import re
 import tempfile
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from spicelib.log.ltsteps import LTSpiceLogReader
@@ -1190,7 +1191,7 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
         # codecs and gives up on an 8-bit log holding a byte none of them
         # defines. LTspice XVII writes one when the deck's title holds text
         # in a double-byte code page.
-        if content.startswith("Circuit:") or "\nCircuit:" in content:
+        if has_circuit_line(content):
             candidates.append(content)
 
         for candidate in candidates:
@@ -1200,6 +1201,31 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
                 except Exception:
                     continue
         raise ResultError(f"Could not parse log file: {first_err}") from first_err
+
+
+def has_circuit_line(text: str) -> bool:
+    """``text`` has the ``Circuit:`` line a log of a run that began opens with.
+
+    A run the simulator refused before it began has none.
+    """
+    return text.startswith("Circuit:") or "\nCircuit:" in text
+
+
+def empty_measurements(
+    diagnostics: Mapping[str, Any], failed: Sequence[str] = ()
+) -> MeasurementsOutput:
+    """The table of a log with no measurement results.
+
+    The log's errors and warnings say why, and a FAIL'ed measurement is listed
+    with no value rather than left out, so its absence is never silent.
+    """
+    return {
+        "measurements": {name: {"values": [None]} for name in failed},
+        "step_count": 0,
+        "errors": diagnostics.get("errors") or None,
+        "warnings": diagnostics.get("warnings") or None,
+        "failed_measurements": list(failed),
+    }
 
 
 def parse_measurements(
@@ -1254,22 +1280,7 @@ def parse_measurements(
         # mode" is a *warning*-class diagnostic; without carrying it, callers
         # (e.g. measurement_stats) report "no diagnostics" while every other
         # tool surfaces the reason.
-        diagnostics = extract_log_diagnostics(log_path)
-        errors_list = diagnostics["errors"] or None
-        warnings_list = diagnostics["warnings"] or None
-        # Even when spicelib reports no measurements, FAIL'ed names still
-        # need to show up in ``measurements`` (value=None) so consumers
-        # don't see a silent absence.
-        measurements: dict[str, MeasurementEntry] = {
-            name: {"values": [None]} for name in failed_names
-        }
-        return {
-            "measurements": measurements,
-            "step_count": 0,
-            "errors": errors_list,
-            "warnings": warnings_list,
-            "failed_measurements": failed_names,
-        }
+        return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
     def _coerce(values: list) -> list[float | None]:
         out: list[float | None] = []

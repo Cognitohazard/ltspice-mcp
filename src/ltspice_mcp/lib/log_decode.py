@@ -255,25 +255,17 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
 
     sections["device_op"] = _section(device_op, limits, present=device_present)
     diagnostics = sections["diagnostics"]["value"] or {}
-    if "log" in text and not re.search(r"^Circuit:", body, re.M) and diagnostics.get("errors"):
+    if "log" not in text:
+        for name in ("measurements", "fourier"):
+            sections[name] = _section(lambda: None, limits, present=False)
+    elif diagnostics.get("errors") and not log_parser.has_circuit_line(body):
         # A run the simulator refused before it began writes no "Circuit:" line
         # and no measurement or Fourier block. The measurements are the empty
         # table a log with no .meas gives, carrying the reason the run failed.
         sections["measurements"] = _section(
-            lambda: {
-                "measurements": {},
-                "step_count": 0,
-                "errors": diagnostics["errors"],
-                "warnings": diagnostics.get("warnings") or None,
-                "failed_measurements": [],
-            },
-            limits,
-            present=False,
+            lambda: log_parser.empty_measurements(diagnostics), limits, present=False
         )
         sections["fourier"] = _section(lambda: [], limits, present=False)
-    elif "log" not in text:
-        for name in ("measurements", "fourier"):
-            sections[name] = _section(lambda: None, limits, present=False)
     else:
         try:
             with log_parser.normalized_log(body, directory) as normalized:
