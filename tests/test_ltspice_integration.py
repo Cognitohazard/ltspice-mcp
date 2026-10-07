@@ -1006,6 +1006,7 @@ class TestSheetOpenInAWindow:
         an LTspice (the command leaves out the path that makes the launch
         fail): the one it starts has its windows on the server's desktop and
         none on this one, and is gone when the session is closed."""
+        assert sys.platform == "win32"
         import ctypes
         from ctypes import wintypes
 
