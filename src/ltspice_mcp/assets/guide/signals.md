@@ -89,13 +89,16 @@ removes it. In Python, `analyze_tone(t, y, f)` does the same on arrays cut by
 over the samples, which weights LTspice's clustered samples by count.
 
 LTspice's `.four <freq> [Nharmonics] [Nperiods] <trace>` prints a Fourier
-table to the log: `.four 1k V(out)` gives nine harmonics, `.four 1k 5 V(in)`
-five. The `summary` recipe returns it as `fourier`, with each harmonic's
-`magnitude` and `phase`. Its window is the last periods of the run, which you
-cannot move, and the phase is printed in each build's own convention: for a
-`SINE(0 1 1k)` source, LTspice XVII prints the fundamental at 0 degrees and
-LTspice 26 at 90, and no constant offset turns one build's phases into the
-other's. Read phase with `tone`. ngspice skips `.four` when it writes a raw
+table to the log, and the `summary` recipe returns it as `fourier`, with each
+harmonic's `magnitude` and `phase`. The number after the frequency is the
+harmonic count, not the period count: `.four 1k V(out)` gives nine harmonics
+over one period, `.four 1k 5 V(in)` five over one. LTspice's help puts the
+window at the last period before the stop time, the last `Nperiods` of them,
+or the whole run for `-1`, so it cannot start where you choose. The phase is
+printed in each build's own convention: for a `SINE(0 1 1k)` source, LTspice
+XVII prints the fundamental at 0 degrees and LTspice 26 at 90, and no
+constant offset turns one build's phases into the other's. Read phase with
+`tone`. ngspice skips `.four` when it writes a raw
 file, as the server runs it, and the run's warnings say so.
 
 ## Reading a deck that carries `.step`
