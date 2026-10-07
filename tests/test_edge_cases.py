@@ -378,20 +378,23 @@ class TestParseSpiceTrailingUnits:
     def test_kilohms(self):
         assert parse_spice_value("1kohm") == pytest.approx(1e3)
 
-    def test_no_suffix_with_trailing_garbage_still_raises(self):
-        # Conservative: only ignore the tail when it begins with a known
-        # suffix. '1Hz' has no recognised suffix prefix → still rejected.
-        with pytest.raises(ValueError, match="Cannot parse"):
-            parse_spice_value("1Hz")
+    def test_a_unit_with_no_suffix_is_skipped_as_ltspice_skips_it(self):
+        # Recorded: LTspice reads '1Hz' as 1 (tests/test_recorded_ltspice_decks.py).
+        assert parse_spice_value("1Hz") == 1.0
 
     def test_pure_garbage_still_raises(self):
         with pytest.raises(ValueError, match="Cannot parse"):
             parse_spice_value("hello")
 
-    def test_trailing_digits_still_rejected(self):
-        # Must not match — '1k1' has digits after the suffix; ambiguous.
+    def test_digits_after_a_suffix_are_its_fraction(self):
+        # Recorded: LTspice reads '1k5' as 1500 and '4R7' as 4.7.
+        assert parse_spice_value("1k1") == pytest.approx(1100.0)
+        assert parse_spice_value("4R7") == pytest.approx(4.7)
+
+    def test_a_tail_that_is_no_letter_still_raises(self):
+        # LTspice 26 refuses '8%'; XVII reads 0.08. The server takes 26's answer.
         with pytest.raises(ValueError, match="Cannot parse"):
-            parse_spice_value("1k1")
+            parse_spice_value("8%")
 
 
 # ---------------------------------------------------------------------------
