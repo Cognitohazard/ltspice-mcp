@@ -908,10 +908,12 @@ def build_simulation_summary(
                 summary["meas_errors"] = diagnostics["meas_errors"]
 
         # How many bias-point solves the log records — each OP-solve block opens
-        # with a "Direct Newton iteration" line (whether it converges or fails),
-        # and a stepped ``.op`` writes only step 0 to the .raw. It both warns the
-        # user (operating-point runs) and gates the OP-error demote below (step
-        # 0's data can't vouch for a later step the raw never carries).
+        # with a "Direct Newton iteration" line (whether it converges or fails).
+        # A stepped ``.op`` stores one point per step in the .raw, with the
+        # stepped parameter as its first variable, and names no step value in
+        # the log; only the first point is read from it here. The count both
+        # warns the user (operating-point runs) and gates the OP-error demote
+        # below (the first point can't vouch for a later step).
         op_log_steps = section_value("steps", "step rows")
         op_iterations = section_value("op_iterations", "OP iterations")
         op_coverage_known = op_log_steps is not None and op_iterations is not None
@@ -930,9 +932,9 @@ def build_simulation_summary(
         # always-terminal failures (iteration limit) aren't candidates. Demote
         # only when the raw covers the WHOLE run: a single solve block
         # (op_solve_count <= 1) written to a single-step raw (step_count <= 1). A
-        # stepped .op (raw = step 0, log shows >1 solve) or a multi-step raw
-        # (later steps not checked here) keeps the error — step 0's finite data
-        # can't clear a failure that belongs to a step the raw can't speak for.
+        # stepped .op (only its first point read, log shows >1 solve) or a
+        # multi-step raw (later steps not checked here) keeps the error — the
+        # first step's finite data can't clear a failure that belongs to another.
         errs = summary.get("errors")
         if errs:
             demoted = [e for e in errs if is_op_stepping_failure(e)]
@@ -968,7 +970,8 @@ def build_simulation_summary(
                 )
             warnings.append(
                 f"Stepped .op detected: log shows {op_solve_count} bias-"
-                "point iterations but the .raw only carries step 0. " + suggestion
+                "point iterations; the .raw holds one point per step and only the "
+                "first is read here. " + suggestion
             )
 
         fourier_data = section_value("fourier", "fourier")
@@ -1041,7 +1044,8 @@ def sniff_raw_dialect(path: Path) -> str | None:
     ask — cannot be read at all.
 
     Two structural facts settle it without that field. LTspice writes the
-    header in UTF-16LE and every other supported simulator writes ASCII; and
+    header in UTF-16LE (except in a text raw, which is 8-bit and carries
+    ``Command:``) and every other supported simulator writes ASCII; and
     the dialect's one load-bearing effect inside spicelib is
     ``always_double = dialect != 'ltspice'``, so separating LTspice from the
     rest *is* the decision. qspice and xyce always write ``Command:``, which

@@ -620,17 +620,18 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
 
 
 def point_on_segment(point: tuple[int, int], v1: tuple[int, int], v2: tuple[int, int]) -> bool:
-    """True iff ``point`` lies on the orthogonal wire segment ``v1 → v2``."""
+    """True iff ``point`` lies on the wire segment ``v1 → v2``, ends included.
+
+    A wire need not be horizontal or vertical: LTspice draws diagonal ones and
+    connects a pin or label that sits on one anywhere along its length, as it
+    does on any other wire.
+    """
     px, py = point
     x1, y1 = v1
     x2, y2 = v2
-    if x1 == x2:
-        return px == x1 and min(y1, y2) <= py <= max(y1, y2)
-    if y1 == y2:
-        return py == y1 and min(x1, x2) <= px <= max(x1, x2)
-    # Diagonal wire — shouldn't happen in LTspice, but if it does, fall
-    # back to endpoint-only matching.
-    return point in (v1, v2)
+    if (x2 - x1) * (py - y1) != (y2 - y1) * (px - x1):
+        return False
+    return min(x1, x2) <= px <= max(x1, x2) and min(y1, y2) <= py <= max(y1, y2)
 
 
 def build_on_wire_predicate(
@@ -698,7 +699,11 @@ def net_partition(
     ``-netlist`` exports of a label, a pin and a wire end on a wire's interior
     (connected, with the wire left whole — no split needed), a plain crossing
     (not connected), and a label at a crossing (joins both wires).
-    The sheets and their exports are ``tests/fixtures/t_junctions/``.
+    The sheets and their exports are ``tests/fixtures/t_junctions/``. LTspice
+    26 and LTspice XVII agree on each of those, and on a pin at a crossing,
+    collinear wires that overlap, two pins that only touch, and a point on a
+    diagonal wire, in the connectivity sheets recorded from both
+    (``docs/TESTING.md``, "Recorded LTspice behaviour").
 
     ``extra_segments`` lets the caller include not-yet-committed wire
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
@@ -1708,12 +1713,13 @@ def same_instance_dropped_segments(
     """Wire segments LTspice discards from the exported netlist.
 
     LTspice drops a wire run whose two ends both land exactly on pins of the
-    SAME single component instance (verified against LTspice 26 ``-netlist``:
-    such a run never reaches the netlist, so the two pins stay on separate nodes
-    and the drawn tie has no electrical effect). Two routes still get kept, and
-    both were confirmed against LTspice 26: a run spanning two *different*
-    instances, and a same-instance tie that turns a corner OUT OF LINE with the
-    two pins. A waypoint that stays *collinear* with the pins does NOT survive —
+    SAME single component instance (recorded from the ``-netlist`` export of
+    LTspice 26 and of LTspice XVII: such a run never reaches the netlist, so the
+    two pins stay on separate nodes and the drawn tie has no electrical
+    effect). Two routes still get kept, and both are in the same recordings: a
+    run spanning two *different* instances, and a same-instance tie that turns
+    a corner OUT OF LINE with the two pins. A waypoint that stays *collinear*
+    with the pins does NOT survive —
     LTspice merges the in-line segments back into one and drops it — so the
     segments are collinear-merged (:func:`_merge_collinear_runs`) before this
     check, which is what catches an all-in-line waypoint route as well as the

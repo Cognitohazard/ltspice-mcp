@@ -242,7 +242,7 @@ def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     error. AC frequency axes come back complex — strip to the real part.
 
     When ``raw_path`` is given, a no-axis raw that is really a stepped ``.op``
-    collapsed to step 0 (the log shows >1 bias iteration) gets the same
+    read at its first step (the log shows >1 bias iteration) gets the same
     ``.dc``-conversion pointer ``build_simulation_summary`` emits — so the
     confused caller learns the fix where they hit the wall, not just that the
     axis is missing.
@@ -276,7 +276,7 @@ def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
                 if max(len(log_steps), op_iters) > 1:
                     param = next(iter(log_steps[0].keys()), "param") if log_steps else "<param>"
                     hint = (
-                        "This is a stepped .op whose .raw carries only step 0. Convert "
+                        "This is a stepped .op, read here at its first step only. Convert "
                         f"to '.dc {param} START STOP STEP' to get an axis over every bias "
                         "point, or use operating_point for a single bias point."
                     )

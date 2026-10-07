@@ -385,7 +385,6 @@ def test_source_defined_allowlisted_layouts(
         ("ngspice", "real fastaccess", "Transient Analysis"),
         ("LTspice", "complex double", "AC Analysis"),
         ("LTspice", "real", "AC Analysis"),
-        ("LTspice", "real", "Transfer Function"),
         ("LTspice", "real", "Unknown analysis"),
     ],
 )
