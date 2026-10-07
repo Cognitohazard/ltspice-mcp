@@ -100,6 +100,12 @@
 # Set this to override auto-detection or for non-standard installs
 # symbol_paths = ["/path/to/LTspice/lib/sym"]
 
+# Show an edit_schematic commit in the LTspice window that has the sheet
+# open, and refuse an edit while that window holds unsaved changes.
+# Windows with LTspice 26.1 or later; LTspice is never started for it.
+# false leaves windows alone.
+# sync_open_window = true
+
 [logging]
 # Stderr logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL.
 # Set "INFO" for the startup banner and per-run detail.

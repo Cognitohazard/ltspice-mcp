@@ -138,7 +138,18 @@ def _decode(raw: bytes, errors: str) -> tuple[str, str]:
     # Anything else is 8-bit text. The degree signs, mus and en-dashes that
     # Windows-edited LTspice files put in comments read as themselves, and
     # text in a code page this cannot name (cp932, cp936) keeps its bytes.
-    return raw.decode("latin-1").translate(_WINDOWS_1252_OVER_LATIN_1), "cp1252"
+    return decode_windows_1252(raw), "cp1252"
+
+
+def decode_windows_1252(raw: bytes) -> str:
+    """Every byte as Windows-1252 reads it, the five it leaves undefined as the
+    control character of the same number.
+
+    This is how LTspice reads an 8-bit sheet or deck whatever its bytes were
+    written as, so it is also the reading to compare with what LTspice shows:
+    a micro sign stored as UTF-8 is two characters there.
+    """
+    return raw.decode("latin-1").translate(_WINDOWS_1252_OVER_LATIN_1)
 
 
 def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]:

@@ -10,7 +10,7 @@
   "license": "GPL-3.0-or-later",
   "keywords": ["ltspice", "ngspice", "spice", "circuit", "simulation", "eda", "schematic"],
   "mcpServers": {
-    "ltspice": {
+    "spice": {
       "command": "uvx",
       "args": ["--from", "ltspice-mcp[raster]", "ltspice-mcp"]
     }
