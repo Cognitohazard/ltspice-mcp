@@ -21,7 +21,9 @@ tool-surface changes.
   what the box said, where before it waited for the timeout or for someone to
   click it. `[simulator] hidden_desktop = false` (or
   `LTSPICE_MCP_HIDDEN_DESKTOP=0`) starts LTspice on your own desktop as
-  before. Named executables are launched the same way; WSL and Wine are
+  before. Named executables are launched the same way, and so is the audited
+  LTspice launch a recoverable experiment resumes with, which keeps its
+  command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
 
 The entries in this group were found by holding the server against files

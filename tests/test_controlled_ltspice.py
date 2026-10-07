@@ -24,6 +24,9 @@ def adapter_module(monkeypatch):
     # separately without replacing the Windows API.
     monkeypatch.setattr(module.sys, "platform", "win32")
     monkeypatch.setattr(module.time, "time", lambda: _QUERY)
+    # The launch where Windows gives no hidden desktop, or the setting is off:
+    # the audited subprocess.run. A test of the desktop launch sets its own.
+    monkeypatch.setattr(module.hidden_desktop, "shared", lambda: None)
     if os.name != "nt":
         monkeypatch.setattr(
             module,
@@ -349,3 +352,93 @@ def test_unsupported_execution_refused(adapter_module, tmp_path, change):
     }
     with pytest.raises(RecoveryError):
         adapter_module.verify_ltspice_execution(replace(execution, **edits[change]))
+
+
+class _Desktop:
+    """The hidden desktop's launch, recorded instead of started."""
+
+    def __init__(self, outcome=0):
+        self.calls: list[tuple[list[str], dict]] = []
+        self._outcome = outcome
+
+    def run(self, command, **options):
+        self.calls.append((list(command), options))
+        if isinstance(self._outcome, BaseException):
+            raise self._outcome
+        return self._outcome
+
+
+def _on_desktop(adapter_module, monkeypatch, desktop):
+    monkeypatch.setattr(adapter_module.hidden_desktop, "shared", lambda: desktop)
+    run = Mock()
+    monkeypatch.setattr(subprocess, "run", run)
+    return run
+
+
+@pytest.mark.parametrize("exe_log", [False, True])
+def test_on_a_hidden_desktop_the_launch_is_the_audited_one(
+    adapter_module, tmp_path, monkeypatch, exe_log
+):
+    """The same command, working directory, environment and timeout as the
+    audited subprocess.run, no stream named (so none redirected and no handle
+    inherited), and never a subprocess.run beside it."""
+    template = _template(tmp_path)
+    path = tmp_path / "startup" / "attempt" / "LTspice.ini"
+    adapter_module.prepare_attempt_ini(template, path, tmp_path)
+    monkeypatch.setenv("APPDATA", "ambient profile")
+    before = dict(os.environ)
+    desktop = _Desktop()
+    run = _on_desktop(adapter_module, monkeypatch, desktop)
+    checked = []
+    adapter = adapter_module.controlled_ltspice(
+        _execution(template), path, lambda: checked.append(True)
+    )
+    deck = tmp_path / "divider with spaces.cir"
+    # timing: a value the adapter must pass through unchanged
+    assert adapter.run(deck, timeout=10, cwd=tmp_path, exe_log=exe_log) == 0
+    run.assert_not_called()
+    assert checked == [True]
+    ((command, options),) = desktop.calls
+    assert command == ["LTspice.exe", "-Run", "-b", str(deck), "-ini", str(path)]
+    assert set(options) == {"timeout", "cwd", "env", "remedy"}
+    assert (options["timeout"], options["cwd"]) == (10, tmp_path)
+    assert options["env"] == {**before, "APPDATA": str(path.parent)}
+    assert "hidden_desktop = false" in options["remedy"]
+    assert dict(os.environ) == before
+    assert not deck.with_suffix(".exe.log").exists()
+
+
+def test_a_message_box_ends_the_attempt_with_what_it_said(adapter_module, tmp_path, monkeypatch):
+    """Nobody answers a box on the hidden desktop; the launch's error, naming
+    the box, is what the attempt raises, as it is for every LTspice run."""
+    from ltspice_mcp.lib.hidden_desktop import DialogError
+
+    template = _template(tmp_path)
+    path = tmp_path / "startup" / "attempt" / "LTspice.ini"
+    adapter_module.prepare_attempt_ini(template, path, tmp_path)
+    box = DialogError("LTspice.exe", "LTspice\nAn update is available")
+    _on_desktop(adapter_module, monkeypatch, _Desktop(box))
+    adapter = adapter_module.controlled_ltspice(_execution(template), path, lambda: None)
+    with pytest.raises(DialogError, match="An update is available"):
+        adapter.run(tmp_path / "divider.cir")
+
+
+def test_refusals_come_before_any_desktop_launch(adapter_module, tmp_path, monkeypatch):
+    """Drift, switches and stream overrides are refused before the launch,
+    on the hidden desktop as under subprocess.run."""
+    template = _template(tmp_path)
+    path = tmp_path / "startup" / "attempt" / "LTspice.ini"
+    adapter_module.prepare_attempt_ini(template, path, tmp_path)
+    desktop = _Desktop()
+    _on_desktop(adapter_module, monkeypatch, desktop)
+    adapter = adapter_module.controlled_ltspice(
+        _execution(template), path, lambda: path.write_bytes(b"changed")
+    )
+    for call in (
+        lambda: adapter.run(tmp_path / "divider.cir", ["-alt"]),
+        lambda: adapter.run(tmp_path / "divider.cir", stdout=object()),
+        lambda: adapter.run(tmp_path / "divider.cir"),
+    ):
+        with pytest.raises(RecoveryError):
+            call()
+    assert desktop.calls == []
