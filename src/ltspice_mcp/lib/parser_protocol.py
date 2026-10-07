@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, StepValue, transient_time_offset
 from ltspice_mcp.lib.parser_capture import parser_cache_key
-from ltspice_mcp.lib.raw_header import RawHeader, RawLimits
+from ltspice_mcp.lib.raw_header import RawHeader, RawLimits, leading_parameters
 from ltspice_mcp.lib.store import parser_file_in
 
 if TYPE_CHECKING:
@@ -308,9 +308,8 @@ def _materialize_raw(
         parameters = reply.plots[index].step_parameters
         if parameters is not None and (
             not parameters
-            or parameters != list(range(len(parameters)))
+            or parameters != leading_parameters(plot)
             or len(parameters) >= plot.variable_count
-            or any(plot.variables[i].declared_type.casefold() != "param" for i in parameters)
         ):
             raise ValueError("Stored step parameters must be the plot's leading param variables")
         step_views.append(_step_values(reply.plots[index], plot.point_count, reply.step_log))
