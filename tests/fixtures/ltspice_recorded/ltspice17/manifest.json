@@ -3970,6 +3970,352 @@
         ".raw"
       ]
     },
+    "plot/ac": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/ac.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/ac.plt": {
+          "bytes": 460,
+          "sha256": "e10c992f85b15b95c9eadb8bcc26fa237f5d9f538fff9381f79dcbb58b0ac04e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/math": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/math.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/math.plt": {
+          "bytes": 618,
+          "sha256": "a4a25b97ff5e1a8235b46db59ddffe994cb09769d8cf586e5bd93d043f70914b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/one_trace": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/one_trace.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/one_trace.plt": {
+          "bytes": 468,
+          "sha256": "7c25f90cddf4b921723f210741fa413645bc7cc1db899b8e2c272369a062a801"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/pane_added": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/pane_added.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/pane_added.plt": {
+          "bytes": 1014,
+          "sha256": "d240590bfde4cd2f0c7b923c4143c30872e69318e18fd11fb9473c92d565a637"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_ac": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_ac.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/ac.plt": "a611b01e577ef40d452b4e91adbaa86b7bcce2a0cec1d12012db4412cd460cc0",
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_ac.plt": {
+          "bytes": 392,
+          "sha256": "56498bcbb493c5a919b43275a0900e4e5c2f81e55002585b63103daad1945ce0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_log_y": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_log_y.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/log_y.plt": "6275d2c72a07f58e3da55f8222be774a4407e246014f163587ad644e55353629",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_log_y.plt": {
+          "bytes": 474,
+          "sha256": "6a19eeddb3fa812923d3b6974ddc7c16d98de8033b80d8f3c76d2fa54824bd87"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_math": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_math.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/math.plt": "fc41be66f8678103b4d58a2ca829c63de2c01574a7acc20a4b87fff68acfaa9e",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_math.plt": {
+          "bytes": 618,
+          "sha256": "a4a25b97ff5e1a8235b46db59ddffe994cb09769d8cf586e5bd93d043f70914b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_spaced": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_spaced.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/spaced.plt": "199d77b25251ceee9722ac02e532ab2af715361d24c4e9fb18ad463e1e315f6c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_spaced.plt": {
+          "bytes": 460,
+          "sha256": "522c77e69baa7a8b9fed160f0c25fc494db91730eedaeb816986f1336f6dd37c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_panes": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_two_panes.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes.plt": "1eedf7eee6766613d99eb2bd9595ff96814cdd2e7da95b0f3ad978b6915586eb"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_panes.plt": {
+          "bytes": 964,
+          "sha256": "8af79fa9d012c4d7f09a1d47b06888f73db848e6fc757b9c67dbe51cfc83e3be"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_sections": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_two_sections.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_sections.plt": "d090016c80a3118099c39024fa25c8a7091dc8acc890a854a153882f879f97a5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_sections.plt": {
+          "bytes": 640,
+          "sha256": "fe16ac161b70d885552efaabaf03482c95a39a1f343e90be3d7e23fb765ce14d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_utf8": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_utf8.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes_utf8.plt": "12ab44e43c23cb11b3757175f6ce3e48ef6191580c9723e4d745dc9b95b00e6b"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_utf8.plt": {
+          "bytes": 1134,
+          "sha256": "9e8fa4099aeeeb849346c010d4edc96c5d8a8f69796d139ae627e632b917d8e3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
     "raw/ac": {
       "behaviour": "raw-ac",
       "command": [
