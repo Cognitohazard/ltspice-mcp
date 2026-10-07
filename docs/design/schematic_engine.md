@@ -354,7 +354,45 @@ what must hold before the next one starts.
      their own, and the sheet whose symbol is not found.
    - *The two memberships merged.* The editor reports what the checker did and
      the reverse; an edit's findings are scoped as §8 says. *Gate:* the
-     response contracts, and the `preexisting` counts reconciled.
+     response contracts, and the `preexisting` counts reconciled. *Not
+     started.* How it is to be done, as proposed and not yet reviewed:
+     - The view the editor builds of a sheet cannot carry the checker's
+       rules. It has no box of what a part draws without its pins and no
+       anchor of a part's attribute text, which a wire through a part and a
+       text inside one are judged by, and working either out from spicelib's
+       editor would be a second copy of the scene's placement. So
+       `edit_schematic` builds the scene of the text it is about to write,
+       and of the sheet before the batch, and reads the view `verify_circuit`
+       reads; the view built from the editor goes. What an edit reports is
+       then what the checker would say of the file once written. Measured on
+       LTspice's own example sheets: a scene takes 30 to 110 ms on the
+       largest and every rule together under 20 ms, where spicelib takes 0.5
+       to 3.4 s to open the same sheet; and with an arc bounded by what is
+       drawn of it (§7) the two views already agree on every part's box and
+       on every finding of the rules both hold, on all 146 of the 150
+       largest that spicelib opens.
+     - One list of findings in the registry's order, and one sentence for
+       each that names its parts and its place, since an edit's reply shows
+       the sentence alone. A part whose symbol is not found is one finding a
+       part; `verify_circuit` groups them by symbol where it words them.
+     - `edit_schematic` gains overlapping parts, a wire through a part, a
+       loose wire end, text inside a part, a net joined only by labels, and a
+       wire LTspice leaves out. `verify_circuit` gains a wire drawn twice and
+       a label on nothing under `layout`, and a label inside a part and
+       stacked directives under `quality`, all as observations.
+     - An edit's findings are scoped as findings, by every part and every
+       point one names, where today a row's first part and first point are
+       looked at. The criterion §8 adds, a net whose membership the batch
+       changed, is applied to electrical and structural rules only: a
+       drawing rule's points lie on nets without the finding being about
+       them.
+     - An op's own advisory and a finding of the sheet already say one thing
+       twice today, for a label placed on nothing. Overlap and a wire through
+       a part will be said twice the same way until the next part turns the
+       ops' checks into rules.
+     - *Gate, added:* for every sheet in the suite the two tools report the
+       same findings, rule by rule and place by place, and the build at
+       scale keeps its time bound.
    - *Refusals as rules*, the part most likely to go wrong. The route planner's
      and the label op's refusals become rules over a transition, in the order
      they are raised today, wrong intent first. *Gate:* every test that pins a
