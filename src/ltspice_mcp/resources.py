@@ -302,9 +302,10 @@ def _read_netlist_content(
     """Read the full text of a specific netlist file.
 
     Decodes via ``read_spice_text`` — the same BOM-sniffing/UTF-16/cp1252
-    path every tool-side netlist read uses (LTspice writes UTF-16 LE
-    artifacts; a hard-coded utf-8 read returned NUL-riddled mojibake for
-    them, diverging from what the tool-side reads show for the same file).
+    path every tool-side netlist read uses (LTspice's library files and the
+    log of a run XVII did not finish are UTF-16 LE; a hard-coded utf-8 read
+    returned NUL-riddled mojibake for them, diverging from what the tool-side
+    reads show for the same file).
     """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.allowed_paths())

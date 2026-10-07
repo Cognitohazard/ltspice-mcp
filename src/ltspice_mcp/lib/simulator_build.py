@@ -87,6 +87,17 @@ def is_cp1252_ltspice_executable(program: str) -> bool:
     return _CP1252_LTSPICE_EXECUTABLE.search(program) is not None
 
 
+def predates_logopinfo(program: str) -> bool:
+    """Whether ``program`` is an LTspice that does not know ``.options logopinfo``.
+
+    LTspice XVII and IV print each semiconductor's operating point in the log
+    of every ``.op`` run, and end the run with "unrecognized option" when a
+    deck asks for it. They are the same executables that decode a deck as
+    cp1252: the builds before LTspice 24.
+    """
+    return is_cp1252_ltspice_executable(program)
+
+
 def is_cp1252_ltspice_build(reported: str) -> bool:
     """Whether a build a run reported (``reported_build``) is an LTspice that
     decodes decks as cp1252: XVII or earlier."""

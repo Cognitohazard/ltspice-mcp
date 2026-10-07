@@ -12,10 +12,12 @@ uses an eight-byte first real variable and four-byte remaining variables
 (all eight with ``double``); complex variables occupy sixteen bytes.
 ngspice/Xyce use eight-byte real or sixteen-byte complex variables. QSPICE
 uses eight bytes for the first complex variable and sixteen for the rest.
-FastAccess changes ordering, not total length. LTspice's ordinary layouts
-are checked against recorded fixtures, including stepped transient and AC.
-Double, FastAccess, QSPICE and Xyce have source-defined synthetic coverage;
-unrecognized flags, LTspice analysis layouts and Xyce text footers refuse.
+FastAccess changes ordering, not total length. LTspice's layouts are checked
+against files LTspice 26 and LTspice XVII wrote (the recorded fixtures
+``docs/TESTING.md`` describes): every analysis below, stepped runs, double
+precision, uncompressed, FastAccess and text. QSPICE and Xyce have
+source-defined synthetic coverage; unrecognized flags, LTspice analysis
+layouts and Xyce text footers refuse.
 """
 
 from __future__ import annotations
@@ -116,13 +118,29 @@ _NUMBER = re.compile(
     r"[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)\Z",
     re.I,
 )
-_FLAGS = {"real", "complex", "forward", "log", "linear", "stepped", "double", "fastaccess"}
+# ``nocompression`` is what LTspice adds under ``.options plotwinsize=0``. It
+# says the samples were not thinned; where each one sits is unchanged.
+_FLAGS = {
+    "real",
+    "complex",
+    "forward",
+    "log",
+    "linear",
+    "stepped",
+    "double",
+    "fastaccess",
+    "nocompression",
+}
 _LT_REAL_PLOTS = {
     "transient analysis",
     "dc transfer characteristic",
     "operating point",
+    "transfer function",
     "noise spectral density - (v/hz½ or a/hz½)",
 }
+# Header fields a writer may give more than once. LTspice 24 and later write
+# one ``Backannotation:`` line for each subcircuit instance in the deck.
+_REPEATED_FIELDS = frozenset({"backannotation"})
 
 
 class _Scanner:
@@ -350,7 +368,7 @@ def _read_plot(
         key, sep, value = line.partition(":")
         key = key.strip()
         normalized = key.lower()
-        if not sep or not key or normalized in header:
+        if not sep or not key or (normalized in header and normalized not in _REPEATED_FIELDS):
             raise scanner.error(RawHeaderError, "invalid or duplicate header field")
         if not header and key != "Title":
             raise scanner.error(RawHeaderError, "missing Title: at plot boundary")

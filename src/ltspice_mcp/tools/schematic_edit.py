@@ -20,6 +20,7 @@ export failure there is reported but never un-commits the sheet.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import hashlib
 import io
@@ -1199,6 +1200,8 @@ async def _evaluate_edit_schematic(
             )
 
         use_template = args.base == "blank" or not exists
+        # Read before the ops run: what the commit's codec turns on.
+        sheet_was_ascii = use_template or target.read_bytes().isascii()
         editor = _build_editor(target, use_template, state)
         # Set once the atomic rename lands. From that point every escape must be
         # reported on a committed envelope instead of re-raised (see the except
@@ -1268,8 +1271,10 @@ async def _evaluate_edit_schematic(
             # accounts for. The rest is counted under preexisting.
             warnings = _op_warnings(results) + [w["message"] for w in findings_reported]
             op_results = _op_results(results)
-            encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
+            encoding = _commit_codec(
+                getattr(editor, "encoding", "utf-8") or "utf-8", sheet_was_ascii, committed_text
+            )
 
             # --- dry run: validate-only, nothing written, target dir untouched
             if dry_run:
@@ -1526,6 +1531,30 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
             decode_page_cursor(cursor, kind)
         except PageCursorError as exc:
             raise NetlistError(f"invalid view_cursors.{kind}: {exc}") from exc
+
+
+def _commit_codec(loaded_as: str, sheet_was_ascii: bool, text: str) -> str:
+    """The codec an edited sheet is committed in.
+
+    A sheet is written back in the encoding it was read in, with one
+    exception. The loader names a sheet that holds only ASCII "utf-8", and
+    LTspice does not read a sheet as UTF-8: it decodes cp1252 (or UTF-16), so
+    a micro sign stored as the two UTF-8 bytes comes out of its netlister as
+    ``Âµ``. The first non-ASCII character an edit adds to such a sheet is
+    therefore written in cp1252, where cp1252 has it. A sheet that already
+    held non-ASCII text keeps the encoding it came in.
+    """
+    try:
+        loaded_as_utf8 = codecs.lookup(loaded_as).name == "utf-8"
+    except LookupError:
+        return loaded_as
+    if not (loaded_as_utf8 and sheet_was_ascii) or text.isascii():
+        return loaded_as
+    try:
+        text.encode("cp1252")
+    except UnicodeEncodeError:
+        return loaded_as
+    return "cp1252"
 
 
 def _render_editor_text(editor: AscEditor) -> str:

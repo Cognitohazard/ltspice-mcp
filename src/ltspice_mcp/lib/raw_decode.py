@@ -214,7 +214,9 @@ def _step_log(
         for parameter in _STEP_PARAMETER.finditer(match.group(1)):
             token = parameter.group(2)
             try:
-                value = float(token.removesuffix("°"))
+                # A stepped temperature carries its unit: LTspice 24 and later
+                # write "-40°", LTspice XVII "-40°C".
+                value = float(token.partition("°")[0])
             except ValueError:
                 value = None
             if value is not None and not math.isfinite(value):
